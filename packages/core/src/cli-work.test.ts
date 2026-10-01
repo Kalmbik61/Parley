@@ -117,7 +117,7 @@ describe('parley-core work new', () => {
     const result = await cli('work', 'new', '--cwd', project);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('--title');
+    expect(result.stderr).toContain('--title <value> is required');
   }, 60_000);
 });
 
@@ -151,7 +151,7 @@ describe('parley-core work map', () => {
     const result = await cli('work', 'map', '--work', 'w-9999');
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('w-9999');
+    expect(result.stderr).toContain('workspace w-9999 is not in');
   }, 60_000);
 });
 
@@ -333,6 +333,29 @@ describe('parley-core work session new', () => {
     expect(config.mcpServers['parley']?.env).not.toHaveProperty('HARNAS_CHANNEL');
   }, 60_000);
 
+  it('claude старше минимума канала: push выключен, причина — в stderr, флага в команде нет', async () => {
+    await newWork('Авторизация');
+    const oldClaude = path.join(binDir, 'claude-old');
+    await writeFile(oldClaude, '#!/bin/sh\necho "2.1.100 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+    const result = await cliEnv(
+      { PARLEY_CLAUDE_BIN: oldClaude },
+      'work',
+      'session',
+      'new',
+      '--work',
+      'w-0001',
+      '--provider',
+      'claude',
+      '--label',
+      'план',
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toContain('push is off: claude 2.1.100 (Claude Code) is older than 2.1.211');
+    const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(printed['args']).not.toContain('--dangerously-load-development-channels');
+  }, 60_000);
+
   it('чужому провайдеру версия не пробуется: про push в stderr ни слова', async () => {
     // Push — возможность Claude Code, у codex и GLM канала нет вовсе (4.4).
     // Сравнивать их версию с минимумом claude бессмысленно, и лишний
@@ -356,8 +379,8 @@ describe('parley-core work session new', () => {
     );
 
     expect(result.code, result.stderr).toBe(0);
-    expect(result.stderr).not.toContain('push выключен');
-    expect(result.stderr).not.toContain('младше');
+    expect(result.stderr).not.toContain('push is off');
+    expect(result.stderr).not.toContain('is older than');
     const printed = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(printed['args']).not.toContain('--dangerously-load-development-channels');
   }, 60_000);
@@ -422,7 +445,7 @@ describe('parley-core work session new', () => {
       'reviewer',
     );
     expect(foreign.code).toBe(1);
-    expect(foreign.stderr).toContain('агентов не принимает');
+    expect(foreign.stderr).toContain('does not accept agents');
 
     expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
@@ -543,7 +566,7 @@ describe('parley-core work session new', () => {
     );
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('s-07');
+    expect(result.stderr).toContain('session s-07 is not in the map');
     expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
 
@@ -564,7 +587,7 @@ describe('parley-core work session new', () => {
     );
     expect(unknown.code).toBe(1);
     expect(unknown.stdout).toBe('');
-    expect(unknown.stderr).toContain('выдумка');
+    expect(unknown.stderr).toContain('unknown provider выдумка; allowed: ');
 
     const missing = await cli(
       'work',
@@ -581,7 +604,7 @@ describe('parley-core work session new', () => {
     );
     expect(missing.code).toBe(1);
     expect(missing.stdout).toBe('');
-    expect(missing.stderr).toContain('PATH');
+    expect(missing.stderr).toContain('is not in PATH — provider glm is unavailable');
 
     expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
@@ -600,10 +623,12 @@ describe('parley-core work session new', () => {
     );
     expect(noWork.code).toBe(1);
     expect(noWork.stdout).toBe('');
-    expect(noWork.stderr).toContain('--work');
+    expect(noWork.stderr).toContain('--work <value> is required');
 
     const nonsense = await cli('work', 'чепуха');
     expect(nonsense.code).toBe(1);
     expect(nonsense.stdout).toBe('');
+    expect(nonsense.stderr).toContain('Unknown command: work чепуха');
+    expect(nonsense.stderr).toContain('a new workspace in the project');
   }, 60_000);
 });

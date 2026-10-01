@@ -312,7 +312,7 @@ export function parseMap(raw: string, file: string): WorkMap {
   try {
     data = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`карта ${file} не парсится: ${(error as Error).message}`);
+    throw new Error(`map ${file} cannot be parsed: ${(error as Error).message}`);
   }
 
   const work = isRecord(data) ? data.work : undefined;
@@ -328,7 +328,7 @@ export function parseMap(raw: string, file: string): WorkMap {
     !data.sessions.every(isSessionShape(version)) ||
     !data.messages.every(isMessageShape(version))
   ) {
-    throw new Error(`карта ${file} не парсится: неожиданная форма`);
+    throw new Error(`map ${file} cannot be parsed: unexpected shape`);
   }
 
   if (version === 1) {

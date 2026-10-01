@@ -710,12 +710,17 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('новому провайдеру нужны badge и command', async () => {
     await write({ мой: { args: ['{prompt}'] } });
-    await expect(loadProviders()).rejects.toThrow(/мой/);
+    await expect(loadProviders()).rejects.toThrow(/мой.*a new provider needs badge and command/);
   });
 
   it('битый файл — ошибка, а не тихий откат к встроенному реестру', async () => {
     await writeFile(providersFile(), '{не json', 'utf8');
-    await expect(loadProviders()).rejects.toThrow(/не парсится/);
+    await expect(loadProviders()).rejects.toThrow(/provider registry .* cannot be parsed/);
+  });
+
+  it('файл — не объект: ошибка той же формы', async () => {
+    await writeFile(providersFile(), '[]', 'utf8');
+    await expect(loadProviders()).rejects.toThrow(/provider registry .* cannot be parsed: unexpected shape/);
   });
 
   it('printArgs переопределяется как остальные аргументы', async () => {
@@ -805,7 +810,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       for (const id of wrongIds) {
         await write({ claude: { models: [{ id, label: 'Х' }] } });
         await expect(loadProviders(), JSON.stringify(id)).rejects.toThrow(
-          /claude.*неожиданная форма записи/,
+          /claude.*unexpected entry shape/,
         );
       }
 
@@ -826,7 +831,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
           ],
         },
       });
-      await expect(loadProviders()).rejects.toThrow(/codex.*неожиданная форма записи/);
+      await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
     });
   });
 

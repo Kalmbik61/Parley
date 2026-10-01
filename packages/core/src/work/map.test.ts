@@ -631,55 +631,55 @@ describe('parseMap', () => {
   });
 
   it('битый json — ошибка', () => {
-    expect(() => parseMap('{ сломано', 'map.json')).toThrow(/не парсится/);
+    expect(() => parseMap('{ сломано', 'map.json')).toThrow(/^map map\.json cannot be parsed: /);
   });
 
   it('чужая форма или другая версия схемы — ошибка', () => {
     expect(() =>
       parseMap('{"schemaVersion":2,"work":{},"sessions":[],"messages":[],"rooms":[]}', 'map.json'),
-    ).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
     expect(() =>
       parseMap(
         '{"schemaVersion":3,"work":{"id":"w-0001"},"sessions":[],"messages":[],"rooms":[]}',
         'map.json',
       ),
-    ).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
     // v2 без комнат — не наша карта: v2 пишется только с ними.
     expect(() =>
       parseMap(
         '{"schemaVersion":2,"work":{"id":"w-0001"},"sessions":[],"messages":[]}',
         'map.json',
       ),
-    ).toThrow(/не парсится/);
-    expect(() => parseMap('{"schemaVersion":1,"sessions":[]}', 'map.json')).toThrow(/не парсится/);
-    expect(() => parseMap('[]', 'map.json')).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
+    expect(() => parseMap('{"schemaVersion":1,"sessions":[]}', 'map.json')).toThrow(/cannot be parsed: unexpected shape/);
+    expect(() => parseMap('[]', 'map.json')).toThrow(/cannot be parsed: unexpected shape/);
   });
 
   it('чужая форма записи внутри массивов — ошибка, а не TypeError при мутации', () => {
     const withSessions = (sessions: string): string =>
       `{"schemaVersion":1,"work":{"id":"w-0001"},"sessions":${sessions},"messages":[]}`;
 
-    expect(() => parseMap(withSessions('[null]'), 'map.json')).toThrow(/не парсится/);
+    expect(() => parseMap(withSessions('[null]'), 'map.json')).toThrow(/cannot be parsed: unexpected shape/);
     expect(() =>
       parseMap(withSessions('[{"id":"s-01","status":"запущена","history":[]}]'), 'map.json'),
-    ).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
     expect(() => parseMap(withSessions('[{"id":"s-01","status":"active"}]'), 'map.json')).toThrow(
-      /не парсится/,
+      /cannot be parsed: unexpected shape/,
     );
     expect(() =>
       parseMap(
         '{"schemaVersion":1,"work":{"id":"w-0001"},"sessions":[],"messages":[null]}',
         'map.json',
       ),
-    ).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
     // v2: статус v1 вместо оси процесса и один адресат строкой — чужая форма.
     const v2 = (sessions: string, messages: string): string =>
       `{"schemaVersion":2,"work":{"id":"w-0001"},"sessions":${sessions},"messages":${messages},"rooms":[]}`;
     expect(() =>
       parseMap(v2('[{"id":"s-01","status":"active","history":[]}]', '[]'), 'map.json'),
-    ).toThrow(/не парсится/);
+    ).toThrow(/cannot be parsed: unexpected shape/);
     expect(() => parseMap(v2('[]', '[{"id":"m-01","to":"s-01"}]'), 'map.json')).toThrow(
-      /не парсится/,
+      /cannot be parsed: unexpected shape/,
     );
   });
 });

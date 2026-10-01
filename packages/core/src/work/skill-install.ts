@@ -60,9 +60,14 @@ const SKILL_FILE = 'SKILL.md';
 /** Finder кладёт его в любую папку, которую человек открывал: правкой навыка это не считается. */
 const FINDER_FILE = '.DS_Store';
 /** Комментарий к своим строкам в `info/exclude`: человек, открывший файл, узнает, откуда они. */
-const EXCLUDE_MARKER = `# ${SKILL_NAME}: скилл агентов, ставится Parley`;
+const EXCLUDE_MARKER = `# ${SKILL_NAME}: agent skill, installed by Parley`;
+/**
+ * Та же метка в прежней, русской записи: сборки до перевода текстов дописали её в файлы исключений, и она
+ * по-прежнему своя — второй раз метку не пишем. Текст — как он лежит на диске, поэтому не переводится.
+ */
+const RUSSIAN_EXCLUDE_MARKER = `# ${SKILL_NAME}: скилл агентов, ставится Parley`; // cyrillic-ok: метка на диске, по ней узнаём свою
 /** Метка строк, которые харнесс ставил под прежним именем: по ней они узнаются и убираются. */
-const LEGACY_EXCLUDE_MARKER = `# ${LEGACY_SKILL_NAME}: скилл агентов, ставится харнессом`;
+const LEGACY_EXCLUDE_MARKER = `# ${LEGACY_SKILL_NAME}: скилл агентов, ставится харнессом`; // cyrillic-ok: метка на диске, по ней узнаём прежнюю установку
 /** Ключи учёта, оканчивающиеся прежними путями: запись про прежнюю установку. */
 const LEGACY_SUFFIXES = [LEGACY_SKILL_DIR, LEGACY_ALIAS_DIR].map((segments) =>
   path.join(path.sep, ...segments),
@@ -441,7 +446,8 @@ async function ensureExclude(commonDir: string, lines: readonly string[]): Promi
   const missing = lines.filter((line) => !present.has(line));
   if (missing.length === 0) return;
 
-  const marker = present.has(EXCLUDE_MARKER) ? [] : [EXCLUDE_MARKER];
+  const marker =
+    present.has(EXCLUDE_MARKER) || present.has(RUSSIAN_EXCLUDE_MARKER) ? [] : [EXCLUDE_MARKER];
   const separator = current === '' || current.endsWith('\n') ? '' : '\n';
   await mkdir(path.dirname(file), { recursive: true });
   await appendFile(file, `${separator}${[...marker, ...missing].join('\n')}\n`, 'utf8');

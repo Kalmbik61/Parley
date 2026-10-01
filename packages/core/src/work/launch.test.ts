@@ -248,7 +248,7 @@ describe('план запуска', () => {
     });
 
     expect(plan.args).not.toContain('--dangerously-load-development-channels');
-    expect(plan.warnings).toEqual(['providers.json без {channel}: push выключен']);
+    expect(plan.warnings).toEqual(['providers.json has no {channel}: push is off']);
   });
 
   it('роль сессии уезжает флагом --agent; без роли пара выпадает целиком', async () => {

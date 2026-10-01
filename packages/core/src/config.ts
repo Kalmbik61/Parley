@@ -123,7 +123,7 @@ const isFontSize = (value: unknown): value is number =>
   Number.isInteger(value) &&
   value >= FONT_SIZE_MIN &&
   value <= FONT_SIZE_MAX;
-const FONT_SIZE_EXPECTED = `целое от ${FONT_SIZE_MIN} до ${FONT_SIZE_MAX}`;
+const FONT_SIZE_EXPECTED = `an integer from ${FONT_SIZE_MIN} to ${FONT_SIZE_MAX}`;
 
 /** Ноль подъёмов разрешён: так письма никогда не будят спящих, только ждут. */
 const RESUME_RATE_MIN = 0;
@@ -133,7 +133,7 @@ const isResumeRate = (value: unknown): value is number =>
   Number.isInteger(value) &&
   value >= RESUME_RATE_MIN &&
   value <= RESUME_RATE_MAX;
-const RESUME_RATE_EXPECTED = `целое от ${RESUME_RATE_MIN} до ${RESUME_RATE_MAX}`;
+const RESUME_RATE_EXPECTED = `an integer from ${RESUME_RATE_MIN} to ${RESUME_RATE_MAX}`;
 
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
@@ -146,21 +146,21 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
     const value = data[key];
     if (value === undefined) return;
     if (!ok(value)) {
-      complain(`${key}: ожидается ${expected}`);
+      complain(`${key}: expected ${expected}`);
       return;
     }
     patch[key] = value as ParleyConfig[K];
   };
 
-  take('silenceThresholdMs', isPositiveInt, 'целое больше нуля');
-  take('channelPush', (value) => typeof value === 'boolean', 'true или false');
-  take('messageRate', isPositiveInt, 'целое больше нуля');
+  take('silenceThresholdMs', isPositiveInt, 'a positive integer');
+  take('channelPush', (value) => typeof value === 'boolean', 'true or false');
+  take('messageRate', isPositiveInt, 'a positive integer');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
-  take('autoLaunch', (value) => typeof value === 'boolean', 'true или false');
-  take('agentSkills', (value) => typeof value === 'boolean', 'true или false');
-  take('fontFamily', isFontFamily, 'непустая строка');
+  take('autoLaunch', (value) => typeof value === 'boolean', 'true or false');
+  take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
+  take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
-  take('worktreeRoot', isWorktreeRoot, 'непустая строка');
+  take('worktreeRoot', isWorktreeRoot, 'a non-empty string');
   return patch;
 }
 
@@ -182,7 +182,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     const lower = value.toLowerCase();
     if (TRUE.has(lower)) patch[key] = true;
     else if (FALSE.has(lower)) patch[key] = false;
-    else complain(`${nameOf(key)}: ожидается 0 или 1`);
+    else complain(`${nameOf(key)}: expected 0 or 1`);
   };
 
   const count = (key: 'silenceThresholdMs' | 'messageRate'): void => {
@@ -190,7 +190,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     if (value === undefined) return;
     const parsed = Number(value);
     if (isPositiveInt(parsed)) patch[key] = parsed;
-    else complain(`${nameOf(key)}: ожидается целое больше нуля`);
+    else complain(`${nameOf(key)}: expected a positive integer`);
   };
 
   count('silenceThresholdMs');
@@ -200,7 +200,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   if (resumeRate !== undefined) {
     const parsed = Number(resumeRate);
     if (isResumeRate(parsed)) patch.resumeRate = parsed;
-    else complain(`${nameOf('resumeRate')}: ожидается ${RESUME_RATE_EXPECTED}`);
+    else complain(`${nameOf('resumeRate')}: expected ${RESUME_RATE_EXPECTED}`);
   }
   flag('autoLaunch');
   flag('agentSkills');
@@ -208,18 +208,18 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
     if (isFontFamily(fontFamily)) patch.fontFamily = fontFamily;
-    else complain(`${nameOf('fontFamily')}: ожидается непустая строка`);
+    else complain(`${nameOf('fontFamily')}: expected a non-empty string`);
   }
   const fontSize = text('fontSize');
   if (fontSize !== undefined) {
     const parsed = Number(fontSize);
     if (isFontSize(parsed)) patch.fontSize = parsed;
-    else complain(`${nameOf('fontSize')}: ожидается ${FONT_SIZE_EXPECTED}`);
+    else complain(`${nameOf('fontSize')}: expected ${FONT_SIZE_EXPECTED}`);
   }
   const worktreeRoot = text('worktreeRoot');
   if (worktreeRoot !== undefined) {
     if (isWorktreeRoot(worktreeRoot)) patch.worktreeRoot = worktreeRoot;
-    else complain(`${nameOf('worktreeRoot')}: ожидается непустая строка`);
+    else complain(`${nameOf('worktreeRoot')}: expected a non-empty string`);
   }
   return patch;
 }
@@ -243,7 +243,7 @@ export async function loadConfig(
   } catch (error) {
     // Файла нет — это норма: настройки необязательные.
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      complain(`${file} не читается: ${(error as Error).message}`);
+      complain(`${file} cannot be read: ${(error as Error).message}`);
     }
   }
 
@@ -253,11 +253,11 @@ export async function loadConfig(
       data = JSON.parse(raw);
     } catch (error) {
       data = undefined;
-      complain(`${file} не парсится: ${(error as Error).message}`);
+      complain(`${file} cannot be parsed: ${(error as Error).message}`);
     }
     if (data !== undefined) {
       if (isRecord(data)) filePatch = fromFile(data, complain);
-      else complain(`${file} не парсится: ожидается объект`);
+      else complain(`${file} cannot be parsed: expected an object`);
     }
   }
 
@@ -289,32 +289,32 @@ export function parseSetting<K extends keyof ParleyConfig>(
 ): { value: ParleyConfig[K] } | { error: string } {
   if (key === 'fontFamily') {
     if (isFontFamily(text)) return { value: text as ParleyConfig[K] };
-    return { error: `${key}: ожидается непустая строка` };
+    return { error: `${key}: expected a non-empty string` };
   }
   if (key === 'worktreeRoot') {
     if (isWorktreeRoot(text)) return { value: text as ParleyConfig[K] };
-    return { error: `${key}: ожидается непустая строка` };
+    return { error: `${key}: expected a non-empty string` };
   }
   if (key === 'fontSize') {
     const parsed = Number(text);
     if (isFontSize(parsed)) return { value: parsed as ParleyConfig[K] };
-    return { error: `${key}: ожидается ${FONT_SIZE_EXPECTED}` };
+    return { error: `${key}: expected ${FONT_SIZE_EXPECTED}` };
   }
   if (key === 'resumeRate') {
     // Отдельная ветка: общая для чисел отвергла бы допустимый ноль.
     const parsed = Number(text);
     if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
-    return { error: `${key}: ожидается ${RESUME_RATE_EXPECTED}` };
+    return { error: `${key}: expected ${RESUME_RATE_EXPECTED}` };
   }
   if (BOOLEAN_KEYS.has(key)) {
     const lower = text.toLowerCase();
     if (TRUE.has(lower)) return { value: true as ParleyConfig[K] };
     if (FALSE.has(lower)) return { value: false as ParleyConfig[K] };
-    return { error: `${key}: ожидается 0 или 1` };
+    return { error: `${key}: expected 0 or 1` };
   }
   const parsed = Number(text);
   if (isPositiveInt(parsed)) return { value: parsed as ParleyConfig[K] };
-  return { error: `${key}: ожидается целое больше нуля` };
+  return { error: `${key}: expected a positive integer` };
 }
 
 /**

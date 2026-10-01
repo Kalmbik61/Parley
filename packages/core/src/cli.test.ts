@@ -49,7 +49,7 @@ describe('parley-core CLI', () => {
     const { stdout, stderr, code } = await cli('session', 'нет-такой', '--root', FIXTURES);
     expect(code).toBe(1);
     expect(stdout).toBe('');
-    expect(stderr).toContain('не найдена');
+    expect(stderr).toContain('was not found');
   }, 60_000);
 
   it('неизвестная команда не печатает JSON', async () => {
@@ -77,6 +77,6 @@ describe('parley-core schema', () => {
     const { stdout, stderr, code } = await cli('schema', '--provider', 'выдумка');
     expect(code).toBe(1);
     expect(stdout).toBe('');
-    expect(stderr).toContain('Неизвестный провайдер');
+    expect(stderr).toContain('Unknown provider');
   }, 60_000);
 });

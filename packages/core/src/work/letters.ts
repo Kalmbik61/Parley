@@ -59,7 +59,7 @@ export async function markHumanRead(
     current = await readMap(projectPath, workId);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new WorkNotFoundError(`карты ${workPaths(projectPath, workId).map} нет — работы ${workId} не существует`);
+      throw new WorkNotFoundError(`map ${workPaths(projectPath, workId).map} does not exist — workspace ${workId} does not exist`);
     }
     throw error;
   }

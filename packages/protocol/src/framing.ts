@@ -36,7 +36,7 @@ export function encodeLine(
 }
 
 export class LineTooLongError extends Error {
-  constructor(message = `строка длиннее ${MAX_LINE_BYTES} байт`) {
+  constructor(message = `line is longer than ${MAX_LINE_BYTES} bytes`) {
     super(message);
     this.name = 'LineTooLongError';
   }
@@ -79,13 +79,13 @@ export type Incoming =
 /** Разбор и проверка по схеме: `params` в результате уже прошли zod. */
 export function parseIncoming(raw: unknown): Incoming {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return { kind: 'invalid', id: null, error: { code: 'bad_request', message: 'ожидался объект' } };
+    return { kind: 'invalid', id: null, error: { code: 'bad_request', message: 'expected an object' } };
   }
   const obj = raw as Record<string, unknown>;
   const id = typeof obj.id === 'number' ? obj.id : null;
   const method = obj.method;
   if (typeof method !== 'string') {
-    return { kind: 'invalid', id, error: { code: 'bad_request', message: 'нет поля method' } };
+    return { kind: 'invalid', id, error: { code: 'bad_request', message: 'no method field' } };
   }
 
   if (id !== null) {
@@ -94,7 +94,7 @@ export function parseIncoming(raw: unknown): Incoming {
       return {
         kind: 'invalid',
         id,
-        error: { code: 'unknown_method', message: `неизвестный метод: ${method}` },
+        error: { code: 'unknown_method', message: `unknown method: ${method}` },
       };
     }
     const result = schema.safeParse(obj.params);
@@ -113,7 +113,7 @@ export function parseIncoming(raw: unknown): Incoming {
     return {
       kind: 'invalid',
       id: null,
-      error: { code: 'unknown_method', message: `неизвестный метод: ${method}` },
+      error: { code: 'unknown_method', message: `unknown method: ${method}` },
     };
   }
   const result = schema.safeParse(obj.params);

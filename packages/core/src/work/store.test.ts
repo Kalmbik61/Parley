@@ -206,7 +206,7 @@ describe('createWork', () => {
     await writeFile(lock, '');
 
     await expect(createWork(project, { title: 'Первая' }, { lockTimeoutMs: 50 })).rejects.toThrow(
-      /не снята/,
+      /lock .* was not released within 50 ms/,
     );
     expect((await readWorksIndex()).works).toEqual([]);
   });
@@ -282,7 +282,7 @@ describe('updateMap', () => {
       updateMap(project, 'w-0001', (map) => {
         addSession(map, { provider: 'claude', label: 'план', task: 't' });
       }),
-    ).rejects.toThrow(/не парсится/);
+    ).rejects.toThrow(/map .* cannot be parsed/);
 
     expect(await readFile(paths.map, 'utf8')).toBe('{ сломано');
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
@@ -296,7 +296,7 @@ describe('updateMap', () => {
     const started = Date.now();
     await expect(
       updateMap(project, 'w-0001', (map) => (map.work.title = 'Другое'), { lockTimeoutMs: 150 }),
-    ).rejects.toThrow(/блокировк/i);
+    ).rejects.toThrow(/lock .*map\.lock was not released within 150 ms/);
 
     expect(Date.now() - started).toBeLessThan(2000);
     expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
@@ -374,7 +374,7 @@ describe('updateMap', () => {
     };
 
     await expect(updateMap(project, 'w-0001', append, { lockTimeoutMs: 100 })).rejects.toThrow(
-      /блокировк/i,
+      /lock .*works-index\.lock was not released within 100 ms/,
     );
 
     expect((await readMap(project, 'w-0001')).sessions).toEqual([]);
@@ -471,13 +471,13 @@ describe('renameWork', () => {
     await createWork(project, { title: 'Старая' });
 
     await expect(renameWork(project, 'w-0001', '')).rejects.toThrow(
-      'название работы: 1–120 символов',
+      'workspace title: 1–120 characters',
     );
     await expect(renameWork(project, 'w-0001', '   ')).rejects.toThrow(
-      'название работы: 1–120 символов',
+      'workspace title: 1–120 characters',
     );
     await expect(renameWork(project, 'w-0001', 'я'.repeat(121))).rejects.toThrow(
-      'название работы: 1–120 символов',
+      'workspace title: 1–120 characters',
     );
     expect((await readMap(project, 'w-0001')).work.title).toBe('Старая');
   });
@@ -486,7 +486,7 @@ describe('renameWork', () => {
     await createWork(project, { title: 'Старая' });
     for (const invisible of ['\u200B\u200B\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF', ' \u200B \u2060 ']) {
       await expect(renameWork(project, 'w-0001', invisible)).rejects.toThrow(
-        'название работы: 1–120 символов',
+        'workspace title: 1–120 characters',
       );
     }
     const map = await renameWork(project, 'w-0001', '\u200B Новая\u200Dx \u2060');
@@ -522,15 +522,19 @@ describe('readWorksIndex', () => {
   it('битый json — ошибка, догадки не строим', async () => {
     await writeFile(worksIndexPath(), '{ сломано', 'utf8');
 
-    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+    await expect(readWorksIndex()).rejects.toThrow(/workspace index .* cannot be parsed: /);
   });
 
   it('чужая форма или другая версия схемы — ошибка', async () => {
     await writeFile(worksIndexPath(), '{"schemaVersion":2,"works":[]}', 'utf8');
-    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+    await expect(readWorksIndex()).rejects.toThrow(
+      /workspace index .* cannot be parsed: unexpected shape/,
+    );
 
     await writeFile(worksIndexPath(), '{"schemaVersion":1}', 'utf8');
-    await expect(readWorksIndex()).rejects.toThrow(/не парсится/);
+    await expect(readWorksIndex()).rejects.toThrow(
+      /workspace index .* cannot be parsed: unexpected shape/,
+    );
   });
 });
 
