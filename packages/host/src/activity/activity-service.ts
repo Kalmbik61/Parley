@@ -40,6 +40,7 @@ import {
   refKey,
   type EventData,
   type LiveMetrics,
+  type LiveTask,
   type SessionRef,
   type WorksSnapshot,
 } from '@parley/protocol';
@@ -47,6 +48,7 @@ import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
+import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
 
 export interface SessionLive {
   activity: SessionActivity;
@@ -208,6 +210,13 @@ export function createActivityService(
   const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
+  /**
+   * `meta.json` субагентов, у которых снимок хуков не назвал описания: по ключу сессии и id задачи.
+   * Хранится, пока задача жива, — запись ушедшей задачи снимает следующий пересчёт.
+   */
+  const subagentMetas = new Map<string, Map<string, SubagentMeta>>();
+  /** Чтения `meta.json` в полёте (ключ сессии и id задачи): одно на задачу, пока оно не вернулось. */
+  const metaReads = new Set<string>();
 
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
@@ -257,12 +266,18 @@ export function createActivityService(
     return [...base.slice(0, index), last, ...base.slice(index)];
   }
 
-  /** Час икс тишины — либо уже прошёл (задержка 0), либо ставится единственный таймер. */
+  /**
+   * Час икс тишины — либо уже наступил (задержка 0), либо ставится единственный таймер. `now` — тот же
+   * миг, по которому `activityOf` только что вывел состояние: порог пройден, а сессия всё ещё `working`,
+   * значит её держит фоновый субагент или ожидание `wait_for`, и время уже ничего не изменит — таймер
+   * не нужен, иначе он пересчитывал бы сессию с нулевой задержкой без конца.
+   */
   function scheduleSilenceTimer(
     ref: SessionRef,
     key: string,
     activity: SessionActivity,
     log: ActivityLog | null,
+    now: number,
   ): void {
     clearSilenceTimer(key);
     if (activity.activity !== 'working') return;
@@ -274,6 +289,7 @@ export function createActivityService(
       Number.isNaN(recordAt) ? -Infinity : recordAt,
     );
     if (!Number.isFinite(quietAt)) return;
+    if (quietAt + silenceThresholdMs < now) return;
 
     const delay = Math.max(0, quietAt + silenceThresholdMs - nowFn());
     silenceTimers.set(
@@ -295,7 +311,64 @@ export function createActivityService(
   const unreadOf = (entry: WorkEntry, sessionId: string): number =>
     unreadFor(entry.map, sessionId).length;
 
+  /**
+   * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —
+   * описание кладётся в кэш сессии и сессия пересчитывается. Не нашлось — ничего не запоминается, и
+   * следующий пересчёт попробует снова: Claude может записать файл чуть позже старта.
+   */
+  function loadSubagentMeta(
+    ref: SessionRef,
+    key: string,
+    id: string,
+    transcriptPath: string,
+  ): void {
+    const read = `${key}\u0000${id}`;
+    if (metaReads.has(read)) return;
+    metaReads.add(read);
+    void readSubagentMeta(transcriptPath, id)
+      .then((meta) => {
+        metaReads.delete(read);
+        if (meta === null || stopped) return;
+        const known = subagentMetas.get(key) ?? new Map<string, SubagentMeta>();
+        known.set(id, meta);
+        subagentMetas.set(key, known);
+        recompute(ref);
+      })
+      .catch((error: unknown) => {
+        metaReads.delete(read);
+        host.log.error('описание субагента не применилось', { ref, id, error: String(error) });
+      });
+  }
+
+  /**
+   * Живые субагенты для окна. Описание из снимка хуков главнее; когда его нет, берётся `meta.json`
+   * субагента (и тип агента, если он пуст). Кэш `meta.json` остаётся только у живых задач.
+   */
+  function liveTasksOf(ref: SessionRef, key: string, activity: SessionActivity): LiveTask[] {
+    const known = subagentMetas.get(key);
+    const kept = new Map<string, SubagentMeta>();
+    const tasks = activity.tasks.map((task): LiveTask => {
+      let { agentType, description } = task;
+      if (description === null) {
+        const meta = known?.get(task.id);
+        if (meta !== undefined) {
+          kept.set(task.id, meta);
+          description = meta.description;
+          agentType ??= meta.agentType;
+        } else if (task.transcriptPath !== null) {
+          loadSubagentMeta(ref, key, task.id, task.transcriptPath);
+        }
+      }
+      return { id: task.id, agentType, description, background: task.background };
+    });
+    if (kept.size === 0) subagentMetas.delete(key);
+    else subagentMetas.set(key, kept);
+    return tasks;
+  }
+
   function metricsFor(
+    ref: SessionRef,
+    key: string,
     entry: WorkEntry,
     session: WorkSession,
     activity: SessionActivity,
@@ -311,6 +384,8 @@ export function createActivityService(
       unread: unreadOf(entry, session.id),
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,
+      tasks: liveTasksOf(ref, key, activity),
+      waitingFor: activity.waitingFor,
     };
   }
 
@@ -445,11 +520,11 @@ export function createActivityService(
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
     const activity = activityOf({ events, log, seen, now, silenceThresholdMs: threshold });
 
-    const metrics = metricsFor(entry, session, activity, logIndex.index(session));
+    const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
     const value: SessionLive = { activity, metrics };
 
     if (driven) clearSilenceTimer(key);
-    else scheduleSilenceTimer(ref, key, activity, log);
+    else scheduleSilenceTimer(ref, key, activity, log, now);
 
     const previous = live.get(key);
     live.set(key, value);
@@ -551,6 +626,9 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
+    for (const [key] of Array.from(subagentMetas)) {
+      if (!validSessions.has(key)) subagentMetas.delete(key);
+    }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
     for (const key of Array.from(hooksMissingNotified)) {

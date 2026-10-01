@@ -19,6 +19,14 @@ const ENDED = new Set(['Stop', 'SessionEnd']);
 const isIdleNotice = (event: EventRecord): boolean =>
   event.name === 'Notification' && event.notificationType === 'idle_prompt';
 
+/**
+ * Строки, которые дописывает MCP-сервер сессии, а не Claude Code (начало и конец `wait_for`): они могут
+ * лечь и после `Stop` — вызов, брошенный прерыванием, дожидается своего таймаута, — и ход не начинают и
+ * не заканчивают.
+ */
+const isWaitLine = (event: EventRecord): boolean =>
+  event.name === 'ParleyWaitStart' || event.name === 'ParleyWaitEnd';
+
 /** Упали посреди хода: последний хук журнала — не Stop и не SessionEnd. */
 export async function findInterrupted(
   entries: WorkEntry[],
@@ -35,7 +43,7 @@ export async function findInterrupted(
         sessionId: session.id,
       };
       const journal = await events(ref);
-      const last = journal?.filter((event) => !isIdleNotice(event)).at(-1);
+      const last = journal?.filter((event) => !isIdleNotice(event) && !isWaitLine(event)).at(-1);
       if (last !== undefined && !ENDED.has(last.name)) found.push(ref);
     }
   }
