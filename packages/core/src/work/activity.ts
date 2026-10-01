@@ -173,6 +173,9 @@ export function activityOf({
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
   // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
   let background: BackgroundTask[] = [];
+  // Остановленные субагенты: снимок следующего события может отстать и ещё числить их работающими,
+  // а остановка уже была — таких в снимках не учитываем, пока субагент не стартует снова.
+  const stopped = new Set<string>();
   let waitingFor: string | null = null;
   let heldByBackground = false;
 
@@ -200,10 +203,13 @@ export function activityOf({
     if (event.name === 'SessionStart') {
       started.clear();
       background = [];
+      stopped.clear();
       waitingFor = null;
     }
     if (event.backgroundTasks !== null) {
-      background = event.backgroundTasks.filter(isRunningSubagent);
+      background = event.backgroundTasks.filter(
+        (task) => isRunningSubagent(task) && !stopped.has(task.id),
+      );
     }
     switch (event.name) {
       case 'UserPromptSubmit':
@@ -237,6 +243,7 @@ export function activityOf({
       case 'SubagentStart':
         // Без id старт не сопоставить с остановкой — события пропускаются.
         if (event.agentId !== null) {
+          stopped.delete(event.agentId);
           started.set(event.agentId, {
             agentType: event.agentType,
             transcriptPath: event.transcriptPath,
@@ -244,11 +251,12 @@ export function activityOf({
         }
         break;
       case 'SubagentStop': {
-        // Чужой id ничего не снимает: служебных остановок без старта бывает десятки.
+        // Чужой id ничего не снимает из живых: служебных остановок без старта бывает десятки.
         const id = event.agentId;
         if (id !== null) {
+          stopped.add(id);
           started.delete(id);
-          // Снимок события мог отстать от остановки и ещё числить задачу работающей.
+          // Снимок самого события мог отстать от остановки и ещё числить задачу работающей.
           background = background.filter((task) => task.id !== id);
         }
         break;

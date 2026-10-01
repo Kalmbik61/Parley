@@ -877,3 +877,64 @@ describe('activityOf: heldByBackground — working только из-за фон
     expect(result.heldByBackground).toBe(false);
   });
 });
+
+describe('activityOf: отставший снимок не воскрешает остановленного субагента (Parley 0.2.0)', () => {
+  const stoppedLead = (...tail: EventRecord[]): EventRecord[] => [
+    event('UserPromptSubmit'),
+    hook('Stop', { backgroundTasks: [task('a')] }),
+    stopOf('a', { backgroundTasks: [task('a')] }),
+    ...tail,
+  ];
+
+  it('SubagentStop(a), а следующее событие снова числит a работающей: задача остановлена', () => {
+    const result = activity(
+      stoppedLead(
+        hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [task('a')] }),
+      ),
+    );
+
+    expect(result.activity).toBe('unseen');
+    expect(result.tasks).toEqual([]);
+    expect(result.subagents).toBe(0);
+    expect(result.heldByBackground).toBe(false);
+  });
+
+  it('и сколько бы позже ни пришло снимков с остановленным id: он вычищается из каждого', () => {
+    const result = activity(
+      stoppedLead(
+        hook('Notification', { backgroundTasks: [task('a')] }),
+        hook('Notification', { backgroundTasks: [task('a'), task('b')] }),
+      ),
+    );
+
+    // Остановленная `a` не вернулась, а `b`, о которой журнал знает только по снимку, жива.
+    expect(result.activity).toBe('working');
+    expect(result.tasks.map((item) => item.id)).toEqual(['b']);
+    expect(result.heldByBackground).toBe(true);
+  });
+
+  it('новый SubagentStart того же id возвращает задачу: её снова ведёт снимок', () => {
+    const result = activity(
+      stoppedLead(startOf('a'), hook('Notification', { backgroundTasks: [task('a')] })),
+    );
+
+    expect(result.activity).toBe('working');
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+
+  it('SessionStart забывает остановленных: снимок самого события с тем же id принимается', () => {
+    const result = activity(stoppedLead(hook('SessionStart', { backgroundTasks: [task('a')] })));
+
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+
+  it('чужая остановка (id, которого не стартовали) тоже запоминается и вычищает его из снимков', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      stopOf('чужой', { backgroundTasks: [] }),
+      hook('Stop', { backgroundTasks: [task('чужой'), task('a')] }),
+    ]);
+
+    expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+});
