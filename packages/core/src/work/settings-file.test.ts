@@ -9,7 +9,15 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HOOK_COMMAND, HOOK_EVENTS, workSettings, writeWorkSettings } from './settings-file.js';
+import {
+  FEED_HOOK_EVENTS,
+  HOOK_COMMAND,
+  HOOK_EVENTS,
+  workSettings,
+  workSettingsJson,
+  writeWorkSettings,
+  type HookHttp,
+} from './settings-file.js';
 import { STATUSLINE_BIN, STATUSLINE_ENTRY, statusLineCommand } from './statusline.js';
 import { createWork, workPaths } from './store.js';
 
@@ -50,6 +58,129 @@ describe('workSettings', () => {
     for (const event of HOOK_EVENTS.filter((name) => name !== 'SessionEnd')) {
       expect(hooks[event]?.[0]?.hooks[0]?.timeout).toBeUndefined();
     }
+  });
+});
+
+describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, решение 1)', () => {
+  const URL = 'http://127.0.0.1:53123/hooks';
+
+  /** Файл до ленты, собранный руками: восемь хуков `cat >>`, предел у `SessionEnd`, строка статуса. */
+  const legacyJson = (): string => {
+    const hooks: Record<string, unknown> = {};
+    for (const event of HOOK_EVENTS) {
+      const command: Record<string, unknown> = { type: 'command', command: HOOK_COMMAND };
+      if (event === 'SessionEnd') command['timeout'] = 5;
+      hooks[event] = [{ hooks: [command] }];
+    }
+    return `${JSON.stringify({ hooks, statusLine: { type: 'command', command: statusLineCommand() } }, null, 2)}\n`;
+  };
+
+  const httpOf = (event: string): HookHttp[] =>
+    (workSettings({ hookUrl: URL }).hooks[event] ?? []).flatMap((group) =>
+      group.hooks.filter((hook): hook is HookHttp => hook.type === 'http'),
+    );
+
+  it('без hookUrl файл побайтно прежний', () => {
+    expect(workSettingsJson()).toBe(legacyJson());
+    expect(workSettingsJson({})).toBe(legacyJson());
+    expect(workSettingsJson({ hookEvents: ['Stop'] })).toBe(legacyJson());
+  });
+
+  it('с hookUrl: HTTP-хук на каждое событие решения 1, с токеном и сессией из окружения', () => {
+    const settings = workSettings({ hookUrl: URL });
+
+    expect(Object.keys(settings.hooks)).toEqual([
+      ...new Set([...HOOK_EVENTS, ...FEED_HOOK_EVENTS]),
+    ]);
+    for (const event of FEED_HOOK_EVENTS) {
+      const http = httpOf(event);
+      expect(http, event).toHaveLength(1);
+      expect(http[0]).toMatchObject({
+        type: 'http',
+        url: URL,
+        headers: {
+          Authorization: 'Bearer $PARLEY_HOOK_TOKEN',
+          'X-Parley-Session': '$PARLEY_SESSION_ID',
+        },
+        allowedEnvVars: ['PARLEY_HOOK_TOKEN', 'PARLEY_SESSION_ID'],
+      });
+    }
+    expect(FEED_HOOK_EVENTS).toEqual([
+      'SessionStart',
+      'SessionEnd',
+      'UserPromptSubmit',
+      'MessageDisplay',
+      'PreToolUse',
+      'PermissionRequest',
+      'PostToolUse',
+      'PostToolUseFailure',
+      'PostToolBatch',
+      'Stop',
+      'StopFailure',
+      'Notification',
+      'SubagentStart',
+      'SubagentStop',
+      'PreCompact',
+      'PostCompact',
+      'PostModelSwitch',
+    ]);
+  });
+
+  it('таймауты: час у PermissionRequest и PreToolUse, у остальных — умолчание Claude Code', () => {
+    expect(httpOf('PermissionRequest')[0]?.timeout).toBe(3600);
+    expect(httpOf('PreToolUse')[0]?.timeout).toBe(3600);
+    for (const event of FEED_HOOK_EVENTS.filter(
+      (name) => name !== 'PermissionRequest' && name !== 'PreToolUse',
+    )) {
+      expect(httpOf(event)[0]?.timeout, event).toBeUndefined();
+    }
+  });
+
+  it('матчер только у PreToolUse: вопрос агента и план', () => {
+    const { hooks } = workSettings({ hookUrl: URL });
+
+    expect(hooks['PreToolUse']).toEqual([
+      { matcher: 'AskUserQuestion|ExitPlanMode', hooks: httpOf('PreToolUse') },
+    ]);
+    for (const [event, groups] of Object.entries(hooks)) {
+      if (event === 'PreToolUse') continue;
+      expect(
+        groups.every((group) => group.matcher === undefined),
+        event,
+      ).toBe(true);
+    }
+  });
+
+  it('прежние хуки cat >> на месте и идут первыми в своей группе', () => {
+    const { hooks } = workSettings({ hookUrl: URL });
+
+    for (const event of HOOK_EVENTS) {
+      const group = hooks[event];
+      expect(group, event).toHaveLength(1);
+      expect(group?.[0]?.hooks[0]).toMatchObject({ type: 'command', command: HOOK_COMMAND });
+      expect(group?.[0]?.hooks[1]?.type, event).toBe('http');
+    }
+    expect(hooks['SessionEnd']?.[0]?.hooks[0]).toEqual({
+      type: 'command',
+      command: HOOK_COMMAND,
+      timeout: 5,
+    });
+    expect(workSettings({ hookUrl: URL }).statusLine).toEqual({
+      type: 'command',
+      command: statusLineCommand(),
+    });
+  });
+
+  it('hookEvents сужает список HTTP-событий', () => {
+    const { hooks } = workSettings({ hookUrl: URL, hookEvents: ['Stop', 'MessageDisplay'] });
+
+    expect(Object.keys(hooks)).toEqual([...HOOK_EVENTS, 'MessageDisplay']);
+    expect(hooks['Stop']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command', 'http']);
+    expect(hooks['UserPromptSubmit']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command']);
+  });
+
+  it('в файле только хуки и строка статуса — рамка (Review Focus 5)', () => {
+    expect(Object.keys(workSettings({ hookUrl: URL }))).toEqual(['hooks', 'statusLine']);
   });
 });
 
@@ -202,5 +333,17 @@ describe('writeWorkSettings', () => {
 
     // Повторный запуск сессии переписывает тот же файл: он один на работу.
     expect(await writeWorkSettings(project, work.id)).toBe(file);
+  });
+
+  it('с hookUrl пишет HTTP-хуки, без него — снова прежний файл', async () => {
+    const { work } = await createWork(project, { title: 'Лента' });
+    const url = 'http://127.0.0.1:40001/hooks';
+
+    const file = await writeWorkSettings(project, work.id, { hookUrl: url });
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson({ hookUrl: url }));
+    expect(await readFile(file, 'utf8')).toContain(url);
+
+    await writeWorkSettings(project, work.id);
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
   });
 });

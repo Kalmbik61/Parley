@@ -23,6 +23,7 @@ import {
   UNTITLED_WORK,
 } from './launch.js';
 import { setResult } from './map.js';
+import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
 
 /** Пути к бинарям подменяются на заглушку: настоящий агент здесь не запускается. */
@@ -312,6 +313,21 @@ describe('план запуска', () => {
     expect((await stat(workPaths(project, workId).events)).isDirectory()).toBe(true);
     // Как и у Claude Code, сессия живёт под теми же переменными (оба имени): notify берёт адрес из них.
     expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
+  });
+
+  it('hookUrl доезжает до файла --settings: HTTP-хуки ленты; без него файл прежний (вид «Chat»)', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const url = 'http://127.0.0.1:41234/hooks';
+
+    const withFeed = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      hookUrl: url,
+    });
+    const file = withFeed.args[withFeed.args.indexOf('--settings') + 1] as string;
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson({ hookUrl: url }));
+
+    const resumed = await planResume(project, workId, await sessionOf(workId, sessionId));
+    expect(resumed.args[resumed.args.indexOf('--settings') + 1]).toBe(file);
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
   });
 
   it('у claude ни notify, ни каталога codex-журнала запуск не добавляет', async () => {

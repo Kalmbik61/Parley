@@ -56,8 +56,23 @@ export interface HookCommand {
   timeout?: number;
 }
 
+/**
+ * HTTP-обработчик ленты (вид «Chat», решение 1): тот же stdin-JSON уходит POST-запросом на приёмник
+ * хоста, решение — тело ответа. Токен и id сессии Claude Code подставляет из окружения агента — только
+ * переменные из `allowedEnvVars`.
+ */
+export interface HookHttp {
+  type: 'http';
+  url: string;
+  headers: Record<string, string>;
+  allowedEnvVars: string[];
+  timeout?: number;
+}
+
 export interface HookMatcher {
-  hooks: HookCommand[];
+  /** Только у `PreToolUse` ленты: какие инструменты ждут ответа окна. */
+  matcher?: string;
+  hooks: (HookCommand | HookHttp)[];
 }
 
 export interface StatusLineSetting {
@@ -70,11 +85,82 @@ export interface SettingsFile {
   statusLine: StatusLineSetting;
 }
 
+/** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
+export const FEED_HOOK_EVENTS = [
+  'SessionStart',
+  'SessionEnd',
+  'UserPromptSubmit',
+  'MessageDisplay',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'PostToolBatch',
+  'Stop',
+  'StopFailure',
+  'Notification',
+  'SubagentStart',
+  'SubagentStop',
+  'PreCompact',
+  'PostCompact',
+  'PostModelSwitch',
+] as const;
+
+/**
+ * `PreToolUse` ленты нужен только там, где окно отвечает за человека: вопрос агента и одобрение плана.
+ */
+export const FEED_PRE_TOOL_MATCHER = 'AskUserQuestion|ExitPlanMode';
+
+/**
+ * Предел HTTP-хуков, которые ждут нажатия человека в окне: час. Остальные — умолчание Claude Code
+ * (`MessageDisplay` держит порцию текста до ответа, и хост отвечает на него сразу).
+ */
+const FEED_TIMEOUT_SEC: Readonly<Record<string, number>> = {
+  PermissionRequest: 3600,
+  PreToolUse: 3600,
+};
+
+/** Переменные окружения агента, которые Claude Code подставляет в заголовки HTTP-хука. */
+const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
+const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
+
+export interface WorkSettingsOptions {
+  /**
+   * Адрес приёмника хуков хоста (`http://127.0.0.1:<порт>/hooks`). Нет — в файле только прежние
+   * хуки и строка статуса, побайтно как до ленты.
+   */
+  hookUrl?: string;
+  /** Какие события слать HTTP; по умолчанию — `FEED_HOOK_EVENTS`. */
+  hookEvents?: readonly string[];
+}
+
+function feedHook(url: string, event: string): HookHttp {
+  const hook: HookHttp = {
+    type: 'http',
+    url,
+    headers: {
+      Authorization: `Bearer $${HOOK_TOKEN_ENV}`,
+      'X-Parley-Session': `$${SESSION_ID_ENV}`,
+    },
+    allowedEnvVars: [HOOK_TOKEN_ENV, SESSION_ID_ENV],
+  };
+  const timeout = FEED_TIMEOUT_SEC[event];
+  if (timeout !== undefined) hook.timeout = timeout;
+  return hook;
+}
+
 /**
  * Содержимое `settings.json` работы. Чужие хуки пользователя не трогаются:
  * `--settings` мержится с его настройками — мерж делает сам Claude Code.
+ *
+ * С `hookUrl` к прежним хукам добавляются HTTP-обработчики ленты: у событий из обоих списков —
+ * в той же группе после `cat >>`, у новых — своей группой. Журнал `events/` остаётся как был: по
+ * нему считается активность.
  */
-export function workSettings(): SettingsFile {
+export function workSettings({
+  hookUrl,
+  hookEvents = FEED_HOOK_EVENTS,
+}: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
     const timeout = TIMEOUT_SEC[event];
@@ -82,21 +168,38 @@ export function workSettings(): SettingsFile {
     if (timeout !== undefined) command.timeout = timeout;
     hooks[event] = [{ hooks: [command] }];
   }
+  if (hookUrl !== undefined) {
+    for (const event of hookEvents) {
+      const http = feedHook(hookUrl, event);
+      const group = hooks[event]?.[0];
+      if (group !== undefined) {
+        group.hooks.push(http);
+      } else if (event === 'PreToolUse') {
+        hooks[event] = [{ matcher: FEED_PRE_TOOL_MATCHER, hooks: [http] }];
+      } else {
+        hooks[event] = [{ hooks: [http] }];
+      }
+    }
+  }
   return { hooks, statusLine: { type: 'command', command: statusLineCommand() } };
 }
 
-export function workSettingsJson(): string {
-  return `${JSON.stringify(workSettings(), null, 2)}\n`;
+export function workSettingsJson(options: WorkSettingsOptions = {}): string {
+  return `${JSON.stringify(workSettings(options), null, 2)}\n`;
 }
 
 /**
  * Пишет `settings.json` работы и заводит каталог `events/`: хук умеет только
  * дописывать файл, каталог под него создаём мы.
  */
-export async function writeWorkSettings(projectPath: string, workId: string): Promise<string> {
+export async function writeWorkSettings(
+  projectPath: string,
+  workId: string,
+  options: WorkSettingsOptions = {},
+): Promise<string> {
   const paths = workPaths(projectPath, workId);
   await ensureStateDir(projectPath);
   await mkdir(paths.events, { recursive: true });
-  await writeFile(paths.settings, workSettingsJson(), 'utf8');
+  await writeFile(paths.settings, workSettingsJson(options), 'utf8');
   return paths.settings;
 }

@@ -56,6 +56,11 @@ export interface LaunchOptions {
    */
   model?: string;
   effort?: EffortLevel;
+  /**
+   * Адрес приёмника хуков хоста: с ним файл `--settings` получает HTTP-хуки ленты (вид «Chat»,
+   * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
+   */
+  hookUrl?: string;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -229,7 +234,11 @@ async function plan(
   // агента читать нечего.
   if (session.agent !== null) subs.agent = session.agent;
   if (template.includes('{settingsFile}')) {
-    subs.settingsFile = await writeWorkSettings(projectPath, workId);
+    subs.settingsFile = await writeWorkSettings(
+      projectPath,
+      workId,
+      options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {},
+    );
   }
   // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
   // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
