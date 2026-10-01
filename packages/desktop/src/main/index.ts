@@ -465,6 +465,7 @@ if (!gotLock) {
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
       getUpdate: () => updates.latest(),
+      appVersion: app.getVersion(),
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },

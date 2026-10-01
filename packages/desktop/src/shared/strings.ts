@@ -691,6 +691,9 @@ export const S = {
     restartHost: 'Restart host',
     statusConnecting: 'Connecting…',
     statusConnected: (hostVersion: string): string => `Host ${hostVersion}`,
+    /** Тост «хост от другой сборки» (0.2.0, `update/host-build-notice.ts`). */
+    hostOtherBuild: (hostVersion: string, appVersion: string): string =>
+      `The host is still from Parley ${hostVersion}, the window is ${appVersion}. Restart the host to finish the update.`,
     statusMismatch: 'Host version mismatch',
     statusDisconnected: (reason: string): string => `No connection: ${reason}`,
     /** `main/index.ts` — login-shell не нашёл системный `node`. */

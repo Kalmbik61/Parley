@@ -81,6 +81,21 @@ export function missingMethods(status: HostStatus): string[] {
   return REQUIRED_METHODS.filter((method) => !known.has(method));
 }
 
+/**
+ * Хост от другой сборки Parley (0.2.0): окно обновили, а хост работает от прежнего приложения. Протокол тот же,
+ * но агенты и git, которые хост запускает, — от старой копии, и macOS считает копии разными приложениями
+ * (подпись ad-hoc у каждой сборки своя): доступ к папкам спрашивается по кругу. Такой хост перезапускают.
+ * `null` — та же сборка, версия окна ещё не пришла или связи нет.
+ */
+export function otherHostBuild(
+  status: HostStatus,
+  appVersion: string | null,
+): { host: string; window: string } | null {
+  if (status.state !== 'connected' || appVersion === null || status.hostVersion === appVersion)
+    return null;
+  return { host: status.hostVersion, window: appVersion };
+}
+
 /** Понимает ли хост метод — для пунктов меню и жестов, которые без него прячутся. */
 export function useHostSupports(method: string): boolean {
   return useHostStore((state) => hostMethods(state.status).has(method));

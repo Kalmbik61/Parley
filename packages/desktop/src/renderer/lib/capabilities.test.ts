@@ -15,6 +15,7 @@ import {
   REQUIRED_METHODS,
   hostMethods,
   missingMethods,
+  otherHostBuild,
   useHostSupports,
 } from './capabilities.js';
 
@@ -96,5 +97,20 @@ describe('capabilities', () => {
     useHostStore.setState({ status });
     const { result } = renderHook(() => useHostSupports('works.rename'));
     expect(result.current).toBe(false);
+  });
+});
+
+describe('otherHostBuild — хост от другой сборки окна (0.2.0)', () => {
+  it('версии разные — пара версий; одинаковые — null', () => {
+    expect(otherHostBuild(connected(null), '1.1.0')).toEqual({ host: '1.0.0', window: '1.1.0' });
+    expect(otherHostBuild(connected(null), '1.0.0')).toBeNull();
+  });
+
+  it('версия окна ещё не пришла или связи нет — не судим', () => {
+    expect(otherHostBuild(connected(null), null)).toBeNull();
+    expect(otherHostBuild({ state: 'connecting' }, '1.1.0')).toBeNull();
+    expect(
+      otherHostBuild({ state: 'mismatch', hostVersion: '0.9.0', liveSessions: 0 }, '1.1.0'),
+    ).toBeNull();
   });
 });

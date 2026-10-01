@@ -20,6 +20,7 @@ import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';
@@ -29,6 +30,7 @@ afterEach(cleanup);
 beforeEach(() => {
   useUiStore.getState().closeRestartHostDialog();
   useProvidersStore.setState({ providers: [] });
+  useHostStore.setState({ appVersion: null });
 });
 
 /** Строка статуса с подтверждением из стора — так её подключает `AppShell`. */
@@ -61,6 +63,30 @@ function renderBar(status: HostStatus, onRestartHost = vi.fn()) {
 }
 
 const old: HostStatus = { state: 'connected', hostVersion: '1.0.0', methods: null };
+
+describe('StatusBar: хост от другой сборки окна (0.2.0)', () => {
+  const full: HostStatus = {
+    state: 'connected',
+    hostVersion: '0.1.0',
+    methods: [...REQUIRED_METHODS],
+  };
+
+  it('методов хватает, но версия хоста не окна — тот же сегмент «Host is outdated — restart»', () => {
+    useHostStore.setState({ appVersion: '0.2.0' });
+    renderBar(full);
+    expect(screen.getByRole('button', { name: S.statusBar.hostOutdated })).toBeTruthy();
+  });
+
+  it('та же сборка или версия окна ещё не пришла — сегмента нет', () => {
+    useHostStore.setState({ appVersion: '0.1.0' });
+    renderBar(full);
+    expect(screen.queryByRole('button', { name: S.statusBar.hostOutdated })).toBeNull();
+    cleanup();
+    useHostStore.setState({ appVersion: null });
+    renderBar(full);
+    expect(screen.queryByRole('button', { name: S.statusBar.hostOutdated })).toBeNull();
+  });
+});
 
 describe('StatusBar: хост старее окна', () => {
   it('Restart в подтверждении зовёт onRestartHost один раз', () => {

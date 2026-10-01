@@ -22,6 +22,7 @@ import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
 import { useWorksStore } from './store/works.js';
 import { Toaster } from './ui/sonner.js';
+import { wireHostBuildNotice } from './update/host-build-notice.js';
 import { wireUpdateNotice } from './update/update-notice.js';
 import { toast } from 'sonner';
 
@@ -198,6 +199,8 @@ export function App(): JSX.Element {
       wireFocusTargets(bridge),
       // Тост о новой версии (V6 плана релиза 0.1.0): рядом с `Toaster`, который живёт в той же ветке — подключённой.
       wireUpdateNotice(bridge),
+      // Хост от другой сборки (0.2.0): окно обновили, хост остался прежним — тост с «Restart host…».
+      wireHostBuildNotice(),
     ];
 
     bridge

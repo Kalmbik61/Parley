@@ -25,7 +25,8 @@ import { providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { cn } from '../lib/cn.js';
-import { missingMethods } from '../lib/capabilities.js';
+import { missingMethods, otherHostBuild } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 
 const CONNECTION_TEXT: Record<HostStatus['state'], (status: HostStatus) => string> = {
@@ -135,7 +136,9 @@ export function StatusBar({
   attention,
   onNextAttention,
 }: StatusBarProps): JSX.Element {
-  const outdated = missingMethods(status).length > 0;
+  const appVersion = useHostStore((state) => state.appVersion);
+  // Хосту не хватает методов окна или он от другой сборки (окно обновили, хост остался прежним) — перезапуск.
+  const outdated = missingMethods(status).length > 0 || otherHostBuild(status, appVersion) !== null;
   const providers = useProvidersStore((state) => state.providers).filter((provider) => provider.available);
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);

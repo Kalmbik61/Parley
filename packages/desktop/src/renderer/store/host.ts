@@ -21,7 +21,12 @@ export interface HostState {
    * что берут данные хоста один раз (`providers.list`, `worktrees.diff`), перечитывают их по нему.
    */
   connections: number;
-  /** Подписка на `onStatus`; возвращает отписку. */
+  /**
+   * Версия окна (`app.version`, 0.2.0): хост другой сборки предлагают перезапустить (`otherHostBuild`).
+   * `null` — ещё не пришла.
+   */
+  appVersion: string | null;
+  /** Подписка на `onStatus` и запрос версии окна; возвращает отписку. */
   init(bridge: ParleyBridge): () => void;
 }
 
@@ -29,13 +34,19 @@ export const useHostStore = create<HostState>((set) => ({
   status: { state: 'connecting' },
   everConnected: false,
   connections: 0,
-  init: (bridge) =>
-    bridge.onStatus((status) =>
+  appVersion: null,
+  init: (bridge) => {
+    bridge.app.version().then(
+      (appVersion) => set({ appVersion }),
+      (error: unknown) => console.warn('[parley] app version', error),
+    );
+    return bridge.onStatus((status) =>
       set((current) => ({
         status,
         everConnected: current.everConnected || status.state === 'connected',
         // Переход в connected, а не каждый статус: `setHostMethods` рассылает connected повторно.
         connections: current.connections + (status.state === 'connected' && current.status.state !== 'connected' ? 1 : 0),
       })),
-    ),
+    );
+  },
 }));

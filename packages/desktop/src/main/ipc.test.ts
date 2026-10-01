@@ -185,6 +185,7 @@ function setup(
     showNotification,
     takeFocusTarget,
     getUpdate,
+    appVersion: '0.2.0-test',
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     setBadge: vi.fn(),
     showItemInFolder,
@@ -652,6 +653,13 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+describe('registerIpc — app:version (хост другой сборки, 0.2.0)', () => {
+  it('отдаёт версию окна, с которой main собрал регистрацию', async () => {
+    const { ipcMain } = setup();
+    await expect(ipcMain.invoke('app:version')).resolves.toBe('0.2.0-test');
   });
 });
 

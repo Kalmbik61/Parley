@@ -151,6 +151,8 @@ export interface RegisterIpcOptions {
   takeFocusTarget: () => FocusTarget | null;
   /** Релиз новее запущенной версии, найденный проверкой main (`app:get-update`, V6 плана релиза 0.1.0); `null` — нет или проверка выключена. */
   getUpdate: () => Promise<UpdateInfo | null>;
+  /** Версия окна (`app.getVersion()`): страница сверяет с ней версию хоста (`app:version`, 0.2.0). */
+  appVersion: string;
   /**
    * Окно сохранило `ui.json` (`app:save-ui`): main реагирует на смену настроек сразу — включённая проверка новой
    * версии идёт тут же (`main/update-check.ts`, `settingsChanged`). Вызывается после записи; не бросает.
@@ -259,6 +261,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     showNotification,
     takeFocusTarget,
     getUpdate,
+    appVersion,
     onUiSaved,
     setBadge,
     layoutStore,
@@ -316,6 +319,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:take-focus-target', withIpcError(() => takeFocusTarget()));
 
   ipcMain.handle('app:get-update', withIpcError(() => getUpdate()));
+  ipcMain.handle('app:version', withIpcError(async () => appVersion));
 
   ipcMain.on('app:set-badge', (_event, count: number) => {
     setBadge(count);
