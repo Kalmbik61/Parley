@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { defaultRoot } from '../discover.js';
+import { claudeProjectRoots } from '../discover.js';
 import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
@@ -126,28 +126,35 @@ async function writtenBrief(
 }
 
 /**
- * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта корня
- * истории (`defaultRoot`; тесты и E2E подменяют его `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не
- * вычисляется: имя ему строит Claude Code, и у сессии в worktree оно своё. Корня нет — нет и
- * разговоров; корень не прочитать — разговор считается, и остаётся прежний `--resume`.
+ * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта одного из
+ * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`; тесты и E2E
+ * подменяют их `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не вычисляется: имя ему строит Claude Code, и у
+ * сессии в worktree оно своё.
+ *
+ * «Нет» — только точный ответ: хоть один корень прочитан, и транскрипта нет ни в одном. Не прочитан ни один
+ * (их нет, нет доступа) — разговор считается, и остаётся прежний `--resume`: новый процесс с занятым id
+ * Claude Code не запустит («Session ID … is already in use»), а это хуже, чем «No conversation found».
  */
 async function claudeConversationExists(id: string): Promise<boolean> {
-  const root = defaultRoot();
-  let projects: Dirent[];
-  try {
-    projects = await readdir(root, { withFileTypes: true });
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
-  }
-  for (const project of projects) {
-    if (!project.isDirectory()) continue;
+  let readAny = false;
+  for (const root of claudeProjectRoots()) {
+    let projects: Dirent[];
     try {
-      if ((await stat(path.join(root, project.name, `${id}.jsonl`))).isFile()) return true;
+      projects = await readdir(root, { withFileTypes: true });
     } catch {
-      // В этом каталоге проекта такого транскрипта нет.
+      continue;
+    }
+    readAny = true;
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      try {
+        if ((await stat(path.join(root, project.name, `${id}.jsonl`))).isFile()) return true;
+      } catch {
+        // В этом каталоге проекта такого транскрипта нет.
+      }
     }
   }
-  return false;
+  return !readAny;
 }
 
 /**
@@ -337,9 +344,12 @@ export function isNewLabel(label: string): boolean {
   return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label);
 }
 
-/** Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. */
+/**
+ * Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. Служебный текст Claude
+ * Code — тоже не название: автозаголовок сборок до 0.2.0 ставил его безымянной работе вместе с ярлыком сессии.
+ */
 export function isUntitledWork(title: string): boolean {
-  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK;
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title);
 }
 
 export interface NewSessionResult {

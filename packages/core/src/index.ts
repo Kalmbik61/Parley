@@ -25,7 +25,13 @@ export type { JsonlStats, RawRecord } from './jsonl.js';
 export { adapterV1 } from './adapter-v1.js';
 export type { TokenTotals } from './counters.js';
 export type { SchemaAdapter, SessionRecord } from './adapter-v1.js';
-export { defaultRoot, discoverSession, discoverSessions, sessionFileForPath } from './discover.js';
+export {
+  claudeProjectRoots,
+  defaultRoot,
+  discoverSession,
+  discoverSessions,
+  sessionFileForPath,
+} from './discover.js';
 export type { DiscoveredSession, DiscoveredSubagent } from './discover.js';
 export { indexSessionFile, projectSlug } from './session-index.js';
 export type { IndexSessionOptions, Provider, SessionIndex, TitleSource } from './session-index.js';

@@ -186,11 +186,14 @@ describe('метки быстрой сессии и автозаголовок',
     const created = await createNewSession(project, null);
     await updateMap(project, created.workId, (map) => {
       map.sessions[0]!.label = polluted;
+      // Заголовок безымянной работы тот же автозаголовок портил вместе с ярлыком.
+      map.work.title = polluted;
     });
+    expect(isUntitledWork(polluted)).toBe(true);
     await applyAutoTitle(project, created.workId, created.session.id, 'Orca мобильное приложение');
-    expect((await readMap(project, created.workId)).sessions[0]?.label).toBe(
-      'Orca мобильное приложение',
-    );
+    const healed = await readMap(project, created.workId);
+    expect(healed.sessions[0]?.label).toBe('Orca мобильное приложение');
+    expect(healed.work.title).toBe('Orca мобильное приложение');
   });
 
   it('автозаголовок переименует быструю сессию и безымянную работу один раз', async () => {
@@ -687,6 +690,34 @@ describe('план возобновления', () => {
       const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
       expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
       expect(plan.args).not.toContain('--session-id');
+    });
+
+    it('CLAUDE_CONFIG_DIR: транскрипт в его projects — --resume, а не новый процесс с занятым id', async () => {
+      const home = await mkdtemp(path.join(tmpdir(), 'parley-claude-home-'));
+      const config = await mkdtemp(path.join(tmpdir(), 'parley-claude-config-'));
+      try {
+        setEnv('PARLEY_CLAUDE_PROJECTS_DIR', undefined);
+        setEnv('HOME', home);
+        setEnv('CLAUDE_CONFIG_DIR', config);
+        await mkdir(path.join(config, 'projects', '-p'), { recursive: true });
+        await writeFile(path.join(config, 'projects', '-p', `${id}.jsonl`), '{"type":"user"}\n');
+        const { workId, sessionId } = await pending('claude');
+        await withId(workId, sessionId);
+
+        const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
+      } finally {
+        await Promise.all([home, config].map((dir) => rm(dir, { recursive: true, force: true })));
+      }
+    });
+
+    it('ни один корень истории не прочитать — ответа нет, остаётся --resume', async () => {
+      setEnv('PARLEY_CLAUDE_PROJECTS_DIR', path.join(logs, 'нет-такого-каталога'));
+      const { workId, sessionId } = await pending('claude');
+      await withId(workId, sessionId);
+
+      const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
     });
 
     it('тихую сессию без разговора будит письмо — указатель её первым сообщением', async () => {

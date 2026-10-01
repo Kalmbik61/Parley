@@ -11,6 +11,25 @@ import { envValue } from './names.js';
  */
 export const CLAUDE_PROJECTS_DIR_KEY = 'CLAUDE_PROJECTS_DIR';
 
+/**
+ * Все корни, где Claude Code держит историю, для вопроса «есть ли такой транскрипт» (0.2.0): подмена
+ * `PARLEY_CLAUDE_PROJECTS_DIR` (тесты, E2E) — только она; иначе `$CLAUDE_CONFIG_DIR/projects`, если
+ * переменная задана (Claude Code пишет туда, куда она указывает), и `~/.claude/projects`. Только пути —
+ * ничего не читается. Окружение — хоста: оно же у агентов, которых он запускает.
+ */
+export function claudeProjectRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string[] {
+  const override = envValue(env, CLAUDE_PROJECTS_DIR_KEY);
+  if (override !== undefined) return [override];
+  const roots: string[] = [];
+  const configDir = env['CLAUDE_CONFIG_DIR']?.trim();
+  if (configDir !== undefined && configDir !== '') roots.push(path.join(configDir, 'projects'));
+  roots.push(path.join(home, '.claude', 'projects'));
+  return [...new Set(roots)];
+}
+
 /** Корень истории Claude Code. Каталог только для чтения. */
 export function defaultRoot(): string {
   const override = envValue(process.env, CLAUDE_PROJECTS_DIR_KEY);

@@ -299,6 +299,29 @@ describe('заголовок сессии', () => {
     expect(index.titleSource).toBe('first-text');
   });
 
+  it('last-prompt со слеш-командой, `!` или служебным текстом — не заголовок: берётся прежний', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't9',
+      line({ type: 'last-prompt', lastPrompt: 'почини парсер' }) +
+        line({ type: 'last-prompt', lastPrompt: '/model opus' }) +
+        line({ type: 'last-prompt', lastPrompt: '!ls -la' }) +
+        line({ type: 'last-prompt', lastPrompt: '<command-name>/effort</command-name>' }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.title).toBe('почини парсер');
+    expect(index.titleSource).toBe('last-prompt');
+  });
+
+  it('путь в начале запроса — не слеш-команда', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      't10',
+      line({ type: 'last-prompt', lastPrompt: '/Users/me/app.ts падает на старте' }),
+    );
+    expect((await indexSessionFile(file, root)).title).toBe('/Users/me/app.ts падает на старте');
+  });
+
   it('одни служебные реплики — заголовка нет; isMeta служебна и без тегов', async () => {
     const file = await writeSession(
       '-Users-me-proj',
