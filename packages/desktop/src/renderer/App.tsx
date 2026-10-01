@@ -170,6 +170,9 @@ export function App(): JSX.Element {
   const closeSettingsDialog = useUiStore((state) => state.closeSettingsDialog);
 
   useEffect(() => useHostStore.getState().init(getHostClient()), []);
+  // Хост от другой сборки (0.2.0): одна подписка на окно, а не на подключение — тост переживает переподключение
+  // и снимается, когда хост перезапущен той же сборкой (ревью 0.2.0, п. 3).
+  useEffect(() => wireHostBuildNotice(), []);
 
   // Хранилища и уведомления живут только пока связь с хостом есть: без неё
   // `works.list`/`settings.get` всё равно отвечать некому.
@@ -199,8 +202,6 @@ export function App(): JSX.Element {
       wireFocusTargets(bridge),
       // Тост о новой версии (V6 плана релиза 0.1.0): рядом с `Toaster`, который живёт в той же ветке — подключённой.
       wireUpdateNotice(bridge),
-      // Хост от другой сборки (0.2.0): окно обновили, хост остался прежним — тост с «Restart host…».
-      wireHostBuildNotice(),
     ];
 
     bridge

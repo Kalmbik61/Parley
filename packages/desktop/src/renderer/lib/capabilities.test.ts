@@ -106,6 +106,23 @@ describe('otherHostBuild — хост от другой сборки окна (0
     expect(otherHostBuild(connected(null), '1.0.0')).toBeNull();
   });
 
+  it('хост новее окна (открыта старая копия приложения) или версия не x.y.z — не «устарел» (ревью 0.2.0, п. 13)', () => {
+    expect(otherHostBuild(connected(null), '0.9.0')).toBeNull();
+    expect(
+      otherHostBuild({ state: 'connected', hostVersion: 'unknown', methods: null }, '1.1.0'),
+    ).toBeNull();
+    expect(otherHostBuild(connected(null), 'dev')).toBeNull();
+    expect(
+      otherHostBuild({ state: 'connected', hostVersion: '0.10.0', methods: null }, '0.9.1'),
+    ).toBeNull();
+    expect(
+      otherHostBuild({ state: 'connected', hostVersion: '0.9.1', methods: null }, '0.10.0'),
+    ).toEqual({
+      host: '0.9.1',
+      window: '0.10.0',
+    });
+  });
+
   it('версия окна ещё не пришла или связи нет — не судим', () => {
     expect(otherHostBuild(connected(null), null)).toBeNull();
     expect(otherHostBuild({ state: 'connecting' }, '1.1.0')).toBeNull();

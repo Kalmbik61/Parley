@@ -84,6 +84,26 @@ describe('wireHostBuildNotice', () => {
     expect(toast.dismiss).toHaveBeenCalledWith(HOST_BUILD_TOAST_ID);
   });
 
+  it('тост прежней подписки снимает и новая: хост перезапущен той же сборкой (ревью 0.2.0, п. 3)', () => {
+    useHostStore.setState({ appVersion: '0.2.0', status: connected('0.1.0') });
+    const first = wireHostBuildNotice();
+    expect(toast).toHaveBeenCalledTimes(1);
+    first();
+
+    useHostStore.setState({ status: { state: 'disconnected', reason: 'closed' } });
+    off = wireHostBuildNotice();
+    useHostStore.setState({ status: connected('0.2.0') });
+    expect(toast.dismiss).toHaveBeenCalledWith(HOST_BUILD_TOAST_ID);
+  });
+
+  it('переподключение к тому же старому хосту тост не повторяет', () => {
+    off = wireHostBuildNotice();
+    useHostStore.setState({ appVersion: '0.2.0', status: connected('0.1.0') });
+    useHostStore.setState({ status: { state: 'disconnected', reason: 'closed' } });
+    useHostStore.setState({ status: connected('0.1.0') });
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
   it('та же сборка или версия окна ещё не пришла — тоста нет', () => {
     off = wireHostBuildNotice();
     useHostStore.setState({ status: connected('0.1.0') });

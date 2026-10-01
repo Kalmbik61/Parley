@@ -133,3 +133,19 @@ describe('README и CHANGELOG: Intel-сборка не проверена на I
     expect(limitations).toMatch(/steps repeat after each update/);
   });
 });
+
+describe('версии пакетов одной сборки (ревью 0.2.0, п. 13)', () => {
+  it('окно сверяет версию хоста со своей: у корня, core, protocol, host и desktop она одна', () => {
+    const version = (file: string): string =>
+      (JSON.parse(readFileSync(path.join(repoRoot, file), 'utf8')) as { version: string }).version;
+    const desktop = version('packages/desktop/package.json');
+    for (const file of [
+      'package.json',
+      'packages/core/package.json',
+      'packages/protocol/package.json',
+      'packages/host/package.json',
+    ]) {
+      expect(version(file), file).toBe(desktop);
+    }
+  });
+});

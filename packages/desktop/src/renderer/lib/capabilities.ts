@@ -82,18 +82,29 @@ export function missingMethods(status: HostStatus): string[] {
 }
 
 /**
- * Хост от другой сборки Parley (0.2.0): окно обновили, а хост работает от прежнего приложения. Протокол тот же,
+ * Хост прежней сборки Parley (0.2.0): окно обновили, а хост работает от старого приложения. Протокол тот же,
  * но агенты и git, которые хост запускает, — от старой копии, и macOS считает копии разными приложениями
  * (подпись ad-hoc у каждой сборки своя): доступ к папкам спрашивается по кругу. Такой хост перезапускают.
- * `null` — та же сборка, версия окна ещё не пришла или связи нет.
+ * Только хост СТАРШЕ окна: новее (открыта старая копия приложения) — не «устарел», и перезапуск откатил бы
+ * его. `null` — та же или новее сборка, версия не `x.y.z`, версия окна ещё не пришла или связи нет.
  */
 export function otherHostBuild(
   status: HostStatus,
   appVersion: string | null,
 ): { host: string; window: string } | null {
-  if (status.state !== 'connected' || appVersion === null || status.hostVersion === appVersion)
-    return null;
+  if (status.state !== 'connected' || appVersion === null) return null;
+  const host = semver(status.hostVersion);
+  const window = semver(appVersion);
+  if (host === null || window === null) return null;
+  const at = host.findIndex((part, index) => part !== window[index]);
+  if (at === -1 || host[at]! > window[at]!) return null;
   return { host: status.hostVersion, window: appVersion };
+}
+
+/** `x.y.z` (хвост `-…` не важен) → [x, y, z]; не такая версия — `null`. */
+function semver(version: string): [number, number, number] | null {
+  const found = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  return found === null ? null : [Number(found[1]), Number(found[2]), Number(found[3])];
 }
 
 /** Понимает ли хост метод — для пунктов меню и жестов, которые без него прячутся. */
