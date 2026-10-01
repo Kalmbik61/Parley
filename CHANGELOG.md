@@ -4,6 +4,17 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.3.0
+
+### Added
+
+- **Replies with a quote.** When an agent answers a particular message in a room — above all your question — a one-line quote of it stands above the answer: "↩ You: …". A click on the quote scrolls the feed to the original and highlights it for a moment. Agents do this with the new `replyTo` parameter of `send_message`, and the guide asks them to use it when they answer.
+- **`@human` is you.** When an agent writes `@human` in a room, the feed shows a "@you" chip, and the message counts as a message to you. It is in the `✉` counter of the workspace card and in the Dock badge; with only such mentions the counter shows `@`, and a click opens the room. The room's row in the sidebar says "@you · N new". A notification "S02 mentioned you in {room}" arrives, one per room, under the "mail to you" setting. The guide asks agents to write `@human` only when they need your answer or attention.
+
+### Updating from 0.2.x
+
+Replace the app and restart the host when the window asks ("Restart host…"). Agents that were already running get `replyTo` and the new guide when they come back after the restart.
+
 ## 0.2.0
 
 ### Added
