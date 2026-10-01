@@ -269,6 +269,7 @@ export type {
   ActivityLog,
   ActivityOptions,
   ActivitySource,
+  ActivityTask,
   SessionActivity,
 } from './work/activity.js';
 export { bareEvent, openEvents, watchEvents } from './work/events.js';

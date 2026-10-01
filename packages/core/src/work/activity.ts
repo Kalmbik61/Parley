@@ -3,11 +3,20 @@
  * В карту не пишется: её выводят читатели по журналу хуков (4.2) и, как
  * страховка, по логу провайдера (4.3).
  *
+ * Субагенты считаются по id: `SubagentStart` заводит, `SubagentStop` снимает, а чужая
+ * остановка — служебные помощники Claude Code шлют их десятками без старта — не снимает
+ * ничего. Обычный субагент ход родителя не переживает. Фоновые живут дольше: Claude Code
+ * кладёт снимок `background_tasks` в каждый хук, и пока в последнем снимке есть
+ * работающий субагент, сессия `working`, даже когда ход родителя окончен, а правило
+ * тишины её не понижает. Ожидание `wait_for` приходит своими строками журнала
+ * (`ParleyWaitStart`, `ParleyWaitEnd`, их дописывает MCP-сервер сессии): пока оно идёт,
+ * сессия занята, а тишина её тоже не понижает.
+ *
  * Функция чистая: весь диск остаётся в `events.ts` и `metrics.ts`.
  */
 
 import { DEFAULT_CONFIG } from '../config.js';
-import type { EventRecord } from './events.js';
+import type { BackgroundTask, EventRecord } from './events.js';
 
 export type Activity = 'working' | 'blocked' | 'unseen' | 'idle';
 
@@ -25,10 +34,30 @@ export interface ActivityLog {
   lastUserRecordAt: string | null;
 }
 
+/** Живой субагент сессии: что о нём известно журналу. */
+export interface ActivityTask {
+  id: string;
+  /** `general-purpose`…; `null` — ни снимок, ни `SubagentStart` типа не назвали. */
+  agentType: string | null;
+  /** Короткое описание из снимка; `null` — снимок его не знает, хост ищет в `meta.json`. */
+  description: string | null;
+  /** Фоновый: есть в последнем снимке `background_tasks` и живёт после конца хода родителя. */
+  background: boolean;
+  /**
+   * `transcript_path` родителя из `SubagentStart`: рядом с ним лежит
+   * `<без .jsonl>/subagents/agent-<id>.meta.json`. `null` — старта не видели.
+   */
+  transcriptPath: string | null;
+}
+
 export interface SessionActivity {
   activity: Activity;
-  /** Живые субагенты: `SubagentStart` минус `SubagentStop`, не ниже нуля. */
+  /** Живые субагенты — `tasks.length`. */
   subagents: number;
+  /** Живые субагенты: по id, обычные и фоновые; пуст, когда ход окончен и фоновых нет. */
+  tasks: ActivityTask[];
+  /** На что сейчас ждёт `wait_for`: id сессии или `inbox`; `null` — не ждёт. */
+  waitingFor: string | null;
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
   lastEventAt: string | null;
@@ -59,6 +88,51 @@ const msOf = (value: string | null): number => (value === null ? Number.NaN : Da
 /** Ось `a` свежее оси `b`; ось без времени не свежее ничего, но её и не обгоняют. */
 const isNewer = (a: number, b: number): boolean => !Number.isNaN(a) && (Number.isNaN(b) || a > b);
 
+/** Субагент, о старте которого сказал `SubagentStart`. */
+interface StartedAgent {
+  agentType: string | null;
+  transcriptPath: string | null;
+}
+
+/**
+ * Работающий субагент снимка. Другие виды задач (фоновая команда, сервер разработки)
+ * сессию не держат: иначе `npm run dev` в фоне оставил бы её `working` навсегда.
+ */
+const isRunningSubagent = (task: BackgroundTask): boolean =>
+  task.type === 'subagent' && task.status === 'running';
+
+/**
+ * Живые субагенты: стартовавшие (в порядке старта) и работающие из снимка, о чьём старте
+ * журнал не знает. Описание и тип берутся из снимка, если они там есть.
+ */
+function tasksOf(
+  started: ReadonlyMap<string, StartedAgent>,
+  background: readonly BackgroundTask[],
+): ActivityTask[] {
+  const tasks: ActivityTask[] = [];
+  for (const [id, agent] of started) {
+    const listed = background.find((task) => task.id === id);
+    tasks.push({
+      id,
+      agentType: listed?.agentType ?? agent.agentType,
+      description: listed?.description ?? null,
+      background: listed !== undefined,
+      transcriptPath: agent.transcriptPath,
+    });
+  }
+  for (const listed of background) {
+    if (started.has(listed.id)) continue;
+    tasks.push({
+      id: listed.id,
+      agentType: listed.agentType,
+      description: listed.description,
+      background: true,
+      transcriptPath: null,
+    });
+  }
+  return tasks;
+}
+
 export interface ActivityOptions {
   /** События журнала в порядке файла; `null` — журнала нет (`hooksMissing`). */
   events?: readonly EventRecord[] | null;
@@ -83,10 +157,14 @@ export function activityOf({
 }: ActivityOptions = {}): SessionActivity {
   let phase: Phase | null = null;
   let source: ActivitySource = 'none';
-  let subagents = 0;
   let turnEndedAt: string | null = null;
   let lastEventAt: string | null = null;
   let exited = false;
+  const started = new Map<string, StartedAgent>();
+  // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
+  // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
+  let background: BackgroundTask[] = [];
+  let waitingFor: string | null = null;
 
   const start = (): void => {
     phase = 'working';
@@ -97,12 +175,31 @@ export function activityOf({
     phase = 'ended';
     turnEndedAt = at;
     source = 'hooks';
+    // Ход кончился: ожидание `wait_for` его не переживает, как и обычный субагент —
+    // остаются фоновые из последнего снимка.
+    waitingFor = null;
+    for (const id of started.keys()) {
+      if (!background.some((task) => task.id === id)) started.delete(id);
+    }
   };
 
   for (const event of events ?? []) {
     lastEventAt = event.at;
+    // Сессия началась заново (запуск, `--resume`, `/clear`, сжатие): прежнее забыто,
+    // но снимок самого события уже про новое состояние и остаётся.
+    if (event.name === 'SessionStart') {
+      started.clear();
+      background = [];
+      waitingFor = null;
+    }
+    if (event.backgroundTasks !== null) {
+      background = event.backgroundTasks.filter(isRunningSubagent);
+    }
     switch (event.name) {
       case 'UserPromptSubmit':
+        waitingFor = null;
+        start();
+        break;
       case 'SessionStart':
         start();
         break;
@@ -128,10 +225,29 @@ export function activityOf({
         end(event.at);
         break;
       case 'SubagentStart':
-        subagents += 1;
+        // Без id старт не сопоставить с остановкой — события пропускаются.
+        if (event.agentId !== null) {
+          started.set(event.agentId, {
+            agentType: event.agentType,
+            transcriptPath: event.transcriptPath,
+          });
+        }
         break;
-      case 'SubagentStop':
-        subagents = Math.max(0, subagents - 1);
+      case 'SubagentStop': {
+        // Чужой id ничего не снимает: служебных остановок без старта бывает десятки.
+        const id = event.agentId;
+        if (id !== null) {
+          started.delete(id);
+          // Снимок события мог отстать от остановки и ещё числить задачу работающей.
+          background = background.filter((task) => task.id !== id);
+        }
+        break;
+      }
+      case 'ParleyWaitStart':
+        if (event.waitTarget !== null) waitingFor = event.waitTarget;
+        break;
+      case 'ParleyWaitEnd':
+        waitingFor = null;
         break;
       case 'SessionEnd':
         exited = true;
@@ -170,7 +286,15 @@ export function activityOf({
     // записей лога это тоже касается: агент, убитый без `SessionEnd`, иначе
     // остался бы `working` навсегда.
     const quietAt = recordIsNewer ? recordAt : eventAt;
-    if (phase === 'working' && !Number.isNaN(quietAt) && now - quietAt > silenceThresholdMs) {
+    // Фоновый субагент и ожидание `wait_for` молчат в журнале и в логе родителя, пока
+    // работают, — тишина по ним ничего не значит.
+    const occupied = background.length > 0 || waitingFor !== null;
+    if (
+      phase === 'working' &&
+      !occupied &&
+      !Number.isNaN(quietAt) &&
+      now - quietAt > silenceThresholdMs
+    ) {
       phase = 'ended';
       turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
       // Источник — та ось, чьё время решило: лога может не быть вовсе.
@@ -178,12 +302,27 @@ export function activityOf({
     }
   }
 
+  // Ход родителя окончен (Stop, idle_prompt), а фоновый субагент ещё работает и принесёт
+  // результат: сессия занята. `blocked` не трогаем — вопрос человеку важнее.
+  if (background.length > 0 && phase !== 'blocked' && phase !== 'working') {
+    phase = 'working';
+    turnEndedAt = null;
+    source = 'hooks';
+  }
+
+  // Ход окончен — работать нечему: обычный субагент его не пережил бы, а фоновые уже подняли
+  // бы сессию в `working`. Случай тишины, когда `started` ещё хранит убитого помощника, —
+  // тоже сюда: в списке его нет.
+  const tasks = phase === 'ended' ? [] : tasksOf(started, background);
+
   const ended: Activity = seen ? 'idle' : 'unseen';
   return {
     // Ничего не известно — состояние тусклое: после перезапуска харнесса все
     // закончившие ход сессии считаются просмотренными (раздел 4.1).
     activity: phase === null ? 'idle' : phase === 'ended' ? ended : phase,
-    subagents,
+    subagents: tasks.length,
+    tasks,
+    waitingFor: phase === 'ended' ? null : waitingFor,
     turnEndedAt,
     lastEventAt,
     source,

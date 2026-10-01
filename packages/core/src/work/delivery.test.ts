@@ -44,6 +44,8 @@ const messageOf = (patch: Partial<Message> = {}): Message => ({
 const activityOf = (activity: SessionActivity['activity']): SessionActivity => ({
   activity,
   subagents: 0,
+  tasks: [],
+  waitingFor: null,
   turnEndedAt: null,
   lastEventAt: null,
   source: 'hooks',

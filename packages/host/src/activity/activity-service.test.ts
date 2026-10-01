@@ -221,7 +221,7 @@ describe('createActivityService', () => {
     expect(activityChanges(ref)).toEqual(changes);
   }, 40_000);
 
-  it('4: SubagentStart ×2 и SubagentStop ×1 → subagents: 1', async () => {
+  it('4: SubagentStart ×2 и SubagentStop ×1 того же id → subagents: 1', async () => {
     const { ref } = await activeSession();
     const w = await works();
     const a = activity(w);
@@ -230,7 +230,10 @@ describe('createActivityService', () => {
 
     await appendFile(
       path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`),
-      `${hook('UserPromptSubmit')}${hook('SubagentStart')}${hook('SubagentStart')}${hook('SubagentStop')}`,
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a1' }) +
+        hook('SubagentStart', { agent_id: 'a2' }) +
+        hook('SubagentStop', { agent_id: 'a1' }),
     );
     await settle();
     expect(a.get(ref)?.activity.subagents).toBe(1);
