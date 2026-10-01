@@ -109,6 +109,32 @@ describe('S.terminal — карточка неживой сессии (Organic, 
   });
 });
 
+// Тост о новой версии и переключатель в настройках (V6 плана релиза 0.1.0): всё по-английски, имя продукта — Parley.
+describe('S.update и S.settings.checkForUpdates', () => {
+  it('тост: «Parley X.Y.Z is available», кнопки «Download» и «Later»', () => {
+    expect(S.update.available('0.2.0')).toBe('Parley 0.2.0 is available');
+    expect(S.update.available('10.0.1')).toBe('Parley 10.0.1 is available');
+    expect(S.update.download).toBe('Download');
+    expect(S.update.later).toBe('Later');
+  });
+
+  it('переключатель: «Check for updates» и пояснение о GitHub', () => {
+    expect(S.settings.checkForUpdates).toBe('Check for updates');
+    expect(S.settings.checkForUpdatesHint).toMatch(/GitHub/);
+  });
+
+  it('ни одного кириллического знака', () => {
+    const texts = [
+      S.update.available('0.2.0'),
+      S.update.download,
+      S.update.later,
+      S.settings.checkForUpdates,
+      S.settings.checkForUpdatesHint,
+    ];
+    for (const text of texts) expect(text).not.toMatch(CYRILLIC);
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');

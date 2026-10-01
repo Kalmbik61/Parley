@@ -123,3 +123,39 @@ describe('fake-bridge: git, поиск и слежение (кусок 7.1b)', (
     expect(tree).toEqual([{ rootKey: '/p w-1 project', dirs: [''] }]);
   });
 });
+
+describe('fake-bridge: onUpdateAvailable (V6 плана релиза 0.1.0)', () => {
+  const info = { version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' };
+
+  it('emitUpdate доходит до подписчиков; после отписки — нет', () => {
+    const bridge = createFakeBridge();
+    const got: unknown[] = [];
+    const off = bridge.app.onUpdateAvailable((update) => got.push(update));
+
+    bridge.emitUpdate(info);
+    off();
+    bridge.emitUpdate({ ...info, version: '0.3.0' });
+
+    expect(got).toEqual([info]);
+  });
+
+  it('setPendingUpdate: каждый новый подписчик получает найденное сразу, как через app:get-update; null — ничего', () => {
+    const bridge = createFakeBridge();
+    const first: unknown[] = [];
+    bridge.app.onUpdateAvailable((update) => first.push(update));
+    expect(first).toEqual([]);
+
+    bridge.setPendingUpdate(info);
+    const second: unknown[] = [];
+    const third: unknown[] = [];
+    bridge.app.onUpdateAvailable((update) => second.push(update));
+    bridge.app.onUpdateAvailable((update) => third.push(update));
+    expect(second).toEqual([info]);
+    expect(third).toEqual([info]);
+
+    bridge.setPendingUpdate(null);
+    const fourth: unknown[] = [];
+    bridge.app.onUpdateAvailable((update) => fourth.push(update));
+    expect(fourth).toEqual([]);
+  });
+});

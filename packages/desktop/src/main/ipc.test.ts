@@ -108,6 +108,7 @@ function setup(
   showItemInFolder: ReturnType<typeof vi.fn>;
   showNotification: ReturnType<typeof vi.fn>;
   takeFocusTarget: ReturnType<typeof vi.fn>;
+  getUpdate: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
   setDirtyBuffers: ReturnType<typeof vi.fn>;
@@ -148,6 +149,7 @@ function setup(
   const showItemInFolder = vi.fn();
   const showNotification = vi.fn();
   const takeFocusTarget = vi.fn().mockReturnValue(null);
+  const getUpdate = vi.fn().mockResolvedValue(null);
   // Настоящие shell.openPath/showItemInFolder тесты не зовут никогда: открыли бы приложения
   // и Finder на экране человека (решение контролёра 5.2).
   const openPath = vi.fn().mockResolvedValue('');
@@ -181,6 +183,7 @@ function setup(
     chooseFolder: vi.fn(),
     showNotification,
     takeFocusTarget,
+    getUpdate,
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -207,6 +210,7 @@ function setup(
     showItemInFolder,
     showNotification,
     takeFocusTarget,
+    getUpdate,
     openPath,
     saveDropImage,
     setDirtyBuffers,
@@ -646,6 +650,36 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+describe('registerIpc — app:get-update (V6 плана релиза 0.1.0)', () => {
+  const update = { version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' };
+
+  it('отдаёт то, что нашла проверка main; ничего не нашла или выключена — null', async () => {
+    const { ipcMain, getUpdate } = setup();
+    getUpdate.mockResolvedValueOnce(update).mockResolvedValueOnce(null);
+
+    await expect(ipcMain.invoke('app:get-update')).resolves.toEqual(update);
+    await expect(ipcMain.invoke('app:get-update')).resolves.toBeNull();
+    expect(getUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('отказ проверки — код failed, как у прочих каналов', async () => {
+    const { ipcMain, getUpdate } = setup();
+    getUpdate.mockRejectedValueOnce(new Error('boom'));
+
+    expect(await codeOf(ipcMain.invoke('app:get-update'))).toBe('failed');
+  });
+
+  it('app:save-ui пропускает ключи проверки версии как есть: слияние и нормализацию делает UiStore', async () => {
+    const { ipcMain, uiStore } = setup();
+
+    await ipcMain.invoke('app:save-ui', { checkForUpdates: false });
+    await ipcMain.invoke('app:save-ui', { dismissedUpdate: '0.2.0' });
+
+    expect(uiStore.save).toHaveBeenNthCalledWith(1, { checkForUpdates: false });
+    expect(uiStore.save).toHaveBeenNthCalledWith(2, { dismissedUpdate: '0.2.0' });
   });
 });
 

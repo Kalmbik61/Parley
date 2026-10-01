@@ -56,6 +56,15 @@ export interface AppNote {
 }
 
 /**
+ * Релиз новее запущенной версии, который нашла проверка main (`main/update-check.ts`, V6 плана релиза 0.1.0):
+ * `version` — `X.Y.Z` без `v`, `url` — страница релиза на GitHub (`html_url`; main пропускает только https).
+ */
+export interface UpdateInfo {
+  version: string;
+  url: string;
+}
+
+/**
  * Ответ окна на `app:confirm-close` (кусок 7.3a): `close` — «Don't save» или «Save all», у
  * которого удались все записи; `cancel` — «Cancel» или ошибка записи, окно остаётся.
  */
@@ -159,6 +168,13 @@ export interface ParleyBridge {
     onConfirmClose(listener: () => void): () => void;
     /** Ответ на `app:confirm-close` (`app:close-answer`). */
     answerClose(answer: CloseAnswer): void;
+    /**
+     * Новая версия на GitHub (V6 плана релиза 0.1.0). При подписке отдаёт слушателю уже найденное (`app:get-update`:
+     * main мог найти релиз, пока окно грузилось или показывало «Connecting…»), дальше — каждое событие
+     * `app:update-available` от проверки main; одна и та же версия может прийти не раз (проверка — раз в сутки).
+     * Проверка выключена переключателем или `PARLEY_UPDATE_CHECK=off` — не приходит ничего.
+     */
+    onUpdateAvailable(listener: (info: UpdateInfo) => void): () => void;
   };
   /**
    * Файловый API main (спека 10.7): `stat` и `locate` — с этапа 5, `list`, `readText`,

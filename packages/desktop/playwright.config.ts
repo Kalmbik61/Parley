@@ -16,6 +16,9 @@ process.env.PARLEY_DIALOGS = 'log';
 // Оболочку человека (`$SHELL -ilc` и её rc-файлы) окно в E2E не зовёт: окружение — то, с которым
 // запущен тест (кусок 11b, ревью). Разбор вывода настоящей оболочки держат юнит-тесты `shell-env.test.ts`.
 process.env.PARLEY_LOGIN_SHELL = 'skip';
+// Проверка новой версии (V6 плана релиза 0.1.0) в E2E в сеть не ходит: GitHub тестам не нужен, а тост о версии в
+// углу мешал бы ожиданиям спеков. Спеки передают окну `...process.env`, а окно читает переменную из окружения.
+process.env.PARLEY_UPDATE_CHECK = 'off';
 
 export default defineConfig({
   testDir: './e2e',

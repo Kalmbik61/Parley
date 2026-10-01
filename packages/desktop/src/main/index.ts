@@ -9,6 +9,7 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
+  net,
   Notification,
   session,
   shell,
@@ -47,6 +48,7 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { createUpdateChecker, updateCheckOff } from './update-check.js';
 import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
@@ -392,6 +394,25 @@ if (!gotLock) {
       (globalThis as { __parleyShell?: typeof shellLog }).__parleyShell = shellLog;
     }
 
+    // Проверка новой версии (V6 плана релиза 0.1.0): при старте и раз в сутки main спрашивает GitHub о последнем
+    // релизе (`main/update-check.ts`). Окно получает найденное событием `app:update-available`, а то, что найдено до
+    // его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update`. Сеть — стеком
+    // Chromium (`net.fetch`: системный прокси), без токенов и куки. Выключена `PARLEY_UPDATE_CHECK=off` (E2E:
+    // `playwright.config.ts`; значение — из окружения login-shell, как прочие `PARLEY_*`) или переключателем в
+    // настройках (`ui.json`); оба читаются перед каждой проверкой.
+    const updates = createUpdateChecker({
+      currentVersion: app.getVersion(),
+      fetch: (url, init) => net.fetch(url, init),
+      isEnabled: async () => !updateCheckOff(shellEnv.env) && (await uiStore.load()).checkForUpdates,
+      onUpdate: (info) => {
+        const window = mainWindow;
+        // Окно ещё грузится — событие ушло бы в пустоту (прелоад не подписан): оно спросит само, `app:get-update`.
+        if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
+          window.webContents.send('app:update-available', info);
+        }
+      },
+    });
+
     registerIpc({
       ipcMain,
       connection,
@@ -439,6 +460,7 @@ if (!gotLock) {
       },
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
+      getUpdate: () => updates.latest(),
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },
@@ -467,6 +489,9 @@ if (!gotLock) {
       spawnGrepWorker: () => createGrepWorker({}),
     });
     createAppMenu(() => mainWindow);
+
+    // Последним: к первому ответу GitHub обработчики каналов уже стоят.
+    updates.start();
 
     // Клик по уведомлению без окон: macOS может прислать `activate` раньше клика. Окно
     // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.

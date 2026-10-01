@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
@@ -34,6 +34,7 @@ const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
 const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
+const updateListeners = new Set<(info: UpdateInfo) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 
@@ -98,6 +99,10 @@ ipcRenderer.on('browser:focus', (_event, e: { webContentsId: number }) => {
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
   for (const listener of windowFocusListeners) listener(focused);
+});
+
+ipcRenderer.on('app:update-available', (_event, info: UpdateInfo) => {
+  for (const listener of updateListeners) listener(info);
 });
 
 /**
@@ -207,6 +212,16 @@ const bridge = {
     },
     answerClose: (answer: CloseAnswer) => {
       ipcRenderer.send('app:close-answer', answer);
+    },
+    onUpdateAvailable: (listener: (info: UpdateInfo) => void) => {
+      updateListeners.add(listener);
+      // Найденное до подписки (окно ещё грузилось или показывало «Connecting…»); отписавшемуся ответ не нужен.
+      void (ipcRenderer.invoke('app:get-update') as Promise<UpdateInfo | null>)
+        .then((info) => {
+          if (info !== null && updateListeners.has(listener)) listener(info);
+        })
+        .catch(() => {});
+      return () => updateListeners.delete(listener);
     },
   },
   files: {

@@ -13,7 +13,7 @@ import type {
   Params,
   Result,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
@@ -64,6 +64,10 @@ export interface FakeBridge extends ParleyBridge {
   emitFocusTarget(target: FocusTarget): void;
   /** Отложенная цель main: первый подписчик onFocusTarget получает её сразу, как через app:take-focus-target. */
   setPendingFocusTarget(target: FocusTarget | null): void;
+  /** Проверка main нашла релиз новее: событие `app:update-available` слушателям `onUpdateAvailable` (V6 плана релиза 0.1.0). */
+  emitUpdate(info: UpdateInfo): void;
+  /** Найденное до подписки (`app:get-update`): каждый новый подписчик `onUpdateAvailable` получает его сразу; `null` — ничего. */
+  setPendingUpdate(info: UpdateInfo | null): void;
   readonly badges: number[];
   /** Вызовы `app.reconnect` и `app.restartHost` по порядку (экран «No connection to host», fix-final-b). */
   readonly hostActions: Array<'reconnect' | 'restartHost'>;
@@ -175,6 +179,8 @@ export function createFakeBridge(): FakeBridge {
   const appNotified: AppNote[] = [];
   const focusTargetListeners = new Set<(target: FocusTarget) => void>();
   let pendingFocusTarget: FocusTarget | null = null;
+  const updateListeners = new Set<(info: UpdateInfo) => void>();
+  let pendingUpdate: UpdateInfo | null = null;
   const badges: number[] = [];
   const hostActions: Array<'reconnect' | 'restartHost'> = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
@@ -617,6 +623,11 @@ export function createFakeBridge(): FakeBridge {
       answerClose: (answer) => {
         closeAnswers.push(answer);
       },
+      onUpdateAvailable: (listener) => {
+        updateListeners.add(listener);
+        if (pendingUpdate !== null) listener(pendingUpdate);
+        return () => updateListeners.delete(listener);
+      },
     },
 
     emit: (event, data) => {
@@ -637,6 +648,12 @@ export function createFakeBridge(): FakeBridge {
     },
     setPendingFocusTarget: (target) => {
       pendingFocusTarget = target;
+    },
+    emitUpdate: (info) => {
+      for (const listener of updateListeners) listener(info);
+    },
+    setPendingUpdate: (info) => {
+      pendingUpdate = info;
     },
     emitAppearance: (next) => {
       for (const listener of appearanceListeners) listener(next);

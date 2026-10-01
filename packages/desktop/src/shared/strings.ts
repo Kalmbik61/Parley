@@ -377,8 +377,22 @@ export const S = {
     notifySound: 'sound',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
+    /**
+     * Проверка новой версии (V6 плана релиза 0.1.0, `ui.json.checkForUpdates`). Своей секции «General» в окне нет,
+     * а шестая вкладка не влезает в диалог, — переключатель стоит в «Notifications»: это тоже уведомление.
+     */
+    checkForUpdates: 'Check for updates',
+    checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
+  },
+
+  /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
+  update: {
+    available: (version: string): string => `Parley ${version} is available`,
+    /** Открывает страницу релиза в браузере: без подписи Apple окно само не обновляется. */
+    download: 'Download',
+    later: 'Later',
   },
 
   /**

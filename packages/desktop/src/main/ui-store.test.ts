@@ -112,6 +112,40 @@ describe('createUiStore', () => {
     await expect(store.load()).resolves.toEqual(DEFAULT_UI);
   });
 
+  // Проверка новой версии (V6 плана релиза 0.1.0): main читает переключатель из ui.json перед каждой проверкой, а окно
+  // пишет в него закрытую версию — оба ключа верхнего уровня, слияние по ним обычное.
+  it('проверка новой версии: файла нет — включена; выключили — читается выключенной; прочее не тронуто', async () => {
+    const store = createUiStore(file);
+    expect((await store.load()).checkForUpdates).toBe(true);
+
+    await store.save({ appearance: 'dark' });
+    await store.save({ checkForUpdates: false });
+
+    await expect(store.load()).resolves.toEqual({ ...DEFAULT_UI, appearance: 'dark', checkForUpdates: false });
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ checkForUpdates: false });
+  });
+
+  it('закрытая версия переживает перезапуск: новый стор на том же файле её читает, смена переключателя её не стирает', async () => {
+    await createUiStore(file).save({ dismissedUpdate: '0.2.0' });
+
+    const reopened = createUiStore(file);
+    expect((await reopened.load()).dismissedUpdate).toBe('0.2.0');
+
+    await reopened.save({ checkForUpdates: false });
+    await expect(reopened.load()).resolves.toMatchObject({ dismissedUpdate: '0.2.0', checkForUpdates: false });
+    // Более новая версия просто заменяет закрытую.
+    await reopened.save({ dismissedUpdate: '0.3.0' });
+    expect((await reopened.load()).dismissedUpdate).toBe('0.3.0');
+  });
+
+  it('ключи проверки чужого типа из патча отсекаются нормализацией: на диске валидный файл', async () => {
+    const store = createUiStore(file);
+    await store.save({ checkForUpdates: 'no', dismissedUpdate: 7 } as unknown as Parameters<typeof store.save>[0]);
+
+    await expect(store.load()).resolves.toEqual(DEFAULT_UI);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ checkForUpdates: true, dismissedUpdate: null });
+  });
+
   it('запись атомарна: во время записи ui.json всегда читается как валидный JSON (тест 3, как тест 5 куска 2.2 прошлого плана)', async () => {
     const store = createUiStore(file);
     await store.save({ appearance: 'dark' });
