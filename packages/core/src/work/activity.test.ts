@@ -6,7 +6,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { activityOf, hookedSince, type ActivityLog } from './activity.js';
-import { bareEvent, type BackgroundTask, type EventRecord } from './events.js';
+import {
+  TERMINAL_WORKING_EVENT,
+  bareEvent,
+  type BackgroundTask,
+  type EventRecord,
+} from './events.js';
 
 const AT = '2026-09-05T10:00:00.000Z';
 const NOW = Date.parse('2026-09-05T10:00:10.000Z');
@@ -1190,5 +1195,46 @@ describe('activityOf: несколько ожиданий wait_for, у кажд�
     const none = read([...waiting, end('w1', QUIET), end('w2', '2026-09-05T09:58:30.000Z')]);
     expect(none.activity).toBe('unseen');
     expect(none.waitingFor).toBeNull();
+  });
+});
+
+describe('activityOf: TerminalWorking — кадр спиннера терминала Codex (Parley 0.2.0)', () => {
+  const frame = (at = AT): EventRecord => event(TERMINAL_WORKING_EVENT, null, at);
+
+  it('начинает ход, как UserPromptSubmit: working, turnEndedAt сброшен', () => {
+    expect(activity([frame()]).activity).toBe('working');
+
+    const afterStop = activity([event('UserPromptSubmit'), event('Stop'), frame()]);
+    expect(afterStop.activity).toBe('working');
+    expect(afterStop.turnEndedAt).toBeNull();
+  });
+
+  it('ожидания wait_for не снимает: кадр новее ParleyWaitStart, но это не новый ход', () => {
+    const waiting = [
+      event('UserPromptSubmit'),
+      hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }),
+    ];
+
+    expect(activity([...waiting, frame(), frame()]).waitingFor).toBe('s-02');
+    // Настоящее начало хода по-прежнему снимает.
+    expect(activity([...waiting, event('UserPromptSubmit')]).waitingFor).toBeNull();
+    // И конец хода.
+    expect(activity([...waiting, frame(), event('Stop')]).waitingFor).toBeNull();
+  });
+
+  it('ожидание и кадры вместе: сессия working, и тишина её не понижает', () => {
+    const quiet = '2026-09-05T09:58:00.000Z';
+    const result = activityOf({
+      events: [
+        frame(quiet),
+        hook('ParleyWaitStart', { waitTarget: 'inbox', waitId: 'w1' }, quiet),
+        frame(quiet),
+      ],
+      now: NOW,
+      silenceThresholdMs: 30_000,
+    });
+
+    expect(result.activity).toBe('working');
+    expect(result.waitingFor).toBe('inbox');
   });
 });

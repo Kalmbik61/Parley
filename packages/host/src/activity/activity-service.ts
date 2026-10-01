@@ -14,6 +14,7 @@
 import { existsSync } from 'node:fs';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  TERMINAL_WORKING_EVENT,
   activityOf,
   applyAutoTitle,
   bareEvent,
@@ -147,12 +148,14 @@ const TERMINAL_READY_EVENT = 'TerminalReady';
 
 /**
  * Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code, а
- * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`).
+ * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`). Кадр спиннера — своё имя
+ * (`TERMINAL_WORKING_EVENT`): время сигнала обновляется на каждом кадре, и `UserPromptSubmit` с таким
+ * временем снимал бы ожидание `wait_for` (его строку дописал MCP-сервер), хотя нового хода нет.
  */
 const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
   switch (signal.kind) {
     case 'working':
-      return 'UserPromptSubmit';
+      return TERMINAL_WORKING_EVENT;
     case 'ready':
       return turnSeen ? 'Stop' : TERMINAL_READY_EVENT;
     case 'turn-complete':

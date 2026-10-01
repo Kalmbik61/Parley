@@ -272,7 +272,7 @@ export type {
   ActivityTask,
   SessionActivity,
 } from './work/activity.js';
-export { bareEvent, openEvents, watchEvents } from './work/events.js';
+export { TERMINAL_WORKING_EVENT, bareEvent, openEvents, watchEvents } from './work/events.js';
 export type {
   BackgroundTask,
   EventRecord,

@@ -22,7 +22,7 @@
  */
 
 import { DEFAULT_CONFIG } from '../config.js';
-import type { BackgroundTask, EventRecord } from './events.js';
+import { TERMINAL_WORKING_EVENT, type BackgroundTask, type EventRecord } from './events.js';
 
 export type Activity = 'working' | 'blocked' | 'unseen' | 'idle';
 
@@ -241,6 +241,10 @@ export function activityOf({
         start();
         break;
       case 'SessionStart':
+        start();
+        break;
+      case TERMINAL_WORKING_EVENT:
+        // Кадр спиннера Codex: ход идёт, но это не его начало — ожидание `wait_for` остаётся.
         start();
         break;
       case 'PermissionRequest':
