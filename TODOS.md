@@ -35,7 +35,7 @@ core, нужный только ему, документы требований 
   должен показать агента, а не `posix_spawnp failed.`. Перед этим проверить режим
   `spawn-helper` у хоста в `.app`, нужен `-rwxr-xr-x`:
   `ls -l packages/desktop/dist/mac-arm64/Parley.app/Contents/Resources/host/node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper`.
-  Заодно окружение login-оболочки (README, «Собрать `Parley.app`»): с настоящим zsh
+  Заодно окружение login-оболочки (README, «Build `Parley.app`»): с настоящим zsh
   (nvm, p10k) `claude` и `codex` находятся, а переменные из rc-файлов доходят до
   агентов; проверено только на оболочке-заглушке.
 - **Уведомления macOS.** Клик по уведомлению ведёт к сессии. Ещё проверить
@@ -54,8 +54,8 @@ core, нужный только ему, документы требований 
   Прогон занимает полчаса и требует двух живых сессий. Вести его в окне: работа с
   двумя сессиями Claude, почта работы и комнаты. Расхождение поведения с текстами
   правит `guide.ts`, `guidance.ts`, `brief.ts` и `instructions` в `mcp/tools.ts`.
-- **Лимиты Claude Code в строке статуса** (README, «Состояние агента: хуки и
-  живость»). На настоящем `claude` Pro или Max после первого ответа модели в
+- **Лимиты Claude Code в строке статуса** (README, «Agent state: hooks and
+  liveness»). На настоящем `claude` Pro или Max после первого ответа модели в
   сегменте провайдера должны появиться полоска и «58% 5h · 41% wk». Заодно:
   - подсказки футера (`esc to interrupt`, `? for shortcuts`) у сессий, где своей
     строки статуса не было, пропадают, остаётся «модель · контекст»;
@@ -68,7 +68,7 @@ core, нужный только ему, документы требований 
   `read_guide`; `git status` проекта остаётся чистым.
 - **Codex на настоящем бинаре.** Список — раздел 14 исследования
   `codex-research.md` (каталог плана `.superpowers/sdd/2026-09-29-desktop-rooms-organic-plan/`;
-  тот же порядок в README, «Что проверить на живом Codex»): версия и вход,
+  тот же порядок в README, «What to check on a live Codex»): версия и вход,
   `-c mcp_servers.parley=…`, поток OSC 0 и OSC 9, экран доверия к папке, `Stop`
   от `notify`, вставка и очередь Tab, `resume`, общий демон. Отдельно: Codex
   0.159 не спрашивает человека для инструментов `parley` с аннотациями и
@@ -138,7 +138,7 @@ core, нужный только ему, документы требований 
 подписки). Для минимума в первую очередь нужны четыре пункта: отмена `wait_for` (комнаты
 ждут через него), `works-index.lock` после падения, errno запуска node-pty, запуск
 `pending`-сессии из окна. Окружение login-оболочки (в том числе `PATH`) для собранного
-`.app` сделано вместе с Codex (README, «Собрать `Parley.app`»); открыта только живая
+`.app` сделано вместе с Codex (README, «Build `Parley.app`»); открыта только живая
 проверка из Finder (прогон 2).
 
 - **node-pty теряет errno запуска.** `posix_spawnp failed.` одинаков для EACCES у
@@ -312,7 +312,7 @@ core, нужный только ему, документы требований 
 - **Скилл `parley` для сессий, поднятых мимо окна.** Скилл теперь ставит хост при запуске
   сессии окна: `.agents/skills/parley` и симлинк `.claude/skills/parley` в проекте и в
   worktree сессии (`core/work/skill-install.ts`, `host/sessions/agent-skills.ts`; README,
-  «Скилл `parley` в проекте»). Команды `parley-core skill install` нет.
+  «The `parley` skill in the project»). Команды `parley-core skill install` нет.
   - Открытым остаётся случай «мимо окна»: сессию поднял CLI `parley-core work session new`
     (или человек сам запустил `claude`/`codex`) в проекте, где окно скилл ещё не ставило.
     Сессия от CLI имеет MCP `parley`, системную вставку и `read_guide`, так что скилл ей —
@@ -329,7 +329,7 @@ handoff «окно харнаса — комнаты, решения, облик
 перетаскивание, диалоги «New session or room», «New room» и «New workspace», облик
 Organic, лимиты подписок в строке статуса, скилл в проекте, Codex. Свёрнутая комната
 в сайдбаре — значки провайдеров с числом всех агентов и тултипом `2 Claude Code agents`
-(просьба 2026-09-28). Описание — README, «Окно» и «Разговор сессий». Открыто:
+(просьба 2026-09-28). Описание — README, «The window» и «Session conversation». Открыто:
 
 - **Прототип идёт дальше handoff** (`packages/desktop/prototype/rooms`, ветка
   `proto/rooms`): план с владельцами, ревизии предложений, роли и инструкции агентов,
@@ -364,7 +364,7 @@ Claude Code. Запуск и `resume` флагами `-c` (MCP `parley`, анн�
 `notify` со строкой `Stop`; ввод через bracketed paste и очередь Tab; экраны входа и
 доверия — «нужен ты»; привязка к логу по `_meta.threadId`; записи Codex видны в диалоге
 «New session or room» и в сайдбаре, значки провайдеров брендовые (README, «Codex —
-агент комнаты», «Провайдеры»). Открыто:
+a room agent», «Providers»). Открыто:
 
 - **Живая проверка Codex.** Всё выведено из документации и исходников Codex 0.159,
   настоящий `codex` в работе не запускался: список — прогон 2 и README, «Что проверить на
