@@ -1,3 +1,4 @@
+import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
@@ -613,6 +614,32 @@ async function spawnSession(
   return { sessionId: created };
 }
 
+/**
+ * Строка в журнал событий своей сессии — тот, куда пишут и хуки Claude Code: по `ParleyWaitStart` и
+ * `ParleyWaitEnd` хост видит, что агент ждёт в `wait_for`, а не бездействует. Адрес — как у хука:
+ * `<каталог работы>/events/<id сессии>.jsonl`. Одна строка — один `appendFile`: строки параллельных
+ * вызовов не перемешиваются. Каталог не создаётся: его отсутствие — признак сессии без хуков, и
+ * наши строки не должны заглушать предупреждение хоста.
+ *
+ * Best-effort: журнал — подсказка окну, а не часть ответа агенту. Сбой записи (нет каталога, диск)
+ * ожидание не ломает.
+ */
+async function noteWait(
+  context: McpContext,
+  sessionId: string,
+  event: Record<string, string>,
+): Promise<void> {
+  try {
+    await appendFile(
+      path.join(context.workDir, 'events', `${sessionId}.jsonl`),
+      `${JSON.stringify(event)}\n`,
+      'utf8',
+    );
+  } catch {
+    // Агент об этом знать не должен: ответ `wait_for` от журнала не зависит.
+  }
+}
+
 async function waitFor(
   context: McpContext,
   sessionId: string,
@@ -660,13 +687,35 @@ async function waitFor(
     };
   }
 
-  const found = await waitForMap(
-    workPaths(context.projectPath, context.workId).map,
-    probe,
-    timeoutMs,
-    context.pollMs ?? POLL_MS,
-  );
-  return found ?? { state: 'running' };
+  // Реальное ожидание начинается, когда первая проба вернула `null`; ответ без ожидания —
+  // итог уже есть, письмо уже пришло, неизвестный id — следов в журнале не оставляет. Конец
+  // ждёт записи начала: строки идут по порядку, что бы ни случилось с ожиданием.
+  const wait = { begun: null as Promise<void> | null };
+  const probeAndNote = async (): Promise<unknown | null> => {
+    const result = await probe();
+    if (result === null && wait.begun === null) {
+      wait.begun = noteWait(context, sessionId, {
+        hook_event_name: 'ParleyWaitStart',
+        parley_wait_target: target,
+      });
+    }
+    return result;
+  };
+
+  try {
+    const found = await waitForMap(
+      workPaths(context.projectPath, context.workId).map,
+      probeAndNote,
+      timeoutMs,
+      context.pollMs ?? POLL_MS,
+    );
+    return found ?? { state: 'running' };
+  } finally {
+    if (wait.begun !== null) {
+      await wait.begun;
+      await noteWait(context, sessionId, { hook_event_name: 'ParleyWaitEnd' });
+    }
+  }
 }
 
 async function sendMessage(
