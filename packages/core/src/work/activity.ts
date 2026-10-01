@@ -178,7 +178,9 @@ export function activityOf({
   silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
   backgroundHoldMs = DEFAULT_BACKGROUND_HOLD_MS,
 }: ActivityOptions = {}): SessionActivity {
-  let phase: Phase | null = null;
+  // `as`: фазу меняют и замыкания `start` и `end`, которых анализ потока не видит, и без приведения он
+  // считал бы её в цикле всё ещё `null`.
+  let phase = null as Phase | null;
   let source: ActivitySource = 'none';
   let turnEndedAt: string | null = null;
   let lastEventAt: string | null = null;
@@ -212,6 +214,7 @@ export function activityOf({
 
   for (const event of events ?? []) {
     lastEventAt = event.at;
+    const heldBefore = background.length > 0;
     // Сессия началась заново (запуск, `--resume`, `/clear`, сжатие): прежнее забыто,
     // но снимок самого события уже про новое состояние и остаётся.
     if (event.name === 'SessionStart') {
@@ -288,6 +291,9 @@ export function activityOf({
         // Прочие хуки состояние не меняют.
         break;
     }
+    // Ход родителя кончился давно, но его держали фоновые; это событие их отпустило — ход окончен
+    // теперь. Иначе тот, кто смотрел сессию, пока лид ждал, считался бы видевшим и конец хода.
+    if (heldBefore && background.length === 0 && phase === 'ended') turnEndedAt = event.at;
   }
 
   // Страховка по логу (4.3). Из записей лога `blocked` снимает только запись

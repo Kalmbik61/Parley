@@ -676,6 +676,33 @@ describe('createActivityService: субагенты и ожидание (Parley 
     await waitFor(() => a.get(ref)?.metrics?.waitingFor === null);
   }, 20_000);
 
+  it('просмотрел сессию, пока лид ждал фоновых, — когда они закончились, она снова unseen', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') + hook('Stop', { background_tasks: [running('a1')] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.heldByBackground === true);
+
+    // Человек открыл сессию, пока лид ждал: просмотр позже Stop.
+    await settle(50);
+    a.markSeen(ref);
+    await settle(50);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+
+    // Последний фоновый закончился: ход окончен позже просмотра — человека ждёт новое, а не idle.
+    await appendFile(
+      journalOf(ref),
+      hook('SubagentStop', { agent_id: 'a1', background_tasks: [] }),
+    );
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+  }, 20_000);
+
   it('предел удержания снимает сессию сам, без нового события: таймер ждёт предела, а не порога тишины', async () => {
     const { ref } = await activeSession();
     const w = await works();

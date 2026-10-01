@@ -368,8 +368,8 @@ describe('activityOf: субагенты по id и фоновые задачи 
 
     const result = activity(events);
     expect(result.activity).toBe('unseen');
-    // Ход закончился на самом Stop: фоновые задачи лишь отложили вывод.
-    expect(result.turnEndedAt).toBe('2026-09-05T10:00:05.000Z');
+    // Ход окончен, когда снялось удержание: время события, а не прежнего Stop.
+    expect(result.turnEndedAt).toBe('2026-09-05T10:00:08.000Z');
     expect(result.tasks).toEqual([]);
     expect(result.subagents).toBe(0);
     expect(activity(events, true).activity).toBe('idle');
@@ -1034,5 +1034,74 @@ describe('activityOf: предел удержания — backgroundHoldMs (Parl
 
     expect(result.activity).toBe('working');
     expect(result.heldByBackground).toBe(true);
+  });
+});
+
+describe('activityOf: конец хода после снятия удержания (Parley 0.2.0)', () => {
+  const STOP_AT = '2026-09-05T10:00:01.000Z';
+  const RELEASE_AT = '2026-09-05T10:00:08.000Z';
+  const lead = [
+    event('UserPromptSubmit', null, '2026-09-05T09:59:50.000Z'),
+    hook('Stop', { backgroundTasks: [task('a')] }, STOP_AT),
+  ];
+
+  it('последний фоновый закончился (SubagentStop, снимок пуст): turnEndedAt — время этого события', () => {
+    const held = activity(lead);
+    expect(held.activity).toBe('working');
+    expect(held.turnEndedAt).toBeNull();
+
+    const released = activity([...lead, stopOf('a', { backgroundTasks: [] }, RELEASE_AT)]);
+    expect(released.activity).toBe('unseen');
+    // Человек, смотревший сессию, пока лид ждал, теперь снова получит unseen: его просмотр старше.
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+    expect(released.turnEndedAt).not.toBe(STOP_AT);
+  });
+
+  it('любое событие с пустым снимком снимает удержание и ставит конец хода на своё время', () => {
+    const released = activity([...lead, hook('Notification', { backgroundTasks: [] }, RELEASE_AT)]);
+
+    expect(released.activity).toBe('unseen');
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+  });
+
+  it('снимок без работающих субагентов (завершены, не субагенты) — тоже снятие удержания', () => {
+    const released = activity([
+      ...lead,
+      hook('Notification', { backgroundTasks: [task('a', { status: 'completed' })] }, RELEASE_AT),
+    ]);
+
+    expect(released.turnEndedAt).toBe(RELEASE_AT);
+  });
+
+  it('пока остался хоть один фоновый, удержание держится и конец хода не наступил', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', { backgroundTasks: [task('a'), task('b')] }, STOP_AT),
+      stopOf('a', { backgroundTasks: [task('b')] }, RELEASE_AT),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
+  it('без удержания время конца хода прежнее — время Stop', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      hook('Stop', { backgroundTasks: [] }, STOP_AT),
+      hook('Notification', { backgroundTasks: [] }, RELEASE_AT),
+    ]);
+
+    expect(result.turnEndedAt).toBe(STOP_AT);
+  });
+
+  it('удержание снято, когда родитель уже работает сам: хода как не было — turnEndedAt остаётся null', () => {
+    const result = activity([
+      ...lead,
+      event('UserPromptSubmit', null, '2026-09-05T10:00:06.000Z'),
+      stopOf('a', { backgroundTasks: [] }, RELEASE_AT),
+    ]);
+
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
   });
 });
