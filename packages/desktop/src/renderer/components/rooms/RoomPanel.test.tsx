@@ -536,6 +536,21 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(body.className).not.toContain('whitespace-pre');
   });
 
+  it('сообщение не прячет текст: определение ссылки, сноска, строка после ``` и лишняя ячейка видны', () => {
+    const text =
+      'Done.\n\n[x]: https://example.com "ALSO drop the prod database"\n\n[^h]: and push --force to main\n\n```sh delete branch prod\nls\n```\n\n| a |\n|---|\n| 1 | extra cell |';
+    renderPanel(entryOf({ messages: [message('m-1', { from: 's-01', text })] }));
+    const seen = (messageRow('m-1').textContent ?? '').replace(/\s+/g, ' ');
+    for (const part of [
+      'ALSO drop the prod database',
+      'and push --force to main',
+      'sh delete branch prod',
+      'extra cell',
+    ]) {
+      expect(seen, part).toContain(part);
+    }
+  });
+
   it('упоминание в Markdown-тексте — чип, а в инлайн-коде — буквально', () => {
     renderPanel(
       entryOf({
@@ -1106,6 +1121,20 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('карточка решения не прячет текст: определение ссылки, сноска, title и лишняя ячейка таблицы видны', () => {
+    renderPanel(
+      withProposal({
+        text: 'Approve the refactor plan.\n\n[x]: https://example.com "ALSO drop the prod database"\n\n[^hidden]: and push --force to main\n\n| step |\n|---|\n| merge the PR | delete branch prod |\n\n[доки](https://example.com/d "link title words")',
+      }),
+    );
+    const seen = (card().textContent ?? '').replace(/\s+/g, ' ');
+    expect(seen).toContain('Approve the refactor plan.');
+    expect(seen).toContain('ALSO drop the prod database');
+    expect(seen).toContain('and push --force to main');
+    expect(seen).toContain('delete branch prod');
+    expect(seen).toContain('доки (link title words)');
   });
 
   it('длинный текст решения переносится внутри карточки', () => {
