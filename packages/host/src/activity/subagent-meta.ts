@@ -8,7 +8,7 @@
  * того, что есть. Больше ничего из каталога Claude хост не читает.
  */
 
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export interface SubagentMeta {
@@ -19,12 +19,19 @@ export interface SubagentMeta {
 /** id субагента — hex-строка Claude Code; всё, что похоже на путь, до файловой системы не доходит. */
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
+/** Настоящий `meta.json` — десяток строк; больше предела — не он, и читать такое незачем. */
+const MAX_BYTES = 64 * 1024;
+
 const textOf = (value: unknown): string | null =>
   typeof value === 'string' && value.trim() !== '' ? value : null;
 
 /**
- * `null` — читать нечего: путь не годится, файла ещё нет, он не разбирается или в нём нет ни типа,
- * ни описания. Вызывающий повторит попытку при следующем обновлении.
+ * `null` — читать нечего: путь не годится, файла ещё нет, это не обычный файл или он больше 64 КБ, он не
+ * разбирается или в нём нет ни типа, ни описания. Вызывающий повторит попытку позже.
+ *
+ * Перед чтением — `lstat`: он не идёт по ссылкам и не открывает файл. FIFO с таким именем заблокировал бы на
+ * `open` поток пула libuv навсегда, символическая ссылка вывела бы за каталог субагентов, а гигантский файл
+ * съел бы память.
  */
 export async function readSubagentMeta(
   transcriptPath: string,
@@ -39,6 +46,8 @@ export async function readSubagentMeta(
 
   let data: unknown;
   try {
+    const info = await lstat(file);
+    if (!info.isFile() || info.size > MAX_BYTES) return null;
     data = JSON.parse(await readFile(file, 'utf8'));
   } catch {
     return null;

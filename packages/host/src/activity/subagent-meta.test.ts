@@ -3,11 +3,15 @@
  * транскрипта родителя, читается только этот файл, любой сбой — `null`. Каталоги — временные.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readSubagentMeta } from './subagent-meta.js';
+
+const run = promisify(execFile);
 
 let root = '';
 /** Транскрипт родителя; рядом с ним (без `.jsonl`) лежит каталог субагентов. */
@@ -96,5 +100,40 @@ describe('readSubagentMeta', () => {
     expect(await readSubagentMeta(transcript, '..')).toBeNull();
     expect(await readSubagentMeta(transcript, '')).toBeNull();
     expect(await readSubagentMeta('-proj/sess.jsonl', 'a1')).toBeNull();
+  });
+
+  it('FIFO с таким именем не блокирует чтение: null сразу, а не зависший поток пула', async () => {
+    const fifo = metaFile('pipe');
+    await run('mkfifo', [fifo]);
+
+    const outcome = await Promise.race([
+      readSubagentMeta(transcript, 'pipe'),
+      new Promise<'завис'>((resolve) => setTimeout(() => resolve('завис'), 1500)),
+    ]);
+    // Если чтение всё же повисло на open, развязываем его: поток пула не должен остаться заблокированным.
+    if (outcome === 'завис') await open(fifo, 'r+').then((handle) => handle.close());
+
+    expect(outcome).toBeNull();
+  });
+
+  it('символическая ссылка (даже на настоящий файл) и каталог с таким именем не читаются', async () => {
+    const real = path.join(root, 'real.json');
+    await writeFile(real, JSON.stringify({ description: 'за ссылкой' }));
+    await symlink(real, metaFile('link'));
+    await mkdir(metaFile('dir'));
+
+    expect(await readSubagentMeta(transcript, 'link')).toBeNull();
+    expect(await readSubagentMeta(transcript, 'dir')).toBeNull();
+  });
+
+  it('предел размера — 64 КБ: ровно столько читается, на байт больше — нет', async () => {
+    // `{"description":"` и `"}` — 18 знаков, остальное — наполнитель до нужного размера.
+    const sized = (bytes: number): string =>
+      JSON.stringify({ description: 'x'.repeat(bytes - 18) });
+    await writeFile(metaFile('fits'), sized(64 * 1024));
+    await writeFile(metaFile('big'), sized(64 * 1024 + 1));
+
+    expect((await readSubagentMeta(transcript, 'fits'))?.description).toHaveLength(64 * 1024 - 18);
+    expect(await readSubagentMeta(transcript, 'big')).toBeNull();
   });
 });

@@ -67,6 +67,11 @@ export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
   /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
   backgroundHoldMs?: number;
+  /**
+   * Чтение `meta.json` субагента — сверх интерфейса плана: тест подставляет читателя-счётчика и видит, что и
+   * когда спросили. По умолчанию — `readSubagentMeta`.
+   */
+  readSubagentMeta?: (transcriptPath: string, agentId: string) => Promise<SubagentMeta | null>;
   /** Сессия в worktree без единого хука дольше этого срока — `trust-wait` (спека 8.2, план 4.2). */
   trustWaitMs?: number;
   /**
@@ -98,6 +103,20 @@ export interface ActivityService {
 }
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/**
+ * Неудачное чтение `meta.json` субагента повторяется не чаще: Claude пишет файл рядом со стартом, а пересчётов
+ * сессии за секунду десятки (события, лог), и ждать файла — не повод ходить за ним на каждом.
+ */
+const META_RETRY_MS = 10_000;
+
+/** Что известно про `meta.json` живых субагентов одной сессии. */
+interface SubagentCache {
+  /** Прочитанное по id задачи. */
+  found: Map<string, SubagentMeta>;
+  /** Когда чтение задачи не удалось в последний раз: до `META_RETRY_MS` не повторяется. */
+  failedAt: Map<string, number>;
+}
 
 /** Спека 8.2: доверие к папке worktree подтверждают руками, и хук может не прийти вовсе. */
 const DEFAULT_TRUST_WAIT_MS = 20_000;
@@ -218,10 +237,11 @@ export function createActivityService(
   const workWatches = new Map<string, WorkWatch>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
   /**
-   * `meta.json` субагентов, у которых снимок хуков не назвал описания: по ключу сессии и id задачи.
-   * Хранится, пока задача жива, — запись ушедшей задачи снимает следующий пересчёт.
+   * `meta.json` субагентов, у которых снимок хуков не назвал описания: прочитанное и неудачи по ключу
+   * сессии и id задачи. Хранится, пока задача жива, — запись ушедшей задачи снимает следующий пересчёт.
    */
-  const subagentMetas = new Map<string, Map<string, SubagentMeta>>();
+  const subagentCaches = new Map<string, SubagentCache>();
+  const readMeta = options.readSubagentMeta ?? readSubagentMeta;
   /** Чтения `meta.json` в полёте (ключ сессии и id задачи): одно на задачу, пока оно не вернулось. */
   const metaReads = new Set<string>();
 
@@ -325,8 +345,9 @@ export function createActivityService(
 
   /**
    * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —
-   * описание кладётся в кэш сессии и сессия пересчитывается. Не нашлось — ничего не запоминается, и
-   * следующий пересчёт попробует снова: Claude может записать файл чуть позже старта.
+   * описание кладётся в кэш сессии и сессия пересчитывается. Не нашлось — запоминается время неудачи, и
+   * пересчёт не раньше чем через `META_RETRY_MS` попробует снова: Claude может записать файл чуть позже
+   * старта.
    */
   function loadSubagentMeta(
     ref: SessionRef,
@@ -337,13 +358,18 @@ export function createActivityService(
     const read = `${key}\u0000${id}`;
     if (metaReads.has(read)) return;
     metaReads.add(read);
-    void readSubagentMeta(transcriptPath, id)
+    void readMeta(transcriptPath, id)
       .then((meta) => {
         metaReads.delete(read);
-        if (meta === null || stopped) return;
-        const known = subagentMetas.get(key) ?? new Map<string, SubagentMeta>();
-        known.set(id, meta);
-        subagentMetas.set(key, known);
+        if (stopped) return;
+        const cache = subagentCaches.get(key) ?? { found: new Map(), failedAt: new Map() };
+        subagentCaches.set(key, cache);
+        if (meta === null) {
+          cache.failedAt.set(id, nowFn());
+          return;
+        }
+        cache.failedAt.delete(id);
+        cache.found.set(id, meta);
         recompute(ref);
       })
       .catch((error: unknown) => {
@@ -354,28 +380,33 @@ export function createActivityService(
 
   /**
    * Живые субагенты для окна. Описание из снимка хуков главнее; когда его нет, берётся `meta.json`
-   * субагента (и тип агента, если он пуст): из кэша, а нет в кэше — в фоне запускается чтение, и
-   * окно получит описание следующим пересчётом. Кэш `meta.json` остаётся только у живых задач.
+   * субагента (и тип агента, если он пуст): из кэша, а нет в кэше — в фоне запускается чтение (не чаще
+   * раза в `META_RETRY_MS` после неудачи), и окно получит описание следующим пересчётом. Кэш `meta.json`
+   * остаётся только у живых задач.
    */
   function liveTasksOf(ref: SessionRef, key: string, activity: SessionActivity): LiveTask[] {
-    const known = subagentMetas.get(key);
-    const kept = new Map<string, SubagentMeta>();
+    const cache = subagentCaches.get(key);
+    const kept: SubagentCache = { found: new Map(), failedAt: new Map() };
     const tasks = activity.tasks.map((task): LiveTask => {
       let { agentType, description } = task;
       if (description === null) {
-        const meta = known?.get(task.id);
+        const meta = cache?.found.get(task.id);
         if (meta !== undefined) {
-          kept.set(task.id, meta);
+          kept.found.set(task.id, meta);
           description = meta.description;
           agentType ??= meta.agentType;
         } else if (task.transcriptPath !== null) {
-          loadSubagentMeta(ref, key, task.id, task.transcriptPath);
+          const failedAt = cache?.failedAt.get(task.id);
+          if (failedAt !== undefined) kept.failedAt.set(task.id, failedAt);
+          if (failedAt === undefined || nowFn() - failedAt >= META_RETRY_MS) {
+            loadSubagentMeta(ref, key, task.id, task.transcriptPath);
+          }
         }
       }
       return { id: task.id, agentType, description, background: task.background };
     });
-    if (kept.size === 0) subagentMetas.delete(key);
-    else subagentMetas.set(key, kept);
+    if (kept.found.size === 0 && kept.failedAt.size === 0) subagentCaches.delete(key);
+    else subagentCaches.set(key, kept);
     return tasks;
   }
 
@@ -653,8 +684,8 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
-    for (const [key] of Array.from(subagentMetas)) {
-      if (!validSessions.has(key)) subagentMetas.delete(key);
+    for (const [key] of Array.from(subagentCaches)) {
+      if (!validSessions.has(key)) subagentCaches.delete(key);
     }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);

@@ -17,6 +17,7 @@ import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createActivityService } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
+import type { SubagentMeta } from './subagent-meta.js';
 
 let home = '';
 let project = '';
@@ -599,7 +600,9 @@ describe('createActivityService: субагенты и ожидание (Parley 
   it('описание — из meta.json субагента, когда снимок его не знает; файл появился позже — подхватывается', async () => {
     const { ref } = await activeSession();
     const w = await works();
-    const a = activity(w);
+    // Часы управляемые: после неудачного чтения повтор не раньше 10 с, и тест их перематывает.
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock, silenceThresholdMs: 120_000 });
     await a.start();
     await settle();
 
@@ -619,7 +622,8 @@ describe('createActivityService: субагенты и ожидание (Parley 
       metaFile('a2'),
       JSON.stringify({ agentType: 'claude-code-guide', description: 'Docs lookup' }),
     );
-    // Следующее событие журнала — следующее обновление: файл перечитывается.
+    // Прошло больше срока повтора, а следующее событие журнала — следующее обновление: файл перечитывается.
+    clock += 10_001;
     await appendFile(journalOf(ref), hook('PreToolUse'));
     await waitFor(() => a.get(ref)?.metrics?.tasks?.[0]?.description === 'Docs lookup');
     expect(a.get(ref)?.metrics?.tasks).toEqual([
@@ -633,13 +637,17 @@ describe('createActivityService: субагенты и ожидание (Parley 
     expect(a.get(ref)?.metrics?.tasks?.[0]?.description).toBe('Docs lookup');
   }, 20_000);
 
-  it('описание из снимка файла не требует: meta.json не читается', async () => {
+  it('описание из снимка файла не требует: meta.json не читается — чтение наблюдаемо', async () => {
     const { ref } = await activeSession();
-    // Файл с другим описанием: если бы его прочли, оно перекрыло бы снимок.
-    await mkdir(path.dirname(metaFile('a3')), { recursive: true });
-    await writeFile(metaFile('a3'), JSON.stringify({ description: 'из файла' }));
     const w = await works();
-    const a = activity(w);
+    const reads: string[] = [];
+    const a = activity(w, {
+      // Читатель-счётчик: что запрошено, то и считано; файл он подменяет другим описанием.
+      readSubagentMeta: async (_transcriptPath, id) => {
+        reads.push(id);
+        return { agentType: null, description: 'из файла' };
+      },
+    });
     await a.start();
     await settle();
 
@@ -652,8 +660,71 @@ describe('createActivityService: субагенты и ожидание (Parley 
     await waitFor(() => a.get(ref)?.activity.subagents === 1);
     await settle(200);
 
+    expect(reads).toEqual([]);
     expect(a.get(ref)?.metrics?.tasks?.[0]?.description).toBe('из снимка');
+
+    // Контроль прибора: субагент без описания в снимке читателя зовёт, и описание берётся из файла.
+    await appendFile(
+      journalOf(ref),
+      hook('SubagentStart', { agent_id: 'b3', transcript_path: transcript() }) +
+        hook('Notification', {
+          background_tasks: [running('a3', 'из снимка'), running('b3', null)],
+        }),
+    );
+    await waitFor(() => reads.length > 0);
+    expect(reads).toEqual(['b3']);
+    await waitFor(() => a.get(ref)?.metrics?.tasks?.[1]?.description === 'из файла');
   }, 20_000);
+
+  it('неудачное чтение запоминается: повтор не чаще раза в 10 с, а не на каждом пересчёте', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const reads: number[] = [];
+    let result: SubagentMeta | null = null;
+    const a = activity(w, {
+      now: () => clock,
+      silenceThresholdMs: 120_000,
+      readSubagentMeta: async () => {
+        reads.push(clock);
+        return result;
+      },
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(
+      journalOf(ref),
+      hook('UserPromptSubmit') +
+        hook('SubagentStart', { agent_id: 'a4', transcript_path: transcript() }),
+    );
+    await waitFor(() => reads.length === 1);
+
+    // Пересчёты идут своим чередом (события журнала), а файла всё нет: читать заново рано.
+    for (let count = 0; count < 3; count += 1) {
+      await appendFile(journalOf(ref), hook('PreToolUse'));
+      await settle(150);
+    }
+    expect(reads).toHaveLength(1);
+
+    // Срок прошёл — одна новая попытка, а за ней снова пауза.
+    clock += 10_000;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await waitFor(() => reads.length === 2);
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await settle(150);
+    expect(reads).toHaveLength(2);
+
+    // Файл появился: следующая попытка берёт его, и больше о нём не спрашивают.
+    result = { agentType: 'explorer', description: 'Docs lookup' };
+    clock += 10_000;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await waitFor(() => a.get(ref)?.metrics?.tasks?.[0]?.description === 'Docs lookup');
+    const total = reads.length;
+    await appendFile(journalOf(ref), hook('PreToolUse'));
+    await settle(150);
+    expect(reads).toHaveLength(total);
+  }, 30_000);
 
   it('ParleyWaitStart и ParleyWaitEnd: LiveMetrics.waitingFor', async () => {
     const { ref } = await activeSession();
