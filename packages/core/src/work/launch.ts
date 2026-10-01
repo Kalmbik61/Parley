@@ -275,13 +275,30 @@ export function planNew(
 }
 
 /**
- * Ярлык быстрой сессии, пока не появился заголовок Claude Code (5.1). Метка-страж, а не текст: она лежит в
- * картах на диске, и по значению её узнают хост (автозаголовок) и окно (показывает «New session»), —
- * поэтому остаётся русской. Перевод — отдельным шагом, с чтением прежнего значения во всех трёх местах.
+ * Ярлык быстрой сессии, пока не появился заголовок Claude Code (5.1). Метка-страж: она лежит в картах на
+ * диске, по значению её узнают `applyAutoTitle`, хост (автозаголовок) и окно (показывает «New session»), а
+ * агент видит её в брифе и в результатах MCP — поэтому английская.
  */
-export const NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка-страж, записана в карты
+export const NEW_LABEL = 'new session';
 /** Заголовок работы, созданной вместе с быстрой сессией (5.1); метка-страж того же рода, что `NEW_LABEL`. */
-export const UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка-страж, записана в карты
+export const UNTITLED_WORK = 'untitled';
+/**
+ * Те же метки в прежней, русской записи: карты, заведённые сборками до перевода текстов, хранят их, и они
+ * по-прежнему свои — автозаголовок такую сессию и такую работу переименует. Текст — как он лежит на диске,
+ * поэтому не переводится.
+ */
+const RUSSIAN_NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка на диске, по ней узнаём свою
+const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка на диске, по ней узнаём свою
+
+/** Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. */
+export function isNewLabel(label: string): boolean {
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL;
+}
+
+/** Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. */
+export function isUntitledWork(title: string): boolean {
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK;
+}
 
 export interface NewSessionResult {
   workId: string;
@@ -290,7 +307,7 @@ export interface NewSessionResult {
 
 /**
  * `new` без диалога: работа берётся выбранная, а если работ нет — заводится
- * «без названия» с пустой целью. Бриф такой сессии не пишется (5.1).
+ * работа `UNTITLED_WORK` с пустой целью. Бриф такой сессии не пишется (5.1).
  */
 export async function createNewSession(
   projectPath: string,
@@ -336,8 +353,8 @@ export async function createChildSession(
 
 /**
  * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
- * заголовок работы «без названия» обновляются из него один раз (5.1).
- * Переименованную руками сессию не трогаем — она уже не `новая сессия`.
+ * заголовок работы `UNTITLED_WORK` обновляются из него один раз (5.1).
+ * Переименованную руками сессию не трогаем — её ярлык уже не `NEW_LABEL`.
  */
 export async function applyAutoTitle(
   projectPath: string,
@@ -347,9 +364,9 @@ export async function applyAutoTitle(
 ): Promise<void> {
   await updateMap(projectPath, workId, (map) => {
     const session = map.sessions.find((item) => item.id === sessionId);
-    if (session === undefined || session.label !== NEW_LABEL) return;
+    if (session === undefined || !isNewLabel(session.label)) return;
     session.label = title;
-    if (map.work.title === UNTITLED_WORK) map.work.title = title;
+    if (isUntitledWork(map.work.title)) map.work.title = title;
   });
 }
 

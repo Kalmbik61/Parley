@@ -297,6 +297,24 @@ describe('createActivityService', () => {
     expect(final?.label).toBe('своё имя');
   }, 40_000);
 
+  it('6b: ярлык в прежней русской записи (карта сборки до перевода) тоже получает автозаголовок', async () => {
+    const { ref, workId } = await activeSession({ label: 'новая сессия', providerSessionId: 's-legacy' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-legacy.jsonl'),
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'заголовок из лога', sessionId: 's-legacy' })}\n`,
+    );
+
+    const w = await works();
+    await activity(w).start();
+    await waitFor(
+      () =>
+        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
+        'заголовок из лога',
+      15_000,
+    );
+  }, 40_000);
+
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
     await activeSession({ launchedBy: 'host', createEventsDir: false });
     const w = await works();

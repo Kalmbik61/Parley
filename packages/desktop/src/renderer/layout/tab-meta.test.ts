@@ -69,11 +69,13 @@ describe('tabMeta — тест 6', () => {
     expect(meta.favicon).toBeNull();
   });
 
-  // Раунд исправлений 1 куска 3.3: метка-страж core `NEW_LABEL` — по-русски, окно
-  // показывает английскую.
-  it('terminal: метка новой сессии из core — английская', () => {
-    const meta = tabMeta({ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, entry([session('s-01', 'новая сессия')]));
+  // Раунд исправлений 1 куска 3.3: метка-страж core `NEW_LABEL` окно показывает как «New session»;
+  // прежняя русская запись из карты старой сборки — так же.
+  it('terminal: метка новой сессии из core — «New session»', () => {
+    const meta = tabMeta({ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, entry([session('s-01', 'new session')]));
     expect(meta.title).toBe('S01 New session');
+    const legacy = tabMeta({ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, entry([session('s-01', 'новая сессия')]));
+    expect(legacy.title).toBe('S01 New session');
   });
 
   it('terminal без сессии в карте — тег без ярлыка, session: null', () => {

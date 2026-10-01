@@ -28,7 +28,7 @@ import { tabMeta, type TabMeta } from '../layout/tab-meta.js';
 import { groups, openTab, openTerminalSessionIds, splitGroup } from '../layout/tree.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../lib/dot-state.js';
 import { isoMs } from '../lib/iso-time.js';
-import { sessionLabelText, sessionRowLabel, sessionTag } from '../lib/participant.js';
+import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
@@ -111,7 +111,7 @@ export function buildDocuments(input: {
     if (entry.map.work.status === 'archived') continue;
     const key = workKey(entry.projectPath, entry.map.work.id);
     if (split && key !== activeWorkKey) continue;
-    const workTitle = entry.map.work.title;
+    const workTitle = workTitleText(entry.map.work.title);
     // Порядок сайдбара — по работам; внутри работы — порядок вкладок и дерева сессий.
     const base = (orderIndex.get(key) ?? input.order.length) * 1000;
     const layout = layouts[key];

@@ -4,7 +4,7 @@
  * переименование на месте и вкладка почты.
  *
  * Пункты с методами, которых хост не знает, спрятаны (`useHostSupports`, спека 3.2).
- * Ошибка хоста или main — тост `errorText(код, действие)`; русский текст хоста — только в
+ * Ошибка хоста или main — тост `errorText(код, действие)`; текст хоста — только в
  * консоль (сквозное правило E.1).
  *
  * «Delete…»: хост отвечает `conflict`, пока у работы есть живая сессия. Поэтому после
@@ -23,6 +23,7 @@ import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { useLayoutStore } from '../layout/store.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { workTitleText } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -213,7 +214,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
 
       <ConfirmDialog
         open={confirm === 'archive'}
-        title={S.cardMenu.archiveConfirmTitle(map.work.title)}
+        title={S.cardMenu.archiveConfirmTitle(workTitleText(map.work.title))}
         description={S.cardMenu.archiveConfirmDescription}
         confirmLabel={S.cardMenu.archive}
         onConfirm={() => setStatus('archived', S.errors.actions.archiveWorkspace)}
@@ -222,7 +223,7 @@ export function CardMenu({ entry, pinned, bridge, onRename, onOpenMail, children
       />
       <ConfirmDialog
         open={confirm === 'delete'}
-        title={S.cardMenu.deleteConfirmTitle(map.work.title)}
+        title={S.cardMenu.deleteConfirmTitle(workTitleText(map.work.title))}
         description={S.cardMenu.deleteConfirmDescription(map.sessions.length)}
         confirmLabel={S.common.delete}
         onConfirm={() => {

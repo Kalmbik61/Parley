@@ -16,9 +16,9 @@ import {
   activityOf,
   applyAutoTitle,
   envValue,
+  isNewLabel,
   linkSession,
   loadConfig,
-  NEW_LABEL,
   openEvents,
   sessionTag,
   unreadFor,
@@ -318,7 +318,7 @@ export function createActivityService(
 
   /** Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). */
   function maybeAutoTitle(ref: SessionRef, key: string, session: WorkSession): void {
-    if (session.label !== NEW_LABEL || autoTitled.has(key)) return;
+    if (!isNewLabel(session.label) || autoTitled.has(key)) return;
     const title = logIndex.index(session)?.title;
     if (title === undefined || title === null) return;
     autoTitled.add(key);

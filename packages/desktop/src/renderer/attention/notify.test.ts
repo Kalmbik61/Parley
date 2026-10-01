@@ -233,6 +233,22 @@ describe('createAttentionNotifier.onWorks (тесты 3 и 9 куска 4.3)', (
     expect(h.notes.map((note) => note.title)).toEqual(['Redesign · message from S01', 'Redesign · decision from S01']);
   });
 
+  // Метка безымянной работы `UNTITLED_WORK` core стоит в карте, пока не придёт автозаголовок: в уведомлении —
+  // «Untitled workspace», а не сырая метка и не её прежняя русская запись из карты старой сборки.
+  it('безымянная работа — «Untitled workspace» в заголовке письма и уведомления хоста', () => {
+    for (const title of ['untitled', 'без названия']) {
+      const base = entry(title, [session('s-01', 'planner'), session('s-02', 'executor')]);
+      const h = harness([base]);
+      h.notifier.onWorks([base]);
+      h.notifier.onWorks([{ ...base, map: { ...base.map, messages: [letter('m-1', { kind: 'question' })] } }]);
+      h.notifier.onHostNotice(notice('launch-failed', ref2));
+      expect(h.notes.map((note) => note.title)).toEqual([
+        'Untitled workspace · question from S01',
+        "Untitled workspace · S02 executor — couldn't launch",
+      ]);
+    }
+  });
+
   it('письмо агента агенту и сообщение комнаты — нет; prefs().mail: false — нет; вкладка почты видна — нет', () => {
     const h = harness([]);
     const base = entry('Redesign', [session('s-01', 'planner')]);

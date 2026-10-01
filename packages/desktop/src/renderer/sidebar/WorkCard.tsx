@@ -36,6 +36,7 @@ import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
+import { workTitleText } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
@@ -204,7 +205,7 @@ export const WorkCard = memo(function WorkCard({
             onDoubleClick={canRename ? () => setRenaming(true) : undefined}
             className={cn('min-w-0 flex-1 truncate text-[13px] leading-5 text-work-sidebar-foreground', bold ? 'font-bold' : 'font-medium')}
           >
-            {map.work.title}
+            {workTitleText(map.work.title)}
           </span>
         )}
         {attention.humanUnread > 0 ? (

@@ -9,8 +9,8 @@
  * один раз для всех, поэтому и письма-приглашения не нужны (`quiet`). Одиночная сессия тоже стартует без задачи — её
  * человек пишет в терминале.
  *
- * Пустой ярлык хост пустым не оставляет: сессиям без задачи он ставит метку «новая сессия» (`NEW_LABEL` core,
- * `applyChoice` в `host/sessions/sessions-service.ts`), чтобы её переименовал заголовок Claude Code (автозаголовок). Поэтому
+ * Пустой ярлык хост пустым не оставляет: сессиям без задачи он ставит метку `NEW_LABEL` core (`applyChoice` в
+ * `host/sessions/sessions-service.ts`), чтобы её переименовал заголовок Claude Code (автозаголовок). Поэтому
  * строка сайдбара, вкладка и упоминания показывают `S05 New session` до автозаголовка (у Codex его нет), а не голый `S05`,
  * как обещает спека 2.1. Расхождение и варианты — в отчёте куска 7, «Правки по ревью»: голый `S05` требует правки хоста и
  * решения, нужен ли автозаголовок таким сессиям.
@@ -59,7 +59,7 @@ import { useLayoutStore } from '../../layout/store.js';
 import { cn } from '../../lib/cn.js';
 import { defaultProvider, type ProviderOption } from '../../lib/default-provider.js';
 import { openWhenListed } from '../../lib/open-when-listed.js';
-import { sessionTag } from '../../lib/participant.js';
+import { sessionTag, workTitleText } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
@@ -362,7 +362,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   };
 
   const text = S.dialogs.newSession;
-  const workTitle = selected?.map.work.title ?? '';
+  const workTitle = selected === null ? '' : workTitleText(selected.map.work.title);
   const summary = multi ? text.summaryRoom(agents.length, workTitle) : text.summarySession(workTitle);
 
   return (
@@ -386,7 +386,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                 <SelectContent className={LIST_HEIGHT}>
                   {activeWorks.map((entry) => (
                     <SelectItem key={keyOf(entry)} value={keyOf(entry)} title={entry.projectPath} className={ITEM_CLIP}>
-                      {text.workspaceOption(entry.map.work.title, projectName(entry.projectPath))}
+                      {text.workspaceOption(workTitleText(entry.map.work.title), projectName(entry.projectPath))}
                     </SelectItem>
                   ))}
                 </SelectContent>

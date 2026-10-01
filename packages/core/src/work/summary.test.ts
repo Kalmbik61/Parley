@@ -197,6 +197,8 @@ describe('дозаказ резюме', () => {
     expect(args[1]).toContain('почини сборку');
     expect(args[1]).toContain('Авторизация');
     expect(args[1]).toContain('бэкенд');
+    // Язык резюме не менялся вместе с переводом текстов: как и прежде, его просят по-русски.
+    expect(args[1]).toContain('Write, in Russian, a summary');
   });
 
   it('у тихой сессии задачи нет — строки «Its task» в промпте тоже', async () => {

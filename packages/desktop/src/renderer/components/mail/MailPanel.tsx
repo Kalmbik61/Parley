@@ -19,6 +19,7 @@ import { S } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { mailView } from '../../lib/mail-view.js';
+import { workTitleText } from '../../lib/participant.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
 
@@ -95,7 +96,7 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
       <div data-mail-header className="flex shrink-0 items-start justify-between gap-3 px-9 pb-3.5 pt-8">
         <div className="flex min-w-0 flex-col gap-0.5">
           <h3 className="m-0 font-heading text-[25px] leading-[1.12] tracking-[-0.015em]">{S.tabs.mail}</h3>
-          <span className="truncate text-[13px] text-muted-foreground">{S.mail.subtitle(entry.map.work.title, unread)}</span>
+          <span className="truncate text-[13px] text-muted-foreground">{S.mail.subtitle(workTitleText(entry.map.work.title), unread)}</span>
         </div>
         {below > 0 ? (
           <button

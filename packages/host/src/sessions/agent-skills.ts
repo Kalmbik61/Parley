@@ -27,7 +27,10 @@ export type SkillInstaller = (ref: SessionRef, worktreePath: string | null) => P
 
 type Install = (options: SkillInstallOptions) => Promise<SkillInstallResult>;
 
-/** Что сказать про каждый вид «не тронуто»: этот же английский текст — в лог и в уведомление окна. */
+/**
+ * Что сказать про каждый вид «не тронуто»: этот английский текст — в лог и в `notice.text`. Окно его не
+ * показывает: оно берёт свой текст по виду уведомления (`skill-foreign`), а `notice.text` пишет в консоль.
+ */
 const LOG_TEXT: Record<SkillSkip['reason'], string> = {
   foreign: 'Parley skill was not installed: the path already exists and was not created by Parley — left as is',
   edited: 'Parley skill was not updated: the file was edited by hand — left as is',

@@ -263,9 +263,8 @@ describe('AppShell — Landing и оболочка с работой (тест 6
     expect(screen.getByTestId('center-sheet').contains(container)).toBe(true);
   });
 
-  // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): HostNotice.text
-  // хост пишет по-русски и не переводит (сквозное правило) — строка статуса
-  // обязана показывать noticeText(notice, label) по коду, а не notice.text.
+  // Раунд исправлений 1 куска E.1 (ревью линза A, Critical): строка статуса
+  // обязана показывать noticeText(notice, label) по коду, а не notice.text хоста.
   it('строка статуса переводит уведомление хоста по коду, не показывает русский notice.text', async () => {
     useNoticesStore.setState({
       notices: [

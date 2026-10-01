@@ -163,7 +163,7 @@ describe('rooms.create / rooms.send', () => {
     });
     expect(response.error).toMatchObject({
       code: 'bad_request',
-      message: `session ${outsider} is not a member of room r-01`,
+      message: `session ${outsider} is not a participant of room r-01`,
     });
     expect((await readMap(dir, workId)).messages).toHaveLength(before);
 
@@ -257,7 +257,7 @@ describe('rooms.create: ведущий и правило одной комнат
       });
       expect(response.error).toMatchObject({
         code: 'bad_request',
-        message: `lead ${lead} is not a member of the room`,
+        message: `lead ${lead} is not a participant of the room`,
       });
     }
     expect((await readMap(dir, workId)).rooms).toEqual([]);
@@ -326,7 +326,7 @@ describe('rooms.create: ведущий и правило одной комнат
       });
       expect(response.error).toMatchObject({
         code: 'bad_request',
-        message: 'origin: two different sessions among the room members',
+        message: 'origin: two different sessions among the room participants',
       });
     }
     const map = await readMap(dir, workId);

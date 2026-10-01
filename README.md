@@ -961,15 +961,18 @@ answer a `note` or a `decision`, and record an agreement with a single `decision
 Maps written before 2026-09-08 are read with the kind `note`.
 
 **Delivery.** When the addressee has finished its turn and is not typing anything, the host
-itself types a pointer into its terminal: "New messages (N). Call check_inbox." If the
-messages came to a room, the room's id and title are in the middle of the phrase:
-`New messages (2) in r-01 "Plan". Call check_inbox.` A message wakes a sleeping session through
-`claude --resume` with the same pointer in the argument, no more often than `resumeRate`
-times per hour. The pointer delivers nothing and does not touch the map: the text of a message
-is brought by `check_inbox`, so `readAt`/`readBy` still mean "the agent has read it", not "we
-have sent it". The `<channel source="parley">` tag (a channel push) exists only in sessions
-started by the `parley-core` CLI with `channelPush`; the guide, the system prompt insert and
-the skill stub tell the agent exactly this: in the window, messages arrive as a pointer.
+itself types a pointer into its terminal: "New messages (N). Call check_inbox." If all the
+messages came from one room, its id and title are in the middle of the phrase:
+`New messages (2) in r-01 "Plan". Call check_inbox.` With several rooms, or a room together
+with direct messages, only the ids are listed (`in r-01, r-02`, `in r-01 and direct`): the line
+is typed into the agent's terminal and stays short, and `check_inbox` brings the details. A
+message wakes a sleeping session through `claude --resume` with the same pointer in the
+argument, no more often than `resumeRate` times per hour. The pointer delivers nothing and
+does not touch the map: the text of a message is brought by `check_inbox`, so `readAt`/`readBy`
+still mean "the agent has read it", not "we have sent it". The `<channel source="parley">` tag
+(a channel push) exists only in sessions started by the `parley-core` CLI with `channelPush`;
+the guide, the system prompt insert and the skill stub tell the agent exactly this: in the
+window, messages arrive as a pointer.
 
 **Cap.** Two polite agents can keep writing to each other until the subscription limit runs
 out, so `send_message` counts the sender's messages over a sliding hour: beyond `messageRate`

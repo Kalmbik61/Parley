@@ -199,6 +199,8 @@ export {
   createPendingSession,
   deleteSession,
   finishExited,
+  isNewLabel,
+  isUntitledWork,
   linkSession,
   NEW_LABEL,
   planLaunch,

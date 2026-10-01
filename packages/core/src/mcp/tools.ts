@@ -326,7 +326,7 @@ const TOOLS: Tool[] = [
     name: 'send_message',
     annotations: WRITES,
     description:
-      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace, as before. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer.',
+      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer.',
     inputSchema: {
       type: 'object',
       properties: {

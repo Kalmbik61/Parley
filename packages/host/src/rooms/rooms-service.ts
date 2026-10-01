@@ -78,13 +78,13 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     for (const id of members) assertDeliverable(map, id);
 
     const lead = input.lead ?? (members[0] as string);
-    if (!members.includes(lead)) throw bad(`lead ${lead} is not a member of the room`);
+    if (!members.includes(lead)) throw bad(`lead ${lead} is not a participant of the room`);
     const { origin } = input;
     if (
       origin !== undefined &&
       (origin[0] === origin[1] || !origin.every((id) => members.includes(id)))
     ) {
-      throw bad('origin: two different sessions among the room members');
+      throw bad('origin: two different sessions among the room participants');
     }
 
     const room = addRoom(map, { title: input.title, creator: HUMAN, members, lead });
@@ -114,7 +114,7 @@ export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<stri
       const room = map.rooms.find((candidate) => candidate.id === roomId);
       if (room === undefined) throw bad(`room ${roomId} is not in the map`);
       for (const id of to) {
-        if (!isMember(room, id)) throw bad(`session ${id} is not a member of room ${roomId}`);
+        if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
       messageId = addMessage(map, { from: HUMAN, to, text, kind, roomId }).id;

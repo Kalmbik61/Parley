@@ -41,6 +41,17 @@ describe('InlineRename (тест 3)', () => {
     expect(useUiStore.getState().sidebarHolds).toEqual({});
   });
 
+  it('безымянная работа: поле открывается на «Untitled workspace»; без изменений хост не зовётся', () => {
+    const untitled = makeWork('w-02', { projectPath: '/tmp/proj', title: 'untitled' });
+    const onDone = vi.fn();
+    render(<InlineRename entry={untitled} bridge={bridge} onDone={onDone} />);
+    const input = screen.getByRole('textbox') as HTMLInputElement;
+    expect(input.value).toBe('Untitled workspace');
+    fireEvent.blur(input);
+    expect(onDone).toHaveBeenCalled();
+    expect(renames()).toEqual([]);
+  });
+
   it('Enter зовёт works.rename с новым названием', async () => {
     const { input, onDone } = renderRename();
     fireEvent.change(input, { target: { value: 'New title' } });

@@ -220,7 +220,7 @@ describe('create() + launch(): argv и окружение процесса', () 
       projectPath: project,
       workId: work.work.id,
       provider: 'claude',
-      label: 'новая сессия',
+      label: NEW_LABEL,
       task: '',
       parent: null,
     });
