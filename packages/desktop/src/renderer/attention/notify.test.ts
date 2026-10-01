@@ -565,7 +565,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     return h;
   }
 
-  it('новое упоминание — одно уведомление macOS: заголовок «S02 mentioned you in Mobile APP», первая строка текста, тег mention:<workKey>:<roomId>, цель — комната', () => {
+  it('новое упоминание — одно уведомление macOS: заголовок «S02 mentioned you in Mobile APP», выдержка из текста, тег mention:<workKey>:<roomId>, цель — комната', () => {
     const h = started();
     h.notifier.onWorks([
       withMessages([mention('m-1', { text: '\n\nReady for review, @human\nsecond line' })]),
@@ -573,7 +573,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     expect(h.notes).toEqual([
       {
         title: 'S02 mentioned you in Mobile APP',
-        body: 'Ready for review, @human',
+        body: 'Ready for review, @you',
         tag: TAG,
         target: TARGET,
         silent: false,
@@ -592,7 +592,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     h.notifier.onWorks([
       withMessages([mention('m-1'), mention('m-2', { text: 'Second ping, @human' })]),
     ]);
-    expect(h.notes.map((note) => note.body)).toEqual(['Second ping, @human']);
+    expect(h.notes.map((note) => note.body)).toEqual(['Second ping, @you']);
   });
 
   it('prefs().mail: false — нет, и упоминание запомнено: включение настройки его не повторяет', () => {
@@ -625,7 +625,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
       ]),
     ]);
     expect(h.notes).toHaveLength(1);
-    expect(h.notes[0]).toMatchObject({ body: 'Second, @human', tag: TAG });
+    expect(h.notes[0]).toMatchObject({ body: 'Second, @you', tag: TAG });
   });
 
   it('упоминания в двух комнатах — два уведомления с тегами своих комнат и своими отправителями', () => {
@@ -642,8 +642,8 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
       ),
     ]);
     expect(h.notes.map((note) => [note.tag, note.title, note.body])).toEqual([
-      ['mention:/tmp/p w-01:r-01', 'S02 mentioned you in Mobile APP', 'Ready for review, @human'],
-      ['mention:/tmp/p w-01:r-02', 'S01 mentioned you in Backend', 'API is ready, @human'],
+      ['mention:/tmp/p w-01:r-01', 'S02 mentioned you in Mobile APP', 'Ready for review, @you'],
+      ['mention:/tmp/p w-01:r-02', 'S01 mentioned you in Backend', 'API is ready, @you'],
     ]);
   });
 
@@ -660,6 +660,27 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
       ]),
     ]);
     expect(h.notes).toEqual([]);
+  });
+
+  it('не уведомляют и там, где лента чипа не рисует: @human в коде, в подписи и адресе ссылки', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'run `@human` in the shell' }),
+        mention('m-2', { text: '```\n@human\n```' }),
+        mention('m-3', { text: '[ask @human](https://x.dev)' }),
+        mention('m-4', { text: 'see https://github.com/@human' }),
+      ]),
+    ]);
+    expect(h.notes).toEqual([]);
+    // А в выделении лента чип рисует, и уведомление идёт.
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'run `@human` in the shell' }),
+        mention('m-5', { text: 'cc **@human**' }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['cc @you']);
   });
 
   it('упоминание, уже бывшее в прошлом снимке и всё ещё не прочитанное, второй раз не уведомляет', () => {
@@ -687,13 +708,46 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     ]);
   });
 
-  it('sound: false → silent: true; длинная первая строка режется до 200 кодовых точек, заголовок цел', () => {
+  it('sound: false → silent: true; длинная первая строка — выдержка в 140 знаков и «…», заголовок цел', () => {
     const h = started();
     h.prefs = { ...h.prefs, sound: false };
     h.notifier.onWorks([withMessages([mention('m-1', { text: `@human ${'😀'.repeat(201)}` })])]);
     expect(h.notes[0]?.silent).toBe(true);
-    expect(Array.from(h.notes[0]?.body ?? '')).toHaveLength(200);
+    // «@you » — пять знаков, остальные 135 — эмодзи: всего 140 знаков и «…».
+    expect(h.notes[0]?.body).toBe(`@you ${'😀'.repeat(135)}…`);
     expect(h.notes[0]?.title).toBe('S02 mentioned you in Mobile APP');
+  });
+
+  it('тело — выдержка, как у цитаты ответа: разрыв пропущен, разметка снята, текст в одну строку', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', {
+          text: '---\n> - **Ready** for [review](https://x.dev/1), @human\nsecond line',
+        }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Ready for review, @you']);
+  });
+
+  it('подписи упоминаний — по карте работы, как у чипов ленты: @s01 — «S01 planner», нет в карте — тег, код остаётся кодом', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'Ask @s01 or @s09, @human; but `@s01` and `@human` stay code' }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'Ask @S01 planner or @S09, @you; but @s01 and @human stay code',
+    ]);
+  });
+
+  it('письма человеку по-прежнему — первая строка как есть: выдержка только у упоминаний', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([letter('m-1', { kind: 'question', text: '**Which** API, @s01?' })]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['**Which** API, @s01?']);
   });
 
   it('в уведомлении нет кириллицы из слов окна: заголовок — английский', () => {
@@ -882,7 +936,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
     expect(bridge.appNotified).toMatchObject([
       {
         title: 'S02 mentioned you in Mobile APP',
-        body: 'Take a look, @human',
+        body: 'Take a look, @you',
         tag: 'mention:/tmp/p w-01:r-01',
         target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' },
       },

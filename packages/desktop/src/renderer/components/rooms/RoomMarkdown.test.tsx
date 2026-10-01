@@ -193,7 +193,7 @@ describe('RoomMarkdown — упоминание человека @human (Parley 
   const humanChips = (root: ParentNode): HTMLElement[] =>
     Array.from(root.querySelectorAll<HTMLElement>('[data-mention-human]'));
 
-  it('@human — чип «@you»: data-mention-human, подсказка и aria-label «Mentions you», вид плотнее чипа сессии', () => {
+  it('@human — чип «@you»: data-mention-human, подсказка «Mentions you» (aria-label нет: у span нет роли), вид плотнее чипа сессии', () => {
     const { container } = renderText('Вопрос к @human: что дальше?');
     const [chip] = humanChips(container);
     expect(humanChips(container)).toHaveLength(1);
@@ -201,7 +201,8 @@ describe('RoomMarkdown — упоминание человека @human (Parley 
     expect(chip?.getAttribute('data-mention-human')).toBe('');
     expect(chip?.textContent).toBe('@you');
     expect(chip?.getAttribute('title')).toBe('Mentions you');
-    expect(chip?.getAttribute('aria-label')).toBe('Mentions you');
+    expect(chip?.hasAttribute('aria-label')).toBe(false);
+    expect(chip?.hasAttribute('role')).toBe(false);
     expect(chip?.className).toBe(HUMAN_MENTION_CHIP_CLASS);
     expect(chip?.className).not.toBe(MENTION_CHIP_CLASS);
     expect(container.querySelector('[data-mention]')).toBeNull();

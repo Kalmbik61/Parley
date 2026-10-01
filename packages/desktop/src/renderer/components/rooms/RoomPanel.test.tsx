@@ -6,6 +6,7 @@
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
 
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
@@ -681,14 +682,16 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     });
   });
 
-  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с aria-label и подсказкой', () => {
+  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с именем из видимого текста и подсказкой', () => {
     renderPanel(entryOf({ messages: replyMessages() }));
     const button = quote('m-1');
     expect(button.tagName).toBe('BUTTON');
     expect(button.getAttribute('type')).toBe('button');
     expect(button.textContent).toBe('↩ You: Что с миграцией?');
     expect(button.querySelector('.font-semibold')?.textContent).toBe('You');
-    expect(button.getAttribute('aria-label')).toBe('Show the message from You');
+    // Имя — видимый текст без стрелки: aria-label выдержку не прячет.
+    expect(button.hasAttribute('aria-label')).toBe(false);
+    expect(screen.getByRole('button', { name: 'You: Что с миграцией?' })).toBe(button);
     expect(button.getAttribute('title')).toBe('Что с миграцией?');
     // Мелкий текст, одна строка с обрезкой, акцентная черта слева.
     for (const token of ['text-xs', 'truncate', 'border-l-2', 'border-(--color-accent)']) {
@@ -722,7 +725,9 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       }),
     );
     expect(quote('m-1').textContent).toBe('↩ S01 архитектор: @S02 бэкенд, @you — что скажете?');
-    expect(quote('m-1').getAttribute('aria-label')).toBe('Show the message from S01 архитектор');
+    expect(
+      screen.getByRole('button', { name: 'S01 архитектор: @S02 бэкенд, @you — что скажете?' }),
+    ).toBe(quote('m-1'));
   });
 
   it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
@@ -746,6 +751,28 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(scrolled).toHaveLength(1);
     expect(scrolled[0]?.element).toBe(messageRow('m-1'));
     expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('клик по цитате переносит фокус на строку оригинала: после прокрутки и без собственной прокрутки', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderPanel(entryOf({ messages: replyMessages() }));
+      // Строка принимает фокус программно, но в порядок Tab не входит.
+      expect(messageRow('m-1').getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(document.body);
+
+      fireEvent.click(quote('m-1'));
+      expect(document.activeElement).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(focus.mock.contexts[0]).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      const scroll = vi.mocked(Element.prototype.scrollIntoView);
+      expect(scroll.mock.invocationCallOrder[0]).toBeLessThan(
+        focus.mock.invocationCallOrder[0] as number,
+      );
+    } finally {
+      focus.mockRestore();
+    }
   });
 
   it('prefers-reduced-motion: reduce — прокрутка без плавности (behavior: auto); без него — smooth', () => {
@@ -835,6 +862,8 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     const { unmount } = renderPanel(entryOf({ messages: replyMessages() }));
     fireEvent.click(quote('m-1'));
     unmount();
+    // Перенос фокуса в jsdom ставит свою отложенную задачу (`selectionchange`): она не наша и срабатывает сразу.
+    vi.advanceTimersByTime(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -861,6 +890,8 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(() => fireEvent.click(button)).not.toThrow();
     expect(scrolled).toEqual([]);
     expect(document.querySelector('[data-reply-flash]')).toBeNull();
+    // Переходить некуда — фокус не двигается.
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('оригинала нет в этой комнате (чужая комната, несуществующий id) — тот же блок, но не кнопка', () => {
@@ -874,7 +905,7 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       }),
     );
     expect(document.querySelector('[data-message-reply]')).toBeNull();
-    expect(screen.queryByRole('button', { name: /Show the message/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Original message/ })).toBeNull();
     const blocks = Array.from(
       document.querySelectorAll<HTMLElement>('[data-message-reply-missing]'),
     );
@@ -1095,6 +1126,200 @@ describe('RoomPanel — прокрутка к низу', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('RoomPanel — открытие комнаты: к самому раннему непрочитанному упоминанию (Parley 0.3.0)', () => {
+  /** Сообщение агента, не прочитанное человеком (`message()` по умолчанию — прочитанное и от человека). */
+  const agent = (id: string, patch: Partial<Message> = {}): Message =>
+    message(id, { from: 's-02', readBy: {}, ...patch });
+  /** Лента с упоминаниями: m-1 уже прочитано, m-3 и m-4 — непрочитанные упоминания, m-5 — после них. */
+  const mentionMessages = (): Message[] => [
+    agent('m-1', { text: 'старое, @human', readBy: { human: 'x' } }),
+    agent('m-2', { text: 'без упоминаний' }),
+    agent('m-3', { text: 'первое, @human' }),
+    agent('m-4', { text: 'второе, @human' }),
+    agent('m-5', { text: 'после всех' }),
+  ];
+  const flashed = (id: string): boolean => messageRow(id).hasAttribute('data-reply-flash');
+  /** Куда звали `scrollIntoView`: на каком элементе и с какими параметрами. */
+  let scrolled: Array<{ element: Element; options: unknown }>;
+  /** jsdom не считает раскладку: высота ленты 900, окно 400 — `scrollTop` 0 это «далеко от дна». */
+  let layout: Array<{ mockRestore(): void }>;
+
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = vi.fn(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      scrolled.push({ element: this, options });
+    });
+    layout = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+  });
+
+  afterEach(() => {
+    for (const spy of layout) spy.mockRestore();
+  });
+
+  it('есть непрочитанные упоминания — лента открывается на самом раннем: по центру, сразу, с подсветкой, не у низа', () => {
+    renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-3'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+    expect(flashed('m-3')).toBe(true);
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+    // К низу (900) лента не прижата: упоминание осталось на экране.
+    expect(feed().scrollTop).toBe(0);
+  });
+
+  it('при открытии фокус не трогается: он остаётся там, где был, а строка сообщения его не получает', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderPanel(entryOf({ messages: mentionMessages() }));
+      expect(focus).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(document.body);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it('переход при открытии мгновенный (behavior: auto), даже когда плавность не отключена: клик по цитате — другое дело', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query }));
+    renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+  });
+
+  it('подсветка гаснет через 1,2 с, и таймера после закрытия вкладки не остаётся', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(flashed('m-3')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1199);
+    });
+    expect(flashed('m-3')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-3')).toBe(false);
+
+    cleanup();
+    const second = renderPanel(entryOf({ messages: mentionMessages() }));
+    second.unmount();
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+    unmount();
+  });
+
+  it('прочитанное упоминание, @human в коде и в ссылке, упоминание от человека и системное — не цель: лента у низа', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          agent('m-1', { text: 'прочитано, @human', readBy: { human: 'x' } }),
+          agent('m-2', { text: 'в коде `@human`' }),
+          agent('m-3', { text: '[ask @human](https://x.dev)' }),
+          message('m-4', { from: 'human', text: 'сам, @human' }),
+          message('m-5', { from: 'system', to: ['human'], text: '@human', readBy: {} }),
+          agent('m-6', { text: 'просто статус' }),
+        ],
+      }),
+    );
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('непрочитанные сообщения без упоминаний — лента открывается у низа, как раньше', () => {
+    renderPanel(entryOf({ messages: [agent('m-1'), agent('m-2'), agent('m-3')] }));
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('упоминание в чужой комнате и в комнате без сообщений — цели нет', () => {
+    renderPanel(entryOf({ messages: [agent('m-1', { roomId: 'r-02', text: 'чужое, @human' })] }));
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('новое сообщение после открытия прижимает ленту к низу, как раньше: политика прижатия не меняется', () => {
+    const { update } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(feed().scrollTop).toBe(0);
+    update(
+      entryOf({
+        messages: [
+          ...mentionMessages(),
+          agent('m-6', { text: 'новое', at: '2026-09-27T10:00:00.000Z' }),
+        ],
+      }),
+    );
+    expect(feed().scrollTop).toBe(900);
+    // Второго перехода к упоминанию нет: цель выбирают один раз, при открытии.
+    expect(scrolled).toHaveLength(1);
+  });
+
+  it('упоминание пришло, когда лента уже открыта, — лента прижимается к низу, перехода к нему нет', () => {
+    const { update } = renderPanel(entryOf({ messages: [agent('m-1', { text: 'раз' })] }));
+    expect(feed().scrollTop).toBe(900);
+    update(
+      entryOf({
+        messages: [
+          agent('m-1', { text: 'раз' }),
+          agent('m-2', { text: 'новое, @human', at: '2026-09-27T10:00:00.000Z' }),
+        ],
+      }),
+    );
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('живая строка после открытия на упоминании ленту к низу не прижимает: человек уже читает с упоминания', () => {
+    const { rerender, initial } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(feed().scrollTop).toBe(0);
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+    expect(liveLine()).not.toBeNull();
+    expect(feed().scrollTop).toBe(0);
+  });
+
+  it('упоминание в конце ленты: после перехода лента у низа, и живая строка прижимает её, как обычно', () => {
+    const { rerender, initial } = renderPanel(
+      entryOf({
+        messages: [agent('m-1', { text: 'раз' }), agent('m-2', { text: 'последнее, @human' })],
+      }),
+    );
+    // Браузер доскроллил до дна: `scrollTop` 500, окно 400 — всего 900.
+    expect(scrolled[0]?.element).toBe(messageRow('m-2'));
+    feed().scrollTop = 500;
+    fireEvent.scroll(feed());
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('комнаты нет в карте, когда панель смонтирована, а потом она появилась, — это и есть открытие ленты', () => {
+    const { rerender, initial } = renderPanel(entryOf({ messages: mentionMessages() }), {
+      roomId: 'r-99',
+    });
+    expect(screen.getByText('Room not found')).toBeTruthy();
+    expect(scrolled).toEqual([]);
+    rerender(<RoomPanel {...initial} roomId="r-01" />);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-3'));
+    expect(flashed('m-3')).toBe(true);
+  });
+
+  it('StrictMode гоняет эффекты дважды и между прогонами снимает подсветку: переход и подсветка остаются', () => {
+    const initial = props(entryOf({ messages: mentionMessages() }));
+    render(
+      <StrictMode>
+        <RoomPanel {...initial} />
+      </StrictMode>,
+    );
+    expect(scrolled.length).toBeGreaterThanOrEqual(1);
+    expect(scrolled.every((call) => call.element === messageRow('m-3'))).toBe(true);
+    expect(flashed('m-3')).toBe(true);
+    expect(feed().scrollTop).toBe(0);
   });
 });
 

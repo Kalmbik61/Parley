@@ -18,13 +18,17 @@
  *
  * Прочтение — существующий механизм писем человеку (`attention/use-mark-read.ts`): сообщение, чья
  * строка меты видна ≥1 с при активной работе, фокусе окна и видимом документе, уходит в `mail.markRead`
- * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — к низу при открытии и при каждом
- * новом сообщении. В отличие от «всей почты» (`MailPanel.tsx`) счёта «↓N» тут нет: комната короче и
- * читается по ходу переписки.
+ * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — при открытии к самому раннему
+ * непрочитанному упоминанию человека (`@human`, `MessageModel.mentionsYou`), а без него к низу; при каждом
+ * новом сообщении — к низу. Без перехода к упоминанию его могло бы не оказаться на экране: человек жмёт `@N` на
+ * карточке работы, отметка «прочитано» не наступает, и счётчик горит. В отличие от «всей почты» (`MailPanel.tsx`)
+ * счёта «↓N» тут нет: комната короче и читается по ходу переписки.
  *
- * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`) и
- * на 1.2 с подсвечивает его — атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик
- * перезапускает отсчёт. Прижатие ленты к низу это не ломает: «у низа» по-прежнему запоминает `onFeedScroll`
+ * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`),
+ * переносит на него фокус (строка сообщения принимает его программно, `tabIndex={-1}`) и на 1.2 с подсвечивает —
+ * атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик перезапускает отсчёт. К упоминанию при
+ * открытии комнаты лента переходит так же (`showMessage`), но сразу, без плавности и без фокуса: человек ещё
+ * ничего не нажимал в ленте. Прижатие ленты к низу это не ломает: «у низа» по-прежнему запоминает `onFeedScroll`
  * по событию `scroll`, а новое сообщение прижимает ленту безусловно.
  */
 
@@ -115,31 +119,78 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Вкладку закрыли — таймер подсветки не должен её пережить.
   useEffect(() => () => clearFlash(), [clearFlash]);
 
-  /** Клик по цитате ответа: лента прокручивается к оригиналу, и он коротко подсвечивается. */
-  const jumpTo = useCallback(
-    (messageId: string): void => {
+  /**
+   * Лента прокручивается к сообщению по центру, и оно коротко подсвечивается; `false` — такого сообщения в ленте нет.
+   * `smooth` — плавная прокрутка (клик по цитате) или мгновенная (открытие комнаты); `focus` — перенести на сообщение
+   * фокус.
+   */
+  const showMessage = useCallback(
+    (messageId: string, { smooth, focus }: { smooth: boolean; focus: boolean }): boolean => {
       const feed = containerRef.current;
-      if (feed === null) return;
+      if (feed === null) return false;
       // Сравнение через dataset — без экранирования id в селекторе.
       const target = [...feed.querySelectorAll<HTMLElement>('[data-message-id]')].find(
         (element) => element.dataset.messageId === messageId,
       );
-      if (target === undefined) return;
-      const reduceMotion =
-        typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-      target.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
+      if (target === undefined) return false;
+      target.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+      // Фокус — на сообщение: читающий с клавиатуры продолжит с него. Без прокрутки — её уже запустила строка выше.
+      if (focus) target.focus({ preventScroll: true });
       // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
       clearFlash();
       void target.offsetWidth;
       target.setAttribute('data-reply-flash', '');
       flashRef.current = { element: target, timer: setTimeout(clearFlash, REPLY_FLASH_MS) };
+      return true;
     },
     [clearFlash],
   );
 
-  // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
-  // его текст заменили (карточка — последняя в ленте).
-  useLayoutEffect(pinToBottom, [pinToBottom, model?.messages.length, model?.proposal?.id, model?.proposal?.rev]);
+  /** Клик по цитате ответа: переход к оригиналу — плавный (без движения, если человек его отключил) и с фокусом. */
+  const jumpTo = useCallback(
+    (messageId: string): void => {
+      const reduceMotion =
+        typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      showMessage(messageId, { smooth: !reduceMotion, focus: true });
+    },
+    [showMessage],
+  );
+
+  // Как лента расположена при открытии: к какому сообщению (`null` — к низу) и для какого её состояния. Повторный прогон
+  // эффекта с тем же состоянием (StrictMode гоняет эффекты дважды и между прогонами снимает подсветку) повторяет это
+  // расположение, а не прижимает ленту к низу.
+  const openedRef = useRef<{ key: string; mentionId: string | null } | null>(null);
+
+  // Лента расположена при открытии: к самому раннему непрочитанному упоминанию человека, а если такого нет — к низу.
+  // Дальше она прижата к низу, когда приходит новое сообщение и когда решение появилось или его текст заменили
+  // (карточка — последняя в ленте). Ленты нет, пока комнаты нет в карте: открытие — первое её расположение.
+  useLayoutEffect(() => {
+    if (containerRef.current === null) return;
+    const key = [model?.messages.length, model?.proposal?.id, model?.proposal?.rev].join('\u0000');
+    if (openedRef.current === null) {
+      const mention = model?.messages.find((message) => message.unread && message.mentionsYou);
+      openedRef.current = { key, mentionId: mention?.id ?? null };
+    }
+    const { key: openedKey, mentionId } = openedRef.current;
+    if (
+      openedKey === key &&
+      mentionId !== null &&
+      showMessage(mentionId, { smooth: false, focus: false })
+    ) {
+      // Прокрутка мгновенная, а событие `scroll` придёт позже: стоит ли лента у низа, запоминаем сразу — иначе
+      // эффект живой строки ниже счёл бы, что она у низа, и прижал её обратно.
+      onFeedScroll();
+      return;
+    }
+    pinToBottom();
+  }, [
+    pinToBottom,
+    showMessage,
+    onFeedScroll,
+    model?.messages.length,
+    model?.proposal?.id,
+    model?.proposal?.rev,
+  ]);
 
   // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
   useLayoutEffect(() => {

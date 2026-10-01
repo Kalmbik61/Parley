@@ -312,8 +312,9 @@ describe('workAttention — решение и почта человеку (2.7)'
   });
 });
 
-// Parley 0.3.0: сообщение комнаты с `@human` адресовано человеку, как прямое письмо ему. Распознаёт `mentionsHuman` из
-// `components/rooms/mention.ts` — то же правило, по которому лента рисует чип «@you».
+// Parley 0.3.0: сообщение комнаты с `@human` адресовано человеку, как прямое письмо ему. Распознаёт `hasHumanMention` из
+// `components/rooms/room-remark.ts` — тот же разбор Markdown, которым лента рисует чип «@you» (сверка с лентой на корпусе
+// текстов — `components/rooms/room-remark.test.tsx`).
 describe('isHumanMention и humanUnreadMentions (Parley 0.3.0)', () => {
   const mention = (patch: Partial<Message> = {}): Message =>
     letter({
@@ -341,6 +342,21 @@ describe('isHumanMention и humanUnreadMentions (Parley 0.3.0)', () => {
   it('@humans и user@human.dev — не упоминание: границы те же, что у чипа ленты', () => {
     expect(isHumanMention(mention({ text: 'ask the @humans' }))).toBe(false);
     expect(isHumanMention(mention({ text: 'mail user@human.dev' }))).toBe(false);
+  });
+
+  it('правило ленты: в коде, в подписи и адресе ссылки, в alt картинки — не упоминание; в выделении и цитате — упоминание', () => {
+    for (const text of [
+      '`@human`',
+      '```\n@human\n```',
+      '[ask @human](https://x.dev)',
+      'https://github.com/@human',
+      '![@human](https://x.dev/a.png)',
+    ]) {
+      expect(isHumanMention(mention({ text })), text).toBe(false);
+    }
+    for (const text of ['_@human_', '__@human__', '**@human**', '> @human here', '- @human here']) {
+      expect(isHumanMention(mention({ text })), text).toBe(true);
+    }
   });
 
   it('humanUnreadMentions: только непрочитанные упоминания, в порядке карты; письма с @human в них не входят', () => {
@@ -413,6 +429,21 @@ describe('workAttention — упоминания человека в комна�
     expect(a.humanUnread).toBe(0);
     expect(a.roomMentions).toEqual({});
     expect(a.level).toBe('off');
+  });
+
+  it('счётчик идёт по правилу ленты: упоминание в коде и в ссылке не считается, в выделении — считается', () => {
+    const e = entry(
+      [],
+      [
+        mention('m1', { text: 'run `@human` in the shell' }),
+        mention('m2', { text: '[ask @human](https://x.dev)' }),
+        mention('m3', { text: 'cc _@human_' }),
+      ],
+    );
+    const a = workAttention(e, {});
+    expect(a.humanUnread).toBe(1);
+    expect(a.roomMentions).toEqual({ 'r-01': 1 });
+    expect(humanUnreadMentions(e.map).map((m) => m.id)).toEqual(['m3']);
   });
 
   it('прямое письмо плюс упоминание — 2: каждое сообщение считается один раз', () => {
