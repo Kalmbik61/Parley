@@ -127,11 +127,15 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
   // Без единого хука с запуска `idle` ничего не значит: агент может ждать ответа на вопрос
   // доверия к папке, и Enter указателя его подтвердил бы (рамка 15.1).
   if (!hooked) return { kind: 'none', reason: 'no-hooks' };
+  // Лид закончил ход и ждёт фоновых субагентов: активность `working`, но удерживают её только они
+  // (`heldByBackground`), а сам он стоит у приглашения и ввод принимает — указатель печатается
+  // Enter-ом, как простаивающему. Агент внутри `wait_for`, как и работающий сам, по-прежнему busy.
+  const parked = activity?.activity === 'working' && activity.heldByBackground;
   // Занятому агенту Codex письмо ставится в очередь; `blocked` (вопрос человеку) и неизвестное — по-прежнему busy.
-  const queue = queueWhileBusy === true && activity?.activity === 'working';
+  const queue = queueWhileBusy === true && activity?.activity === 'working' && !parked;
   if (
     activity === null ||
-    (activity.activity !== 'unseen' && activity.activity !== 'idle' && !queue)
+    (activity.activity !== 'unseen' && activity.activity !== 'idle' && !queue && !parked)
   ) {
     return { kind: 'none', reason: 'busy' };
   }
