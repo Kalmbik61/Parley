@@ -130,7 +130,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
       <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
       <div ref={containerRef} data-room-feed="" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]">
-        <Decisions decisions={model.decisions} className="max-w-[680px]" />
+        <Decisions
+          decisions={model.decisions}
+          labelOf={labelOf}
+          onOpenExternal={onOpenExternal}
+          className="max-w-[680px]"
+        />
         {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
         {model.messages.map((message) => (
           <RoomMessage

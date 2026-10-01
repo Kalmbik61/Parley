@@ -1,7 +1,7 @@
 /**
  * Упоминания в комнате (дизайн комнат, 1.4, 2.2, 2.3) — чистая часть, без DOM: токен `@s02` в тексте
  * письма, условия открытия меню в поле ввода и его фильтр. Поле ввода (`Composer.tsx`,
- * `mention-editor.ts`) и лента (`MentionText.tsx`) зовут одни и те же функции, чтобы то, что человек
+ * `mention-editor.ts`) и лента (`RoomMarkdown.tsx`) зовут одни и те же функции, чтобы то, что человек
  * видит в поле, и то, что рисует лента, не разошлись.
  */
 
@@ -33,22 +33,20 @@ function tokenSessionId(digits: string): string {
 }
 
 export type TextSegment =
-  | { kind: 'text'; text: string }
-  | { kind: 'mention'; sessionId: string; raw: string }
-  | { kind: 'link'; url: string; text: string };
+  { kind: 'text'; text: string } | { kind: 'mention'; sessionId: string; raw: string };
 
 /**
  * Токен: `@s02` или `@s-02`. Слева — не буква, не цифра и не `@` (иначе `user@s02.example.com` стал бы
  * чипом), справа — не буква и не цифра (`@s02бэкенд` — слово, а не упоминание).
  */
 const TOKEN = /(?<![\p{L}\p{N}_@])@s-?(\d+)(?![\p{L}\p{N}_])/giu;
-/** Адрес http(s) до пробела; хвостовая пунктуация срезается отдельно. */
-const URL_CANDIDATE = /https?:\/\/[^\s<>"']+/g;
-const TRAILING_PUNCTUATION = /[.,;:!?)\]}]+$/;
 
-/** Текст → текст и упоминания: то, что нужно полю ввода, когда оно поднимает черновик (ссылки ему не нужны). */
-export function splitMentions(text: string): Array<Exclude<TextSegment, { kind: 'link' }>> {
-  const out: Array<Exclude<TextSegment, { kind: 'link' }>> = [];
+/**
+ * Текст → текст и упоминания: то, что нужно полю ввода, когда оно поднимает черновик, и ленте комнаты
+ * (`RoomMarkdown.tsx` режет по нему текстовые узлы Markdown).
+ */
+export function splitMentions(text: string): TextSegment[] {
+  const out: TextSegment[] = [];
   let last = 0;
   for (const match of text.matchAll(TOKEN)) {
     if (match.index > last) out.push({ kind: 'text', text: text.slice(last, match.index) });
@@ -56,35 +54,6 @@ export function splitMentions(text: string): Array<Exclude<TextSegment, { kind: 
     last = match.index + match[0].length;
   }
   if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
-  return out;
-}
-
-/** Адрес — только http и https и только если разбирается как URL: `javascript:` и `file:` ссылкой не становятся. */
-function isSafeUrl(candidate: string): boolean {
-  try {
-    const { protocol } = new URL(candidate);
-    return protocol === 'http:' || protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Текст письма → сегменты для ленты: обычный текст, упоминания (чипом с ярлыком участника) и ссылки.
- * Ссылки ищутся первыми: `@s02` внутри адреса — часть адреса. Разметка markdown не разбирается:
- * текст комнаты идёт как есть (`pre-wrap`), 1.3.
- */
-export function segmentText(text: string): TextSegment[] {
-  const out: TextSegment[] = [];
-  let last = 0;
-  for (const match of text.matchAll(URL_CANDIDATE)) {
-    const trimmed = match[0].replace(TRAILING_PUNCTUATION, '');
-    if (!isSafeUrl(trimmed)) continue;
-    out.push(...splitMentions(text.slice(last, match.index)));
-    out.push({ kind: 'link', url: trimmed, text: trimmed });
-    last = match.index + trimmed.length;
-  }
-  out.push(...splitMentions(text.slice(last)));
   return out;
 }
 

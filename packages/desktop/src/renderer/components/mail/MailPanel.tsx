@@ -19,7 +19,7 @@ import { S } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { mailView } from '../../lib/mail-view.js';
-import { workTitleText } from '../../lib/participant.js';
+import { sessionRowLabel, workTitleText } from '../../lib/participant.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
 
@@ -91,6 +91,12 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
 
   const unread = view.letters.filter((letter) => letter.unread).length;
 
+  /** Ярлык участника для чипа в тексте решения — тот же, что в ленте комнаты; сессии нет в карте — `null`. */
+  const labelOf = (sessionId: string): string | null => {
+    const session = entry.map.sessions.find((candidate) => candidate.id === sessionId);
+    return session === undefined ? null : sessionRowLabel(sessionId, session.label);
+  };
+
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div data-mail-header className="flex shrink-0 items-start justify-between gap-3 px-9 pb-3.5 pt-8">
@@ -108,7 +114,12 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
           </button>
         ) : null}
       </div>
-      <Decisions decisions={view.decisions} className="mx-9 mb-3.5 max-w-[640px]" />
+      <Decisions
+        decisions={view.decisions}
+        labelOf={labelOf}
+        onOpenExternal={onOpenExternal}
+        className="mx-9 mb-3.5 max-w-[640px]"
+      />
       <div ref={containerRef} onScroll={handleScroll} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-9 pb-8">
         {view.letters.map((letter) => (
           <Letter
