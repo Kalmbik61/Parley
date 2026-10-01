@@ -54,6 +54,8 @@ beforeEach(async () => {
   setEnv('PARLEY_CLAUDE_BIN', STUB);
   setEnv('PARLEY_CODEX_BIN', STUB);
   setEnv('PARLEY_GLM_BIN', '');
+  // План возобновления Claude ищет транскрипт сессии в корне истории — здесь, а не в настоящем ~/.claude.
+  setEnv('PARLEY_CLAUDE_PROJECTS_DIR', logs);
 });
 
 afterEach(async () => {
@@ -82,6 +84,16 @@ const sessionOf = async (workId: string, sessionId: string) => {
   if (session === undefined) throw new Error(`нет сессии ${sessionId}`);
   return session;
 };
+
+/**
+ * Транскрипт Claude Code с этим id в корне истории (`logs`): он появляется после первого сообщения
+ * сессии, и только тогда её есть что продолжать по `--resume`.
+ */
+async function claudeTranscript(id: string): Promise<void> {
+  const dir = path.join(logs, '-private-tmp-parley-project');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${id}.jsonl`), '{"type":"user"}\n');
+}
 
 describe('создание pending сессии', () => {
   it('кладёт запись в карту и пишет бриф на диск', async () => {
@@ -511,6 +523,7 @@ describe('модель и усилие в плане запуска (дизай�
       const session = map.sessions.find((item) => item.id === sessionId);
       if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
     });
+    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
 
     expect(plan.args).not.toContain('--model');
@@ -523,6 +536,7 @@ describe('модель и усилие в плане запуска (дизай�
       const session = map.sessions.find((item) => item.id === sessionId);
       if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
     });
+    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
       model: 'opus',
       effort: 'high',
@@ -589,6 +603,7 @@ describe('план возобновления', () => {
       const session = map.sessions.find((item) => item.id === sessionId);
       if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
     });
+    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
       channel: true,
     });
@@ -610,6 +625,7 @@ describe('план возобновления', () => {
       const session = map.sessions.find((item) => item.id === sessionId);
       if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
     });
+    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
 
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
     expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('reviewer');
@@ -621,6 +637,64 @@ describe('план возобновления', () => {
 
     expect(plan.args).not.toContain('resume');
     expect(plan.args.at(-1)).toContain('прогнать e2e');
+  });
+
+  describe('claude: --resume только при разговоре (транскрипт пишется с первого сообщения)', () => {
+    const id = 'c0ffee00-aaaa-bbbb-cccc-000000000001';
+    const pointer = 'New messages (1). Call check_inbox.';
+
+    /** Сессия Claude, которой харнесс уже выдал id (`--session-id` первого запуска). */
+    async function withId(workId: string, sessionId: string): Promise<void> {
+      await updateMap(project, workId, (map) => {
+        const session = map.sessions.find((item) => item.id === sessionId);
+        if (session !== undefined) session.providerSessionId = id;
+      });
+    }
+
+    it('транскрипта нет — новый процесс с тем же --session-id, бриф снова первым сообщением', async () => {
+      const { workId, sessionId } = await pending('claude');
+      await withId(workId, sessionId);
+
+      const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args).not.toContain('--resume');
+      expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe(id);
+      expect(plan.providerSessionId).toBe(id);
+      expect(plan.args.at(-1)).toContain('прогнать e2e');
+    });
+
+    it('транскрипт есть — --resume с этим id', async () => {
+      const { workId, sessionId } = await pending('claude');
+      await withId(workId, sessionId);
+      await claudeTranscript(id);
+
+      const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
+      expect(plan.args).not.toContain('--session-id');
+    });
+
+    it('тихую сессию без разговора будит письмо — указатель её первым сообщением', async () => {
+      const { workId, session } = await createNewSession(project, null);
+      await withId(workId, session.id);
+
+      const plan = await planResume(project, workId, await sessionOf(workId, session.id), {
+        prompt: pointer,
+      });
+      expect(plan.args).not.toContain('--resume');
+      expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe(id);
+      expect(plan.args.at(-1)).toBe(pointer);
+    });
+
+    it('сессию с задачей без разговора будит письмо — бриф и указатель одним первым сообщением', async () => {
+      const { workId, sessionId } = await pending('claude');
+      await withId(workId, sessionId);
+
+      const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
+        prompt: pointer,
+      });
+      expect(plan.args).not.toContain('--resume');
+      expect(plan.args.at(-1)).toContain('прогнать e2e');
+      expect(plan.args.at(-1)).toContain(pointer);
+    });
   });
 });
 
@@ -646,6 +720,7 @@ describe('системная вставка гида', () => {
     // собирается заново, иначе агент поднялся бы, не зная про харнесс.
     const map = await readMap(project, workId);
     map.sessions[0]!.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000002';
+    await claudeTranscript('7fa0e1ee-cc7b-4a1e-9d4e-000000000002');
     const resumed = await planResume(project, workId, map.sessions[0]!);
     expect(resumed.args).toContain('--resume');
     expect(guidanceOf(resumed.args)).toContain(sessionId);
@@ -693,6 +768,7 @@ describe('системная вставка гида', () => {
       const target = map.sessions.find((item) => item.id === child.id);
       if (target !== undefined) target.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000003';
     });
+    await claudeTranscript('7fa0e1ee-cc7b-4a1e-9d4e-000000000003');
 
     const plan = await planResume(project, workId, await sessionOf(workId, child.id));
     expect(plan.args).toContain('--resume');
@@ -705,6 +781,7 @@ describe('системная вставка гида', () => {
       const target = map.sessions.find((item) => item.id === sessionId);
       if (target !== undefined) target.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000004';
     });
+    await claudeTranscript('7fa0e1ee-cc7b-4a1e-9d4e-000000000004');
 
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
     expect(plan.args).toContain('--resume');

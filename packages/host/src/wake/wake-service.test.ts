@@ -82,6 +82,8 @@ beforeEach(async () => {
   claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-claude-'));
   codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   process.env['PARLEY_HOME'] = home;
+  // План возобновления Claude ищет транскрипт сессии в корне истории — во временном, не в ~/.claude.
+  setEnv('PARLEY_CLAUDE_PROJECTS_DIR', claudeRoot);
   broadcasts = [];
   logErrors = [];
 });
@@ -417,8 +419,12 @@ async function sleepingPair(
     transitionSession(current, created.id, lifecycle);
     sender = addSession(current, { provider: 'claude', label: 'отправитель', task: 'писать' }).id;
   });
-  // Спящая уже жила: каталог журналов хуков завёл её первый запуск (`--settings`).
+  // Спящая уже жила: каталог журналов хуков завёл её первый запуск (`--settings`), а разговор с
+  // ней — транскрипт Claude Code; без него core поднял бы её новым процессом, а не `--resume`.
   await mkdir(workPaths(project, map.work.id).events, { recursive: true });
+  const transcripts = path.join(claudeRoot, '-private-tmp-parley-wake');
+  await mkdir(transcripts, { recursive: true });
+  await writeFile(path.join(transcripts, `${providerSessionId}.jsonl`), '{"type":"user"}\n');
   return { workId: map.work.id, target, sender, providerSessionId };
 }
 

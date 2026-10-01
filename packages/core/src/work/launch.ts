@@ -8,8 +8,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { defaultRoot } from '../discover.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
@@ -123,6 +125,31 @@ async function writtenBrief(
 }
 
 /**
+ * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта корня
+ * истории (`defaultRoot`; тесты и E2E подменяют его `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не
+ * вычисляется: имя ему строит Claude Code, и у сессии в worktree оно своё. Корня нет — нет и
+ * разговоров; корень не прочитать — разговор считается, и остаётся прежний `--resume`.
+ */
+async function claudeConversationExists(id: string): Promise<boolean> {
+  const root = defaultRoot();
+  let projects: Dirent[];
+  try {
+    projects = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    try {
+      if ((await stat(path.join(root, project.name, `${id}.jsonl`))).isFile()) return true;
+    } catch {
+      // В этом каталоге проекта такого транскрипта нет.
+    }
+  }
+  return false;
+}
+
+/**
  * Как поднимается процесс: `launch` — по брифу, `resume` — по `resumeArgs`,
  * `new` — быстрая сессия без промпта вовсе (дизайн TUI v2, 5.1).
  */
@@ -145,8 +172,13 @@ async function plan(
   const quiet = session.task === '';
 
   // Продолжать нечего, пока id сессии у провайдера неизвестен: такой запуск —
-  // новый процесс по тому же брифу, запись в карте остаётся прежней.
-  const resuming = mode === 'resume' && session.providerSessionId !== null;
+  // новый процесс по тому же брифу, запись в карте остаётся прежней. Id Claude Code харнесс выдаёт
+  // сам (`--session-id`) ещё на запуске, а транскрипт появляется с первым сообщением: сессию, уснувшую
+  // раньше, `--resume` не поднимет («No conversation found»), и её тоже запускаем заново — с тем же id.
+  const resuming =
+    mode === 'resume' &&
+    session.providerSessionId !== null &&
+    (session.provider !== 'claude' || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
   // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
@@ -217,7 +249,12 @@ async function plan(
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
     // системным промптом.
-    if (mode !== 'new' && !quiet) subs.prompt = await readBrief(projectPath, workId, session.id);
+    const brief = mode !== 'new' && !quiet ? await readBrief(projectPath, workId, session.id) : '';
+    // Сессию без разговора, поднятую письмом, указатель догоняет её первым сообщением: будильник уже
+    // счёл письма указанными (`{prompt}` в `resumeArgs`) и второй раз их не напечатает.
+    const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
+    const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
+    if (first !== '') subs.prompt = first;
     const model = options.model ?? session.model;
     if (model !== undefined) subs.model = model;
     const effort = options.effort ?? session.effort;
