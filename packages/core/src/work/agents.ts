@@ -37,7 +37,9 @@ export async function listAgents(dirs: readonly string[]): Promise<string[]> {
 export async function assertAgent(name: string, dirs: readonly string[]): Promise<void> {
   // Имя идёт в путь файла: пробелы и `..` отсекаем до похода на диск.
   if (!/^[\w.-]+$/.test(name)) {
-    throw new Error(`агент ${name}: имя — буквы, цифры, точка, дефис, подчёркивание`);
+    throw new Error(
+      `agent ${name}: the name may contain only letters, digits, dot, hyphen and underscore`,
+    );
   }
   for (const dir of dirs) {
     const ok = await stat(path.join(dir, `${name}.md`))
@@ -49,7 +51,7 @@ export async function assertAgent(name: string, dirs: readonly string[]): Promis
   const known = await listAgents(dirs);
   throw new Error(
     known.length === 0
-      ? `агента ${name} нет: ни в .claude/agents/ проекта, ни в ~/.claude/agents/`
-      : `агента ${name} нет; найдены: ${known.join(', ')}`,
+      ? `agent ${name} does not exist: neither in the project's .claude/agents/ nor in ~/.claude/agents/`
+      : `agent ${name} does not exist; found: ${known.join(', ')}`,
   );
 }

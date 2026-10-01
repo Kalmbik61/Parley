@@ -38,12 +38,14 @@ describe('sanitizeForSend', () => {
 
   it('только ESC — bad_request', () => {
     expect(codeOf(() => sanitizeForSend('\x1b[31m\x1b'))).toBe('bad_request');
+    expect(() => sanitizeForSend('\x1b[31m\x1b')).toThrow(/^empty text$/);
   });
 
   it('64 КиБ ровно проходит, 64 КиБ + 1 байт (кириллица) — bad_request', () => {
     const half = 'я'.repeat(32 * 1024); // 2 байта UTF-8 на символ
     expect(codeOf(() => sanitizeForSend(half))).toBe(null);
     expect(codeOf(() => sanitizeForSend(`${half}a`))).toBe('bad_request');
+    expect(() => sanitizeForSend(`${half}a`)).toThrow(/^text is longer than 64 KiB$/);
   });
 });
 
@@ -79,7 +81,10 @@ describe('createSender', () => {
 
   it('сессии без PTY — not_found', async () => {
     pty.live = false;
-    await expect(sender()({ ref, text: 'hi', submit: true })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(sender()({ ref, text: 'hi', submit: true })).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'session is not running',
+    });
   });
 
   it('blocked — ни одной записи, текст не вставлен', async () => {

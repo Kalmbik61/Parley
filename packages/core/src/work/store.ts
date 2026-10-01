@@ -89,7 +89,7 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  */
 export class MapLockTimeoutError extends Error {
   constructor(lockFile: string, timeoutMs: number) {
-    super(`блокировка ${lockFile} не снята за ${timeoutMs} мс`);
+    super(`lock ${lockFile} was not released within ${timeoutMs} ms`);
     this.name = 'MapLockTimeoutError';
   }
 }
@@ -224,11 +224,11 @@ export async function readWorksIndex(file: string = worksIndexPath()): Promise<W
   try {
     data = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`индекс работ ${file} не парсится: ${(error as Error).message}`);
+    throw new Error(`workspace index ${file} cannot be parsed: ${(error as Error).message}`);
   }
   const works = (data as Partial<WorksIndex>).works;
   if ((data as Partial<WorksIndex>).schemaVersion !== 1 || !Array.isArray(works)) {
-    throw new Error(`индекс работ ${file} не парсится: неожиданная форма`);
+    throw new Error(`workspace index ${file} cannot be parsed: unexpected shape`);
   }
   return { schemaVersion: 1, works };
 }
@@ -342,7 +342,7 @@ export async function createWork(
         await writeFile(paths.map, text, { encoding: 'utf8', flag: 'wx' });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        throw new Error(`карта ${paths.map} уже существует — работа не создана`);
+        throw new Error(`map ${paths.map} already exists — the workspace was not created`);
       }
       // `.bak` с первой же записи: раздел 8 обещает предыдущую версию для любой карты.
       await writeFile(paths.bak, text, 'utf8');
@@ -373,7 +373,7 @@ export async function updateMap(
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
   // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
   const missing = (): WorkNotFoundError =>
-    new WorkNotFoundError(`карты ${paths.map} нет — работы ${workId} не существует`);
+    new WorkNotFoundError(`map ${paths.map} does not exist — workspace ${workId} does not exist`);
   if (!(await exists(paths.map))) throw missing();
 
   // Каталог могли удалить после проверки выше, пока ждали лок или уже под ним:
@@ -392,7 +392,7 @@ export async function updateMap(
     // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
     // осела бы запись с чужим id, которую в списке работ нечем открыть.
     if (current.work.id !== workId) {
-      throw new Error(`карта ${paths.map} принадлежит работе ${current.work.id}, а не ${workId}`);
+      throw new Error(`map ${paths.map} belongs to workspace ${current.work.id}, not ${workId}`);
     }
     mutate(current);
     if (touch) current.work.updatedAt = new Date().toISOString();
@@ -430,7 +430,7 @@ export async function renameWork(
   const trimmed = title.replace(TITLE_EDGES, '');
   const length = [...trimmed].length;
   if (length < 1 || length > WORK_TITLE_MAX) {
-    throw new Error(`название работы: 1–${WORK_TITLE_MAX} символов`);
+    throw new Error(`workspace title: 1–${WORK_TITLE_MAX} characters`);
   }
   return updateMap(projectPath, workId, (map) => (map.work.title = trimmed), { touch: false });
 }

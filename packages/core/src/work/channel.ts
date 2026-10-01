@@ -21,7 +21,7 @@ export const CHANNEL_VALUE = `server:${MCP_SERVER_NAME}`;
  * поэтому раз на работу об этом говорит CLI этой строкой (4.4); `planLaunch`
  * кладёт её же в `warnings` плана.
  */
-export const NO_CHANNEL_WARNING = 'providers.json без {channel}: push выключен';
+export const NO_CHANNEL_WARNING = 'providers.json has no {channel}: push is off';
 
 /**
  * Нижняя граница по документации channels (2026-09). Спайк 2026-09-18

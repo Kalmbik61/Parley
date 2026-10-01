@@ -37,14 +37,14 @@ const bad = (message: string): HostError => new HostError('bad_request', message
  * как `internal`, хотя ошибся запрос, а не хост.
  */
 function assertWork(projectPath: string, workId: string): void {
-  if (!existsSync(workPaths(projectPath, workId).map)) throw bad(`работы ${workId} нет`);
+  if (!existsSync(workPaths(projectPath, workId).map)) throw bad(`workspace ${workId} does not exist`);
 }
 
 /** Сессия есть в карте и не закрыта — закрытая писем не получает (спека 7.1). */
 function assertDeliverable(map: WorkMap, sessionId: string): void {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw bad(`сессии ${sessionId} нет в карте`);
-  if (session.lifecycle === 'closed') throw bad(`сессия ${sessionId} закрыта`);
+  if (session === undefined) throw bad(`session ${sessionId} is not in the map`);
+  if (session.lifecycle === 'closed') throw bad(`session ${sessionId} is closed`);
 }
 
 /**
@@ -74,17 +74,17 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
   await updateMap(input.projectPath, input.workId, (map) => {
     // Человек — участник всегда и в список не пишется (спека 6.1); повторы схлопнуты.
     const members = [...new Set(input.members)].filter((id) => id !== HUMAN);
-    if (members.length === 0) throw bad('в комнате нужна хотя бы одна сессия');
+    if (members.length === 0) throw bad('a room needs at least one session');
     for (const id of members) assertDeliverable(map, id);
 
     const lead = input.lead ?? (members[0] as string);
-    if (!members.includes(lead)) throw bad(`ведущий ${lead} не участник комнаты`);
+    if (!members.includes(lead)) throw bad(`lead ${lead} is not a participant of the room`);
     const { origin } = input;
     if (
       origin !== undefined &&
       (origin[0] === origin[1] || !origin.every((id) => members.includes(id)))
     ) {
-      throw bad('origin: две разные сессии из участников комнаты');
+      throw bad('origin: two different sessions among the room participants');
     }
 
     const room = addRoom(map, { title: input.title, creator: HUMAN, members, lead });
@@ -112,16 +112,16 @@ export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<stri
   await updateMap(projectPath, workId, (map) => {
     if (roomId !== null) {
       const room = map.rooms.find((candidate) => candidate.id === roomId);
-      if (room === undefined) throw bad(`комнаты ${roomId} нет в карте`);
+      if (room === undefined) throw bad(`room ${roomId} is not in the map`);
       for (const id of to) {
-        if (!isMember(room, id)) throw bad(`сессия ${id} не участник комнаты ${roomId}`);
+        if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
       messageId = addMessage(map, { from: HUMAN, to, text, kind, roomId }).id;
       return;
     }
 
-    if (to.length !== 1) throw bad('без комнаты нужен ровно один адресат в to');
+    if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
     const target = to[0] as string;
     assertDeliverable(map, target);
     messageId = addMessage(map, { from: HUMAN, to: [target], text, kind }).id;

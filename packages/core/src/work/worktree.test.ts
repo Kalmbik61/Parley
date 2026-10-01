@@ -307,6 +307,9 @@ describe('discardWorktree', () => {
     await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
 
     await expect(discardWorktree(project, info)).rejects.toBeInstanceOf(DirtyWorktreeError);
+    await expect(discardWorktree(project, info)).rejects.toThrow(
+      `worktree ${info.path} was not discarded: it has uncommitted changes`,
+    );
     await expect(readFile(path.join(info.path, 'draft.md'), 'utf8')).resolves.toContain(
       'черновик',
     );
@@ -590,6 +593,7 @@ describe('mergeCheck — ревизии из карты и старый git (р�
     }
     // Диапазон вместо ветки — тоже не имя ревизии.
     await expect(mergeCheck(project, { ...info, branch: 'HEAD~1..' })).rejects.toBeInstanceOf(InvalidRevisionError);
+    await expect(mergeCheck(project, { ...info, branch: 'HEAD~1..' })).rejects.toThrow('not a revision name: "HEAD~1.."');
     expect(await exists(canary)).toBe(false);
     // Нормальные ветка и база — как раньше.
     expect(await mergeCheck(project, info)).toEqual({ status: 'clean' });
@@ -851,6 +855,7 @@ describe.each(STATE_DIRS)('%s/ — не изменения проекта (те�
     const head = (await git(project, ['rev-parse', 'HEAD'])).stdout;
 
     await expect(commitProject(project, 'пусто')).rejects.toBeInstanceOf(NothingToCommitError);
+    await expect(commitProject(project, 'пусто')).rejects.toThrow(`nothing to commit in ${project}`);
     expect((await git(project, ['rev-parse', 'HEAD'])).stdout).toBe(head);
   });
 
@@ -1030,6 +1035,9 @@ describe('исполняемые ключи конфигурации и подл
 
     await expect(worktreeDiff(project, info)).rejects.toMatchObject(corrupt);
     await expect(worktreeDiff(project, info)).rejects.toBeInstanceOf(GitStateError);
+    await expect(worktreeDiff(project, info)).rejects.toThrow(
+      `${info.path}: .git does not point to a worktree of the project ${project}`,
+    );
     await expect(commitWorktree(project, info, 'сохранить')).rejects.toMatchObject(corrupt);
     await expect(mergeWorktree(project, info, 'влить')).rejects.toMatchObject(corrupt);
     await expect(discardWorktree(project, info)).rejects.toMatchObject(corrupt);

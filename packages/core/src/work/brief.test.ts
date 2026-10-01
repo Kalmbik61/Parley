@@ -66,7 +66,7 @@ describe('бриф сессии', () => {
     // 5 — три правила.
     expect(brief).toContain('get_map');
     expect(brief).toContain('send_message');
-    expect(brief).toContain('на `note` и `decision` не отвечай');
+    expect(brief).toContain('do not answer a `note` or a `decision`');
     expect(brief).toContain('report');
   });
 
@@ -80,7 +80,7 @@ describe('бриф сессии', () => {
   it('без contextFrom раздела контекста нет', () => {
     const map = mapWithSessions();
     const brief = buildBrief(map, 's-01');
-    expect(brief).not.toContain('Контекст');
+    expect(brief).not.toContain('## Context');
     expect(brief).toContain('get_map');
   });
 
@@ -91,8 +91,8 @@ describe('бриф сессии', () => {
     plan.summary = null;
     plan.artifacts = [];
     const brief = buildBrief(map, 's-02');
-    expect(brief).toContain('резюме: нет');
-    expect(brief).not.toContain('Артефакты');
+    expect(brief).toContain('summary: none');
+    expect(brief).not.toContain('Artifacts');
   });
 
   it('тихий старт: пустая задача не оставляет строку «Задача:», контекст на месте', () => {
@@ -102,9 +102,9 @@ describe('бриф сессии', () => {
     backend.task = '';
 
     const brief = buildBrief(map, 's-02');
-    expect(brief).not.toContain('Задача:');
+    expect(brief).not.toContain('Task:');
     // Контекст родителя и правила — ради них бриф тихой сессии и собирается.
-    expect(brief).toContain('## Контекст');
+    expect(brief).toContain('## Context');
     expect(brief).toContain('План готов: 5 шагов, миграции отдельно.');
     expect(brief).toContain('report');
   });
@@ -112,7 +112,7 @@ describe('бриф сессии', () => {
   it('пустая цель работы не оставляет пустую строку «Цель:»', () => {
     const map = mapWithSessions();
     map.work.goal = '';
-    expect(buildBrief(map, 's-02')).not.toContain('Цель:');
+    expect(buildBrief(map, 's-02')).not.toContain('Goal:');
   });
 
   it('неизвестная сессия — ошибка, а не пустой бриф', () => {
@@ -150,8 +150,8 @@ describe('бриф: коллеги и решения треда', () => {
   it('знакомит с участниками треда и помечает родителя', () => {
     const brief = buildBrief(mapWithThread(), 's-02');
 
-    expect(brief).toContain('## Коллеги');
-    expect(brief).toContain('- s-01 — план (родитель): done');
+    expect(brief).toContain('## Colleagues');
+    expect(brief).toContain('- s-01 — план (parent): done');
     expect(brief).toContain('- s-03 — ревью: pending');
     // Сама сессия себе не коллега.
     expect(brief).not.toContain('- s-02 —');
@@ -164,7 +164,7 @@ describe('бриф: коллеги и решения треда', () => {
     plan.agent = 'planner';
 
     const brief = buildBrief(map, 's-02');
-    expect(brief).toContain('- s-01 — план (родитель, агент planner): done');
+    expect(brief).toContain('- s-01 — план (parent, agent planner): done');
     // Без роли скобок не появляется: обычная сессия ничем не помечена.
     expect(brief).toContain('- s-03 — ревью: pending');
   });
@@ -172,8 +172,8 @@ describe('бриф: коллеги и решения треда', () => {
   it('несёт решения треда со временем и подписью, заметки и вопросы — нет', () => {
     const brief = buildBrief(mapWithThread(), 's-02');
 
-    expect(brief).toContain('## Решения треда');
-    expect(brief).toMatch(/- \d\d:\d\d план: «миграции отдельным PR»/);
+    expect(brief).toContain('## Thread decisions');
+    expect(brief).toMatch(/- \d\d:\d\d план: "миграции отдельным PR"/);
     expect(brief).not.toContain('а где миграции?');
   });
 
@@ -183,15 +183,15 @@ describe('бриф: коллеги и решения треда', () => {
     map.messages = [];
 
     const brief = buildBrief(map, 's-01');
-    expect(brief).not.toContain('## Коллеги');
-    expect(brief).not.toContain('## Решения треда');
+    expect(brief).not.toContain('## Colleagues');
+    expect(brief).not.toContain('## Thread decisions');
   });
 
   it('коллеги есть, решений нет — печатается только раздел коллег', () => {
     const brief = buildBrief(mapWithSessions(), 's-02');
 
-    expect(brief).toContain('## Коллеги');
-    expect(brief).not.toContain('## Решения треда');
+    expect(brief).toContain('## Colleagues');
+    expect(brief).not.toContain('## Thread decisions');
   });
 });
 
@@ -201,11 +201,11 @@ describe('бриф: комнаты', () => {
     addRoom(map, { title: 'Бэкенд', creator: 's-01', members: ['s-02'] });
 
     const brief = buildBrief(map, 's-02');
-    expect(brief).toContain('## Коллеги');
-    expect(brief).toContain('r-01 «Бэкенд»');
+    expect(brief).toContain('## Colleagues');
+    expect(brief).toContain('r-01 "Бэкенд"');
     // Создатель комнаты — коллега, себя в составе не повторяем.
     expect(brief).toContain('план');
-    expect(brief).not.toMatch(/r-01 «Бэкенд»[^\n]*s-02/);
+    expect(brief).not.toMatch(/r-01 "Бэкенд"[^\n]*s-02/);
   });
 
   it('человек-участник комнаты назван «человек»', () => {
@@ -213,8 +213,8 @@ describe('бриф: комнаты', () => {
     addRoom(map, { title: 'Штаб', creator: 'human', members: ['s-01', 's-02'] });
 
     const brief = buildBrief(map, 's-02');
-    expect(brief).toContain('r-01 «Штаб»');
-    expect(brief).toContain('человек');
+    expect(brief).toContain('r-01 "Штаб"');
+    expect(brief).toContain('human');
   });
 
   it('нет ни треда, ни комнат — раздела «Коллеги» нет', () => {
@@ -223,12 +223,12 @@ describe('бриф: комнаты', () => {
     map.messages = [];
 
     const brief = buildBrief(map, 's-01');
-    expect(brief).not.toContain('## Коллеги');
+    expect(brief).not.toContain('## Colleagues');
   });
 
   it('комнат нет, но есть коллега по треду — раздел «Коллеги» есть, комнат в нём нет', () => {
     const brief = buildBrief(mapWithSessions(), 's-02');
-    expect(brief).toContain('## Коллеги');
+    expect(brief).toContain('## Colleagues');
     expect(brief).not.toMatch(/r-\d\d/);
   });
 });
@@ -244,31 +244,31 @@ describe('бриф: роль в комнате', () => {
   it('ведущему: собрать позиции, propose_decision, до принятия не начинать, части — упоминаниями', () => {
     const brief = buildBrief(mapWithRoom(), 's-02');
 
-    expect(brief).toContain('## Роль в комнате');
-    expect(brief).toContain('- r-01 «Бэкенд»: ты ведущий.');
+    expect(brief).toContain('## Role in the room');
+    expect(brief).toContain('- r-01 "Бэкенд": you are the lead.');
     expect(brief).toMatch(
-      /собери позиции участников \(каждый отвечает в комнате одним сообщением\)/,
+      /collect the participants' positions \(each answers in the room with one message\)/,
     );
     expect(brief).toContain('`propose_decision`');
-    expect(brief).toContain('до принятия работу не начинай');
+    expect(brief).toContain('do not start the work before acceptance');
     expect(brief).toMatch(
-      /Принято — раздай части упоминаниями[^\n]*возврат — переделай и предложи снова/,
+      /Accepted — hand out the parts with mentions[^\n]*returned — redo it and propose again/,
     );
     // Про ведущего другого в его брифе речи нет.
-    expect(brief).not.toContain('ведущий —');
+    expect(brief).not.toContain('the lead is');
   });
 
   it('участнику: высказаться одним сообщением, ждать свою часть, отчитаться ведущему; ведущий назван', () => {
     const brief = buildBrief(mapWithRoom(), 's-03');
 
-    expect(brief).toContain('## Роль в комнате');
-    expect(brief).toContain('- r-01 «Бэкенд»: ведущий — s-02 (бэкенд).');
-    expect(brief).toMatch(/выскажись одним сообщением в комнату/);
-    expect(brief).toContain('работу не начинай, пока ведущий не назвал твою часть');
+    expect(brief).toContain('## Role in the room');
+    expect(brief).toContain('- r-01 "Бэкенд": the lead is s-02 (бэкенд).');
+    expect(brief).toMatch(/speak up in one message to the room/);
+    expect(brief).toContain('do not start the work until the lead names your part');
     // Свой токен упоминания — по нему участник узнаёт свою часть.
-    expect(brief).toContain('твоё — `@s03`');
-    expect(brief).toMatch(/отчитайся в комнате ведущему/);
-    expect(brief).not.toContain('ты ведущий');
+    expect(brief).toContain('yours is `@s03`');
+    expect(brief).toMatch(/report to the lead in the room/);
+    expect(brief).not.toContain('you are the lead');
   });
 
   it('ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {
@@ -278,9 +278,9 @@ describe('бриф: роль в комнате', () => {
     // строке роли, между «до принятия не начинай» и раздачей частей: раздел не вырос лишней строкой.
     const line = brief
       .split('\n')
-      .find((candidate) => candidate.startsWith('- r-01 «Бэкенд»: ты ведущий.'));
+      .find((candidate) => candidate.startsWith('- r-01 "Бэкенд": you are the lead.'));
     expect(line).toMatch(
-      /до принятия работу не начинай\. Пока решение ждёт \(у комнаты в `get_map` `proposal` не `null`\), новое сообщение человека всем — не новая задача: позиции заново не собирай\.[^\n]* Принято — раздай части/,
+      /do not start the work before acceptance\. While a decision waits \(the room's `proposal` in `get_map` is not `null`\), a new human message to everyone is not a new task: do not collect positions again\.[^\n]* Accepted — hand out the parts/,
     );
   });
 
@@ -291,9 +291,9 @@ describe('бриф: роль в комнате', () => {
     // Клауза стоит в той же строке роли сразу за «позиции заново не собирай» и перед раздачей частей.
     const line = brief
       .split('\n')
-      .find((candidate) => candidate.startsWith('- r-01 «Бэкенд»: ты ведущий.'));
+      .find((candidate) => candidate.startsWith('- r-01 "Бэкенд": you are the lead.'));
     expect(line).toMatch(
-      /позиции заново не собирай\. Такое сообщение — поправка к ждущему решению: если оно меняет суть, учти его и замени текст повторным `propose_decision`, иначе ничего не делай\. Принято — раздай части/,
+      /do not collect positions again\. Such a message is a correction to the waiting decision: if it changes the substance, take it into account and replace the text with a repeated `propose_decision`, otherwise do nothing\. Accepted — hand out the parts/,
     );
   });
 
@@ -302,9 +302,9 @@ describe('бриф: роль в комнате', () => {
 
     const line = brief
       .split('\n')
-      .find((candidate) => candidate.startsWith('- r-01 «Бэкенд»: ведущий —'));
+      .find((candidate) => candidate.startsWith('- r-01 "Бэкенд": the lead is'));
     expect(line).toMatch(
-      /Пока решение ждёт \(у комнаты в `get_map` `proposal` не `null`\), новое сообщение человека всем — не новая задача: позиции заново не пиши\./,
+      /While a decision waits \(the room's `proposal` in `get_map` is not `null`\), a new human message to everyone is not a new task: do not write positions again\./,
     );
   });
 
@@ -312,24 +312,24 @@ describe('бриф: роль в комнате', () => {
     const brief = buildBrief(mapWithRoom(), 's-03');
 
     // Правило брифа «на `note` не отвечай» — про реплики коллег; задачу человека оно не отменяет.
-    expect(brief).toContain('на `note` и `decision` не отвечай');
+    expect(brief).toContain('do not answer a `note` or a `decision`');
     expect(brief).toMatch(
-      /выскажись одним сообщением в комнату \(отвечай, даже если его письмо — `note`\)/,
+      /speak up in one message to the room \(answer even if the human's message is a `note`\)/,
     );
   });
 
   it('создатель-сессия, не назначенный ведущим, — тоже участник', () => {
     const brief = buildBrief(mapWithRoom(), 's-01');
 
-    expect(brief).toContain('- r-01 «Бэкенд»: ведущий — s-02 (бэкенд).');
-    expect(brief).not.toContain('ты ведущий');
+    expect(brief).toContain('- r-01 "Бэкенд": the lead is s-02 (бэкенд).');
+    expect(brief).not.toContain('you are the lead');
   });
 
   it('карта до 2026-09-29 (lead: null): ведущий — первый из участников', () => {
     const map = mapWithRoom(null);
 
-    expect(buildBrief(map, 's-02')).toContain('- r-01 «Бэкенд»: ты ведущий.');
-    expect(buildBrief(map, 's-03')).toContain('ведущий — s-02 (бэкенд)');
+    expect(buildBrief(map, 's-02')).toContain('- r-01 "Бэкенд": you are the lead.');
+    expect(buildBrief(map, 's-03')).toContain('the lead is s-02 (бэкенд)');
   });
 
   it('назначенный ведущий закрыт — ведёт первый живой участник, в брифе он и назван', () => {
@@ -339,8 +339,8 @@ describe('бриф: роль в комнате', () => {
     closed.lifecycle = 'closed';
 
     // Сам он — «ты ведущий», остальным его называет бриф.
-    expect(buildBrief(map, 's-03')).toContain('- r-01 «Бэкенд»: ты ведущий.');
-    expect(buildBrief(map, 's-01')).toContain('- r-01 «Бэкенд»: ведущий — s-03 (ревью).');
+    expect(buildBrief(map, 's-03')).toContain('- r-01 "Бэкенд": you are the lead.');
+    expect(buildBrief(map, 's-01')).toContain('- r-01 "Бэкенд": the lead is s-03 (ревью).');
   });
 
   it('роль отсылает к темам `lead` и `member` гида один раз, сколько бы комнат ни было', () => {
@@ -348,17 +348,17 @@ describe('бриф: роль в комнате', () => {
     addRoom(map, { title: 'Ревью', creator: 'human', members: ['s-02', 's-03'], lead: 's-03' });
 
     const brief = buildBrief(map, 's-02');
-    expect(brief.match(/`read_guide`, темы `lead` и `member`/g)).toHaveLength(1);
-    // Заголовок раздела — не имя темы: по «Комнаты» `read_guide` отдал бы вводную без ролей.
-    expect(brief).not.toContain('раздел «Комнаты»');
-    expect(brief).toContain('- r-01 «Бэкенд»: ты ведущий.');
-    expect(brief).toContain('- r-02 «Ревью»: ведущий — s-03 (ревью).');
+    expect(brief.match(/`read_guide`, topics `lead` and `member`/g)).toHaveLength(1);
+    // Заголовок раздела — не имя темы: по «Rooms» `read_guide` отдал бы вводную без ролей.
+    expect(brief).not.toContain('the "Rooms" section');
+    expect(brief).toContain('- r-01 "Бэкенд": you are the lead.');
+    expect(brief).toContain('- r-02 "Ревью": the lead is s-03 (ревью).');
   });
 
   it('без комнат раздела роли нет, бриф остался коротким', () => {
     const brief = buildBrief(mapWithThread(), 's-02');
 
-    expect(brief).not.toContain('## Роль в комнате');
+    expect(brief).not.toContain('## Role in the room');
     expect(brief).not.toContain('propose_decision');
     expect(brief.split('\n').length).toBeLessThan(40);
   });
@@ -366,9 +366,36 @@ describe('бриф: роль в комнате', () => {
   it('состав комнаты в «Коллегах» на месте, роль идёт следом', () => {
     const brief = buildBrief(mapWithRoom(), 's-03');
 
-    expect(brief).toContain('- r-01 «Бэкенд»: план, бэкенд');
-    expect(brief.indexOf('## Коллеги')).toBeLessThan(brief.indexOf('## Роль в комнате'));
-    expect(brief.indexOf('## Роль в комнате')).toBeLessThan(brief.indexOf('## Правила'));
+    expect(brief).toContain('- r-01 "Бэкенд": план, бэкенд');
+    expect(brief.indexOf('## Colleagues')).toBeLessThan(brief.indexOf('## Role in the room'));
+    expect(brief.indexOf('## Role in the room')).toBeLessThan(brief.indexOf('## Rules'));
+  });
+});
+
+describe('язык брифа', () => {
+  it('текст брифа — по-английски: кириллица в нём бывает только из данных карты', () => {
+    const map = mapWithThread();
+    addRoom(map, { title: 'Backend', creator: 's-01', members: ['s-02', 's-03'], lead: 's-02' });
+    map.work.title = 'Auth';
+    map.work.goal = 'login by e-mail';
+    for (const session of map.sessions) {
+      session.label = `role-${session.id}`;
+      session.task = 'do the work';
+      if (session.summary !== null) session.summary = 'done';
+    }
+    for (const message of map.messages) message.text = 'agreed';
+    const mover = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (mover === undefined) throw new Error('нет s-02');
+    mover.worktree = {
+      path: '/tmp/worktrees/proj/w-0042-s-02',
+      branch: 'parley/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+    };
+
+    for (const id of ['s-01', 's-02', 's-03']) {
+      expect(buildBrief(map, id), id).not.toMatch(/[А-Яа-яЁё]/);
+    }
   });
 });
 
@@ -385,12 +412,16 @@ describe('бриф сессии: worktree', () => {
     };
 
     const brief = buildBrief(map, 's-02');
-    expect(brief).toContain('Worktree: ветка `harnas/w-0042/s-02` от базы `master`, папка `/tmp/worktrees/proj-a1b2c3/w-0042-s-02`.');
-    expect(brief).toContain('Правила работы в worktree — в `read_guide`, тема `worktrees`.');
-    // Заголовок раздела — не имя темы: тема `window` («Окно человека») правил worktree не содержит.
-    expect(brief).not.toContain('Окно человека');
+    expect(brief).toContain(
+      'Worktree: branch `harnas/w-0042/s-02` off base `master`, folder `/tmp/worktrees/proj-a1b2c3/w-0042-s-02`.',
+    );
+    expect(brief).toContain(
+      'The rules for working in a worktree are in `read_guide`, topic `worktrees`.',
+    );
+    // Заголовок раздела — не имя темы: тема `window` («The human's window») правил worktree не содержит.
+    expect(brief).not.toContain("The human's window");
     // Строка стоит в разделе своей сессии, до контекста и правил.
-    expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Контекст'));
+    expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Context'));
   });
 
   it('сессия без worktree: бриф о worktree молчит', () => {
@@ -401,9 +432,9 @@ describe('бриф сессии: worktree', () => {
 });
 
 describe('бриф сессии: указатели на гид', () => {
-  /** Темы, которыми бриф отсылает к `read_guide`: «`read_guide`, тема `x`» и «`read_guide`, темы `x` и `y`». */
+  /** Темы, которыми бриф отсылает к `read_guide`: «`read_guide`, topic `x`» и «`read_guide`, topics `x` and `y`». */
   const pointedTopics = (brief: string): string[] =>
-    [...brief.matchAll(/`read_guide`, тем[аы] ([^.\n]+)\./g)].flatMap((match) =>
+    [...brief.matchAll(/`read_guide`, topics? ([^.\n]+)\./g)].flatMap((match) =>
       [...(match[1] ?? '').matchAll(/`([a-z]+)`/g)].map((name) => name[1] ?? ''),
     );
 
@@ -428,18 +459,18 @@ describe('бриф сессии: указатели на гид', () => {
     const topics = GUIDE_TOPICS.map((item) => item.topic);
     expect(pointedTopics(brief)).toEqual(['worktrees', 'lead', 'member']);
     for (const name of pointedTopics(brief)) expect(topics, name).toContain(name);
-    expect(brief).not.toMatch(/раздел «/);
+    expect(brief).not.toMatch(/section "/);
   });
 
   it('в названных темах лежит то, ради чего бриф на них отсылает', () => {
-    // Запреты worktree — тема `worktrees`, а не `window`: раздел «Окно человека» их не содержит.
-    expect(guideTopic('worktrees')).toContain('не переключай ветку');
-    expect(guideTopic('worktrees')).toContain('не пушь');
-    expect(guideTopic('window')).not.toContain('не переключай ветку');
+    // Запреты worktree — тема `worktrees`, а не `window`: раздел «The human's window» их не содержит.
+    expect(guideTopic('worktrees')).toContain('do not switch the branch');
+    expect(guideTopic('worktrees')).toContain('do not push');
+    expect(guideTopic('window')).not.toContain('do not switch the branch');
     // Роли комнаты — темы `lead` и `member`, а не `rooms`: вводная комнат о ролях молчит.
-    expect(guideTopic('lead')).toContain('Собери позиции');
-    expect(guideTopic('member')).toContain('Выскажись одним сообщением');
-    expect(guideTopic('rooms')).not.toContain('Собери позиции');
+    expect(guideTopic('lead')).toContain('Collect the positions');
+    expect(guideTopic('member')).toContain('Speak up in one message');
+    expect(guideTopic('rooms')).not.toContain('Collect the positions');
   });
 });
 

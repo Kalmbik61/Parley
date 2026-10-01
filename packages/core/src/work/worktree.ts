@@ -314,10 +314,10 @@ export class InvalidRevisionError extends Error {
 async function assertRevisions(projectPath: string, revisions: string[]): Promise<void> {
   for (const revision of revisions) {
     if (revision === '' || revision.startsWith('-')) {
-      throw new InvalidRevisionError(`не имя ревизии: ${JSON.stringify(revision)}`);
+      throw new InvalidRevisionError(`not a revision name: ${JSON.stringify(revision)}`);
     }
     const { code } = await exitCode(['-C', projectPath, 'check-ref-format', '--branch', revision]);
-    if (code !== 0) throw new InvalidRevisionError(`не имя ревизии: ${JSON.stringify(revision)}`);
+    if (code !== 0) throw new InvalidRevisionError(`not a revision name: ${JSON.stringify(revision)}`);
   }
 }
 
@@ -383,7 +383,7 @@ async function withGitState<T>(projectPath: string, action: () => Promise<T>): P
     const reason = await gitStateReason(projectPath, error);
     if (reason === null) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new GitStateError(reason, `git в ${projectPath}: ${reason} (${message})`);
+    throw new GitStateError(reason, `git in ${projectPath}: ${reason} (${message})`);
   }
 }
 
@@ -442,7 +442,7 @@ async function filterOverrides(cwd: string, pin: string[]): Promise<string[]> {
   ]);
   // Код 1 — таких ключей нет.
   if (code === 1) return [];
-  if (code !== 0) throw new Error(`git config --get-regexp filter: код ${code}`);
+  if (code !== 0) throw new Error(`git config --get-regexp filter: exit code ${code}`);
   const drivers = new Set(zFields(stdout).map((key) => key.slice('filter.'.length, key.lastIndexOf('.'))));
   return [...drivers].flatMap((driver) => [
     '-c',
@@ -530,7 +530,7 @@ async function pinnedCheckout(projectPath: string, checkoutPath: string): Promis
   await stat(cwd);
   const gitDir = await checkoutGitDir(await projectCommonDir(projectPath), cwd);
   if (gitDir === null) {
-    throw new GitStateError('worktree-corrupt', `${cwd}: .git не ведёт в worktree проекта ${projectPath}`);
+    throw new GitStateError('worktree-corrupt', `${cwd}: .git does not point to a worktree of the project ${projectPath}`);
   }
   return { cwd, pin: ['--git-dir', gitDir, '--work-tree', cwd] };
 }
@@ -573,7 +573,7 @@ async function untrackedCounts(at: GitAt, filePath: string): Promise<DiffFile> {
     '/dev/null',
     filePath,
   ]);
-  if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: код ${code}`);
+  if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: exit code ${code}`);
   const entry = parseNumstat(Buffer.from(stdout, 'utf8'))[0];
   // Пустой новый файл: отличий от /dev/null нет, записи нет.
   return {
@@ -661,7 +661,7 @@ async function listWorktrees(projectPath: string): Promise<WorktreeListEntry[]> 
  */
 async function untrackedPatch(at: GitAt, filePath: string): Promise<string> {
   const { code, stdout } = await gitWithCode(at, ['diff', ...DIFF_READ, '--no-index', '--', '/dev/null', filePath]);
-  if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: код ${code}`);
+  if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: exit code ${code}`);
   return stdout;
 }
 
@@ -831,7 +831,7 @@ export async function mergeCheck(projectPath: string, info: WorktreeInfo): Promi
     ]);
     const result = parseMergeTree(code, stdout);
     // Код 1 без id дерева — ветки нет (база переименована): не «конфликт без файлов».
-    if (result === null) throw new Error(`git merge-tree ${info.base} ${info.branch}: код ${code}`);
+    if (result === null) throw new Error(`git merge-tree ${info.base} ${info.branch}: exit code ${code}`);
     return result;
   });
 }
@@ -925,11 +925,11 @@ export async function commitProject(projectPath: string, message: string): Promi
     // принимает), а не по stderr — у человека git локализован.
     if (added.code !== 0) {
       const ignored = (await gitWithCode(project, ['check-ignore', '--', ...STATE_DIRS])).code === 0;
-      if (added.code !== 1 || !ignored) throw new Error(`git add -A: код ${added.code}`);
+      if (added.code !== 1 || !ignored) throw new Error(`git add -A: exit code ${added.code}`);
     }
     const { code } = await gitWithCode(project, ['diff', ...DIFF_READ, '--cached', '--quiet', ...STATE_PATHSPEC]);
-    if (code === 0) throw new NothingToCommitError(`в ${projectPath} нечего коммитить`);
-    if (code !== 1) throw new Error(`git diff --cached --quiet: код ${code}`);
+    if (code === 0) throw new NothingToCommitError(`nothing to commit in ${projectPath}`);
+    if (code !== 1) throw new Error(`git diff --cached --quiet: exit code ${code}`);
     await run('git', [...NO_FSMONITOR, '-C', projectPath, 'commit', '-m', message, ...STATE_PATHSPEC]);
     return { commit: (await readGit(project, ['rev-parse', 'HEAD'])).trim() };
   });
@@ -1019,7 +1019,7 @@ export async function discardWorktree(
     const dirty = (await readGit(worktree, ['status', '--porcelain', NO_SUBMODULE_WALK])).trim() !== '';
     if (dirty) {
       throw new DirtyWorktreeError(
-        `worktree ${info.path} не отброшен: есть незакоммиченные изменения`,
+        `worktree ${info.path} was not discarded: it has uncommitted changes`,
       );
     }
   }

@@ -67,7 +67,7 @@ core, нужный только ему, документы требований 
   `.claude/skills/parley` в проекте и в worktree сессии) и по нему зовут
   `read_guide`; `git status` проекта остаётся чистым.
 - **Codex на настоящем бинаре.** Список — раздел 14 исследования
-  `codex-research.md` (каталог плана `.superpowers/sdd/2026-09-29-desktop-rooms-organic-plan/`;
+  `docs/research/2026-09-29-codex-research.md` (
   тот же порядок в README, «What to check on a live Codex»): версия и вход,
   `-c mcp_servers.parley=…`, поток OSC 0 и OSC 9, экран доверия к папке, `Stop`
   от `notify`, вставка и очередь Tab, `resume`, общий демон. Отдельно: Codex

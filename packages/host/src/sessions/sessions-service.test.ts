@@ -220,7 +220,7 @@ describe('create() + launch(): argv и окружение процесса', () 
       projectPath: project,
       workId: work.work.id,
       provider: 'claude',
-      label: 'новая сессия',
+      label: NEW_LABEL,
       task: '',
       parent: null,
     });
@@ -634,7 +634,10 @@ describe('запуск без бинаря', () => {
 
     const notice = broadcasts.find((b) => b.event === 'host.notice');
     expect(notice).toBeDefined();
-    expect(notice?.data).toMatchObject({ kind: 'launch-failed' });
+    expect(notice?.data).toMatchObject({
+      kind: 'launch-failed',
+      text: expect.stringMatching(/^session s-\d+ failed to launch: /),
+    });
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions).toHaveLength(1);
@@ -716,6 +719,27 @@ describe('закрытие по карте', () => {
 });
 
 describe('worktree (план, кусок 4.2)', () => {
+  it('0: sessions.create({ worktree: true }) в проекте без git — bad_request с понятным текстом, записей нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+
+    await expect(
+      service.create({
+        projectPath: project,
+        workId: work.work.id,
+        provider: 'claude',
+        label: 'a',
+        task: 'т',
+        parent: null,
+        worktree: true,
+      }),
+    ).rejects.toMatchObject({
+      code: 'bad_request',
+      message: 'the project has no git — a worktree cannot be created',
+    });
+    expect((await readMap(project, work.work.id)).sessions).toEqual([]);
+  });
+
   it('1: sessions.create({ worktree: true }) — cwd стаба и createdAt в карте', async () => {
     await initGitProject(project);
     const work = await createWork(project, { title: 'Работа', goal: '' });
@@ -770,7 +794,7 @@ describe('worktree (план, кусок 4.2)', () => {
     const map = await readMap(project, work.work.id);
     const worktree = map.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
     const brief = await readFile(path.join(workPaths(project, work.work.id).briefs, `${ref.sessionId}.md`), 'utf8');
-    expect(brief).toContain(`Worktree: ветка \`${worktree?.branch}\` от базы \`${worktree?.base}\``);
+    expect(brief).toContain(`Worktree: branch \`${worktree?.branch}\` off base \`${worktree?.base}\``);
 
     await service.stop(ref);
   });
@@ -862,7 +886,9 @@ describe('worktree (план, кусок 4.2)', () => {
     expect(map.sessions.find((s) => s.id === childId)?.lifecycle).toBe('pending');
     const letter = map.messages.find((m) => m.from === SYSTEM && m.to.includes(parentId));
     expect(letter).toBeDefined();
-    expect(letter?.text).toContain('worktree');
+    expect(letter?.text).toMatch(/^worktree for S\d+ was not created: /);
+    // Человеку — тот же текст уведомлением: письмо родителю и уведомление окна не расходятся.
+    expect((notice?.data as { text: string }).text).toBe(letter?.text);
   });
 
   it('7: sessions.delete грязного worktree без force — conflict; с force — сессия и worktree убраны целиком', async () => {

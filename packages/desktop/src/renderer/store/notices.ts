@@ -18,10 +18,9 @@ export const useNoticesStore = create<NoticesState>((set) => ({
   notices: [],
   init: (bridge) =>
     bridge.on('host.notice', (notice) => {
-      // Раунд исправлений 1 куска E.1: `notice.text` хост пишет по-русски и
-      // не переводит (сквозное правило) — строка статуса берёт `noticeText`
-      // по `notice.kind` (`shell/StatusBar.tsx`), сырой текст остаётся только
-      // здесь, в консоли.
+      // Раунд исправлений 1 куска E.1: строка статуса берёт `noticeText` по
+      // `notice.kind` (`shell/StatusBar.tsx`), сырой `notice.text` хоста
+      // остаётся только здесь, в консоли.
       console.warn('[parley] host.notice', notice.kind, notice.text);
       set((state) => ({ notices: [notice, ...state.notices].slice(0, LIMIT) }));
     }),

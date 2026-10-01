@@ -367,7 +367,7 @@ describe('finishSession', () => {
 
     // pending → sleeping в таблице переходов нет: процесс ещё не запускали.
     await expect(finishSession(project, map.work.id, 's-01', 'sleeping')).rejects.toThrow(
-      /недопустимый переход/,
+      /invalid transition/,
     );
     expect(
       await readFile(path.join(project, '.parley', 'works', map.work.id, 'map.json'), 'utf8'),

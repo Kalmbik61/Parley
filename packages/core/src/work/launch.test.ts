@@ -6,16 +6,21 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
 import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
+  applyAutoTitle,
   createChildSession,
   createNewSession,
   createPendingSession,
   finishExited,
+  isNewLabel,
+  isUntitledWork,
   linkSession,
+  NEW_LABEL,
   planLaunch,
   planNew,
   planResume,
   readBrief,
   startSession,
+  UNTITLED_WORK,
 } from './launch.js';
 import { setResult } from './map.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
@@ -126,6 +131,92 @@ const sessionEnv = (workDir: string, sessionId: string): Record<string, string> 
   PARLEY_SESSION_ID: sessionId,
   HARNAS_WORK_DIR: workDir,
   HARNAS_SESSION_ID: sessionId,
+});
+
+describe('метки быстрой сессии и автозаголовок', () => {
+  it('быстрая сессия в проекте без работ: работа и ярлык — английские метки', async () => {
+    const created = await createNewSession(project, null);
+    const map = await readMap(project, created.workId);
+
+    expect(map.work.title).toBe(UNTITLED_WORK);
+    expect(created.session.label).toBe(NEW_LABEL);
+    expect(`${UNTITLED_WORK} ${NEW_LABEL}`).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('бриф дочерней сессии не несёт русской метки: агент читает её в «Your session»', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    const brief = await readFile(
+      path.join(workPaths(project, workId).briefs, `${child.id}.md`),
+      'utf8',
+    );
+
+    expect(brief).toContain(`## Your session: ${child.id} — ${NEW_LABEL}`);
+  });
+
+  it('метки узнаются и в прежней русской записи: карты старых сборок', () => {
+    expect(isNewLabel(NEW_LABEL)).toBe(true);
+    expect(isNewLabel('новая сессия')).toBe(true);
+    expect(isNewLabel('бэкенд')).toBe(false);
+    expect(isNewLabel('')).toBe(false);
+    expect(isUntitledWork(UNTITLED_WORK)).toBe(true);
+    expect(isUntitledWork('без названия')).toBe(true);
+    expect(isUntitledWork('Авторизация')).toBe(false);
+  });
+
+  it('автозаголовок переименует быструю сессию и безымянную работу один раз', async () => {
+    const created = await createNewSession(project, null);
+
+    await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe('Починить сборку');
+    expect(map.work.title).toBe('Починить сборку');
+
+    // Ярлык уже не метка: второй заголовок ничего не меняет.
+    await applyAutoTitle(project, created.workId, created.session.id, 'Другой заголовок');
+    const again = await readMap(project, created.workId);
+    expect(again.sessions[0]?.label).toBe('Починить сборку');
+    expect(again.work.title).toBe('Починить сборку');
+  });
+
+  it('карта старой сборки: русские метки тоже переименуются автозаголовком', async () => {
+    const created = await createNewSession(project, null);
+    await updateMap(project, created.workId, (map) => {
+      map.work.title = 'без названия';
+      const session = map.sessions[0];
+      if (session !== undefined) session.label = 'новая сессия';
+    });
+
+    await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe('Починить сборку');
+    expect(map.work.title).toBe('Починить сборку');
+  });
+
+  it('названную человеком работу автозаголовок не трогает, а ярлык быстрой сессии меняет', async () => {
+    const { workId } = await pending('claude');
+    const quick = await createNewSession(project, workId);
+
+    await applyAutoTitle(project, workId, quick.session.id, 'Починить сборку');
+    const map = await readMap(project, workId);
+    expect(map.work.title).toBe('Авторизация');
+    expect(map.sessions.find((item) => item.id === quick.session.id)?.label).toBe(
+      'Починить сборку',
+    );
+  });
+
+  it('переименованную руками сессию автозаголовок не трогает', async () => {
+    const created = await createNewSession(project, null);
+    await updateMap(project, created.workId, (map) => {
+      const session = map.sessions[0];
+      if (session !== undefined) session.label = 'бэкенд';
+    });
+
+    await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe('бэкенд');
+    expect(map.work.title).toBe(UNTITLED_WORK);
+  });
 });
 
 describe('план запуска', () => {
@@ -248,7 +339,7 @@ describe('план запуска', () => {
     });
 
     expect(plan.args).not.toContain('--dangerously-load-development-channels');
-    expect(plan.warnings).toEqual(['providers.json без {channel}: push выключен']);
+    expect(plan.warnings).toEqual(['providers.json has no {channel}: push is off']);
   });
 
   it('роль сессии уезжает флагом --agent; без роли пара выпадает целиком', async () => {
@@ -485,9 +576,9 @@ describe('план возобновления', () => {
       if (session !== undefined) session.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000001';
     });
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
-      prompt: 'Новые письма (1). Вызови check_inbox.',
+      prompt: 'New messages (1). Call check_inbox.',
     });
-    expect(plan.args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    expect(plan.args.at(-1)).toBe('New messages (1). Call check_inbox.');
     // Модель и усилие Codex восстанавливает из треда, флагами их не передаём.
     expect(plan.args).not.toContain('--model');
   });
@@ -625,7 +716,7 @@ describe('системная вставка гида', () => {
     const quick = await createNewSession(project, workId);
 
     const plan = await planNew(project, workId, quick.session);
-    expect(guidanceOf(plan.args)).not.toContain('# Работа');
+    expect(guidanceOf(plan.args)).not.toContain('# Workspace');
     await expect(
       readFile(path.join(workPaths(project, workId).briefs, `${quick.session.id}.md`), 'utf8'),
     ).rejects.toThrow();

@@ -113,7 +113,7 @@ describe('participantLabel', () => {
     expect(participantLabel(map, 's-01')).toBe('план');
     removeSession(map, 's-03');
     // Ярлыка удалённой в карте не остаётся — только id в `deletedSessions`.
-    expect(participantLabel(map, 's-03')).toBe('s-03 (удалена)');
+    expect(participantLabel(map, 's-03')).toBe('s-03 (deleted)');
     expect(participantLabel(map, 's-99')).toBe('s-99');
   });
 });

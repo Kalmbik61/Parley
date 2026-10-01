@@ -26,7 +26,7 @@ export const settingsGet: Handler<'settings.get'> = async () => {
 
 export const settingsSet: Handler<'settings.set'> = async (params) => {
   if (!isConfigKey(params.key)) {
-    throw new HostError('bad_request', `неизвестная настройка: ${params.key}`);
+    throw new HostError('bad_request', `unknown setting: ${params.key}`);
   }
   const parsed = parseSetting(params.key, params.value);
   if ('error' in parsed) {

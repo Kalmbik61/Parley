@@ -12,6 +12,7 @@ import type { WorkEntry } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { settleVanishedWork } from '../files/SaveChangesDialog.js';
+import { workTitleText } from '../lib/participant.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { emptyLayout, parseWorkLayout, pruneLayout } from './tree.js';
 import { useLayoutStore } from './store.js';
@@ -220,7 +221,7 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
    * а в свежем снимке её уже нет. Только растёт — по строке на работу за запуск.
    */
   const titlesRef = useRef(new Map<string, string>());
-  for (const entry of works) titlesRef.current.set(workKeyOf(entry.projectPath, entry.map.work.id), entry.map.work.title);
+  for (const entry of works) titlesRef.current.set(workKeyOf(entry.projectPath, entry.map.work.id), workTitleText(entry.map.work.title));
   /** `activeWorkKey` из `ui.json`; `undefined` — ответа ещё нет. */
   const fromDiskRef = useRef<string | null | undefined>(undefined);
   // Отменяет выбор по `ui.json` только размонтирование, а не перезапуск эффекта

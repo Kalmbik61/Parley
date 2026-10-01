@@ -95,14 +95,14 @@ describe('joinNotice', () => {
     const map = emptyMap();
     const room = addRoom(map, { title: 'бэкенд', creator: 's-01', members: ['s-02', 's-03'] });
 
-    expect(joinNotice(room, map)).toBe('Вас добавили в r-01 «бэкенд» с S02 и S03');
+    expect(joinNotice(room, map)).toBe('You were added to r-01 "бэкенд" with S02 and S03');
   });
 
   it('один участник — без «и»', () => {
     const map = emptyMap();
     const room = addRoom(map, { title: 'бэкенд', creator: 's-01', members: ['s-02'] });
 
-    expect(joinNotice(room, map)).toBe('Вас добавили в r-01 «бэкенд» с S02');
+    expect(joinNotice(room, map)).toBe('You were added to r-01 "бэкенд" with S02');
   });
 
   it('удалённый участник помечен отдельно', () => {
@@ -112,7 +112,7 @@ describe('joinNotice', () => {
     removeSession(map, 's-02');
     const room = addRoom(map, { title: 'бэкенд', creator: 's-01', members: ['s-01', 's-02'] });
 
-    expect(joinNotice(room, map)).toBe('Вас добавили в r-01 «бэкенд» с S01 и S02 (удалена)');
+    expect(joinNotice(room, map)).toBe('You were added to r-01 "бэкенд" with S01 and S02 (deleted)');
   });
 });
 
@@ -394,8 +394,8 @@ describe('addMember', () => {
     addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02'] });
     const before = JSON.stringify(map);
 
-    expect(() => addMember(map, 'r-01', 's-02')).toThrow(/уже участник/);
-    expect(() => addMember(map, 'r-01', 's-01')).toThrow(/уже участник/);
+    expect(() => addMember(map, 'r-01', 's-02')).toThrow(/already a participant/);
+    expect(() => addMember(map, 'r-01', 's-01')).toThrow(/already a participant/);
     expect(JSON.stringify(map)).toBe(before);
   });
 
@@ -414,10 +414,10 @@ describe('addMember', () => {
     const before = JSON.stringify(map);
 
     const cases: Array<[() => unknown, RegExp]> = [
-      [() => addMember(map, 'r-01', 's-02'), /уже участник/],
-      [() => addMember(map, 'r-01', 's-04'), /закрыта/],
-      [() => addMember(map, 'r-01', 's-09'), /нет в карте/],
-      [() => addMember(map, 'r-09', 's-03'), /нет в карте/],
+      [() => addMember(map, 'r-01', 's-02'), /already a participant/],
+      [() => addMember(map, 'r-01', 's-04'), /is closed/],
+      [() => addMember(map, 'r-01', 's-09'), /is not in the map/],
+      [() => addMember(map, 'r-09', 's-03'), /is not in the map/],
     ];
     for (const [call, message] of cases) {
       expect(call).toThrow(RoomRuleError);
@@ -468,7 +468,7 @@ describe('addMemberByLead', () => {
 
     for (const caller of ['s-02', 's-04', HUMAN]) {
       expect(() => addMemberByLead(map, 'r-01', caller, 's-03'), caller).toThrow(RoomRuleError);
-      expect(() => addMemberByLead(map, 'r-01', caller, 's-03'), caller).toThrow(/не ведущий/);
+      expect(() => addMemberByLead(map, 'r-01', caller, 's-03'), caller).toThrow(/not the lead/);
     }
     expect(JSON.stringify(map)).toBe(before);
   });
@@ -482,7 +482,7 @@ describe('addMemberByLead', () => {
     const replaced = twoRooms();
     transitionSession(replaced, 's-01', 'closed');
     // Назначенный s-01 закрыт: право за первым живым участником — s-02, а не за самим s-01.
-    expect(() => addMemberByLead(replaced, 'r-01', 's-01', 's-04')).toThrow(/не ведущий/);
+    expect(() => addMemberByLead(replaced, 'r-01', 's-01', 's-04')).toThrow(/not the lead/);
     expect(() => addMemberByLead(replaced, 'r-01', 's-02', 's-04')).not.toThrow();
   });
 
@@ -493,7 +493,7 @@ describe('addMemberByLead', () => {
     const before = JSON.stringify(map);
 
     expect(() => addMemberByLead(map, 'r-01', 's-01', 's-04')).toThrow(RoomRuleError);
-    expect(() => addMemberByLead(map, 'r-01', 's-01', 's-04')).toThrow(/закрыта/);
+    expect(() => addMemberByLead(map, 'r-01', 's-01', 's-04')).toThrow(/is closed/);
     expect(JSON.stringify(map)).toBe(before);
   });
 
@@ -503,14 +503,14 @@ describe('addMemberByLead', () => {
     const before = JSON.stringify(map);
 
     const cases: Array<[() => unknown, RegExp]> = [
-      [() => addMemberByLead(map, 'r-01', 's-01', 's-04'), /закрыта/],
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-04'), /is closed/],
       // Чужая — нет в карте этой работы.
-      [() => addMemberByLead(map, 'r-01', 's-01', 's-77'), /нет в карте/],
-      [() => addMemberByLead(map, 'r-01', 's-01', HUMAN), /нет в карте/],
-      [() => addMemberByLead(map, 'r-01', 's-01', 's-02'), /уже участник/],
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-77'), /is not in the map/],
+      [() => addMemberByLead(map, 'r-01', 's-01', HUMAN), /is not in the map/],
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-02'), /already a participant/],
       // Ведущий вводит и самого себя: он уже участник.
-      [() => addMemberByLead(map, 'r-01', 's-01', 's-01'), /уже участник/],
-      [() => addMemberByLead(map, 'r-09', 's-01', 's-03'), /нет в карте/],
+      [() => addMemberByLead(map, 'r-01', 's-01', 's-01'), /already a participant/],
+      [() => addMemberByLead(map, 'r-09', 's-01', 's-03'), /is not in the map/],
     ];
     for (const [call, message] of cases) {
       expect(call).toThrow(RoomRuleError);

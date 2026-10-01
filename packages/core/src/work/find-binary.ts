@@ -10,9 +10,9 @@ import { ENV_PREFIX, envRaw } from '../names.js';
 export class BinaryNotFoundError extends Error {
   constructor(readonly binary: string) {
     super(
-      `Бинарь «${binary}» не найден в PATH.\n` +
-        `Харнесс запускает только официальный немодифицированный ${binary} — ` +
-        `установи его и убедись, что он доступен в PATH.`,
+      `Binary "${binary}" was not found in PATH.\n` +
+        `Parley runs only the official, unmodified ${binary} — ` +
+        `install it and make sure it is available in PATH.`,
     );
     this.name = 'BinaryNotFoundError';
   }

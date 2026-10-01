@@ -435,6 +435,11 @@ const pause = (ms: number): Promise<void> => act(() => new Promise((resolve) => 
 
 describe('SessionRow — метка новой сессии (раунд исправлений 1 куска 3.3)', () => {
   it('метка-страж core даёт английский текст в строке, обычная — как была', () => {
+    renderRow(makeSession('s-01', 'new session'));
+    expect(row('s-01').textContent).toContain('S01 New session');
+    expect(row('s-01').textContent).not.toContain('new session');
+    cleanup();
+    // Карта старой сборки хранит метку по-русски — строка та же.
     renderRow(makeSession('s-01', 'новая сессия'));
     expect(row('s-01').textContent).toContain('S01 New session');
     expect(row('s-01').textContent).not.toContain('новая сессия');

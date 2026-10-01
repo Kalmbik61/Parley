@@ -14,7 +14,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
  * `sessions.create`/`pty.attach` — методы кусков 1.6/1.7 хоста
  * (`packages/host/src/methods/index.ts`), которые на момент этого куска
  * (1.11, окно) ещё не заведены: сервер отвечает `{code: 'unknown_method',
- * message: 'метод пока не реализован: …'}` (`packages/host/src/server.ts`).
+ * message: 'method is not implemented yet: …'}` (`packages/host/src/server.ts`).
  * Тест написан по приёмке плана заранее — включится сам, как только 1.6/1.7
  * landят. До тех пор он проверяет это в рантайме и пропускает себя явным
  * `test.skip`, а не падает и не подделывает результат.
@@ -29,7 +29,7 @@ async function hostSupportsPty(window: Page): Promise<boolean> {
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return !message.includes('метод пока не реализован');
+      return !message.includes('method is not implemented yet');
     }
   });
 }

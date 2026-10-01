@@ -267,7 +267,7 @@ async function busyWork(stateRoot: string, nowMs: number, processes: ProcessTabl
   }
 
   const commands = await processes();
-  if (commands === null) throw new Error('таблица процессов не прочиталась (ps)');
+  if (commands === null) throw new Error('the process table could not be read (ps)');
   // Путь с разделителем в конце: `…/shop/.harnas/` не совпадёт с `…/shop-old/.harnas/`.
   const needle = `${stateRoot}${path.sep}`;
   const holder = commands.find((line) => line.includes(needle));

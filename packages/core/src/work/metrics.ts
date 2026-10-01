@@ -201,7 +201,7 @@ export async function finishSession(
   const session = (await readMap(projectPath, workId)).sessions.find(
     (candidate) => candidate.id === sessionId,
   );
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
 
   const { providerSessionId } = session;
   const measured =

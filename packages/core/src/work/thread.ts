@@ -35,7 +35,7 @@ const byTime = (messages: readonly Message[]): Message[] =>
 
 export function threadOf(map: WorkMap, sessionId: string): Thread {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
 
   const owner =
     session.parent !== null
@@ -72,13 +72,13 @@ export const decisionsOf = (thread: Thread): Message[] =>
 
 /**
  * Единственное место, где id сессии становится подписью (решение D9 ревью):
- * ярлык у живой записи, «(удалена)» у следа в `deletedSessions`, голый id у
+ * ярлык у живой записи, «(deleted)» у следа в `deletedSessions`, голый id у
  * чужого. Ярлыка у удалённой в карте не остаётся, поэтому подпись — её id.
  */
 export function participantLabel(map: WorkMap, id: string): string {
   const session = map.sessions.find((candidate) => candidate.id === id);
   if (session !== undefined) return session.label;
-  return (map.work.deletedSessions ?? []).includes(id) ? `${id} (удалена)` : id;
+  return (map.work.deletedSessions ?? []).includes(id) ? `${id} (deleted)` : id;
 }
 
 /** Номер в id вида `s-01`, `s-12`; чужая форма id не трогается (дизайн комнаты, 4). */

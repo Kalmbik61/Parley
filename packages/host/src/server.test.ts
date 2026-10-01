@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { addSession, createWork, updateMap, workPaths } from '@parley/core';
-import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { METHODS, NOTIFICATIONS, PROTOCOL_VERSION } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
 import type { RawMessage, TestClient } from '../test/helpers.js';
@@ -45,7 +45,7 @@ describe('рукопожатие', () => {
     await waitConnected(client.socket);
 
     const response = await hello(client, 'не-тот-токен');
-    expect(response.error).toMatchObject({ code: 'unauthorized' });
+    expect(response.error).toMatchObject({ code: 'unauthorized', message: 'invalid token' });
     await waitClosed(client.socket);
   });
 
@@ -56,6 +56,7 @@ describe('рукопожатие', () => {
 
     const response = await hello(client, token, { protocol: 999 });
     expect(response.error?.code).toBe('protocol_mismatch');
+    expect(response.error?.message).toBe(`host speaks protocol ${PROTOCOL_VERSION}, client sent 999`);
     expect(response.error?.data).toMatchObject({ hostVersion: '9.9.9', liveSessions: 0 });
     await waitClosed(client.socket);
   });
@@ -67,7 +68,7 @@ describe('рукопожатие', () => {
 
     client.send({ id: 1, method: 'host.info', params: {} });
     const response = await client.next();
-    expect(response.error).toMatchObject({ code: 'unauthorized' });
+    expect(response.error).toMatchObject({ code: 'unauthorized', message: 'the first message must be hello' });
     await waitClosed(client.socket);
   });
 

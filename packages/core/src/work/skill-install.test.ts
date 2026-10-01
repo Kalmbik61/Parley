@@ -63,8 +63,12 @@ const readReceipt = async (
 ): Promise<{ version: number; entries: Record<string, Record<string, string>> }> =>
   JSON.parse(await readFile(receiptFile(dir), 'utf8'));
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
-/** Метка своих строк в `info/exclude` (`# <имя скилла>: …`) и метка прежней установки под именем `harnas`. */
-const MARKER = '# parley: скилл агентов, ставится Parley';
+/**
+ * Метка своих строк в `info/exclude` (`# <имя скилла>: …`), та же метка в записи сборок до перевода текстов
+ * (она по-прежнему своя) и метка прежней установки под именем `harnas`.
+ */
+const MARKER = '# parley: agent skill, installed by Parley';
+const RUSSIAN_MARKER = '# parley: скилл агентов, ставится Parley';
 const LEGACY_MARKER = '# harnas: скилл агентов, ставится харнессом';
 /** Шаблоны путей своих строк в `info/exclude` и сколько раз строка встречается в тексте файла. */
 const PATTERNS = ['/.agents/skills/parley', '/.claude/skills/parley'];
@@ -526,6 +530,20 @@ describe('скрыть от git: info/exclude', () => {
     expect(count(text, PATTERNS[0] as string)).toBe(1);
     expect(count(text, PATTERNS[1] as string)).toBe(1);
     expect(count(text, MARKER)).toBe(1);
+  });
+
+  it('метка в прежней, русской записи — тоже своя: недостающее дописывается, второй метки нет', async () => {
+    await initRepo(project);
+    const file = path.join(project, '.git', 'info', 'exclude');
+    await writeFile(file, `${RUSSIAN_MARKER}\n${PATTERNS[0]}\n`, 'utf8');
+
+    await installAgentSkill({ projectPath: project });
+
+    const text = await readFile(file, 'utf8');
+    expect(count(text, PATTERNS[0] as string)).toBe(1);
+    expect(count(text, PATTERNS[1] as string)).toBe(1);
+    expect(count(text, RUSSIAN_MARKER)).toBe(1);
+    expect(count(text, MARKER)).toBe(0);
   });
 
   it('файла и каталога info нет (git init --template без них) — создаются', async () => {

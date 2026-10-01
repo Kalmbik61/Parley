@@ -39,17 +39,17 @@ describe('темы гида', () => {
   });
 
   it('заголовки подтем: ведущий, участник и worktree — темы сами по себе, а не куски чужих', () => {
-    expect(guideTopic('lead')).toMatch(/^### Ведущий и решение\n/);
-    expect(guideTopic('member')).toMatch(/^### Участник комнаты\n/);
-    expect(guideTopic('worktrees')).toMatch(/^### Worktree сессии\n/);
+    expect(guideTopic('lead')).toMatch(/^### The lead and the decision\n/);
+    expect(guideTopic('member')).toMatch(/^### Room participant\n/);
+    expect(guideTopic('worktrees')).toMatch(/^### Session worktree\n/);
     // Комнаты — до ролей, окно — до worktree: роли и worktree не дублируются в родительских темах.
-    expect(guideTopic('rooms')).not.toContain('### Ведущий и решение');
-    expect(guideTopic('window')).not.toContain('### Worktree сессии');
+    expect(guideTopic('rooms')).not.toContain('### The lead and the decision');
+    expect(guideTopic('window')).not.toContain('### Session worktree');
   });
 
   it('указатель check_inbox лежит в теме про письма', () => {
-    expect(guideTopic('letters')).toContain('## Указатель');
-    expect(guideTopic('letters')).toContain('Новые письма (N). Вызови check_inbox.');
+    expect(guideTopic('letters')).toContain('## The pointer');
+    expect(guideTopic('letters')).toContain('New messages (N). Call check_inbox.');
   });
 
   it('неизвестная тема — null; сверка точная, без учёта регистра не гадает', () => {
@@ -71,9 +71,9 @@ describe('ссылки между темами гида', () => {
       }),
     );
 
-  it('отсылка «тема `x`» называет существующую тему: в read_guide уйдёт то, что написано', () => {
+  it('отсылка «topic `x`» называет существующую тему: в read_guide уйдёт то, что написано', () => {
     for (const { topic } of GUIDE_TOPICS) {
-      for (const match of (guideTopic(topic) ?? '').matchAll(/тем[аеыу] `([a-z]+)`/g)) {
+      for (const match of (guideTopic(topic) ?? '').matchAll(/topics? `([a-z]+)`/g)) {
         expect(names, `${topic}: ${match[0]}`).toContain(match[1]);
       }
     }
@@ -83,7 +83,7 @@ describe('ссылки между темами гида', () => {
     for (const { topic } of GUIDE_TOPICS) {
       const text = guideTopic(topic) ?? '';
       for (const other of headings().filter((item) => item.topic !== topic)) {
-        expect(text, `${topic} → «${other.heading}»`).not.toContain(`«${other.heading}»`);
+        expect(text, `${topic} → "${other.heading}"`).not.toContain(`"${other.heading}"`);
       }
     }
   });
@@ -92,13 +92,22 @@ describe('ссылки между темами гида', () => {
   const flat = (topic: string): string => (guideTopic(topic) ?? '').replace(/\s+/g, ' ');
 
   it('«Инструменты» отсылают за этикетом писем к теме `letters`, «Комнаты» — к ведущему в теме `lead`', () => {
-    expect(flat('tools')).toContain('этикет и виды писем — в теме `letters`.');
-    expect(flat('rooms')).toContain('`add_to_room(room, session)` (тема `lead`).');
+    expect(flat('tools')).toContain(
+      'the etiquette and the kinds of messages are in topic `letters`.',
+    );
+    expect(flat('rooms')).toContain('`add_to_room(room, session)` (topic `lead`).');
   });
 
   it('«Инструменты» отсылают за правилами worktree к теме `worktrees`, а та лежит отдельно от `window`', () => {
-    expect(flat('tools')).toContain('Правила работы в нём — тема `worktrees`.');
-    expect(guideTopic('worktrees')).toContain('не переключай ветку');
-    expect(guideTopic('window')).not.toContain('не переключай ветку');
+    expect(flat('tools')).toContain('The rules for working in it are in topic `worktrees`.');
+    expect(guideTopic('worktrees')).toContain('do not switch the branch');
+    expect(guideTopic('window')).not.toContain('do not switch the branch');
+  });
+});
+
+describe('язык гида', () => {
+  it('гид и подписи его тем — по-английски: кириллицы в тексте для агента нет', () => {
+    expect(GUIDE).not.toMatch(/[А-Яа-яЁё]/);
+    for (const item of GUIDE_TOPICS) expect(item.summary, item.topic).not.toMatch(/[А-Яа-яЁё]/);
   });
 });

@@ -243,7 +243,7 @@ export function createWakeService(
     notice(
       'resume-limit',
       ref,
-      `${sessionTag(ref.sessionId)} не поднята: лимит подъёмов за час исчерпан, письма ждут`,
+      `${sessionTag(ref.sessionId)} was not resumed: the hourly resume limit is reached, messages are waiting`,
     );
   }
 
@@ -259,7 +259,7 @@ export function createWakeService(
     reason: string,
   ): Promise<void> {
     for (const id of letterIds) state.pointed.add(id);
-    const text = `${sessionTag(ref.sessionId)} не поднялась: ${reason}`;
+    const text = `${sessionTag(ref.sessionId)} did not resume: ${reason}`;
     const ids = new Set(letterIds);
     try {
       await updateMap(ref.projectPath, ref.workId, (map) => {
@@ -328,7 +328,7 @@ export function createWakeService(
     letterIds: readonly string[],
   ): Promise<void> {
     if ((await journalLength(ref)) > base) return;
-    await resumeFailed(ref, state, letterIds, `процесс вышел с кодом ${exitCode}, не начав работу`);
+    await resumeFailed(ref, state, letterIds, `the process exited with code ${exitCode} before starting work`);
   }
 
   /**
@@ -378,7 +378,7 @@ export function createWakeService(
         // ход всё равно не будет замечен.
         clearTimers(state);
         state.inFlight = false;
-        notice('pointer-timeout', ref, `сессия ${ref.sessionId} не начала ход после указателя`);
+        notice('pointer-timeout', ref, `session ${ref.sessionId} did not start a turn after the pointer`);
       }, pointerTimeoutMs);
     }
 
@@ -392,13 +392,17 @@ export function createWakeService(
         // не набираем, следующий подъём — только на новое письмо.
         clearTimers(state);
         state.inFlight = false;
-        notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} отменён вводом человека`);
+        notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
       } else if (outcome === 'blocked') {
         // Агент показал диалог за паузу перед Enter: отвечать на него нельзя (рамка 15.1).
         // Указатель остаётся в поле ввода, письма — в `pointed`, как при вводе человека.
         clearTimers(state);
         state.inFlight = false;
-        notice('pointer-cancelled', ref, `указатель сессии ${ref.sessionId} без Enter — сессия ждёт ответа`);
+        notice(
+          'pointer-cancelled',
+          ref,
+          `the pointer for session ${ref.sessionId} was left without Enter — the session is waiting for an answer`,
+        );
       }
     }, (error: unknown) => {
       // Enter указателя не записался (PTY умер в окне ожидания). Сессию дальше ведёт

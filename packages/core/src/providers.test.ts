@@ -131,7 +131,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('claude получает системную вставку и при запуске, и при возобновлении', () => {
-    const guidance = 'Ты в харнессе Parley: работа w-0042, твоя сессия s-02.';
+    const guidance = 'You are inside Parley: workspace w-0042, your session is s-02.';
 
     const started = startCommand(PROVIDERS.claude, {
       sessionUuid: 'uuid-1',
@@ -158,7 +158,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('провайдеру без такой возможности вставка не достаётся', () => {
-    const guidance = 'Ты в харнессе Parley.';
+    const guidance = 'You are inside Parley.';
     // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
     // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
     expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
@@ -710,12 +710,17 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('новому провайдеру нужны badge и command', async () => {
     await write({ мой: { args: ['{prompt}'] } });
-    await expect(loadProviders()).rejects.toThrow(/мой/);
+    await expect(loadProviders()).rejects.toThrow(/мой.*a new provider needs badge and command/);
   });
 
   it('битый файл — ошибка, а не тихий откат к встроенному реестру', async () => {
     await writeFile(providersFile(), '{не json', 'utf8');
-    await expect(loadProviders()).rejects.toThrow(/не парсится/);
+    await expect(loadProviders()).rejects.toThrow(/provider registry .* cannot be parsed/);
+  });
+
+  it('файл — не объект: ошибка той же формы', async () => {
+    await writeFile(providersFile(), '[]', 'utf8');
+    await expect(loadProviders()).rejects.toThrow(/provider registry .* cannot be parsed: unexpected shape/);
   });
 
   it('printArgs переопределяется как остальные аргументы', async () => {
@@ -805,7 +810,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       for (const id of wrongIds) {
         await write({ claude: { models: [{ id, label: 'Х' }] } });
         await expect(loadProviders(), JSON.stringify(id)).rejects.toThrow(
-          /claude.*неожиданная форма записи/,
+          /claude.*unexpected entry shape/,
         );
       }
 
@@ -826,7 +831,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
           ],
         },
       });
-      await expect(loadProviders()).rejects.toThrow(/codex.*неожиданная форма записи/);
+      await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
     });
   });
 
@@ -920,7 +925,7 @@ describe('codex: запуск и возобновление (спека комн
       resumeCommand(PROVIDERS.codex, {
         ...subs,
         providerSessionId: '019ce3d5-584a-7be2-922e-b8185a8d7c19',
-        prompt: 'Новые письма (1). Вызови check_inbox.',
+        prompt: 'New messages (1). Call check_inbox.',
       }),
     ).toEqual({
       command: 'codex',
@@ -939,7 +944,7 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_condition="always"',
         '-c',
         subs.notify,
-        'Новые письма (1). Вызови check_inbox.',
+        'New messages (1). Call check_inbox.',
       ],
     });
   });
@@ -999,10 +1004,10 @@ describe('codex: запуск и возобновление (спека комн
     const args = resumeCommand(PROVIDERS.codex, {
       ...subs,
       providerSessionId: 'uuid-1',
-      prompt: 'Новые письма (1). Вызови check_inbox.',
+      prompt: 'New messages (1). Call check_inbox.',
     }).args;
     expect(args.slice(0, 2)).toEqual(['resume', 'uuid-1']);
-    expect(args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    expect(args.at(-1)).toBe('New messages (1). Call check_inbox.');
     // Всё между `resume <id>` и промптом — пары `-c <значение>`, других флагов нет.
     const flags = args.slice(2, -1);
     expect(flags.length % 2).toBe(0);

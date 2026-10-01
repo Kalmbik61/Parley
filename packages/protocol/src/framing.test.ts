@@ -81,7 +81,7 @@ describe('parseIncoming', () => {
     expect(result).toEqual({
       kind: 'invalid',
       id: 3,
-      error: { code: 'unknown_method', message: 'неизвестный метод: no.such.method' },
+      error: { code: 'unknown_method', message: 'unknown method: no.such.method' },
     });
   });
 
@@ -101,7 +101,7 @@ describe('parseIncoming', () => {
     expect(result).toEqual({
       kind: 'invalid',
       id: null,
-      error: { code: 'bad_request', message: 'нет поля method' },
+      error: { code: 'bad_request', message: 'no method field' },
     });
   });
 
@@ -109,12 +109,12 @@ describe('parseIncoming', () => {
     expect(parseIncoming('мусор')).toEqual({
       kind: 'invalid',
       id: null,
-      error: { code: 'bad_request', message: 'ожидался объект' },
+      error: { code: 'bad_request', message: 'expected an object' },
     });
     expect(parseIncoming(null)).toEqual({
       kind: 'invalid',
       id: null,
-      error: { code: 'bad_request', message: 'ожидался объект' },
+      error: { code: 'bad_request', message: 'expected an object' },
     });
   });
 });

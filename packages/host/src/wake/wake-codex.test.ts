@@ -31,7 +31,7 @@ import type { WakeService, WakeServiceOptions } from './wake-service.js';
 
 const CODEX_STUB = fileURLToPath(new URL('../../test/stub-codex.mjs', import.meta.url));
 
-const POINTER = 'Новые письма (1). Вызови check_inbox.';
+const POINTER = 'New messages (1). Call check_inbox.';
 
 let home = '';
 let project = '';
@@ -320,6 +320,6 @@ describe('будильник и codex', () => {
       });
       addMessage(current, { from: 's-00', to: [ref.sessionId], text: 'x', roomId: 'r-01' });
     });
-    await waitFor(() => stream().includes('enter: Новые письма (1) в r-01'), 5000);
+    await waitFor(() => stream().includes('enter: New messages (1) in r-01'), 5000);
   }, 30_000);
 });

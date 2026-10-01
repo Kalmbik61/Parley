@@ -68,7 +68,7 @@ export function gitFailure(error: unknown): HostError {
     // satisfies — причина core обязана быть в общем списке протокола: новая причина git без него не соберётся.
     return new HostError(code, error.message, { reason: error.reason satisfies HostErrorReason });
   }
-  if (error instanceof NothingToCommitError) return new HostError('conflict', 'нет изменений для коммита');
+  if (error instanceof NothingToCommitError) return new HostError('conflict', 'nothing to commit');
   if (error instanceof InvalidRevisionError) return new HostError('bad_request', error.message);
   return new HostError('internal', error instanceof Error ? error.message : String(error));
 }
@@ -85,7 +85,7 @@ async function viaGit<T>(action: () => Promise<T>): Promise<T> {
 async function requireSession(ref: SessionRef): Promise<WorkSession> {
   const map = await readMap(ref.projectPath, ref.workId);
   const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-  if (session === undefined) throw new HostError('not_found', `сессии ${ref.sessionId} нет в карте`);
+  if (session === undefined) throw new HostError('not_found', `session ${ref.sessionId} is not in the map`);
   return session;
 }
 
@@ -95,7 +95,7 @@ async function requireWorktree(
 ): Promise<{ label: string; worktree: WorktreeInfo }> {
   const session = await requireSession(ref);
   if (session.worktree === null) {
-    throw new HostError('bad_request', `у сессии ${ref.sessionId} нет своего worktree`);
+    throw new HostError('bad_request', `session ${ref.sessionId} has no worktree of its own`);
   }
   return { label: session.label, worktree: session.worktree };
 }
@@ -123,7 +123,7 @@ async function requirePresentWorktree(
       },
     );
     if (!present) {
-      throw new HostError('bad_request', `worktree сессии ${ref.sessionId} отсутствует: ${found.worktree.path}`, {
+      throw new HostError('bad_request', `worktree of session ${ref.sessionId} is missing: ${found.worktree.path}`, {
         reason: HOST_ERROR_REASONS.worktreeMissing,
       });
     }
@@ -135,7 +135,7 @@ async function requirePresentWorktree(
 async function requireNoWorktree(ref: SessionRef): Promise<void> {
   const session = await requireSession(ref);
   if (session.worktree !== null) {
-    throw new HostError('bad_request', `у сессии ${ref.sessionId} свой worktree — смотрите worktrees.diff`);
+    throw new HostError('bad_request', `session ${ref.sessionId} has its own worktree — see worktrees.diff`);
   }
 }
 
@@ -163,7 +163,7 @@ export function createWorktreesService(
 
     async merge(ref) {
       const { label, worktree } = await requirePresentWorktree(ref);
-      const message = `parley: влить ${sessionTag(ref.sessionId)} (${label}) из ${worktree.branch}`;
+      const message = `parley: merge ${sessionTag(ref.sessionId)} (${label}) from ${worktree.branch}`;
       try {
         return await mergeWorktree(ref.projectPath, worktree, message);
       } catch (error) {

@@ -32,7 +32,7 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
     (session) => session.lifecycle === 'active' && session.pid !== null && isAlive(session.pid),
   );
   if (busy === true) {
-    throw new HostError('conflict', `у работы ${params.workId} есть живая сессия`);
+    throw new HostError('conflict', `workspace ${params.workId} has a live session`);
   }
   await deleteWorkFiles(params.projectPath, params.workId);
   return { ok: true };
@@ -46,7 +46,7 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
  */
 export async function requireWork(projectPath: string, workId: string): Promise<void> {
   const map = await readMap(projectPath, workId).catch(() => null);
-  if (map === null) throw new HostError('not_found', `работы ${workId} нет`);
+  if (map === null) throw new HostError('not_found', `workspace ${workId} does not exist`);
 }
 
 export function notFoundOnGone(error: unknown): never {

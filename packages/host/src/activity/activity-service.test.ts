@@ -297,6 +297,24 @@ describe('createActivityService', () => {
     expect(final?.label).toBe('своё имя');
   }, 40_000);
 
+  it('6b: ярлык в прежней русской записи (карта сборки до перевода) тоже получает автозаголовок', async () => {
+    const { ref, workId } = await activeSession({ label: 'новая сессия', providerSessionId: 's-legacy' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-legacy.jsonl'),
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'заголовок из лога', sessionId: 's-legacy' })}\n`,
+    );
+
+    const w = await works();
+    await activity(w).start();
+    await waitFor(
+      () =>
+        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
+        'заголовок из лога',
+      15_000,
+    );
+  }, 40_000);
+
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
     await activeSession({ launchedBy: 'host', createEventsDir: false });
     const w = await works();
@@ -310,6 +328,9 @@ describe('createActivityService', () => {
         (entry.data as { kind: string }).kind === 'hooks-missing',
     );
     expect(notices).toHaveLength(1);
+    expect((notices[0]?.data as { text: string }).text).toMatch(
+      /^Claude Code hooks did not arrive for session s-\d+ — status comes from the log$/,
+    );
 
     // Дальнейшие пересчёты (например, works.changed от другой работы) второго не дают.
     await createWork(project, { title: 'Толчок' });
@@ -370,7 +391,9 @@ describe('createActivityService', () => {
       (entry) => entry.event === 'host.notice' && (entry.data as { kind: string }).kind === 'trust-wait',
     );
     expect((notice?.data as { ref: SessionRef }).ref).toEqual(ref);
-    expect((notice?.data as { text: string }).text).toContain('доверия к папке');
+    expect((notice?.data as { text: string }).text).toMatch(
+      /^S\d+ has not responded since launch — it may be waiting for folder trust$/,
+    );
   }, 20_000);
 
   /** Сессия `ref` — в worktree: trust-wait ждут только такие (спека 8.2). */

@@ -136,7 +136,7 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
       (error: unknown) => {
         done();
         const info = decodeIpcError(error);
-        // Сообщение хоста — русский текст рантайма: человеку — только свой английский.
+        // Сообщение хоста — текст рантайма: человеку — только свой, по коду.
         console.warn('[parley] commit', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.commit));
       },
