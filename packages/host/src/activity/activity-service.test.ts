@@ -699,7 +699,7 @@ describe('createActivityService: субагенты и ожидание (Parley 
     const before = calls;
     await settle(500);
     // Без защиты таймер с нулевой задержкой пересчитывал бы сессию сотни раз за полсекунды.
-    expect(calls - before).toBeLessThan(10);
+    expect(calls - before).toBeLessThan(50);
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
 });

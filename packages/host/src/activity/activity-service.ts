@@ -342,7 +342,8 @@ export function createActivityService(
 
   /**
    * Живые субагенты для окна. Описание из снимка хуков главнее; когда его нет, берётся `meta.json`
-   * субагента (и тип агента, если он пуст). Кэш `meta.json` остаётся только у живых задач.
+   * субагента (и тип агента, если он пуст): из кэша, а нет в кэше — в фоне запускается чтение, и
+   * окно получит описание следующим пересчётом. Кэш `meta.json` остаётся только у живых задач.
    */
   function liveTasksOf(ref: SessionRef, key: string, activity: SessionActivity): LiveTask[] {
     const known = subagentMetas.get(key);
