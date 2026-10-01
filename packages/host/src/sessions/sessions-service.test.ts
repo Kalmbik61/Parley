@@ -770,7 +770,7 @@ describe('worktree (план, кусок 4.2)', () => {
     const map = await readMap(project, work.work.id);
     const worktree = map.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
     const brief = await readFile(path.join(workPaths(project, work.work.id).briefs, `${ref.sessionId}.md`), 'utf8');
-    expect(brief).toContain(`Worktree: ветка \`${worktree?.branch}\` от базы \`${worktree?.base}\``);
+    expect(brief).toContain(`Worktree: branch \`${worktree?.branch}\` off base \`${worktree?.base}\``);
 
     await service.stop(ref);
   });

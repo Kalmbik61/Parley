@@ -126,7 +126,7 @@ describe('сохранённый mcp/<sid>.json прежней сборки (т�
     expect(() => contextFromEnv({ HARNAS_WORK_DIR: project })).toThrow(/HARNAS_WORK_DIR=.*\.parley\/works.*\.harnas\/works/);
     expect(() => contextFromEnv({ PARLEY_WORK_DIR: project })).toThrow(/PARLEY_WORK_DIR=/);
     expect(() => contextFromEnv({ PARLEY_WORK_DIR: path.join(project, 'other', 'works', 'w-0001') })).toThrow(
-      /не похож/,
+      /does not look like/,
     );
   });
 

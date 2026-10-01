@@ -485,9 +485,9 @@ describe('план возобновления', () => {
       if (session !== undefined) session.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000001';
     });
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
-      prompt: 'Новые письма (1). Вызови check_inbox.',
+      prompt: 'New messages (1). Call check_inbox.',
     });
-    expect(plan.args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    expect(plan.args.at(-1)).toBe('New messages (1). Call check_inbox.');
     // Модель и усилие Codex восстанавливает из треда, флагами их не передаём.
     expect(plan.args).not.toContain('--model');
   });

@@ -72,18 +72,22 @@ describe('assertAgent', () => {
     await defineAgent(homeDir, 'planner');
 
     await expect(assertAgent('backend', agentDirs(project, claudeHome))).rejects.toThrow(
-      /агента backend нет; найдены: planner, reviewer/,
+      /agent backend does not exist; found: planner, reviewer/,
     );
   });
 
   it('ни одного определения — ошибка называет оба каталога', async () => {
     await expect(assertAgent('backend', agentDirs(project, claudeHome))).rejects.toThrow(
-      /\.claude\/agents\/ проекта/,
+      /project's \.claude\/agents\//,
     );
   });
 
   it('имя с путём или пробелом — ошибка до похода на диск', async () => {
-    await expect(assertAgent('../ключи', agentDirs(project, claudeHome))).rejects.toThrow(/имя/);
-    await expect(assertAgent('два слова', agentDirs(project, claudeHome))).rejects.toThrow(/имя/);
+    await expect(assertAgent('../ключи', agentDirs(project, claudeHome))).rejects.toThrow(
+      /the name may contain only/,
+    );
+    await expect(assertAgent('два слова', agentDirs(project, claudeHome))).rejects.toThrow(
+      /the name may contain only/,
+    );
   });
 });

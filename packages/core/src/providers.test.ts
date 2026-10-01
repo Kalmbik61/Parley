@@ -131,7 +131,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('claude получает системную вставку и при запуске, и при возобновлении', () => {
-    const guidance = 'Ты в харнессе Parley: работа w-0042, твоя сессия s-02.';
+    const guidance = 'You are inside Parley: workspace w-0042, your session is s-02.';
 
     const started = startCommand(PROVIDERS.claude, {
       sessionUuid: 'uuid-1',
@@ -158,7 +158,7 @@ describe('подстановка аргументов запуска', () => {
   });
 
   it('провайдеру без такой возможности вставка не достаётся', () => {
-    const guidance = 'Ты в харнессе Parley.';
+    const guidance = 'You are inside Parley.';
     // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
     // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
     expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
@@ -920,7 +920,7 @@ describe('codex: запуск и возобновление (спека комн
       resumeCommand(PROVIDERS.codex, {
         ...subs,
         providerSessionId: '019ce3d5-584a-7be2-922e-b8185a8d7c19',
-        prompt: 'Новые письма (1). Вызови check_inbox.',
+        prompt: 'New messages (1). Call check_inbox.',
       }),
     ).toEqual({
       command: 'codex',
@@ -939,7 +939,7 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_condition="always"',
         '-c',
         subs.notify,
-        'Новые письма (1). Вызови check_inbox.',
+        'New messages (1). Call check_inbox.',
       ],
     });
   });
@@ -999,10 +999,10 @@ describe('codex: запуск и возобновление (спека комн
     const args = resumeCommand(PROVIDERS.codex, {
       ...subs,
       providerSessionId: 'uuid-1',
-      prompt: 'Новые письма (1). Вызови check_inbox.',
+      prompt: 'New messages (1). Call check_inbox.',
     }).args;
     expect(args.slice(0, 2)).toEqual(['resume', 'uuid-1']);
-    expect(args.at(-1)).toBe('Новые письма (1). Вызови check_inbox.');
+    expect(args.at(-1)).toBe('New messages (1). Call check_inbox.');
     // Всё между `resume <id>` и промптом — пары `-c <значение>`, других флагов нет.
     const flags = args.slice(2, -1);
     expect(flags.length % 2).toBe(0);

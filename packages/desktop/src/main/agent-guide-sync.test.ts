@@ -24,7 +24,7 @@ describe('гид агента цитирует блоки окна дослов�
     expect(GUIDE).toContain(S.notes.line(7));
     expect(GUIDE).toContain(S.notes.lines(10, 14));
     expect(GUIDE).toContain(S.notes.sideOriginal);
-    expect(GUIDE).toContain(S.notes.note('ещё текст'));
+    expect(GUIDE).toContain(S.notes.note('another note'));
   });
 
   it('элемент страницы Design Mode — S.designBlock', () => {

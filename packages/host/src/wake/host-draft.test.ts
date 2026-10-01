@@ -34,7 +34,7 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Указатель на прямые письма — байт в байт по плану (сквозные ограничения). */
-const pointer = (count: number): string => `Новые письма (${count}). Вызови check_inbox.`;
+const pointer = (count: number): string => `New messages (${count}). Call check_inbox.`;
 
 let home = '';
 let project = '';

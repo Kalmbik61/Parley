@@ -274,8 +274,8 @@ describe('parley-core work session new', () => {
     // Бриф уходит контекстом вместе со вставкой гида, а не первым сообщением:
     // задачу пользователь напишет сам (план от 2026-09-06, раздел B).
     expect(guidance).toContain('s-01');
-    expect(guidance).toContain('# Работа w-0001');
-    expect(brief).not.toContain('Задача:');
+    expect(guidance).toContain('# Workspace w-0001');
+    expect(brief).not.toContain('Task:');
     // Позиционного промпта в команде нет: бриф уехал вставкой, а хвостом стоит
     // значение флага канала.
     expect(args).not.toContain(brief);
@@ -403,7 +403,7 @@ describe('parley-core work session new', () => {
       'reviewer',
     );
     expect(missing.code).toBe(1);
-    expect(missing.stderr).toContain('агента reviewer нет');
+    expect(missing.stderr).toContain('agent reviewer does not exist');
 
     await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
     await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');

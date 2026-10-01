@@ -12,9 +12,9 @@ import { HUMAN, type WorkMap, type WorkSession } from './types.js';
  * Текст один и тот же для порождённых агентом и созданных руками сессий.
  */
 const RULES = [
-  'В начале работы вызови `get_map` — получишь карту работы и список провайдеров.',
-  'Письма коллег приходят сами; на `question` отвечай тому, кто спросил, через `send_message`, и не заканчивай ход с неотвеченным вопросом; на `note` и `decision` не отвечай; договорённость помечай одним письмом `kind: decision`.',
-  'Перед завершением обязательно вызови `report` — иначе результат никуда не попадёт.',
+  'At the start, call `get_map` — you get the workspace map and the list of providers.',
+  "Colleagues' messages arrive by themselves; answer a `question` to whoever asked, with `send_message`, and do not end a turn with an unanswered question; do not answer a `note` or a `decision`; mark an agreement with one `kind: decision` message.",
+  'Before finishing you must call `report` — otherwise the result will not go anywhere.',
 ];
 
 /**
@@ -25,14 +25,14 @@ const RULES = [
  * Здесь только суть, подробности — в гиде: бриф нарочно короткий.
  */
 const LEAD_ROLE =
-  'ты ведущий. Человек ставит в комнате задачу всем — собери позиции участников (каждый отвечает в комнате одним сообщением), предложи решение через `propose_decision` и до принятия работу не начинай. Пока решение ждёт (у комнаты в `get_map` `proposal` не `null`), новое сообщение человека всем — не новая задача: позиции заново не собирай. Такое сообщение — поправка к ждущему решению: если оно меняет суть, учти его и замени текст повторным `propose_decision`, иначе ничего не делай. Принято — раздай части упоминаниями вида `@s07`, возврат — переделай и предложи снова.';
+  "you are the lead. The human sets a task for everyone in the room — collect the participants' positions (each answers in the room with one message), propose a decision with `propose_decision` and do not start the work before acceptance. While a decision waits (the room's `proposal` in `get_map` is not `null`), a new human message to everyone is not a new task: do not collect positions again. Such a message is a correction to the waiting decision: if it changes the substance, take it into account and replace the text with a repeated `propose_decision`, otherwise do nothing. Accepted — hand out the parts with mentions like `@s07`; returned — redo it and propose again.";
 
 /**
  * Участнику нужен его токен: по нему в раздаче частей он находит своё. Задача человека — не реплика
- * коллеги: ответ нужен и на письмо вида `note`, иначе правило брифа «на `note` не отвечай» с ней спорит.
+ * коллеги: ответ нужен и на письмо вида `note`, иначе правило брифа «do not answer a `note`» с ней спорит.
  */
 const memberRole = (mention: string): string =>
-  `Человек ставит в комнате задачу всем — выскажись одним сообщением в комнату (отвечай, даже если его письмо — \`note\`), работу не начинай, пока ведущий не назвал твою часть (он раздаёт части упоминаниями, твоё — \`${mention}\`), сделав — отчитайся в комнате ведущему. Пока решение ждёт (у комнаты в \`get_map\` \`proposal\` не \`null\`), новое сообщение человека всем — не новая задача: позиции заново не пиши.`;
+  `The human sets a task for everyone in the room — speak up in one message to the room (answer even if the human's message is a \`note\`), do not start the work until the lead names your part (the lead hands out parts with mentions, yours is \`${mention}\`), and when done report to the lead in the room. While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human message to everyone is not a new task: do not write positions again.`;
 
 /**
  * Время решения — местное и короткое: бриф читают рядом с человеком, которому
@@ -43,7 +43,7 @@ const clock = (at: string): string =>
 
 function sessionOf(map: WorkMap, sessionId: string): WorkSession {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
   return session;
 }
 
@@ -53,13 +53,13 @@ function sessionOf(map: WorkMap, sessionId: string): WorkSession {
  */
 export function buildBrief(map: WorkMap, sessionId: string): string {
   const session = sessionOf(map, sessionId);
-  const lines: string[] = [`# Работа ${map.work.id} — ${map.work.title}`, ''];
+  const lines: string[] = [`# Workspace ${map.work.id} — ${map.work.title}`, ''];
 
-  if (map.work.goal !== '') lines.push(`Цель: ${map.work.goal}`, '');
-  lines.push(`## Твоя сессия: ${session.id} — ${session.label}`, '');
-  // Тихий старт: задачи нет, и пустая строка «Задача:» только сбивала бы с
+  if (map.work.goal !== '') lines.push(`Goal: ${map.work.goal}`, '');
+  lines.push(`## Your session: ${session.id} — ${session.label}`, '');
+  // Тихий старт: задачи нет, и пустая строка «Task:» только сбивала бы с
   // толку — её напишет пользователь первым сообщением (раздел B плана).
-  if (session.task !== '') lines.push(`Задача: ${session.task}`, '');
+  if (session.task !== '') lines.push(`Task: ${session.task}`, '');
   // Без этой строки агент в worktree не знает, на какой он ветке и во что её
   // вольют, а правила (не переключать ветку, не пушить) лежат только в гиде.
   // Путь в плане есть всегда: `createdAt: null` значит лишь, что хост создаст
@@ -69,20 +69,20 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(
-      `Worktree: ветка \`${branch}\` от базы \`${base}\`, папка \`${folder}\`.`,
-      'Правила работы в worktree — в `read_guide`, тема `worktrees`.',
+      `Worktree: branch \`${branch}\` off base \`${base}\`, folder \`${folder}\`.`,
+      'The rules for working in a worktree are in `read_guide`, topic `worktrees`.',
       '',
     );
   }
 
   if (session.contextFrom.length > 0) {
-    lines.push('## Контекст', '');
+    lines.push('## Context', '');
     for (const id of session.contextFrom) {
       const source = sessionOf(map, id);
       lines.push(`### ${source.id} — ${source.label}`, '');
-      lines.push(source.summary === null ? 'резюме: нет' : `Резюме: ${source.summary}`);
+      lines.push(source.summary === null ? 'summary: none' : `Summary: ${source.summary}`);
       if (source.artifacts.length > 0) {
-        lines.push('Артефакты:');
+        lines.push('Artifacts:');
         for (const artifact of source.artifacts) {
           lines.push(`- ${artifact.kind} — ${artifact.path}`);
         }
@@ -101,15 +101,15 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // брифе комната появляется у всех остальных участников.
   const rooms = map.rooms.filter((room) => isMember(room, session.id));
   if (colleagues.length > 0 || rooms.length > 0) {
-    lines.push('## Коллеги', '');
+    lines.push('## Colleagues', '');
     for (const id of colleagues) {
       const mate = sessionOf(map, id);
-      // Пометки в одних скобках: «(родитель, агент planner)» (спецификация 5.2).
+      // Пометки в одних скобках: «(parent, agent planner)» (спецификация 5.2).
       // Роль коллеги видна сразу — с планировщиком и с ревьюером говорят
       // по-разному, а лезть за этим в карту незачем.
       const marks = [
-        ...(id === session.parent ? ['родитель'] : []),
-        ...(mate.agent === null ? [] : [`агент ${mate.agent}`]),
+        ...(id === session.parent ? ['parent'] : []),
+        ...(mate.agent === null ? [] : [`agent ${mate.agent}`]),
       ];
       const mark = marks.length === 0 ? '' : ` (${marks.join(', ')})`;
       lines.push(`- ${mate.id} — ${mate.label}${mark}: ${displayStatus(mate)}`);
@@ -119,9 +119,9 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       // собираем из него и списка участников; себя в составе не повторяем.
       const participants = [room.creator, ...room.members]
         .filter((id, at, all) => all.indexOf(id) === at && id !== session.id)
-        .map((id) => (id === HUMAN ? 'человек' : participantLabel(map, id)));
+        .map((id) => (id === HUMAN ? 'human' : participantLabel(map, id)));
       const composition = participants.length === 0 ? '' : `: ${participants.join(', ')}`;
-      lines.push(`- ${room.id} «${room.title}»${composition}`);
+      lines.push(`- ${room.id} "${room.title}"${composition}`);
     }
     lines.push('');
   }
@@ -132,33 +132,33 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   const roles = rooms.flatMap((room) => {
     const lead = liveLead(map, room);
     if (lead === null) return [];
-    const head = `- ${room.id} «${room.title}»: `;
+    const head = `- ${room.id} "${room.title}": `;
     if (lead === session.id) return [`${head}${LEAD_ROLE}`];
     const name = `${lead} (${participantLabel(map, lead)})`;
-    return [`${head}ведущий — ${name}. ${memberRole(sessionMention(session.id))}`];
+    return [`${head}the lead is ${name}. ${memberRole(sessionMention(session.id))}`];
   });
   if (roles.length > 0) {
     lines.push(
-      '## Роль в комнате',
+      '## Role in the room',
       '',
       ...roles,
       '',
-      'Подробности — в `read_guide`, темы `lead` и `member`.',
+      'Details are in `read_guide`, topics `lead` and `member`.',
       '',
     );
   }
 
   const decisions = decisionsOf(thread);
   if (decisions.length > 0) {
-    lines.push('## Решения треда', '');
+    lines.push('## Thread decisions', '');
     for (const decision of decisions) {
       const who = participantLabel(map, decision.from);
-      lines.push(`- ${clock(decision.at)} ${who}: «${decision.text}»`);
+      lines.push(`- ${clock(decision.at)} ${who}: "${decision.text}"`);
     }
     lines.push('');
   }
 
-  lines.push('## Правила', '');
+  lines.push('## Rules', '');
   RULES.forEach((rule, at) => lines.push(`${at + 1}. ${rule}`));
   lines.push('');
   return lines.join('\n');

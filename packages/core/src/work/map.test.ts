@@ -176,7 +176,7 @@ describe('transitionSession', () => {
         expect(session.history.at(-1)).toEqual({ event: to, at: '2026-09-02T11:00:00.000Z' });
       } else {
         expect(() => transitionSession(map, 's-01', to), `${from} → ${to}`).toThrow(
-          /недопустимый переход/,
+          /invalid transition/,
         );
         expect(map.sessions[0]?.lifecycle).toBe(from);
         expect(map.sessions[0]?.history).toHaveLength(1);
@@ -202,7 +202,7 @@ describe('transitionSession', () => {
     }
 
     const closed = withLifecycle('closed');
-    expect(() => setResult(closed, 's-01', 'failed')).toThrow(/закрыта/);
+    expect(() => setResult(closed, 's-01', 'failed')).toThrow(/is closed/);
     expect(closed.sessions[0]?.result).toBeNull();
     expect(closed.sessions[0]?.history).toHaveLength(1);
   });

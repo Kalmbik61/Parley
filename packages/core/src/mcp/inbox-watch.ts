@@ -58,7 +58,7 @@ interface Call {
 
 export function ringFor(letter: Message, fromLabel: string, unread: number): Ring {
   return {
-    content: `Новое письмо от ${fromLabel} (${letter.kind}): позови check_inbox.`,
+    content: `New message from ${fromLabel} (${letter.kind}): call check_inbox.`,
     meta: {
       message_id: letter.id,
       from: letter.from,

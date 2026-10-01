@@ -45,7 +45,7 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Указатель на прямые письма — байт в байт по плану (сквозные ограничения). */
-const pointer = (count: number): string => `Новые письма (${count}). Вызови check_inbox.`;
+const pointer = (count: number): string => `New messages (${count}). Call check_inbox.`;
 
 let home = '';
 let project = '';
@@ -388,7 +388,7 @@ describe('WakeService: сбой Enter указателя (кусок 5.1, рау
     failing = false;
     pty.input(ref, '\x15');
     await sendLetter(workId, sessionId, 'второе письмо');
-    await waitFor(() => /echo: .*Новые письма \(\d+\)\. Вызови check_inbox\./.test(stream()), 3000);
+    await waitFor(() => /echo: .*New messages \(\d+\)\. Call check_inbox\./.test(stream()), 3000);
   });
 });
 
@@ -659,7 +659,7 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
 }
 
 const inRoom = (count: number, room: string, title: string): string =>
-  `Новые письма (${count}) в ${room} «${title}». Вызови check_inbox.`;
+  `New messages (${count}) in ${room} "${title}". Call check_inbox.`;
 
 describe('WakeService: комнаты (3.5)', () => {
   it('1: рассылка комнаты будит всех участников, кроме отправителя', async () => {
@@ -678,7 +678,7 @@ describe('WakeService: комнаты (3.5)', () => {
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(c)?.().includes(expected) === true, 3000);
     await settle(300);
-    expect(streams.get(a)?.()).not.toContain('Новые письма');
+    expect(streams.get(a)?.()).not.toContain('New messages');
   }, 20_000);
 
   it('2: адресное письмо в комнате будит только адресата; неадресату ни указателя, ни письма', async () => {
@@ -695,8 +695,8 @@ describe('WakeService: комнаты (3.5)', () => {
 
     await waitFor(() => streams.get(b)?.().includes(`echo: ${inRoom(1, 'r-01', 'Трое')}`) === true, 3000);
     await settle(300);
-    expect(streams.get(c)?.()).not.toContain('Новые письма');
-    expect(streams.get(a)?.()).not.toContain('Новые письма');
+    expect(streams.get(c)?.()).not.toContain('New messages');
+    expect(streams.get(a)?.()).not.toContain('New messages');
 
     // `check_inbox` отдаёт `unreadFor`: неадресату в нём пусто.
     const map = await readMap(project, workId);
@@ -713,7 +713,7 @@ describe('WakeService: комнаты (3.5)', () => {
 
     await waitFor(() => streams.get(b)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
     await settle(300);
-    expect(streams.get(a)?.()).not.toContain('Новые письма');
+    expect(streams.get(a)?.()).not.toContain('New messages');
   }, 20_000);
 
   it('3б: рассылка человека будит всех участников его комнаты, и только их', async () => {
@@ -729,6 +729,6 @@ describe('WakeService: комнаты (3.5)', () => {
     await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
     await settle(300);
-    expect(streams.get(c)?.()).not.toContain('Новые письма');
+    expect(streams.get(c)?.()).not.toContain('New messages');
   }, 20_000);
 });

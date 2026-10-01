@@ -76,7 +76,7 @@ async function entryOf(provider: string): Promise<ProviderEntry> {
   const entry = registry[provider];
   if (entry === undefined) {
     throw new Error(
-      `неизвестный провайдер ${provider}; допустимы: ${Object.keys(registry).join(', ')}`,
+      `unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`,
     );
   }
   return entry;
@@ -297,7 +297,7 @@ export async function createNewSession(
   await updateMap(projectPath, id, (map) => {
     created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '' });
   });
-  if (created === undefined) throw new Error(`сессия в работе ${id} не создана`);
+  if (created === undefined) throw new Error(`session in workspace ${id} was not created`);
   return { workId: id, session: created };
 }
 
@@ -316,7 +316,7 @@ export async function createChildSession(
   let created: WorkSession | undefined;
   const map = await updateMap(projectPath, workId, (current) => {
     const parent = current.sessions.find((item) => item.id === parentId);
-    if (parent === undefined) throw new Error(`сессии ${parentId} в работе ${workId} нет`);
+    if (parent === undefined) throw new Error(`session ${parentId} is not in workspace ${workId}`);
     created = addSession(current, {
       provider: 'claude',
       label: NEW_LABEL,
@@ -325,7 +325,7 @@ export async function createChildSession(
       contextFrom: [parentId],
     });
   });
-  if (created === undefined) throw new Error(`сессия в работе ${workId} не создана`);
+  if (created === undefined) throw new Error(`session in workspace ${workId} was not created`);
   await writeBrief(projectPath, map, created.id);
   return { workId, session: created };
 }

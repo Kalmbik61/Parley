@@ -77,7 +77,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function stringArg(args: Record<string, unknown>, name: string): string {
   const value = args[name];
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`аргумент ${name} обязателен и должен быть непустой строкой`);
+    throw new Error(`argument ${name} is required and must be a non-empty string`);
   }
   return value;
 }
@@ -89,7 +89,7 @@ function enumArg<T extends string>(
 ): T {
   const value = stringArg(args, name);
   if (!(allowed as readonly string[]).includes(value)) {
-    throw new Error(`аргумент ${name}: ожидалось одно из ${allowed.join(' | ')}, пришло ${value}`);
+    throw new Error(`argument ${name}: expected one of ${allowed.join(' | ')}, got ${value}`);
   }
   return value as T;
 }
@@ -98,7 +98,7 @@ function stringsArg(args: Record<string, unknown>, name: string): string[] {
   const value = args[name];
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new Error(`аргумент ${name}: ожидался массив строк`);
+    throw new Error(`argument ${name}: expected an array of strings`);
   }
   return value as string[];
 }
@@ -115,7 +115,7 @@ function toArg(args: Record<string, unknown>, name: string): string[] {
   if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
     return value as string[];
   }
-  throw new Error(`аргумент ${name}: ожидалась строка или массив строк`);
+  throw new Error(`argument ${name}: expected a string or an array of strings`);
 }
 
 function optionalStringArg(args: Record<string, unknown>, name: string): string | null {
@@ -126,7 +126,7 @@ function numberArg(args: Record<string, unknown>, name: string): number | undefi
   const value = args[name];
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`аргумент ${name}: ожидалось число`);
+    throw new Error(`argument ${name}: expected a number`);
   }
   return value;
 }
@@ -139,20 +139,20 @@ function numberArg(args: Record<string, unknown>, name: string): number | undefi
 function artifactsArg(args: Record<string, unknown>): Artifact[] {
   const value = args['artifacts'];
   if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error('аргумент artifacts: ожидался массив {kind, path}');
+  if (!Array.isArray(value)) throw new Error('argument artifacts: expected an array of {kind, path}');
 
   return value.map((item) => {
     if (!isRecord(item) || typeof item['kind'] !== 'string' || typeof item['path'] !== 'string') {
-      throw new Error('аргумент artifacts: каждый элемент — объект {kind, path}');
+      throw new Error('argument artifacts: each element is an object {kind, path}');
     }
     const file = item['path'];
-    if (file === '') throw new Error('путь артефакта пуст');
+    if (file === '') throw new Error('artifact path is empty');
     if (path.isAbsolute(file)) {
-      throw new Error(`путь артефакта ${file}: нужен относительный корню проекта`);
+      throw new Error(`artifact path ${file}: must be relative to the project root`);
     }
     const normalized = path.normalize(file);
     if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
-      throw new Error(`путь артефакта ${file} ведёт за пределы проекта`);
+      throw new Error(`artifact path ${file} leads outside the project`);
     }
     return { kind: item['kind'], path: file };
   });
@@ -160,20 +160,20 @@ function artifactsArg(args: Record<string, unknown>): Artifact[] {
 
 function requireSession(map: WorkMap, sessionId: string): WorkSession {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
   return session;
 }
 
 function requireRoom(map: WorkMap, roomId: string): Room {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new Error(`комнаты ${roomId} нет в карте`);
+  if (room === undefined) throw new Error(`room ${roomId} is not in the map`);
   return room;
 }
 
 /** Сессия существует и не закрыта — иначе письмо доставлять некому (спецификация 6.2). */
 function assertDeliverable(map: WorkMap, sessionId: string): void {
   const session = requireSession(map, sessionId);
-  if (session.lifecycle === 'closed') throw new Error(`сессия ${sessionId} закрыта`);
+  if (session.lifecycle === 'closed') throw new Error(`session ${sessionId} is closed`);
 }
 
 /** Письмо в ответе агенту: комната и подпись отправителя — не только id (спецификация 6.2). */
@@ -202,7 +202,7 @@ function assertRate(map: WorkMap, sessionId: string, limit: number, now: number)
   ).length;
   if (recent >= limit) {
     throw new Error(
-      `слишком часто: ${recent} писем за час от этой сессии (лимит ${limit}); отчитайся report и обратись к человеку`,
+      `too many messages: ${recent} from this session in the last hour (limit ${limit}); call report and turn to the human`,
     );
   }
 }
@@ -238,22 +238,22 @@ const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'Карта работы целиком: сессии, их статусы, резюме и артефакты, сообщения — плюс список провайдеров реестра с флагом доступности в PATH и тем, что провайдер принимает при запуске (модели и усилие для spawn_session). Вызови первым делом; подробный гид — инструмент read_guide',
+      'The whole workspace map: sessions, their statuses, summaries and artifacts, messages — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models and effort for spawn_session). Call it first; the detailed guide is the read_guide tool',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'report',
     annotations: WRITES,
     description:
-      'Отчёт о своей сессии. done или failed — результат сдан, сессия остаётся на связи и не закрывается сама; progress — промежуточное резюме без смены итога. Повторный вызов перезаписывает резюме и артефакты.',
+      'A report on your own session. done or failed — the result is handed in, the session stays reachable and does not close itself; progress — an intermediate summary without changing the result. A repeated call overwrites the summary and the artifacts.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['done', 'failed', 'progress'] },
-        summary: { type: 'string', description: 'Резюме результата в двух-трёх фразах.' },
+        summary: { type: 'string', description: 'A summary of the result in two or three sentences.' },
         artifacts: {
           type: 'array',
-          description: 'Файлы результата; путь — относительно корня проекта.',
+          description: 'Result files; the path is relative to the project root.',
           items: {
             type: 'object',
             properties: { kind: { type: 'string' }, path: { type: 'string' } },
@@ -268,38 +268,38 @@ const TOOLS: Tool[] = [
     name: 'spawn_session',
     annotations: WRITES,
     description:
-      'Создаёт сессию другого агента в этой же работе: проверяет провайдера по реестру и наличие команды в PATH, собирает бриф и заводит запись pending. Запустит её харнесс.',
+      'Creates a session of another agent in this same workspace: checks the provider against the registry and the command in PATH, assembles the brief and creates a pending record. Parley will launch it.',
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', description: 'Id провайдера из get_map.' },
-        label: { type: 'string', description: 'Роль сессии: «план», «бэкенд», «ревью».' },
-        task: { type: 'string', description: 'Что новой сессии сделать.' },
+        provider: { type: 'string', description: 'Provider id from get_map.' },
+        label: { type: 'string', description: 'Session role: "plan", "backend", "review".' },
+        task: { type: 'string', description: 'What the new session should do.' },
         contextFrom: {
           type: 'array',
-          description: 'Id сессий, чьи резюме и артефакты попадут в бриф.',
+          description: 'Ids of sessions whose summaries and artifacts go into the brief.',
           items: { type: 'string' },
         },
         agent: {
           type: 'string',
           description:
-            'Роль сессии — агент Claude Code: имя файла .claude/agents/<name>.md проекта или ~/.claude/agents/<name>.md. Определение с урезанным списком tools обязано включать mcp__parley__*, иначе роль не сможет ни написать коллеге, ни отчитаться.',
+            'The session role — a Claude Code agent: the name of the file .claude/agents/<name>.md of the project or ~/.claude/agents/<name>.md. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
         },
         worktree: {
           type: 'boolean',
           description:
-            'Изолировать сессию в своём git worktree — правки не трогают рабочую копию проекта, пока их не решат влить (панель окна «Изменения»). Только для проекта с git; создаёт сам харнесс перед запуском.',
+            "Isolate the session in its own git worktree — its edits do not touch the project's working copy until it is decided to merge them (the window's Changes panel). Only for a project with git; Parley itself creates it before the launch.",
         },
         model: {
           type: 'string',
           description:
-            'Модель новой сессии: id из поля models её провайдера в get_map. Не из списка — ошибка, сессия не создаётся. Провайдер, который модель флагом не принимает, значение отбрасывает. Без поля — модель по умолчанию.',
+            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Without the field — the default model.",
         },
         effort: {
           type: 'string',
           enum: [...EFFORT_LEVELS],
           description:
-            'Усилие рассуждений новой сессии. Провайдер с effort: false в get_map значение отбрасывает. Без поля — усилие по умолчанию.',
+            "The new session's reasoning effort. A provider with effort: false in get_map drops the value. Without the field — the default effort.",
         },
       },
       required: ['provider', 'label', 'task'],
@@ -309,14 +309,14 @@ const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: READS,
     description:
-      'Ждёт завершения сессии (target — её id) или входящего сообщения (target = "inbox"). По таймауту возвращает {"state":"running"} — решай сам, звать ли снова. {"state":"deleted"} значит, что сессию удалил человек: ждать больше нечего. Поручаешь новое дело сессии, которая уже сдала report? Жди её ответ через target = "inbox", а не по id: по id вернётся сразу старый итог.',
+      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"). On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Id сессии или "inbox".' },
+        target: { type: 'string', description: 'A session id or "inbox".' },
         timeoutSec: {
           type: 'number',
-          description: `Сколько ждать; по умолчанию ${DEFAULT_TIMEOUT_SEC}, максимум ${MAX_TIMEOUT_SEC}.`,
+          description: `How long to wait; the default is ${DEFAULT_TIMEOUT_SEC}, the maximum is ${MAX_TIMEOUT_SEC}.`,
         },
       },
       required: ['target'],
@@ -326,13 +326,13 @@ const TOOLS: Tool[] = [
     name: 'send_message',
     annotations: WRITES,
     description:
-      'Кладёт сообщение в переписку. Без room — ровно одному адресату работы, как раньше. С room — отправитель и адресаты обязаны быть участниками комнаты; пустой или отсутствующий to — рассылка всем участникам. Отвечай только на question: заметка и решение ответа не требуют.',
+      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace, as before. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer.',
     inputSchema: {
       type: 'object',
       properties: {
         to: {
           description:
-            'Id адресата или несколько сразу. Без room — ровно один; с room и без to — рассылка комнате.',
+            'An addressee id, or several at once. Without room — exactly one; with room and no to — a broadcast to the room.',
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
         text: { type: 'string' },
@@ -340,9 +340,9 @@ const TOOLS: Tool[] = [
           type: 'string',
           enum: [...MESSAGE_KINDS],
           description:
-            'question — жду ответа; decision — договорились; note — заметка (по умолчанию).',
+            'question — waiting for an answer; decision — we have agreed; note — a note (the default).',
         },
-        room: { type: 'string', description: 'Id комнаты из get_map; без него письмо прямое.' },
+        room: { type: 'string', description: 'Room id from get_map; without it the message is direct.' },
       },
       required: ['text'],
     },
@@ -351,27 +351,27 @@ const TOOLS: Tool[] = [
     name: 'check_inbox',
     annotations: WRITES,
     description:
-      'Отдаёт непрочитанные письма этой сессии — прямые и из её комнат, включая рассылки — и помечает их прочитанными. У каждого письма — подпись отправителя и комната, если она есть.',
+      "Returns this session's unread messages — direct ones and those from its rooms, including broadcasts — and marks them as read. Each message carries the sender's label and the room, if there is one.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'create_room',
     annotations: WRITES,
     description:
-      'Заводит комнату — постоянный круг переписки для нескольких сессий, обычно своих подчинённых. Вызывающий становится создателем и участником; остальным участникам уходит письмо о добавлении. Одна комната на сессию: из прочих комнат работы уходишь и ты, и участники. Ведущий комнаты собирает позиции участников и приносит человеку решение (propose_decision): без lead ведущий — ты сам.',
+      "Creates a room — a standing circle of conversation for several sessions, usually your own subordinates. The caller becomes the creator and a participant; the other participants get a message about being added. One room per session: both you and the participants leave the workspace's other rooms. The room's lead collects the participants' positions and brings the human a decision (propose_decision): without lead, the lead is you.",
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
         members: {
           type: 'array',
-          description: 'Id сессий-участников из get_map; себя указывать не нужно.',
+          description: 'Ids of the participant sessions from get_map; you do not need to list yourself.',
           items: { type: 'string' },
         },
         lead: {
           type: 'string',
           description:
-            'Id ведущего: твой или одного из members. Без него ведущий — ты; не из круга комнаты — ошибка, комната не создаётся.',
+            "The lead's id: yours or one of members. Without it you are the lead; not from the room's circle — an error, the room is not created.",
         },
       },
       required: ['title', 'members'],
@@ -381,14 +381,14 @@ const TOOLS: Tool[] = [
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      'Ведущий вводит в свою комнату ещё одну сессию этой работы — например, только что порождённого исполнителя. Только ведущий (get_map, поле lead комнаты); комната не закрыта, сессия жива и ещё не участник. Одна комната на сессию: из прочих комнат работы она уходит, в ленте появляется строка «@s04 joined the room». Письма о добавлении новый участник не получает — напиши ему в комнату сам, чего ждёшь.',
+      "The lead brings one more session of this workspace into the room — for example, an executor just spawned. Lead only (get_map, the room's lead field); the room is not closed, the session is alive and not yet a participant. One room per session: it leaves the workspace's other rooms, and a line \"@s04 joined the room\" appears in the feed. The new participant gets no message about being added — write to it in the room yourself, saying what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        room: { type: 'string', description: 'Room id from get_map.' },
         session: {
           type: 'string',
-          description: 'Id сессии этой работы из get_map; закрытая или чужая — ошибка.',
+          description: 'Id of a session of this workspace from get_map; a closed or foreign one is an error.',
         },
       },
       required: ['room', 'session'],
@@ -398,12 +398,12 @@ const TOOLS: Tool[] = [
     name: 'read_room',
     annotations: READS,
     description:
-      'Лента комнаты для контекста — последние limit писем, без пометок прочтения. Доступна только участникам.',
+      "The room's feed for context — the last limit messages, without read marks. Available only to participants.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Id комнаты из get_map.' },
-        limit: { type: 'number', description: 'Сколько последних писем отдать; по умолчанию 50.' },
+        room: { type: 'string', description: 'Room id from get_map.' },
+        limit: { type: 'number', description: 'How many of the latest messages to return; the default is 50.' },
       },
       required: ['room'],
     },
@@ -412,14 +412,14 @@ const TOOLS: Tool[] = [
     name: 'propose_decision',
     annotations: WRITES,
     description:
-      'Ведущий комнаты предлагает решение: оно ложится карточкой в окне и ждёт ответа человека — принять или вернуть на доработку. Только ведущий (get_map, поле lead комнаты); в закрытой комнате — ошибка. Зови, когда позиции участников собраны; работу до принятия не начинай. Повтор до ответа человека заменяет текст (тот же proposalId, rev + 1). Ответ придёт тебе письмом: принято — раздавай части, возврат — переделай и предложи снова.',
+      "The room's lead proposes a decision: it lands as a card in the window and waits for the human's answer — accept or return for rework. Lead only (get_map, the room's lead field); in a closed room — an error. Call it when the participants' positions are collected; do not start the work before acceptance. A repeat before the human's answer replaces the text (the same proposalId, rev + 1). The answer will reach you as a message: accepted — hand out the parts, returned — redo it and propose again.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Id комнаты из get_map.' },
+        room: { type: 'string', description: 'Room id from get_map.' },
         text: {
           type: 'string',
-          description: `Решение целиком, до ${PROPOSAL_TEXT_MAX} знаков: что делаем и какую часть берёт каждый; участников называй упоминаниями @s02.`,
+          description: `The whole decision, up to ${PROPOSAL_TEXT_MAX} characters: what we do and which part each takes; name participants with @s02 mentions.`,
         },
       },
       required: ['room', 'text'],
@@ -429,11 +429,11 @@ const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      'Закрывает сессию насовсем: письма ей больше не приходят, будильник её не поднимает. Цель — сама сессия или её потомок. Зови только после явного согласия человека.',
+      "Closes a session for good: it no longer receives messages, and auto-wake does not start it. The target is the session itself or its descendant. Call it only after the human's explicit consent.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Id сессии: своей или порождённой по цепочке.' },
+        target: { type: 'string', description: 'A session id: your own or a descendant spawned down the chain.' },
       },
       required: ['target'],
     },
@@ -441,14 +441,14 @@ const TOOLS: Tool[] = [
   {
     name: 'read_guide',
     annotations: READS,
-    description: `Подробный гид по харнессу: сущности, жизненный цикл сессии, комнаты и роли в них (ведущий, участник), что класть в отчёт и артефакты, как ждать подчинённую сессию, чего не делать. Читай, когда коротких описаний не хватило. Без topic — весь гид, с topic — один раздел: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    description: `The detailed guide to Parley: entities, the session lifecycle, rooms and the roles in them (lead, participant), what to put in a report and artifacts, how to wait for a subordinate session, what not to do. Read it when the short descriptions were not enough. Without topic — the whole guide, with topic — one section: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
     inputSchema: {
       type: 'object',
       properties: {
         topic: {
           type: 'string',
           enum: GUIDE_TOPICS.map((item) => item.topic),
-          description: 'Раздел гида; без него — весь гид.',
+          description: 'A guide section; without it — the whole guide.',
         },
       },
       additionalProperties: false,
@@ -492,7 +492,7 @@ async function report(
     // Закрытая сессия ничего больше не сдаёт (спецификация 7.1) — проверяем
     // раньше записи резюме, иначе progress на закрытой тихо прошёл бы мимо.
     if (session.lifecycle === 'closed') {
-      throw new Error(`сессия ${sessionId} закрыта: report не принят`);
+      throw new Error(`session ${sessionId} is closed: report not accepted`);
     }
     session.summary = summary;
     session.summarySource = 'agent';
@@ -540,12 +540,12 @@ async function spawnSession(
   const entry = registry[provider];
   if (entry === undefined) {
     throw new Error(
-      `неизвестный провайдер ${provider}; допустимы: ${Object.keys(registry).join(', ')}`,
+      `unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`,
     );
   }
   if (!(await commandInPath(entry.runner.command))) {
     throw new Error(
-      `команды ${entry.runner.command} нет в PATH — провайдер ${provider} недоступен`,
+      `command ${entry.runner.command} is not in PATH — provider ${provider} is unavailable`,
     );
   }
 
@@ -564,7 +564,7 @@ async function spawnSession(
   // карте (спецификация 2026-09-08, раздел 7).
   if (agent !== null) {
     if (!(entry.runner.args ?? []).includes('{agent}')) {
-      throw new Error(`провайдер ${provider} агентов не принимает`);
+      throw new Error(`provider ${provider} does not accept agents`);
     }
     await assertAgent(agent, agentDirs(context.projectPath));
   }
@@ -575,7 +575,7 @@ async function spawnSession(
   let worktreeBase: string | null = null;
   if (worktree) {
     if (!(await isGitRepo(context.projectPath))) {
-      throw new Error('в проекте нет git — worktree не завести');
+      throw new Error('the project has no git — a worktree cannot be created');
     }
     const parent = requireSession(await readMap(context.projectPath, context.workId), sessionId);
     worktreeBase =
@@ -690,11 +690,11 @@ async function sendMessage(
     if (roomId !== null) {
       const room = requireRoom(current, roomId);
       if (!isMember(room, sessionId)) {
-        throw new Error(`сессия ${sessionId} не участник комнаты ${roomId}`);
+        throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
       }
       for (const memberId of to) {
         if (!isMember(room, memberId)) {
-          throw new Error(`сессия ${memberId} не участник комнаты ${roomId}`);
+          throw new Error(`session ${memberId} is not a participant of room ${roomId}`);
         }
         assertDeliverable(current, memberId);
       }
@@ -702,7 +702,7 @@ async function sendMessage(
       created = addMessage(current, { from: sessionId, to, text, kind, roomId }).id;
     } else {
       if (to.length !== 1) {
-        throw new Error('без room нужен ровно один адресат в to');
+        throw new Error('without room, exactly one addressee in to is required');
       }
       const target = to[0] as string;
       assertDeliverable(current, target);
@@ -742,7 +742,7 @@ async function createRoom(
     for (const memberId of members) {
       const member = requireSession(current, memberId);
       if (member.lifecycle === 'closed') {
-        throw new Error(`сессия ${memberId} закрыта: в комнату не добавить`);
+        throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
     }
 
@@ -797,7 +797,7 @@ async function readRoom(
   const map = await readMap(context.projectPath, context.workId);
   const room = requireRoom(map, roomId);
   if (!isMember(room, sessionId)) {
-    throw new Error(`сессия ${sessionId} не участник комнаты ${roomId}`);
+    throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
   }
 
   const inRoom = map.messages
@@ -833,11 +833,11 @@ async function proposeDecision(
 function readGuide(args: Record<string, unknown>): string {
   const raw = args['topic'];
   if (raw === undefined || raw === '') return GUIDE;
-  if (typeof raw !== 'string') throw new Error('аргумент topic: ожидалась строка');
+  if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
   const text = guideTopic(raw.trim().toLowerCase());
   if (text === null) {
     throw new Error(
-      `неизвестная тема гида «${raw}»; темы: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
+      `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
     );
   }
   return text;
@@ -854,7 +854,7 @@ async function closeSession(
     requireSession(current, target);
     if (target !== sessionId && !isDescendant(current, sessionId, target)) {
       throw new Error(
-        `сессия ${target} не подчинена ${sessionId}: close_session закрывает только себя или потомка`,
+        `session ${target} is not subordinate to ${sessionId}: close_session closes only itself or a descendant`,
       );
     }
     transitionSession(current, target, 'closed');
@@ -863,7 +863,7 @@ async function closeSession(
 }
 
 const NO_SESSION =
-  'сессия не задана (PARLEY_SESSION_ID пуст): доступны только get_map и read_guide. Создай сессию через харнесс или `parley-core work session new` — тогда работают остальные инструменты.';
+  'no session is set (PARLEY_SESSION_ID is empty): only get_map and read_guide are available. Create a session through Parley or `parley-core work session new` — then the other tools work.';
 
 async function dispatch(
   context: McpContext,
@@ -887,7 +887,7 @@ async function dispatch(
   if (name === 'read_room') return readRoom(context, sessionId, args);
   if (name === 'propose_decision') return proposeDecision(context, sessionId, args);
   if (name === 'close_session') return closeSession(context, sessionId, args);
-  throw new Error(`неизвестный инструмент ${name}`);
+  throw new Error(`unknown tool ${name}`);
 }
 
 /**
@@ -895,9 +895,9 @@ async function dispatch(
  * при подключении, поэтому он короткий и весь про поведение: этикет тут —
  * половина защиты от переписки двух вежливых агентов до конца лимита (4.7).
  */
-export const CHANNEL_INSTRUCTIONS = `Письма коллег по этой работе объявляются тегом <channel source="parley">: в нём from — id сессии-отправителя, from_label — её роль, kind — вид письма. Текста письма в теге нет: увидел тег — позови check_inbox, он отдаст все непрочитанные разом.
-Отвечай send_message(to=<from>) только на \`question\`; note и decision ответа не требуют, «спасибо» и «принято» не пишут. Договорённость фиксируй одним письмом с kind: decision тому, с кем договорился.
-Про письмо звонят один раз; check_inbox и wait_for("inbox") — страховка, если канал молчит.`;
+export const CHANNEL_INSTRUCTIONS = `Colleagues' messages in this workspace are announced with the tag <channel source="parley">: in it from is the sender session's id, from_label is its role, kind is the kind of message. The tag has no message text: if you see the tag, call check_inbox, it returns all unread messages at once.
+Answer with send_message(to=<from>) only to a \`question\`; a note and a decision need no answer, do not write "thanks" or "agreed". Record an agreement with one message with kind: decision to the one you agreed with.
+Each message is announced once; check_inbox and wait_for("inbox") are a safety net in case the channel is silent.`;
 
 /**
  * Уведомление-звонок. Метода нет в `ServerNotification`, поэтому он объявляется
@@ -955,7 +955,7 @@ async function bindCodexThread(
     });
     return true;
   } catch (error) {
-    process.stderr.write(`parley-mcp: привязка треда не записалась: ${(error as Error).message}\n`);
+    process.stderr.write(`parley-mcp: could not record the thread binding: ${(error as Error).message}\n`);
     return false;
   }
 }

@@ -540,12 +540,12 @@ const isModelId = (value: unknown): value is string =>
  */
 export function modelChoiceError(entry: ProviderEntry, model: string): string | null {
   if (!isModelId(model)) {
-    return `модель ${JSON.stringify(model)}: одно слово, не с дефиса и не длиннее ${MODEL_ID_MAX_LENGTH} знаков`;
+    return `model ${JSON.stringify(model)}: must be one word, must not start with a hyphen and must not be longer than ${MODEL_ID_MAX_LENGTH} characters`;
   }
   const list = selectableModels(entry);
   if (list !== null && !list.some((option) => option.id === model)) {
     const allowed = list.map((option) => option.id).join(', ');
-    return `модель ${model} не из списка провайдера ${entry.id}; допустимы: ${allowed}`;
+    return `model ${model} is not in the list of provider ${entry.id}; allowed: ${allowed}`;
   }
   return null;
 }

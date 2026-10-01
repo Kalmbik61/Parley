@@ -145,7 +145,7 @@ export function addSession(
  */
 export function removeSession(map: WorkMap, sessionId: string): WorkSession {
   const at = map.sessions.findIndex((candidate) => candidate.id === sessionId);
-  if (at === -1) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (at === -1) throw new Error(`session ${sessionId} is not in the map`);
   const [removed] = map.sessions.splice(at, 1) as [WorkSession];
 
   for (const session of map.sessions) {
@@ -210,7 +210,7 @@ export interface TransitionOptions {
 
 const findSession = (map: WorkMap, sessionId: string): WorkSession => {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw new Error(`сессии ${sessionId} нет в карте`);
+  if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
   return session;
 };
 
@@ -226,7 +226,7 @@ export function transitionSession(
 ): WorkSession {
   const session = findSession(map, sessionId);
   if (!canTransition(session.lifecycle, to)) {
-    throw new Error(`недопустимый переход ${session.lifecycle} → ${to} (сессия ${sessionId})`);
+    throw new Error(`invalid transition ${session.lifecycle} → ${to} (session ${sessionId})`);
   }
 
   session.lifecycle = to;
@@ -255,7 +255,7 @@ export function setResult(
 ): WorkSession {
   const session = findSession(map, sessionId);
   if (session.lifecycle === 'closed') {
-    throw new Error(`сессия ${sessionId} закрыта: итог ${result} не принят`);
+    throw new Error(`session ${sessionId} is closed: result ${result} not accepted`);
   }
   session.result = result;
   session.resultAt = at;
