@@ -6,6 +6,7 @@ export type {
   HostNotice,
   LimitWindow,
   LiveMetrics,
+  LiveTask,
   ModelOption,
   NoticeKind,
   ProtocolError,

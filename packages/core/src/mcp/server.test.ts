@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +18,8 @@ import {
   setResult,
   transitionSession,
 } from '../work/map.js';
+import { activityOf } from '../work/activity.js';
+import { openEvents } from '../work/events.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
@@ -1852,6 +1854,186 @@ describe('wait_for', () => {
     ]);
     // Прочитанным помечает только check_inbox.
     expect((await readMapFile()).messages[0]?.readBy).toEqual({});
+  });
+});
+
+describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
+  const eventsDir = (): string => workPaths(project, workId).events;
+  const journalFile = (): string => path.join(eventsDir(), 's-01.jsonl');
+  /** Строки журнала сессии `s-01` как объекты; журнала нет — пусто. */
+  const journalLines = async (): Promise<Record<string, unknown>[]> => {
+    const text = await readFile(journalFile(), 'utf8').catch(() => '');
+    return text
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  };
+  const started = (target: string) => ({
+    hook_event_name: 'ParleyWaitStart',
+    parley_wait_target: target,
+  });
+  const ended = { hook_event_name: 'ParleyWaitEnd' };
+  /** Запись начала идёт параллельно висящему вызову: ждём, пока в журнале станет `count` строк. */
+  const linesAre = (count: number): Promise<void> =>
+    vi.waitFor(async () => expect(await journalLines()).toHaveLength(count), {
+      timeout: 2000,
+      interval: 10,
+    });
+
+  beforeEach(async () => {
+    // Каталог `events/` заводит запуск сессии, а в `createWork` его нет.
+    await mkdir(eventsDir(), { recursive: true });
+  });
+
+  it('inbox: ParleyWaitStart с целью, пока вызов висит, и ParleyWaitEnd после пробуждения', async () => {
+    const client = await connect('s-01');
+    const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
+
+    await linesAre(1);
+    expect(await journalLines()).toEqual([started('inbox')]);
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    });
+    expect((await pending)['state']).toBe('message');
+    expect(await journalLines()).toEqual([started('inbox'), ended]);
+  });
+
+  it('таймаут по id сессии: Start с её id и End; строка — ровно один JSON с переводом строки', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
+      state: 'running',
+    });
+    expect(await readFile(journalFile(), 'utf8')).toBe(
+      `${JSON.stringify(started('s-02'))}\n${JSON.stringify(ended)}\n`,
+    );
+  });
+
+  it('итог сессии пришёл, пока вызов висел: Start, затем End', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
+
+    await linesAre(1);
+    await updateMap(project, workId, (map) => {
+      setResult(map, 's-02', 'done');
+    });
+
+    expect((await pending)['state']).toBe('done');
+    expect(await journalLines()).toEqual([started('s-02'), ended]);
+  });
+
+  it('сессию удалили, пока вызов висел: ответ deleted, и конец ожидания записан', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
+
+    await linesAre(1);
+    await updateMap(project, workId, (map) => {
+      removeSession(map, 's-02');
+    });
+
+    expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
+    expect(await journalLines()).toEqual([started('s-02'), ended]);
+  });
+
+  it('ожидание кончилось ошибкой (карта не читается): End всё равно записан', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const pending = call(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
+
+    await linesAre(1);
+    await writeFile(workPaths(project, workId).map, 'не json', 'utf8');
+
+    expect((await pending).isError).toBe(true);
+    expect(await journalLines()).toEqual([started('s-02'), ended]);
+  });
+
+  it('ответ без ожидания строк не пишет: итог уже есть, письмо уже пришло, id неизвестен', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await updateMap(project, workId, (map) => {
+      setResult(map, 's-02', 'done');
+      addMessage(map, { from: 's-02', to: ['s-01'], text: 'готово' });
+    });
+
+    expect((await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 5 }))['state']).toBe(
+      'done',
+    );
+    expect((await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 }))['state']).toBe(
+      'message',
+    );
+    expect((await call(client, 'wait_for', { target: 's-77', timeoutSec: 5 })).isError).toBe(true);
+
+    expect(await journalLines()).toEqual([]);
+  });
+
+  it('два вызова сразу: строки не перемешиваются, у каждого своя пара', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    await Promise.all([
+      callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 0.3 }),
+      callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.3 }),
+    ]);
+
+    const lines = await journalLines();
+    expect(lines).toHaveLength(4);
+    expect(
+      lines
+        .filter((line) => line['hook_event_name'] === 'ParleyWaitStart')
+        .map((line) => line['parley_wait_target'])
+        .sort(),
+    ).toEqual(['inbox', 's-02']);
+    expect(lines.filter((line) => line['hook_event_name'] === 'ParleyWaitEnd')).toHaveLength(2);
+  });
+
+  it('сбой записи в журнал не ломает ожидание: на месте журнала каталог', async () => {
+    await mkdir(journalFile());
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
+      state: 'running',
+    });
+
+    const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
+    await delay(60);
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    });
+    expect((await pending)['state']).toBe('message');
+  });
+
+  it('каталог events ожидание не создаёт: без него хуков нет, и предупреждение хоста не заглушить', async () => {
+    await rm(eventsDir(), { recursive: true, force: true });
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
+      state: 'running',
+    });
+    await expect(stat(eventsDir())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('читатель журнала и activityOf понимают строки: waitingFor есть, пока вызов висит, и пропадает после', async () => {
+    const client = await connect('s-01');
+    const waitingFor = async (): Promise<string | null> => {
+      const events = await openEvents(eventsDir()).read('s-01');
+      return activityOf({ events }).waitingFor;
+    };
+
+    const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
+    await linesAre(1);
+    expect(await waitingFor()).toBe('inbox');
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    });
+    await pending;
+    expect(await waitingFor()).toBeNull();
   });
 });
 

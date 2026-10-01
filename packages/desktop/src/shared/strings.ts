@@ -337,6 +337,19 @@ export const S = {
      * показывается: его никто не хранит.
      */
     participantTooltip: (provider: string, model: string | null): string => (model === null ? provider : `${provider} · ${model}`),
+    /**
+     * Чем занят участник (Parley 0.2.0): вторая строка его карточки вместо задачи и живая строка над полем
+     * ввода. `Subagent: Orca research` — название субагента (описание или тип агента); безымянный — просто
+     * `Subagent`. Несколько — `3 subagents: <первое название>`, без названий — `3 subagents`.
+     */
+    doingSubagent: (name: string | null): string =>
+      name === null ? 'Subagent' : `Subagent: ${name}`,
+    doingSubagents: (count: number, first: string | null): string =>
+      first === null ? `${count} subagents` : `${count} subagents: ${first}`,
+    /** Ждёт ответа сессии: `tag` — короткий тег (`S03`). */
+    doingWaitingFor: (tag: string): string => `Waiting for ${tag}`,
+    /** Ждёт сообщений: `wait_for("inbox")`. */
+    doingWaitingInbox: 'Waiting for messages',
     /** Мета пункта меню упоминаний: `Opus 5.5 · idle`; модель неизвестна — только состояние. */
     mentionMeta: (model: string | null, word: string): string => (model === null ? word : `${model} · ${word}`),
     /** Поле ввода: подпись над ним, плейсхолдер, имя для скринридера. */
