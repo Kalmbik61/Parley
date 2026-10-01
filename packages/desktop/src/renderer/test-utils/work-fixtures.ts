@@ -83,7 +83,11 @@ export function makeRoom(id: string, title: string): Room {
 export function makeActivity(
   ref: SessionRef,
   activity: Activity,
-  patch: { lastEventAt?: string | null; metrics?: LiveMetrics | null } = {},
+  patch: {
+    lastEventAt?: string | null;
+    metrics?: LiveMetrics | null;
+    heldByBackground?: boolean;
+  } = {},
 ): ActivityEntry {
   return {
     ref,
@@ -92,7 +96,7 @@ export function makeActivity(
       subagents: 0,
       tasks: [],
       waitingFor: null,
-      heldByBackground: false,
+      heldByBackground: patch.heldByBackground ?? false,
       turnEndedAt: null,
       lastEventAt: patch.lastEventAt ?? '2026-09-27T09:00:00.000Z',
       source: 'hooks',

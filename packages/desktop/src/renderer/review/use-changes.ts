@@ -9,6 +9,7 @@ import type { MergeCheck, WorkEntry } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
+import { workingEnded } from '../lib/turn-end.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { changesErrorText, type ChangesSource } from './state.js';
@@ -143,7 +144,7 @@ export function useChanges(input: {
     });
 
     const offActivity = useActivityStore.subscribe((state, prev) => {
-      if (prev.byRef[key]?.activity.activity === 'working' && state.byRef[key]?.activity.activity !== 'working') request();
+      if (workingEnded(prev.byRef[key]?.activity, state.byRef[key]?.activity)) request();
     });
 
     // Связь вернулась — заново (fix-7.3): оболочка при обрыве не перемонтируется.
