@@ -3,7 +3,9 @@
  * печатала обычный текст (`MentionText`), теперь разметку разбирает `react-markdown` + `remark-gfm`, а токен
  * `@s02` остаётся тем же чипом, что в поле ввода: его вырезает из текстовых узлов маленький remark-плагин, а
  * сам чип рисует `MentionChip` — ярлык берётся при отрисовке (`labelOf`), и переименование сессии обновляет
- * чипы, не заставляя разбирать текст заново.
+ * чипы, не заставляя разбирать текст заново. Упоминание человека `@human` (Parley 0.3.0) плагин вырезает так же,
+ * а рисует его `HumanMentionChip` — чип «@you» плотнее чипа сессии: так агент, обратившийся к человеку, заметен
+ * в ленте (поле ввода человека `@human` не разбирает: себя человек не упоминает).
  *
  * Правила безопасности — те же, что у письма (`mail/Letter.tsx`) и у превью файлов
  * (`files/preview/MarkdownPreview.tsx`), агент не должен получить из комнаты ни исполнение, ни переход окна:
@@ -44,9 +46,10 @@
 import { Children, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
 import ReactMarkdown, { type Components, type Options } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { S } from '../../../shared/strings.js';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
-import { MENTION_CHIP_CLASS, splitMentions } from './mention.js';
+import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS, splitFeedMentions } from './mention.js';
 
 export interface RoomMarkdownProps {
   text: string;
@@ -174,14 +177,31 @@ function mentionNode(sessionId: string): MdNode {
 }
 
 /**
+ * Упоминание человека `@human`: тот же приём — `<span data-mention-human>` с текстом «@you», а `components.span`
+ * подменяет его чипом (`HumanMentionChip`).
+ */
+function humanMentionNode(): MdNode {
+  return {
+    type: 'text',
+    value: S.rooms.humanMention,
+    data: { hName: 'span', hProperties: { 'data-mention-human': '' } },
+  };
+}
+
+/**
  * Текстовый узел → текст, упоминания и `break` на каждом переводе строки (в строчном виде `\n` остаётся
- * в тексте и читается пробелом). Разбор токена — `mention.ts`.
+ * в тексте и читается пробелом). Разбор токенов — `mention.ts`.
  */
 function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNode[] {
   const out: MdNode[] = [];
-  for (const segment of literal ? [{ kind: 'text' as const, text: value }] : splitMentions(value)) {
+  const segments = literal ? [{ kind: 'text' as const, text: value }] : splitFeedMentions(value);
+  for (const segment of segments) {
     if (segment.kind === 'mention') {
       out.push(mentionNode(segment.sessionId));
+      continue;
+    }
+    if (segment.kind === 'human') {
+      out.push(humanMentionNode());
       continue;
     }
     if (!lineBreaks) {
@@ -242,6 +262,20 @@ function MentionChip({ sessionId }: { sessionId: string }): JSX.Element {
   return (
     <span data-mention={sessionId} className={MENTION_CHIP_CLASS}>
       @{labelOf(sessionId) ?? sessionTag(sessionId)}
+    </span>
+  );
+}
+
+/** «@you»: ярлыка у человека нет, текст и подсказка — из `strings.ts`. */
+function HumanMentionChip(): JSX.Element {
+  return (
+    <span
+      data-mention-human=""
+      title={S.rooms.humanMentionTitle}
+      aria-label={S.rooms.humanMentionTitle}
+      className={HUMAN_MENTION_CHIP_CLASS}
+    >
+      {S.rooms.humanMention}
     </span>
   );
 }
@@ -323,13 +357,14 @@ function markdownComponents(openExternal: (url: string) => void): Components {
       );
     },
     img: ({ src, alt }) => <RoomImage src={src} alt={alt} openExternal={openExternal} />,
-    // Единственные `span` в дереве — упоминания из плагина выше.
+    // Единственные `span` в дереве — упоминания из плагина выше: сессии (`data-mention`) и человека.
     span: ({ node, children }) => {
       const sessionId = node?.properties['data-mention'];
-      return typeof sessionId === 'string' ? (
-        <MentionChip sessionId={sessionId} />
-      ) : (
+      if (typeof sessionId === 'string') return <MentionChip sessionId={sessionId} />;
+      return node?.properties['data-mention-human'] === undefined ? (
         <span>{children}</span>
+      ) : (
+        <HumanMentionChip />
       );
     },
     // Широкая таблица прокручивается в своей обёртке, а не раздвигает ленту.
