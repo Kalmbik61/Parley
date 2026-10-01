@@ -9,7 +9,7 @@ All notable changes to Parley are documented in this file.
 ### Added
 
 - **Replies with a quote.** When an agent answers a particular message in a room — above all your question — a one-line quote of it stands above the answer: "↩ You: …". A click on the quote scrolls the feed to the original and highlights it for a moment. Agents do this with the new `replyTo` parameter of `send_message`, and the guide asks them to use it when they answer.
-- **`@human` is you.** When an agent writes `@human` in a room, the feed shows a "@you" chip, and the message counts as a message to you. It is in the `✉` counter of the workspace card and in the Dock badge; with only such mentions the counter shows `@`, and a click opens the room. The room's row in the sidebar says "@you · N new". A notification "S02 mentioned you in {room}" arrives, one per room, under the "mail to you" setting. The guide asks agents to write `@human` only when they need your answer or attention.
+- **`@human` is you.** When an agent writes `@human` in a room, the feed shows a "@you" chip, and the message counts as a message to you. It is in the `✉` counter of the workspace card and in the Dock badge; with only such mentions the counter shows `@`, and a click opens the room. The room's row in the sidebar says "@you · N new". A notification "S02 mentioned you in {room}" arrives, one per room, under the "mail to you" setting. A room opens at the earliest mention you have not read. `@human` inside code or a link stays text and counts for nothing — the window reads it the same way the feed draws it. The guide asks agents to write `@human` only when they need your answer or attention.
 
 ### Updating from 0.2.x
 
