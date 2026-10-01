@@ -222,6 +222,27 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['codex', 'claude']);
   });
 
+  it('Claude Code и Codex без CLI в PATH хоста — сегмент «not found» с подсказкой; прочие без CLI скрыты (0.2.0)', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', version: '2.1.276' }),
+        provider({ id: 'codex', label: 'Codex', available: false, version: '0.44.0' }),
+        provider({ id: 'glm', label: 'GLM', available: false }),
+      ],
+    });
+    const { container } = renderPlain();
+    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual([
+      'claude',
+      'codex',
+    ]);
+    const codex = segments(container)[1];
+    // Версии и лимитов у ненайденного нет: версия из прошлой пробы о нынешнем CLI ничего не говорит.
+    expect(codex?.textContent).toBe(`Codex${S.statusBar.providerNotFound}`);
+    expect(screen.getByText(S.statusBar.providerNotFound).getAttribute('title')).toBe(
+      S.statusBar.providerNotFoundTitle('codex'),
+    );
+  });
+
   it('значок 14, имя по handoff — «Claude Code» и «Codex», версия — моноширинным 11px neutral-700', () => {
     useProvidersStore.setState({
       providers: [provider({ id: 'claude', label: 'Claude', version: '2.1.276' }), provider({ id: 'codex', label: 'OpenAI Codex', version: '0.44.0' })],

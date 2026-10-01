@@ -30,7 +30,7 @@ export interface ProviderInfo {
 }
 
 export interface ProvidersState {
-  /** В порядке ответа хоста; показывает строка статуса только `available`. */
+  /** В порядке ответа хоста; строка статуса показывает `available`, а Claude Code и Codex и без CLI — «not found». */
   providers: ProviderInfo[];
   /**
    * Один запрос `providers.list` и подписка на `providers.limitsChanged`; возвращает отписку — ответ,

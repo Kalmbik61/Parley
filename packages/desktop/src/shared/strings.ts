@@ -171,6 +171,10 @@ export const S = {
     wakeOn: 'Auto-wake on',
     /** Хосту не хватает методов этой сборки окна (спека 3.2, 5.9). */
     hostOutdated: 'Host is outdated — restart',
+    /** Основной провайдер, чьего CLI нет в PATH хоста (0.2.0, `shell/StatusBar.tsx`). */
+    providerNotFound: 'not found',
+    providerNotFoundTitle: (command: string): string =>
+      `${command} is not in the host's PATH. Install it, or restart the host after installing.`,
     restartHostTitle: 'Restart host?',
     restartHostDescription: 'Live agents will be interrupted and come back with --resume.',
     /** «N ждут тебя · M не просмотрено» (кусок 4.2, спека 7.3): нулевая часть не пишется, обе нулевые — ''. */
