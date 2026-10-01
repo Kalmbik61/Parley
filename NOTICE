@@ -204,6 +204,8 @@ Node.js
 нет.
 
 Copyright Node.js contributors. All rights reserved.
-Лицензия: MIT. Полный текст — файл LICENSE в архиве node-v<версия>-darwin-<arch>.tar.gz
-и на https://github.com/nodejs/node/blob/main/LICENSE; там же лицензии библиотек,
-которые входят в Node.js (V8, OpenSSL, ICU и другие).
+Лицензия: MIT. Полный текст лежит в приложении, рядом с бинарём, —
+Contents/Resources/node/LICENSE: это файл LICENSE из архива
+node-v<версия>-darwin-<arch>.tar.gz, его же fetch-node.mjs достаёт вместе с
+bin/node. В нём и лицензии библиотек, которые входят в Node.js (V8, OpenSSL, ICU
+и другие). Тот же текст — на https://github.com/nodejs/node/blob/main/LICENSE.

@@ -62,25 +62,39 @@ launch. Allow it once, in either of two ways:
 Node.js is not needed: the app carries its own Node 22, and the host, the MCP server and the
 status line script run on it. Linux and Windows are not supported yet.
 
+The Intel build is made on an Apple Silicon machine and has not been tested on an Intel Mac yet.
+
 ### Updates
 
 Parley does not update itself, but it tells you when a new version is out. At start, and then
-once a day, the window asks GitHub for the latest release: one request to
-`api.github.com/repos/Kalmbik61/Parley/releases/latest`, with no token, no cookies and nothing
-about you or your projects. If a newer stable release exists (drafts and pre-releases are
+once a day, the window asks GitHub for the latest release: one ordinary HTTPS request to
+`api.github.com/repos/Kalmbik61/Parley/releases/latest`, with no token and no cookies, and
+nothing about you or your projects in it. GitHub does see the request itself, so your IP address,
+as with any website you open. If a newer stable release exists (drafts and pre-releases are
 ignored), the window shows the toast "Parley X.Y.Z is available" with "Download" (it opens the
-release page in your browser) and "Later". Closing the toast, with either button or by
-dismissing it, means it does not come back for that version; a newer one shows it again.
-Nothing is downloaded or installed, and a network error is silent.
+release page in your browser) and "Later". "Download", or swiping the toast away, means it does
+not come back for that version; a newer one shows it again. "Later" only closes the toast: it
+returns with the next check or the next start. Nothing is downloaded or installed, and a network
+error is silent. A window started from source (`pnpm dev:desktop`) does not check at all.
 
 To update, quit Parley (⌘Q), download the new `.dmg` and replace Parley in Applications; your
-data lives outside the app and stays. A host started by the previous version keeps running
-while agents are alive: if the new window says "Host is outdated — restart", choose "Restart
-host…" in the palette (⌘J) — live agents are interrupted and come back through `--resume`.
+data lives outside the app and stays. Because the app is signed ad hoc, macOS treats every build
+as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
+for access to folders such as Documents, Desktop and Downloads.
 
-To turn the check off, switch off "Check for updates" in Settings (⌘,) → Notifications, or set
-`PARLEY_UPDATE_CHECK=off` in the environment of your login shell (see "Environment of the
-window"). Either way the window does not ask GitHub.
+Then open Parley and choose "Restart host…" in the palette (⌘J), even if the window does not say
+"Host is outdated — restart" (it says so only when the host lacks methods the window needs). The
+host outlives the window, and the agents it started keep command lines that point into the old
+app: the status line script, the MCP server and the notification hook of Codex. The replacement
+can remove those files (the folder names inside the app carry dependency versions), and then
+status lines, limits and Codex turn notifications quietly stop. Live agents are interrupted and
+come back through `--resume`.
+
+To turn the check off, switch off "Check for updates" in Settings (⌘,) → Notifications; it takes
+effect at once. The other way is `PARLEY_UPDATE_CHECK=off` in the environment of your login shell
+(see "Environment of the window"). The window reads it from the environment it captured at start:
+if your shell did not answer in time (the reason is printed to the window's console), the
+variable is not seen and only the switch in Settings turns the check off.
 
 ### Environment of the window
 
@@ -129,14 +143,16 @@ pnpm --filter @parley/desktop dist --dir
 ```
 
 `fetch-node` downloads the Node 22 that the app carries, for this machine's architecture, from
-nodejs.org and checks it against the published SHA-256 sums. `dist --dir` builds only this
-machine's app: `packages/desktop/dist/mac-arm64/Parley.app` (`dist/mac/Parley.app` on an Intel
-Mac), signed ad hoc and not notarized (`identity: '-'` in `electron-builder.yml`). Inside are
+nodejs.org and checks it against the published SHA-256 sums; with the binary it takes the
+`LICENSE` of the Node archive. `dist --dir` builds only this machine's app:
+`packages/desktop/dist/mac-arm64/Parley.app` (`dist/mac/Parley.app` on an Intel Mac), signed ad
+hoc and not notarized (`identity: '-'` in `electron-builder.yml`). Inside are
 `Contents/Resources/host` (the host with its own `node_modules`),
-`Contents/Resources/node/bin/node` (that Node; the window starts the host with it), `NOTICE`,
-`licenses/Figtree-OFL.txt` and `licenses/Caprasimo-OFL.txt`. Without `fetch-node` the app has no
-Node of its own: like the development window, the built one then needs `node` in the `PATH` of
-your login shell, and without it the window prints "node not found in login-shell PATH".
+`Contents/Resources/node/bin/node` (that Node; the window starts the host with it) and
+`Contents/Resources/node/LICENSE` (its license text), `NOTICE`, `licenses/Figtree-OFL.txt` and
+`licenses/Caprasimo-OFL.txt`. Without `fetch-node` the app has no Node of its own: like the
+development window, the built one then needs `node` in the `PATH` of your login shell, and
+without it the window prints "node not found in login-shell PATH".
 
 The files of a release — a `.dmg` and a `.zip` for each of Apple Silicon and Intel — come from:
 
@@ -740,8 +756,10 @@ Other variables:
   ignored. The window's E2E tests need it so as not to wait twenty seconds.
 - `PARLEY_UPDATE_CHECK=off` — do not look for a newer release on GitHub, whatever the "Check
   for updates" switch says; any other value leaves the choice to the switch. The window takes
-  it from the environment of your login shell (see "Environment of the window"); its E2E tests
-  set it so as not to ask GitHub.
+  it from the environment of your login shell (see "Environment of the window"); if the shell
+  did not answer in time, the variable is not seen. Only a built `Parley.app` looks for a
+  release at all — a window started from source does not — and the E2E tests set the variable
+  anyway.
 
 ## Agent state: hooks and liveness
 

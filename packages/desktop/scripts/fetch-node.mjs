@@ -4,13 +4,15 @@
 //
 // Для каждой архитектуры скачивает `node-v<версия>-darwin-<arch>.tar.gz` с nodejs.org/dist, сверяет
 // его sha256 со строкой `SHASUMS256.txt` той же версии (не сошлось — ошибка, в `build/node` ничего
-// не остаётся) и достаёт из архива один файл `bin/node` в `build/node/darwin-<arch>/bin/node`.
-// Каталог скрыт от git, а `extraResources` electron-builder (`electron-builder.yml`) кладёт его в
-// `Contents/Resources/node` приложения своей архитектуры.
+// не остаётся) и достаёт из архива два файла: `bin/node` в `build/node/darwin-<arch>/bin/node` и
+// `LICENSE` в `build/node/darwin-<arch>/LICENSE`. Лицензия едет с бинарём: это MIT самого Node.js и
+// лицензии библиотек, которые в него входят (V8, OpenSSL, ICU и других), а они требуют уведомления
+// и текста лицензии при раздаче бинаря. Каталог скрыт от git, а `extraResources` electron-builder
+// (`electron-builder.yml`) кладёт его в `Contents/Resources/node` приложения своей архитектуры.
 //
 // Использование: `node scripts/fetch-node.mjs [arm64] [x64]` — без аргументов только архитектура
-// этой машины; релизная сборка просит обе. Повторный запуск ничего не качает, пока файл на месте и
-// совпадает с записью `build/node/darwin-<arch>.json` (версия и sha256 файла).
+// этой машины; релизная сборка просит обе. Повторный запуск ничего не качает, пока оба файла на месте
+// и совпадают с записью `build/node/darwin-<arch>.json` (версия и sha256 файлов).
 
 /* global fetch, AbortSignal */
 
@@ -82,19 +84,27 @@ async function download(url, fetchImpl) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-/** Файл на месте и совпадает с записью прошлого запуска — повторное скачивание не нужно. */
-async function isUpToDate(binaryFile, markerFile, version) {
+/**
+ * Оба файла на месте и совпадают с записью прошлого запуска — повторное скачивание не нужно. Запись без
+ * суммы лицензии (сделана до того, как лицензия стала ехать с бинарём) — устаревшая: скачиваем заново.
+ */
+async function isUpToDate(binaryFile, licenseFile, markerFile, version) {
   try {
     const marker = JSON.parse(await readFile(markerFile, 'utf8'));
-    return marker.version === version && marker.binarySha256 === sha256(await readFile(binaryFile));
+    return (
+      marker.version === version &&
+      marker.binarySha256 === sha256(await readFile(binaryFile)) &&
+      typeof marker.licenseSha256 === 'string' &&
+      marker.licenseSha256 === sha256(await readFile(licenseFile))
+    );
   } catch {
     return false;
   }
 }
 
 /**
- * Кладёт `bin/node` версии `version` под `<outRoot>/darwin-<arch>/bin/node`. Возвращает `'cached'`,
- * если там уже лежит проверенный файл этой версии, иначе `'fetched'`.
+ * Кладёт `bin/node` и `LICENSE` версии `version` под `<outRoot>/darwin-<arch>/`. Возвращает `'cached'`,
+ * если там уже лежат проверенные файлы этой версии, иначе `'fetched'`.
  */
 export async function fetchNode({
   arch,
@@ -104,9 +114,11 @@ export async function fetchNode({
   fetchImpl = fetch,
   log = console.log,
 }) {
-  const binaryFile = path.join(outRoot, `darwin-${arch}`, 'bin', 'node');
+  const archDir = path.join(outRoot, `darwin-${arch}`);
+  const binaryFile = path.join(archDir, 'bin', 'node');
+  const licenseFile = path.join(archDir, 'LICENSE');
   const markerFile = path.join(outRoot, `darwin-${arch}.json`);
-  if (await isUpToDate(binaryFile, markerFile, version)) {
+  if (await isUpToDate(binaryFile, licenseFile, markerFile, version)) {
     log(`node v${version} darwin-${arch}: уже на месте (${binaryFile})`);
     return 'cached';
   }
@@ -130,27 +142,42 @@ export async function fetchNode({
   try {
     const archive = path.join(work, name);
     await writeFile(archive, tarball);
-    // Один файл из архива, без каталога верхнего уровня: `<work>/node`.
-    const member = `node-v${version}-darwin-${arch}/bin/node`;
-    await run('tar', ['-xzf', archive, '-C', work, '--strip-components=2', member]);
-    const extracted = path.join(work, 'node');
+    // Два файла из архива: `bin/node` и `LICENSE`. Нет любого из них — `tar` отказывает, и это ошибка:
+    // бинарь без текста лицензии раздавать нельзя.
+    const top = `node-v${version}-darwin-${arch}`;
+    const member = `${top}/bin/node`;
+    await run('tar', ['-xzf', archive, '-C', work, member, `${top}/LICENSE`]);
+    const extracted = path.join(work, top, 'bin', 'node');
+    const extractedLicense = path.join(work, top, 'LICENSE');
     const binary = await readFile(extracted);
     const found = machOArch(binary);
     if (found !== arch) {
       throw new Error(`${member}: ждали Mach-O ${arch}, в файле ${found ?? 'не Mach-O'}`);
     }
+    const license = await readFile(extractedLicense);
+    if (license.length === 0) throw new Error(`${top}/LICENSE: пустой файл`);
     await chmod(extracted, 0o755);
-    await rm(path.dirname(path.dirname(binaryFile)), { recursive: true, force: true });
+    await rm(archDir, { recursive: true, force: true });
     await mkdir(path.dirname(binaryFile), { recursive: true });
     await rename(extracted, binaryFile);
+    await rename(extractedLicense, licenseFile);
     await writeFile(
       markerFile,
-      `${JSON.stringify({ version, tarballSha256: actual, binarySha256: sha256(binary) }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          version,
+          tarballSha256: actual,
+          binarySha256: sha256(binary),
+          licenseSha256: sha256(license),
+        },
+        null,
+        2,
+      )}\n`,
     );
   } finally {
     await rm(work, { recursive: true, force: true });
   }
-  log(`node v${version} darwin-${arch}: скачан, sha256 сверен с SHASUMS256.txt (${actual}) → ${binaryFile}`);
+  log(`node v${version} darwin-${arch}: скачан, sha256 сверен с SHASUMS256.txt (${actual}) → ${archDir} (bin/node, LICENSE)`);
   return 'fetched';
 }
 

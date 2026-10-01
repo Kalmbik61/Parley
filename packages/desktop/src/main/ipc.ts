@@ -151,6 +151,11 @@ export interface RegisterIpcOptions {
   takeFocusTarget: () => FocusTarget | null;
   /** Релиз новее запущенной версии, найденный проверкой main (`app:get-update`, V6 плана релиза 0.1.0); `null` — нет или проверка выключена. */
   getUpdate: () => Promise<UpdateInfo | null>;
+  /**
+   * Окно сохранило `ui.json` (`app:save-ui`): main реагирует на смену настроек сразу — включённая проверка новой
+   * версии идёт тут же (`main/update-check.ts`, `settingsChanged`). Вызывается после записи; не бросает.
+   */
+  onUiSaved?: () => void;
   setBadge: (count: number) => void;
   /** Раскладки работ, `layouts.json` (кусок 2.2 плана каркаса, спека 5.8). */
   layoutStore: LayoutStore;
@@ -254,6 +259,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     showNotification,
     takeFocusTarget,
     getUpdate,
+    onUiSaved,
     setBadge,
     layoutStore,
     uiStore,
@@ -412,7 +418,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
         throw new Error(`invalid ui.json patch: ${String(patch)}`);
       }
-      return uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
+      const saved = await uiStore.save(patch as Partial<Omit<UiFile, 'version'>>);
+      onUiSaved?.();
+      return saved;
     }),
   );
 

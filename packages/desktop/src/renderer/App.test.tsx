@@ -36,7 +36,10 @@ import type { TabSpec } from '../shared/layout-types.js';
 import { workKey } from '../shared/work-keys.js';
 
 // Тест 4 куска 4.3 проверяет вызов тоста, а не его разметку; `Toaster` остаётся настоящим.
-vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
+vi.mock('sonner', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('sonner')>()),
+  toast: Object.assign(vi.fn(), { dismiss: vi.fn() }),
+}));
 
 // Тест 6 открывает вкладку-терминал; настоящий xterm в jsdom падает на
 // `matchMedia` — поверхности тут не нужны, раскладка и диалог от них не зависят.
@@ -492,10 +495,12 @@ describe('App — тост о новой версии (V6 плана релиз�
   beforeEach(() => {
     useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: false });
     vi.mocked(toast).mockClear();
+    vi.mocked(toast.dismiss).mockClear();
   });
   afterEach(() => {
     useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: false });
     vi.mocked(toast).mockClear();
+    vi.mocked(toast.dismiss).mockClear();
   });
 
   it('main нашёл релиз новее — тост «Parley 0.2.0 is available»', async () => {
@@ -531,13 +536,13 @@ describe('App — тост о новой версии (V6 плана релиз�
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it('«Later» записывает версию в ui.json; новое подключение её уже не показывает', async () => {
+  it('смахнутый тост записывает версию в ui.json; новое подключение её уже не показывает', async () => {
     render(<App />);
     await settle();
     act(() => bridge.emitUpdate(update));
-    const options = vi.mocked(toast).mock.calls[0]?.[1] as unknown as { cancel: { onClick: () => void } };
+    const options = vi.mocked(toast).mock.calls[0]?.[1] as unknown as { onDismiss: () => void };
 
-    act(() => options.cancel.onClick());
+    act(() => options.onDismiss());
     await settle();
     expect((await bridge.app.loadUi()).dismissedUpdate).toBe('0.2.0');
 
@@ -548,6 +553,27 @@ describe('App — тост о новой версии (V6 плана релиз�
     await settle();
 
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  // «Later» — «позже», а не «никогда»: версия в ui.json не пишется, и на следующем подключении (как и при новом
+  // запуске окна) тост на месте.
+  it('«Later» версию в ui.json не записывает; новое подключение тост показывает снова', async () => {
+    render(<App />);
+    await settle();
+    act(() => bridge.emitUpdate(update));
+    const options = vi.mocked(toast).mock.calls[0]?.[1] as unknown as { cancel: { onClick: () => void } };
+
+    act(() => options.cancel.onClick());
+    await settle();
+    expect((await bridge.app.loadUi()).dismissedUpdate).toBeNull();
+
+    vi.mocked(toast).mockClear();
+    bridge.setPendingUpdate(update);
+    act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
+    act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
+    await settle();
+
+    expect(toast).toHaveBeenCalledWith('Parley 0.2.0 is available', expect.anything());
   });
 });
 

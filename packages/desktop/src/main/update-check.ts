@@ -7,8 +7,11 @@
  * разбор отвергает их ещё раз. Любая беда (нет сети, 403 от лимита GitHub, 404 до первого релиза, чужой JSON,
  * ответ больше предела, таймаут 10 с) — «нового нет» и тишина: человек про неё не узнаёт.
  *
+ * Идёт только у собранного окна (`app.isPackaged`): в разработке `app.getVersion()` — версия `package.json` ветки, и
+ * каждый `pnpm dev:desktop` ходил бы на api.github.com, а на новом релизе показывал бы тост окну разработки.
  * Выключается переключателем «Check for updates» (`ui.json`) и `PARLEY_UPDATE_CHECK=off` (тесты, E2E, закрытая
- * сеть); оба читаются перед каждой проверкой, так что выключение действует сразу.
+ * сеть); оба читаются перед каждой проверкой, так что выключение действует сразу, а включение переключателя
+ * запускает проверку тут же (`settingsChanged`), а не через сутки.
  */
 
 import { envValue, type Env } from '@parley/core';
@@ -23,6 +26,14 @@ export const MAX_RESPONSE_BYTES = 1024 * 1024;
 /** `PARLEY_UPDATE_CHECK=off`: проверки нет вовсе. Прочие значения (и пустое) её не трогают. */
 export function updateCheckOff(env: Env): boolean {
   return envValue(env, 'UPDATE_CHECK')?.trim().toLowerCase() === 'off';
+}
+
+/**
+ * Проверка вообще разрешена: окно собрано (`packaged`) и переменная её не выключила. Переключатель в настройках —
+ * отдельно, его читает `isEnabled` перед каждой проверкой.
+ */
+export function updateCheckAllowed(env: Env, packaged: boolean): boolean {
+  return packaged && !updateCheckOff(env);
 }
 
 interface ParsedVersion {
@@ -191,6 +202,12 @@ export interface UpdateChecker {
   /** Первая проверка — сразу, дальше раз в сутки. Повторный вызов ничего не меняет. */
   start(): void;
   stop(): void;
+  /**
+   * Окно сохранило настройки (`ui.json`). Проверка, ставшая включённой с прошлого чтения, идёт сразу, а не через
+   * сутки: человек включил переключатель — значит, хочет знать. Остальные сохранения (ширина сайдбара и прочее)
+   * ничего не делают; до `start` и после `stop` — тоже. Не бросает.
+   */
+  settingsChanged(): Promise<void>;
   /** Релиз новее запущенной версии из последней удачной проверки; `null` — его нет, проверка выключена или ещё не ответила. */
   latest(): Promise<UpdateInfo | null>;
 }
@@ -210,6 +227,9 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
   const { currentVersion, fetch, isEnabled, onUpdate, intervalMs = CHECK_INTERVAL_MS } = options;
   let found: UpdateInfo | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  // Была ли проверка включена при последнем чтении настройки (`check` и `settingsChanged`): переход «выключена →
+  // включена» — повод проверить сразу. `latest` его не трогает: у него свой, не связанный с переключателем повод.
+  let wasEnabled = false;
 
   // Отказ чтения настройки — «выключено»: лучше не спросить, чем спросить против воли человека.
   const enabled = async (): Promise<boolean> => {
@@ -223,7 +243,8 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
   // Не бросает никогда: отказавший промис без обработчика в main показал бы человеку окно с ошибкой JavaScript.
   const check = async (): Promise<void> => {
     try {
-      if (!(await enabled())) return;
+      wasEnabled = await enabled();
+      if (!wasEnabled) return;
       const release = await fetchLatestRelease(fetch);
       // Неудача проверки прежний ответ не отменяет: найденный релиз остаётся найденным.
       if (release === null) return;
@@ -244,6 +265,13 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       if (timer === null) return;
       clearInterval(timer);
       timer = null;
+    },
+    async settingsChanged() {
+      if (timer === null) return;
+      const on = await enabled();
+      const switchedOn = on && !wasEnabled;
+      wasEnabled = on;
+      if (switchedOn) await check();
     },
     latest: async () => ((await enabled()) ? found : null),
   };

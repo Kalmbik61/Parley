@@ -44,7 +44,8 @@ extraResources:
     to: licenses/Caprasimo-OFL.txt
   # Встроенный Node 22: `scripts/fetch-node.mjs` кладёт его в build/node/darwin-<arch>/bin/node, сюда он
   # попадает как Contents/Resources/node/bin/node — окно запускает им хост (`src/main/host-launcher.ts`),
-  # и человеку свой node не нужен. `${arch}` — архитектура собираемой цели. Нет каталога (сборка без
+  # и человеку свой node не нужен. Рядом едет LICENSE из архива Node (Contents/Resources/node/LICENSE): бинарь
+  # раздаётся вместе с текстом лицензии. `${arch}` — архитектура собираемой цели. Нет каталога (сборка без
   # `fetch-node`, например локальный `dist`) — electron-builder только предупреждает, а окно берёт node из PATH.
   - from: build/node/darwin-${arch}
     to: node

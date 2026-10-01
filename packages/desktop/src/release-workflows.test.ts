@@ -1,16 +1,20 @@
 /**
  * Страж workflow GitHub Actions (`.github/workflows/`, план релиза 0.1.0, V4 и V5). Файлы выполняются только на
  * GitHub, а ошибка в них всплывает в худший момент — при выпуске. Тест держит то, что нельзя менять случайно:
- * безопасность (имя тега и другие строки извне не попадают в `run`, токен — только в `env` шага, действия
- * закреплены), состав шагов CI и цепочку create-release → build-mac → publish-release.
+ * безопасность (имя тега и другие строки извне не попадают в `run`, токен — только в `env` шага, который зовёт
+ * `gh`, действия закреплены по SHA, права задач), состав шагов CI и цепочку create-release → build-mac →
+ * publish-release.
  *
  * YAML не разбирается: пакета для этого в зависимостях нет, а файлы пишутся в одном ровном стиле — хватает
- * регулярных выражений по тексту, как в `release-config.test.ts`.
+ * регулярных выражений по тексту, как в `release-config.test.ts`. Шаг проверки «коммит тега — в master» тест
+ * ещё и выполняет: берёт его `run` из файла и гоняет в настоящем git-репозитории во временном каталоге.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const workflowsDir = path.join(repoRoot, '.github', 'workflows');
@@ -19,14 +23,19 @@ const read = (name: string): string => readFileSync(path.join(workflowsDir, name
 const ci = read('ci.yml');
 const release = read('release.yml');
 
-/** Действия, которые workflow вправе брать, — каждое закреплено мажорной версией. Новое — осознанная правка списка. */
-const ALLOWED_ACTIONS = [
-  'actions/cache@v4',
-  'actions/checkout@v4',
-  'actions/setup-node@v4',
-  'actions/upload-artifact@v4',
-  'pnpm/action-setup@v4',
-];
+/**
+ * Действия, которые workflow вправе брать: каждое — по полному SHA коммита, версия — в комментарии рядом. Подвижный
+ * тег (`@v4`) переставляют без единого коммита в этом репозитории, и чужой код исполнялся бы в задаче с токеном на
+ * запись; SHA не переставить. Новое действие или новая версия — осознанная правка этого списка вместе с workflow
+ * (SHA — `git ls-remote --tags <репозиторий> <тег>`, у аннотированного тега — строка с `^{}`).
+ */
+const ALLOWED_ACTIONS: Record<string, { sha: string; version: string }> = {
+  'actions/cache': { sha: '0057852bfaa89a56745cba8c7296529d2fc39830', version: 'v4.3.0' },
+  'actions/checkout': { sha: '11d5960a326750d5838078e36cf38b85af677262', version: 'v4.4.0' },
+  'actions/setup-node': { sha: '49933ea5288caeca8642d1e84afbd3f7d6820020', version: 'v4.4.0' },
+  'actions/upload-artifact': { sha: 'ea165f8d65b6e75b540449e92b4886f43607fa02', version: 'v4.6.2' },
+  'pnpm/action-setup': { sha: 'b906affcce14559ad1aafd4ab0e942779e9f58b1', version: 'v4.3.0' },
+};
 
 /** Тексты всех `run:` файла: однострочные и блочные (`|`, `>` с `-`/`+`). Комментарии не попадают. */
 function runScripts(workflow: string): string[] {
@@ -51,6 +60,26 @@ function runScripts(workflow: string): string[] {
   return scripts;
 }
 
+/** Задачи файла: имя → текст от `  имя:` до следующей задачи. */
+function jobsOf(workflow: string): Map<string, string> {
+  const start = workflow.indexOf('\njobs:\n');
+  const text = workflow.slice(start + '\njobs:\n'.length);
+  const headers = [...text.matchAll(/^ {2}([\w-]+):\n/gm)];
+  const jobs = new Map<string, string>();
+  for (const [index, header] of headers.entries()) {
+    const end = headers[index + 1]?.index ?? text.length;
+    jobs.set(header[1] ?? '', text.slice(header.index, end));
+  }
+  return jobs;
+}
+
+/** Шаги задачи: текст от `      - name:` до следующего шага. */
+function stepsOf(job: string): string[] {
+  return job.split(/^(?= {6}- )/m).slice(1);
+}
+
+const stepName = (step: string): string => /^ {6}- name: (.+)$/m.exec(step)?.[1] ?? '(без имени)';
+
 describe('workflow: общие правила безопасности', () => {
   it('есть ci.yml и release.yml', () => {
     expect(names).toEqual(expect.arrayContaining(['ci.yml', 'release.yml']));
@@ -73,18 +102,26 @@ describe('workflow: общие правила безопасности', () => {
     },
   );
 
-  it.each(names)('%s: действия — из закреплённого списка, с мажорной версией', (name) => {
-    const used = [...read(name).matchAll(/^\s*(?:-\s+)?uses:\s*(\S+)\s*$/gm)].map(
-      (match) => match[1],
-    );
+  it.each(names)(
+    '%s: действия — из закреплённого списка, по полному SHA коммита, с версией в комментарии',
+    (name) => {
+      const used = [...read(name).matchAll(/^\s*(?:-\s+)?uses:\s*(.+?)\s*$/gm)].map(
+        (match) => match[1] ?? '',
+      );
 
-    expect(used.length).toBeGreaterThan(0);
-    for (const action of used) expect(ALLOWED_ACTIONS, `${name}: ${action}`).toContain(action);
-  });
+      expect(used.length).toBeGreaterThan(0);
+      for (const line of used) {
+        const match = /^([\w.-]+\/[\w.-]+)@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)$/.exec(line);
+        expect(match, `${name}: «${line}» — не вида «имя@<40 hex> # vX.Y.Z»`).not.toBeNull();
+        const [, action = '', sha, version] = match ?? [];
+        expect(ALLOWED_ACTIONS[action], `${name}: ${action}`).toEqual({ sha, version });
+      }
+    },
+  );
 
   it.each(names)('%s: checkout не оставляет токен в .git (persist-credentials: false)', (name) => {
     const text = read(name);
-    const checkouts = text.match(/uses: actions\/checkout@v4/g) ?? [];
+    const checkouts = text.match(/uses: actions\/checkout@[0-9a-f]{40}/g) ?? [];
 
     expect(checkouts.length).toBeGreaterThan(0);
     expect(text.match(/^\s+persist-credentials: false$/gm) ?? []).toHaveLength(checkouts.length);
@@ -127,8 +164,8 @@ describe('ci.yml (V4)', () => {
   it('pnpm — той версии, что в packageManager корня: своей version у action-setup нет', () => {
     for (const text of [ci, release]) {
       // Шаг — до пустой строки: от `uses:` и его `with:` (если есть).
-      const step = text.slice(text.indexOf('uses: pnpm/action-setup@v4')).split('\n\n')[0] ?? '';
-      expect(step).toContain('pnpm/action-setup@v4');
+      const step = text.slice(text.indexOf('uses: pnpm/action-setup@')).split('\n\n')[0] ?? '';
+      expect(step).toContain('pnpm/action-setup@');
       expect(step).not.toMatch(/\bversion:/);
     }
     const manifest = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as {
@@ -148,8 +185,15 @@ describe('release.yml (V5)', () => {
     );
   });
 
-  it('права — contents: write; один прогон на ref, прерывать нельзя', () => {
-    expect(release).toMatch(/^permissions:\n {2}contents: write\n(?! )/m);
+  it('права: по умолчанию чтение, запись — у трёх задач, и каждая просит её у себя; один прогон на ref, прерывать нельзя', () => {
+    expect(release).toMatch(/^permissions:\n {2}contents: read\n(?! )/m);
+    const jobs = jobsOf(release);
+    expect([...jobs.keys()]).toEqual(['create-release', 'build-mac', 'publish-release']);
+    for (const [name, job] of jobs) {
+      expect(job, `${name}: права задачи`).toMatch(
+        /^ {4}permissions:\n {6}contents: write\n(?! {6})/m,
+      );
+    }
     expect(release).toMatch(
       /^concurrency:\n {2}group: release-\$\{\{ github\.ref \}\}\n {2}cancel-in-progress: false\n/m,
     );
@@ -188,7 +232,6 @@ describe('release.yml (V5)', () => {
       'pnpm build',
       'pnpm --filter @parley/desktop fetch-node arm64 x64',
       'pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish never',
-      'pnpm --filter @parley/desktop dist --mac --arm64 --x64 --publish always',
       'bash scripts/release/verify-packaged-apps.sh',
     ].map((command) => scripts.indexOf(command));
     expect(
@@ -199,33 +242,72 @@ describe('release.yml (V5)', () => {
   });
 
   it('кэш electron и electron-builder — по pnpm-lock', () => {
-    expect(release).toContain('uses: actions/cache@v4');
+    expect(release).toMatch(/uses: actions\/cache@[0-9a-f]{40} # v4\.\d+\.\d+/);
     expect(release).toMatch(/^ {12}~\/Library\/Caches\/electron$/m);
     expect(release).toMatch(/^ {12}~\/Library\/Caches\/electron-builder$/m);
     expect(release).toContain("hashFiles('pnpm-lock.yaml')");
   });
 
-  it('публикация и загрузка — только в настоящем релизе; пробный прогон кладёт файлы в артефакты', () => {
+  it('загрузка в релиз — только в настоящем релизе; пробный прогон кладёт файлы в артефакты', () => {
     expect(release).toMatch(
-      /- name: Package for macOS \(dry run\)\n\s+if: needs\.create-release\.result == 'skipped'\n/,
-    );
-    expect(release).toMatch(
-      /- name: Package for macOS and upload to the draft release\n\s+if: needs\.create-release\.result == 'success'\n/,
+      /- name: Upload the files to the draft release\n\s+if: needs\.create-release\.result == 'success'\n/,
     );
     expect(release).toMatch(
       /- name: Keep the files as run artifacts\n\s+if: needs\.create-release\.result == 'skipped'\n/,
     );
-    expect(release.match(/--publish always/g)).toHaveLength(1);
   });
 
-  it('SHA256SUMS.txt по всем dmg и zip уходит в релиз', () => {
+  it('electron-builder ничего не публикует (--publish never) и токена у сборки нет: файлы в черновик кладёт шаг ниже', () => {
+    const scripts = runScripts(release);
+    expect(scripts.filter((script) => script.includes('--publish always'))).toEqual([]);
+    expect(scripts.filter((script) => script.includes('--publish never'))).toHaveLength(1);
+    // Шаг один на оба режима: пробный прогон и настоящий собирают одной командой.
+    expect(release).not.toMatch(/- name: Package for macOS \(dry run\)/);
+  });
+
+  it('токен — только у шагов, которые зовут gh или скрипты scripts/release; сборка и установка зависимостей его не получают', () => {
+    let withToken = 0;
+    for (const [jobName, job] of jobsOf(release)) {
+      for (const step of stepsOf(job)) {
+        if (!step.includes('GH_TOKEN')) continue;
+        withToken += 1;
+        const script = runScripts(step).join('\n');
+        const where = `${jobName} / ${stepName(step)}`;
+        expect(script, where).toMatch(/\bgh (?:api|release) |node scripts\/release\//);
+        expect(script, where).not.toMatch(/\b(?:pnpm|npm|npx|yarn|electron-builder)\b/);
+      }
+    }
+    // create-release (черновик), build-mac (загрузка, гейт), publish-release (проверка, публикация).
+    expect(withToken).toBe(5);
+  });
+
+  it('загрузка в черновик — после сборки, проверки собранного и SHA256SUMS.txt: битые файлы в релиз не попадают', () => {
+    const names = stepsOf(jobsOf(release).get('build-mac') ?? '').map(stepName);
+    const at = (name: string): number => {
+      expect(names, name).toContain(name);
+      return names.indexOf(name);
+    };
+
+    expect(at('Package for macOS')).toBeLessThan(at('Verify the packaged apps'));
+    expect(at('Verify the packaged apps')).toBeLessThan(at('Create SHA256SUMS.txt'));
+    expect(at('Create SHA256SUMS.txt')).toBeLessThan(at('Upload the files to the draft release'));
+    expect(at('Upload the files to the draft release')).toBeLessThan(
+      at('Check the release is still a draft'),
+    );
+  });
+
+  it('SHA256SUMS.txt по всем dmg и zip уходит в релиз вместе с файлами сборки', () => {
     const scripts = runScripts(release);
 
     expect(
       scripts.some((script) => script.includes('shasum -a 256 *.dmg *.zip > SHA256SUMS.txt')),
     ).toBe(true);
+    // Те же файлы, что публиковал бы electron-builder (dmg, zip, blockmap, latest-mac.yml), и сверка сумм.
     expect(scripts).toContain(
-      'gh release upload "$TAG" packages/desktop/dist/SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"',
+      'gh release upload "$TAG" *.dmg *.zip *.blockmap latest-mac.yml SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"',
+    );
+    expect(release).toMatch(
+      /- name: Upload the files to the draft release\n(?: {8}.*\n)*? {8}working-directory: packages\/desktop\/dist\n/,
     );
   });
 
@@ -259,6 +341,23 @@ describe('release.yml (V5)', () => {
     );
   });
 
+  it('create-release забирает всю историю: без неё нельзя проверить, что коммит тега лежит в master', () => {
+    const checkout = stepsOf(jobsOf(release).get('create-release') ?? '').find(
+      (step) => stepName(step) === 'Checkout',
+    );
+
+    expect(checkout).toMatch(/^ {10}fetch-depth: 0$/m);
+    expect(checkout).toMatch(/^ {10}persist-credentials: false$/m);
+  });
+
+  it('проверка коммита тега идёт после разбора тега и до создания черновика', () => {
+    const names = stepsOf(jobsOf(release).get('create-release') ?? '').map(stepName);
+    const check = names.indexOf('Check the tagged commit is in master');
+
+    expect(check).toBeGreaterThan(names.indexOf('Check the tag and read the release notes'));
+    expect(check).toBeLessThan(names.indexOf('Create the draft release'));
+  });
+
   it('все скрипты, которые зовут workflow, лежат в репозитории', () => {
     const referenced = new Set(
       [...runScripts(release), ...runScripts(ci)].flatMap(
@@ -269,5 +368,77 @@ describe('release.yml (V5)', () => {
     expect(referenced.size).toBeGreaterThanOrEqual(4);
     for (const script of referenced)
       expect(existsSync(path.join(repoRoot, script)), script).toBe(true);
+  });
+});
+
+describe('release.yml: шаг «коммит тега лежит в master» — выполняется как написан', () => {
+  const script =
+    runScripts(release).find((text) => text.includes('merge-base --is-ancestor')) ?? '';
+  let repo = '';
+
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'T',
+    GIT_AUTHOR_EMAIL: 't@example.test',
+    GIT_COMMITTER_NAME: 'T',
+    GIT_COMMITTER_EMAIL: 't@example.test',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const git = (...args: string[]): string => {
+    const result = spawnSync('git', args, { cwd: repo, env, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+    return result.stdout.trim();
+  };
+  const commit = (file: string): string => {
+    writeFileSync(path.join(repo, file), file);
+    git('add', file);
+    git('commit', '-q', '-m', file);
+    return git('rev-parse', 'HEAD');
+  };
+  const runStep = () => spawnSync('bash', ['-c', script], { cwd: repo, env, encoding: 'utf8' });
+
+  beforeEach(() => {
+    repo = mkdtempSync(path.join(tmpdir(), 'rel-master-'));
+    git('init', '-q');
+    git('symbolic-ref', 'HEAD', 'refs/heads/master');
+  });
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('шаг в файле есть', () => {
+    expect(script).toContain('git merge-base --is-ancestor HEAD origin/master');
+  });
+
+  it('тег на коммите из истории master (и на его конце) — проходит', () => {
+    const first = commit('a');
+    commit('b');
+    // Так выглядит master после `actions/checkout` с `fetch-depth: 0`: ветка — как удалённая `origin/master`.
+    git('update-ref', 'refs/remotes/origin/master', 'HEAD');
+
+    git('checkout', '-q', '--detach', first);
+    expect(runStep().status).toBe(0);
+    git('checkout', '-q', '--detach', 'master');
+    expect(runStep().status).toBe(0);
+  });
+
+  it('тег на коммите ветки, которой нет в master, — релиз не создаётся', () => {
+    commit('a');
+    git('update-ref', 'refs/remotes/origin/master', 'HEAD');
+    git('checkout', '-q', '-b', 'feat/release');
+    commit('c');
+
+    const result = runStep();
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toMatch(/^::error::The tagged commit is not in the history of master/m);
+  });
+
+  it('master не найден (нет origin/master) — тоже отказ, а не тихий пропуск', () => {
+    commit('a');
+
+    expect(runStep().status).not.toBe(0);
   });
 });

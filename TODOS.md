@@ -524,13 +524,30 @@ CHANGELOG, лицензия MIT. Открыто:
 
 - **Релизный workflow ещё не прогонялся на GitHub.** `release.yml` проверен вычиткой, тестами
   (`release-workflows.test.ts`, `release-scripts.test.ts`) и локальной сборкой теми же командами,
-  но кнопка «Run workflow» появляется в Actions, только когда файл лежит в master. Порядок:
+  но кнопка «Run workflow» появляется в Actions, только когда файл лежит в master. Больше всего
+  на GitHub ещё не видели шаги `Upload the files to the draft release` (`gh release upload` после
+  `--publish never`) и `Check the tagged commit is in master` (`fetch-depth: 0` даёт `origin/master`;
+  сам шаг тест выполняет на настоящем git-репозитории). Порядок:
   слить ветку в master → Actions → Release → Run workflow (`dry_run` по умолчанию включён,
   собранное остаётся в артефактах прогона) → тег `v0.1.0`; публикует `publish-release` после
   проверки файлов. Заодно живая проверка скачанной сборки (к прогону 2, «Собранный
   `Parley.app` из Finder»): dmg → Applications → «Open Anyway»; запуск на машине без node в
   `PATH` — хост поднимается встроенным node; приложение в каталоге с пробелом; Intel-сборка на
   настоящем Intel-маке — её собирали и проверяли только на arm64.
+- **Релиз: что осталось после ревью релизного workflow.**
+  - права: `build-mac` получает `contents: write` и в пробном прогоне (GitHub не даёт задать права
+    задачи по условию), хотя токен берёт только шаг загрузки. Чтобы у сборки права записи не было
+    вовсе, разделить её на задачу сборки (чтение, артефакты Actions) и задачу выкладки (запись,
+    `gh release upload`). Подводный камень — имя артефакта при «Re-run failed jobs»: у частично
+    перезапущенного прогона другой `run_attempt`;
+  - коммит тега: `create-release` проверяет, что он лежит в master, но не что CI на нём зелёный.
+    Нужны `checks: read` у задачи и опрос check-runs коммита (или environment с ручным одобрением у
+    `publish-release`);
+  - действия закреплены по SHA на мажоре v4 (`ALLOWED_ACTIONS` в `release-workflows.test.ts`);
+    обновлять осознанно, SHA — `git ls-remote --tags <репозиторий> <тег>`, у аннотированного тега
+    строка с `^{}`;
+  - Intel: `scripts/release/verify-packaged-apps.sh` запускает встроенный node x64 под Rosetta, если
+    она есть на раннере; нет — предупреждение, и x64 проверен только по файлам.
 - **Linux** (x64 и arm64, AppImage и deb). Решение 2026-09-30: клавиши — Ctrl+Shift+буква, на
   macOS остаётся ⌘.
   - клавиши: реестр `shared/keybindings.ts` описан акселераторами `CmdOrCtrl+…`, а обработчики
@@ -570,7 +587,8 @@ CHANGELOG, лицензия MIT. Открыто:
     встроенный node (JIT V8) и `node-pty` (`spawn-helper`). Сертификат и пароли — в секретах
     Actions, не в репозитории;
   - затем `electron-updater`: на macOS Squirrel.Mac без подписи не работает. `latest-mac.yml` и
-    blockmap electron-builder уже кладёт в релиз, `app-update.yml` лежит в
+    blockmap `release.yml` уже кладёт в релиз (`gh release upload` после проверки собранного;
+    electron-builder идёт с `--publish never`), `app-update.yml` лежит в
     `Contents/Resources`, но читать его пока нечем. Тост из `main/update-check.ts` тогда уступает
     место или остаётся запасным;
   - Homebrew cask (`Casks/parley.rb`): имена файлов без версии, ссылки

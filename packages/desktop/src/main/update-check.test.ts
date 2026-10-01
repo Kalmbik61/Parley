@@ -14,6 +14,7 @@ import {
   MAX_RESPONSE_BYTES,
   parseLatestRelease,
   RELEASES_LATEST_URL,
+  updateCheckAllowed,
   updateCheckOff,
   type UpdateFetch,
 } from './update-check.js';
@@ -419,6 +420,74 @@ describe('createUpdateChecker', () => {
     checker.stop();
   });
 
+  it('settingsChanged: включили проверку — она идёт сразу, а не через сутки', async () => {
+    const { fetch, onUpdate, isEnabled, checker } = setup({ enabled: false });
+    checker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).not.toHaveBeenCalled();
+
+    isEnabled.mockReturnValue(true);
+    await checker.settingsChanged();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledWith(NEWER);
+    await expect(checker.latest()).resolves.toEqual(NEWER);
+    checker.stop();
+  });
+
+  it('settingsChanged: прочие сохранения настроек проверку не запускают; запускает только переход «выключена → включена»', async () => {
+    const { fetch, isEnabled, checker } = setup();
+    checker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Ширина сайдбара и прочее: проверка как была включена, так и осталась.
+    await checker.settingsChanged();
+    await checker.settingsChanged();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Выключили — тишина, и повторные сохранения тоже.
+    isEnabled.mockReturnValue(false);
+    await checker.settingsChanged();
+    await checker.settingsChanged();
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    // Включили снова — проверка, но один раз.
+    isEnabled.mockReturnValue(true);
+    await checker.settingsChanged();
+    await checker.settingsChanged();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    checker.stop();
+  });
+
+  it('settingsChanged до start и после stop проверку не запускает', async () => {
+    const { fetch, isEnabled, checker } = setup({ enabled: false });
+    isEnabled.mockReturnValue(true);
+    await checker.settingsChanged();
+    expect(fetch).not.toHaveBeenCalled();
+
+    isEnabled.mockReturnValue(false);
+    checker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    checker.stop();
+    isEnabled.mockReturnValue(true);
+    await checker.settingsChanged();
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('settingsChanged не бросает, даже если настройку не прочитать: отказ — это «выключено»', async () => {
+    const { fetch, isEnabled, checker } = setup();
+    checker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    isEnabled.mockRejectedValue(new Error('ui.json unreadable'));
+
+    await expect(checker.settingsChanged()).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    checker.stop();
+  });
+
   it('isEnabled может быть асинхронным; отказ чтения настройки — выключено, а не исключение', async () => {
     const { fetch, isEnabled, checker } = setup();
     isEnabled.mockResolvedValue(true);
@@ -514,5 +583,21 @@ describe('updateCheckOff — PARLEY_UPDATE_CHECK=off', () => {
 
   it('переменной нет вовсе — проверка идёт', () => {
     expect(updateCheckOff({})).toBe(false);
+  });
+});
+
+describe('updateCheckAllowed — проверка только у собранного окна', () => {
+  // В разработке (`pnpm dev:desktop`, E2E) `app.getVersion()` — версия package.json ветки: проверка ходила бы на
+  // GitHub при каждом запуске и показывала бы тост окну разработки.
+  it('окно не собрано (разработка) — проверки нет, что бы ни говорило окружение', () => {
+    expect(updateCheckAllowed({}, false)).toBe(false);
+    expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: 'on' }, false)).toBe(false);
+    expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: 'off' }, false)).toBe(false);
+  });
+
+  it('окно собрано — проверка идёт, пока PARLEY_UPDATE_CHECK не off', () => {
+    expect(updateCheckAllowed({}, true)).toBe(true);
+    expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: 'on' }, true)).toBe(true);
+    expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: ' OFF ' }, true)).toBe(false);
   });
 });

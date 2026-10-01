@@ -108,6 +108,23 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     expect(usedIn('layout/Tab.tsx')).toBe(false);
   });
 
+  // Бинарь Node.js в dmg и zip раздаётся вместе с текстом его лицензии (MIT Node.js и лицензии V8, OpenSSL, ICU):
+  // `fetch-node.mjs` достаёт `LICENSE` из архива, `extraResources` несёт каталог целиком, NOTICE называет место.
+  it('NOTICE: Node.js — бинарь и его лицензия едут вместе, в Contents/Resources/node', () => {
+    const rule = `\n${'-'.repeat(78)}`;
+    const underline = notice.indexOf(rule, notice.indexOf('\nNode.js\n'));
+    const next = notice.indexOf(rule, underline + 1);
+    const section = notice.slice(underline, next === -1 ? undefined : next);
+
+    expect(section).toContain('Contents/Resources/node/bin/node');
+    expect(section).toContain('Contents/Resources/node/LICENSE');
+    expect(section).toMatch(/V8, OpenSSL, ICU/);
+    // Лицензию кладёт тот же скрипт, что и бинарь, и называет её тем же именем, что в архиве Node.
+    const fetchNode = readFileSync(path.join(desktopRoot, 'scripts', 'fetch-node.mjs'), 'utf8');
+    expect(fetchNode).toContain('${top}/LICENSE');
+    expect(builder).toMatch(/- from: build\/node\/darwin-\$\{arch\}\n\s+to: node\n/);
+  });
+
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
     expect(notice).toContain('packages/desktop/src/renderer/terminal/xterm-themes.ts');
   });

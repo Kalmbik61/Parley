@@ -95,6 +95,7 @@ function setup(
     notesStore?: NotesStore;
     roots?: RootsRegistry;
     webContents?: Map<number, unknown>;
+    onUiSaved?: () => void;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -184,6 +185,7 @@ function setup(
     showNotification,
     takeFocusTarget,
     getUpdate,
+    ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -670,6 +672,29 @@ describe('registerIpc — app:get-update (V6 плана релиза 0.1.0)', ()
     getUpdate.mockRejectedValueOnce(new Error('boom'));
 
     expect(await codeOf(ipcMain.invoke('app:get-update'))).toBe('failed');
+  });
+
+  it('app:save-ui после записи зовёт onUiSaved (включённая проверка версии идёт сразу); без записи — не зовёт', async () => {
+    const order: string[] = [];
+    const uiStore: UiStore = {
+      load: vi.fn().mockResolvedValue(DEFAULT_UI),
+      save: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          order.push('save');
+          return DEFAULT_UI;
+        })
+        .mockRejectedValueOnce(new Error('диск сломался')),
+    };
+    const onUiSaved = vi.fn(() => order.push('onUiSaved'));
+    const { ipcMain } = setup({ uiStore, onUiSaved });
+
+    await ipcMain.invoke('app:save-ui', { checkForUpdates: true });
+    expect(order).toEqual(['save', 'onUiSaved']);
+
+    await expect(ipcMain.invoke('app:save-ui', { checkForUpdates: false })).rejects.toThrow('диск сломался');
+    await expect(ipcMain.invoke('app:save-ui', [1])).rejects.toThrow();
+    expect(onUiSaved).toHaveBeenCalledTimes(1);
   });
 
   it('app:save-ui пропускает ключи проверки версии как есть: слияние и нормализацию делает UiStore', async () => {

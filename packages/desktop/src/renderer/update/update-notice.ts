@@ -5,13 +5,15 @@
  *
  * Тост один на окно (`UPDATE_TOAST_ID`): та же версия приходит не раз — проверка идёт раз в сутки, а подписка
  * после обрыва связи заводится заново, — и повтор обновляет стоящий тост на месте. Стоит, пока человек его не
- * закроет: у `Infinity` нет таймера, а закрытая версия записывается в `ui.json` (`dismissedUpdate`), и о ней тост
- * больше не появится; о более новой — появится. Закрытие — любое: «Later», «Download» (человек получил ссылку) и
- * смахивание самого тоста.
+ * закроет: у `Infinity` нет таймера. Версия записывается в `ui.json` (`dismissedUpdate`), и о ней тост больше не
+ * появится (о более новой — появится), когда человек её закрыл: «Download» (он получил ссылку) или смахнул тост.
+ * «Later» — только закрыть тост: он вернётся со следующей проверкой, при новом запуске или после переподключения
+ * к хосту. Записанное «Later» значило бы «никогда», хотя кнопка обещает обратное.
  *
  * Решает по зеркалу `ui.json` (`store/ui.ts`): пока оно не загружено (`uiLoaded`), решать нечем — иначе уже
  * закрытая версия показалась бы на миг до ответа `app.loadUi()`. Переключатель «Check for updates» выключен —
- * тоста нет, даже если main успел найти релиз.
+ * тоста нет, даже если main успел найти релиз; выключили при стоящем тосте — он снимается, включили — найденное
+ * снова на виду (main при этом проверяет сразу, `settingsChanged`).
  */
 
 import { toast } from 'sonner';
@@ -25,8 +27,12 @@ export function wireUpdateNotice(bridge: ParleyBridge): () => void {
   let info: UpdateInfo | null = null;
 
   const dismiss = (version: string): void => {
+    const { ui } = useUiStore.getState();
+    // Переключатель выключен: тост снят нами же (`toast.dismiss` ниже), а его `onDismiss` — не решение человека.
+    // Запись «закрыто» спрятала бы версию и после того, как он включит проверку обратно.
+    if (!ui.checkForUpdates) return;
     // Повтор того же значения не пишется: `patchUi` на каждое закрытие слал бы файл заново.
-    if (useUiStore.getState().ui.dismissedUpdate === version) return;
+    if (ui.dismissedUpdate === version) return;
     useUiStore.getState().patchUi({ dismissedUpdate: version });
   };
 
@@ -47,7 +53,8 @@ export function wireUpdateNotice(bridge: ParleyBridge): () => void {
             .catch((error: unknown) => console.warn('[parley] openExternal', error));
         },
       },
-      cancel: { label: S.update.later, onClick: () => dismiss(version) },
+      // Только закрыть: sonner закрывает тост сам. Версия не записывается — «позже» не «никогда».
+      cancel: { label: S.update.later, onClick: () => {} },
       // Смахивание тоста: кнопки sonner `onDismiss` не зовёт — у них свои обработчики выше.
       onDismiss: () => dismiss(version),
     });
@@ -60,6 +67,10 @@ export function wireUpdateNotice(bridge: ParleyBridge): () => void {
   // `ui.json` приходит после подписки: версия, найденная раньше, показывается, когда решать уже есть чем.
   const offUi = useUiStore.subscribe((state, prev) => {
     if (state.uiLoaded && !prev.uiLoaded) show();
+    if (state.ui.checkForUpdates === prev.ui.checkForUpdates) return;
+    // Переключатель «Check for updates»: выключили — стоящий тост снимается, включили — найденное снова на виду.
+    if (state.ui.checkForUpdates) show();
+    else toast.dismiss(UPDATE_TOAST_ID);
   });
   return () => {
     off();

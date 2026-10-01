@@ -48,7 +48,7 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
-import { createUpdateChecker, updateCheckOff } from './update-check.js';
+import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
@@ -397,13 +397,16 @@ if (!gotLock) {
     // Проверка новой версии (V6 плана релиза 0.1.0): при старте и раз в сутки main спрашивает GitHub о последнем
     // релизе (`main/update-check.ts`). Окно получает найденное событием `app:update-available`, а то, что найдено до
     // его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update`. Сеть — стеком
-    // Chromium (`net.fetch`: системный прокси), без токенов и куки. Выключена `PARLEY_UPDATE_CHECK=off` (E2E:
-    // `playwright.config.ts`; значение — из окружения login-shell, как прочие `PARLEY_*`) или переключателем в
-    // настройках (`ui.json`); оба читаются перед каждой проверкой.
+    // Chromium (`net.fetch`: системный прокси), без токенов и куки. Идёт только у собранного окна: в разработке
+    // `app.getVersion()` — версия `package.json` ветки, и `pnpm dev:desktop` ходил бы на GitHub зря. Выключена
+    // `PARLEY_UPDATE_CHECK=off` (E2E: `playwright.config.ts`; значение — из окружения login-shell, как прочие
+    // `PARLEY_*`; не снялось окружение оболочки — из окружения окна) или переключателем в настройках (`ui.json`);
+    // оба читаются перед каждой проверкой. Включённый переключатель проверяет сразу: `onUiSaved` ниже.
     const updates = createUpdateChecker({
       currentVersion: app.getVersion(),
       fetch: (url, init) => net.fetch(url, init),
-      isEnabled: async () => !updateCheckOff(shellEnv.env) && (await uiStore.load()).checkForUpdates,
+      isEnabled: async () =>
+        updateCheckAllowed(shellEnv.env, app.isPackaged) && (await uiStore.load()).checkForUpdates,
       onUpdate: (info) => {
         const window = mainWindow;
         // Окно ещё грузится — событие ушло бы в пустоту (прелоад не подписан): оно спросит само, `app:get-update`.
@@ -418,6 +421,7 @@ if (!gotLock) {
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
+      onUiSaved: () => void updates.settingsChanged(),
       notesStore: createNotesStore(),
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;

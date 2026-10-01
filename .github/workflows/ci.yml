@@ -1,5 +1,6 @@
 # CI (план релиза 0.1.0, V4): сборка, типы, линтер и юнит-тесты всех пакетов на каждый pull request и на
 # каждый push в master. E2E окна здесь пока не гоняются — пункт в TODOS.
+# Чужие действия — по полному SHA коммита, версия в комментарии (почему и как обновлять — в шапке release.yml).
 name: CI
 
 on:
@@ -22,16 +23,16 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       # Версию pnpm action-setup берёт из `packageManager` корневого package.json: своей строки у него нет.
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm

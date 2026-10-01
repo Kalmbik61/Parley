@@ -25,6 +25,7 @@ Download `parley-macos-arm64.dmg` (Apple Silicon) or `parley-macos-x64.dmg` (Int
 
 ### Known limitations
 
-- The app is not signed with an Apple Developer ID and is not notarized, so the first launch needs the steps above.
-- It does not update itself: the window only tells you about a new release.
+- The app is not signed with an Apple Developer ID and is not notarized, so the first launch needs the steps above. Every downloaded build is a new app to macOS: the steps repeat after each update, and macOS may ask again for access to folders such as Documents, Desktop and Downloads.
+- It does not update itself: the window only tells you about a new release. After replacing the app, choose "Restart host…" in the palette (⌘J): agents started by the old version keep paths into the old app (status line, MCP server, Codex notifications).
+- The Intel build is made on an Apple Silicon machine and has not been tested on an Intel Mac yet.
 - macOS only. Linux and Windows are not supported yet.

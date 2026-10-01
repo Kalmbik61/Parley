@@ -1,6 +1,7 @@
 /**
  * Тост о новой версии (V6 плана релиза 0.1.0): «Parley X.Y.Z is available» с кнопками «Download» и «Later»,
- * закрытая версия — в `ui.json`, переключатель «Check for updates» и ожидание загрузки зеркала `ui.json`.
+ * закрытая версия («Download», смахнули) — в `ui.json`, «Later» — только закрыть тост, переключатель
+ * «Check for updates» (выключили — тост снимается, включили — возвращается) и ожидание загрузки зеркала `ui.json`.
  * Мост подставной, `sonner` тоже: проверяется вызов тоста и поведение его кнопок, а не разметка.
  */
 
@@ -12,7 +13,7 @@ import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { UPDATE_TOAST_ID, wireUpdateNotice } from './update-notice.js';
 
-vi.mock('sonner', () => ({ toast: vi.fn() }));
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { dismiss: vi.fn() }) }));
 
 const INFO: UpdateInfo = {
   version: '0.2.0',
@@ -53,6 +54,7 @@ beforeEach(async () => {
   bridge = createFakeBridge();
   unwire = [];
   vi.mocked(toast).mockClear();
+  vi.mocked(toast.dismiss).mockClear();
   useUiStore.setState({ ui: DEFAULT_UI, uiLoaded: false });
   // `patchUi` пишет через мост, запомненный в `init`; зеркало `ui.json` загружается ответом `app.loadUi()`.
   disposeUi = useUiStore.getState().init(bridge);
@@ -127,7 +129,9 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     expect(useUiStore.getState().ui.dismissedUpdate).toBe('0.2.0');
   });
 
-  it('Later закрывает версию в ui.json и ничего не открывает', () => {
+  // «Later» обещает «позже», а не «никогда»: записанная в ui.json версия не показалась бы больше ни при новом запуске,
+  // ни на следующий день, пока не выйдет более новая.
+  it('Later только закрывает тост: версия в ui.json не записывается, ничего не открывается, а следующая проверка снова скажет', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
     bridge.emitUpdate(INFO);
@@ -135,9 +139,13 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     lastToast().options.cancel.onClick();
 
     expect(bridge.externalOpened).toEqual([]);
-    expect(saveUi).toHaveBeenCalledTimes(1);
-    expect(saveUi).toHaveBeenCalledWith({ dismissedUpdate: '0.2.0' });
-    expect(useUiStore.getState().ui.dismissedUpdate).toBe('0.2.0');
+    expect(saveUi).not.toHaveBeenCalled();
+    expect(useUiStore.getState().ui.dismissedUpdate).toBeNull();
+    // Проверка раз в сутки (или новый запуск) находит тот же релиз — тост на месте.
+    vi.mocked(toast).mockClear();
+    bridge.emitUpdate({ ...INFO });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(lastToast().message).toBe('Parley 0.2.0 is available');
   });
 
   it('смахивание тоста (onDismiss) закрывает версию так же', () => {
@@ -158,9 +166,10 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     bridge.emitUpdate(INFO);
     const { options } = lastToast();
 
-    options.cancel.onClick();
     options.onDismiss();
     options.action.onClick();
+    options.cancel.onClick();
+    options.onDismiss();
 
     expect(saveUi).toHaveBeenCalledTimes(1);
   });
@@ -168,7 +177,8 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
   it('закрытая версия больше не показывается — ни тем же событием, ни при новой подписке; более новая показывается', () => {
     wire();
     bridge.emitUpdate(INFO);
-    lastToast().options.cancel.onClick();
+    // Закрыть насовсем — смахнуть тост; «Later» версию не закрывает.
+    lastToast().options.onDismiss();
     vi.mocked(toast).mockClear();
 
     bridge.emitUpdate(INFO);
@@ -210,16 +220,57 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
 });
 
 describe('wireUpdateNotice — переключатель и загрузка ui.json', () => {
-  it('«Check for updates» выключен — тоста нет, даже если main успел найти релиз; включили — следующее сообщение показывает', () => {
+  it('«Check for updates» выключен — тоста нет, даже если main успел найти релиз; включили — найденное показывается сразу', () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false } });
     wire();
 
     bridge.emitUpdate(INFO);
     expect(toast).not.toHaveBeenCalled();
 
+    // Без нового сообщения от main: оно придёт, когда main проверит (`settingsChanged`), а найденное уже на виду.
     useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: true } });
-    bridge.emitUpdate(INFO);
     expect(toast).toHaveBeenCalledTimes(1);
+    expect(lastToast().message).toBe('Parley 0.2.0 is available');
+  });
+
+  it('выключили переключатель при стоящем тосте — тост снимается, а `onDismiss` этого снятия версию не закрывает', () => {
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    wire();
+    bridge.emitUpdate(INFO);
+    const { options } = lastToast();
+
+    useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false } });
+
+    expect(toast.dismiss).toHaveBeenCalledTimes(1);
+    expect(toast.dismiss).toHaveBeenCalledWith(UPDATE_TOAST_ID);
+    // sonner зовёт `onDismiss` и при снятии программой, не только при смахивании человеком.
+    options.onDismiss();
+    expect(saveUi).not.toHaveBeenCalled();
+    expect(useUiStore.getState().ui.dismissedUpdate).toBeNull();
+
+    // Включил обратно — версия не спрятана: тост снова.
+    vi.mocked(toast).mockClear();
+    useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: true } });
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('переключатель, не менявшийся, тост не трогает: чужие правки ui.json его не снимают', () => {
+    wire();
+    bridge.emitUpdate(INFO);
+
+    useUiStore.setState({ ui: { ...DEFAULT_UI, appearance: 'dark' } });
+
+    expect(toast.dismiss).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('включили переключатель, а найденного релиза нет, — тоста нет', () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false } });
+    wire();
+
+    useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: true } });
+
+    expect(toast).not.toHaveBeenCalled();
   });
 
   it('пока зеркало ui.json не загружено — ждёт; загрузилось — показывает', () => {
