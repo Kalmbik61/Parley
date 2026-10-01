@@ -352,7 +352,9 @@ describe('RoomPanel — лента при смене живой строки (Pa
         entryOf({ messages: [message('m-1')] }),
         before === undefined ? {} : { activity: before },
       );
+      // Человек прокрутил ленту: браузер присылает scroll, и положение запоминается.
       feed().scrollTop = scrollTop;
+      fireEvent.scroll(feed());
       rerender(<RoomPanel {...initial} activity={after} />);
       result = feed().scrollTop;
     });
@@ -389,6 +391,39 @@ describe('RoomPanel — лента при смене живой строки (Pa
     expect(scrollAfter(600, waiting('s-01'), withDoing({ 's-03': { waitingFor: 's-01' } }))).toBe(
       1000,
     );
+  });
+
+  it('«у низа» не мерится в render: перерисовка без смены строки раскладку ленты не читает', () => {
+    withLayout(() => {
+      const { rerender, initial } = renderPanel(entryOf({ messages: [message('m-1')] }), {
+        activity: waiting('s-01'),
+      });
+      // Счётчики чтений раскладки — на самой ленте: каждое чтение `scrollHeight`, `clientHeight` и `scrollTop`
+      // в render было бы синхронной перекладкой на каждое событие активности.
+      const reads: string[] = [];
+      let scrollTop = 600;
+      Object.defineProperties(feed(), {
+        scrollHeight: { configurable: true, get: () => (reads.push('scrollHeight'), 1000) },
+        clientHeight: { configurable: true, get: () => (reads.push('clientHeight'), 400) },
+        scrollTop: {
+          configurable: true,
+          get: () => (reads.push('scrollTop'), scrollTop),
+          set: (value: number) => {
+            scrollTop = value;
+          },
+        },
+      });
+
+      // Посторонняя перерисовка: у участника изменились метрики, а живая строка прежняя.
+      rerender(
+        <RoomPanel
+          {...initial}
+          activity={withDoing({ 's-02': { waitingFor: 's-01', tokensIn: 5 } })}
+        />,
+      );
+
+      expect(reads).toEqual([]);
+    });
   });
 
   it('строка прежняя — перерисовка позицию не трогает, даже у низа', () => {

@@ -8,7 +8,8 @@
  * не пишется, а когда никто ничем не занят, строки нет. Строки обрезаются, а блок выше 96px прокручивается:
  * много занятых участников не должны выдавить ленту из невысокого окна. Появление, смена и исчезновение строки
  * меняют высоту ленты: если до этого она стояла у низа (не дальше 48px от дна), её прижимают заново, а того, кто
- * читает историю выше, не дёргают.
+ * читает историю выше, не дёргают. Положение запоминается по событию `scroll` ленты, а не мерится при отрисовке:
+ * чтение раскладки в render было бы синхронной перекладкой на каждое событие активности.
  *
  * Карточка решения — последней в ленте, пока `Room.proposal` не `null`. Кнопки зовут
  * `rooms.resolveProposal` с `proposalId` и `rev` показанной карточки: человек не примет текст, которого не
@@ -76,17 +77,20 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const now = useNow(NOW_PERIOD_MS);
   const canResolve = useHostSupports('rooms.resolveProposal');
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // Стояла ли лента у низа до этой отрисовки. Читается здесь, пока DOM ещё прежний: после коммита живая
-  // строка уже сожмёт ленту, и «был ли у низа» по ней не определить.
+  // Стоит ли лента у низа — по последнему `scroll`: после коммита живая строка уже сожмёт ленту, и по DOM
+  // «был ли у низа» не определить, а мерить его при каждой отрисовке — перекладка на каждое событие.
   const atBottomRef = useRef(true);
-  const feedEl = containerRef.current;
-  if (feedEl !== null)
-    atBottomRef.current =
-      feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight <= AT_BOTTOM_PX;
+  const onFeedScroll = useCallback((): void => {
+    const feed = containerRef.current;
+    if (feed !== null)
+      atBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AT_BOTTOM_PX;
+  }, []);
 
   const pinToBottom = useCallback((): void => {
     const container = containerRef.current;
-    if (container !== null) container.scrollTop = container.scrollHeight;
+    if (container === null) return;
+    container.scrollTop = container.scrollHeight;
+    atBottomRef.current = true;
   }, []);
 
   // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
@@ -157,7 +161,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
       <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
-      <div ref={containerRef} data-room-feed="" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]">
+      <div
+        ref={containerRef}
+        onScroll={onFeedScroll}
+        data-room-feed=""
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
+      >
         <Decisions decisions={model.decisions} className="max-w-[680px]" />
         {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
         {model.messages.map((message) => (
