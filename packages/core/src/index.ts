@@ -278,7 +278,15 @@ export type {
   ActivityTask,
   SessionActivity,
 } from './work/activity.js';
-export { TERMINAL_WORKING_EVENT, bareEvent, openEvents, watchEvents } from './work/events.js';
+export {
+  TERMINAL_WORKING_EVENT,
+  bareEvent,
+  eventRecordOf,
+  openEvents,
+  parseTasks,
+  textOf,
+  watchEvents,
+} from './work/events.js';
 export type {
   BackgroundTask,
   EventRecord,
@@ -298,13 +306,24 @@ export {
 } from './work/liveness.js';
 export type { Liveness, LivenessOptions, ReconcileOptions } from './work/liveness.js';
 export {
+  FEED_HOOK_EVENTS,
+  FEED_PRE_TOOL_MATCHER,
   HOOK_COMMAND,
   HOOK_EVENTS,
   workSettings,
   workSettingsJson,
   writeWorkSettings,
 } from './work/settings-file.js';
-export type { HookCommand, HookEvent, HookMatcher, SettingsFile } from './work/settings-file.js';
+export type {
+  HookCommand,
+  HookEvent,
+  HookHttp,
+  HookMatcher,
+  SettingsFile,
+  WorkSettingsOptions,
+} from './work/settings-file.js';
+export { FEED_MIN_VERSION, feedSupported } from './work/feed-version.js';
+export * from './feed/index.js';
 export {
   MCP_SERVER_BIN,
   codexMcpOverride,
