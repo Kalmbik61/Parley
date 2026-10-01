@@ -5,7 +5,8 @@
 Пункты собраны в прогоны — то, что разумно делать одним заходом. Прогоны стоят в
 порядке важности (пересобрано 2026-09-28; сделанное планом комнат и облика Organic
 отмечено 2026-09-30 в прогонах 5, 7, 8 и 10, живые проверки к нему — в прогоне 2;
-переименование в Parley — в прогоне 15).
+переименование в Parley — в прогоне 15; первый релиз 0.1.0 и платформы после него — в
+прогоне 16).
 
 TUI удалён из проекта (решение 2026-09-28): пакет `packages/tui`, его настройки, код
 core, нужный только ему, документы требований и пункты TODOS.
@@ -35,7 +36,7 @@ core, нужный только ему, документы требований 
   должен показать агента, а не `posix_spawnp failed.`. Перед этим проверить режим
   `spawn-helper` у хоста в `.app`, нужен `-rwxr-xr-x`:
   `ls -l packages/desktop/dist/mac-arm64/Parley.app/Contents/Resources/host/node_modules/.pnpm/node-pty@*/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper`.
-  Заодно окружение login-оболочки (README, «Build `Parley.app`»): с настоящим zsh
+  Заодно окружение login-оболочки (README, «Environment of the window»): с настоящим zsh
   (nvm, p10k) `claude` и `codex` находятся, а переменные из rc-файлов доходят до
   агентов; проверено только на оболочке-заглушке.
 - **Уведомления macOS.** Клик по уведомлению ведёт к сессии. Ещё проверить
@@ -138,7 +139,7 @@ core, нужный только ему, документы требований 
 подписки). Для минимума в первую очередь нужны четыре пункта: отмена `wait_for` (комнаты
 ждут через него), `works-index.lock` после падения, errno запуска node-pty, запуск
 `pending`-сессии из окна. Окружение login-оболочки (в том числе `PATH`) для собранного
-`.app` сделано вместе с Codex (README, «Build `Parley.app`»); открыта только живая
+`.app` сделано вместе с Codex (README, «Environment of the window»); открыта только живая
 проверка из Finder (прогон 2).
 
 - **node-pty теряет errno запуска.** `posix_spawnp failed.` одинаков для EACCES у
@@ -476,8 +477,7 @@ a room agent», «Providers»). Открыто:
 Оставлено по старому имени намеренно: человеку это не видно, а смена стоила бы данных или
 разрешений.
 
-- `appId dev.harnas.desktop` (разрешение уведомлений macOS, настройки приложения, сохранённое
-  состояние окна) и раздел `persist:harnas-browser` (куки и хранилища встроенного браузера);
+- раздел `persist:harnas-browser` (куки и хранилища встроенного браузера);
 - каталог данных Electron: `~/Library/Application Support/@harnas/desktop`, если он есть,
   иначе `@parley/desktop`. Он считается от `name` в `packages/desktop/package.json`, а не от
   `productName`, и имя пакета сменилось;
@@ -488,6 +488,12 @@ a room agent», «Providers»). Открыто:
 - записи до переименования говорят `harnas` и `my-harnas` и не правятся: `docs/specs/`,
   `docs/design/2026-09-29-rooms-organic/`, `.ralph/`, `.ralphrc`, `RUN.md`, снимок схемы
   `docs/schema/index.json`, память OMC `.omc/project-memory.json`.
+
+Исключение — `appId`: до первого публичного релиза он сменён на `dev.parley.desktop` (решение
+пользователя, план `docs/specs/2026-10-01-release-0.1.0-plan.md`). У копии, собранной под
+`dev.harnas.desktop`, macOS один раз заново спросит разрешение на уведомления, а настройки
+приложения и сохранённое состояние окна под прежним идентификатором не переедут. После релиза
+0.1.0 `appId` не менять: страж — `packages/desktop/src/release-config.test.ts`.
 
 Открыто:
 
@@ -508,6 +514,77 @@ a room agent», «Providers»). Открыто:
 - **Подпись пути брифа** у `pending`-сессии (`renderer/terminal/NotRunningCard.tsx`) всегда
   начинается с `.parley/`, даже у проекта, где каталог состояния ещё `.harnas` (перенос ждёт
   живой сессии). Рендерер каталоги не читает; только подпись.
+
+## 16. Релиз 0.1.0 и платформы после него
+
+Сделано (2026-10-01, план `docs/specs/2026-10-01-release-0.1.0-plan.md`, ветка
+`feat/release-0.1.0`): сборки macOS (dmg и zip для arm64 и x64, подпись ad-hoc), встроенный
+Node 22, `ci.yml` и `release.yml`, уведомление о новой версии, раздел «Install» в README,
+CHANGELOG, лицензия MIT. Открыто:
+
+- **Релизный workflow ещё не прогонялся на GitHub.** `release.yml` проверен вычиткой, тестами
+  (`release-workflows.test.ts`, `release-scripts.test.ts`) и локальной сборкой теми же командами,
+  но кнопка «Run workflow» появляется в Actions, только когда файл лежит в master. Порядок:
+  слить ветку в master → Actions → Release → Run workflow (`dry_run` по умолчанию включён,
+  собранное остаётся в артефактах прогона) → тег `v0.1.0`; публикует `publish-release` после
+  проверки файлов. Заодно живая проверка скачанной сборки (к прогону 2, «Собранный
+  `Parley.app` из Finder»): dmg → Applications → «Open Anyway»; запуск на машине без node в
+  `PATH` — хост поднимается встроенным node; приложение в каталоге с пробелом; Intel-сборка на
+  настоящем Intel-маке — её собирали и проверяли только на arm64.
+- **Linux** (x64 и arm64, AppImage и deb). Решение 2026-09-30: клавиши — Ctrl+Shift+буква, на
+  macOS остаётся ⌘.
+  - клавиши: реестр `shared/keybindings.ts` описан акселераторами `CmdOrCtrl+…`, а обработчики
+    окна (`renderer/keys/handler.ts`, терминал, палитра) ждут `metaKey`, подписи ⌘ зашиты в
+    `shared/strings.ts`. Нужны схема Ctrl+Shift и подписи по платформе — самый большой кусок;
+  - заголовок окна: `main/window.ts` ставит `titleBarStyle: 'hiddenInset'` и
+    `trafficLightPosition`, а `renderer/shell/Titlebar.tsx` держит отступ под «светофор»
+    (`pl-20`). На Linux нужен обычный заголовок или `titleBarOverlay`;
+  - сборка: цели AppImage и deb в `electron-builder.yml`; `fetch-node` знает только darwin; у
+    `node-pty` для Linux нет prebuilds — собирает node-gyp; раннеры `ubuntu-22.04` и
+    `ubuntu-22.04-arm`; `chmod 4755 chrome-sandbox` после установки deb; AppArmor на Ubuntu
+    24.04;
+  - `main/shell-env.ts` берёт `/bin/zsh` и каталоги Homebrew по умолчанию — для Linux свои;
+  - проверки: версия glibc через `objdump`, запуск под `xvfb-run`, `dpkg-deb -I`.
+- **Windows — спайки**, по одному дню на каждый, до любой сборки:
+  1. ConPTY под `node-pty` (prebuilds win32-x64 и win32-arm64 есть) и сигналы:
+     `pty-manager.ts` шлёт SIGHUP и SIGKILL, а `kill(signal)` у node-pty на Windows бросает
+     «Signals not supported on windows»;
+  2. сокет хоста → named pipe: `host.sock` в `host/src/paths.ts`, своя копия путей в
+     `main/host-launcher.ts`, `main/host-connection.ts`; права через `chmod` (сокет и каталог,
+     `host/src/host.ts`) для pipe не работают;
+  3. хуки и строка статуса: `HOOK_COMMAND` в `core/src/work/settings-file.ts` — POSIX
+     `cat >> …`, нужна форма без оболочки;
+  4. длинные пути git у worktree;
+  5. Codex: `-c mcp_servers=…` и `notify` на Windows;
+  6. NSIS без подписи и обновление при живом хосте: файлы хоста заняты, нужен `host.shutdown`.
+
+  Потом — поиск бинарей без PATHEXT (`core/src/work/find-binary.ts`, `core/src/providers.ts`,
+  `main/host-launcher.ts`: `.exe` и `.cmd`), живость по времени старта процесса
+  (`core/src/work/liveness.ts`), симлинк скилла `.claude/skills/parley`, POSIX `rm -rf` и
+  `$PWD` в скрипте `dist`, job на `windows-2022`.
+- **Подпись и нотаризация Apple, потом автообновления и Homebrew cask.**
+  - нужен платный аккаунт Apple Developer: сертификат Developer ID Application и нотаризация
+    (`notarytool`). Сейчас `identity: '-'` и `hardenedRuntime: false`, а первый запуск требует
+    «Open Anyway»;
+  - с подписью включить `hardenedRuntime` и entitlements; на нотаризованной сборке проверить
+    встроенный node (JIT V8) и `node-pty` (`spawn-helper`). Сертификат и пароли — в секретах
+    Actions, не в репозитории;
+  - затем `electron-updater`: на macOS Squirrel.Mac без подписи не работает. `latest-mac.yml` и
+    blockmap electron-builder уже кладёт в релиз, `app-update.yml` лежит в
+    `Contents/Resources`, но читать его пока нечем. Тост из `main/update-check.ts` тогда уступает
+    место или остаётся запасным;
+  - Homebrew cask (`Casks/parley.rb`): имена файлов без версии, ссылки
+    `releases/latest/download/parley-macos-<arch>.dmg`; у Orca рядом `homebrew-bump.yml` — он
+    поднимает версию в cask после релиза.
+- **E2E в CI.** `ci.yml` гоняет сборку, типы, линтер и юнит-тесты, E2E окна (Playwright) — нет.
+  - `ci.yml` ставит зависимости с `ELECTRON_SKIP_BINARY_DOWNLOAD=1`: для E2E переменную убрать;
+  - `pnpm --filter @parley/desktop e2e --workers=1` на `macos-15` после `pnpm build`. В
+    `playwright.config.ts` `retries: 0`, в CI нужен `--retries=1`, как у юнит-тестов;
+  - известные флейки (прогон 6: `theme.spec.ts:72`, `attention.spec.ts:190`,
+    `rooms-dialogs.spec.ts:170`) PR блокировать не должны; при падении выложить `test-results/`
+    артефактом;
+  - сначала проверить, что Electron стартует на раннере и что E2E не пишут вне временных
+    каталогов (`PARLEY_HOME`, `PARLEY_WORKTREE_ROOT`; страж корня worktree — прогон 6).
 
 ## Справка: спайк канала 2026-09-18
 

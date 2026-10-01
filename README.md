@@ -7,8 +7,8 @@
 
 Coordination of agent CLIs (Claude Code, Codex) in the `Parley.app` window — an Electron
 app on top of a local `parley-host` process. The window and the host are connected by a
-unix socket with its own handshake token; there are no network ports. Parley works strictly
-locally: it is not a server and not a web app.
+unix socket with its own handshake token; there are no network ports. Parley works locally: it
+is not a server and not a web app.
 
 In the window: a sidebar of project workspaces with a tree of their sessions and rooms;
 tabs for the terminal, rooms (a conversation of several agents and a decision that waits
@@ -17,6 +17,136 @@ palette on ⌘J; and a status bar with providers, CLI versions and subscription 
 See "The window" for details.
 
 https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
+
+## Install
+
+Parley runs on macOS, on Apple Silicon and on Intel. Download the `.dmg` for your Mac from the
+[latest release](https://github.com/Kalmbik61/Parley/releases/latest), about 200 MB:
+
+| Your Mac | Download |
+|---|---|
+| Apple Silicon (M1 and later) | [`parley-macos-arm64.dmg`](https://github.com/Kalmbik61/Parley/releases/latest/download/parley-macos-arm64.dmg) |
+| Intel | [`parley-macos-x64.dmg`](https://github.com/Kalmbik61/Parley/releases/latest/download/parley-macos-x64.dmg) |
+
+Not sure which one you have? The Apple menu → About This Mac shows "Chip" on Apple Silicon and
+"Processor" on Intel. Open the `.dmg` and drag Parley to Applications.
+
+Each release also has the same builds as `.zip` archives (`parley-macos-arm64.zip`,
+`parley-macos-x64.zip`) and `SHA256SUMS.txt` with the SHA-256 checksums of all four files. To
+check a download, run this in the folder where you saved it together with `SHA256SUMS.txt`:
+
+```bash
+grep parley-macos-arm64.dmg SHA256SUMS.txt | shasum -a 256 -c -
+```
+
+### First launch
+
+Parley is not signed with an Apple Developer ID and is not notarized, so macOS blocks the first
+launch. Allow it once, in either of two ways:
+
+- open System Settings → Privacy & Security, scroll to Security and click "Open Anyway" next to
+  the message about Parley, then confirm. The button appears after you have tried to open the
+  app once;
+- or run `xattr -dr com.apple.quarantine /Applications/Parley.app` in Terminal and open the app
+  as usual.
+
+### Requirements
+
+- macOS 13 (Ventura) or later, on Apple Silicon or Intel;
+- `claude` and/or `codex`, installed and signed in. Parley starts the CLIs you already use,
+  under your own login: it does not sign you in and does not touch your credentials. The window
+  finds them on the `PATH` of your login shell (see "Environment of the window");
+- git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
+  older git a conflict shows up only when you try to merge.
+
+Node.js is not needed: the app carries its own Node 22, and the host, the MCP server and the
+status line script run on it. Linux and Windows are not supported yet.
+
+### Updates
+
+Parley does not update itself, but it tells you when a new version is out. At start, and then
+once a day, the window asks GitHub for the latest release: one request to
+`api.github.com/repos/Kalmbik61/Parley/releases/latest`, with no token, no cookies and nothing
+about you or your projects. If a newer stable release exists (drafts and pre-releases are
+ignored), the window shows the toast "Parley X.Y.Z is available" with "Download" (it opens the
+release page in your browser) and "Later". Closing the toast, with either button or by
+dismissing it, means it does not come back for that version; a newer one shows it again.
+Nothing is downloaded or installed, and a network error is silent.
+
+To update, quit Parley (⌘Q), download the new `.dmg` and replace Parley in Applications; your
+data lives outside the app and stays. A host started by the previous version keeps running
+while agents are alive: if the new window says "Host is outdated — restart", choose "Restart
+host…" in the palette (⌘J) — live agents are interrupted and come back through `--resume`.
+
+To turn the check off, switch off "Check for updates" in Settings (⌘,) → Notifications, or set
+`PARLEY_UPDATE_CHECK=off` in the environment of your login shell (see "Environment of the
+window"). Either way the window does not ask GitHub.
+
+### Environment of the window
+
+For a window opened from Finder, launchd supplies a stripped-down environment. Its `PATH` is
+`/usr/bin:/bin:/usr/sbin:/sbin`, so without `~/.local/bin` and nvm the host would find neither
+`claude` nor `codex`, and variables from your rc files (proxy, `CLAUDE_CONFIG_DIR`, `PARLEY_*`
+and others) would not arrive at all. So when the app starts, the window captures the
+environment of your login shell once (`$SHELL -ilc`, `env -0` between markers, 5-second
+timeout). Output of the rc files outside the markers does not get into it, and the rc files
+themselves are read by the shell, not by the window. The captured environment, the shell's
+`PATH` included, goes to the host as its launch environment, and agents inherit it from the
+host. If the shell did not answer, the window's own environment remains, with the existing
+`~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`; the reason is
+printed to the window's console. The environment is captured once per app launch: neither
+closing the window nor "Restart host…" refreshes it, and a running host (it outlives the
+window) does not change its own. If you changed `PATH` or variables in your rc files, quit the
+app (⌘Q), open it again and choose "Restart host…" in the palette: live agents are interrupted
+and come back through `--resume`. In an unpackaged window (E2E, `pnpm dev`)
+`PARLEY_LOGIN_SHELL=skip` does not call the shell at all: the window's environment is passed as
+it is.
+
+## Build from source
+
+You need Node.js >= 20 (tested on 22) and pnpm 9 (the repository pins 9.12.3). The development
+window starts `parley-host` with the `node` from the `PATH` of your login shell. The rest is as
+in "Requirements" above; for a channel push when a session is started from the `parley-core`
+CLI (see "Core CLI") you also need `claude` 2.1.211 or later.
+
+```bash
+pnpm install
+pnpm build
+pnpm dev:desktop
+```
+
+`pnpm install` additionally sets the execute bit on node-pty's helper binary: pnpm unpacks
+it without permissions, and without this the PTY does not start. `pnpm build` is required:
+the window takes `@parley/core` and `@parley/protocol` from their `dist`. `pnpm dev:desktop`
+builds the host (`@parley/host`) and launches the window (`electron-vite dev`).
+
+### Build `Parley.app`
+
+```bash
+pnpm build
+pnpm --filter @parley/desktop fetch-node
+pnpm --filter @parley/desktop dist --dir
+```
+
+`fetch-node` downloads the Node 22 that the app carries, for this machine's architecture, from
+nodejs.org and checks it against the published SHA-256 sums. `dist --dir` builds only this
+machine's app: `packages/desktop/dist/mac-arm64/Parley.app` (`dist/mac/Parley.app` on an Intel
+Mac), signed ad hoc and not notarized (`identity: '-'` in `electron-builder.yml`). Inside are
+`Contents/Resources/host` (the host with its own `node_modules`),
+`Contents/Resources/node/bin/node` (that Node; the window starts the host with it), `NOTICE`,
+`licenses/Figtree-OFL.txt` and `licenses/Caprasimo-OFL.txt`. Without `fetch-node` the app has no
+Node of its own: like the development window, the built one then needs `node` in the `PATH` of
+your login shell, and without it the window prints "node not found in login-shell PATH".
+
+The files of a release — a `.dmg` and a `.zip` for each of Apple Silicon and Intel — come from:
+
+```bash
+pnpm build
+pnpm --filter @parley/desktop fetch-node arm64 x64
+pnpm --filter @parley/desktop dist
+```
+
+They land in `packages/desktop/dist/` as `parley-macos-arm64.*` and `parley-macos-x64.*`.
 
 ## Architecture
 
@@ -59,8 +189,9 @@ only through data:
   layouts, notes and `ui.json` in `~/.parley/desktop/`, starting the host and reconnecting
   to it), `preload` (a narrow `window.parley` bridge into the page) and `renderer` (the
   whole interface). The types they share and the window's English texts live in `shared`.
-- **host** is `parley-host`, a separate process of the system `node`. It holds the agents'
-  PTYs, outlives the window, and works with the map through core.
+- **host** is `parley-host`, a separate Node process: the app's own Node 22 (the system `node`
+  when you run from source). It holds the agents' PTYs, outlives the window, and works with
+  the map through core.
 - **protocol** is the protocol version, the methods and events between the window and the
   host, and the framing of socket messages.
 - **agent** is an unmodified `claude` (or `codex`) running under your login. It learns about
@@ -107,7 +238,9 @@ The window (`packages/desktop`) and its host add six more rules to the boundary 
   inserted, and Enter is not pressed on top of a draft;
 - there are no YOLO flags (`--dangerously-skip-permissions` and the like) in the sources —
   the boundary test `packages/core/test/frame-check.test.ts` checks this. There is no
-  telemetry and no auto-update either.
+  telemetry and no auto-update either: apart from the pages you open in the embedded browser,
+  the window's only network request is the check for a newer release ("Updates" under
+  "Install"), which only reports and can be turned off.
 
 The Orca-style window (spec `docs/specs/2026-09-26-desktop-orca-ui-design.md`, section 15.1)
 adds four more:
@@ -132,72 +265,16 @@ This matches Anthropic's policy (re-read on 2026-09-02): the binary must not be 
 and an end user signing in to an unmodified Claude Code with their own subscription is
 explicitly allowed. Details are in `code.claude.com/docs/en/legal-and-compliance`.
 
-## Requirements
-
-- macOS — the window is built only for it; Linux and Windows come after v1
-- Node.js >= 20 (tested on 22), in the `PATH` of your login shell — the window uses it to
-  start `parley-host`
-- git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
-  older git a conflict shows up only when you try to merge
-- `claude` and/or `codex` in `PATH` — the ones you already use
-- for a channel push when a session is started from the `parley-core` CLI (see "Core CLI")
-  — `claude` 2.1.211 or later
-
-## Install and run
-
-```bash
-pnpm install
-pnpm build
-pnpm dev:desktop
-```
-
-`pnpm install` additionally sets the execute bit on node-pty's helper binary: pnpm unpacks
-it without permissions, and without this the PTY does not start. `pnpm build` is required:
-the window takes `@parley/core` and `@parley/protocol` from their `dist`. `pnpm dev:desktop`
-builds the host (`@parley/host`) and launches the window (`electron-vite dev`).
-
-### Build `Parley.app`
-
-```bash
-pnpm build
-pnpm --filter @parley/desktop dist
-```
-
-The result is `packages/desktop/dist/mac-arm64/Parley.app`: unsigned and not notarized, for
-this machine only (`identity: null` in `electron-builder.yml`). Inside are
-`Contents/Resources/host` (the host with its own `node_modules`), `NOTICE`,
-`licenses/Figtree-OFL.txt` and `licenses/Caprasimo-OFL.txt`. Like the development window, the
-built window needs the system `node` and `claude` (and/or `codex`) in the `PATH` of your
-login shell to run; without `node` the window prints "node not found in login-shell PATH".
-
-**Environment of the built window.** For a window opened from Finder, launchd supplies a
-stripped-down environment. Its `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, so without
-`~/.local/bin` and nvm the host would find neither `claude` nor `codex`, and variables from
-your rc files (proxy, `CLAUDE_CONFIG_DIR`, `PARLEY_*` and others) would not arrive at all.
-So when the app starts, the window captures the environment of your login shell once
-(`$SHELL -ilc`, `env -0` between markers, 5-second timeout). Output of the rc files outside
-the markers does not get into it, and the rc files themselves are read by the shell, not by
-the window. The captured environment, the shell's `PATH` included, goes to the host as its
-launch environment, and agents inherit it from the host. If the shell did not answer, the
-window's own environment remains, with the existing `~/.local/bin`, `/opt/homebrew/bin` and
-`/usr/local/bin` appended to its `PATH`; the reason is printed to the window's console. The
-environment is captured once per app launch: neither closing the window nor "Restart host…"
-refreshes it, and a running host (it outlives the window) does not change its own. If you
-changed `PATH` or variables in your rc files, quit the app (⌘Q), open it again and choose
-"Restart host…" in the palette: live agents are interrupted and come back through
-`--resume`. In an unpackaged window (E2E, `pnpm dev`) `PARLEY_LOGIN_SHELL=skip` does not
-call the shell at all: the window's environment is passed as it is.
-
 ## The window
 
 The window is an Electron app on top of a separate `parley-host` process. The host holds the
 agents' PTYs, the map, auto-wake and rooms. It lives in `~/.parley/host/` (`host.sock`,
 `host.token`, `host.pid`, `host.log`, `host.err` — the host process's stderr) and outlives the
 window: open the window again and the terminals are restored from screen snapshots. The
-window starts the host itself, with the system `node` from your login shell's `PATH`, and
-does not start a second one while the `host.pid` lock is held. The host exits by itself after
-5 minutes with no windows and no live sessions. A second launch of the window focuses the
-first.
+window starts the host itself, with the Node 22 inside the app (when you run from source, or
+build without `fetch-node`, with the `node` from your login shell's `PATH`), and does not start
+a second one while the `host.pid` lock is held. The host exits by itself after 5 minutes with
+no windows and no live sessions. A second launch of the window focuses the first.
 
 The look of the window is Organic: a sand background, terracotta and sage accents, the
 Figtree and Caprasimo fonts, shadcn/ui primitives. The terminal sits on the window sheet (its
@@ -259,7 +336,7 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   data the segment has no limits. When space runs short, the limits text disappears first
   (the bar stays), then the version, and the name last. Further right: the host's latest
   notice; "N need you · M unseen" — a click goes to the next such session or room; the
-  connection to the host (for example "Host 0.0.0"); "Host is outdated — restart" if it is
+  connection to the host (for example "Host 0.1.0"); "Host is outdated — restart" if it is
   outdated; "Auto-wake on" or "Auto-wake paused" — a click sets or clears the pause;
 - each workspace has its own layout: a tree of splits made of tab groups (session terminal,
   mail, room, changes, file, embedded browser). While there is one group, its tabs are pills
@@ -593,7 +670,8 @@ The window has Settings (⌘,), with five tabs:
   (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Worktree
   root".
 - **Notifications** — "needs you" / "finished" / "mail to you" / "sound"; if notifications do
-  not arrive, a hint points to System Settings → Notifications → Parley.
+  not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
+  for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
 
 The fields from "Terminal" and "Agents" are written through the host to `~/.parley/config.json`
@@ -660,6 +738,10 @@ Other variables:
   status (`Ready` or `Working`) before the session becomes "needs you" (a sign-in or folder
   trust screen); 20,000 by default. An integer from 100 to 600,000; any other value is
   ignored. The window's E2E tests need it so as not to wait twenty seconds.
+- `PARLEY_UPDATE_CHECK=off` — do not look for a newer release on GitHub, whatever the "Check
+  for updates" switch says; any other value leaves the choice to the switch. The window takes
+  it from the environment of your login shell (see "Environment of the window"); its E2E tests
+  set it so as not to ask GitHub.
 
 ## Agent state: hooks and liveness
 
@@ -684,8 +766,9 @@ than `silenceThresholdMs` means "turn finished". A one-time warning about a miss
 appears in the status bar.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
-script (`node <core>/dist/work/statusline-bin.js`, with an absolute path, like the MCP
-server). Claude Code calls it after every model response. From its input the script puts
+script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP
+server; `<node>` is the one the host runs on). Claude Code calls it after every model
+response. From its input the script puts
 `rate_limits` into `<work-dir>/limits/<id>.json` (`{ at, rateLimits }`, an atomic write) and
 prints a terminal line. Your own `statusLine` from the Claude Code settings (the project's
 local and shared settings — of the directory Claude Code was launched from — then yours;
@@ -1044,9 +1127,13 @@ to it.
 - `.ralph/specs/` — the specifications for v0–v2: the data layer, the old UI, PTY, runners.
 - `docs/schema/` — snapshots of the real schemas of both providers, which the parser is
   checked against.
-- `NOTICE` — licenses of third-party code in the window: Orca and shadcn/ui (MIT), Figtree and
-  Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js (Apache-2.0; its cmaps and the Foxit fonts
-  are BSD-3-Clause); the origin of the Claude and Codex icons and whose marks they are.
+- `NOTICE` — licenses of third-party code in the app: Orca and shadcn/ui (MIT; Orca also gave
+  the release scripts), Figtree and Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js
+  (Apache-2.0; its cmaps and the Foxit fonts are BSD-3-Clause), the Node.js that the app
+  carries (MIT); the origin of the Claude and Codex icons and whose marks they are.
+- `LICENSE` — MIT. `CHANGELOG.md` — what each release brings: a version's section is the
+  description of its release on GitHub. `.github/workflows/` — CI (`ci.yml`) and the release
+  (`release.yml`); `scripts/release/` — the checks the release runs.
 - `TODOS.md` — deferred work (runs, in order of importance).
 
 ## Providers
@@ -1348,3 +1435,8 @@ A non-empty diff means the format has drifted and a new schema adapter is needed
 
 Test fixtures are made from real sessions with full anonymization:
 `node tools/make-fixtures.mjs <session-id> ...`.
+
+## License
+
+Parley is released under the [MIT License](LICENSE). Third-party code, fonts and the Node.js that
+the app carries are covered in [NOTICE](NOTICE).
