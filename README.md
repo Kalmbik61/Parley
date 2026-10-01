@@ -443,8 +443,9 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
 - the room tab (a click on a room row, "Rooms" in the palette, the `#` of a card). The header
   has the name and the caption "Created by you · 4 agents · lead S01 · `<workspace>`" (or
   "Created by S01 …" if an agent created the room). Under it is the strip of members: a card
-  per agent with its state, a `★` for the lead and its task; a click opens the agent's
-  terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
+  per agent with its state, a `★` for the lead and its task, or what the agent is busy with
+  right now: a subagent ("Subagent: …") or a session it waits for ("Waiting for S03"); a click
+  opens the agent's terminal. Below, the "Decisions" block comes first (up to the five latest decisions; older
   ones are "+N earlier"; a decision takes up to two lines of running text, where bold, code and
 links stay but headings and list marks do not), then
 the messages: Markdown (headings, lists, code, tables, links) with mention chips. HTML in a
@@ -455,7 +456,9 @@ message is shown as text, and a link opens in your browser. Each
   decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
   should the lead change?" and "Send to lead"); if the lead has replaced the text in the
   meantime, an answer to the old version is rejected with the toast "The decision changed —
-  review the latest version.". At the bottom is the input field with the caption "To
+  review the latest version.". Above the input field a live line lists the members busy with
+  a subagent or waiting; it is state, not a message, and the feed does not keep it. At the
+  bottom is the input field with the caption "To
   everyone" or "To S02, S03"; `@` opens the member menu (a filter by label, provider and
   model; ↑/↓, Enter or Tab, Esc; mouse click), and the chosen member becomes a chip and a
   recipient. Enter sends, Shift+Enter inserts a line break, only plain text is pasted, and an
@@ -788,6 +791,15 @@ not accept this flag or the directory is not writable, a fallback keeps the stat
 history jsonl watcher as before. A new assistant entry means "working", and silence longer
 than `silenceThresholdMs` means "turn finished". A one-time warning about a missing log
 appears in the status bar.
+
+**Subagents and waiting.** Subagents are counted by id: `SubagentStart` adds one, and the
+`SubagentStop` with the same `agent_id` removes it; Claude Code's own helper agents send stops
+without a start, and those count for nothing. Every hook also carries `background_tasks`, the
+list of background tasks Claude Code keeps. While a background subagent in it is running, the
+session stays `working` after its turn ended, and silence does not end it; such a session still
+gets the pointer to new letters, because the agent itself is at its prompt. Around `wait_for` the
+session's MCP server appends two lines of its own to the same log, `ParleyWaitStart` (with
+`parley_wait_target`) and `ParleyWaitEnd`, so the window can show what an agent waits for.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP
