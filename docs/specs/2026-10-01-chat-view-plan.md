@@ -186,10 +186,13 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    waiting in the terminal» с кнопкой «Open terminal» и обычную метку «нужен ты»; условие
    баннера одно — активность `blocked` без карточки `pending` в ленте (elicitation активность
    хоста уже считает `blocked`, отдельного разбора `Notification` в ленте нет). Переключать
-   вид под руками человека нельзя. Ожидающая карточка открытой ленты даёт сессии и работе
-   «нужен ты» в `derive.ts`; карточку вкладки, которой нет (лента не открыта), окно не видит,
-   а активность по тишине считает удержанный вопрос оконченным ходом — хвост для хоста
-   (удержанный `PreToolUse(AskUserQuestion)` должен давать `blocked`).
+   вид под руками человека нельзя. «Нужен ты» у ждущей карточки считает хост, а не окно: пока
+   удержан хук `PreToolUse(AskUserQuestion)`, служба активности публикует `blocked`
+   (`questionHeld`; журнал событий такого хука не видит и по тишине счёл бы ход оконченным),
+   таймер тишины и метрики при этом идут по настоящему значению; удержанный `PermissionRequest`
+   активность не трогает — там CLI сам показывает диалог, и `blocked` даёт `Notification
+   permission_prompt`. Окно ничего не добавляет: `derive.ts` считает внимание по активности, как
+   раньше, и закрытая вкладка видит ожидание так же, как открытая.
 8. **Ввод.** Поле чата шлёт `pty.send` с теми же отказами и тостами, что у отправки из
    комнаты (`terminal/send.ts`: busy, blocked, draft). Enter — отправить, Shift+Enter —
    перенос. Кнопка «Stop» — Esc через `pty.input`. Сообщение во время хода уходит в очередь
@@ -458,7 +461,8 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
 **Файлы:**
 - `renderer/chat/cards/PermissionCard.tsx`, `QuestionCard.tsx`, `PlanCard.tsx`,
   `WaitingBanner.tsx`; `chat/store.ts` (решения, идемпотентность);
-- `renderer/attention/derive.ts` (ожидающая карточка — «нужен ты» вкладки и работы);
+- host: `activity/activity-service.ts` (`questionHeld` — удержанный вопрос держит сессию в
+  `blocked`; окно и `derive.ts` не меняются);
 - protocol: `sessions.setMode { ref, mode } → { mode, verified }`;
 - host: `pty/screen.ts` (`text(rows)` — последние строки экрана без управляющих
   последовательностей), `pty/mode-switch.ts`, `methods/sessions.ts`;
@@ -493,8 +497,9 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
 5. **Автопоказ** по решению 7: до `SessionStart` вкладка новой сессии открывается
    терминалом; после первого `SessionStart` — чат, один раз. Баннер «Claude Code is waiting
    in the terminal» при `blocked` без `pending`-карточки и при `Notification` с типами
-   `elicitation_*`. Ожидающая карточка = «нужен ты» в `derive.ts` (как ожидание решения
-   комнаты).
+   `elicitation_*`. Ожидающая карточка = «нужен ты»: удержанный вопрос даёт `blocked` на хосте
+   (`questionHeld` службы активности), разрешение и план — `blocked` по `permission_prompt`;
+   `derive.ts` не меняется.
 6. **Агенты в сайдбаре, комнате и тулбаре** (решение 13). Источник — `metrics.tasks` из
    `activity.changed` (0.2.0); нет поля — прежний счётчик `▤N`. Строка сессии в сайдбаре:
    бейдж «2 agents» с поповером (тип, описание, фоновый или нет). Полоса участников
@@ -506,7 +511,9 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
 **Тесты:**
 - карточки: три состояния каждой, длинные команды и пути, «Allow and don't ask again»
   появляется только с подсказкой, второй клик не шлёт `decide`;
-- `derive.ts`: `pending` даёт `needs-you`, `elsewhere` снимает;
+- host: удержанный вопрос → `questionHeld(ref, true)`, ответ, закрытие запроса CLI, таймаут и
+  выключение → `false`, удержанное разрешение службу активности не трогает; `questionHeld`
+  публикует `blocked`, тишина при удержании не роняет сессию в `idle`;
 - host: `mode-switch` на фальшивом экране — manual → plan это два нажатия, подвал не
   сошёлся → `verified: false`, подвала нет или `bypass` — ни одного нажатия; `screen.text()`
   режет управляющие последовательности; режим в снимке и в дельте без элементов,
