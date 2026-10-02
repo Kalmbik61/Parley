@@ -95,6 +95,11 @@ export interface FeedService {
   /** Клиент отключился от хоста: все его подписки сняты. */
   dropClient(client: Client): void;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
+  /**
+   * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
+   * ленту и шлёт дельту подписчикам, не дожидаясь события хука с `permission_mode`.
+   */
+  noteMode(ref: SessionRef, mode: string): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
 }
@@ -112,6 +117,8 @@ interface SessionFeed {
   sizes: Map<string, number>;
   bytes: number;
   batch: Batch;
+  /** Режим разрешений сменился с прошлой дельты: дельта уходит и без элементов. */
+  modeChanged: boolean;
   timer: NodeJS.Timeout | undefined;
   /** Были живые события хуков: из журнала такую ленту не сеют. */
   live: boolean;
@@ -211,6 +218,7 @@ export function createFeedService(
         sizes: new Map(),
         bytes: 0,
         batch: { upsert: new Map(), removed: new Set() },
+        modeChanged: false,
         timer: undefined,
         live: false,
         seeded: false,
@@ -247,7 +255,18 @@ export function createFeedService(
     if (evicted.length > 0) pending.settle(feed.ref, evicted);
   }
 
+  /** Таймер пачки заведён, если есть что слать: элементы, вытеснения или смена режима. */
+  function schedule(feed: SessionFeed): void {
+    if (
+      feed.timer === undefined &&
+      (feed.batch.upsert.size > 0 || feed.batch.removed.size > 0 || feed.modeChanged)
+    ) {
+      feed.timer = setTimeout(() => flush(feed), batchMs);
+    }
+  }
+
   function commit(feed: SessionFeed, update: FeedUpdate): void {
+    if (update.state.permissionMode !== feed.state.permissionMode) feed.modeChanged = true;
     feed.state = update.state;
     for (const item of update.changes) {
       const size = itemBytes(item);
@@ -257,9 +276,7 @@ export function createFeedService(
       feed.batch.removed.delete(item.id);
     }
     trim(feed, true);
-    if (feed.timer === undefined && (feed.batch.upsert.size > 0 || feed.batch.removed.size > 0)) {
-      feed.timer = setTimeout(() => flush(feed), batchMs);
-    }
+    schedule(feed);
     // Карточки, которые шаг снял (PostToolUse, Stop, новый промпт, SessionEnd), — их хукам `{}`.
     const settled = update.changes.filter((item) => isCard(item) && item.state !== 'pending');
     if (settled.length > 0) {
@@ -277,8 +294,9 @@ export function createFeedService(
       feed.timer = undefined;
     }
     const { upsert, removed } = feed.batch;
-    if (upsert.size === 0 && removed.size === 0) return;
+    if (upsert.size === 0 && removed.size === 0 && !feed.modeChanged) return;
     feed.batch = { upsert: new Map(), removed: new Set() };
+    feed.modeChanged = false;
     feed.revision += 1;
     const clients = subscribers.get(refKey(feed.ref));
     if (clients === undefined || clients.size === 0) return;
@@ -287,6 +305,7 @@ export function createFeedService(
       revision: feed.revision,
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
+      mode: feed.state.permissionMode,
     };
     for (const client of Array.from(clients)) {
       // Клиент не успевает читать — подписка снимается, как у `pty.output`: окно возьмёт снимок заново.
@@ -387,7 +406,9 @@ export function createFeedService(
       try {
         const records = await readTranscript(file);
         if (records === null || feed.live || stopped) return;
-        const state = feedFromTranscript(records, { limit: maxItems });
+        const seeded = feedFromTranscript(records, { limit: maxItems });
+        // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
+        const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
         feed.sizes = new Map();
         feed.bytes = 0;
@@ -442,8 +463,13 @@ export function createFeedService(
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
     const records = await readTranscript(file);
     if (records === null) throw notFound();
-    const items = feedFromTranscript(records, { limit: maxItems }).items;
-    return { items: tailByBytes(items, maxBytes), revision: 0, schemaVersion: FEED_SCHEMA_VERSION };
+    const state = feedFromTranscript(records, { limit: maxItems });
+    return {
+      items: tailByBytes(state.items, maxBytes),
+      revision: 0,
+      schemaVersion: FEED_SCHEMA_VERSION,
+      mode: state.permissionMode,
+    };
   }
 
   const unsubscribeActivity = deps.activity.onChange((ref, value) => {
@@ -521,6 +547,7 @@ export function createFeedService(
         items: [...feed.state.items],
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
+        mode: feed.state.permissionMode,
       };
     },
 
@@ -577,6 +604,12 @@ export function createFeedService(
       pending.resolve(feed.ref, cardId, response);
       commit(feed, result);
       return { applied: true, state: next.state };
+    },
+
+    noteMode(ref, mode) {
+      if (stopped || mode === '') return;
+      const feed = feedOf(ref);
+      commit(feed, { state: { ...feed.state, permissionMode: mode }, changes: [] });
     },
 
     async stop() {

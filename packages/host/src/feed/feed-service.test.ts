@@ -703,3 +703,79 @@ describe('сев из журнала', () => {
     expect(cut.items.at(-1)).toEqual(last);
   });
 });
+
+describe('режим разрешений (план 2026-10-01, решение 4)', () => {
+  it('снимок несёт режим из permission_mode события; без событий — null', async () => {
+    start();
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ mode: null });
+
+    send({ ...prompt('go'), permission_mode: 'plan' });
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ mode: 'plan' });
+  });
+
+  it('дельта несёт режим; смена режима без элементов тоже уходит дельтой', () => {
+    vi.useFakeTimers();
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+
+    send({ ...prompt('go'), permission_mode: 'default' });
+    vi.advanceTimersByTime(50);
+    // Событие без новых элементов (PostToolUse без вызова не меняет ленту), но с другим режимом.
+    send({ hook_event_name: 'Notification', session_id: SESSION, permission_mode: 'acceptEdits' });
+    vi.advanceTimersByTime(50);
+
+    const deltas = feedChanged(client);
+    expect(deltas.map((delta) => delta.mode)).toEqual(['default', 'acceptEdits']);
+    expect(deltas[1]?.upsert).toEqual([]);
+    expect(deltas.map((delta) => delta.revision)).toEqual([1, 2]);
+  });
+
+  it('тот же режим дельты не рождает', () => {
+    vi.useFakeTimers();
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+
+    send({ ...prompt('go'), permission_mode: 'default' });
+    vi.advanceTimersByTime(50);
+    send({ hook_event_name: 'Notification', session_id: SESSION, permission_mode: 'default' });
+    vi.advanceTimersByTime(50);
+
+    expect(feedChanged(client)).toHaveLength(1);
+  });
+
+  it('noteMode ставит режим и шлёт дельту без элементов', async () => {
+    vi.useFakeTimers();
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+
+    service.noteMode(REF, 'plan');
+    vi.advanceTimersByTime(50);
+
+    expect(feedChanged(client)).toEqual([
+      { ref: REF, revision: 1, upsert: [], removed: [], mode: 'plan' },
+    ]);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ mode: 'plan', revision: 1 });
+
+    service.noteMode(REF, 'plan');
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(1);
+  });
+
+  it('сев из журнала ставит режим последней записи permission-mode', async () => {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'write.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    start({
+      roots: () => [root],
+      readRecords: async (name) => (await readJsonlRecords(name)).records,
+    });
+
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ mode: 'default', revision: 0 });
+  });
+});

@@ -65,3 +65,32 @@ describe('createScreen', () => {
     screen.dispose();
   });
 });
+
+describe('Screen.text', () => {
+  it('цветовые последовательности в текст не попадают, концевые пробелы срезаны', async () => {
+    const screen = createScreen(40, 5);
+    screen.write('\x1b[31mкрасная\x1b[0m строка   \r\n\x1b[1;32mзелёная\x1b[0m');
+    await waitFor(() => screen.text().some((line) => line.includes('зелёная')));
+    expect(screen.text()).toEqual(['красная строка', 'зелёная', '', '', '']);
+    screen.dispose();
+  });
+
+  it('rows — последние строки видимой области', async () => {
+    const screen = createScreen(40, 5);
+    screen.write('a\r\nb\r\nc');
+    await waitFor(() => screen.text().includes('c'));
+    expect(screen.text(2)).toEqual(['', '']);
+    expect(screen.text(0)).toEqual([]);
+    expect(screen.text(99)).toHaveLength(5);
+    screen.dispose();
+  });
+
+  it('прокрутка: берётся видимая область, а не начало буфера', async () => {
+    const screen = createScreen(40, 3, 100);
+    screen.write('1\r\n2\r\n3\r\n4\r\n5');
+    await waitFor(() => screen.text().includes('5'));
+    expect(screen.text()).toEqual(['3', '4', '5']);
+    expect(screen.text(1)).toEqual(['5']);
+    screen.dispose();
+  });
+});
