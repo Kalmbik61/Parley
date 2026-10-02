@@ -137,6 +137,8 @@ const liveTask = (
 
 const feed = (): HTMLElement => document.querySelector('[data-room-feed]') as HTMLElement;
 const liveLine = (): HTMLElement | null => document.querySelector('[data-room-live]');
+/** Кнопка «↓N» над низом ленты: сколько пришло снизу, пока человек читал историю. */
+const newBelow = (): HTMLElement | null => document.querySelector('[data-room-new-below]');
 const messageRow = (id: string): HTMLElement => document.querySelector(`[data-message-id="${id}"]`) as HTMLElement;
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: WORK_ID, sessionId });
 
@@ -939,7 +941,7 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(document.querySelector('[data-reply-flash]')).toBeNull();
   });
 
-  it('прижатие ленты к низу после перехода к оригиналу живо: новое сообщение прижимает её, как раньше', () => {
+  it('после перехода к оригиналу новое сообщение агента ленту не уводит: человек читает вопрос, пришедшее — в «↓1»', () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(800);
     try {
       const { update } = renderPanel(entryOf({ messages: replyMessages() }));
@@ -956,7 +958,8 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
           ],
         }),
       );
-      expect(feed().scrollTop).toBe(800);
+      expect(feed().scrollTop).toBe(100);
+      expect(newBelow()?.textContent).toBe('↓1');
     } finally {
       spy.mockRestore();
     }
@@ -1118,15 +1121,121 @@ describe('RoomPanel — прокрутка к низу', () => {
     }
   });
 
-  it('новое сообщение снова прижимает ленту к низу, даже если её прокрутили вверх', () => {
+  /** Ленту прокрутили вверх, браузер прислал `scroll`: до дна далеко — человек читает историю. */
+  function scrollUp(top = 40): void {
+    feed().scrollTop = top;
+    fireEvent.scroll(feed());
+  }
+  const fromAgent = (id: string, at: string): Message =>
+    message(id, { from: 's-02', readBy: {}, at });
+  const PROPOSAL = {
+    id: 'p-01',
+    from: 's-01',
+    text: 'Делаем так',
+    rev: 0,
+    at: '2026-09-27T11:00:00.000Z',
+  };
+
+  it('у низа новое сообщение агента прижимает ленту, кнопки «↓N» нет', () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
     try {
       const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
       expect(feed().scrollTop).toBe(500);
-      feed().scrollTop = 40;
       setScrollHeight(feed(), 800);
-      update(entryOf({ messages: [message('m-1'), message('m-2', { at: '2026-09-27T10:00:00.000Z' })] }));
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
       expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('читают историю — новое сообщение агента ленту не трогает, внизу кнопка «↓1» (Parley 0.3.0)', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      setScrollHeight(feed(), 800);
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
+      expect(feed().scrollTop).toBe(40);
+      const button = newBelow() as HTMLElement;
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.textContent).toBe('↓1');
+      expect(button.getAttribute('aria-label')).toBe('1 new below');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('«↓N» копит новые сообщения и решение; клик ведёт к низу, и кнопка гаснет', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const two = [
+        message('m-1'),
+        fromAgent('m-2', '2026-09-27T10:00:00.000Z'),
+        fromAgent('m-3', '2026-09-27T10:01:00.000Z'),
+      ];
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: two }));
+      expect(newBelow()?.textContent).toBe('↓2');
+      // Новое решение ведущего — тоже снизу, ленту оно не уводит.
+      setScrollHeight(feed(), 900);
+      update(entryOf({ room: room({ proposal: PROPOSAL }), messages: two }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓3');
+      expect(newBelow()?.getAttribute('aria-label')).toBe('3 new below');
+
+      fireEvent.click(newBelow() as HTMLElement);
+      expect(feed().scrollTop).toBe(900);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('дошёл до низа прокруткой сам — «↓N» гаснет', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
+      expect(newBelow()).not.toBeNull();
+      // 500 − 460 − 0 = 40 ≤ 48: у низа.
+      scrollUp(460);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('своё сообщение (от человека) прижимает ленту к низу и гасит «↓N», даже когда читают историю', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const first = [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')];
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: first }));
+      expect(newBelow()?.textContent).toBe('↓1');
+      setScrollHeight(feed(), 800);
+      // `message()` по умолчанию — от человека: это его ответ из поля ввода.
+      update(entryOf({ messages: [...first, message('m-3', { at: '2026-09-27T10:05:00.000Z' })] }));
+      expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('новое решение, пока читают историю, ленту не уводит: карточка при появлении не прижимает ленту к низу', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      setScrollHeight(feed(), 700);
+      update(entryOf({ room: room({ proposal: PROPOSAL }), messages: [message('m-1')] }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓1');
     } finally {
       spy.mockRestore();
     }
@@ -1260,7 +1369,7 @@ describe('RoomPanel — открытие комнаты: к самому ран�
     expect(feed().scrollTop).toBe(900);
   });
 
-  it('новое сообщение после открытия прижимает ленту к низу, как раньше: политика прижатия не меняется', () => {
+  it('новое сообщение после открытия на упоминании ленту не уводит: человек читает упоминание, пришедшее — в «↓1»', () => {
     const { update } = renderPanel(entryOf({ messages: mentionMessages() }));
     expect(feed().scrollTop).toBe(0);
     update(
@@ -1271,7 +1380,8 @@ describe('RoomPanel — открытие комнаты: к самому ран�
         ],
       }),
     );
-    expect(feed().scrollTop).toBe(900);
+    expect(feed().scrollTop).toBe(0);
+    expect(document.querySelector('[data-room-new-below]')?.textContent).toBe('↓1');
     // Второго перехода к упоминанию нет: цель выбирают один раз, при открытии.
     expect(scrolled).toHaveLength(1);
   });

@@ -331,6 +331,8 @@ export const S = {
     humanMentionTitle: 'Mentions you',
     /** Цитата ответа над текстом сообщения (Parley 0.3.0), когда сообщения, на которое ответили, нет в этой комнате. */
     replyMissing: 'Original message is not in this room',
+    /** Кнопка `↓N` над низом ленты (Parley 0.3.0): столько пришло снизу, пока человек читал историю; клик — к низу. */
+    newBelow: (n: number): string => `${n} new below`,
     /** Карточка решения. */
     decisionWaiting: 'decision · waiting for you',
     accept: 'Accept',

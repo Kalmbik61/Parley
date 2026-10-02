@@ -458,7 +458,9 @@ message is shown as text, and a link opens in your browser. Each
   `@human` in the text (not in code or a link) is a "@you" chip, and the room opens at the
   earliest such mention you have not read. An answer to a particular message carries a one-line
   quote of it above the text ("↩ You: …"); a click on the quote scrolls the feed to the original
-  and highlights it for a moment. A waiting
+  and highlights it for a moment. The feed follows new messages only while it is at the bottom
+  or the message is your own; while you read above, what comes is counted in a `↓N` button over
+  the bottom of the feed, and a click takes you down. A waiting
   decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
   should the lead change?" and "Send to lead"); if the lead has replaced the text in the
   meantime, an answer to the old version is rejected with the toast "The decision changed —
