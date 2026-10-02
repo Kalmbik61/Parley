@@ -330,6 +330,10 @@ export type {
   CapabilitySkill,
   CapabilitySource,
 } from './capabilities/types.js';
+export { claudeCommands } from './capabilities/claude-commands.js';
+export { parseFrontmatter } from './capabilities/frontmatter.js';
+export { scanClaudeCapabilities } from './capabilities/scan.js';
+export type { ScanOptions } from './capabilities/scan.js';
 export {
   MCP_SERVER_BIN,
   codexMcpOverride,
