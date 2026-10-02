@@ -32,8 +32,12 @@ export interface SplitNode {
 
 export type FileRootSpec = { kind: 'project' } | { kind: 'worktree'; sessionId: string };
 
+/** Вид вкладки сессии (план 2026-10-01, решение 6): лента «Chat» или терминал. */
+export type TerminalView = 'chat' | 'terminal';
+
 export type TabSpec =
-  | { kind: 'terminal'; id: string; sessionId: string }
+  // view: нет поля — умолчание по сессии (`renderer/lib/feed-view.ts`); есть — выбор человека переключателем.
+  | { kind: 'terminal'; id: string; sessionId: string; view?: TerminalView }
   | { kind: 'mail'; id: 'mail' }
   | { kind: 'room'; id: string; roomId: string }
   // commit: null — все изменения ветки, иначе один коммит.

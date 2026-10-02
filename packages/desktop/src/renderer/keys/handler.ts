@@ -40,6 +40,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'tab.mruPrev',
   'find',
   'terminal.clear',
+  'chat.toggleView',
   'works.showArchived',
   'attention.next',
   'wake.toggle',
@@ -60,6 +61,8 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
 /** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */
 const REQUIRED_HOST_METHODS: Partial<Record<ActionId, readonly string[]>> = {
   'wake.toggle': ['wake.pause', 'wake.resume'],
+  // Без ленты у хоста вида «Chat» нет (план 2026-10-01, решение 6).
+  'chat.toggleView': ['feed.snapshot'],
 };
 
 /**

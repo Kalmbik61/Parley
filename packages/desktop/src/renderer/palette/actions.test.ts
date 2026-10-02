@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionId } from '../../shared/keybindings.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import { workKey } from '../../shared/work-keys.js';
 import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
 import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
@@ -15,11 +16,16 @@ import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, focusGroup, groups, openTab, splitGroup } from '../layout/tree.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
+import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
+import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { runAction, type ActionContext, type ActionSource } from './actions.js';
 
-const KEY = '/tmp/p\nw-01';
-const ORDER = Array.from({ length: 9 }, (_, index) => `/tmp/p\nw-0${index + 1}`);
+// Ключ — настоящий `workKey`: `chat.toggleView` ищет сессию вкладки в снимке работ по нему.
+const KEY = workKey('/tmp/p', 'w-01');
+const ORDER = Array.from({ length: 9 }, (_, index) => workKey('/tmp/p', `w-0${index + 1}`));
 
 function term(sessionId: string): TabSpec {
   return { kind: 'terminal', id: tabId.terminal(sessionId), sessionId };
@@ -162,13 +168,38 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'browser.zoomIn': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]),
     'browser.zoomOut': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, -1] }]),
     'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
+    // План 2026-10-01: активная вкладка s-09 — Claude без поля view, то есть в чате; действие ставит terminal.
+    'chat.toggleView': ({ layout }) => {
+      expect(layout.apply).toHaveBeenCalledTimes(1);
+      const op = layout.apply.mock.calls[0]?.[1] as unknown as (l: WorkLayout) => WorkLayout;
+      const next = op(layout.layouts[KEY] as WorkLayout);
+      expect(groups(next)[0]?.tabs.find((tab) => tab.id === tabId.terminal('s-09'))).toMatchObject({ view: 'terminal' });
+    },
   };
   const check = table[id];
   if (check === undefined) throw new Error(`нет ожидания для ${id}`);
   return check;
 }
 
+/** Хост с лентой и работа KEY с сессией s-09 нужного провайдера — для `chat.toggleView`. */
+function withFeedHost(provider = 'claude'): void {
+  useHostStore.setState({
+    status: { state: 'connected', hostVersion: '0.3.0', methods: [...REQUIRED_METHODS, 'feed.snapshot'] },
+  });
+  useWorksStore.setState({
+    entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-09', 'S09', { provider })] })],
+  });
+}
+
+function resetFeedHost(): void {
+  useHostStore.setState({ status: { state: 'connecting' } });
+  useWorksStore.setState({ entries: [] });
+}
+
 describe('runAction — таблица по реестру (тест 1 куска 6.3)', () => {
+  beforeEach(() => withFeedHost());
+  afterEach(resetFeedHost);
+
   it.each([...IMPLEMENTED_ACTIONS])('%s', (id) => {
     const spies = makeContext();
     runAction(id, spies.ctx);
@@ -473,5 +504,33 @@ describe('действия страницы: поиск и масштаб (те�
     await Promise.resolve();
     expect(warn).toHaveBeenCalled();
     expect(spies.toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
+  afterEach(resetFeedHost);
+
+  const viewAfter = (spies: Spies): unknown => {
+    const op = spies.layout.apply.mock.calls[0]?.[1] as unknown as (l: WorkLayout) => WorkLayout;
+    const next = op(spies.layout.layouts[KEY] as WorkLayout);
+    return groups(next)[0]?.tabs.find((tab) => tab.id === tabId.terminal('s-09'));
+  };
+
+  it('вкладка в терминале — переключает в chat', () => {
+    withFeedHost();
+    const spies = makeContext();
+    spies.layout.layouts[KEY] = { ...(spies.layout.layouts[KEY] as WorkLayout) };
+    const group = groups(spies.layout.layouts[KEY] as WorkLayout)[0]!;
+    group.tabs = group.tabs.map((tab) => (tab.kind === 'terminal' && tab.sessionId === 's-09' ? { ...tab, view: 'terminal' } : tab));
+    runAction('chat.toggleView', spies.ctx);
+    expect(viewAfter(spies)).toMatchObject({ view: 'chat' });
+  });
+
+  it('codex — тост с подсказкой, раскладка не тронута', () => {
+    withFeedHost('codex');
+    const spies = makeContext();
+    runAction('chat.toggleView', spies.ctx);
+    expect(spies.toast).toHaveBeenCalledWith(expect.stringContaining('Chat view is available for Claude Code'));
+    expect(spies.layout.apply).not.toHaveBeenCalled();
   });
 });

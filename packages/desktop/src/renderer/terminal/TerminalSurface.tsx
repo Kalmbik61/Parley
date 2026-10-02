@@ -74,6 +74,8 @@ export interface TerminalSurfaceProps {
   visible: boolean;
   fontFamily: string;
   fontSize: number;
+  /** Отступ сверху под тулбар вкладки с сегментом «Chat | Terminal» (план 2026-10-01); нет — 0. */
+  topInset?: number;
 }
 
 // ESC и управляющие байты в регулярках — ровно то, что вырезается из вставки.
@@ -125,6 +127,7 @@ function newMountId(): string {
 
 export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   const { sessionRef, tabId, groupId, visible } = props;
+  const topInset = props.topInset ?? 0;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [mountId] = useState(newMountId);
   const dark = useUiStore((state) => state.dark);
@@ -154,11 +157,11 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
     const el = rootRef.current;
     if (el === null) return;
     el.style.setProperty('position-anchor', `--g-${groupId}`);
-    el.style.setProperty('top', 'anchor(top)');
+    el.style.setProperty('top', topInset === 0 ? 'anchor(top)' : `calc(anchor(top) + ${topInset}px)`);
     el.style.setProperty('left', 'anchor(left)');
     el.style.setProperty('width', 'anchor-size(width)');
-    el.style.setProperty('height', 'anchor-size(height)');
-  }, [groupId]);
+    el.style.setProperty('height', topInset === 0 ? 'anchor-size(height)' : `calc(anchor-size(height) - ${topInset}px)`);
+  }, [groupId, topInset]);
 
   // `inert` в React 18 — не булев проп, ставится руками. Скрытая поверхность —
   // `visibility: hidden`, а не `display: none`: xterm без размеров их теряет.

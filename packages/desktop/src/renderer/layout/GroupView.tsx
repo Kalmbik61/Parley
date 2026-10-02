@@ -79,8 +79,16 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
     case 'terminal': {
       const session = entry.map.sessions.find((candidate) => candidate.id === tab.sessionId);
       if (session === undefined) return <MissingBody kind="session" onClose={onMissing} />;
-      // Сам терминал — в слое поверхностей (`SurfaceLayer.tsx`, кусок 2.5).
-      return <TerminalBody />;
+      // Сам терминал — в слое поверхностей (`SurfaceLayer.tsx`, кусок 2.5); вид «Chat» — в теле.
+      return (
+        <TerminalBody
+          workKey={workKeyOf(entry.projectPath, entry.map.work.id)}
+          tab={tab}
+          session={session}
+          sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }}
+          active={host.active}
+        />
+      );
     }
     case 'mail':
       return <MailBody bridge={host.bridge} entry={entry} active={host.active} />;

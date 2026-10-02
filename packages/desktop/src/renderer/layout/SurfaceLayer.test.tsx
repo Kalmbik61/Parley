@@ -5,10 +5,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { refKey } from '@parley/protocol';
 import type { WorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
+import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
@@ -20,7 +23,7 @@ import { LayoutView } from './LayoutView.js';
 import { useLayoutStore } from './store.js';
 import { SurfaceLayer } from './SurfaceLayer.js';
 import { tabMeta } from './tab-meta.js';
-import { focusTab, moveTab } from './tree.js';
+import { focusTab, moveTab, updateTab } from './tree.js';
 
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
@@ -412,5 +415,103 @@ describe('SurfaceLayer — вкладка браузера (тест 4 куск�
     expect(order()).toEqual(orderBefore);
     // Тело группы с вкладкой браузера — без запасного вида ошибки.
     expect(document.body.textContent).not.toContain("Couldn't show layout");
+  });
+});
+
+describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 6, решение контролёра Ж)', () => {
+  const FEED_METHODS = [...REQUIRED_METHODS, 'feed.snapshot', 'feed.subscribe', 'feed.unsubscribe'];
+  let disposeFeed: () => void = () => {};
+
+  beforeEach(() => {
+    resetFeedStoreForTests();
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods: FEED_METHODS } });
+    bridge.setHandler('feed.subscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1 }));
+    disposeFeed = useFeedStore.getState().init(bridge);
+  });
+
+  afterEach(() => {
+    disposeFeed();
+    resetFeedStoreForTests();
+    useHostStore.setState({ status: { state: 'connecting' } });
+  });
+
+  const feedCalls = (method: string, sessionId: string): number =>
+    bridge.calls.filter(
+      (call) => call.method === method && (call.params as { ref: { sessionId: string } }).ref.sessionId === sessionId,
+    ).length;
+
+  const setView = (tabId: string, view: 'chat' | 'terminal'): void => {
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => updateTab(layout, tabId, { view }));
+    });
+  };
+
+  it('Claude без поля view — чат: поверхности нет, лента подписана, сессия видима', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(2); // a в g1 и b в g2
+    expect(attachCount('a')).toBe(0);
+    // Подписка — на каждую открытую вкладку в чате, не только активную: x в g1 скрыта.
+    expect(feedCalls('feed.subscribe', 'x')).toBe(1);
+    expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('a'))]).toBe(true);
+    expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('x'))]).toBeUndefined();
+  });
+
+  it('view terminal — поверхность под тулбаром; переход туда и обратно монтирует её заново', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+
+    setView('terminal:a', 'terminal');
+    await flush();
+    const first = surface('terminal:a');
+    if (first === null) throw new Error('нет поверхности terminal:a');
+    const mountId = first.dataset.mountId;
+    // jsdom переставляет слагаемые calc и роняет голый anchor(): сверяем только отступ.
+    expect(first.style.getPropertyValue('top')).toContain('36px');
+    expect(first.style.getPropertyValue('height')).toContain('36px');
+    expect(attachCount('a')).toBe(1);
+    expect(feedCalls('feed.unsubscribe', 'a')).toBe(1);
+    expect(within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!).getByTestId('chat-toolbar')).toBeTruthy();
+
+    setView('terminal:a', 'chat');
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(detachCount('a')).toBe(1);
+    expect(feedCalls('feed.subscribe', 'a')).toBe(2);
+
+    setView('terminal:a', 'terminal');
+    await flush();
+    const second = surface('terminal:a');
+    expect(second).not.toBeNull();
+    expect(second?.dataset.mountId).not.toBe(mountId);
+    expect(attachCount('a')).toBe(2);
+  });
+
+  it('клик по сегменту Terminal пишет view в раскладку', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    const body = within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!);
+    fireEvent.click(body.getByRole('radio', { name: 'Terminal' }));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[WORK_KEY]!;
+    const tab = layout.root.type === 'split' && layout.root.children[0].type === 'group' ? layout.root.children[0].tabs[0] : null;
+    expect(tab).toMatchObject({ id: 'terminal:a', view: 'terminal' });
+    expect(surface('terminal:a')).not.toBeNull();
+  });
+
+  it('хост без feed.snapshot — терминал без тулбара, как раньше', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.2.0', methods: [...REQUIRED_METHODS] } });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')?.style.getPropertyValue('top')).not.toContain('36px');
+    expect(screen.queryByTestId('chat-toolbar')).toBeNull();
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
   });
 });

@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import type { HostNotice, NoticeKind } from '@parley/protocol';
+import { FEED_MIN_VERSION, type HostNotice, type NoticeKind } from '@parley/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -541,6 +541,20 @@ export const S = {
     lastEvent: (when: string): string => `last event ${when}`,
   },
 
+  /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
+  chat: {
+    /** Сегмент тулбара вкладки «Chat | Terminal». */
+    segment: { chat: 'Chat', terminal: 'Terminal' },
+    viewLabel: 'Session view',
+    /** Подсказка выключенного сегмента: Codex или `claude` ниже порога версии ленты. */
+    terminalOnly: `Chat view is available for Claude Code ${FEED_MIN_VERSION} or newer — this session runs in the terminal`,
+    loading: 'Loading the conversation…',
+    empty: 'Nothing here yet',
+    feedUnavailable: "Couldn't load the conversation — open the terminal",
+    /** Карточка разрешения, вопроса или плана до кнопок куска 4. */
+    waiting: 'Waiting for your answer',
+  },
+
   /**
    * Тосты отправки агенту (кусок 5.4, спека 8.6); `session` — `sessionTag`: 'S02'. Copy —
    * `S.common.copy`, Retry — `S.common.retry`, Resume — `S.sidebar.sessionMenu.resume`.
@@ -766,6 +780,7 @@ export const S = {
     tabNumber: (n: number): string => `Tab ${n}`,
     find: 'Find',
     clearTerminal: 'Clear terminal',
+    toggleChatTerminal: 'Toggle chat / terminal',
     settings: 'Settings',
     nextNeedsYou: 'Next session that needs you',
     // Реестр берёт pause; палитра подменяет на resume по wakePaused (6.2).

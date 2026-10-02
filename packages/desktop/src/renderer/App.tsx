@@ -15,6 +15,7 @@ import { S } from '../shared/strings.js';
 import { WindowCloseQuestion } from './files/SaveChangesDialog.js';
 import { AppShell } from './shell/AppShell.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
+import { useFeedStore } from './chat/store.js';
 import { useActivityStore } from './store/activity.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
@@ -187,6 +188,9 @@ export function App(): JSX.Element {
       // Провайдеры строки статуса (Organic, 1.1): один `providers.list` на подключение, а после
       // обрыва этот эффект заводится заново — список и версии CLI перечитываются.
       useProvidersStore.getState().init(bridge),
+      // Ленты вида «Chat» (план 2026-10-01): одна подписка на `feed.changed`; открытые ленты после
+      // переподключения подписываются и берут снимок заново.
+      useFeedStore.getState().init(bridge),
       // Бейдж и «просмотрено» (кусок 4.2) — рядом, оба по вниманию.
       wireBadge(bridge),
       wireSeenTracker(bridge),
