@@ -46,3 +46,4 @@ export {
 export { feedFromTranscript, interruptedAt } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';
+export { turnActive } from './turn.js';

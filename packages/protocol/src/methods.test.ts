@@ -301,6 +301,11 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
     expect(answer({ Q: 'x'.repeat(16 * 1024 + 1) }).success).toBe(false);
   });
 
+  it('feed.interrupt: только ref сессии', () => {
+    expect(METHODS['feed.interrupt'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['feed.interrupt'].safeParse({}).success).toBe(false);
+  });
+
   it('feed.decide: неизвестный вид решения, cardId длиннее 200 и без ref — отвергаются', () => {
     expect(decide({ kind: 'allow' }).success).toBe(false);
     expect(decide({ kind: 'permission', behavior: 'maybe' }).success).toBe(false);

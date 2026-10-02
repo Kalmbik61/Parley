@@ -41,6 +41,12 @@ export interface FakeFeedDeps {
   emitLog(): void;
   /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
   setSessions(next: FakeSession[]): void;
+  /** Всё, что служба напечатала в терминал сессии (`pty.write`). */
+  writes: string[];
+  /** Строки экрана терминала, которые отдаёт `pty.screenText`. */
+  setScreen(lines: string[]): void;
+  /** Процесс сессии: `null` — не запущен; `draft` — человек набирает в терминале. */
+  setProcess(process: { pid: number; draft?: boolean } | null): void;
 }
 
 type FakeEntry = { projectPath: string; map: { work: { id: string }; sessions: unknown[] } };
@@ -71,6 +77,9 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
   const exitListeners = new Set<ExitListener>();
   const startListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
+  const writes: string[] = [];
+  let screen: string[] = [];
+  let process: { pid: number; draft?: boolean } | null = { pid: 1 };
   const log = silentLog();
   const deps = {
     host: { log },
@@ -109,6 +118,12 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       },
     },
     pty: {
+      get: () =>
+        process === null ? undefined : { pid: process.pid, hasDraft: () => process?.draft === true },
+      write: (_ref: SessionRef, data: string) => {
+        writes.push(data);
+      },
+      screenText: () => (process === null ? undefined : screen),
       on: (event: string, listener: ExitListener) => {
         const listeners =
           event === 'exit' ? exitListeners : event === 'start' ? startListeners : null;
@@ -130,6 +145,13 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     emitExit(ref) {
       for (const listener of exitListeners) listener(ref);
+    },
+    writes,
+    setScreen(lines) {
+      screen = lines;
+    },
+    setProcess(next) {
+      process = next;
     },
     emitStart(ref) {
       for (const listener of startListeners) listener(ref);

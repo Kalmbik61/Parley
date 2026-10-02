@@ -65,6 +65,7 @@ export const WORKS_GATED_METHODS = [
   'feed.subscribe',
   'feed.unsubscribe',
   'feed.decide',
+  'feed.interrupt',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -140,6 +141,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.subscribe'] = feed.feedSubscribe as AnyHandler;
     methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
+    methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
   }
   const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
     'pty.input': pty.ptyInput as AnyNotificationHandler,

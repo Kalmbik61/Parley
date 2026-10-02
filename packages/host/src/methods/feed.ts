@@ -1,6 +1,6 @@
 /**
  * Методы `feed.*` (план 2026-10-01, Task 2): снимок ленты сессии или субагента, подписка на дельты
- * `feed.changed` и решение человека по карточке. Схемы параметров проверяет сервер (`METHODS`),
+ * `feed.changed`, решение человека по карточке и «Stop» (Esc агенту). Схемы параметров проверяет сервер (`METHODS`),
  * состояние ленты держит `FeedService`.
  */
 
@@ -16,6 +16,7 @@ export interface FeedHandlers {
   feedSubscribe: Handler<'feed.subscribe'>;
   feedUnsubscribe: Handler<'feed.unsubscribe'>;
   feedDecide: Handler<'feed.decide'>;
+  feedInterrupt: Handler<'feed.interrupt'>;
 }
 
 export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
@@ -30,5 +31,9 @@ export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
       return { ok: true };
     },
     feedDecide: async (params) => deps.feed.decide(params.ref, params.cardId, params.decision),
+    feedInterrupt: async (params) => {
+      deps.feed.interrupt(params.ref);
+      return { ok: true };
+    },
   };
 }

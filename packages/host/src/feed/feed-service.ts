@@ -25,6 +25,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   settleCards,
+  turnActive,
 } from '@parley/core';
 import type {
   FeedCard,
@@ -62,6 +63,18 @@ export const SEED_RECORD_WINDOW = 10_000;
 /** Сколько байт хвоста журнала читается в поисках записи о прерывании: несколько последних записей. */
 const INTERRUPT_TAIL_BYTES = 64 * 1024;
 
+/**
+ * Сколько ждать после Esc из чата, прежде чем закрыть ход самому: запись о прерывании хода с начатым
+ * ответом Claude Code пишет сразу, и её успевает поймать `checkInterrupts`.
+ */
+export const INTERRUPT_GRACE_MS = 1_500;
+const ESC = '\x1b';
+const BACKSPACE = '\x7f';
+/** Приглашение поля ввода Claude Code на экране: за ним — набранный текст. */
+const INPUT_PROMPT = /^\s*❯\s?(.*)$/;
+/** Сколько знаков начала промпта сверяется с полем ввода на экране. */
+const RESTORED_PREFIX = 24;
+
 const QUESTION_TOOL = 'AskUserQuestion';
 const PLAN_TOOL = 'ExitPlanMode';
 /** id субагента — как у `meta.json` (0.2.0): ничего похожего на путь до файловой системы не доходит. */
@@ -71,7 +84,7 @@ export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
   activity: Pick<ActivityService, 'onChange' | 'logFile' | 'questionHeld' | 'onLogChange'>;
-  pty: Pick<PtyManager, 'on'>;
+  pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
 }
 
 export interface FeedServiceOptions {
@@ -80,6 +93,8 @@ export interface FeedServiceOptions {
   batchMs?: number;
   /** Сколько хост держит хук без решения; дальше — `{}` и `stale`. */
   pendingTimeoutMs?: number;
+  /** Срок после Esc из чата, за который CLI сам пишет о прерывании; по умолчанию `INTERRUPT_GRACE_MS`. */
+  interruptGraceMs?: number;
   now?: () => number;
   /** Корни истории Claude Code, внутри которых читаются журналы; по умолчанию — `claudeProjectRoots()`. */
   roots?: () => readonly string[];
@@ -104,6 +119,11 @@ export interface FeedService {
    * ленту и шлёт дельту подписчикам, не дожидаясь события хука с `permission_mode`.
    */
   noteMode(ref: SessionRef, mode: string): void;
+  /**
+   * «Stop» вида «Chat»: Esc агенту по нажатию человека. Ход, который CLI бросил без записи в журнале
+   * (ответа ещё не было), лента закрывает сама, а текст промпта, возвращённый CLI в поле ввода, стирает.
+   */
+  interrupt(ref: SessionRef): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
 }
@@ -195,12 +215,15 @@ export function createFeedService(
   const maxBytes = options.maxBytes ?? FEED_MAX_BYTES;
   const batchMs = options.batchMs ?? FEED_BATCH_MS;
   const now = options.now ?? Date.now;
+  const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
   const roots = options.roots ?? (() => claudeProjectRoots());
   const readRecords = options.readRecords ?? readRecordsTail;
 
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
+  /** Таймеры присмотра за Esc из чата. */
+  const interruptTimers = new Set<NodeJS.Timeout>();
   let stopped = false;
 
   const rawPending: PendingHooks = createPendingHooks({
@@ -453,7 +476,7 @@ export function createFeedService(
       try {
         const records = await readTranscript(file);
         if (records === null || feed.live || stopped) return;
-        const seeded = feedFromTranscript(records, { limit: maxItems });
+        const seeded = closeBrokenTurn(feedFromTranscript(records, { limit: maxItems }));
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
@@ -476,6 +499,19 @@ export function createFeedService(
       }
     })();
     return feed.seeding;
+  }
+
+  /**
+   * Журнал оборван посреди хода: хост перезапустили или процесс убили, пока агент работал, либо ход
+   * бросили Esc до ответа (записи о прерывании тогда нет). Сев идёт, пока живых событий не было, — того
+   * хода уже нет, и без черты окно показывало бы у возобновлённой сессии «Working…» и Stop. Время черты —
+   * последнего элемента: когда оборвалось на самом деле, журнал не знает.
+   */
+  function closeBrokenTurn(state: FeedState): FeedState {
+    if (!turnActive(state.items)) return state;
+    const endedAt = state.items.at(-1)?.at ?? at();
+    const startedAt = state.items.findLast((item) => item.kind === 'prompt')?.at ?? endedAt;
+    return closeFeedTurn({ ...state, turnStartedAt: startedAt }, endedAt, { interrupted: true }).state;
   }
 
   /**
@@ -563,6 +599,42 @@ export function createFeedService(
     for (const item of feed.state.items) feed.batch.upsert.set(item.id, item);
     if (feed.state.permissionMode !== before.permissionMode) feed.modeChanged = true;
     flush(feed);
+  }
+
+  /** Поле ввода на экране показывает начало этого текста (пробелы не в счёт: CLI рисует их сдвигом каретки). */
+  function inputShows(screen: readonly string[], text: string): boolean {
+    // Многострочный промпт стоит в поле первой строкой за приглашением — с ней и сверяем.
+    const wanted = (text.trim().split('\n')[0] ?? '').replace(/\s+/g, '').slice(0, RESTORED_PREFIX);
+    if (wanted === '') return false;
+    const line = screen.findLast((candidate) => INPUT_PROMPT.test(candidate));
+    const shown = (line === undefined ? '' : (INPUT_PROMPT.exec(line)?.[1] ?? '')).replace(/\s+/g, '');
+    // Длинную вставку CLI держит в поле меткой `[Pasted text #N …]` — это тоже возвращённый промпт.
+    return shown.startsWith(wanted) || shown.startsWith('[Pastedtext#');
+  }
+
+  /**
+   * Срок после Esc вышел. Лента за это время не менялась — ни записи о прерывании, ни событий хуков: CLI
+   * бросил ход молча (ответа ещё не было) и вернул текст промпта в поле ввода. Ход закрывается чертой
+   * `interrupted`; текст стирается Backspace-ами — столько, сколько в нём знаков (лишние на пустом поле
+   * ничего не делают), и только если экран его показывает, а человек в терминале сам ничего не набирал.
+   */
+  function settleInterrupt(feed: SessionFeed, state: FeedState, pid: number): void {
+    if (stopped || feed.state !== state || feeds.get(refKey(feed.ref)) !== feed) return;
+    const handle = deps.pty.get(feed.ref);
+    if (handle === undefined || handle.pid !== pid) return;
+    const prompt = state.items.findLast((item) => item.kind === 'prompt');
+    commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+    if (prompt === undefined || prompt.kind !== 'prompt' || handle.hasDraft()) return;
+    const screen = deps.pty.screenText(feed.ref);
+    if (screen === undefined || !inputShows(screen, prompt.text)) return;
+    try {
+      deps.pty.write(feed.ref, BACKSPACE.repeat(Array.from(prompt.text).length));
+    } catch (error) {
+      log.warn('лента: возвращённый текст промпта не стёрт', {
+        sessionId: feed.ref.sessionId,
+        error: String(error),
+      });
+    }
   }
 
   async function agentSnapshot(ref: SessionRef, agentId: string): Promise<FeedSnapshot> {
@@ -775,6 +847,22 @@ export function createFeedService(
       commit(feed, { state: { ...feed.state, permissionMode: mode }, changes: [] });
     },
 
+    interrupt(ref) {
+      const handle = deps.pty.get(ref);
+      if (handle === undefined) throw new HostError('not_found', 'session is not running');
+      deps.pty.write(ref, ESC);
+      const feed = feeds.get(refKey(ref));
+      // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
+      if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;
+      const state = feed.state;
+      const pid = handle.pid;
+      const timer = setTimeout(() => {
+        interruptTimers.delete(timer);
+        settleInterrupt(feed, state, pid);
+      }, interruptGraceMs);
+      interruptTimers.add(timer);
+    },
+
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -787,6 +875,8 @@ export function createFeedService(
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;
       }
+      for (const timer of interruptTimers) clearTimeout(timer);
+      interruptTimers.clear();
       pending.settleAll();
     },
   };

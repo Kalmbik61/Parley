@@ -776,6 +776,39 @@ describe('сев из журнала', () => {
     expect(reader.finished()).toBe(0);
   });
 
+  it('журнал оборван посреди хода — сев закрывает ход чертой interrupted, идущий вызов отклонён', async () => {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'broken.jsonl');
+    const record = (value: Record<string, unknown>) => JSON.stringify({ sessionId: 's', ...value });
+    await writeFile(
+      file,
+      [
+        record({ type: 'user', uuid: 'u1', timestamp: '2026-10-02T10:00:00.000Z', message: { role: 'user', content: 'сделай' } }),
+        record({
+          type: 'assistant',
+          uuid: 'a1',
+          timestamp: '2026-10-02T10:00:05.000Z',
+          message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 600' } }] },
+        }),
+      ].join('\n'),
+    );
+    fakes.setLogFile(file);
+    start({ roots: () => [root] });
+
+    const snapshot = await service.snapshot(REF);
+
+    expect(snapshot.items.map((item) => item.kind)).toEqual(['prompt', 'tool', 'turn']);
+    expect(ofKind(snapshot.items, 'tool')[0]).toMatchObject({ status: 'rejected' });
+    expect(snapshot.items.at(-1)).toMatchObject({
+      kind: 'turn',
+      interrupted: true,
+      at: '2026-10-02T10:00:05.000Z',
+      durationMs: 5000,
+    });
+  });
+
   it('живые события уже были — журнал не читается', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
@@ -860,6 +893,120 @@ describe('сев из журнала', () => {
     expect(bytes).toBeLessThanOrEqual(limit);
     expect(cut.items.length).toBeLessThan(full.items.length);
     expect(cut.items.at(-1)).toEqual(last);
+  });
+});
+
+describe('Stop из чата: feed.interrupt (живая проверка 2026-10-02)', () => {
+  const ESC = '\x1b';
+  const BACKSPACE = '\x7f';
+  const INPUT = (text: string) => ['⏺ ответ', '────────', `❯ ${text}`, '────────', '  ⏵⏵ auto mode on'];
+
+  it('ход без ответа CLI бросает молча: лента закрывает его сама и стирает возвращённый в поле текст', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    send(prompt('Сосчитай от 1 до 40'));
+    fakes.setScreen(INPUT('Сосчитай от 1 до 40'));
+
+    service.interrupt(REF);
+    expect(fakes.writes).toEqual([ESC]);
+    vi.advanceTimersByTime(999);
+    expect(fakes.writes).toHaveLength(1);
+    vi.advanceTimersByTime(60);
+
+    expect(fakes.writes[1]).toBe(BACKSPACE.repeat('Сосчитай от 1 до 40'.length));
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+    expect(feedChanged(client).at(-1)?.upsert.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+  });
+
+  it('за срок пришло событие хода (ответ уже шёл) — ленту не трогаем: ход закроет запись журнала или Stop', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    send(prompt('go'));
+    fakes.setScreen(INPUT('go'));
+
+    service.interrupt(REF);
+    send(display('m1', 0, 'Отвечаю'));
+    vi.advanceTimersByTime(1100);
+
+    expect(fakes.writes).toEqual([ESC]);
+    const snapshot = await service.snapshot(REF);
+    expect(ofKind(snapshot.items, 'turn')).toHaveLength(0);
+  });
+
+  it('экран не показывает текст промпта в поле ввода — ход закрыт, но ничего не стирается', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    send(prompt('длинный вопрос человека'));
+    fakes.setScreen(INPUT(''));
+
+    service.interrupt(REF);
+    vi.advanceTimersByTime(1100);
+
+    expect(fakes.writes).toEqual([ESC]);
+    expect((await service.snapshot(REF)).items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+  });
+
+  it('человек набирает в терминале сам — его строку не стираем', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    send(prompt('вопрос'));
+    fakes.setScreen(INPUT('вопрос'));
+    fakes.setProcess({ pid: 1, draft: true });
+
+    service.interrupt(REF);
+    vi.advanceTimersByTime(1100);
+
+    expect(fakes.writes).toEqual([ESC]);
+  });
+
+  it('длинная вставка стоит в поле меткой [Pasted text #N] — стирается; многострочный промпт сверяется по первой строке', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    send(prompt('первая строка\nвторая строка'));
+    fakes.setScreen(INPUT('первая строка'));
+    service.interrupt(REF);
+    vi.advanceTimersByTime(1100);
+    expect(fakes.writes[1]).toBe(BACKSPACE.repeat('первая строка\nвторая строка'.length));
+
+    send(prompt('x'.repeat(900)));
+    fakes.setScreen(INPUT('[Pasted text #1 +3 lines]'));
+    service.interrupt(REF);
+    vi.advanceTimersByTime(1100);
+    expect(fakes.writes[3]).toBe(BACKSPACE.repeat(900));
+  });
+
+  it('хода в ленте нет — только Esc; сессия не запущена — not_found; процесс сменился за срок — ничего', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    service.interrupt(REF);
+    vi.advanceTimersByTime(1100);
+    expect(fakes.writes).toEqual([ESC]);
+
+    send(prompt('go'));
+    fakes.setScreen(INPUT('go'));
+    service.interrupt(REF);
+    fakes.setProcess({ pid: 2 });
+    vi.advanceTimersByTime(1100);
+    expect(fakes.writes).toEqual([ESC, ESC]);
+    expect(ofKind((await service.snapshot(REF)).items, 'turn')).toHaveLength(0);
+
+    fakes.setProcess(null);
+    expect(() => service.interrupt(REF)).toThrow(HostError);
+  });
+
+  it('stop() снимает присмотр за Esc', async () => {
+    vi.useFakeTimers();
+    start({ interruptGraceMs: 1000 });
+    send(prompt('go'));
+    fakes.setScreen(INPUT('go'));
+    service.interrupt(REF);
+    await service.stop();
+    vi.advanceTimersByTime(1100);
+    expect(fakes.writes).toEqual([ESC]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

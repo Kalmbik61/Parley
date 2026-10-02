@@ -176,6 +176,9 @@ export const METHODS = {
   'feed.unsubscribe': z.object({ ref: sessionRef }),
   // Решение человека — единственный путь, которым `allow`/`deny` доходит до хука (Review Focus 5).
   'feed.decide': z.object({ ref: sessionRef, cardId: z.string().max(200), decision: feedDecision }),
+  // «Stop» вида «Chat»: Esc агенту по нажатию человека; хост сам закрывает в ленте ход, который CLI бросил
+  // без записи, и стирает из поля ввода терминала возвращённый туда текст промпта.
+  'feed.interrupt': z.object({ ref: sessionRef }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -267,6 +270,7 @@ export interface Results {
   'feed.unsubscribe': { ok: true };
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
   'feed.decide': { applied: boolean; state: FeedCardState };
+  'feed.interrupt': { ok: true };
 }
 
 export type MethodName = keyof typeof METHODS;
