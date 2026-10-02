@@ -28,6 +28,11 @@ export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 export const FEED_TEXT_LIMIT = 256 * 1024;
 /** = `FEED_AGENT_CHILDREN` core: вложенных вызовов у карточки субагента. */
 export const FEED_AGENT_CHILDREN = 100;
+/**
+ * = `FEED_MIN_VERSION` core: наименьшая версия `claude`, которой хост пишет HTTP-хуки ленты. Окно по
+ * ней решает, доступен ли сессии вид «Chat» (решение 6), — core в рендерер не импортируется.
+ */
+export const FEED_MIN_VERSION = '2.1.286';
 
 /** Текст отказа для модели в `feed.decide` (как заметка возврата `rooms.resolveProposal`). */
 export const FEED_DECISION_MESSAGE_LIMIT = 4000;
