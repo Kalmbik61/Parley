@@ -318,6 +318,15 @@ describe('бриф: роль в комнате', () => {
     );
   });
 
+  it('ответ человеку в комнате — с replyTo: участник цитирует задачу, ведущий — то, на что отвечает (Parley 0.3.0)', () => {
+    expect(buildBrief(mapWithRoom(), 's-03')).toMatch(
+      /\(answer even if the human's message is a `note`\) with `replyTo` set to the id of the human's message, so the window quotes it/,
+    );
+    expect(buildBrief(mapWithRoom(), 's-02')).toContain(
+      'Answer the human in the room without `to`, with `replyTo` set to the id of the message you answer.',
+    );
+  });
+
   it('создатель-сессия, не назначенный ведущим, — тоже участник', () => {
     const brief = buildBrief(mapWithRoom(), 's-01');
 
