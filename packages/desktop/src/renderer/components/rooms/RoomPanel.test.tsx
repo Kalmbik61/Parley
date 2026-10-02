@@ -206,7 +206,7 @@ describe('RoomPanel — лента участников (1.3)', () => {
 
   it('клик по карточке открывает терминал участника', () => {
     const { initial } = renderPanel(entryOf());
-    fireEvent.click(document.querySelector('[data-participant="s-03"]') as HTMLElement);
+    fireEvent.click(within(document.querySelector('[data-participant="s-03"]') as HTMLElement).getByRole('button'));
     expect(initial.onOpenSession).toHaveBeenCalledWith('s-03');
   });
 
@@ -310,6 +310,35 @@ describe('RoomPanel — чем заняты участники (Parley 0.2.0)', 
     });
 
     expect(liveLine()).toBeNull();
+  });
+
+  // Кусок 4b плана 2026-10-01: строка субагентов карточки — бейдж с поповером; клик по агенту ведёт на его карточку в ленте.
+  it('поповер агентов у участника из metrics.tasks: строки по агентам; клик по строке — onOpenSession(сессия, агент)', () => {
+    const activity = withDoing({
+      's-01': { subagents: 2, tasks: [liveTask('agent-1', 'Orca mobile app research'), liveTask('agent-2', 'Docs lookup', { agentType: 'Plan', background: false })] },
+    });
+    const { initial } = renderPanel(entryOf(), { activity });
+
+    const trigger = within(card('s-01')).getByTestId('agents-badge');
+    expect(trigger.textContent).toBe('2 subagents: Orca mobile app research');
+    fireEvent.click(trigger);
+    expect(initial.onOpenSession).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId('agents-popover-row');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'general-purposebackgroundOrca mobile app research',
+      'PlanDocs lookup',
+    ]);
+    fireEvent.click(rows[1]!);
+    expect(initial.onOpenSession).toHaveBeenCalledWith('s-01', 'agent-2');
+    // Карточка без субагентов — без бейджа.
+    expect(within(card('s-02')).queryByTestId('agents-badge')).toBeNull();
+  });
+
+  it('участник ждёт — строка «Waiting…» без поповера, хотя субагенты есть: они в подсказке', () => {
+    const activity = withDoing({ 's-01': { waitingFor: 's-03', subagents: 1, tasks: [liveTask('agent-1', 'Docs lookup')] } });
+    renderPanel(entryOf(), { activity });
+    expect(within(card('s-01')).queryByTestId('agents-badge')).toBeNull();
+    expect(within(card('s-01')).getByText('Waiting for S03').getAttribute('title')).toBe('Waiting for S03\nSubagent: Docs lookup');
   });
 
   it('сессия с фоновыми субагентами — working и в карточке участника', () => {

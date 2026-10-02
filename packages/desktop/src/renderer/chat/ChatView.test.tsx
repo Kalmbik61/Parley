@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type SessionRef } from '@parley/protocol';
+import { refKey, type Capabilities, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -363,7 +363,17 @@ describe('ChatView — поле ввода и тулбар', () => {
     await waitFor(() => expect(screen.queryByTestId('chat-queued')).toBeNull());
   });
 
-  it('Stop виден только во время хода и шлёт Esc через pty.input', () => {
+  it('Stop у хоста с feed.interrupt зовёт метод, а не шлёт Esc сам (живая проверка 2026-10-02)', async () => {
+    hostWith([...FEED_METHODS, 'feed.interrupt']);
+    bridge.setHandler('feed.interrupt', () => ({ ok: true }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.stop }));
+    await waitFor(() => expect(bridge.calls).toContainEqual({ method: 'feed.interrupt', params: { ref: REF } }));
+    expect(bridge.notified.some((note) => note.method === 'pty.input')).toBe(false);
+  });
+
+  it('Stop виден только во время хода; хост без feed.interrupt — Esc через pty.input', () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'go'), turn('u1')]);
     expect(screen.queryByRole('button', { name: S.chat.stop })).toBeNull();
@@ -1182,5 +1192,355 @@ describe('ChatView — вложения в поле ввода (живая пр�
     view.unmount();
     renderBody(makeSession('s-01', 'S01'));
     expect(chipPaths()).toEqual(['/a/notes.txt']);
+  });
+});
+
+describe('ChatView — отказ отправки не теряет набранное', () => {
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const type = (value: string): void => {
+    fireEvent.change(field(), { target: { value } });
+  };
+  const chipPaths = (): Array<string | null> => screen.queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'));
+  const KEY = refKey(REF);
+  /** Скрепка: диалог отвечает `paths`, чипы встают после ответа. */
+  async function attach(...paths: string[]): Promise<void> {
+    bridge.setChosenFiles(paths);
+    fireEvent.click(screen.getByTestId('chat-attach'));
+    await act(async () => {});
+  }
+  const draft = (): string => useChatUiStore.getState().drafts[KEY] ?? '';
+  const staged = (): readonly string[] => useChatUiStore.getState().attachments[KEY] ?? [];
+
+  /** Хост отвечает на `pty.send` исходом `outcome` не сразу: до `answer()` поле уже очищено, как у любой отправки. */
+  function holdSend(): { answer: (outcome: SendResult) => Promise<void> } {
+    let resolve!: (value: SendResult) => void;
+    bridge.setHandler(
+      'pty.send',
+      () =>
+        new Promise<SendResult>((done) => {
+          resolve = done;
+        }),
+    );
+    return {
+      answer: async (outcome) => {
+        resolve(outcome);
+        await act(async () => {});
+      },
+    };
+  }
+
+  it('поле и вложения очищаются сразу, до ответа хоста', async () => {
+    const send = holdSend();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/notes.txt');
+    type('draft text');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('');
+    expect(chipPaths()).toEqual([]);
+    expect(draft()).toBe('');
+    expect(staged()).toEqual([]);
+    await send.answer({ inserted: true, submitted: true, reason: null });
+  });
+
+  it.each(['blocked', 'busy', 'no-paste-mode'] as const)('хост ничего не вставил (%s) — текст и вложения вернулись в поле', async (reason) => {
+    const send = holdSend();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/b c.png', '/a/notes.txt');
+    type('what is this?');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('');
+    await send.answer({ inserted: false, submitted: false, reason });
+    // Вернулось набранное как есть: текст без упоминаний, вложения — чипами.
+    expect(field().value).toBe('what is this?');
+    expect(chipPaths()).toEqual(['/a/b c.png', '/a/notes.txt']);
+    expect(draft()).toBe('what is this?');
+    expect(staged()).toEqual(['/a/b c.png', '/a/notes.txt']);
+    // Тост отказа прежний: из поля его ничто не убирает.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('вернулось, и отправить можно снова — теперь удачно: поле пусто, вернуть больше нечего', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('again please');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(field().value).toBe('again please');
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(field().value).toBe('');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
+      { ref: REF, text: 'again please', submit: true },
+      { ref: REF, text: 'again please', submit: true },
+    ]);
+  });
+
+  it('ошибка вызова (хост недоступен, сессия не запущена) — тоже возврат', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setHandler('pty.send', () => {
+      throw new Error('boom');
+    });
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/notes.txt');
+    type('lost?');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(field().value).toBe('lost?');
+    expect(chipPaths()).toEqual(['/a/notes.txt']);
+    vi.restoreAllMocks();
+  });
+
+  it('человек за это время начал новое сообщение — его текст не трогаем, прежнее не возвращается', async () => {
+    const send = holdSend();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/old.txt');
+    type('first message');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    type('second, typed meanwhile');
+    await send.answer({ inserted: false, submitted: false, reason: 'blocked' });
+    expect(field().value).toBe('second, typed meanwhile');
+    // Вложения прежнего сообщения тоже не вернулись: возврат — всё или ничего.
+    expect(chipPaths()).toEqual([]);
+    expect(staged()).toEqual([]);
+  });
+
+  it('человек успел прикрепить файл (текст пуст) — поле занято: прежнее не возвращается', async () => {
+    const send = holdSend();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('first message');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await attach('/a/new.txt');
+    await send.answer({ inserted: false, submitted: false, reason: 'busy' });
+    expect(field().value).toBe('');
+    expect(chipPaths()).toEqual(['/a/new.txt']);
+  });
+
+  it.each(['draft', 'input', 'blocked-before-enter', 'restarted'] as const)('вставлено без Enter (%s) — текст уже в поле ввода терминала: поле остаётся пустым', async (reason) => {
+    const send = holdSend();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/notes.txt');
+    type('pasted without enter');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await send.answer({ inserted: true, submitted: false, reason });
+    expect(field().value).toBe('');
+    expect(chipPaths()).toEqual([]);
+    expect(draft()).toBe('');
+    expect(staged()).toEqual([]);
+  });
+
+  it('успех — поле пустое; серый элемент очереди при отказе уходит, как и прежде', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('fine');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(field().value).toBe('');
+
+    // Ход идёт, отказ busy: серого элемента нет, а набранное вернулось в поле.
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
+    setFeed([prompt('p1', 'go')]);
+    type('queued then refused');
+    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.queue }));
+    await waitFor(() => expect(screen.queryByTestId('chat-queued')).toBeNull());
+    expect(field().value).toBe('queued then refused');
+  });
+
+  it('вид размонтирован до ответа хоста — набранное возвращается в стор и ждёт нового монтирования', async () => {
+    const send = holdSend();
+    const view = renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('typed before leaving');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    view.unmount();
+    await send.answer({ inserted: false, submitted: false, reason: 'blocked' });
+    expect(draft()).toBe('typed before leaving');
+    renderBody(makeSession('s-01', 'S01'));
+    expect(field().value).toBe('typed before leaving');
+  });
+});
+
+describe('ChatView — агенты: тулбар, прокрутка к карточке, heldByBackground (кусок 4b)', () => {
+  const KEY = refKey(REF);
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const agent = (id: string, agentId: string | null, status: 'running' | 'done' | 'failed' = 'running'): FeedItem => ({
+    id,
+    at: AT,
+    kind: 'agent',
+    toolUseId: `tu-${id}`,
+    agentId,
+    agentType: 'Explore',
+    description: `Agent ${id}`,
+    prompt: null,
+    model: null,
+    background: true,
+    status,
+    toolCount: 0,
+    children: [],
+  });
+  const running = (): HTMLElement | null => screen.queryByTestId('chat-agents-running');
+
+  /** Строки ленты по 100px: с ними видно, к какой именно карточке прокрутили (`offsetHeight` — так мерит virtual-core). */
+  function rowHeights(): void {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.getAttribute('data-testid') === 'chat-feed' ? 600 : this.hasAttribute('data-index') ? 100 : 0;
+      },
+    });
+  }
+  /** Прокрутчик: `scrollTo` запоминает смещение; событие `scroll` — отдельной задачей, как в браузере. */
+  function scroller(): { scrollTo: ReturnType<typeof vi.fn>; top: () => number } {
+    const el = screen.getByTestId('chat-feed');
+    let top = 0;
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 });
+    Object.defineProperty(el, 'scrollTop', { configurable: true, get: () => top, set: (value: number) => { top = value; } });
+    const scrollTo = vi.fn((options: { top: number }) => {
+      top = options.top;
+      queueMicrotask(() => el.dispatchEvent(new Event('scroll')));
+    });
+    (el as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
+    return { scrollTo, top: () => top };
+  }
+  const feedWithAgents = (): FeedItem[] => [
+    prompt('p1', 'go'),
+    text('t1', 'one'),
+    agent('a0', 'g0', 'done'),
+    agent('a1', 'g1'),
+    text('t2', 'two'),
+    agent('a2', 'g2'),
+    turn('u1'),
+  ];
+
+  it('«N agents running» — по карточкам со статусом running: «1 agent running», «2 agents running»; готовые не в счёт; нет работающих — кнопки нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go'), agent('a0', 'g0', 'done'), agent('a9', 'g9', 'failed'), turn('u1')]);
+    expect(running()).toBeNull();
+    setFeed([prompt('p1', 'go'), agent('a1', 'g1'), turn('u1')], 2);
+    expect(running()?.textContent).toBe('1 agent running');
+    setFeed(feedWithAgents(), 3);
+    expect(running()?.textContent).toBe('2 agents running');
+    expect(screen.getByTestId('chat-toolbar').contains(running())).toBe(true);
+    setFeed([...feedWithAgents().slice(0, 3), agent('a1', 'g1', 'done'), agent('a2', 'g2', 'done'), turn('u1')], 4);
+    expect(running()).toBeNull();
+  });
+
+  it('клик по «N agents running» ставит просьбу про первую работающую карточку, и лента прокручивает к ней, погасив просьбу', async () => {
+    rowHeights();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed(feedWithAgents());
+    const feed = scroller();
+    const request = vi.spyOn(useChatUiStore.getState(), 'requestReveal');
+    fireEvent.click(running()!);
+    await act(async () => {});
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(KEY, 'g1');
+    // Первая работающая — четвёртая строка: три по 100px над ней.
+    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 300 }));
+    expect(useChatUiStore.getState().reveal).toBeNull();
+    // Прилипание к низу снято: человек читает выше.
+    expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
+  });
+
+  it('у первой работающей карточки agentId ещё нет (SubagentStart не пришёл) — берётся следующая; ни у одной нет — просьбы нет', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go'), agent('a1', null), agent('a2', 'g2'), turn('u1')]);
+    const request = vi.spyOn(useChatUiStore.getState(), 'requestReveal');
+    fireEvent.click(running()!);
+    expect(request).toHaveBeenCalledWith(KEY, 'g2');
+    setFeed([prompt('p1', 'go'), agent('a1', null), turn('u1')], 2);
+    request.mockClear();
+    fireEvent.click(running()!);
+    expect(request).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it('просьба, поставленная до монтирования вида (вкладку только что открыли), исполняется, когда лента готова', async () => {
+    rowHeights();
+    useChatUiStore.getState().requestReveal(KEY, 'g2');
+    renderBody(makeSession('s-01', 'S01'));
+    const feed = scroller();
+    // Снимок ещё не пришёл — просьба ждёт.
+    expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: KEY, agentId: 'g2' });
+    expect(feed.scrollTo).not.toHaveBeenCalled();
+    act(() => {
+      useFeedStore.setState({ feeds: { [KEY]: { items: feedWithAgents(), revision: 1, mode: null, status: 'ready' } } });
+    });
+    await act(async () => {});
+    // Строки только что появились и не измерены — точное смещение виртуализатор доведёт сам, здесь важно, что прокрутка была.
+    expect(feed.scrollTo).toHaveBeenCalledTimes(1);
+    expect(useChatUiStore.getState().reveal).toBeNull();
+    expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
+  });
+
+  it('просьба про другую сессию лентой этой сессии не исполняется и не гасится', async () => {
+    rowHeights();
+    useChatUiStore.getState().requestReveal(refKey({ ...REF, sessionId: 's-99' }), 'g1');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed(feedWithAgents());
+    const feed = scroller();
+    await act(async () => {});
+    expect(feed.scrollTo).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: S.chat.jumpToLatest })).toBeNull();
+    expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: refKey({ ...REF, sessionId: 's-99' }), agentId: 'g1' });
+  });
+
+  it('просьба про карточку, которой в этой ленте нет, ждёт: ни прокрутки, ни «Jump to latest»; карточка появилась — прокрутка', async () => {
+    rowHeights();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go'), turn('u1')]);
+    const feed = scroller();
+    act(() => useChatUiStore.getState().requestReveal(KEY, 'g1'));
+    await act(async () => {});
+    expect(feed.scrollTo).not.toHaveBeenCalled();
+    expect(useChatUiStore.getState().reveal).toMatchObject({ agentId: 'g1' });
+    setFeed([prompt('p1', 'go'), agent('a1', 'g1'), turn('u1')], 2);
+    await act(async () => {});
+    expect(feed.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 100 }));
+    expect(useChatUiStore.getState().reveal).toBeNull();
+  });
+
+  it('heldByBackground: лента кончилась turn, сессию держат фоновые субагенты — Stop нет, «Send» а не «Queue», поле открыто и отправляет', async () => {
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working', { heldByBackground: true })]), loaded: true });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'explore'), agent('a1', 'g1'), agent('a2', 'g2'), turn('u1')]);
+    expect(running()?.textContent).toBe('2 agents running');
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    expect(field().disabled).toBe(false);
+    expect(screen.getAllByRole('button', { name: S.chat.composer.send })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: S.chat.composer.queue })).toBeNull();
+
+    fireEvent.change(field(), { target: { value: 'meanwhile, a question' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
+      { ref: REF, text: 'meanwhile, a question', submit: true },
+    ]);
+    // Без хода — без серого элемента: промпт придёт хуком сразу.
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
+  it('родитель проснулся по <task-notification> и работает сам (идущий вызов) — Stop на месте, как у любого хода', () => {
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]), loaded: true });
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([
+      prompt('p1', 'explore'),
+      agent('a1', 'g1', 'done'),
+      turn('u1'),
+      { id: 'tool1', at: AT, kind: 'tool', toolUseId: 'tu1', name: 'Bash', input: {}, status: 'running' },
+    ]);
+    expect(screen.getByTestId('chat-stop')).toBeTruthy();
+    expect(running()).toBeNull();
   });
 });

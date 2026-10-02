@@ -28,6 +28,10 @@
  * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
  * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
  * тултип `Lead`.
+ *
+ * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером перед словом состояния
+ * (`AgentsBadge`): строка поповера открывает сессию на карточке агента. Хост прежней версии списка не присылает —
+ * тогда у строки бейджа нет, а счётчик `▤N` остаётся в тултипе, как был.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
@@ -37,7 +41,9 @@ import type { WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
+import { openAgentCard } from '../chat/open-agent.js';
 import { AgentIcon } from '../components/AgentIcon.js';
+import { AgentsBadge } from '../components/AgentsBadge.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { dndId, type DragSourceData } from '../layout/dnd.js';
 import { cn } from '../lib/cn.js';
@@ -119,6 +125,8 @@ export const SessionRow = memo(function SessionRow({
   const dragging = active !== null;
   const draggingThis = active?.id === dragId;
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  // Поповер агентов открыт — тултип строки не нужен: оба встают справа от строки и закрыли бы друг друга.
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const setRowRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -189,9 +197,17 @@ export const SessionRow = memo(function SessionRow({
   const secondary = 'text-work-sidebar-muted-foreground';
   const blocked = attention === 'needs-you';
   const unseen = attention === 'unseen';
+  // Живые субагенты — бейдж с поповером (кусок 4b); хост прежней версии списка не присылает, и счётчик `▤N` остаётся в
+  // тултипе. Метрики спящей и закрытой сессии — след прошлого процесса: у них агентов нет, как и на карточке участника комнаты.
+  const agents = session.lifecycle === 'active' ? (activity?.metrics?.tasks ?? []) : [];
+  // Последний агент закончил при открытом поповере — бейдж ушёл вместе с ним и «закрыто» не сообщил: без сброса тултип
+  // строки остался бы спрятан насовсем.
+  useEffect(() => {
+    if (agents.length === 0) setAgentsOpen(false);
+  }, [agents.length]);
 
   return (
-    <HoverCard open={tooltipOpen && !dragging} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
+    <HoverCard open={tooltipOpen && !dragging && !agentsOpen} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
       <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
       <HoverCardTrigger asChild>
         <div
@@ -264,6 +280,21 @@ export const SessionRow = memo(function SessionRow({
             >
               ⚠
             </span>
+          ) : null}
+          {agents.length > 0 ? (
+            <AgentsBadge
+              tasks={agents}
+              side="right"
+              anchor={rowRef}
+              // Tab в списке ведёт курсор строки (roving tabindex): бейдж встаёт в порядок Tab только у строки под курсором.
+              tabIndex={stop ? 0 : -1}
+              onOpenChange={setAgentsOpen}
+              onOpen={(task) => openAgentCard({ projectPath, workId, sessionId: session.id }, task.id)}
+              className={cn(
+                'h-[18px] shrink-0 rounded-full bg-[color-mix(in_srgb,currentColor_10%,transparent)] px-1.5 text-[10px] leading-[18px] hover:bg-[color-mix(in_srgb,currentColor_20%,transparent)]',
+                secondary,
+              )}
+            />
           ) : null}
           <span
             className={cn(

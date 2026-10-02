@@ -36,4 +36,12 @@ describe('formatMetricsLine', () => {
     );
     expect(line).toBe('↑1.2k ↓845 · 12m · ▤1 · ⋮1');
   });
+
+  // Кусок 4b: хост со списком живых субагентов показывает их бейджем в строке сессии — ▤N в тултипе не повторяется.
+  it('есть список субагентов (tasks) — ▤N не печатается, ⋮ остаётся; списка нет (хост прежней версии) — ▤N как был', () => {
+    const task = { id: 'a', agentType: 'Explore', description: 'Look around', background: true };
+    expect(formatMetricsLine(metrics({ subagents: 1, unread: 1, tasks: [task] }))).toBe('— · — · ⋮1');
+    expect(formatMetricsLine(metrics({ subagents: 0, tasks: [] }))).toBe('— · —');
+    expect(formatMetricsLine(metrics({ subagents: 1, unread: 1 }))).toBe('— · — · ▤1 · ⋮1');
+  });
 });

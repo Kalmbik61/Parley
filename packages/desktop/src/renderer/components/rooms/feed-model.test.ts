@@ -296,6 +296,29 @@ describe('buildRoomModel — чем занят участник (Parley 0.2.0)',
     });
   });
 
+  // Кусок 4b плана 2026-10-01: поповер на строке субагентов получает их списком.
+  it('agents — те же субагенты для поповера: список, пока строка — субагенты; ожидание важнее — пусто; ничем не занят — пусто', () => {
+    const agentsOf = (extra: Partial<LiveMetrics>, sessionsOver?: WorkSession[]) =>
+      build(
+        entryOf(sessionsOver === undefined ? {} : { sessions: sessionsOver }),
+        activityMap([makeActivity(REF('s-01'), 'working', { metrics: metrics(extra) })]),
+      ).participants[0]?.agents;
+    const tasks = [task('a'), task('b', { background: false })];
+    expect(agentsOf({ tasks })).toEqual(tasks);
+    expect(agentsOf({ tasks: [task('a')] })).toEqual([task('a')]);
+    expect(agentsOf({ tasks, waitingFor: 's-02' })).toEqual([]);
+    expect(agentsOf({ tasks: [], waitingFor: null })).toEqual([]);
+    expect(agentsOf({})).toEqual([]);
+    // Нет активности вовсе — пусто, а не «неизвестно».
+    expect(build(entryOf()).participants.map((participant) => participant.agents)).toEqual([[], [], []]);
+    // Только у живой сессии: у закрытой, спящей и не запущенной метрики — след прошлого процесса.
+    for (const lifecycle of ['closed', 'sleeping', 'pending'] as const) {
+      const custom = sessions();
+      custom[0] = makeSession('s-01', 'архитектор', { lifecycle });
+      expect(agentsOf({ tasks }, custom), lifecycle).toEqual([]);
+    }
+  });
+
   it('данные только у живой сессии: закрытая, спящая и не запущенная ничем не заняты', () => {
     const busy = { tasks: [task('a')], waitingFor: 's-02' };
     for (const lifecycle of ['closed', 'sleeping', 'pending'] as const) {

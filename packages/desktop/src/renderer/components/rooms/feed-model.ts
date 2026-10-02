@@ -14,6 +14,7 @@
  *
  * Чем занят участник (`doing`, `doingDetail`) — из тех же метрик (`tasks`, `waitingFor`, Parley 0.2.0): живой
  * субагент или ожидание `wait_for`. Только у живой сессии: у закрытой и спящей метрики — след прошлого процесса.
+ * `agents` — те же субагенты списком для поповера на строке `doing` (кусок 4b плана 2026-10-01).
  */
 
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
@@ -62,6 +63,11 @@ export interface ParticipantModel {
   doing: string | null;
   /** Полный список для подсказки: все субагенты по строке, ожидание — первой; `null`, когда `doing` пуст. */
   doingDetail: string | null;
+  /**
+   * Живые субагенты для поповера на строке `doing` (кусок 4b). Не пусто, только когда `doing` — сама строка субагентов:
+   * ожидание `wait_for` важнее, и тогда субагенты видны лишь в подсказке.
+   */
+  agents: readonly LiveTask[];
   lead: boolean;
   /** Закрытая сессия: в ленте участников есть, а в меню упоминаний нет. */
   closed: boolean;
@@ -155,7 +161,7 @@ const INBOX = 'inbox';
 function doingOf(
   tasks: readonly LiveTask[],
   waitingFor: string | null,
-): { doing: string | null; doingDetail: string | null } {
+): { doing: string | null; doingDetail: string | null; agents: readonly LiveTask[] } {
   const waiting =
     waitingFor === null
       ? null
@@ -172,7 +178,7 @@ function doingOf(
         : S.rooms.doingSubagents(tasks.length, first);
 
   const doing = waiting ?? subagents;
-  if (doing === null) return { doing: null, doingDetail: null };
+  if (doing === null) return { doing: null, doingDetail: null, agents: [] };
 
   const lines = waiting === null ? [] : [waiting];
   if (tasks.length > 1) {
@@ -183,7 +189,7 @@ function doingOf(
   } else if (subagents !== null) {
     lines.push(subagents);
   }
-  return { doing, doingDetail: lines.join('\n') };
+  return { doing, doingDetail: lines.join('\n'), agents: waiting === null ? tasks : [] };
 }
 
 export function buildRoomModel(input: RoomModelInput): RoomModel | null {
@@ -208,10 +214,10 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
     // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
-    const { doing, doingDetail } =
+    const { doing, doingDetail, agents } =
       session.lifecycle === 'active'
         ? doingOf(liveEntry?.metrics?.tasks ?? [], liveEntry?.metrics?.waitingFor ?? null)
-        : { doing: null, doingDetail: null };
+        : { doing: null, doingDetail: null, agents: [] };
     participants.push({
       id,
       label: sessionRowLabel(id, session.label),
@@ -226,6 +232,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       task: session.task,
       doing,
       doingDetail,
+      agents,
       lead: id === lead,
       closed: session.lifecycle === 'closed',
     });

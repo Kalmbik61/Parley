@@ -2,7 +2,8 @@
  * Поле ввода вида «Chat» (план 2026-10-01, решение 8): textarea на 1–8 строк (растёт по тексту —
  * `field-sizing: content`, дальше прокрутка), Enter — отправить, Shift+Enter — перенос строки. Пока
  * ход идёт, кнопка — «Queue»: сообщение уйдёт в очередь CLI. Саму отправку (`pty.send`, отказы и
- * тосты) делает владелец — `ChatView`; поле лишь отдаёт текст (с упоминаниями вложений) и очищается.
+ * тосты) делает владелец — `ChatView`; поле лишь отдаёт набранное (текст и пути вложений), а очищает его
+ * владелец — и он же возвращает набранное, если хост ничего не вставил.
  *
  * Текст и вложения — снаружи (черновик и список путей в `ui-store.ts` по сессии): переключение вида и
  * вкладки их не теряет. Поле получает фокус, когда вид появляется (`visible`), и держит его после
@@ -32,7 +33,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { pasteHasOnlyImage } from '../terminal/drop.js';
-import { addAttachments, composePrompt } from './attachments.js';
+import { addAttachments } from './attachments.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { applySuggestion, suggestionContext } from './suggestions.js';
 import { SuggestionList } from './SuggestionList.js';
@@ -50,8 +51,11 @@ export interface ComposerProps {
   onAttachmentsChange: (next: readonly string[]) => void;
   /** Мост окна: по нему чипы берут миниатюры картинок. */
   bridge: ParleyBridge;
-  /** Текст вместе с упоминаниями вложений (`composePrompt`) — тот, что и уйдёт в CLI. */
-  onSubmit: (text: string) => void;
+  /**
+   * Набранное как есть — текст и пути вложений. Сборку «текст + упоминания» (`composePrompt`), очистку поля и вложений
+   * и их возврат при отказе отправки делает владелец: поле само ничего не стирает.
+   */
+  onSubmit: (text: string, attachments: readonly string[]) => void;
   /** Есть — слева от «Send/Queue» кнопка «Stop» (ход идёт; живая проверка 2026-10-02). */
   onStop?: () => void;
   /** Откуда берутся подсказки: команды и скиллы, модели, файлы и субагенты. */
@@ -150,9 +154,7 @@ export function Composer({
   const canSend = text.trim() !== '' || attachments.length > 0;
   const submit = (): void => {
     if (!canSend) return;
-    onSubmit(composePrompt(text, attachments));
-    onTextChange('');
-    if (attachments.length > 0) onAttachmentsChange([]);
+    onSubmit(text, attachments);
     field.current?.focus();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {

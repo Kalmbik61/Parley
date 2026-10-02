@@ -13,6 +13,7 @@ import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../../attention/focus-target.js';
+import { openAgentCard } from '../../chat/open-agent.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
 import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
@@ -39,8 +40,13 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
   }, [bridge, connections]);
 
   // Клик по карточке участника: тот же переход, что клик по уведомлению (4.3) — вкладка терминала, вспышка, фокус.
-  const openSession = (sessionId: string): void => {
+  // Клик по агенту в поповере его строки субагентов — тот же переход, но вид «Chat» и прокрутка к карточке агента (кусок 4b).
+  const openSession = (sessionId: string, agentId?: string): void => {
     const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId };
+    if (agentId !== undefined) {
+      openAgentCard(ref, agentId);
+      return;
+    }
     if (!applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps())) toast(S.notifications.targetGone);
   };
 

@@ -44,7 +44,10 @@ export function formatTokens(value: number): string {
 /**
  * Строка метрик целиком. Токенов нет вовсе (оба `null`) — `—` вместо пары
  * стрелок; нулевые `▤` (субагенты) и `⋮` (непрочитанное) не печатаются —
- * колонка не должна заполняться нулями по умолчанию.
+ * колонка не должна заполняться нулями по умолчанию. Хост со списком живых
+ * субагентов (`tasks`) их число показывает бейджем с поповером в самой строке
+ * сессии (кусок 4b), счётчик `▤` тогда не повторяется; прежний хост списка
+ * не присылает — счётчик остаётся единственным признаком.
  */
 export function formatMetricsLine(metrics: LiveMetrics): string {
   const parts: string[] = [];
@@ -55,7 +58,7 @@ export function formatMetricsLine(metrics: LiveMetrics): string {
       : `↑${formatTokens(metrics.tokensIn ?? 0)} ↓${formatTokens(metrics.tokensOut ?? 0)}`,
   );
   parts.push(formatDuration(metrics.durationMs));
-  if (metrics.subagents > 0) parts.push(`▤${metrics.subagents}`);
+  if (metrics.tasks === undefined && metrics.subagents > 0) parts.push(`▤${metrics.subagents}`);
   if (metrics.unread > 0) parts.push(`⋮${metrics.unread}`);
 
   return parts.join(' · ');

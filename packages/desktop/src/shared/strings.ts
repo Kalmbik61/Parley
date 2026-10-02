@@ -636,6 +636,14 @@ export const S = {
       toolCalls: (count: number): string => (count === 1 ? '1 tool call' : `${count} tool calls`),
       status: { running: 'Running', done: 'Done', failed: 'Failed' },
       background: 'background',
+      /** Бейдж с поповером в строке сессии и в ленте участников комнаты (кусок 4b): `2 agents`. */
+      count: (count: number): string => (count === 1 ? '1 agent' : `${count} agents`),
+      /** Кнопка тулбара чата: сколько карточек агентов ещё работает. */
+      running: (count: number): string => (count === 1 ? '1 agent running' : `${count} agents running`),
+      /** Подпись (`aria-label`) строки поповера: открыть карточку агента в ленте сессии; `kind` — тип агента. */
+      open: (kind: string): string => `Open ${kind}`,
+      /** Имя поповера для скринридера. */
+      list: 'Agents',
       details: 'Show agent details',
       result: 'Result',
       transcriptLoading: 'Loading the transcript…',

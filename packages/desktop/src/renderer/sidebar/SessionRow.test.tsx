@@ -10,10 +10,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { Activity, WorkSession } from '@parley/core';
-import type { HostNotice } from '@parley/protocol';
+import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';
@@ -21,6 +21,10 @@ import { useNoticesStore } from '../store/notices.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession } from '../test-utils/work-fixtures.js';
 import { SessionRow } from './SessionRow.js';
+
+// «Открыть» строку поповера агентов — переход окна (`chat/open-agent.ts`, свой тест): здесь важно лишь, что строка зовёт его.
+const openAgentCard = vi.hoisted(() => vi.fn());
+vi.mock('../chat/open-agent.js', () => ({ openAgentCard }));
 
 const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
@@ -547,5 +551,148 @@ describe('SessionRow — меню строки (кусок 3.4)', () => {
     fireEvent.contextMenu(row());
     fireEvent.click(screen.getByText('Open'));
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Кусок 4b плана 2026-10-01 (решение 13): живые субагенты — бейдж «N agents» с поповером в самой строке сессии вместо `▤N`.
+describe('SessionRow — бейдж агентов (кусок 4b)', () => {
+  const REF = { projectPath: PROJECT, workId: WORK, sessionId: 's-01' };
+  const task = (id: string, extra: Partial<LiveTask> = {}): LiveTask => ({
+    id,
+    agentType: 'Explore',
+    description: `Task ${id}`,
+    background: true,
+    ...extra,
+  });
+  const metricsOf = (extra: Partial<LiveMetrics>): LiveMetrics => ({
+    tokensIn: 1200,
+    tokensOut: 300,
+    durationMs: 65_000,
+    unread: 0,
+    subagents: 0,
+    model: null,
+    ...extra,
+  });
+  const rowWith = (metrics: LiveMetrics | null, session = makeSession('s-01', 'agent row'), onOpen: () => void = () => {}): JSX.Element => (
+    <SessionRow
+      workKey={KEY}
+      projectPath={PROJECT}
+      workId={WORK}
+      bridge={BRIDGE}
+      session={session}
+      depth={0}
+      activity={makeActivity(REF, 'working', { metrics })}
+      now={NOW}
+      draggable
+      selected={false}
+      onOpen={onOpen}
+    />
+  );
+  const renderWith = (metrics: LiveMetrics | null, session = makeSession('s-01', 'agent row'), onOpen: () => void = () => {}) =>
+    render(rowWith(metrics, session, onOpen));
+  const badge = (): HTMLElement | null => row().querySelector<HTMLElement>('[data-testid="agents-badge"]');
+  const tooltipText = (): string | null => document.querySelector('[data-session-tooltip]')?.textContent ?? null;
+
+  beforeEach(() => openAgentCard.mockClear());
+
+  it('есть metrics.tasks — бейдж «2 agents» в строке между названием и словом состояния; без них — бейджа нет', () => {
+    renderWith(metricsOf({ subagents: 2, tasks: [task('a'), task('b')] }));
+    expect(badge()?.textContent).toBe('2 agents');
+    expect(row().textContent).toContain('S01 agent row2 agentsworking');
+    cleanup();
+    renderWith(metricsOf({ subagents: 0, tasks: [] }));
+    expect(badge()).toBeNull();
+    cleanup();
+    renderWith(null);
+    expect(badge()).toBeNull();
+  });
+
+  it('в строке метрик тултипа ▤N нет, когда бейдж его заменил; хост без поля tasks — бейджа нет, а ▤N в тултипе как был', async () => {
+    renderWith(metricsOf({ subagents: 2, tasks: [task('a'), task('b')] }));
+    act(() => row().focus());
+    await waitFor(() => expect(tooltipText()).not.toBeNull());
+    expect(tooltipText()).not.toContain('▤');
+    cleanup();
+
+    const old = metricsOf({ subagents: 2 });
+    renderWith(old);
+    expect(badge()).toBeNull();
+    act(() => row().focus());
+    await waitFor(() => expect(tooltipText()).toContain(formatMetricsLine(old)));
+    expect(tooltipText()).toContain('▤2');
+  });
+
+  it('спящая и закрытая сессия: метрики прошлого процесса бейджа не дают', () => {
+    for (const lifecycle of ['sleeping', 'closed'] as const) {
+      renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }), makeSession('s-01', 'a', { lifecycle }));
+      expect(badge(), lifecycle).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('поповер: тип, описание и «background» по каждому агенту; строка зовёт openAgentCard со ссылкой на сессию и id агента', () => {
+    const onOpen = vi.fn();
+    renderWith(
+      metricsOf({
+        subagents: 2,
+        tasks: [task('agent-1', { description: 'Look around' }), task('agent-2', { agentType: 'Plan', description: 'Plan it', background: false })],
+      }),
+      makeSession('s-01', 'agent row'),
+      onOpen,
+    );
+    fireEvent.click(badge()!);
+    const rows = screen.getAllByTestId('agents-popover-row');
+    expect(rows.map((item) => item.textContent)).toEqual(['ExplorebackgroundLook around', 'PlanPlan it']);
+    fireEvent.click(rows[1]!);
+    expect(openAgentCard).toHaveBeenCalledTimes(1);
+    expect(openAgentCard).toHaveBeenCalledWith(REF, 'agent-2');
+    // Строка поповера — не клик по строке сессии: она ведёт на карточку агента сама.
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('agents-popover')).toBeNull();
+  });
+
+  it('клик по бейджу и Enter на нём строку сессии не открывают', () => {
+    const onOpen = vi.fn();
+    renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }), makeSession('s-01', 'agent row'), onOpen);
+    fireEvent.click(badge()!);
+    fireEvent.keyDown(badge()!, { key: 'Enter' });
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.getByTestId('agents-popover')).toBeTruthy();
+  });
+
+  it('пока поповер открыт, тултип строки скрыт; закрылся поповер — тултип снова может открыться', async () => {
+    renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }));
+    act(() => row().focus());
+    await waitFor(() => expect(tooltipText()).not.toBeNull());
+    fireEvent.click(badge()!);
+    await waitFor(() => expect(tooltipText()).toBeNull());
+    expect(within(document.body).getByTestId('agents-popover')).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId('agents-popover'), { key: 'Escape' });
+    await waitFor(() => expect(tooltipText()).not.toBeNull());
+  });
+
+  it('последний агент закончил при открытом поповере — бейдж ушёл, и тултип строки снова открывается', async () => {
+    const view = renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }));
+    fireEvent.click(badge()!);
+    expect(screen.getByTestId('agents-popover')).toBeTruthy();
+    view.rerender(rowWith(metricsOf({ subagents: 0, tasks: [] })));
+    expect(badge()).toBeNull();
+    expect(screen.queryByTestId('agents-popover')).toBeNull();
+    act(() => row().focus());
+    await waitFor(() => expect(tooltipText()).not.toBeNull());
+  });
+
+  it('бейдж — в порядке Tab только у строки под курсором сайдбара (roving tabindex): у остальных -1', () => {
+    renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }));
+    // Курсор сайдбара на этой строке не стоит — и бейдж из порядка Tab выпал вместе с ней.
+    expect(row().getAttribute('tabindex')).toBe('-1');
+    expect(badge()?.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('пилюля бейджа: высота 18px, текст 10px, строка её не сжимает', () => {
+    renderWith(metricsOf({ subagents: 1, tasks: [task('a')] }));
+    expect(badge()?.className).toContain('h-[18px]');
+    expect(badge()?.className).toContain('shrink-0');
+    expect(badge()?.className).toContain('text-[10px]');
   });
 });

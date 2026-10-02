@@ -9,9 +9,18 @@
  *
  * Ввод (решение 8): текст уходит `pty.send` с `submit: true` через `sendWithToast` — те же отказы и
  * тосты, что у отправки из комнаты и ревью. Отправленное во время хода показывается в ленте серым,
- * пока не придёт промпт с тем же текстом, или до отказа отправки. «Stop» — Esc агенту (`pty.input`).
+ * пока не придёт промпт с тем же текстом, или до отказа отправки. «Stop» — `feed.interrupt` хоста (Esc агенту и
+ * присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
  * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
+ * Поле и вложения очищаются сразу; если хост ничего не вставил (нет процесса, `blocked`, `busy`, `no-paste-mode`),
+ * набранное возвращается — но только в поле, пустое к этому моменту: человек мог начать новое сообщение. Вставка без
+ * Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) ничего не возвращает: текст уже в поле ввода терминала.
+ *
+ * Агенты (кусок 4b): «N agents running» в тулбаре — по карточкам `agent` ленты со статусом `running`; клик по ней и по
+ * бейджу агентов в сайдбаре и комнате ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
+ * сессию держат одни фоновые субагенты (`heldByBackground`), лента кончается `turn`: хода нет, Stop не показывается,
+ * поле ввода открыто — карточки агентов `turnActive` не считает.
  *
  * Меню режима в тулбаре (кусок 4a, решения К и Л): подпись — `mode` ленты, выбор — `sessions.setMode`;
  * пока запрос в пути или сессия не живая (хост ответил бы `not_found`), меню выключено; `verified: false` — тост «откройте терминал». Баннер «ждёт в
@@ -48,12 +57,12 @@ import { useWorksStore } from '../store/works.js';
 import { NotRunningCard } from '../terminal/NotRunningCard.js';
 import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
-import { addAttachments } from './attachments.js';
+import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
-import { currentModel, hasPendingCard, turnActive } from './feed-model.js';
+import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
@@ -124,6 +133,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const waiting = blocked && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
   const canSetMode = useHostSupports('sessions.setMode');
+  const canInterrupt = useHostSupports('feed.interrupt');
   const [modeBusy, setModeBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const modelOptions = useProvidersStore((state) => state.providers.find((item) => item.id === provider)?.models) ?? NO_MODELS;
@@ -157,6 +167,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
   const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
   const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
+  // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
+  const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
+  const clearReveal = useChatUiStore((state) => state.clearReveal);
+  const agents = runningAgents(items);
   useEffect(() => {
     useUiStore.getState().setSessionVisible(sessionKey, visible);
   }, [sessionKey, visible]);
@@ -170,14 +184,26 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     });
   }, [items, sessionKey]);
 
-  const submit = (text: string): void => {
-    const { updateQueued } = useChatUiStore.getState();
+  const submit = (typed: string, paths: readonly string[]): void => {
+    const { updateQueued, setDraft, setAttachments } = useChatUiStore.getState();
+    const text = composePrompt(typed, paths);
     const id = String((nextQueuedId += 1));
     if (active) updateQueued(sessionKey, (was) => [...was, { id, text, seen: promptCount(items, text) }]);
+    // Поле очищается сразу, как в любом чате; хост ничего не вставил — набранное вернётся (ниже).
+    setDraft(sessionKey, '');
+    if (paths.length > 0) setAttachments(sessionKey, []);
     void sendWithToast(sendDeps, sessionRef, text, true, { silentSuccess: true }).then((outcome) => {
       if (!('error' in outcome) && outcome.submitted) return;
       // Отказ или вставка без Enter: в очередь CLI сообщение не попало.
       updateQueued(sessionKey, (was) => (was.some((entry) => entry.id === id) ? was.filter((entry) => entry.id !== id) : was));
+      // Вставка без Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) — текст уже в поле ввода терминала.
+      if (!('error' in outcome) && outcome.inserted) return;
+      // Ничего не вставлено (нет процесса, `blocked`, `busy`, `no-paste-mode`): набранное не должно пропасть. Человек за
+      // это время мог начать новое сообщение — его поле не трогаем.
+      const now = useChatUiStore.getState();
+      if ((now.drafts[sessionKey] ?? '') !== '' || (now.attachments[sessionKey] ?? NO_PATHS).length > 0) return;
+      setDraft(sessionKey, typed);
+      if (paths.length > 0) setAttachments(sessionKey, paths);
     });
   };
 
@@ -249,7 +275,22 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const showWorking = active && !(lastItem?.kind === 'text' && lastItem.streaming) && !hasPendingCard(items);
   const turnStart = items.findLast((item) => item.kind === 'prompt')?.at ?? null;
 
-  const stop = (): void => bridge.notify('pty.input', { ref: sessionRef, data: '\x1b' });
+  // Stop — метод хоста: он шлёт Esc и сам закрывает ход, который CLI бросил без записи (ответа ещё не было),
+  // стирая возвращённый в поле терминала текст промпта. Хост без метода — прежний Esc в терминал.
+  const stop = (): void => {
+    if (!canInterrupt) {
+      bridge.notify('pty.input', { ref: sessionRef, data: '\x1b' });
+      return;
+    }
+    bridge.call('feed.interrupt', { ref: sessionRef }).catch((error: unknown) => {
+      console.warn('[parley] feed.interrupt', decodeIpcError(error).message);
+    });
+  };
+  // К первой работающей карточке; у только что созданной (`SubagentStart` ещё не пришёл) `agentId` нет — прокручивать не к чему.
+  const showAgent = (): void => {
+    const agentId = agents.map((agent) => agent.agentId).find((id): id is string => id !== null);
+    if (agentId !== undefined) useChatUiStore.getState().requestReveal(sessionKey, agentId);
+  };
   const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
 
   return (
@@ -270,6 +311,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           model={model}
           {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
           {...(modelOptions.length > 0 ? { modelMenu: { options: modelOptions, busy: modelBusy || !live, onSelect: selectModel } } : {})}
+          {...(agents.length > 0 ? { agents: { running: agents.length, onShow: showAgent } } : {})}
         />
         <FeedList
           items={items}
@@ -277,6 +319,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           note={noteOf(feed)}
           {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
           {...(showWorking ? { working: { since: turnStart } } : {})}
+          {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
         />
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}

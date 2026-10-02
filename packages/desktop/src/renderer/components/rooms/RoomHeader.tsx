@@ -12,7 +12,7 @@ export interface RoomHeaderProps {
   title: string;
   subtitle: string;
   participants: readonly ParticipantModel[];
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
 export function RoomHeader({ title, subtitle, participants, onOpenSession }: RoomHeaderProps): JSX.Element {

@@ -28,8 +28,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * буфер обмена человека тесты не читают и не пишут), файл с диска — синтетический бросок `File` из скрытого `<input
  * type=file>` (как в `terminal-send.spec.ts`). Отправленное стабу видно в экране терминала: `PASTE<<…>>` и `echo: …`.
  *
- * Не покрыто: бейдж агентов в сайдбаре и у участника комнаты (кусок 4b ещё не сделан); хост без `feed.*`
- * (подменить `hello` без правки кода окна нечем).
+ * Агенты (кусок 4b): бейдж «N agents» в строке сессии сайдбара с поповером, «N agents running» в тулбаре чата и
+ * прокрутка ленты к карточке — тест «агенты» ниже; у участника комнаты тот же поповер — юнит-тесты (комнату в этом файле
+ * не заводим). Не покрыто: хост без `feed.*` (подменить `hello` без правки кода окна нечем).
  *
  * Снимки — в `.omc/reviews/shots/` worktree (не коммитится).
  */
@@ -221,6 +222,33 @@ async function clickUntil(button: Locator, answered: () => Promise<boolean>): Pr
     if (await button.isVisible()) await button.click({ timeout: 2000 });
     expect(await answered()).toBe(true);
   }).toPass({ timeout: 20_000, intervals: [300, 500, 1000] });
+}
+
+/** Описание фонового субагента в ~200 знаков: длинное, чтобы поповер и строки с ним проверялись на переполнение. */
+const LONG_DESCRIPTION =
+  'Summarise every file in the repository root, explain what each one is for, group them by purpose and list the questions that are still open about the build setup and the release process';
+
+/**
+ * Фоновый субагент (кусок 4b): карточка в ленте (HTTP-хуки) и живой субагент у хоста — `background_tasks` в журнале событий,
+ * по нему считаются `metrics.tasks`; `id` задачи совпадает с `agentId` карточки. Затем родитель пишет абзацы, и карточка
+ * уходит вверх за экран, а в конце ход родителя кончается: сессию держит снимок с этим субагентом.
+ */
+async function launchBackgroundAgent(hooks: Hooks, agentId: string, paragraphs: number): Promise<void> {
+  const agentInput = { description: LONG_DESCRIPTION, prompt: 'Look around the repository', subagent_type: 'Explore' };
+  const snapshot = [{ id: agentId, type: 'subagent', status: 'running', agent_type: 'Explore', description: LONG_DESCRIPTION }];
+  await hooks.fire('PreToolUse', { tool_name: 'Agent', tool_input: agentInput, tool_use_id: 'toolu_badge1', permission_mode: 'default' });
+  await hooks.fire('PostToolUse', {
+    tool_name: 'Agent',
+    tool_input: agentInput,
+    tool_use_id: 'toolu_badge1',
+    permission_mode: 'default',
+    tool_response: { isAsync: true, status: 'async_launched', agentId, description: LONG_DESCRIPTION },
+  });
+  await hooks.fire('SubagentStart', { agent_id: agentId, agent_type: 'Explore', background_tasks: snapshot });
+  for (let at = 0; at < paragraphs; at += 1) {
+    await hooks.fire('MessageDisplay', { message_id: `msg-badge-${at}`, index: 0, final: true, delta: `Paragraph ${at}: the explorer works in the background while the parent keeps writing.` });
+  }
+  await hooks.fire('Stop', { last_assistant_message: 'Waiting for the explorer.', stop_hook_active: false, background_tasks: snapshot });
 }
 
 interface Opened {
@@ -578,6 +606,29 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     expect(errors).toEqual([]);
   });
 
+  test('Stop до ответа: записи о прерывании нет — хост закрывает ход сам (feed.interrupt), Stop и «Working…» пропадают', async () => {
+    const { window, hooks, errors } = await open();
+    const chat = window.getByTestId('chat-view');
+    await expect(chat).toBeVisible();
+    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+
+    // Ход начался, ответа ещё нет: настоящий Claude Code по Esc бросает такой ход без хука и без записи журнала.
+    await hooks.fire('UserPromptSubmit', { prompt: 'Stop me before any output', permission_mode: 'default' });
+    await expect(chat.getByTestId('chat-stop')).toBeVisible();
+    await expect(chat.getByTestId('chat-working')).toBeVisible();
+    await chat.getByTestId('chat-stop').click();
+
+    await expect(chat.locator('[data-testid="chat-turn"][data-turn-interrupted]')).toHaveCount(1, { timeout: 10_000 });
+    await expect(chat.getByTestId('chat-stop')).toHaveCount(0);
+    await expect(chat.getByTestId('chat-working')).toHaveCount(0);
+    // Следующее сообщение — обычный новый ход: лента не осталась «в ходе».
+    await hooks.fire('UserPromptSubmit', { prompt: 'Next prompt', permission_mode: 'default' });
+    await expect(chat.getByTestId('chat-prompt')).toHaveCount(2);
+    await expect(chat.getByTestId('chat-stop')).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
+
   test('карточки: разрешение (allow, always, deny с текстом), вопрос, план, карточка агента', async () => {
     const { window, hooks, errors } = await open();
     // Стаб сам дописывает в журнал нейтральное событие при старте: вкладка открывается чатом без SessionStart.
@@ -744,6 +795,194 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await expect(agent.getByTestId('chat-agent-details')).toContainText('The project has README.md and notes.txt');
     await expect(agent.getByTestId('chat-agent-children').getByTestId('chat-tool')).toHaveCount(1);
     await hooks.fire('Stop', { last_assistant_message: 'Done exploring.', stop_hook_active: false });
+
+    expect(errors).toEqual([]);
+  });
+
+  test('агенты: бейдж в строке сессии с поповером, «1 agent running» в тулбаре, прокрутка к карточке; Stop нет; 800×500 в обеих темах', async () => {
+    const { app, window, ref, hooks, errors } = await open();
+    const chat = window.getByTestId('chat-view');
+    await expect(chat).toBeVisible();
+    await resize(app, 800, 500);
+    await expect(chat).toBeVisible();
+    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+    await hooks.fire('UserPromptSubmit', { prompt: 'Explore the repository and keep working', permission_mode: 'default' });
+
+    // Фоновый субагент с описанием в ~200 знаков; родитель пишет дальше, карточка уходит вверх, ход родителя кончается.
+    const agentId = 'b1c2d3e4f5061728';
+    await launchBackgroundAgent(hooks, agentId, 24);
+
+    // Строки ленты виртуализированы: карточка так далеко вверху, что в DOM её уже нет.
+    const agent = chat.getByTestId('chat-agent');
+    await expect.poll(() => agent.count()).toBe(0);
+
+    // Строка сессии в сайдбаре: бейдж вместо ▤N.
+    const badge = window.locator(`[data-session-id="${ref.sessionId}"]`).getByTestId('agents-badge');
+    await expect(badge).toHaveText('1 agent', { timeout: 20_000 });
+
+    // Тулбар чата: «1 agent running»; пока сессию держит один фоновый субагент, Stop нет, а поле ввода открыто.
+    const running = chat.getByTestId('chat-agents-running');
+    await expect(running).toHaveText('1 agent running');
+    await expect(chat.getByTestId('chat-stop')).toHaveCount(0);
+    const field = chat.getByRole('textbox', { name: 'Message to Claude' });
+    await expect(field).toBeEnabled();
+    await expect(chat.getByRole('button', { name: 'Send' })).toBeVisible();
+
+    // Поповер в окне 800×500: целиком в окне, длинное описание обрезано тремя строками и не раздвигает его.
+    const viewport = await window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    const popover = window.getByTestId('agents-popover');
+    const row = popover.getByTestId('agents-popover-row');
+    const openPopover = async (): Promise<void> => {
+      await badge.click();
+      await expect(popover).toBeVisible();
+      await expect(row).toHaveCount(1);
+    };
+    await openPopover();
+    await expect(row).toHaveAttribute('aria-label', 'Open Explore');
+    await expect(row).toContainText('background');
+    await expect(row).toContainText('Summarise every file');
+    const popoverBox = await boxOf(popover);
+    expect(popoverBox.x).toBeGreaterThanOrEqual(0);
+    expect(popoverBox.y).toBeGreaterThanOrEqual(0);
+    expect(popoverBox.x + popoverBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(popoverBox.y + popoverBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+    expect(await popover.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const rowBox = await boxOf(row);
+    expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(popoverBox.x + popoverBox.width + 0.5);
+    // Поповер встаёт справа от всей строки сессии (как её тултип), а не от бейджа: слово состояния и время строки видны.
+    const sessionRowBox = await boxOf(window.locator(`[data-session-id="${ref.sessionId}"]`));
+    expect(popoverBox.x).toBeGreaterThanOrEqual(sessionRowBox.x + sessionRowBox.width - 0.5);
+    // Описание обрезано тремя строками (текст длиннее — иначе обрезать нечего), полный — в подсказке строки.
+    await expect(row).toHaveAttribute('title', LONG_DESCRIPTION);
+    const clamp = await row.locator('span.line-clamp-3').evaluate((element) => ({
+      lines: element.clientHeight / parseFloat(getComputedStyle(element).lineHeight),
+      truncated: element.scrollHeight > element.clientHeight,
+    }));
+    expect(clamp.lines).toBeLessThanOrEqual(3.05);
+    expect(clamp.truncated).toBe(true);
+    // Тултип строки сессии, пока поповер открыт, спрятан.
+    await expect(window.locator('[data-session-tooltip]')).toHaveCount(0);
+    await shot(window, 'agents-800x500');
+    // Палитра (смена темы) закрыла бы поповер сама — закрываем явно и открываем заново в другой теме.
+    await window.keyboard.press('Escape');
+    await expect(popover).toHaveCount(0);
+    await pickTheme(window, 'Theme: dark');
+    await openPopover();
+    await shot(window, 'agents-800x500-dark');
+    await window.keyboard.press('Escape');
+    await expect(popover).toHaveCount(0);
+    await pickTheme(window, 'Theme: light');
+
+    // «1 agent running» → лента прокручивается к карточке (она была выше экрана), «Jump to latest» появляется.
+    await running.click();
+    await expect(agent).toBeInViewport();
+    await expect(agent).toHaveAttribute('data-agent-status', 'running');
+    await expect(chat.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
+    await shot(window, 'agents-card-800x500');
+
+    // Назад к низу — карточка снова вне экрана; теперь из поповера: клик по строке агента ведёт к его карточке, поповер закрывается.
+    await chat.getByRole('button', { name: 'Jump to latest' }).click();
+    await expect.poll(() => agent.count()).toBe(0);
+    await openPopover();
+    await row.click();
+    await expect(popover).toHaveCount(0);
+    await expect(agent).toBeInViewport();
+    // Строка поповера — переход окна: вкладка сессии осталась в виде Chat, терминала нет.
+    await expect(chat).toBeVisible();
+    await expect(window.locator('.xterm')).toHaveCount(0);
+
+    // Субагент закончил: карточка done, «agent running» и бейдж в сайдбаре пропадают.
+    await hooks.fire('SubagentStop', {
+      agent_id: agentId,
+      agent_type: 'Explore',
+      last_assistant_message: 'The repository has a build setup and a release process.',
+      agent_transcript_path: path.join(project, 'subagents', `agent-${agentId}.jsonl`),
+      stop_hook_active: false,
+      background_tasks: [],
+    });
+    await expect(agent).toHaveAttribute('data-agent-status', 'done');
+    await expect(chat.getByTestId('chat-agents-running')).toHaveCount(0);
+    await expect(badge).toHaveCount(0, { timeout: 20_000 });
+
+    expect(errors).toEqual([]);
+  });
+
+  test('комната: строка субагентов участника — бейдж с поповером; клик по агенту ведёт в чат его сессии к карточке агента (800×500)', async () => {
+    const { app, window, ref, hooks, errors } = await open();
+    const chat = window.getByTestId('chat-view');
+    await expect(chat).toBeVisible();
+    await resize(app, 800, 500);
+    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+    await hooks.fire('UserPromptSubmit', { prompt: 'Explore the repository and keep working', permission_mode: 'default' });
+    const agentId = 'c1d2e3f4a5b60718';
+    await launchBackgroundAgent(hooks, agentId, 24);
+    const agent = chat.getByTestId('chat-agent');
+    await expect.poll(() => agent.count()).toBe(0);
+
+    // Комната из этой сессии (ведущий) и второй: хост создаёт её тихо, заглушка писем не читает.
+    const helper = await call<{ ref: Ref }>(window, 'sessions.create', {
+      projectPath: project,
+      workId: ref.workId,
+      provider: 'claude',
+      label: 'helper',
+      task: '',
+      parent: null,
+    });
+    const { roomId } = await call<{ roomId: string }>(window, 'rooms.create', {
+      projectPath: project,
+      workId: ref.workId,
+      title: 'e2e-room',
+      members: [ref.sessionId, helper.ref.sessionId],
+      lead: ref.sessionId,
+      quiet: true,
+    });
+    await window.locator(`[data-room-row="${roomId}"] > div`).first().click();
+    const roomTab = window.locator(`[role="tab"][data-tab-id="room:${roomId}"]`);
+    await expect(roomTab).toHaveAttribute('data-active', 'true');
+
+    // Карточка участника: вторая строка — «Subagent: …» бейджем; у второго участника, ничем не занятого, её нет.
+    const card = window.locator(`[data-participant="${ref.sessionId}"]`);
+    const badge = card.getByTestId('agents-badge');
+    await expect(badge).toContainText('Subagent: Summarise every file', { timeout: 20_000 });
+    await expect(window.locator(`[data-participant="${helper.ref.sessionId}"]`).getByTestId('agents-badge')).toHaveCount(0);
+    // Карточка остаётся кнопкой, а бейдж не вложен в неё; обрезка строки с многоточием — карточка не раздвигается.
+    expect(await card.evaluate((element) => element.getBoundingClientRect().width)).toBeCloseTo(230, 0);
+    expect(await badge.evaluate((element) => element.tagName === 'BUTTON' && element.parentElement?.closest('button') === null)).toBe(true);
+    expect(await badge.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+
+    const popover = window.getByTestId('agents-popover');
+    const row = popover.getByTestId('agents-popover-row');
+    await badge.click();
+    await expect(popover).toBeVisible();
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute('aria-label', 'Open Explore');
+    await expect(row).toContainText('background');
+    const viewport = await window.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    const popoverBox = await boxOf(popover);
+    expect(popoverBox.x + popoverBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(popoverBox.y + popoverBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+    // Бейдж открыл поповер, а не сессию: вкладка комнаты всё ещё активна.
+    await expect(roomTab).toHaveAttribute('data-active', 'true');
+    await shot(window, 'agents-room-800x500');
+    await window.keyboard.press('Escape');
+    await expect(popover).toHaveCount(0);
+    await pickTheme(window, 'Theme: dark');
+    await badge.click();
+    await expect(popover).toBeVisible();
+    await shot(window, 'agents-room-800x500-dark');
+    await window.keyboard.press('Escape');
+    await expect(popover).toHaveCount(0);
+    await pickTheme(window, 'Theme: light');
+
+    // Клик по агенту: вкладка сессии — чат, лента прокручена к карточке агента, поповер закрыт.
+    await badge.click();
+    await row.click();
+    await expect(popover).toHaveCount(0);
+    await expect(window.locator(`[role="tab"][data-tab-id="terminal:${ref.sessionId}"]`)).toHaveAttribute('data-active', 'true');
+    await expect(chat).toBeVisible();
+    await expect(window.locator('.xterm')).toHaveCount(0);
+    await expect(agent).toBeInViewport();
+    await expect(agent).toHaveAttribute('data-agent-status', 'running');
 
     expect(errors).toEqual([]);
   });

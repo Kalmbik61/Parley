@@ -12,6 +12,9 @@
  * поправить высоты по замеру — такое событие «не у низа» сорвало бы прилипание без действий человека,
  * поэтому ближайший `scroll` после неё не учитывается.
  *
+ * Просьба показать карточку агента (`reveal`: бейдж агентов в сайдбаре и комнате, «N agents running» в тулбаре) —
+ * прокрутка к карточке с этим `agentId` и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
+ *
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
  * сообщения из очереди (`queued`, решение 8). Несколько агентов подряд — стопкой: между ними отступ меньше.
@@ -62,6 +65,12 @@ export interface FeedListProps {
   onRetry?: () => void;
   /** Есть — под лентой строка «Working…» (агент работает, а текста ещё нет); `since` — начало хода, ISO, или `null`. */
   working?: { since: string | null };
+  /**
+   * Просьба показать карточку агента (`ui-store.ts`, кусок 4b): лента прокручивает к ней и зовёт `onRevealed` с её
+   * `nonce`. Карточки ещё нет — просьба ждёт, пока она появится в ленте (снимок только что открытой вкладки).
+   */
+  reveal?: { agentId: string; nonce: number };
+  onRevealed?: (nonce: number) => void;
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
@@ -119,7 +128,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, note, onRetry, working }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
@@ -189,6 +198,19 @@ export function FeedList({ items, queued, note, onRetry, working }: FeedListProp
   useLayoutEffect(() => {
     if (atBottomRef.current) pinToBottom();
   }, [pinToBottom, total, rows.length, last, working !== undefined]);
+
+  // Просьба показать карточку агента. Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
+  // и просьба, последним остаётся переход к карточке. Прилипание снимается — иначе следующий элемент увёл бы
+  // ленту обратно к низу; доехала лента до дна сама — `scroll` вернёт его. Просьба гаснет, когда карточка найдена.
+  useLayoutEffect(() => {
+    if (reveal === undefined) return;
+    const at = rows.findIndex((row) => 'item' in row && row.item.kind === 'agent' && row.item.agentId === reveal.agentId);
+    if (at === -1) return;
+    atBottomRef.current = false;
+    setAtBottom(false);
+    virtualizer.scrollToIndex(at, { align: 'start' });
+    onRevealed?.(reveal.nonce);
+  }, [reveal, items, onRevealed]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

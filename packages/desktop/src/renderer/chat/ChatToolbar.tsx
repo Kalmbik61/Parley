@@ -5,11 +5,12 @@
  * переживает перезапуск. Вид «Chat» сессии недоступен (Codex, старый `claude`) — сегмент выключен с
  * подсказкой. В виде «Chat» справа — меню режима разрешений (кусок 4a, решение 9: подпись текущего
  * режима из ленты, пункты Manual / Accept edits / Plan; выбор уходит `sessions.setMode` из `ChatView`),
- * модель сессии (из ленты; с меню выбора, если у провайдера есть список моделей — живая проверка 2026-10-02; «Stop» ушёл в поле ввода). Высота фиксирована и строки не переносятся: от неё зависит отступ
- * поверхности терминала.
+ * модель сессии (из ленты; с меню выбора, если у провайдера есть список моделей — живая проверка 2026-10-02; «Stop» ушёл в поле ввода).
+ * Левее них, пока в ленте есть работающие карточки агентов, — «N agents running» (кусок 4b): клик ведёт ленту к первой из
+ * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала.
  */
 
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, LoaderCircle } from 'lucide-react';
 
 import type { ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -76,11 +77,13 @@ export interface ChatToolbarProps {
   model?: string | null;
   /** Меню моделей; нет — подпись модели просто текстом. */
   modelMenu?: ModelMenuProps;
+  /** Сколько карточек агентов ещё работает; нет — кнопки «N agents running» нет. Клик ведёт ленту к первой из них. */
+  agents?: { running: number; onShow: () => void };
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
 
-export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, modelMenu }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, modelMenu, agents }: ChatToolbarProps): JSX.Element {
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -111,6 +114,12 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
         </ToggleGroup>
       </span>
       <span className="min-w-0 flex-1" />
+      {agents === undefined ? null : (
+        <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">
+          <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          {S.chat.agent.running(agents.running)}
+        </Button>
+      )}
       {modeMenu === undefined ? null : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild disabled={modeMenu.busy}>

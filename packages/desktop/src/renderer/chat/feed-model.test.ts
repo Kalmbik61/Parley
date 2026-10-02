@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { FeedItem } from '@parley/core';
 // Разбор журнала — из исходников ленты core (корневой `@parley/core` под jsdom не грузится, см. items.test.tsx).
 import { feedFromTranscript } from '../../../../core/src/feed/index.js';
-import { currentModel, firstLine, toolHeadline, turnActive } from './feed-model.js';
+import { currentModel, firstLine, runningAgents, toolHeadline, turnActive } from './feed-model.js';
 
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../core/src/feed/fixtures');
 
@@ -86,6 +86,25 @@ describe('turnActive', () => {
     const last = items.findLast((item) => item.kind === 'prompt');
     expect(last?.kind === 'prompt' ? last.text.trim() : null).toBe('/exit');
     expect(turnActive(items)).toBe(false);
+  });
+});
+
+describe('runningAgents', () => {
+  const finished = { ...agent, id: 'a2', agentId: 'g2', status: 'done' as const };
+  const failed = { ...agent, id: 'a3', agentId: 'g3', status: 'failed' as const };
+  const second = { ...agent, id: 'a4', agentId: 'g4' };
+
+  it('карточки агентов со статусом running, в порядке ленты; готовые, упавшие и прочие элементы — нет', () => {
+    expect(runningAgents([prompt, agent, finished, tool('running'), failed, second, turn]).map((item) => item.agentId)).toEqual(['g', 'g4']);
+  });
+
+  it('работающих нет — пусто', () => {
+    expect(runningAgents([])).toEqual([]);
+    expect(runningAgents([prompt, finished, turn])).toEqual([]);
+  });
+
+  it('карточка без agentId (SubagentStart ещё не пришёл) в счёт идёт', () => {
+    expect(runningAgents([{ ...agent, agentId: null }])).toHaveLength(1);
   });
 });
 
