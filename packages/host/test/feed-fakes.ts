@@ -35,6 +35,8 @@ export interface FakeFeedDeps {
   setLogFile(file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
   emitExit(ref: SessionRef): void;
+  /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
+  emitStart(ref: SessionRef): void;
   /** Индекс логов сообщил об изменении журнала (`activity.onLogChange`). */
   emitLog(): void;
   /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
@@ -67,6 +69,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
   const activityListeners = new Set<ActivityListener>();
   const logListeners = new Set<() => void>();
   const exitListeners = new Set<ExitListener>();
+  const startListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
   const log = silentLog();
   const deps = {
@@ -107,9 +110,11 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     pty: {
       on: (event: string, listener: ExitListener) => {
-        if (event !== 'exit') return () => {};
-        exitListeners.add(listener);
-        return () => exitListeners.delete(listener);
+        const listeners =
+          event === 'exit' ? exitListeners : event === 'start' ? startListeners : null;
+        if (listeners === null) return () => {};
+        listeners.add(listener);
+        return () => listeners.delete(listener);
       },
     },
   } as unknown as FeedServiceDeps;
@@ -125,6 +130,9 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     emitExit(ref) {
       for (const listener of exitListeners) listener(ref);
+    },
+    emitStart(ref) {
+      for (const listener of startListeners) listener(ref);
     },
     emitLog() {
       for (const listener of logListeners) listener();

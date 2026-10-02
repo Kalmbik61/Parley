@@ -645,6 +645,17 @@ describe('сев из журнала', () => {
     return { files, read };
   }
 
+  /** Читатель, который считает дочитанные журналы: сев вне снимка идёт в фоне, и ждать надо его конца. */
+  function finishingReader() {
+    let finished = 0;
+    const read = async (file: string): Promise<RawRecord[]> => {
+      const { records } = await readJsonlRecords(file);
+      finished += 1;
+      return records;
+    };
+    return { finished: () => finished, read };
+  }
+
   it('снимок без живых событий сеет из журнала один раз: вызовы и дифф на месте', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
@@ -675,6 +686,94 @@ describe('сев из журнала', () => {
     const seeded = await service.snapshot(REF);
     expect(reader.files).toHaveLength(1);
     expect(ofKind(seeded.items, 'tool').length).toBeGreaterThan(0);
+  });
+
+  it('журнал появился у индекса после снимка — лента сеется и уходит подписчику дельтой', async () => {
+    const { root } = await history();
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    // Окно подключилось раньше, чем индекс журналов построился: снимок пуст, второй оно не попросит.
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [], revision: 0 });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    fakes.emitLog();
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+
+    const delta = feedChanged(client)[0];
+    expect(delta?.revision).toBe(1);
+    expect(ofKind(delta?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.items).toEqual(delta?.upsert);
+    // Следующие изменения журналов ленту заново не сеют и ничего не шлют.
+    fakes.emitLog();
+    await service.snapshot(REF);
+    expect(reader.files).toHaveLength(1);
+    expect(feedChanged(client)).toHaveLength(1);
+  });
+
+  it('поздний сев без подписчиков дельту не шлёт: посеянное отдаёт следующий снимок', async () => {
+    const { root } = await history();
+    const reader = finishingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    await service.snapshot(REF);
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    fakes.emitLog();
+    await vi.waitFor(() => expect(reader.finished()).toBe(1));
+
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.revision).toBe(0);
+    expect(ofKind(snapshot.items, 'tool').length).toBeGreaterThan(0);
+    expect(reader.finished()).toBe(1);
+  });
+
+  it('процесс сессии запущен — лента сеется до живых событий: история цела, даже если чат открыли позже', async () => {
+    const { root } = await history();
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    const reader = finishingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    fakes.emitStart(REF);
+    await vi.waitFor(() => expect(reader.finished()).toBe(1));
+    send(prompt('live'));
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.finished()).toBe(1);
+    expect(ofKind(snapshot.items, 'tool').length).toBeGreaterThan(0);
+    expect(snapshot.items.at(-1)).toMatchObject({ kind: 'prompt', text: 'live' });
+  });
+
+  it('запуск раньше индекса журналов: лента сеется, когда журнал появится, и живое идёт следом', async () => {
+    const { root } = await history();
+    const reader = finishingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    fakes.emitStart(REF);
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    fakes.emitLog();
+    await vi.waitFor(() => expect(reader.finished()).toBe(1));
+    send(prompt('live'));
+
+    const snapshot = await service.snapshot(REF);
+    expect(ofKind(snapshot.items, 'tool').length).toBeGreaterThan(0);
+    expect(snapshot.items.at(-1)).toMatchObject({ kind: 'prompt', text: 'live' });
+  });
+
+  it('запуск сессии Codex ленту не заводит и журнал не читает', async () => {
+    const { root } = await history();
+    fakes = fakeFeedDeps([{ ref: REF, provider: 'codex' }]);
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    const reader = finishingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    fakes.emitStart(REF);
+    fakes.emitLog();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(reader.finished()).toBe(0);
   });
 
   it('живые события уже были — журнал не читается', async () => {

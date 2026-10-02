@@ -3,7 +3,8 @@
  * состояние чистого редьюсера core, кольцо элементов, `revision` и пачка дельт для подписчиков.
  *
  * Источники: приёмник хуков (`onHook`), решения окна (`decide`), активность хоста (`idle` снимает
- * карточки), выход процесса агента (`pty.exit`: карточки `stale`, ход закрыт) и выключение хоста.
+ * карточки), запуск и выход процесса агента (`pty.start`: сев из журнала; `pty.exit`: карточки `stale`,
+ * ход закрыт) и выключение хоста.
  * Ответ хуку `allow`/`deny` рождается только в `decide` — из решения, которое прислало окно
  * (Review Focus 5); всё остальное хост отвечает пустым `{}`.
  *
@@ -441,8 +442,8 @@ export function createFeedService(
 
   /**
    * Сев из журнала сессии: один раз и только пока живых событий не было (решение 2). Журнал ещё не
-   * известен индексу (он строится после старта хоста, не дожидаясь окна) — сев не состоялся, и
-   * следующий снимок попробует снова.
+   * известен индексу (он строится после старта хоста, не дожидаясь окна) — сев не состоялся, и его
+   * повторит следующий снимок или изменение журналов (`seedAside`).
    */
   function seed(feed: SessionFeed, provider: string): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
@@ -537,6 +538,33 @@ export function createFeedService(
     return session;
   }
 
+  /**
+   * Сев вне снимка — по запуску процесса сессии и по изменению журналов; посеянное уходит подписчикам
+   * дельтой. Без него лента зависела бы от того, когда окно попросило снимок: раньше, чем индекс
+   * журналов построился (секунды после старта хоста, а окно подключается сразу), — снимок пуст, и
+   * второго окно не попросит (живая проверка 2026-10-02: после возобновления чат пуст, пока не
+   * переключишь вид); позже первого живого события — историю до него лента уже не посеет.
+   */
+  async function seedAside(ref: SessionRef): Promise<void> {
+    let provider: string;
+    try {
+      provider = sessionOf(ref).provider;
+    } catch {
+      return;
+    }
+    if (provider !== 'claude') return;
+    const feed = feedOf(ref);
+    if (feed.live || feed.seeded || feed.seeding !== undefined) return;
+    const before = feed.state;
+    await seed(feed, provider);
+    if (stopped || feed.live || feed.state === before) return;
+    const clients = subscribers.get(refKey(feed.ref));
+    if (clients === undefined || clients.size === 0) return;
+    for (const item of feed.state.items) feed.batch.upsert.set(item.id, item);
+    if (feed.state.permissionMode !== before.permissionMode) feed.modeChanged = true;
+    flush(feed);
+  }
+
   async function agentSnapshot(ref: SessionRef, agentId: string): Promise<FeedSnapshot> {
     const notFound = (): HostError =>
       new HostError('not_found', `no transcript for agent ${agentId}`);
@@ -601,6 +629,11 @@ export function createFeedService(
     }
   });
 
+  // Запуск и возобновление: журнал читается до первого события нового процесса.
+  const unsubscribeStart = deps.pty.on('start', (ref) => {
+    if (!stopped) void seedAside(ref);
+  });
+
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
     const feed = feeds.get(refKey(ref));
@@ -657,7 +690,10 @@ export function createFeedService(
     }
   }
   const unsubscribeLogs = deps.activity.onLogChange(() => {
-    if (!stopped) void checkInterrupts();
+    if (stopped) return;
+    void checkInterrupts();
+    // Индекс узнал журнал позже снимка или запуска — ленты без сева сеются сейчас.
+    for (const feed of Array.from(feeds.values())) void seedAside(feed.ref);
   });
 
   return {
@@ -743,6 +779,7 @@ export function createFeedService(
       if (stopped) return;
       stopped = true;
       unsubscribeActivity();
+      unsubscribeStart();
       unsubscribeExit();
       unsubscribeWorks();
       unsubscribeLogs();
