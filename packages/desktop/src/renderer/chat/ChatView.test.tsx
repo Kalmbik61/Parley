@@ -76,7 +76,7 @@ beforeEach(() => {
   useProvidersStore.setState({ providers: [CLAUDE_OK], loaded: true });
   useUiStore.setState({ visibleSessionRefs: {} });
   // Сессия стартовала (есть событие журнала): вид без явного выбора — чат (кусок 4a, решение М).
-  useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]) });
+  useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]), loaded: true });
   vi.mocked(toast).mockClear();
   vi.mocked(toast.error).mockClear();
 });
@@ -88,7 +88,7 @@ afterEach(() => {
   resetChatUiStoreForTests();
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
-  useActivityStore.setState({ byRef: {} });
+  useActivityStore.setState({ byRef: {}, loaded: false });
 });
 
 describe('TerminalBody — вид вкладки', () => {
@@ -458,6 +458,17 @@ describe('автопоказ терминала до SessionStart (кусок 4a
     expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
   });
 
+  it('снимок активности ещё не пришёл (loaded ложно) — вид не выбран, заглушка; явный view побеждает', () => {
+    useActivityStore.setState({ byRef: {}, loaded: false });
+    const view = renderBody(makeSession('s-01', 'S01'));
+    expect(screen.getAllByTestId('tab-view-pending')).toHaveLength(1);
+    expect(screen.queryByTestId('terminal-body')).toBeNull();
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+    view.unmount();
+    renderBody(makeSession('s-01', 'S01'), 'chat');
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
+  });
+
   it('записи активности нет вовсе — терминал', () => {
     useActivityStore.setState({ byRef: {} });
     renderBody(makeSession('s-01', 'S01'));
@@ -492,7 +503,19 @@ describe('ChatView — баннер ожидания в терминале (ку
   const activity = (value: 'blocked' | 'idle'): void =>
     useActivityStore.setState({ byRef: activityMap([makeActivity(REF, value)]) });
 
-  it('blocked без pending-карточки — баннер есть; клик уводит вкладку в терминал', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const settle = (ms = 300): void => {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  it('blocked без pending-карточки — баннер есть через 300 мс; клик уводит вкладку в терминал', () => {
     useLayoutStore.setState({
       activeWorkKey: WORK_KEY,
       layouts: {
@@ -511,6 +534,7 @@ describe('ChatView — баннер ожидания в терминале (ку
     activity('blocked');
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'hi')]);
+    settle();
     expect(screen.getByTestId('chat-waiting-banner').textContent).toContain(S.chat.waitingBanner.text);
     fireEvent.click(screen.getByTestId('chat-waiting-open'));
     const layout = useLayoutStore.getState().layouts[WORK_KEY]!;
@@ -518,12 +542,38 @@ describe('ChatView — баннер ожидания в терминале (ку
     expect(root.type === 'group' ? root.tabs[0] : null).toMatchObject({ id: 'terminal:s-01', view: 'terminal' });
   });
 
-  it('blocked с pending-карточкой — баннера нет; карточка улажена — баннер появляется', () => {
+  it('условие держится 100 мс — баннера нет; 300 мс — есть; пропало — баннера нет сразу', () => {
+    activity('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    settle(100);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    settle(200);
+    expect(screen.getByTestId('chat-waiting-banner')).not.toBeNull();
+    // Пропажа условия снимает баннер без ожидания.
+    act(() => activity('idle'));
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('карточка PermissionRequest пришла раньше 300 мс — баннер не мелькнул', () => {
+    activity('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    settle(150);
+    setFeed([prompt('p1', 'hi'), card('pending')], 2);
+    settle(1000);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('blocked с pending-карточкой — баннера нет; карточка улажена — баннер появляется через 300 мс', () => {
     activity('blocked');
     renderBody(makeSession('s-01', 'S01'));
     setFeed([card('pending')]);
+    settle(1000);
     expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
     setFeed([card('allowed')], 2);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    settle();
     expect(screen.getByTestId('chat-waiting-banner')).not.toBeNull();
   });
 
@@ -531,6 +581,7 @@ describe('ChatView — баннер ожидания в терминале (ку
     activity('idle');
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'hi')]);
+    settle(1000);
     expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
   });
 });
@@ -605,6 +656,16 @@ describe('ChatView — меню режима (кусок 4a, решения К �
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledTimes(1);
     vi.restoreAllMocks();
+  });
+
+  it('сессия не живая (спит) — меню выключено, sessions.setMode не зовётся', () => {
+    hostWith(MODE_METHODS);
+    renderBody(makeSession('s-01', 'S01', { lifecycle: 'sleeping' }));
+    setMode('default');
+    expect((trigger() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(trigger(), { key: 'Enter' });
+    expect(screen.queryAllByTestId('chat-mode-option')).toHaveLength(0);
+    expect(bridge.calls.some((call) => call.method === 'sessions.setMode')).toBe(false);
   });
 
   it('пока запрос в пути — меню выключено', async () => {

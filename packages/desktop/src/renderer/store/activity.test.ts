@@ -6,7 +6,7 @@ import { activityFor, useActivityStore, type ActivityEntry } from './activity.js
 const ref: SessionRef = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
 
 beforeEach(() => {
-  useActivityStore.setState({ byRef: {} });
+  useActivityStore.setState({ byRef: {}, loaded: false });
 });
 
 describe('useActivityStore', () => {
@@ -78,6 +78,39 @@ describe('useActivityStore: снимок активности из main (рау�
 
     expect(activityFor(useActivityStore.getState().byRef, ref)?.activity.activity).toBe('working');
     dispose();
+  });
+});
+
+describe('useActivityStore: признак loaded (кусок 4a, ревью)', () => {
+  it('false до ответа снимка, true после — даже если снимок пуст', async () => {
+    const bridge = createFakeBridge();
+    let answer: (entries: ActivityEntry[]) => void = () => {};
+    bridge.activitySnapshot = () => new Promise((resolve) => (answer = resolve));
+    expect(useActivityStore.getState().loaded).toBe(false);
+
+    const dispose = useActivityStore.getState().init(bridge);
+    expect(useActivityStore.getState().loaded).toBe(false);
+    answer([]);
+    await vi.waitFor(() => expect(useActivityStore.getState().loaded).toBe(true));
+    dispose();
+  });
+
+  it('снимок не удался — loaded всё равно true (живём по событиям)', async () => {
+    const bridge = createFakeBridge();
+    bridge.activitySnapshot = () => Promise.reject(new Error('нет снимка'));
+    const dispose = useActivityStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useActivityStore.getState().loaded).toBe(true));
+    dispose();
+  });
+
+  it('повторный init не сбрасывает loaded в false', async () => {
+    const bridge = createFakeBridge();
+    const first = useActivityStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useActivityStore.getState().loaded).toBe(true));
+    first();
+    const again = useActivityStore.getState().init(bridge);
+    expect(useActivityStore.getState().loaded).toBe(true);
+    again();
   });
 });
 

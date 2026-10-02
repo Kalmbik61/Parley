@@ -22,7 +22,8 @@
  * ленту, поверхность опускается под тулбар вкладки с сегментом (`TAB_TOOLBAR_PX`). Пока доступность
  * вида неизвестна (`effectiveView` — `null`: первый ответ `providers.list` не пришёл), у вкладки нет ни
  * поверхности, ни подписки: иначе она мигнула бы одним видом и перескочила в другой. Без явного выбора
- * вкладка сессии, что ещё не стартовала (нет `lastEventAt` активности), — терминал (решение М куска 4a).
+ * вкладка сессии, что ещё не стартовала (нет `lastEventAt` активности), — терминал (решение М куска 4a); пока снимок
+ * активности не пришёл (`loaded` ложно), вид тоже не выбран.
  */
 
 import { useMemo } from 'react';
@@ -93,7 +94,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
         if (tab.kind !== 'terminal') continue;
         const provider = providers.get(tab.sessionId);
         if (provider === undefined) continue;
-        const view = effectiveView(tab, feedAvailable(provider), started.has(refKey(sessionRefOf(tab.sessionId))));
+        const view = effectiveView(tab, feedAvailable(provider), started(refKey(sessionRefOf(tab.sessionId))));
         if (view === null) continue;
         if (view === 'chat') {
           surfaces.push({ kind: 'feed', tabId: tab.id, sessionId: tab.sessionId });

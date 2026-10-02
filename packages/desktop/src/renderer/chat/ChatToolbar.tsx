@@ -46,7 +46,7 @@ export function modeLabel(mode: string | null): string {
 export interface ModeMenuProps {
   /** Текущий режим ленты (сырая строка CLI); `null` — неизвестен. */
   mode: string | null;
-  /** Запрос смены в пути — меню выключено. */
+  /** Запрос смены в пути или сессия не живая — меню выключено. */
   busy: boolean;
   onSelect: (mode: ModeChoice) => void;
 }

@@ -13,11 +13,8 @@
 
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
-import { useShallow } from 'zustand/react/shallow';
 import type { WorkEntry } from '@parley/core';
 import { sameWorkAttention, workAttention, type WorkAttention } from '../attention/derive.js';
-import { hasPendingCard } from '../chat/feed-model.js';
-import { useFeedStore } from '../chat/store.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
@@ -62,17 +59,6 @@ export function useSidebarAttention(): Record<string, WorkAttention> {
 export function useSidebarSectionsSync(): SidebarSection[] {
   const entries = useWorksStore((state) => state.entries);
   const byRef = useActivityStore((state) => state.byRef);
-  // `refKey` сессий с карточкой `pending` в открытой ленте (кусок 4a, решение О): отсортированный
-  // массив с поверхностным сравнением — внимание пересчитывается, только когда меняется само
-  // множество, а не на каждый элемент ленты.
-  const pendingKeys = useFeedStore(
-    useShallow((state) =>
-      Object.keys(state.feeds)
-        .filter((key) => hasPendingCard(state.feeds[key]?.items ?? []))
-        .sort(),
-    ),
-  );
-  const pendingFeeds = useMemo(() => new Set(pendingKeys), [pendingKeys]);
   const pinned = useUiStore((state) => state.ui.pinnedWorks);
   const collapsed = useUiStore((state) => state.ui.collapsedProjects);
   const showDone = useUiStore((state) => state.ui.showDoneWorks);
@@ -89,7 +75,7 @@ export function useSidebarSectionsSync(): SidebarSection[] {
     const next: Record<string, WorkAttention> = {};
     for (const entry of entries) {
       const key = workKey(entry.projectPath, entry.map.work.id);
-      const fresh = workAttention(entry, byRef, pendingFeeds);
+      const fresh = workAttention(entry, byRef);
       const old = prev[key];
       if (old !== undefined && sameWorkAttention(old, fresh)) {
         next[key] = old;
@@ -99,7 +85,7 @@ export function useSidebarSectionsSync(): SidebarSection[] {
       }
     }
     return reused === entries.length && reused === Object.keys(prev).length ? prev : next;
-  }, [entries, byRef, pendingFeeds]);
+  }, [entries, byRef]);
   previous.current = attention;
   const fresh = useMemo(
     () => buildSections({ entries, attention, pinned, collapsed, showDone, showArchived }),

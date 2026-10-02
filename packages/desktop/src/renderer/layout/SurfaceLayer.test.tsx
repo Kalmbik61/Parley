@@ -432,7 +432,10 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
     bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1, mode: null }));
     // Сессии стартовали (есть событие журнала): без явного выбора вид — чат (кусок 4a, решение М).
-    useActivityStore.setState({ byRef: activityMap(['a', 'b', 'x'].map((id) => makeActivity(refOf(id), 'idle'))) });
+    useActivityStore.setState({
+      byRef: activityMap(['a', 'b', 'x'].map((id) => makeActivity(refOf(id), 'idle'))),
+      loaded: true,
+    });
     disposeFeed = useFeedStore.getState().init(bridge);
     useProvidersStore.setState({
       providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
@@ -443,7 +446,7 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
   afterEach(() => {
     disposeFeed();
     resetFeedStoreForTests();
-    useActivityStore.setState({ byRef: {} });
+    useActivityStore.setState({ byRef: {}, loaded: false });
     useHostStore.setState({ status: { state: 'connecting' } });
     useProvidersStore.setState({ providers: [], loaded: false });
   });
@@ -491,6 +494,23 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(feedCalls('feed.subscribe', 'a')).toBe(1);
     // b и x событий не имели — остаются терминалами.
     expect(surface('terminal:b')).not.toBeNull();
+  });
+
+  it('снимок активности ещё не пришёл — ни поверхности, ни подписки; после снимка — терминал', async () => {
+    useActivityStore.setState({ byRef: {}, loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(attachCount('a')).toBe(0);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+
+    act(() => {
+      useActivityStore.setState({ loaded: true });
+    });
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
   });
 
   it('view terminal — поверхность под тулбаром; переход туда и обратно монтирует её заново', async () => {

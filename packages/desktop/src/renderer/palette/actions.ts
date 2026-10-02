@@ -21,7 +21,7 @@ import type { FilesState } from '../files/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
-import { effectiveView, feedAvailableNow, sessionStarted } from '../lib/feed-view.js';
+import { effectiveView, feedAvailableNow, sessionStartedOrUnknown } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -349,7 +349,8 @@ function toggleChatView(ctx: ActionContext, key: string, layout: WorkLayout): vo
     return;
   }
   const ref = { projectPath: entry?.projectPath ?? '', workId: entry?.map.work.id ?? '', sessionId: tab.sessionId };
-  const started = sessionStarted(activityFor(useActivityStore.getState().byRef, ref));
+  const { byRef, loaded } = useActivityStore.getState();
+  const started = sessionStartedOrUnknown(loaded, activityFor(byRef, ref));
   const view = effectiveView(tab, available, started) === 'chat' ? 'terminal' : 'chat';
   ctx.layout.apply(key, (l) => updateTab(l, tab.id, { view }));
 }

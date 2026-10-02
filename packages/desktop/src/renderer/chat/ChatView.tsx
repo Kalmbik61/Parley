@@ -14,9 +14,9 @@
  * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
  *
  * Меню режима в тулбаре (кусок 4a, решения К и Л): подпись — `mode` ленты, выбор — `sessions.setMode`;
- * пока запрос в пути, меню выключено; `verified: false` — тост «откройте терминал». Баннер «ждёт в
+ * пока запрос в пути или сессия не живая (хост ответил бы `not_found`), меню выключено; `verified: false` — тост «откройте терминал». Баннер «ждёт в
  * терминале» (решение Н) — когда активность сессии `blocked`, а карточки `pending` в ленте нет (диалог
- * без хука); с карточкой ждёт человека сама карточка.
+ * без хука) и так держится 300 мс подряд; с карточкой ждёт человека сама карточка.
  *
  * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
  * Queue не показываются, даже если лента кончилась промптом без конца хода.
@@ -57,6 +57,26 @@ export interface ChatViewProps {
   sendDeps: SendWithToastDeps;
 }
 
+/**
+ * Баннер ждёт, пока условие держится столько подряд: `Notification` с `permission_prompt` приходит на
+ * доли секунды раньше карточки `PermissionRequest`, и без паузы баннер мигал бы перед каждой карточкой.
+ */
+const BANNER_DELAY_MS = 300;
+
+/** `true`, только когда `condition` держится `delayMs` подряд; пропажа условия снимает сразу. */
+function useHeldFor(condition: boolean, delayMs: number): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!condition) {
+      setHeld(false);
+      return undefined;
+    }
+    const timer = setTimeout(() => setHeld(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [condition, delayMs]);
+  return condition && held;
+}
+
 const NO_ITEMS: readonly FeedItem[] = [];
 const NO_QUEUED: readonly Queued[] = [];
 
@@ -80,7 +100,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const active = live && turnActive(items);
   const model = currentModel(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
-  const showBanner = blocked && !hasPendingCard(items);
+  const waiting = blocked && !hasPendingCard(items);
+  const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
   const canSetMode = useHostSupports('sessions.setMode');
   const [modeBusy, setModeBusy] = useState(false);
 
@@ -112,7 +133,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   };
 
   const setMode = (mode: ModeChoice): void => {
-    if (modeBusy || mode === feed?.mode) return;
+    if (modeBusy || !live || mode === feed?.mode) return;
     setModeBusy(true);
     bridge
       .call('sessions.setMode', { ref: sessionRef, mode })
@@ -139,7 +160,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           view="chat"
           available
           model={model}
-          {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy, onSelect: setMode } } : {})}
+          {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
           {...(active ? { onStop: stop } : {})}
         />
         <FeedList

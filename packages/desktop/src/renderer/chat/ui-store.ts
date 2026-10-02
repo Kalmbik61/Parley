@@ -44,8 +44,8 @@ export interface ChatUiState {
   /** Черновики карточек по `cardKey`. */
   cardDrafts: Record<string, CardDraft>;
   setCardDraft(key: string, patch: Partial<CardDraft>): void;
-  /** Забыть черновики карточек сессии (лента закрыта). */
-  clearCardDrafts(sessionKey: string): void;
+  /** Забыть черновики карточек сессии (лента закрыта); `only` — только этих `cardId` (карточка перестала быть `pending`). */
+  clearCardDrafts(sessionKey: string, only?: readonly string[]): void;
   /** Обновить очередь сессии; тот же массив — стор не трогается. */
   updateQueued(key: string, update: (was: readonly Queued[]) => readonly Queued[]): void;
 }
@@ -58,12 +58,13 @@ export const useChatUiStore = create<ChatUiState>((set) => ({
   cardDrafts: {},
   setCardDraft: (key, patch) =>
     set((state) => ({ cardDrafts: { ...state.cardDrafts, [key]: { ...(state.cardDrafts[key] ?? EMPTY_CARD_DRAFT), ...patch } } })),
-  clearCardDrafts: (sessionKey) =>
+  clearCardDrafts: (sessionKey, only) =>
     set((state) => {
       const prefix = `${sessionKey}\n`;
-      const keys = Object.keys(state.cardDrafts).filter((key) => key.startsWith(prefix));
-      if (keys.length === 0) return state;
-      return { cardDrafts: Object.fromEntries(Object.entries(state.cardDrafts).filter(([key]) => !key.startsWith(prefix))) };
+      const drop = (key: string): boolean =>
+        only === undefined ? key.startsWith(prefix) : only.some((id) => key === cardKey(sessionKey, id));
+      if (!Object.keys(state.cardDrafts).some(drop)) return state;
+      return { cardDrafts: Object.fromEntries(Object.entries(state.cardDrafts).filter(([key]) => !drop(key))) };
     }),
   setDraft: (key, text) => set((state) => ({ drafts: { ...state.drafts, [key]: text } })),
   updateQueued: (key, update) =>

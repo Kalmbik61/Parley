@@ -58,16 +58,11 @@ export function roomDecisionReturned(map: WorkMap, roomId: string): boolean {
   return answer?.text.startsWith(RETURNED_LETTER) ?? false;
 }
 
-/**
- * Таблица спеки 7.1. `pendingCard` — в открытой ленте сессии есть карточка `pending` (план 2026-10-01,
- * кусок 4a, решение О): живая сессия с ней — «нужен ты», как `blocked`. Закрытой и спящей сессии
- * карточка внимания не даёт.
- */
-export function sessionAttention(session: WorkSession, live: SessionActivity | null, pendingCard = false): Attention {
+/** Таблица спеки 7.1. */
+export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
   if (session.lifecycle === 'closed') return 'off';
   // pending и sleeping: процесса нет, но сессия не закрыта.
   if (session.lifecycle !== 'active') return 'idle';
-  if (pendingCard) return 'needs-you';
   switch (live?.activity ?? 'idle') {
     case 'blocked':
       return 'needs-you';
@@ -121,17 +116,7 @@ function later(a: string, b: string | null): string {
   return ta === null || tb > ta ? b : a;
 }
 
-const NO_PENDING_FEEDS: ReadonlySet<string> = new Set();
-
-/**
- * `pendingFeeds` — `refKey` сессий, у которых в открытой ленте окна есть карточка `pending` (решение О
- * куска 4a). Лента закрытой вкладки окну неизвестна — такая карточка сюда не попадёт.
- */
-export function workAttention(
-  entry: WorkEntry,
-  activity: Record<string, ActivityEntry>,
-  pendingFeeds: ReadonlySet<string> = NO_PENDING_FEEDS,
-): WorkAttention {
+export function workAttention(entry: WorkEntry, activity: Record<string, ActivityEntry>): WorkAttention {
   const { map, projectPath } = entry;
   let level: Attention = 'off';
   let needsYou = 0;
@@ -139,9 +124,8 @@ export function workAttention(
   let lastEventAt = map.work.updatedAt;
 
   for (const session of map.sessions) {
-    const key = refKey({ projectPath, workId: map.work.id, sessionId: session.id });
-    const live = activity[key]?.activity ?? null;
-    const own = sessionAttention(session, live, pendingFeeds.has(key));
+    const live = activity[refKey({ projectPath, workId: map.work.id, sessionId: session.id })]?.activity ?? null;
+    const own = sessionAttention(session, live);
     if (own === 'needs-you') needsYou += 1;
     if (own === 'unseen') unseen += 1;
     if (ATTENTION_RANK[own] > ATTENTION_RANK[level]) level = own;

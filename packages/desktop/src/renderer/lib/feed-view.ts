@@ -58,14 +58,20 @@ export function feedAvailability(input: FeedAvailabilityInput & { loaded: boolea
  * Без явного `view` вкладка показывает терминал, пока сессия не стартовала (`started`: у активности
  * есть `lastEventAt` — первое событие журнала и есть SessionStart; кусок 4a, решение М), — диалог
  * доверия папке и вход в аккаунт идут до хуков, и чат был бы пуст. Явный выбор человека побеждает
- * всегда: вид под руками не переключается.
+ * всегда: вид под руками не переключается. `started` — `null`, пока снимок активности не пришёл:
+ * без явного `view` вид тогда не выбран (иначе вкладка возобновлённой сессии мигнула бы терминалом
+ * и сделала лишний `pty.attach`).
  */
-export function effectiveView(tab: { view?: TerminalView }, available: boolean, started: boolean): TerminalView;
-export function effectiveView(tab: { view?: TerminalView }, available: boolean | null, started: boolean): TerminalView | null;
-export function effectiveView(tab: { view?: TerminalView }, available: boolean | null, started: boolean): TerminalView | null {
+export function effectiveView(
+  tab: { view?: TerminalView },
+  available: boolean | null,
+  started: boolean | null,
+): TerminalView | null {
   if (available === null) return null;
   if (!available) return 'terminal';
-  return tab.view ?? (started ? 'chat' : 'terminal');
+  if (tab.view !== undefined) return tab.view;
+  if (started === null) return null;
+  return started ? 'chat' : 'terminal';
 }
 
 /** Сессия стартовала: по её активности пришло хотя бы одно событие журнала. */
@@ -73,17 +79,24 @@ export function sessionStarted(entry: ActivityEntry | null | undefined): boolean
   return (entry?.activity.lastEventAt ?? null) !== null;
 }
 
-/** `sessionStarted` по `refKey` сессии — подписка на один признак, не на каждое `activity.changed`. */
-export function useSessionStarted(ref: SessionRef): boolean {
+/** `sessionStarted` с третьим состоянием: `null`, пока снимок активности не пришёл. */
+export function sessionStartedOrUnknown(loaded: boolean, entry: ActivityEntry | null | undefined): boolean | null {
+  return loaded ? sessionStarted(entry) : null;
+}
+
+/** `sessionStartedOrUnknown` по `refKey` сессии — подписка на один признак, не на каждое `activity.changed`. */
+export function useSessionStarted(ref: SessionRef): boolean | null {
   const key = refKey(ref);
-  return useActivityStore((state) => sessionStarted(state.byRef[key]));
+  return useActivityStore((state) => sessionStartedOrUnknown(state.loaded, state.byRef[key]));
 }
 
 /**
- * `refKey` стартовавших сессий — для слоя, где вкладок много. Селектор возвращает отсортированный
- * массив с поверхностным сравнением: перерисовка только когда сессия стартовала, не на метрики.
+ * Признак «стартовала» по `refKey` — для слоя, где вкладок много; `null` — снимок активности ещё не
+ * пришёл. Селектор возвращает отсортированный массив с поверхностным сравнением: перерисовка только
+ * когда сессия стартовала, не на метрики.
  */
-export function useStartedKeys(): ReadonlySet<string> {
+export function useStartedKeys(): (key: string) => boolean | null {
+  const loaded = useActivityStore((state) => state.loaded);
   const keys = useActivityStore(
     useShallow((state) =>
       Object.keys(state.byRef)
@@ -91,7 +104,10 @@ export function useStartedKeys(): ReadonlySet<string> {
         .sort(),
     ),
   );
-  return useMemo(() => new Set(keys), [keys]);
+  return useMemo(() => {
+    const set = new Set(keys);
+    return (key) => (loaded ? set.has(key) : null);
+  }, [loaded, keys]);
 }
 
 /** Хост знает ленту — сегмент «Chat | Terminal» есть (выключенный, если вид сессии недоступен). */

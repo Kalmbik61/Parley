@@ -12,7 +12,8 @@
  * `feed.changed` на стор, а открытые ленты после переподключения подписываются и берут снимок
  * заново (хост забыл подписки ушедшего клиента). Хост без `feed.snapshot` — стор ничего не зовёт.
  * Решения человека (`decide`, кусок 4a, решение П): пока запрос в пути, повторный клик по той же
- * карточке игнорируется (`deciding`); `applied: true` — ждём дельту, карточка сменит состояние сама;
+ * карточке игнорируется (`deciding`); `applied: true` — ждём дельту, карточка сменит состояние сама (снимок
+ * забывает `deciding`, пометки и черновики только у карточек, что в нём не `pending` или пропали);
  * `applied: false` при `pending` — хук ещё не удержан, строка «попробуй ещё раз» (`notes`); ошибка —
  * строка «не отправилось». Ни повторов, ни умолчаний по таймеру: ответ хуку — только кликом человека.
  *
@@ -121,6 +122,31 @@ export const useFeedStore = create<FeedState>((set, get) => {
       return deciding === state.deciding && notes === state.notes ? state : { deciding, notes };
     });
 
+  /** Карточка перестала быть `pending` (дельта, снимок): забыть её решение, пометку и черновик. */
+  const settleCards = (sessionKey: string, ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    forgetCards(sessionKey, ids);
+    useChatUiStore.getState().clearCardDrafts(sessionKey, ids);
+  };
+
+  /**
+   * Снимок применён: забыть состояние карточек, которых в снимке нет или которые больше не `pending`.
+   * Решение в пути у карточки, всё ещё ждущей человека, остаётся — иначе кнопки вернулись бы под
+   * идущий запрос.
+   */
+  const settleAfterSnapshot = (sessionKey: string, items: readonly FeedItem[]): void => {
+    const prefix = `${sessionKey}\n`;
+    const pending = new Set(items.filter((item) => 'cardId' in item && item.state === 'pending').map((item) => item.id));
+    const known = [
+      ...Object.keys(get().deciding),
+      ...Object.keys(get().notes),
+      ...Object.keys(useChatUiStore.getState().cardDrafts),
+    ]
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length));
+    settleCards(sessionKey, [...new Set(known)].filter((id) => !pending.has(id)));
+  };
+
   /** subscribe → snapshot; ответ устаревшего поколения или чужого моста не применяется. */
   const load = (key: string): void => {
     const feed = opened.get(key);
@@ -138,8 +164,8 @@ export const useFeedStore = create<FeedState>((set, get) => {
       .then((snapshot) => {
         if (snapshot === null || stale()) return;
         feed.loading = false;
-        forgetCards(key);
         patch(key, { items: snapshot.items, revision: snapshot.revision, mode: snapshot.mode, status: 'ready' });
+        settleAfterSnapshot(key, snapshot.items);
       })
       .catch((error: unknown) => {
         if (stale()) return;
@@ -167,9 +193,9 @@ export const useFeedStore = create<FeedState>((set, get) => {
       revision: delta.revision,
       mode: delta.mode,
     });
-    // Карточка сменила состояние — её решение и пометка своё отслужили.
+    // Карточка сменила состояние или ушла — её решение, пометка и черновик своё отслужили.
     const settled = delta.upsert.filter((item) => 'cardId' in item && item.state !== 'pending').map((item) => item.id);
-    if (settled.length > 0) forgetCards(key, settled);
+    settleCards(key, [...settled, ...delta.removed]);
   };
 
   return {

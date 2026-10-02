@@ -9,7 +9,7 @@ import { FEED_MIN_VERSION } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import { makeActivity } from '../test-utils/work-fixtures.js';
-import { effectiveView, feedAvailability, feedAvailable, sessionStarted } from './feed-view.js';
+import { effectiveView, feedAvailability, feedAvailable, sessionStarted, sessionStartedOrUnknown } from './feed-view.js';
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
 
@@ -91,6 +91,31 @@ describe('effectiveView — автопоказ до SessionStart (кусок 4a,
     expect(effectiveView({}, false, true)).toBe('terminal');
     expect(effectiveView({}, null, true)).toBeNull();
     expect(effectiveView({ view: 'chat' }, false, true)).toBe('terminal');
+  });
+});
+
+describe('effectiveView — started неизвестен до снимка активности (кусок 4a, ревью)', () => {
+  it('без явного view и с неизвестным started — null (вид не выбран)', () => {
+    expect(effectiveView({}, true, null)).toBeNull();
+  });
+
+  it('явный view побеждает и при неизвестном started', () => {
+    expect(effectiveView({ view: 'terminal' }, true, null)).toBe('terminal');
+    expect(effectiveView({ view: 'chat' }, true, null)).toBe('chat');
+  });
+
+  it('вид недоступен — терминал и при неизвестном started; доступность неизвестна — null', () => {
+    expect(effectiveView({}, false, null)).toBe('terminal');
+    expect(effectiveView({ view: 'chat' }, null, null)).toBeNull();
+  });
+});
+
+describe('sessionStartedOrUnknown', () => {
+  it('до снимка — null, после — как sessionStarted', () => {
+    const entry = makeActivity(REF, 'idle', { lastEventAt: '2026-10-02T10:00:00.000Z' });
+    expect(sessionStartedOrUnknown(false, entry)).toBeNull();
+    expect(sessionStartedOrUnknown(true, entry)).toBe(true);
+    expect(sessionStartedOrUnknown(true, undefined)).toBe(false);
   });
 });
 

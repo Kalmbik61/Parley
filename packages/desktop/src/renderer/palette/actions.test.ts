@@ -201,6 +201,7 @@ function withFeedHost(provider = 'claude'): void {
   // Сессия стартовала (есть событие журнала): без поля view вид — чат (кусок 4a, решение М).
   useActivityStore.setState({
     byRef: activityMap([makeActivity({ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-09' }, 'idle')]),
+    loaded: true,
   });
 }
 
@@ -208,7 +209,7 @@ function resetFeedHost(): void {
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
   useWorksStore.setState({ entries: [] });
-  useActivityStore.setState({ byRef: {} });
+  useActivityStore.setState({ byRef: {}, loaded: false });
 }
 
 describe('runAction — таблица по реестру (тест 1 куска 6.3)', () => {
@@ -544,6 +545,14 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
   it('сессия не стартовала и поля view нет — вкладка в терминале, действие ставит chat', () => {
     withFeedHost();
     useActivityStore.setState({ byRef: {} });
+    const spies = makeContext();
+    runAction('chat.toggleView', spies.ctx);
+    expect(viewAfter(spies)).toMatchObject({ view: 'chat' });
+  });
+
+  it('снимок активности не пришёл и поля view нет — действие всё равно ставит chat', () => {
+    withFeedHost();
+    useActivityStore.setState({ byRef: {}, loaded: false });
     const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
     expect(viewAfter(spies)).toMatchObject({ view: 'chat' });

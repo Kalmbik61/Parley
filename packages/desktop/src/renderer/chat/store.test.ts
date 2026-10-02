@@ -258,6 +258,44 @@ describe('решения по карточкам (decide)', () => {
     expect(decideCalls()).toHaveLength(0);
   });
 
+  it('снимок во время decide в пути не возвращает кнопки; снимок с уложенной карточкой — снимает', async () => {
+    bridge.setHandler('feed.decide', () => new Promise(() => undefined));
+    void useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(deciding()).toBe(true);
+    // Повторная загрузка (Retry): карточка в снимке всё ещё pending — решение в пути остаётся.
+    setSnapshots(bridge, [{ items: [card('pending')], revision: 3 }]);
+    useFeedStore.getState().retry(REF);
+    await flush();
+    expect(feed()?.revision).toBe(3);
+    expect(deciding()).toBe(true);
+    // В снимке карточка уже уложена — решение, пометка и черновик забываются.
+    useChatUiStore.getState().setCardDraft(cardKey(KEY, CARD), { message: 'no' });
+    setSnapshots(bridge, [{ items: [card('allowed')], revision: 4 }]);
+    useFeedStore.getState().retry(REF);
+    await flush();
+    expect(deciding()).toBeUndefined();
+    expect(useChatUiStore.getState().cardDrafts[cardKey(KEY, CARD)]).toBeUndefined();
+  });
+
+  it('снимок без карточки вовсе — решение и пометка забываются', async () => {
+    bridge.setHandler('feed.decide', () => ({ applied: false, state: 'pending' as const }));
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBe('not-applied');
+    setSnapshots(bridge, [{ items: [prompt('a')], revision: 2 }]);
+    useFeedStore.getState().retry(REF);
+    await flush();
+    expect(note()).toBeUndefined();
+  });
+
+  it('черновик карточки забывается, когда она перестала быть pending: дельта и снимок; у pending — остаётся', () => {
+    const draftOf = () => useChatUiStore.getState().cardDrafts[cardKey(KEY, CARD)];
+    useChatUiStore.getState().setCardDraft(cardKey(KEY, CARD), { message: 'wait' });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [card('pending')], removed: [] });
+    expect(draftOf()?.message).toBe('wait');
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 3, upsert: [card('allowed')], removed: [] });
+    expect(draftOf()).toBeUndefined();
+  });
+
   it('закрытие ленты забывает пометки, решения в пути и черновики карточек', async () => {
     bridge.setHandler('feed.decide', () => ({ applied: false, state: 'pending' as const }));
     await useFeedStore.getState().decide(REF, CARD, DECISION);
