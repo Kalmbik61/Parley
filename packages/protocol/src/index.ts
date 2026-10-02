@@ -19,7 +19,7 @@ export type {
   SessionRef,
   WorksSnapshot,
 } from './types.js';
-export { METHODS, NOTIFICATIONS, sessionRef } from './methods.js';
+export { METHODS, NOTIFICATIONS, permissionModeChoice, sessionRef } from './methods.js';
 export {
   FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
@@ -36,7 +36,14 @@ export {
   feedDecision,
   feedItem,
 } from './feed.js';
-export type { MethodName, NotificationName, Params, Result, Results } from './methods.js';
+export type {
+  MethodName,
+  NotificationName,
+  Params,
+  PermissionModeChoice,
+  Result,
+  Results,
+} from './methods.js';
 export type { EventData, EventName, Events } from './events.js';
 export {
   LineDecoder,

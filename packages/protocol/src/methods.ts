@@ -21,6 +21,10 @@ export const sessionRef = z.object({
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
+/** Режимы, которые окно выбирает само: цикл Shift+Tab без `bypassPermissions` и `auto`. */
+export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan']);
+export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
+
 export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
   'host.info': z.object({}),
@@ -79,6 +83,8 @@ export const METHODS = {
   'sessions.delete': z.object({ ref: sessionRef, force: z.boolean().optional() }),
   'sessions.close': z.object({ ref: sessionRef }),
   'sessions.interrupted': z.object({}),
+  // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
+  'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
@@ -221,6 +227,8 @@ export interface Results {
   'sessions.delete': { ok: true };
   'sessions.close': { ok: true };
   'sessions.interrupted': { refs: SessionRef[] };
+  /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
+  'sessions.setMode': { mode: string | null; verified: boolean };
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
@@ -245,8 +253,11 @@ export interface Results {
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
-  /** `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`. */
-  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number };
+  /**
+   * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.
+   * `mode` — режим разрешений сессии (сырая строка CLI), `null` — не известен.
+   */
+  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number; mode: string | null };
   'feed.subscribe': { ok: true };
   'feed.unsubscribe': { ok: true };
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */

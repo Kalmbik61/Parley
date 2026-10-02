@@ -1173,3 +1173,40 @@ describe('прочность и пределы', () => {
     expect(ofKind(state.items, 'text')).toHaveLength(1);
   });
 });
+
+describe('режим разрешений в ленте (план 2026-10-01, решение 4)', () => {
+  const AT = '2026-10-01T10:00:00.000Z';
+
+  it('режим берётся из permission_mode события, событие без поля его не сбрасывает', () => {
+    const first = applyHookEvent(
+      emptyFeedState(),
+      { hook_event_name: 'UserPromptSubmit', prompt: 'hi', permission_mode: 'plan' },
+      AT,
+    ).state;
+    expect(first.permissionMode).toBe('plan');
+
+    const second = applyHookEvent(
+      first,
+      { hook_event_name: 'MessageDisplay', message_id: 'm1', delta: 'x', final: false },
+      AT,
+    ).state;
+    expect(second.permissionMode).toBe('plan');
+
+    const third = applyHookEvent(
+      second,
+      { hook_event_name: 'Stop', permission_mode: 'acceptEdits' },
+      AT,
+    ).state;
+    expect(third.permissionMode).toBe('acceptEdits');
+  });
+
+  it('пустая строка режим не меняет; начальный режим — null', () => {
+    expect(emptyFeedState().permissionMode).toBeNull();
+    const state = applyHookEvent(
+      emptyFeedState(),
+      { hook_event_name: 'UserPromptSubmit', prompt: 'hi', permission_mode: '' },
+      AT,
+    ).state;
+    expect(state.permissionMode).toBeNull();
+  });
+});

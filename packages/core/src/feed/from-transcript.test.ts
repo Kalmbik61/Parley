@@ -284,3 +284,15 @@ describe('feedFromTranscript: ветки и пределы', () => {
     expect(feedFromTranscript(records.slice(0, 20)).items).toHaveLength(10);
   });
 });
+
+describe('feedFromTranscript: режим разрешений', () => {
+  it('p5b: последняя запись permission-mode — default', () => {
+    expect(feedFromTranscript(records('transcript-p5b-write')).permissionMode).toBe('default');
+  });
+
+  it('последняя запись побеждает; без записей — null', () => {
+    const mode = (permissionMode: string): RawRecord => ({ type: 'permission-mode', permissionMode });
+    expect(feedFromTranscript([mode('default'), mode('plan')]).permissionMode).toBe('plan');
+    expect(feedFromTranscript([]).permissionMode).toBeNull();
+  });
+});

@@ -24,9 +24,15 @@ export interface Events {
   /**
    * Дельта ленты сессии (план 2026-10-01, Task 2) — только подписчикам `feed.subscribe`. `upsert` —
    * новые и изменённые элементы, `removed` — `id` вытесненных из кольца; `revision` идёт подряд за
-   * `revision` снимка.
+   * `revision` снимка. `mode` — текущий режим разрешений ленты (может прийти и без элементов).
    */
-  'feed.changed': { ref: SessionRef; revision: number; upsert: FeedItem[]; removed: string[] };
+  'feed.changed': {
+    ref: SessionRef;
+    revision: number;
+    upsert: FeedItem[];
+    removed: string[];
+    mode: string | null;
+  };
 }
 
 export type EventName = keyof Events;

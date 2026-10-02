@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
-import type { Params, Result } from './methods.js';
+import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
 import type { FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
 
@@ -332,6 +332,7 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       items: FeedItem[];
       revision: number;
       schemaVersion: number;
+      mode: string | null;
     }>();
     expectTypeOf<Result<'feed.subscribe'>>().toEqualTypeOf<{ ok: true }>();
     expectTypeOf<Result<'feed.unsubscribe'>>().toEqualTypeOf<{ ok: true }>();
@@ -341,7 +342,27 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       revision: number;
       upsert: FeedItem[];
       removed: string[];
+      mode: string | null;
     }>();
     expectTypeOf<Params<'feed.decide'>['decision']>().toEqualTypeOf<FeedDecision>();
+  });
+});
+
+describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
+  const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+
+  it('принимает три режима окна и отвергает прочие', () => {
+    for (const mode of ['default', 'acceptEdits', 'plan']) {
+      expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(true);
+    }
+    for (const mode of ['bypassPermissions', 'auto', '', 5]) {
+      expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(false);
+    }
+    expect(METHODS['sessions.setMode'].safeParse({ mode: 'plan' }).success).toBe(false);
+  });
+
+  it('результат и тип выбора', () => {
+    expectTypeOf<Result<'sessions.setMode'>>().toEqualTypeOf<{ mode: string | null; verified: boolean }>();
+    expectTypeOf<Params<'sessions.setMode'>['mode']>().toEqualTypeOf<PermissionModeChoice>();
   });
 });

@@ -273,6 +273,12 @@ export interface FeedState {
   seq: number;
   /** Начало идущего хода; `null` — ход не идёт. */
   turnStartedAt: string | null;
+  /**
+   * Режим разрешений сессии, сырая строка CLI (`default`, `acceptEdits`, `plan`, …): из поля
+   * `permission_mode` событий хуков и записей журнала `permission-mode`; `null` — режим не известен
+   * (план 2026-10-01, решение 4). Наружу едет отдельным полем снимка и дельт, не элементом.
+   */
+  permissionMode: string | null;
   /** Порции растущих текстов по `messageId`; закрытый текст отсюда уходит. В окно не едет. */
   streams: Readonly<Record<string, FeedStream>>;
 }

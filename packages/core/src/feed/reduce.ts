@@ -56,6 +56,7 @@ export const emptyFeedState = (): FeedState => ({
   items: [],
   seq: 0,
   turnStartedAt: null,
+  permissionMode: null,
   streams: {},
 });
 
@@ -271,6 +272,7 @@ export class FeedDraft {
   readonly items: FeedItem[];
   seq: number;
   turnStartedAt: string | null;
+  permissionMode: string | null;
   readonly streams: Record<string, FeedStream>;
   private readonly changed = new Map<string, FeedItem>();
   /** `id` → место в `items`; строится при первом поиске. */
@@ -280,6 +282,7 @@ export class FeedDraft {
     this.items = state.items.slice();
     this.seq = state.seq;
     this.turnStartedAt = state.turnStartedAt;
+    this.permissionMode = state.permissionMode;
     this.streams = { ...state.streams };
   }
 
@@ -331,6 +334,7 @@ export class FeedDraft {
         items: this.items,
         seq: this.seq,
         turnStartedAt: this.turnStartedAt,
+        permissionMode: this.permissionMode,
         streams: this.streams,
       },
       changes: [...this.changed.values()],
@@ -996,8 +1000,16 @@ function onSubagentStop(
  */
 export function applyHookEvent(state: FeedState, event: unknown, at: string): FeedUpdate {
   const rec = eventRecordOf(event, at);
-  if (rec === null || !isRecord(event) || isHookNoise(event)) return { state, changes: [] };
+  if (rec === null || !isRecord(event)) return { state, changes: [] };
+  // Режим берётся у любого события, и у шума тоже: Shift+Tab не обязан совпасть с «значимым» событием.
+  const mode = textOf(event['permission_mode']);
+  if (isHookNoise(event)) {
+    return mode === null || mode === state.permissionMode
+      ? { state, changes: [] }
+      : { state: { ...state, permissionMode: mode }, changes: [] };
+  }
   const draft = new FeedDraft(state);
+  if (mode !== null) draft.permissionMode = mode;
   const data = event;
 
   switch (rec.name) {

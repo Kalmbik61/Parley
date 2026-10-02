@@ -196,6 +196,9 @@ export function feedFromTranscript(
         kind: 'turn',
         durationMs: typeof duration === 'number' ? duration : null,
       });
+    } else if (record.type === 'permission-mode') {
+      const mode = raw['permissionMode'];
+      if (typeof mode === 'string' && mode !== '') draft.permissionMode = mode;
     }
     // `queue-operation`, `attachment`, `mode`, заголовки и прочее служебное в ленту не идут.
   }
