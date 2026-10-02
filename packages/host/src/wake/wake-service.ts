@@ -533,7 +533,9 @@ export function createWakeService(
     });
 
     if (action.kind !== 'type-pointer') {
-      publishWaiting(ref, state, waitingOf(action, state));
+      // Пауза будильника проверяется раньше писем: без непрочитанных причины нет и на паузе.
+      const letters = unreadFor(entry.map, session.id).length > 0;
+      publishWaiting(ref, state, letters ? waitingOf(action, state) : null);
       return;
     }
     if (codex) {

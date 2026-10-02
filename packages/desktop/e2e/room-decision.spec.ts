@@ -16,7 +16,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * подложенные тестом (в `room-row.spec.ts` решение клал ядром сам тест). Строку в терминал агента тест отправляет так
  * же, как набрал бы человек, — уведомлением `pty.input` хоста.
  *
- * Первый тест — весь сценарий: карточка, подкраска, уведомления, замена, `Accept`, новое решение, возврат с заметкой и
+ * Первый тест — весь сценарий: карточка, подкраска, уведомления, замена, `Accept`, новое решение, возврат с заметкой
+ * (письмо ведущему со строкой доставки: «Not picked up yet» с причиной хоста до `check_inbox`, «Picked up by» после) и
  * исправленное решение после него («revised», а не «collected positions»). Второй — «то же решение второй раз не
  * уведомляет»: ни после перезапуска окна (хост переживает окно, решение в карте ждёт), ни после переподключения к
  * хосту («Restart host»). Замену решения после каждого из событий он кладёт сам и видит по журналу, что уведомитель
@@ -176,7 +177,7 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     return { workId, key: `${project} ${workId}`, lead, second, roomId, leadRef: { projectPath: project, workId, sessionId: lead } };
   }
 
-  test('propose_decision → карточка, подкраска, уведомление; повтор — rev + 1 и «revised»; Accept; новое решение в окне; возврат с заметкой', async () => {
+  test('propose_decision → карточка, подкраска, уведомление; повтор — rev + 1 и «revised»; Accept; новое решение в окне; возврат с заметкой и строка доставки письма', async () => {
     test.setTimeout(120_000);
     const { electronApp, window } = await launch();
     const { workId, key, lead, second, roomId, leadRef } = await setupRoom(window);
@@ -275,6 +276,9 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await expect(letter).toHaveCount(1);
     await expect(letter).toContainText('You');
     await expect(letter).toContainText('→ S01 lead');
+    // Строка доставки под письмом: ведущий его ещё не забрал, и хост говорит почему — будильник на паузе (`metrics.mailWaiting`).
+    await expect(letter.locator('[data-message-waiting]')).toHaveText('▤ Not picked up yet by S01 (auto-wake paused)', { timeout: 20_000 });
+    await expect(letter.locator('[data-message-picked]')).toHaveCount(0);
     const returned = await workMap(window, workId);
     expect(returned.rooms.find((item) => item.id === roomId)?.proposal).toBeNull();
     expect(
@@ -286,6 +290,11 @@ test.describe('решение ведущего: настоящий parley-mcp, �
 
     // Письмо дошло до агента: ведущий читает входящие через тот же настоящий MCP-сервер.
     await agentCalls(window, leadRef, 'check_inbox', {});
+    // `check_inbox` ставит отметку `readBy`: строка доставки меняется на «Picked up by S01» (время отметки — в подсказке), ждущих нет.
+    const delivered = letter.locator('[data-message-picked]');
+    await expect(delivered).toHaveText('✓ Picked up by S01', { timeout: 20_000 });
+    await expect(delivered).toHaveAttribute('title', /^S01 \d{2}:\d{2}:\d{2}$/);
+    await expect(letter.locator('[data-message-waiting]')).toHaveCount(0);
     await sendFocusTarget(electronApp, { kind: 'session', ref: leadRef });
     await expect.poll(() => screenText(window), { timeout: 20_000 }).toContain(`Returned for rework: ${RETURN_NOTE}`);
 

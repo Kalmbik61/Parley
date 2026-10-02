@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type NoticeKind } from '@parley/protocol';
+import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -323,7 +323,25 @@ export const S = {
     lead: 'Lead',
     /** Пустая комната. */
     emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
+    /** Строка доставки под сообщением: кто уже забрал его (`readBy`) и кто ещё нет. */
+    pickedUp: (tags: string): string => `✓ Picked up by ${tags}`,
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /**
+     * Почему сообщение ещё не забрано — в скобках после тега, `S01 (busy)`. Ключи — `MailWait` протокола: причину
+     * присылает хост в живых метриках сессии (`metrics.mailWaiting`); таблица обязана покрывать их все.
+     */
+    mailWait: {
+      busy: 'busy',
+      draft: 'unsent text in its terminal',
+      'no-hooks': 'waiting in its terminal',
+      'in-flight': 'notified, not started',
+      pointed: 'notified',
+      paused: 'auto-wake paused',
+      sleeping: 'sleeping',
+      resuming: 'resuming',
+      'resume-limit': 'resume limit reached',
+      pending: 'not launched',
+    } satisfies Record<MailWait, string>,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
     /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` — вторая строка. */
