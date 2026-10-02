@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { RawRecord } from '../jsonl.js';
 import { feedFromTranscript } from './from-transcript.js';
 import { applyHookEvent } from './reduce.js';
-import type { FeedAgent, FeedItem, FeedPrompt, FeedTool } from './types.js';
+import type { FeedAgent, FeedItem, FeedPrompt, FeedTool, FeedTurn } from './types.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -53,6 +53,9 @@ describe('feedFromTranscript на настоящих журналах', () => {
       items.filter((item) => item.kind === 'prompt').map((item) => (item as FeedPrompt).text),
     ).not.toContainEqual(expect.stringContaining('[Request interrupted'));
     expect(items[3]).toMatchObject({ kind: 'turn', durationMs: 4648 });
+    // Прерванный ход: черта одна, с признаком и длительностью из записи `turn_duration`.
+    expect(items[6]).toMatchObject({ kind: 'turn', interrupted: true });
+    expect((items[6] as FeedTurn).durationMs).not.toBeNull();
   });
 
   it('p5b: дифф правки из structuredPatch, слеш-команда — промпт без разметки', () => {
@@ -224,13 +227,14 @@ describe('feedFromTranscript: ветки и пределы', () => {
     expect(kinds(items)).toEqual(['tool:failed']);
   });
 
-  it('прерывание без отказа в диалоге отклоняет идущие вызовы', () => {
+  it('прерывание без отказа в диалоге отклоняет идущие вызовы и ставит черту interrupted', () => {
     const { items } = feedFromTranscript([
       toolUse('a1', 't1', 'Bash', { command: 'sleep 9' }),
       user('u1', [{ type: 'text', text: '[Request interrupted by user]' }]),
     ]);
 
-    expect(kinds(items)).toEqual(['tool:rejected']);
+    expect(kinds(items)).toEqual(['tool:rejected', 'turn']);
+    expect(items.at(-1)).toMatchObject({ kind: 'turn', durationMs: null, interrupted: true });
   });
 
   it('is_error у вызова Agent — карточка агента failed', () => {

@@ -946,6 +946,21 @@ describe('прочность и пределы', () => {
     expect(closeFeedTurn(closed.state, LATER).changes).toEqual([]);
   });
 
+  it('closeFeedTurn с interrupted: человек прервал ход Esc — черта с признаком, вызов отклонён', () => {
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      pre('t1', 'Bash', { command: 'sleep 9' }),
+    ]);
+    const closed = closeFeedTurn(state, LATER, { interrupted: true });
+
+    expect(ofKind(closed.state.items, 'tool')[0]?.status).toBe('rejected');
+    expect(closed.state.items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+    expect(closed.state.turnStartedAt).toBeNull();
+    // Обычное закрытие признака не ставит.
+    const plain = closeFeedTurn(run([{ hook_event_name: 'UserPromptSubmit', prompt: 'go' }]), LATER);
+    expect('interrupted' in (plain.state.items.at(-1) ?? {})).toBe(false);
+  });
+
   it('вложенные вызовы субагента: последние FEED_AGENT_CHILDREN, короткие вход и сводка, без хунков', () => {
     const total = FEED_AGENT_CHILDREN + 1;
     const events: Record<string, unknown>[] = [

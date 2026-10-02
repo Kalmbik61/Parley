@@ -605,7 +605,7 @@ function rejectRunningTools(draft: FeedDraft, at: string): void {
 }
 
 /** Закрывает идущий ход: тексты, карточки, вызовы; `turn` — если ход шёл. */
-function closeTurn(draft: FeedDraft, at: string): void {
+function closeTurn(draft: FeedDraft, at: string, interrupted = false): void {
   closeTexts(draft);
   settleAllPending(draft, at);
   rejectRunningTools(draft, at);
@@ -615,6 +615,7 @@ function closeTurn(draft: FeedDraft, at: string): void {
       at,
       kind: 'turn',
       durationMs: durationBetween(draft.turnStartedAt, at),
+      ...(interrupted ? { interrupted: true as const } : {}),
     });
     draft.turnStartedAt = null;
   }
@@ -1175,12 +1176,13 @@ export function settleCards(
 }
 
 /**
- * Закрывает ход, оборванный без `Stop` и `SessionEnd` (процесс агента вышел): тексты закрыты, идущие
- * вызовы отклонены, ждущие карточки — `elsewhere`, черта `turn` — если ход шёл. Карточки, которым
- * положено `stale`, хост сначала снимает `settleCards`.
+ * Закрывает ход, оборванный без `Stop` и `SessionEnd` (процесс агента вышел, или человек прервал
+ * ход Esc — `interrupted`, по записи журнала): тексты закрыты, идущие вызовы отклонены, ждущие
+ * карточки — `elsewhere`, черта `turn` — если ход шёл. Карточки, которым положено `stale`, хост
+ * сначала снимает `settleCards`.
  */
-export function closeFeedTurn(state: FeedState, at: string): FeedUpdate {
+export function closeFeedTurn(state: FeedState, at: string, options: { interrupted?: boolean } = {}): FeedUpdate {
   const draft = new FeedDraft(state);
-  closeTurn(draft, at);
+  closeTurn(draft, at, options.interrupted === true);
   return draft.done();
 }

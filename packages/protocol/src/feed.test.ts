@@ -228,6 +228,11 @@ describe('feedItem отвергает чужое', () => {
     expect(feedItem.safeParse(text).success).toBe(true);
   });
 
+  it('черта прерванного хода: `interrupted: true` проходит, `false` — нет (признак только истинный)', () => {
+    expect(feedItem.safeParse({ ...turn, interrupted: true }).success).toBe(true);
+    expect(feedItem.safeParse({ ...turn, interrupted: false }).success).toBe(false);
+  });
+
   it('лишнее поле не проходит — на элементе и внутри него', () => {
     expect(feedItem.safeParse({ ...turn, extra: 1 }).success).toBe(false);
     const notice = {

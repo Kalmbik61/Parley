@@ -45,6 +45,9 @@ function onUserText(draft: FeedDraft, text: string, images: number, at: string):
     )) {
       if (tool.status === 'running') draft.put({ ...tool, status: 'rejected', endedAt: at });
     }
+    // Прерванный ход кончается чертой `interrupted`: записи конца хода у него нет, и без черты
+    // окно считало бы ход идущим (Stop, Queue). Длительность журнал не даёт.
+    draft.put({ id: draft.nextId('turn'), at, kind: 'turn', durationMs: null, interrupted: true });
     return;
   }
   const note = parseTaskNotification(text);
@@ -190,12 +193,15 @@ export function feedFromTranscript(
       onAssistant(draft, raw, uuid, record.messageId, message?.['content'], at);
     } else if (record.type === 'system' && raw['subtype'] === 'turn_duration') {
       const duration = raw['durationMs'];
-      draft.put({
-        id: `turn:${uuid}`,
-        at,
-        kind: 'turn',
-        durationMs: typeof duration === 'number' ? duration : null,
-      });
+      const durationMs = typeof duration === 'number' ? duration : null;
+      const last = draft.items.at(-1);
+      // Длительность после прерывания (Esc, отказ в диалоге): черта `interrupted` уже стоит — дописать
+      // ей длительность, а не ставить вторую.
+      if (last !== undefined && last.kind === 'turn' && last.interrupted === true && last.durationMs === null) {
+        draft.put({ ...last, durationMs });
+      } else {
+        draft.put({ id: `turn:${uuid}`, at, kind: 'turn', durationMs });
+      }
     } else if (record.type === 'permission-mode') {
       const mode = raw['permissionMode'];
       if (typeof mode === 'string' && mode !== '') draft.permissionMode = mode;

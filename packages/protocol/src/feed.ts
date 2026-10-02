@@ -224,6 +224,8 @@ const turn = z.strictObject({
   ...base,
   kind: z.literal('turn'),
   durationMs: z.number().min(0).nullable(),
+  /** Ход оборван человеком (Esc): записью журнала, без `Stop`. */
+  interrupted: z.literal(true).exactOptional(),
 });
 
 /** Элемент ленты (`FeedItem` core). */

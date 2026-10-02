@@ -229,6 +229,11 @@ export interface FeedTurn extends FeedItemBase {
   kind: 'turn';
   /** Длительность хода; `null` — начала хода лента не видела. */
   durationMs: number | null;
+  /**
+   * Ход оборван человеком (Esc в терминале): `Stop` не приходит, прерывание видно только записью
+   * «[Request interrupted by user…]» в журнале сессии (решение 5).
+   */
+  interrupted?: true;
 }
 
 export type FeedItem =
