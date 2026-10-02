@@ -10,8 +10,10 @@
 // Копит символы до `\r`/`\n` и печатает `echo: <строка>\r\n` — построчный
 // эхо-отклик, которого ждёт `e2e/terminal.spec.ts`.
 
+import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import readline from 'node:readline';
 
@@ -41,6 +43,109 @@ if (process.env.STUB_NO_HOOKS !== '1' && fromEnv('WORK_DIR') !== undefined && fr
 }
 
 process.stdout.write('stub-echo готов\r\n');
+
+// События файлового журнала `<WORK_DIR>/events/<SESSION_ID>.jsonl`: настоящий Claude Code пишет их командным хуком
+// (core/work/settings-file.ts, HOOK_EVENTS), и по ним хост считает активность (blocked, working, lastEventAt).
+// Стаб, посылая событие строкой STUB_HOOK, дописывает в журнал и его — иначе хост событий не увидит.
+const JOURNAL_EVENTS = new Set([
+  'SessionStart',
+  'SessionEnd',
+  'UserPromptSubmit',
+  'Notification',
+  'PermissionRequest',
+  'Stop',
+  'SubagentStart',
+  'SubagentStop',
+]);
+
+/** Значение флага argv (`--settings <путь>`, `--session-id <id>`); нет флага — `undefined`. */
+function argvValue(flag) {
+  const at = process.argv.indexOf(flag);
+  return at === -1 ? undefined : process.argv[at + 1];
+}
+
+/**
+ * HTTP-хук из файла `--settings` (вид «Chat», решение 1 плана 2026-10-01): адрес и заголовки, в которых
+ * `$ИМЯ` из `allowedEnvVars` заменено значением из окружения процесса — так делает настоящий Claude Code.
+ * Нет флага, файла или HTTP-хука — `null`: стаб ведёт себя как прежде, команда STUB_HOOK не распознаётся.
+ */
+function readHttpHook() {
+  const file = argvValue('--settings');
+  if (file === undefined) return null;
+  let settings;
+  try {
+    settings = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  for (const groups of Object.values(settings.hooks ?? {})) {
+    for (const group of groups ?? []) {
+      for (const hook of group.hooks ?? []) {
+        if (hook.type !== 'http' || typeof hook.url !== 'string') continue;
+        const allowed = hook.allowedEnvVars ?? [];
+        const substitute = (value) =>
+          String(value).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, name) => (allowed.includes(name) ? (process.env[name] ?? '') : whole));
+        const headers = Object.fromEntries(Object.entries(hook.headers ?? {}).map(([name, value]) => [name, substitute(value)]));
+        return { url: hook.url, headers };
+      }
+    }
+  }
+  return null;
+}
+
+const httpHook = readHttpHook();
+/** `--session-id` — id сессии у Claude Code: приёмник хоста сверяет с ним `session_id` тела (иначе 404). */
+const providerSessionId = argvValue('--session-id');
+
+/** Ответ хоста — в терминал (`HOOK<<json>>`) и, если задан `STUB_HOOK_LOG`, строкой в файл: в виде Chat терминала не видно. */
+function reportHook(event, status, response) {
+  process.stdout.write(`HOOK<<${JSON.stringify(response)}>>\r\n`);
+  const log = process.env.STUB_HOOK_LOG;
+  if (log !== undefined && log !== '') appendFileSync(log, `${JSON.stringify({ event, status, response })}\n`);
+}
+
+/**
+ * Строка `STUB_HOOK <json>`: POST события на хост от имени сессии. Запрос не держит чтение stdin — удержанный
+ * хук (PermissionRequest, вопрос агента) ждёт клика человека в окне, а стаб тем временем принимает дальнейшие строки.
+ * Пустое тело ответа — `{}`. Ошибка сети, не-2xx и непонятный ответ — `{"error": …}`.
+ */
+function postHook(text) {
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch (error) {
+    reportHook('unknown', 0, { error: `bad json: ${error.message}` });
+    return;
+  }
+  const event = typeof body.hook_event_name === 'string' ? body.hook_event_name : 'unknown';
+  if (body.session_id === undefined && providerSessionId !== undefined) body.session_id = providerSessionId;
+  const payload = JSON.stringify(body);
+  if (JOURNAL_EVENTS.has(event) && fromEnv('WORK_DIR') !== undefined && fromEnv('SESSION_ID') !== undefined) {
+    const events = path.join(fromEnv('WORK_DIR'), 'events');
+    mkdirSync(events, { recursive: true });
+    appendFileSync(path.join(events, `${fromEnv('SESSION_ID')}.jsonl`), `${payload}\n`);
+  }
+  const request = http.request(
+    httpHook.url,
+    { method: 'POST', headers: { ...httpHook.headers, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+    (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const status = response.statusCode ?? 0;
+        const raw = Buffer.concat(chunks).toString('utf8');
+        if (status < 200 || status >= 300) return reportHook(event, status, { error: `HTTP ${status}` });
+        try {
+          reportHook(event, status, raw.trim() === '' ? {} : JSON.parse(raw));
+        } catch (error) {
+          reportHook(event, status, { error: `bad response: ${error.message}` });
+        }
+      });
+    },
+  );
+  request.on('error', (error) => reportHook(event, 0, { error: error.message }));
+  request.end(payload);
+}
 
 // Настоящий MCP-сервер харнесса (кусок 8 «Organic»): строка `STUB_MCP <инструмент> <json-аргументы>` в терминале —
 // вызов инструмента `parley-mcp` так, как его делает модель. Сервер запускается ровно как Claude Code запускает его
@@ -143,6 +248,15 @@ function typed(text) {
       if (mcpCall !== -1) {
         const command = buffer.slice(mcpCall + 'STUB_MCP '.length);
         mcpQueue = mcpQueue.then(() => callMcp(command));
+        buffer = '';
+        continue;
+      }
+      // Событие хука на хост (см. postHook); эхо строки не печатается. Ищется так же, как STUB_MCP. Длинные тела
+      // (сотни знаков) — в режиме STUB_BRACKETED=1: в обычном режиме строку держит канонический режим tty с пределом
+      // в 1024 байта.
+      const hookCall = buffer.indexOf('STUB_HOOK ');
+      if (httpHook !== null && hookCall !== -1) {
+        postHook(buffer.slice(hookCall + 'STUB_HOOK '.length));
         buffer = '';
         continue;
       }
