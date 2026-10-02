@@ -56,6 +56,8 @@ launch. Allow it once, in either of two ways:
 - `claude` and/or `codex`, installed and signed in. Parley starts the CLIs you already use,
   under your own login: it does not sign you in and does not touch your credentials. The window
   finds them on the `PATH` of your login shell (see "Environment of the window");
+- Chat view (optional) needs Claude Code 2.1.286 or newer; older versions and Codex stay in the
+  terminal;
 - git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
   older git a conflict shows up only when you try to merge.
 
@@ -685,6 +687,48 @@ node packages/core/dist/cli.js index
 node packages/core/dist/cli.js session <id>
 ```
 
+### Chat view
+
+A Claude Code session tab can show the session as a conversation instead of a terminal. The
+agent is the same unmodified CLI, running in a terminal that is hidden, not removed: the
+**Chat | Terminal** segment in the tab's toolbar switches between the two at any moment.
+Nothing is sent on your behalf: every permission, question and plan is answered by your click
+on its card, and the host never answers a hook by itself.
+
+**What the feed shows.** Your prompts, the reply text as it streams, tool calls with their
+results and diffs, permission, question and plan cards, an agent card for each subagent
+(type, description, model, status, tool calls, the final text and "Show transcript"), and
+notices: session start, `/clear`, compaction, a model switch. A line marks the end of each
+turn. The input field at the bottom sends text to the session like the terminal does.
+
+**What stays in the terminal.** Folder trust, sign-in, menus such as `/model`, elicitation
+dialogs and Esc. When Claude Code waits for one of these, the feed shows the banner "Claude
+Code is waiting in the terminal" with "Open terminal"; the dialog itself is never hidden or
+answered for you.
+
+**Which view opens.** A new session opens in the terminal until Claude Code has started, then
+switches to the chat once. Your own choice of view is remembered per tab and wins over this.
+
+**Mode.** The toolbar menu sets Manual, Accept edits or Plan. The host presses Shift+Tab in the
+hidden terminal and checks the footer of the screen; if it cannot confirm the change, it asks
+you to open the terminal. Auto and bypass modes are set in the terminal only.
+
+**Version.** Chat view needs Claude Code 2.1.286 or newer. Codex and older versions of Claude
+Code stay terminal-only: the segment is disabled and says why.
+
+**How it works.** The session's settings file carries HTTP hooks that post to the host on
+`127.0.0.1` with a per-launch token. The feed lives on the host: the window gets a snapshot,
+then deltas. The host holds a permission request, a plan or a question until you decide, and
+answers the hook with your decision; everything else it acknowledges at once. The history of
+a resumed session is seeded from its transcript, without streamed text.
+
+**Limits.**
+
+- Thinking is not shown.
+- A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
+- A question with two identical question texts collapses into one answer.
+- Badges for subagents in the sidebar, the room and the toolbar are planned.
+
 ## Settings
 
 The window has Settings (⌘,), with five tabs:
@@ -800,6 +844,8 @@ session stays `working` after its turn ended, and silence does not end it; such 
 gets the pointer to new letters, because the agent itself is at its prompt. Around `wait_for` the
 session's MCP server appends two lines of its own to the same log, `ParleyWaitStart` (with
 `parley_wait_target`) and `ParleyWaitEnd`, so the window can show what an agent waits for.
+In Chat view, each subagent also gets an agent card in the feed: its type, description, model and
+status, its tool calls, its final text and a "Show transcript" link.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP
