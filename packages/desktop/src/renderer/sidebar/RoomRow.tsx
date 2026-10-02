@@ -4,8 +4,9 @@
  * строками карточка не выводит.
  *
  * Облик: radius 14, отступ `4 6 7 {8 + 12·depth}`, зазор 4, 12px. Шапка 18px, зазор 6: значок вопроса 12 (только
- * когда решение ждёт человека, иначе пустое место), Hash 13, название, слово состояния — `decision` (`accent-800`) или
- * `{n} new` (`neutral-800`), шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего события. Свёрнутая —
+ * когда решение ждёт человека, иначе пустое место), Hash 13, название, слово состояния — `decision` (`accent-800`),
+ * `@you · {n} new`, если среди новых сообщений есть упоминание человека (`@human`, Parley 0.3.0), или `{n} new`
+ * (оба — `neutral-800`), шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего события. Свёрнутая —
  * значки провайдеров участников (отступ 37, зазор 14): значок 14 и в правом нижнем углу кружок-счётчик, обведённый
  * цветом фона карточки; число — ВСЕ агенты провайдера в комнате, не только запущенные (решение 7), тултип
  * `2 Claude Code agents`. «В комнате» — те, кого сайдбар в неё поставил (`CardRoomRow.sessions`): сессия старой карты,
@@ -62,6 +63,8 @@ export interface RoomRowProps {
   row: CardRoomRow;
   /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
   unread: number;
+  /** Среди них есть упоминание человека `@human` (`WorkAttention.roomMentions`). */
+  mentioned: boolean;
   /** Срез активности работы (`WorkCard`): по `refKey` сессии. */
   activity: Record<string, ActivityEntry>;
   now: Date;
@@ -103,6 +106,7 @@ export function RoomRow({
   bridge,
   row,
   unread,
+  mentioned,
   activity,
   now,
   active,
@@ -126,7 +130,14 @@ export function RoomRow({
   const expanded = override ?? tab !== null;
   const pending = roomAwaitsDecision(room);
   const bold = selected || unread > 0 || pending;
-  const word = pending ? S.sidebar.roomDecision : unread > 0 ? S.sidebar.roomNew(unread) : '';
+  // Решение важнее всего; упоминание человека — важнее простого «N new».
+  const word = pending
+    ? S.sidebar.roomDecision
+    : mentioned
+      ? S.sidebar.roomMentioned(unread)
+      : unread > 0
+        ? S.sidebar.roomNew(unread)
+        : '';
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
   const tooltip = S.sidebar.roomTooltip(
     row.lead === null ? null : sessionTag(row.lead),

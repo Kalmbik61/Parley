@@ -6,6 +6,7 @@
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
 
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
@@ -136,6 +137,8 @@ const liveTask = (
 
 const feed = (): HTMLElement => document.querySelector('[data-room-feed]') as HTMLElement;
 const liveLine = (): HTMLElement | null => document.querySelector('[data-room-live]');
+/** Кнопка «↓N» над низом ленты: сколько пришло снизу, пока человек читал историю. */
+const newBelow = (): HTMLElement | null => document.querySelector('[data-room-new-below]');
 const messageRow = (id: string): HTMLElement => document.querySelector(`[data-message-id="${id}"]`) as HTMLElement;
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: WORK_ID, sessionId });
 
@@ -649,6 +652,338 @@ describe('RoomPanel — сообщения (1.3)', () => {
   });
 });
 
+describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
+  /** Вопрос человека и ответ агента на него: у ответа `replyTo` — id вопроса. */
+  const replyMessages = (): Message[] => [
+    message('m-1', {
+      text: 'Что с миграцией?\n\nПодробности ниже',
+      kind: 'question',
+      at: '2026-09-27T09:00:00.000Z',
+    }),
+    message('m-2', {
+      from: 's-02',
+      to: ['human'],
+      text: 'Миграция **готова**',
+      replyTo: 'm-1',
+      at: '2026-09-27T09:01:00.000Z',
+    }),
+  ];
+  const quote = (id: string): HTMLElement =>
+    document.querySelector(`[data-message-reply="${id}"]`) as HTMLElement;
+  const flashed = (id: string): boolean => messageRow(id).hasAttribute('data-reply-flash');
+  /** Куда звали `scrollIntoView`: на каком элементе и с какими параметрами. */
+  let scrolled: Array<{ element: Element; options: unknown }>;
+
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = vi.fn(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      scrolled.push({ element: this, options });
+    });
+  });
+
+  it('ответ — цитата между метой и текстом: «↩ подпись: выдержка», кнопка с именем из видимого текста и подсказкой', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const button = quote('m-1');
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.textContent).toBe('↩ You: Что с миграцией?');
+    expect(button.querySelector('.font-semibold')?.textContent).toBe('You');
+    // Имя — видимый текст без стрелки: aria-label выдержку не прячет.
+    expect(button.hasAttribute('aria-label')).toBe(false);
+    expect(screen.getByRole('button', { name: 'You: Что с миграцией?' })).toBe(button);
+    expect(button.getAttribute('title')).toBe('Что с миграцией?');
+    // Мелкий текст, одна строка с обрезкой, акцентная черта слева.
+    for (const token of ['text-xs', 'truncate', 'border-l-2', 'border-(--color-accent)']) {
+      expect(button.className, token).toContain(token);
+    }
+    // Внутри строки ответа, между метой и текстом.
+    const row = messageRow('m-2');
+    const meta = row.querySelector('[data-message-meta]') as HTMLElement;
+    const body = row.querySelector('[data-room-markdown]') as HTMLElement;
+    expect(row.contains(button)).toBe(true);
+    expect(meta.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Текст ответа — Markdown, как у любого сообщения; у оригинала цитаты нет.
+    expect(body.querySelector('strong')?.textContent).toBe('готова');
+    expect(
+      messageRow('m-1').querySelector('[data-message-reply], [data-message-reply-missing]'),
+    ).toBeNull();
+  });
+
+  it('подпись и выдержка — как в ленте: ярлык агента, упоминания чипами-ярлыками, разметка снята', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', {
+            from: 's-01',
+            text: '## @s02, @human — что **скажете**?',
+            at: '2026-09-27T09:00:00.000Z',
+          }),
+          message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ S01 архитектор: @S02 бэкенд, @you — что скажете?');
+    expect(
+      screen.getByRole('button', { name: 'S01 архитектор: @S02 бэкенд, @you — что скажете?' }),
+    ).toBe(quote('m-1'));
+  });
+
+  it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', {
+            text: '![](https://example.com/a.png)',
+            at: '2026-09-27T09:00:00.000Z',
+          }),
+          message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ You');
+  });
+
+  it('клик по цитате зовёт scrollIntoView у сообщения-оригинала: по центру, плавно', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-1'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('оригинал выше ленты встаёт к верху, а не по центру: строка меты (по ней — прочтение) остаётся на экране', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const feed = document.querySelector('[data-room-feed]') as HTMLElement;
+    // В jsdom раскладки нет: высоты задаём сами — лента 400px, оригинал 900px, то есть выше ленты.
+    Object.defineProperty(feed, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(messageRow('m-1'), 'offsetHeight', { configurable: true, value: 900 });
+
+    fireEvent.click(quote('m-1'));
+    expect(scrolled.at(-1)?.options).toEqual({ block: 'start', behavior: 'smooth' });
+
+    // Ровно в высоту ленты — ещё по центру.
+    Object.defineProperty(messageRow('m-1'), 'offsetHeight', { configurable: true, value: 400 });
+    fireEvent.click(quote('m-1'));
+    expect(scrolled.at(-1)?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('клик по цитате переносит фокус на строку оригинала: после прокрутки и без собственной прокрутки', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderPanel(entryOf({ messages: replyMessages() }));
+      // Строка принимает фокус программно, но в порядок Tab не входит.
+      expect(messageRow('m-1').getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(document.body);
+
+      fireEvent.click(quote('m-1'));
+      expect(document.activeElement).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(focus.mock.contexts[0]).toBe(messageRow('m-1'));
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      const scroll = vi.mocked(Element.prototype.scrollIntoView);
+      expect(scroll.mock.invocationCallOrder[0]).toBeLessThan(
+        focus.mock.invocationCallOrder[0] as number,
+      );
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it('prefers-reduced-motion: reduce — прокрутка без плавности (behavior: auto); без него — smooth', () => {
+    const reduce = (matches: boolean) =>
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: matches && query === '(prefers-reduced-motion: reduce)',
+        media: query,
+      }));
+    reduce(true);
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+
+    reduce(false);
+    fireEvent.click(quote('m-1'));
+    expect(scrolled[1]?.options).toEqual({ block: 'center', behavior: 'smooth' });
+  });
+
+  it('оригинал получает data-reply-flash на 1,2 с, по таймеру атрибут снимается', () => {
+    vi.useFakeTimers();
+    renderPanel(entryOf({ messages: replyMessages() }));
+    expect(flashed('m-1')).toBe(false);
+
+    fireEvent.click(quote('m-1'));
+    expect(flashed('m-1')).toBe(true);
+    // Подсвечено только то, к чему перешли: не ответ и не вся лента.
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1199);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-1')).toBe(false);
+  });
+
+  it('повторный клик перезапускает отсчёт: подсветка держится 1,2 с от последнего клика', () => {
+    vi.useFakeTimers();
+    renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    fireEvent.click(quote('m-1'));
+    expect(scrolled).toHaveLength(2);
+
+    // От первого клика прошло 1600 мс, от второго — 800: прежний таймер подсветку не снимает.
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(flashed('m-1')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-1')).toBe(false);
+  });
+
+  it('подсветка одна на ленту: переход к другому оригиналу снимает прежнюю', () => {
+    vi.useFakeTimers();
+    const messages = [
+      ...replyMessages(),
+      message('m-3', {
+        from: 's-03',
+        to: ['human'],
+        replyTo: 'm-2',
+        at: '2026-09-27T09:02:00.000Z',
+      }),
+    ];
+    renderPanel(entryOf({ messages }));
+    fireEvent.click(quote('m-2'));
+    expect(flashed('m-2')).toBe(true);
+
+    fireEvent.click(quote('m-1'));
+    expect(flashed('m-2')).toBe(false);
+    expect(flashed('m-1')).toBe(true);
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+  });
+
+  it('вкладку закрыли — таймер подсветки не остаётся', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderPanel(entryOf({ messages: replyMessages() }));
+    fireEvent.click(quote('m-1'));
+    unmount();
+    // Перенос фокуса в jsdom ставит свою отложенную задачу (`selectionchange`): она не наша и срабатывает сразу.
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('id оригинала с кавычкой, скобкой и косой чертой находится без подстановки в селектор', () => {
+    const id = 'm-"1"]\\';
+    renderPanel(
+      entryOf({
+        messages: [
+          message(id, { text: 'Вопрос', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', { from: 's-02', replyTo: id, at: '2026-09-27T09:01:00.000Z' }),
+        ],
+      }),
+    );
+    fireEvent.click(document.querySelector('[data-message-reply]') as HTMLElement);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element.getAttribute('data-message-id')).toBe(id);
+    expect(scrolled[0]?.element.hasAttribute('data-reply-flash')).toBe(true);
+  });
+
+  it('оригинала уже нет в ленте — клик ничего не делает: ни прокрутки, ни подсветки, ни ошибки', () => {
+    renderPanel(entryOf({ messages: replyMessages() }));
+    const button = quote('m-1');
+    messageRow('m-1').remove();
+    expect(() => fireEvent.click(button)).not.toThrow();
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+    // Переходить некуда — фокус не двигается.
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('оригинала нет в этой комнате (чужая комната, несуществующий id) — тот же блок, но не кнопка', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-0', { roomId: 'r-02', text: 'Чужая комната', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-1', { from: 's-02', replyTo: 'm-0', at: '2026-09-27T09:01:00.000Z' }),
+          message('m-2', { from: 's-03', replyTo: 'm-99', at: '2026-09-27T09:02:00.000Z' }),
+        ],
+      }),
+    );
+    expect(document.querySelector('[data-message-reply]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Original message/ })).toBeNull();
+    const blocks = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-message-reply-missing]'),
+    );
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      expect(block.tagName).toBe('DIV');
+      expect(block.textContent).toBe('↩ Original message is not in this room');
+      for (const token of ['text-xs', 'truncate', 'border-l-2']) {
+        expect(block.className, token).toContain(token);
+      }
+    }
+    // Это не кнопка: клик ничего не прокручивает и не подсвечивает.
+    fireEvent.click(blocks[0] as HTMLElement);
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+  });
+
+  it('после перехода к оригиналу новое сообщение агента ленту не уводит: человек читает вопрос, пришедшее — в «↓1»', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(800);
+    try {
+      const { update } = renderPanel(entryOf({ messages: replyMessages() }));
+      expect(feed().scrollTop).toBe(800);
+      fireEvent.click(quote('m-1'));
+      // Браузер доскроллил ленту к оригиналу и прислал `scroll`: до дна далеко.
+      feed().scrollTop = 100;
+      fireEvent.scroll(feed());
+      update(
+        entryOf({
+          messages: [
+            ...replyMessages(),
+            message('m-3', { from: 's-03', to: ['human'], at: '2026-09-27T10:00:00.000Z' }),
+          ],
+        }),
+      );
+      expect(feed().scrollTop).toBe(100);
+      expect(newBelow()?.textContent).toBe('↓1');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('после перехода к оригиналу читают историю: живая строка ленту не дёргает', () => {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+    try {
+      const { rerender, initial } = renderPanel(entryOf({ messages: replyMessages() }));
+      fireEvent.click(quote('m-1'));
+      feed().scrollTop = 100;
+      fireEvent.scroll(feed());
+      rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+      expect(liveLine()).not.toBeNull();
+      expect(feed().scrollTop).toBe(100);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
+
 describe('RoomPanel — строка ожидания по readBy (1.3)', () => {
   it('«Not picked up yet by …» — теги тех, кто ещё не прочитал', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
@@ -786,15 +1121,121 @@ describe('RoomPanel — прокрутка к низу', () => {
     }
   });
 
-  it('новое сообщение снова прижимает ленту к низу, даже если её прокрутили вверх', () => {
+  /** Ленту прокрутили вверх, браузер прислал `scroll`: до дна далеко — человек читает историю. */
+  function scrollUp(top = 40): void {
+    feed().scrollTop = top;
+    fireEvent.scroll(feed());
+  }
+  const fromAgent = (id: string, at: string): Message =>
+    message(id, { from: 's-02', readBy: {}, at });
+  const PROPOSAL = {
+    id: 'p-01',
+    from: 's-01',
+    text: 'Делаем так',
+    rev: 0,
+    at: '2026-09-27T11:00:00.000Z',
+  };
+
+  it('у низа новое сообщение агента прижимает ленту, кнопки «↓N» нет', () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
     try {
       const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
       expect(feed().scrollTop).toBe(500);
-      feed().scrollTop = 40;
       setScrollHeight(feed(), 800);
-      update(entryOf({ messages: [message('m-1'), message('m-2', { at: '2026-09-27T10:00:00.000Z' })] }));
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
       expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('читают историю — новое сообщение агента ленту не трогает, внизу кнопка «↓1» (Parley 0.3.0)', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      setScrollHeight(feed(), 800);
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
+      expect(feed().scrollTop).toBe(40);
+      const button = newBelow() as HTMLElement;
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.textContent).toBe('↓1');
+      expect(button.getAttribute('aria-label')).toBe('1 new below');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('«↓N» копит новые сообщения и решение; клик ведёт к низу, и кнопка гаснет', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const two = [
+        message('m-1'),
+        fromAgent('m-2', '2026-09-27T10:00:00.000Z'),
+        fromAgent('m-3', '2026-09-27T10:01:00.000Z'),
+      ];
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: two }));
+      expect(newBelow()?.textContent).toBe('↓2');
+      // Новое решение ведущего — тоже снизу, ленту оно не уводит.
+      setScrollHeight(feed(), 900);
+      update(entryOf({ room: room({ proposal: PROPOSAL }), messages: two }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓3');
+      expect(newBelow()?.getAttribute('aria-label')).toBe('3 new below');
+
+      fireEvent.click(newBelow() as HTMLElement);
+      expect(feed().scrollTop).toBe(900);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('дошёл до низа прокруткой сам — «↓N» гаснет', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')] }));
+      expect(newBelow()).not.toBeNull();
+      // 500 − 460 − 0 = 40 ≤ 48: у низа.
+      scrollUp(460);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('своё сообщение (от человека) прижимает ленту к низу и гасит «↓N», даже когда читают историю', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const first = [message('m-1'), fromAgent('m-2', '2026-09-27T10:00:00.000Z')];
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      update(entryOf({ messages: first }));
+      expect(newBelow()?.textContent).toBe('↓1');
+      setScrollHeight(feed(), 800);
+      // `message()` по умолчанию — от человека: это его ответ из поля ввода.
+      update(entryOf({ messages: [...first, message('m-3', { at: '2026-09-27T10:05:00.000Z' })] }));
+      expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('новое решение, пока читают историю, ленту не уводит: карточка при появлении не прижимает ленту к низу', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const { update } = renderPanel(entryOf({ messages: [message('m-1')] }));
+      scrollUp();
+      setScrollHeight(feed(), 700);
+      update(entryOf({ room: room({ proposal: PROPOSAL }), messages: [message('m-1')] }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓1');
     } finally {
       spy.mockRestore();
     }
@@ -810,6 +1251,201 @@ describe('RoomPanel — прокрутка к низу', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('RoomPanel — открытие комнаты: к самому раннему непрочитанному упоминанию (Parley 0.3.0)', () => {
+  /** Сообщение агента, не прочитанное человеком (`message()` по умолчанию — прочитанное и от человека). */
+  const agent = (id: string, patch: Partial<Message> = {}): Message =>
+    message(id, { from: 's-02', readBy: {}, ...patch });
+  /** Лента с упоминаниями: m-1 уже прочитано, m-3 и m-4 — непрочитанные упоминания, m-5 — после них. */
+  const mentionMessages = (): Message[] => [
+    agent('m-1', { text: 'старое, @human', readBy: { human: 'x' } }),
+    agent('m-2', { text: 'без упоминаний' }),
+    agent('m-3', { text: 'первое, @human' }),
+    agent('m-4', { text: 'второе, @human' }),
+    agent('m-5', { text: 'после всех' }),
+  ];
+  const flashed = (id: string): boolean => messageRow(id).hasAttribute('data-reply-flash');
+  /** Куда звали `scrollIntoView`: на каком элементе и с какими параметрами. */
+  let scrolled: Array<{ element: Element; options: unknown }>;
+  /** jsdom не считает раскладку: высота ленты 900, окно 400 — `scrollTop` 0 это «далеко от дна». */
+  let layout: Array<{ mockRestore(): void }>;
+
+  beforeEach(() => {
+    scrolled = [];
+    Element.prototype.scrollIntoView = vi.fn(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      scrolled.push({ element: this, options });
+    });
+    layout = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+  });
+
+  afterEach(() => {
+    for (const spy of layout) spy.mockRestore();
+  });
+
+  it('есть непрочитанные упоминания — лента открывается на самом раннем: по центру, сразу, с подсветкой, не у низа', () => {
+    renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-3'));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+    expect(flashed('m-3')).toBe(true);
+    expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+    // К низу (900) лента не прижата: упоминание осталось на экране.
+    expect(feed().scrollTop).toBe(0);
+  });
+
+  it('при открытии фокус не трогается: он остаётся там, где был, а строка сообщения его не получает', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      renderPanel(entryOf({ messages: mentionMessages() }));
+      expect(focus).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(document.body);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it('переход при открытии мгновенный (behavior: auto), даже когда плавность не отключена: клик по цитате — другое дело', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query }));
+    renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+  });
+
+  it('подсветка гаснет через 1,2 с, и таймера после закрытия вкладки не остаётся', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(flashed('m-3')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1199);
+    });
+    expect(flashed('m-3')).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(flashed('m-3')).toBe(false);
+
+    cleanup();
+    const second = renderPanel(entryOf({ messages: mentionMessages() }));
+    second.unmount();
+    vi.advanceTimersByTime(0);
+    expect(vi.getTimerCount()).toBe(0);
+    unmount();
+  });
+
+  it('прочитанное упоминание, @human в коде и в ссылке, упоминание от человека и системное — не цель: лента у низа', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          agent('m-1', { text: 'прочитано, @human', readBy: { human: 'x' } }),
+          agent('m-2', { text: 'в коде `@human`' }),
+          agent('m-3', { text: '[ask @human](https://x.dev)' }),
+          message('m-4', { from: 'human', text: 'сам, @human' }),
+          message('m-5', { from: 'system', to: ['human'], text: '@human', readBy: {} }),
+          agent('m-6', { text: 'просто статус' }),
+        ],
+      }),
+    );
+    expect(scrolled).toEqual([]);
+    expect(document.querySelector('[data-reply-flash]')).toBeNull();
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('непрочитанные сообщения без упоминаний — лента открывается у низа, как раньше', () => {
+    renderPanel(entryOf({ messages: [agent('m-1'), agent('m-2'), agent('m-3')] }));
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('упоминание в чужой комнате и в комнате без сообщений — цели нет', () => {
+    renderPanel(entryOf({ messages: [agent('m-1', { roomId: 'r-02', text: 'чужое, @human' })] }));
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('новое сообщение после открытия на упоминании ленту не уводит: человек читает упоминание, пришедшее — в «↓1»', () => {
+    const { update } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(feed().scrollTop).toBe(0);
+    update(
+      entryOf({
+        messages: [
+          ...mentionMessages(),
+          agent('m-6', { text: 'новое', at: '2026-09-27T10:00:00.000Z' }),
+        ],
+      }),
+    );
+    expect(feed().scrollTop).toBe(0);
+    expect(document.querySelector('[data-room-new-below]')?.textContent).toBe('↓1');
+    // Второго перехода к упоминанию нет: цель выбирают один раз, при открытии.
+    expect(scrolled).toHaveLength(1);
+  });
+
+  it('упоминание пришло, когда лента уже открыта, — лента прижимается к низу, перехода к нему нет', () => {
+    const { update } = renderPanel(entryOf({ messages: [agent('m-1', { text: 'раз' })] }));
+    expect(feed().scrollTop).toBe(900);
+    update(
+      entryOf({
+        messages: [
+          agent('m-1', { text: 'раз' }),
+          agent('m-2', { text: 'новое, @human', at: '2026-09-27T10:00:00.000Z' }),
+        ],
+      }),
+    );
+    expect(scrolled).toEqual([]);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('живая строка после открытия на упоминании ленту к низу не прижимает: человек уже читает с упоминания', () => {
+    const { rerender, initial } = renderPanel(entryOf({ messages: mentionMessages() }));
+    expect(feed().scrollTop).toBe(0);
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+    expect(liveLine()).not.toBeNull();
+    expect(feed().scrollTop).toBe(0);
+  });
+
+  it('упоминание в конце ленты: после перехода лента у низа, и живая строка прижимает её, как обычно', () => {
+    const { rerender, initial } = renderPanel(
+      entryOf({
+        messages: [agent('m-1', { text: 'раз' }), agent('m-2', { text: 'последнее, @human' })],
+      }),
+    );
+    // Браузер доскроллил до дна: `scrollTop` 500, окно 400 — всего 900.
+    expect(scrolled[0]?.element).toBe(messageRow('m-2'));
+    feed().scrollTop = 500;
+    fireEvent.scroll(feed());
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-02': { waitingFor: 's-01' } })} />);
+    expect(feed().scrollTop).toBe(900);
+  });
+
+  it('комнаты нет в карте, когда панель смонтирована, а потом она появилась, — это и есть открытие ленты', () => {
+    const { rerender, initial } = renderPanel(entryOf({ messages: mentionMessages() }), {
+      roomId: 'r-99',
+    });
+    expect(screen.getByText('Room not found')).toBeTruthy();
+    expect(scrolled).toEqual([]);
+    rerender(<RoomPanel {...initial} roomId="r-01" />);
+    expect(scrolled).toHaveLength(1);
+    expect(scrolled[0]?.element).toBe(messageRow('m-3'));
+    expect(flashed('m-3')).toBe(true);
+  });
+
+  it('StrictMode гоняет эффекты дважды и между прогонами снимает подсветку: переход и подсветка остаются', () => {
+    const initial = props(entryOf({ messages: mentionMessages() }));
+    render(
+      <StrictMode>
+        <RoomPanel {...initial} />
+      </StrictMode>,
+    );
+    expect(scrolled.length).toBeGreaterThanOrEqual(1);
+    expect(scrolled.every((call) => call.element === messageRow('m-3'))).toBe(true);
+    expect(flashed('m-3')).toBe(true);
+    expect(feed().scrollTop).toBe(0);
   });
 });
 

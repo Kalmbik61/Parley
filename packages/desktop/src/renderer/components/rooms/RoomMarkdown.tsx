@@ -1,9 +1,12 @@
 /**
  * Текст сообщения и решения комнаты — Markdown (GFM) (спека окна 2026-09-29, 1.3, 1.4; 0.2.0). Раньше лента
  * печатала обычный текст (`MentionText`), теперь разметку разбирает `react-markdown` + `remark-gfm`, а токен
- * `@s02` остаётся тем же чипом, что в поле ввода: его вырезает из текстовых узлов маленький remark-плагин, а
- * сам чип рисует `MentionChip` — ярлык берётся при отрисовке (`labelOf`), и переименование сессии обновляет
- * чипы, не заставляя разбирать текст заново.
+ * `@s02` остаётся тем же чипом, что в поле ввода: его вырезает из текстовых узлов маленький remark-плагин
+ * (`room-remark.ts`), а сам чип рисует `MentionChip` — ярлык берётся при отрисовке (`labelOf`), и переименование
+ * сессии обновляет чипы, не заставляя разбирать текст заново. Упоминание человека `@human` (Parley 0.3.0) плагин
+ * вырезает так же, а рисует его `HumanMentionChip` — чип «@you» плотнее чипа сессии: так агент, обратившийся к
+ * человеку, заметен в ленте (поле ввода человека `@human` не разбирает: себя человек не упоминает). Что считается
+ * упоминанием, решает разбор в `room-remark.ts`: по нему же окно считает сообщение письмом человеку.
  *
  * Правила безопасности — те же, что у письма (`mail/Letter.tsx`) и у превью файлов
  * (`files/preview/MarkdownPreview.tsx`), агент не должен получить из комнаты ни исполнение, ни переход окна:
@@ -17,15 +20,9 @@
  *
  * Человек видит всё, что прочтёт агент. По MCP агент получает исходный текст письма целиком, а Markdown при
  * отрисовке кое-что молча теряет — и человек принял бы решение, которого не видел. Плагин `remarkReveal`
- * возвращает потерянное текстом, и в обычном, и в строчном виде:
- *  — определение ссылки `[x]: адрес "title"` — абзац с исходным текстом (узел остаётся: ссылки `[текст][x]`
- *    работают);
- *  — определение сноски `[^a]: …` — абзац с исходным текстом (сноска не рисуется, ссылка на неё — номер);
- *  — `title` ссылки и картинки — ` (title)` сразу за ней;
- *  — таблица, в какой-то строке которой ячеек больше, чем в заголовке (лишние Markdown отбрасывает), — блок
- *    кода с исходником таблицы;
- *  — строка после ``` (язык и всё за ним) — подпись над блоком кода;
- *  — картинка без `alt` и ссылка без подписи — своим адресом (`RoomImage`, `components.a`).
+ * (`room-remark.ts`, там же полный список) возвращает потерянное текстом, и в обычном, и в строчном виде:
+ * определения ссылок и сносок, `title` ссылки и картинки, лишние ячейки таблицы, строку после ```; а картинка
+ * без `alt` и ссылка без подписи называются здесь своим адресом (`RoomImage`, `components.a`).
  * Адрес за подписью ссылки или картинки с `alt` — как в любом Markdown — виден подсказкой `title`, а не
  * текстом. Инвариант — «слова исходника не пропадают из текста» — держит `RoomMarkdown.test.tsx`.
  *
@@ -42,11 +39,17 @@
  */
 
 import { Children, createContext, useContext, useMemo, useRef, type ReactNode } from 'react';
-import ReactMarkdown, { type Components, type Options } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import { S } from '../../../shared/strings.js';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
-import { MENTION_CHIP_CLASS, splitMentions } from './mention.js';
+import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
+import {
+  HUMAN_MENTION_ATTR,
+  INLINE_REMARK_PLUGINS,
+  MENTION_ATTR,
+  REMARK_PLUGINS,
+} from './room-remark.js';
 
 export interface RoomMarkdownProps {
   text: string;
@@ -56,177 +59,6 @@ export interface RoomMarkdownProps {
   /** Строчный вид для превью в одну строку (плашка решений): блоки сворачиваются в текст, корень — `span`. */
   inline?: boolean;
 }
-
-/**
- * Узел mdast в той мере, в какой его читает и пишет плагин. Пакета типов `mdast` в зависимостях окна нет
- * (его тянет только `react-markdown`), поэтому форма своя.
- */
-interface MdNode {
-  type: string;
-  value?: string;
-  children?: MdNode[];
-  data?: { hName?: string; hProperties?: Record<string, string> };
-  /** Текст вставлен как есть (исходник, подпись, title): упоминания в нём не разбираются. */
-  literal?: boolean;
-  position?: { start: { offset?: number }; end: { offset?: number } };
-  /** `link` и `image`. */
-  title?: string | null;
-  /** `code`: язык и остаток строки после тройных кавычек. */
-  lang?: string | null;
-  meta?: string | null;
-  /** `table`: выравнивание столбцов, по нему считается число столбцов. */
-  align?: unknown[];
-}
-
-/**
- * Внутри ссылки текст остаётся как есть: `@s02` в адресе — часть адреса (`https://x.example/@s02`), а чип
- * внутри `<a>` открывал бы ссылку, а не участника.
- */
-const LITERAL_PARENTS = new Set(['link', 'linkReference']);
-const LINE_BREAK = /\r\n|\r|\n/;
-
-/** Мелкая приглушённая подпись над блоком кода. */
-const CAPTION_CLASS = 'text-xs text-muted-foreground';
-
-/** Абзац из готового текста, который не разбирается дальше: это исходник, а не разметка. */
-function literalParagraph(value: string, className?: string): MdNode {
-  return {
-    type: 'paragraph',
-    children: [{ type: 'text', value, literal: true }],
-    ...(className === undefined ? {} : { data: { hProperties: { className } } }),
-  };
-}
-
-/** Исходный текст узла — ровно то, что прочтёт агент. */
-function sourceOf(node: MdNode, source: string): string {
-  const start = node.position?.start.offset;
-  const end = node.position?.end.offset;
-  return start === undefined || end === undefined ? '' : source.slice(start, end);
-}
-
-/**
- * В какой-то строке ячеек больше, чем столбцов в заголовке: лишние `mdast-util-to-hast` отбрасывает молча
- * (строки короче дополняет пустыми — там терять нечего).
- */
-function hasExcessCells(table: MdNode): boolean {
-  const columns = table.align?.length;
-  return (
-    columns !== undefined &&
-    (table.children ?? []).some((row) => (row.children?.length ?? 0) > columns)
-  );
-}
-
-/** Что Markdown прячет при отрисовке, а агент читает: см. шапку файла. */
-function revealHidden(parent: MdNode, source: string): void {
-  if (parent.children === undefined) return;
-  const next: MdNode[] = [];
-  for (const child of parent.children) {
-    const raw = sourceOf(child, source);
-    if (child.type === 'definition' && raw !== '') {
-      // Узел остаётся: по нему `mdast-util-to-hast` собирает адреса ссылок `[текст][метка]`.
-      next.push(child, literalParagraph(raw));
-      continue;
-    }
-    if (child.type === 'footnoteDefinition' && raw !== '') {
-      next.push(literalParagraph(raw));
-      continue;
-    }
-    if (child.type === 'table' && raw !== '' && hasExcessCells(child)) {
-      next.push({ type: 'code', value: raw });
-      continue;
-    }
-    if (child.type === 'code') {
-      const info = [child.lang, child.meta]
-        .filter((part) => part !== null && part !== undefined && part !== '')
-        .join(' ');
-      if (info !== '') next.push(literalParagraph(info, CAPTION_CLASS));
-      next.push(child);
-      continue;
-    }
-    revealHidden(child, source);
-    next.push(child);
-    if (
-      (child.type === 'link' || child.type === 'image') &&
-      typeof child.title === 'string' &&
-      child.title !== ''
-    ) {
-      next.push({ type: 'text', value: ` (${child.title})`, literal: true });
-    }
-  }
-  parent.children = next;
-}
-
-/** Плагин remark: возвращает текстом то, что Markdown прячет (исходник берётся из `file`, позиции — из узлов). */
-function remarkReveal() {
-  return (tree: MdNode, file: { toString(): string }): void => revealHidden(tree, String(file));
-}
-
-/**
- * Упоминание: текстовый узел с `data.hName` — `mdast-util-to-hast` делает из него `<span data-mention="s-02">`
- * с этим текстом, а `components.span` подменяет его чипом (`MentionChip`).
- */
-function mentionNode(sessionId: string): MdNode {
-  return {
-    type: 'text',
-    value: `@${sessionTag(sessionId)}`,
-    data: { hName: 'span', hProperties: { 'data-mention': sessionId } },
-  };
-}
-
-/**
- * Текстовый узел → текст, упоминания и `break` на каждом переводе строки (в строчном виде `\n` остаётся
- * в тексте и читается пробелом). Разбор токена — `mention.ts`.
- */
-function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNode[] {
-  const out: MdNode[] = [];
-  for (const segment of literal ? [{ kind: 'text' as const, text: value }] : splitMentions(value)) {
-    if (segment.kind === 'mention') {
-      out.push(mentionNode(segment.sessionId));
-      continue;
-    }
-    if (!lineBreaks) {
-      out.push({ type: 'text', value: segment.text });
-      continue;
-    }
-    segment.text.split(LINE_BREAK).forEach((line, index) => {
-      if (index > 0) out.push({ type: 'break' });
-      if (line !== '') out.push({ type: 'text', value: line });
-    });
-  }
-  return out;
-}
-
-/**
- * Код (`inlineCode`, `code`) и разметка HTML — узлы-листья со своим `value`, а не `text`: их плагин не
- * трогает, `@s02` в них остаётся буквальным.
- */
-function expandChildren(parent: MdNode, lineBreaks: boolean): void {
-  if (parent.children === undefined) return;
-  const next: MdNode[] = [];
-  for (const child of parent.children) {
-    if (child.type === 'text' && child.value !== undefined) {
-      next.push(...expandText(child.value, lineBreaks, child.literal === true));
-      continue;
-    }
-    if (!LITERAL_PARENTS.has(child.type)) expandChildren(child, lineBreaks);
-    next.push(child);
-  }
-  parent.children = next;
-}
-
-/** Плагин remark: упоминания и переносы строк в текстовых узлах. */
-function remarkMentions(options?: { lineBreaks?: boolean }) {
-  const lineBreaks = options?.lineBreaks ?? true;
-  return (tree: MdNode): void => expandChildren(tree, lineBreaks);
-}
-
-type RemarkPlugins = NonNullable<Options['remarkPlugins']>;
-const REMARK_PLUGINS: RemarkPlugins = [remarkGfm, remarkReveal, remarkMentions];
-const INLINE_REMARK_PLUGINS: RemarkPlugins = [
-  remarkGfm,
-  remarkReveal,
-  [remarkMentions, { lineBreaks: false }],
-];
 
 /**
  * Что остаётся в строчном виде; прочие элементы (блоки) заменяются своим содержимым. Флажок списка задач
@@ -242,6 +74,19 @@ function MentionChip({ sessionId }: { sessionId: string }): JSX.Element {
   return (
     <span data-mention={sessionId} className={MENTION_CHIP_CLASS}>
       @{labelOf(sessionId) ?? sessionTag(sessionId)}
+    </span>
+  );
+}
+
+/** «@you»: ярлыка у человека нет, текст и подсказка — из `strings.ts`. */
+function HumanMentionChip(): JSX.Element {
+  return (
+    <span
+      data-mention-human=""
+      title={S.rooms.humanMentionTitle}
+      className={HUMAN_MENTION_CHIP_CLASS}
+    >
+      {S.rooms.humanMention}
     </span>
   );
 }
@@ -323,13 +168,14 @@ function markdownComponents(openExternal: (url: string) => void): Components {
       );
     },
     img: ({ src, alt }) => <RoomImage src={src} alt={alt} openExternal={openExternal} />,
-    // Единственные `span` в дереве — упоминания из плагина выше.
+    // Единственные `span` в дереве — упоминания из плагина (`room-remark.ts`): сессии и человека.
     span: ({ node, children }) => {
-      const sessionId = node?.properties['data-mention'];
-      return typeof sessionId === 'string' ? (
-        <MentionChip sessionId={sessionId} />
-      ) : (
+      const sessionId = node?.properties[MENTION_ATTR];
+      if (typeof sessionId === 'string') return <MentionChip sessionId={sessionId} />;
+      return node?.properties[HUMAN_MENTION_ATTR] === undefined ? (
         <span>{children}</span>
+      ) : (
+        <HumanMentionChip />
       );
     },
     // Широкая таблица прокручивается в своей обёртке, а не раздвигает ленту.

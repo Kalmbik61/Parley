@@ -18,12 +18,23 @@
  *
  * Прочтение — существующий механизм писем человеку (`attention/use-mark-read.ts`): сообщение, чья
  * строка меты видна ≥1 с при активной работе, фокусе окна и видимом документе, уходит в `mail.markRead`
- * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — к низу при открытии и при каждом
- * новом сообщении. В отличие от «всей почты» (`MailPanel.tsx`) счёта «↓N» тут нет: комната короче и
- * читается по ходу переписки.
+ * (пачка через 500 мс тишины); карта отвечает, точка гаснет. Прокрутка — при открытии к самому раннему
+ * непрочитанному упоминанию человека (`@human`, `MessageModel.mentionsYou`), а без него к низу. Без перехода к
+ * упоминанию его могло бы не оказаться на экране: человек жмёт `@N` на карточке работы, отметка «прочитано» не
+ * наступает, и счётчик горит. Дальше лента сама не прыгает (Parley 0.3.0): новое сообщение или решение прижимает её
+ * к низу, только если она стояла у низа или сообщение написал сам человек. Того, кто читает историю или оригинал
+ * цитаты, она не уводит — пришедшее копится в кнопке `↓N` поверх низа ленты, как в «всей почте» (`MailPanel.tsx`);
+ * клик по ней — к низу, а дочитав до низа сам, человек её гасит.
+ *
+ * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`),
+ * переносит на него фокус (строка сообщения принимает его программно, `tabIndex={-1}`) и на 1.2 с подсвечивает —
+ * атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик перезапускает отсчёт. К упоминанию при
+ * открытии комнаты лента переходит так же (`showMessage`), но сразу, без плавности и без фокуса: человек ещё
+ * ничего не нажимал в ленте. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по событию
+ * `scroll`), поэтому новое сообщение человека от оригинала не уводит.
  */
 
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -64,6 +75,9 @@ const NOW_PERIOD_MS = 30_000;
 /** Лента «у низа», если до дна не больше стольких px: дочитавший почти до конца историю уже не читает. */
 const AT_BOTTOM_PX = 48;
 
+/** Сколько оригинал цитаты остаётся подсвеченным после клика по ней (`data-reply-flash`). */
+const REPLY_FLASH_MS = 1200;
+
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
   // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
@@ -80,10 +94,14 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Стоит ли лента у низа — по последнему `scroll`: после коммита живая строка уже сожмёт ленту, и по DOM
   // «был ли у низа» не определить, а мерить его при каждой отрисовке — перекладка на каждое событие.
   const atBottomRef = useRef(true);
+  // Сколько пришло снизу, пока человек читал историю: сообщения и решения, при которых лента стояла не у низа (`↓N`).
+  const [below, setBelow] = useState(0);
   const onFeedScroll = useCallback((): void => {
     const feed = containerRef.current;
-    if (feed !== null)
-      atBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AT_BOTTOM_PX;
+    if (feed === null) return;
+    atBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= AT_BOTTOM_PX;
+    // Дочитал до низа сам — пришедшее он уже видит.
+    if (atBottomRef.current) setBelow(0);
   }, []);
 
   const pinToBottom = useCallback((): void => {
@@ -91,16 +109,122 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     if (container === null) return;
     container.scrollTop = container.scrollHeight;
     atBottomRef.current = true;
+    setBelow(0);
   }, []);
 
-  // Лента прижата к низу при открытии, когда приходит новое сообщение и когда решение появилось или
-  // его текст заменили (карточка — последняя в ленте).
-  useLayoutEffect(pinToBottom, [pinToBottom, model?.messages.length, model?.proposal?.id, model?.proposal?.rev]);
+  /** Высота ленты изменилась (живая строка, форма возврата у решения): у низа стояла — остаётся у низа, иначе не трогаем. */
+  const keepAtBottom = useCallback((): void => {
+    if (atBottomRef.current) pinToBottom();
+  }, [pinToBottom]);
+
+  // Подсвеченный оригинал цитаты и таймер, который снимет подсветку: она одна на ленту.
+  const flashRef = useRef<{ element: HTMLElement; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
+  const clearFlash = useCallback((): void => {
+    const flash = flashRef.current;
+    if (flash === null) return;
+    clearTimeout(flash.timer);
+    flash.element.removeAttribute('data-reply-flash');
+    flashRef.current = null;
+  }, []);
+  // Вкладку закрыли — таймер подсветки не должен её пережить.
+  useEffect(() => () => clearFlash(), [clearFlash]);
+
+  /**
+   * Лента прокручивается к сообщению по центру (выше ленты — к верху), и оно коротко подсвечивается; `false` — такого
+   * сообщения в ленте нет.
+   * `smooth` — плавная прокрутка (клик по цитате) или мгновенная (открытие комнаты); `focus` — перенести на сообщение
+   * фокус.
+   */
+  const showMessage = useCallback(
+    (messageId: string, { smooth, focus }: { smooth: boolean; focus: boolean }): boolean => {
+      const feed = containerRef.current;
+      if (feed === null) return false;
+      // Сравнение через dataset — без экранирования id в селекторе.
+      const target = [...feed.querySelectorAll<HTMLElement>('[data-message-id]')].find(
+        (element) => element.dataset.messageId === messageId,
+      );
+      if (target === undefined) return false;
+      // Сообщение выше ленты по центру ушло бы строкой меты за верхний край, а прочтение смотрит именно на неё
+      // (`use-mark-read.ts`): такое сообщение встаёт к верху.
+      const block = target.offsetHeight > feed.clientHeight ? 'start' : 'center';
+      target.scrollIntoView({ block, behavior: smooth ? 'smooth' : 'auto' });
+      // Фокус — на сообщение: читающий с клавиатуры продолжит с него. Без прокрутки — её уже запустила строка выше.
+      if (focus) target.focus({ preventScroll: true });
+      // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
+      clearFlash();
+      void target.offsetWidth;
+      target.setAttribute('data-reply-flash', '');
+      flashRef.current = { element: target, timer: setTimeout(clearFlash, REPLY_FLASH_MS) };
+      return true;
+    },
+    [clearFlash],
+  );
+
+  /** Клик по цитате ответа: переход к оригиналу — плавный (без движения, если человек его отключил) и с фокусом. */
+  const jumpTo = useCallback(
+    (messageId: string): void => {
+      const reduceMotion =
+        typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      showMessage(messageId, { smooth: !reduceMotion, focus: true });
+    },
+    [showMessage],
+  );
+
+  // Как лента расположена при открытии: к какому сообщению (`null` — к низу) и для какого её состояния. Повторный прогон
+  // эффекта с тем же состоянием (StrictMode гоняет эффекты дважды и между прогонами снимает подсветку) повторяет это
+  // расположение, а не прижимает ленту к низу.
+  const openedRef = useRef<{ key: string; mentionId: string | null } | null>(null);
+  // Что лента уже показала: id сообщений и решение (`id` и `rev`). По разнице с ним видно, что пришло нового.
+  const seenRef = useRef<{ ids: ReadonlySet<string>; proposal: string } | null>(null);
+
+  // Лента расположена при открытии: к самому раннему непрочитанному упоминанию человека, а если такого нет — к низу.
+  // Дальше — новое сообщение, новое или переделанное решение (карточка — последняя в ленте). Ленту оно прижимает к
+  // низу, только если она стояла у низа или сообщение написал сам человек: своё он ждёт увидеть. Того, кто читает
+  // историю или оригинал цитаты, лента не уводит — пришедшее копится в `↓N`. Ленты нет, пока комнаты нет в карте:
+  // открытие — первое её расположение.
+  useLayoutEffect(() => {
+    if (containerRef.current === null) return;
+    const messages = model?.messages ?? [];
+    const waiting = model?.proposal ?? null;
+    const proposal = waiting === null ? '' : `${waiting.id}\u0000${waiting.rev}`;
+    const key = `${messages.length}\u0000${proposal}`;
+    const seen = seenRef.current;
+    seenRef.current = { ids: new Set(messages.map((message) => message.id)), proposal };
+    if (openedRef.current === null) {
+      const mention = messages.find((message) => message.unread && message.mentionsYou);
+      openedRef.current = { key, mentionId: mention?.id ?? null };
+    }
+    const { key: openedKey, mentionId } = openedRef.current;
+    if (openedKey === key) {
+      if (mentionId !== null && showMessage(mentionId, { smooth: false, focus: false })) {
+        // Прокрутка мгновенная, а событие `scroll` придёт позже: стоит ли лента у низа, запоминаем сразу — иначе
+        // эффект живой строки ниже счёл бы, что она у низа, и прижал её обратно.
+        onFeedScroll();
+        return;
+      }
+      pinToBottom();
+      return;
+    }
+    const fresh = messages.filter((message) => seen?.ids.has(message.id) !== true);
+    const added = fresh.length + (proposal !== '' && proposal !== seen?.proposal ? 1 : 0);
+    const own = fresh.some((message) => message.sender.kind === 'human');
+    if (atBottomRef.current || own) pinToBottom();
+    else if (added > 0) setBelow((count) => count + added);
+    // Зависимости — длина ленты и версия решения, а не сами `model.messages`: модель собирается заново на каждой
+    // отрисовке (событие активности), а эффект нужен, только когда пришло новое.
+  }, [
+    pinToBottom,
+    showMessage,
+    onFeedScroll,
+    model?.messages.length,
+    model?.proposal?.id,
+    model?.proposal?.rev,
+  ]);
 
   // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
-  useLayoutEffect(() => {
-    if (atBottomRef.current) pinToBottom();
-  }, [pinToBottom, liveKey]);
+  useLayoutEffect(keepAtBottom, [keepAtBottom, liveKey]);
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -161,41 +285,57 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
       <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
-      <div
-        ref={containerRef}
-        onScroll={onFeedScroll}
-        data-room-feed=""
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
-      >
-        <Decisions
-          decisions={model.decisions}
-          labelOf={labelOf}
-          onOpenExternal={onOpenExternal}
-          className="max-w-[680px]"
-        />
-        {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
-        {model.messages.map((message) => (
-          <RoomMessage
-            key={message.id}
-            message={message}
-            now={now}
+      {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={containerRef}
+          onScroll={onFeedScroll}
+          data-room-feed=""
+          className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
+        >
+          <Decisions
+            decisions={model.decisions}
             labelOf={labelOf}
             onOpenExternal={onOpenExternal}
-            observeRef={markRead(message.id, message.needsRead)}
+            className="max-w-[680px]"
           />
-        ))}
-        {model.proposal === null ? null : (
-          <DecisionCard
-            key={model.proposal.id}
-            proposal={model.proposal}
-            time={relativeTime(model.proposal.at, now)}
-            labelOf={labelOf}
-            onOpenExternal={onOpenExternal}
-            canResolve={canResolve}
-            onResolve={handleResolve}
-            onLayout={pinToBottom}
-          />
-        )}
+          {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
+          {model.messages.map((message) => (
+            <RoomMessage
+              key={message.id}
+              message={message}
+              now={now}
+              labelOf={labelOf}
+              onOpenExternal={onOpenExternal}
+              onJumpTo={jumpTo}
+              observeRef={markRead(message.id, message.needsRead)}
+            />
+          ))}
+          {model.proposal === null ? null : (
+            <DecisionCard
+              key={model.proposal.id}
+              proposal={model.proposal}
+              time={relativeTime(model.proposal.at, now)}
+              labelOf={labelOf}
+              onOpenExternal={onOpenExternal}
+              canResolve={canResolve}
+              onResolve={handleResolve}
+              onLayout={keepAtBottom}
+            />
+          )}
+        </div>
+        {below > 0 ? (
+          <button
+            type="button"
+            data-room-new-below=""
+            onClick={pinToBottom}
+            title={S.rooms.newBelow(below)}
+            aria-label={S.rooms.newBelow(below)}
+            className="absolute bottom-3 right-9 rounded-full bg-secondary px-2.5 py-1 text-xs text-foreground shadow-sm"
+          >
+            ↓{below}
+          </button>
+        ) : null}
       </div>
       {busy.length === 0 ? null : (
         <div

@@ -118,7 +118,7 @@ away — it is a typo. Giving a new job to a session that has already handed in 
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
 Wait with \`wait_for("inbox")\`: it will wake on the session's reply message.
 
-\`send_message(to, text, kind, room)\` and \`check_inbox()\` — correspondence inside the
+\`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
 workspace. A message lives in the map until the addressee picks it up; the etiquette and the
 kinds of messages are in topic \`letters\`.`,
   },
@@ -141,6 +141,17 @@ only a room's lead can bring one more session into it — \`add_to_room(room, se
 In a room \`send_message\` gains a \`room\` parameter: a message without \`to\` is a broadcast,
 received by all participants except the sender; a message with \`to\` is addressed, seen only
 by those named. \`check_inbox\` returns both, marked with the room they come from.
+
+When you answer a particular message in a room — above all a question from the human — pass
+\`replyTo\` with that message's id (the \`id\` field in what \`check_inbox\` and \`read_room\`
+return). The window draws a quote of it above your answer, so the human sees what you are
+answering. \`replyTo\` works only together with \`room\`, and the message must be from that
+same room: otherwise it is an error, and nothing is sent. The human is not a session: answer
+the human in the room without \`to\` and with \`replyTo\`; \`to: "human"\` is an error.
+
+To address the human in a room, write \`@human\` in the text. The window highlights the
+mention and notifies the human, so write it only when you need the human's answer or
+attention. Write it as plain text: inside code or a link it stays text and notifies no one.
 
 \`read_room(room, limit)\` — read the room's feed for context, without replying and without
 touching read marks: good for finding out what was agreed without joining the conversation.`,
@@ -210,7 +221,8 @@ The human set a task for everyone in the room. Then:
   risks, what you can take. Not in parts and not in ten messages: the lead builds the
   decision from one. You must answer whatever the kind of the human's message (even
   \`note\`): "do not answer a \`note\`" is about colleagues' replies, not about the human's
-  task.
+  task. Answering the human's task, pass \`replyTo\` with the id of the human's message
+  (from \`check_inbox\` or \`read_room\`): the window shows a quote of it above your answer.
 - Wait for your part: do not start the work until the lead has handed out the parts with
   mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with \`wait_for("inbox")\`. A
   \`kind: decision\` message with the accepted decision is the outcome of the agreement, not

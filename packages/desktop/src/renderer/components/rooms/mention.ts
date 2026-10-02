@@ -22,6 +22,15 @@ export const MENTION_QUERY_MAX = 24;
 export const MENTION_CHIP_CLASS =
   'mx-px inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)] px-[7px] align-bottom font-semibold text-accent-800';
 
+/**
+ * Вид чипа «@you» (упоминание человека `@human`, Parley 0.3.0) — только в ленте. Форма та же, что у чипа сессии:
+ * пилюля, без переноса, с обрезкой. Заметнее него: вместо подкраски 22 % — плотная заливка акцентом, пара
+ * `--primary` и `--primary-foreground`, которой красится главная кнопка. Текст на ней не ниже 4.5:1 в обеих
+ * темах: светлая — `accent-700` и `bg` (5.7:1), тёмная — `accent` и `bg` (6.5:1).
+ */
+export const HUMAN_MENTION_CHIP_CLASS =
+  'mx-px inline-block max-w-full overflow-hidden text-ellipsis whitespace-nowrap rounded-full bg-primary px-[7px] align-bottom font-semibold text-primary-foreground';
+
 /** `s-02` → `@s02`: так упоминание уходит в тексте письма (2.2). */
 export function mentionToken(sessionId: string): string {
   return `@${sessionId.replace('-', '')}`;
@@ -51,6 +60,37 @@ export function splitMentions(text: string): TextSegment[] {
   for (const match of text.matchAll(TOKEN)) {
     if (match.index > last) out.push({ kind: 'text', text: text.slice(last, match.index) });
     out.push({ kind: 'mention', sessionId: tokenSessionId(match[1] as string), raw: match[0] });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });
+  return out;
+}
+
+/**
+ * Токен сессии или человека — одним проходом по всему тексту. Упоминание человека — `@human` (Parley 0.3.0): так
+ * агенты обращаются к человеку в комнате. Лента рисует его чипом «@you», окно считает такое сообщение адресованным
+ * человеку (`attention/derive.ts`) — по одному и тому же разбору, `hasHumanMention` из `room-remark.ts`. Границы —
+ * те же, что у токена сессии: `user@human.dev` и `@humans` упоминанием не считаются; регистр не важен.
+ */
+const FEED_TOKEN = /(?<![\p{L}\p{N}_@])@(?:s-?(\d+)|(human))(?![\p{L}\p{N}_])/giu;
+
+export type FeedSegment = TextSegment | { kind: 'human'; raw: string };
+
+/**
+ * Текст ленты → текст, упоминания сессий и упоминания человека. Поле ввода человека зовёт `splitMentions`:
+ * там `@human` остаётся текстом — себя человек не упоминает.
+ */
+export function splitFeedMentions(text: string): FeedSegment[] {
+  const out: FeedSegment[] = [];
+  let last = 0;
+  for (const match of text.matchAll(FEED_TOKEN)) {
+    if (match.index > last) out.push({ kind: 'text', text: text.slice(last, match.index) });
+    const digits = match[1];
+    out.push(
+      digits === undefined
+        ? { kind: 'human', raw: match[0] }
+        : { kind: 'mention', sessionId: tokenSessionId(digits), raw: match[0] },
+    );
     last = match.index + match[0].length;
   }
   if (last < text.length) out.push({ kind: 'text', text: text.slice(last) });

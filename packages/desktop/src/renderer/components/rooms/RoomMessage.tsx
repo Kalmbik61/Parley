@@ -11,12 +11,20 @@
  * За «прочитано» (`observeRef`, `attention/use-mark-read.ts`) наблюдается строка меты, а не всё
  * сообщение: наблюдатель ждёт половину площади цели, а сообщение в 2000 знаков в невысоком окне выше
  * самого окна — половина его не видна никогда, и прочтение не наступило бы.
+ *
+ * Сообщение-ответ (`message.reply`, Parley 0.3.0) несёт цитату между метой и текстом: одна строка
+ * `↩ S02 бэкенд: начало вопроса…` с акцентной чертой слева. Оригинал в этой комнате — кнопка, клик по ней зовёт
+ * `onJumpTo(id)`; оригинала нет — тот же блок без кнопки. Имя кнопки — её видимый текст (подпись и выдержка), а
+ * `title` показывает выдержку целиком, когда строка обрезана. Строка сообщения принимает фокус программно
+ * (`tabIndex={-1}`): переход по цитате переносит его на оригинал, и читающий с клавиатуры продолжает оттуда.
+ * Текст ответа — Markdown, как у любого сообщения.
  */
 
 import { S } from '../../../shared/strings.js';
+import { cn } from '../../lib/cn.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { Badge } from '../../ui/badge.js';
-import type { MessageModel } from './feed-model.js';
+import type { MessageModel, ReplyModel } from './feed-model.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
@@ -32,12 +40,59 @@ export interface RoomMessageProps {
   now: Date;
   labelOf: (sessionId: string) => string | null;
   onOpenExternal: (url: string) => void;
+  /** Клик по цитате ответа: показать сообщение с этим id (прокрутить ленту и подсветить его). */
+  onJumpTo: (messageId: string) => void;
   observeRef?: (el: HTMLElement | null) => void;
 }
 
-export function RoomMessage({ message, now, labelOf, onOpenExternal, observeRef }: RoomMessageProps): JSX.Element {
+/** Цитата — одна строка с обрезкой и акцентной чертой слева; у кнопки и у заглушки «оригинала нет» вид общий. */
+const REPLY_QUOTE_CLASS =
+  'block max-w-full self-start truncate border-l-2 border-(--color-accent) pl-2 text-left text-xs text-muted-foreground';
+
+interface ReplyQuoteProps {
+  reply: ReplyModel;
+  onJumpTo: (messageId: string) => void;
+}
+
+function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
+  if (!reply.found) {
+    return (
+      <div data-message-reply-missing="" className={REPLY_QUOTE_CLASS}>
+        <span aria-hidden="true">↩</span> {S.rooms.replyMissing}
+      </div>
+    );
+  }
   return (
-    <div data-message-id={message.id} data-sender={message.sender.kind} className="flex max-w-[680px] gap-2.5">
+    <button
+      type="button"
+      data-message-reply={reply.id}
+      // Строка обрезается по ширине колонки — выдержка целиком видна подсказкой.
+      title={reply.excerpt}
+      onClick={() => onJumpTo(reply.id)}
+      className={cn(REPLY_QUOTE_CLASS, 'cursor-pointer hover:text-foreground')}
+    >
+      <span aria-hidden="true">↩ </span>
+      <span className="font-semibold">{reply.from}</span>
+      {reply.excerpt === '' ? null : `: ${reply.excerpt}`}
+    </button>
+  );
+}
+
+export function RoomMessage({
+  message,
+  now,
+  labelOf,
+  onOpenExternal,
+  onJumpTo,
+  observeRef,
+}: RoomMessageProps): JSX.Element {
+  return (
+    <div
+      data-message-id={message.id}
+      data-sender={message.sender.kind}
+      tabIndex={-1}
+      className="flex max-w-[680px] gap-2.5"
+    >
       <div className="flex w-5 shrink-0 justify-center pt-px">
         <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} />
       </div>
@@ -65,6 +120,7 @@ export function RoomMessage({ message, now, labelOf, onOpenExternal, observeRef 
             />
           ) : null}
         </div>
+        {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} />}
         <RoomMarkdown text={message.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
         {message.waiting.length > 0 ? (
           <span data-message-waiting className="text-xs text-muted-foreground">

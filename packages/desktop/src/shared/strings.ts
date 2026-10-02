@@ -103,6 +103,8 @@ export const S = {
     /** Слово строки комнаты, пока решение ждёт человека; `{n} new` — сообщения комнаты, не прочитанные человеком. */
     roomDecision: 'decision',
     roomNew: (n: number): string => `${n} new`,
+    /** Слово строки комнаты, где человека назвали (`@human`): `@you · {n} new`, `n` — все непрочитанные сообщения комнаты. */
+    roomMentioned: (n: number): string => `@you · ${n} new`,
     /** Тултип значка провайдера свёрнутой комнаты: `2 Claude Code agents`; имя провайдера — `providerName`. */
     roomAgents: (n: number, provider: string): string => `${n} ${provider} ${n === 1 ? 'agent' : 'agents'}`,
     /** Тултип `★` у ведущего в строке участника развёрнутой комнаты. */
@@ -324,6 +326,13 @@ export const S = {
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
+    /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` — вторая строка. */
+    humanMention: '@you',
+    humanMentionTitle: 'Mentions you',
+    /** Цитата ответа над текстом сообщения (Parley 0.3.0), когда сообщения, на которое ответили, нет в этой комнате. */
+    replyMissing: 'Original message is not in this room',
+    /** Кнопка `↓N` над низом ленты (Parley 0.3.0): столько пришло снизу, пока человек читал историю; клик — к низу. */
+    newBelow: (n: number): string => `${n} new below`,
     /** Карточка решения. */
     decisionWaiting: 'decision · waiting for you',
     accept: 'Accept',
@@ -797,6 +806,8 @@ export const S = {
     /** «<работа> · письмо | вопрос | решение от S01» по `Message.kind`. */
     mailTitle: (workspace: string, kind: 'note' | 'question' | 'decision', from: string): string =>
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
+    /** Агент назвал человека в комнате (`@human`): «S02 mentioned you in Mobile APP». `from` — короткий ярлык, комната — данные. */
+    mentionTitle: (from: string, room: string): string => `${from} mentioned you in ${room}`,
     /** Тост: клик по уведомлению, чью работу или сессию успели удалить (спека 7.5). */
     targetGone: 'Workspace or session no longer exists',
     /**

@@ -377,7 +377,9 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   and finished workspaces go to the bottom. While the pointer is over the sidebar or its
   menu is open, the order does not jump. The card header has the icon of the most urgent
   state (a question icon if a decision is waiting in the workspace), the name (bold when
-  there is unread mail or an unseen result), `✉N` (messages to you), `#` or `#N` (the menu of
+  there is unread mail or an unseen result), `✉N` (messages to you: letters, and room
+  messages where an agent wrote `@human`; with only such mentions it is `@N`, and a click opens
+  the room instead of the mail), `#` or `#N` (the menu of
   the workspace's rooms; the number counts rooms with unread messages) and the time. Below
   it are the meta line "folder · N sessions · branch" and the rows. A session row has the
   state and agent icons, `S02 backend`, the state word (`working`, `needs you`,
@@ -385,7 +387,7 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   for a session with its own worktree, and the time; a session that waits for you or has an
   unseen result is tinted. A room is a row (`# name`) in the place of its first member: the
   word `decision` and a tint while a decision waits for you, or `N new` for messages you have
-  not read. Collapsed, a room shows provider icons with the count of all that provider's
+  not read (`@you · N new` when one of them mentions you). Collapsed, a room shows provider icons with the count of all that provider's
   agents in the room (tooltip "2 Claude Code agents"); expanded, it shows the members, with a
   `★` for the lead. It expands by itself while a tab of the room or of one of its members is
   open in the active workspace, and the chevron overrides this until the window restarts. A
@@ -452,7 +454,13 @@ the messages: Markdown (headings, lists, code, tables, links) with mention chips
 message is shown as text, and a link opens in your browser. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
   tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
-  picked up yet by S02, S03" stays while the recipients have not read the message. A waiting
+  picked up yet by S02, S03" stays while the recipients have not read the message. An agent's
+  `@human` in the text (not in code or a link) is a "@you" chip, and the room opens at the
+  earliest such mention you have not read. An answer to a particular message carries a one-line
+  quote of it above the text ("↩ You: …"); a click on the quote scrolls the feed to the original
+  and highlights it for a moment. The feed follows new messages only while it is at the bottom
+  or the message is your own; while you read above, what comes is counted in a `↓N` button over
+  the bottom of the feed, and a click takes you down. A waiting
   decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
   should the lead change?" and "Send to lead"); if the lead has replaced the text in the
   meantime, an answer to the old version is rejected with the toast "The decision changed —
@@ -482,7 +490,9 @@ message is shown as text, and a link opens in your browser. Each
   a room message are marked as read when they have been visible in the mail or in the room for
   more than 1 s while the window is focused;
 - macOS notifications: a session waits for you or has finished its turn, a message to you
-  arrived, a session failed to start, failed to resume or waits for folder trust. When you are
+  arrived (an agent's `@human` in a room too: "S02 mentioned you in {room}", one per room, under
+  the same "mail to you" setting), a session failed to start, failed to resume or waits for
+  folder trust. When you are
   already looking at that tab, there is no notification; after a window or host restart there
   is no burst of notifications about earlier states. A click opens the window (also when the
   window is closed) right on the tab: the frame flashes for 600 ms and the terminal gets input
@@ -913,7 +923,7 @@ to introduce itself; the server knows who is calling. The tools:
 | `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
 | `spawn_session(provider, label, task, contextFrom?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is `low`, `medium` or `high`; a provider without the flag discards the choice |
 | `wait_for(target, timeoutSec)` | wait for a session to finish or for a message; on timeout it returns `running` |
-| `send_message(to?, text, kind?, room?)` | a message to a session or to a room: `note`, `question` or `decision` |
+| `send_message(to?, text, kind?, room?, replyTo?)` | a message to a session or to a room: `note`, `question` or `decision`; `replyTo` — the id of the room message it answers, and the window shows a quote of it |
 | `check_inbox()` | unread incoming messages with their kinds; marks them as read |
 | `create_room(title, members, lead?)` | creates a conversation room for several sessions; the lead is `lead`, and without it the caller; the caller and the members leave the workspace's other rooms (one room per session) |
 | `read_room(room, limit?)` | the room's feed for context, without touching read marks |
@@ -1016,7 +1026,10 @@ dialog with two or more agents ("New room" in the card menu and in the palette),
 dropping one session onto another in the sidebar. A room stands in a card in the place of its
 members and opens as a tab; the `#`/`#N` menu on the workspace card lists all of them. The
 room's feed is visible to all members. A message with no addressee wakes everyone, and an
-addressed one wakes only its addressees: `send_message(to?, text, kind, room)`.
+addressed one wakes only its addressees: `send_message(to?, text, kind, room)`. An agent that
+answers a particular message of the room, above all the human's question, passes `replyTo`
+with its id, and the feed shows a quote of it above the answer. An agent addresses the human
+with `@human`; the window counts such a message as a message to the human.
 `read_room(room)` reads the feed for context without touching read marks. A human writes to a
 room from the input field at the bottom of the feed: with no mentions the message goes to
 everyone, `@` opens the member menu, and the mentioned members become the addressees (Enter

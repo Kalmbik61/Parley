@@ -143,6 +143,25 @@ describe('addMessage', () => {
     expect(plain.kind).toBe('note');
     expect(question.kind).toBe('question');
   });
+
+  it('replyTo (Parley 0.3.0) пишется, когда задан; без него ключа в письме нет', () => {
+    const map = emptyMap();
+    const plain = addMessage(map, { from: 's-01', to: [], text: 'вопрос', roomId: 'r-01' });
+    const reply = addMessage(map, {
+      from: 's-02',
+      to: [],
+      text: 'ответ',
+      roomId: 'r-01',
+      replyTo: plain.id,
+    });
+
+    expect('replyTo' in plain).toBe(false);
+    expect(reply.replyTo).toBe('m-01');
+    // Через JSON — как на диске: `parseMap` поле не теряет, а у обычного письма ключа не появляется.
+    const again = parseMap(JSON.stringify(map), 'map.json');
+    expect(again.messages[1]?.replyTo).toBe('m-01');
+    expect('replyTo' in (again.messages[0] ?? {})).toBe(false);
+  });
 });
 
 describe('transitionSession', () => {

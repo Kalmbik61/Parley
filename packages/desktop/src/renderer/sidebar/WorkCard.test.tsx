@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { Room, WorkEntry } from '@parley/core';
+import type { Message, Room, WorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
 import { roomKey } from '../lib/room-view.js';
@@ -55,7 +55,16 @@ beforeEach(() => {
 const NOW = new Date('2026-09-27T10:00:00.000Z');
 
 function attention(patch: Partial<WorkAttention> = {}): WorkAttention {
-  return { level: 'idle', needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt: '2026-09-27T09:57:00.000Z', ...patch };
+  return {
+    level: 'idle',
+    needsYou: 0,
+    unseen: 0,
+    humanUnread: 0,
+    roomsUnread: {},
+    roomMentions: {},
+    lastEventAt: '2026-09-27T09:57:00.000Z',
+    ...patch,
+  };
 }
 
 function renderCard(entry: WorkEntry, patch: Partial<WorkCardProps> = {}) {
@@ -642,5 +651,158 @@ describe('WorkCard — строка «New session or room» (1.2, «Под ст�
   it('работа без сессий — строка всё равно есть: с неё и начинается', () => {
     renderCard(makeWork('w-01', { title: 'Empty' }), { active: true });
     expect(newRow()).not.toBeNull();
+  });
+});
+
+// Parley 0.3.0: счётчик «для тебя» — письма человеку и упоминания `@human` в комнатах. Письма ведут в Mail, одни
+// упоминания — в комнату самого позднего из них (Mail показывает только письма).
+describe('WorkCard — счётчик «для тебя»: письма и упоминания (Parley 0.3.0)', () => {
+  const mentionIn = (id: string, roomId: string, patch: Partial<Message> = {}): Message =>
+    makeLetter(id, { roomId, to: [], text: 'Need your call, @human', ...patch });
+  const forYou = (): HTMLElement =>
+    screen.getByRole('button', { name: '2 unread messages to you' });
+
+  it('при одних упоминаниях — значок «@» вместо конверта; число и тултип те же; клик открывает комнату самого позднего', () => {
+    const work = makeWork('w-01', {
+      title: 'T',
+      rooms: [makeRoom('r-01', 'Design'), makeRoom('r-02', 'Backend')],
+      messages: [mentionIn('m-1', 'r-01'), mentionIn('m-2', 'r-02')],
+    });
+    const onOpenMail = vi.fn();
+    const onOpenRoom = vi.fn();
+    const onActivate = vi.fn();
+    renderCard(work, {
+      attention: attention({
+        humanUnread: 2,
+        roomsUnread: { 'r-01': 1, 'r-02': 1 },
+        roomMentions: { 'r-01': 1, 'r-02': 1 },
+      }),
+      onOpenMail,
+      onOpenRoom,
+      onActivate,
+    });
+    const button = forYou();
+    expect(button.getAttribute('title')).toBe('2 unread messages to you');
+    expect(button.textContent).toBe('2');
+    expect(button.querySelector('svg.lucide-at-sign')?.classList.contains('size-3')).toBe(true);
+    expect(button.querySelector('svg.lucide-mail')).toBeNull();
+    expect(button.className).toContain('text-accent-700');
+    fireEvent.click(button);
+    expect(onOpenRoom).toHaveBeenCalledTimes(1);
+    expect(onOpenRoom).toHaveBeenCalledWith('r-02');
+    expect(onOpenMail).not.toHaveBeenCalled();
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('есть непрочитанные письма — конверт и Mail, даже если есть и упоминания', () => {
+    const work = makeWork('w-01', {
+      title: 'T',
+      rooms: [makeRoom('r-01', 'Design')],
+      messages: [mentionIn('m-1', 'r-01'), makeLetter('m-2')],
+    });
+    const onOpenMail = vi.fn();
+    const onOpenRoom = vi.fn();
+    renderCard(work, {
+      attention: attention({
+        humanUnread: 2,
+        roomsUnread: { 'r-01': 1 },
+        roomMentions: { 'r-01': 1 },
+      }),
+      onOpenMail,
+      onOpenRoom,
+    });
+    const button = forYou();
+    expect(button.querySelector('svg.lucide-mail')).not.toBeNull();
+    expect(button.querySelector('svg.lucide-at-sign')).toBeNull();
+    fireEvent.click(button);
+    expect(onOpenMail).toHaveBeenCalledTimes(1);
+    expect(onOpenRoom).not.toHaveBeenCalled();
+  });
+
+  it('упоминание прочитано — в комнату ведёт самое позднее из непрочитанных', () => {
+    const read = { human: '2026-09-27T09:30:00.000Z' };
+    const work = makeWork('w-01', {
+      title: 'T',
+      rooms: [makeRoom('r-01', 'Design'), makeRoom('r-02', 'Backend')],
+      messages: [
+        mentionIn('m-1', 'r-01'),
+        mentionIn('m-2', 'r-02', { readBy: read }),
+        mentionIn('m-3', 'r-01'),
+      ],
+    });
+    const onOpenRoom = vi.fn();
+    renderCard(work, {
+      attention: attention({ humanUnread: 2, roomMentions: { 'r-01': 2 } }),
+      onOpenRoom,
+    });
+    fireEvent.click(forYou());
+    expect(onOpenRoom).toHaveBeenCalledWith('r-01');
+  });
+
+  it('непрочитанного для тебя нет — кнопки нет; расчёт опередил карту (в карте ни писем, ни упоминаний) — конверт и Mail', () => {
+    renderCard(makeWork('w-01', { title: 'T' }));
+    expect(screen.queryByRole('button', { name: /unread message/ })).toBeNull();
+    cleanup();
+    const onOpenMail = vi.fn();
+    const onOpenRoom = vi.fn();
+    renderCard(makeWork('w-01', { title: 'T' }), {
+      attention: attention({ humanUnread: 1 }),
+      onOpenMail,
+      onOpenRoom,
+    });
+    const button = screen.getByRole('button', { name: '1 unread message to you' });
+    expect(button.querySelector('svg.lucide-mail')).not.toBeNull();
+    fireEvent.click(button);
+    expect(onOpenMail).toHaveBeenCalledTimes(1);
+    expect(onOpenRoom).not.toHaveBeenCalled();
+  });
+
+  describe('строки комнат получают mentioned из roomMentions', () => {
+    const roomOf = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({
+      ...makeRoom(id, `Room ${id}`),
+      members,
+      lead: members[0] ?? null,
+      ...patch,
+    });
+    const crew = (rooms: Room[]) =>
+      makeWork('w-01', {
+        sessions: ['s-01', 's-02', 's-03', 's-04', 's-05', 's-06'].map((id) => makeSession(id, id)),
+        rooms,
+      });
+    const rowText = (roomId: string): string =>
+      card().querySelector(`[data-room-row="${roomId}"] > div`)?.textContent ?? '';
+
+    beforeEach(() => {
+      useUiStore.setState({ roomExpanded: {} });
+    });
+
+    it('с упоминанием — «@you · N new»; без — «N new»; решение важнее обоих — «decision»', () => {
+      const proposal = {
+        id: 'p-1',
+        from: 's-05',
+        text: 'Решение',
+        rev: 0,
+        at: '2026-09-29T10:00:00.000Z',
+      };
+      renderCard(
+        crew([
+          roomOf('r-01', ['s-01', 's-02']),
+          roomOf('r-02', ['s-03', 's-04']),
+          roomOf('r-03', ['s-05', 's-06'], { proposal }),
+        ]),
+        {
+          attention: attention({
+            humanUnread: 2,
+            roomsUnread: { 'r-01': 3, 'r-02': 2, 'r-03': 1 },
+            roomMentions: { 'r-01': 1, 'r-03': 1 },
+          }),
+        },
+      );
+      expect(rowText('r-01')).toContain(S.sidebar.roomMentioned(3));
+      expect(rowText('r-02')).toContain('2 new');
+      expect(rowText('r-02')).not.toContain('@you');
+      expect(rowText('r-03')).toContain(S.sidebar.roomDecision);
+      expect(rowText('r-03')).not.toContain('@you');
+    });
   });
 });
