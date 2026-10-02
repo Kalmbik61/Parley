@@ -121,7 +121,8 @@ function Details({ item }: { item: FeedPermissionCard }): JSX.Element {
     return (
       <>
         <PathLine path={path} />
-        <Collapsible label={S.chat.card.showContent} hideLabel={S.chat.card.hideContent}>
+        {/* `key` — смена инструмента в той же строке даёт новый свёрнутый блок, а не прежний раскрытый. */}
+        <Collapsible key="content" label={S.chat.card.showContent} hideLabel={S.chat.card.hideContent}>
           <pre data-testid="card-content" className={BLOCK}>{str(input, 'content') ?? ''}</pre>
         </Collapsible>
       </>
@@ -131,7 +132,7 @@ function Details({ item }: { item: FeedPermissionCard }): JSX.Element {
   return (
     <>
       <span className="font-mono text-xs [overflow-wrap:anywhere]">{name}</span>
-      <Collapsible label={S.chat.card.showArguments} hideLabel={S.chat.card.hideArguments}>
+      <Collapsible key="arguments" label={S.chat.card.showArguments} hideLabel={S.chat.card.hideArguments}>
         <pre data-testid="card-arguments" className={BLOCK}>{JSON.stringify(input, null, 2)}</pre>
       </Collapsible>
     </>

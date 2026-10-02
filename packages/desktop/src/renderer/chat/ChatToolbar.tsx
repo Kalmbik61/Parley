@@ -28,7 +28,7 @@ import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
 
-/** Режимы меню: значения `sessions.setMode` и подписи; auto и bypassPermissions человек выбирает в терминале. */
+/** Режимы меню: значения `sessions.setMode` и подписи; auto и обход разрешений человек выбирает в терминале. */
 const MODE_ITEMS = [
   { value: 'default', label: S.chat.mode.manual },
   { value: 'acceptEdits', label: S.chat.mode.acceptEdits },

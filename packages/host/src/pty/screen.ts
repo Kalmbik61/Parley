@@ -69,7 +69,9 @@ export function createScreen(cols: number, rows: number, scrollback = DEFAULT_SC
       for (let i = total - count; i < total; i += 1) {
         // Видимая область начинается с `baseY`: выше неё — прокрутка.
         const line = buffer.getLine(buffer.baseY + i);
-        lines.push(line === undefined ? '' : line.translateToString(true));
+        // `translateToString(true)` срезает только пустые ячейки; напечатанные пробелы в конце строки
+        // остаются — их срезаем сами.
+        lines.push(line === undefined ? '' : line.translateToString(true).trimEnd());
       }
       return lines;
     },

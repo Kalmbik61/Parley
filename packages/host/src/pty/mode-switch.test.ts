@@ -14,7 +14,8 @@ const FOOTER = {
   default: '  ⏸ manual mode on · ← for agents',
   acceptEdits: '  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents',
   plan: '  ⏸ plan mode on (shift+tab to cycle) · ← for agents',
-  bypassPermissions: '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  /** Режим обхода разрешений: его подпись хост не распознаёт (его имя — YOLO-флаг для стража рамки). */
+  bypass: '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
   auto: '  ⏵⏵ auto mode on (shift+tab to cycle)',
 } as const;
 const CYCLE = ['default', 'acceptEdits', 'plan'] as const;
@@ -85,7 +86,7 @@ describe('modeFromFooter', () => {
     expect(modeFromFooter([FOOTER.default])).toBe('default');
     expect(modeFromFooter([FOOTER.acceptEdits])).toBe('acceptEdits');
     expect(modeFromFooter([FOOTER.plan])).toBe('plan');
-    expect(modeFromFooter([FOOTER.bypassPermissions])).toBe('bypassPermissions');
+    expect(modeFromFooter([FOOTER.bypass])).toBeNull();
     expect(modeFromFooter([FOOTER.auto])).toBe('auto');
     expect(modeFromFooter(['auto mode unavailable for this model'])).toBeNull();
     expect(modeFromFooter([])).toBeNull();
@@ -119,10 +120,10 @@ describe('switchMode', () => {
 
   it('подвал не сошёлся после первого нажатия — verified false, фактический режим, дальше не жмём', async () => {
     const screen = fakeScreen(FOOTER.default);
-    screen.jumpTo = 'bypassPermissions';
+    screen.jumpTo = 'auto';
     const result = switchMode(screen.deps, ref, 'plan');
     await vi.advanceTimersByTimeAsync(5_000);
-    await expect(result).resolves.toEqual({ mode: 'bypassPermissions', verified: false });
+    await expect(result).resolves.toEqual({ mode: 'auto', verified: false });
     expect(screen.writes).toEqual(['\x1b[Z']);
   });
 
@@ -151,14 +152,18 @@ describe('switchMode', () => {
     expect(screen.writes).toEqual([]);
   });
 
-  it('bypass и auto — вне цикла: verified false без нажатий', async () => {
-    for (const mode of ['bypassPermissions', 'auto'] as const) {
-      const screen = fakeScreen(FOOTER[mode]);
-      const result = switchMode(screen.deps, ref, 'plan');
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(result).resolves.toEqual({ mode, verified: false });
-      expect(screen.writes).toEqual([]);
-    }
+  it('auto — вне цикла: verified false без нажатий; подпись обхода разрешений — как неизвестный подвал', async () => {
+    const auto = fakeScreen(FOOTER.auto);
+    const fromAuto = switchMode(auto.deps, ref, 'plan');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(fromAuto).resolves.toEqual({ mode: 'auto', verified: false });
+    expect(auto.writes).toEqual([]);
+
+    const bypass = fakeScreen(FOOTER.bypass);
+    const fromBypass = switchMode(bypass.deps, ref, 'plan');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(fromBypass).resolves.toEqual({ mode: null, verified: false });
+    expect(bypass.writes).toEqual([]);
   });
 
   it('нажатие не раньше, чем через 200 мс без вывода', async () => {

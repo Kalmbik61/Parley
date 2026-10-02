@@ -4,8 +4,10 @@
  * самом CLI, и угадать его по числу нажатий нельзя (диалог поверх, режимы вне цикла, потерянная
  * клавиша). Не сошлось — хост останавливается и говорит, что видит; человек решает дальше сам.
  *
- * Цикл окна: default → acceptEdits → plan → default. `bypassPermissions` и `auto` в него не входят:
- * из них хост ничего не нажимает.
+ * Цикл окна: default → acceptEdits → plan → default. `auto` в него не входит: из него хост ничего не
+ * нажимает. Подпись режима обхода разрешений («bypass permissions on») хост не распознаёт вовсе —
+ * само имя этого режима в исходниках запрещено стражем рамки (`test/frame-scan.ts`, YOLO-флаги); в нём
+ * подвал считается неизвестным, ответ `mode: null`, нажатий нет, а окно видит режим из хуков ленты.
  */
 
 import { refKey } from '@parley/protocol';
@@ -35,7 +37,6 @@ const FOOTER_LABELS: readonly (readonly [RegExp, string])[] = [
   [/manual mode on/i, 'default'],
   [/accept edits on/i, 'acceptEdits'],
   [/plan mode on/i, 'plan'],
-  [/bypass permissions on/i, 'bypassPermissions'],
   [/auto mode on/i, 'auto'],
 ];
 
