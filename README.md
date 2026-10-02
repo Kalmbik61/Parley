@@ -703,9 +703,20 @@ text is streaming yet, a "Working…" row shows the elapsed time. A line marks t
 turn; a turn interrupted with Esc ends with "Interrupted". A session that is not running shows
 the same "Resume" card as the terminal.
 
+**Subagents.** Besides the agent cards in the feed, running subagents show as a badge
+"N agents" in the session's row of the sidebar and on the participant's card in a room: a
+popover lists each one's type, description and whether it runs in the background, and a click
+opens the session's chat at that agent's card. The chat toolbar shows "N agents running" and
+scrolls to the first running card. While only background subagents keep a session busy, the
+input stays open and there is no "Stop".
+
 **Input.** The field at the bottom sends text to the session like the terminal does. While a
 turn runs, the button reads "Queue" (the message waits in Claude Code's own queue) and "Stop"
-sends Esc. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
+interrupts the turn with Esc. A turn stopped before any reply leaves no trace in Claude Code,
+which also puts the prompt back into its terminal input: the host closes such a turn in the
+feed itself and erases that text, so the next message is not glued to it. If the host refuses
+a message (the session is not running, is busy or waits for an answer), the text and the
+attachments return to the field. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
 and `@` lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab
 insert, Esc closes. The window only inserts the text — Claude Code parses it.
 
@@ -745,7 +756,6 @@ indexed the transcript — without streamed text.
   is busy.
 - A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
 - A question with two identical question texts collapses into one answer.
-- Badges for subagents in the sidebar, the room and the toolbar are planned.
 
 ## Settings
 
