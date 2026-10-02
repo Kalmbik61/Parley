@@ -35,6 +35,8 @@ export type FeedStatus = 'loading' | 'ready' | 'error';
 export interface FeedEntry {
   items: FeedItem[];
   revision: number;
+  /** Режим разрешений сессии (сырая строка CLI) из снимка и дельт; `null` — не известен (кусок 4a, решение К). */
+  mode: string | null;
   status: FeedStatus;
   /** Сообщение отказа хоста — только для консоли и отладки; человеку — `S.chat.feedUnavailable`. */
   error?: string;
@@ -129,7 +131,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
     const generation = feed.generation;
     const stale = (): boolean => opened.get(key) !== feed || feed.generation !== generation || bridge !== current;
     const prev = get().feeds[key];
-    patch(key, { items: prev?.items ?? [], revision: prev?.revision ?? 0, status: 'loading' });
+    patch(key, { items: prev?.items ?? [], revision: prev?.revision ?? 0, mode: prev?.mode ?? null, status: 'loading' });
     current
       .call('feed.subscribe', { ref: feed.ref })
       .then(() => (stale() ? null : current.call('feed.snapshot', { ref: feed.ref })))
@@ -137,7 +139,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
         if (snapshot === null || stale()) return;
         feed.loading = false;
         forgetCards(key);
-        patch(key, { items: snapshot.items, revision: snapshot.revision, status: 'ready' });
+        patch(key, { items: snapshot.items, revision: snapshot.revision, mode: snapshot.mode, status: 'ready' });
       })
       .catch((error: unknown) => {
         if (stale()) return;
@@ -145,7 +147,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
         const { message } = decodeIpcError(error);
         console.warn('[parley] feed', message);
         const was = get().feeds[key];
-        patch(key, { items: was?.items ?? [], revision: was?.revision ?? 0, status: 'error', error: message });
+        patch(key, { items: was?.items ?? [], revision: was?.revision ?? 0, mode: was?.mode ?? null, status: 'error', error: message });
       });
   };
 
@@ -159,7 +161,12 @@ export const useFeedStore = create<FeedState>((set, get) => {
       load(key);
       return;
     }
-    patch(key, { ...entry, items: applyDelta(entry.items, delta.upsert, delta.removed), revision: delta.revision });
+    patch(key, {
+      ...entry,
+      items: applyDelta(entry.items, delta.upsert, delta.removed),
+      revision: delta.revision,
+      mode: delta.mode,
+    });
     // Карточка сменила состояние — её решение и пометка своё отслужили.
     const settled = delta.upsert.filter((item) => 'cardId' in item && item.state !== 'pending').map((item) => item.id);
     if (settled.length > 0) forgetCards(key, settled);

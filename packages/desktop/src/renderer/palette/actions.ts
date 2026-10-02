@@ -21,8 +21,9 @@ import type { FilesState } from '../files/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
-import { effectiveView, feedAvailableNow } from '../lib/feed-view.js';
+import { effectiveView, feedAvailableNow, sessionStarted } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { neighborInOrder } from '../sidebar/sort.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
@@ -347,6 +348,8 @@ function toggleChatView(ctx: ActionContext, key: string, layout: WorkLayout): vo
     ctx.toast(S.chat.terminalOnly);
     return;
   }
-  const view = effectiveView(tab, available) === 'chat' ? 'terminal' : 'chat';
+  const ref = { projectPath: entry?.projectPath ?? '', workId: entry?.map.work.id ?? '', sessionId: tab.sessionId };
+  const started = sessionStarted(activityFor(useActivityStore.getState().byRef, ref));
+  const view = effectiveView(tab, available, started) === 'chat' ? 'terminal' : 'chat';
   ctx.layout.apply(key, (l) => updateTab(l, tab.id, { view }));
 }

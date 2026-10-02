@@ -13,6 +13,11 @@ import type { FeedItem } from '@parley/core';
  * хода не открывает: локальная команда CLI не шлёт `Stop`, и без этого простаивающая сессия навсегда
  * осталась бы «в ходе» (Stop и Queue). Слеш-команда, за которой пошёл ответ (`/review`), — обычный ход.
  */
+/** В ленте есть карточка, ждущая решения человека (состояние `pending`). */
+export function hasPendingCard(items: readonly FeedItem[]): boolean {
+  return items.some((item) => 'cardId' in item && item.state === 'pending');
+}
+
 export function turnActive(items: readonly FeedItem[]): boolean {
   /** После текущей позиции — только `notice`. */
   let quiet = true;

@@ -91,6 +91,15 @@ describe('sessionAttention (1)', () => {
     expect(sessionAttention(session('s-01'), live('idle'))).toBe('idle');
   });
 
+  it('карточка pending в открытой ленте (кусок 4a, решение О): живая сессия — needs-you; закрытая и спящая — нет', () => {
+    expect(sessionAttention(session('s-01'), null, true)).toBe('needs-you');
+    expect(sessionAttention(session('s-01'), live('working'), true)).toBe('needs-you');
+    expect(sessionAttention(session('s-01'), live('idle'), false)).toBe('idle');
+    expect(sessionAttention(session('s-01', 'closed'), live('idle'), true)).toBe('off');
+    expect(sessionAttention(session('s-01', 'sleeping'), null, true)).toBe('idle');
+    expect(sessionAttention(session('s-01', 'pending'), null, true)).toBe('idle');
+  });
+
   it('ранги 4..0', () => {
     expect(ATTENTION_RANK).toEqual({ 'needs-you': 4, unseen: 3, working: 2, idle: 1, off: 0 });
   });
@@ -153,6 +162,19 @@ describe('workAttention (4)', () => {
     expect(a.unseen).toBe(1);
     expect(a.humanUnread).toBe(0);
     expect(a.roomsUnread).toEqual({});
+  });
+
+  it('сессия с карточкой pending в ленте — needs-you и в счёте работы; без неё — как было', () => {
+    const e = entry([session('s-01'), session('s-02')]);
+    const pending = new Set([refKey({ projectPath: e.projectPath, workId: e.map.work.id, sessionId: 's-01' })]);
+    const a = workAttention(e, activityOf(e, { 's-01': live('working'), 's-02': live('idle') }), pending);
+    expect(a.level).toBe('needs-you');
+    expect(a.needsYou).toBe(1);
+    expect(workAttention(e, activityOf(e, { 's-01': live('working'), 's-02': live('idle') })).level).toBe('working');
+    // Карточка у закрытой сессии внимания не даёт.
+    const closed = entry([session('s-01', 'closed')]);
+    const key = refKey({ projectPath: closed.projectPath, workId: closed.map.work.id, sessionId: 's-01' });
+    expect(workAttention(closed, {}, new Set([key])).level).toBe('off');
   });
 
   it('только письмо человеку → unseen (ранг 3, спека 2.7), а не needs-you', () => {

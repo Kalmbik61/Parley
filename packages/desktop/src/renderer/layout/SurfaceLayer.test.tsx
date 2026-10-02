@@ -11,9 +11,11 @@ import type { WorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
@@ -428,7 +430,9 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods: FEED_METHODS } });
     bridge.setHandler('feed.subscribe', () => ({ ok: true }));
     bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
-    bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1 }));
+    bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1, mode: null }));
+    // Сессии стартовали (есть событие журнала): без явного выбора вид — чат (кусок 4a, решение М).
+    useActivityStore.setState({ byRef: activityMap(['a', 'b', 'x'].map((id) => makeActivity(refOf(id), 'idle'))) });
     disposeFeed = useFeedStore.getState().init(bridge);
     useProvidersStore.setState({
       providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
@@ -439,6 +443,7 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
   afterEach(() => {
     disposeFeed();
     resetFeedStoreForTests();
+    useActivityStore.setState({ byRef: {} });
     useHostStore.setState({ status: { state: 'connecting' } });
     useProvidersStore.setState({ providers: [], loaded: false });
   });
@@ -465,6 +470,27 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(feedCalls('feed.subscribe', 'x')).toBe(1);
     expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('a'))]).toBe(true);
     expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('x'))]).toBeUndefined();
+  });
+
+  it('сессия ещё не стартовала (нет lastEventAt) — терминал; первое событие журнала переводит в чат', async () => {
+    useActivityStore.setState({ byRef: {} });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(refOf('a'), 'working')]) });
+    });
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(detachCount('a')).toBe(1);
+    expect(feedCalls('feed.subscribe', 'a')).toBe(1);
+    // b и x событий не имели — остаются терминалами.
+    expect(surface('terminal:b')).not.toBeNull();
   });
 
   it('view terminal — поверхность под тулбаром; переход туда и обратно монтирует её заново', async () => {

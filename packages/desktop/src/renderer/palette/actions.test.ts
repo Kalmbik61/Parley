@@ -17,11 +17,12 @@ import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, focusGroup, groups, openTab, splitGroup } from '../layout/tree.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { runAction, type ActionContext, type ActionSource } from './actions.js';
 
 // Ключ — настоящий `workKey`: `chat.toggleView` ищет сессию вкладки в снимке работ по нему.
@@ -197,12 +198,17 @@ function withFeedHost(provider = 'claude'): void {
   useWorksStore.setState({
     entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-09', 'S09', { provider })] })],
   });
+  // Сессия стартовала (есть событие журнала): без поля view вид — чат (кусок 4a, решение М).
+  useActivityStore.setState({
+    byRef: activityMap([makeActivity({ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-09' }, 'idle')]),
+  });
 }
 
 function resetFeedHost(): void {
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
   useWorksStore.setState({ entries: [] });
+  useActivityStore.setState({ byRef: {} });
 }
 
 describe('runAction — таблица по реестру (тест 1 куска 6.3)', () => {
@@ -531,6 +537,14 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     spies.layout.layouts[KEY] = { ...(spies.layout.layouts[KEY] as WorkLayout) };
     const group = groups(spies.layout.layouts[KEY] as WorkLayout)[0]!;
     group.tabs = group.tabs.map((tab) => (tab.kind === 'terminal' && tab.sessionId === 's-09' ? { ...tab, view: 'terminal' } : tab));
+    runAction('chat.toggleView', spies.ctx);
+    expect(viewAfter(spies)).toMatchObject({ view: 'chat' });
+  });
+
+  it('сессия не стартовала и поля view нет — вкладка в терминале, действие ставит chat', () => {
+    withFeedHost();
+    useActivityStore.setState({ byRef: {} });
+    const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
     expect(viewAfter(spies)).toMatchObject({ view: 'chat' });
   });

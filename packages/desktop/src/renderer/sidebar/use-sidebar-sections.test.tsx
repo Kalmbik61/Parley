@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { useState } from 'react';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
+import type { FeedItem } from '@parley/core';
+import { refKey } from '@parley/protocol';
+import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
@@ -34,6 +37,7 @@ beforeEach(() => {
   useActivityStore.setState({ byRef: {} });
   useUiStore.setState({ ui: DEFAULT_UI, sidebarHovering: false });
   useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
+  resetFeedStoreForTests();
 });
 
 afterEach(cleanup);
@@ -127,5 +131,48 @@ describe('структурное разделение и снимок (раун�
     const next = [a, b, makeWork('w-c', { projectPath: '/p/two' })];
     act(() => useWorksStore.setState({ entries: next }));
     expect(useSidebarSectionsStore.getState().entries).toBe(next);
+  });
+});
+
+describe('карточка pending в ленте — «нужен ты» (кусок 4a, решение О)', () => {
+  const refA = { projectPath: a.projectPath, workId: a.map.work.id, sessionId: 's-01' };
+  const card = (state: 'pending' | 'elsewhere'): FeedItem => ({
+    id: 'card-1',
+    at: '2026-10-01T00:00:00.000Z',
+    kind: 'permission',
+    cardId: 'card-1',
+    state,
+    toolUseId: null,
+    toolName: 'Bash',
+    toolInput: { command: 'ls' },
+    suggestions: [],
+    notified: false,
+  });
+  const setFeed = (items: FeedItem[]): void =>
+    useFeedStore.setState({ feeds: { [refKey(refA)]: { items, revision: 1, mode: null, status: 'ready' } } });
+  // Сессия живая и простаивает — без карточки внимание idle.
+  const idleA = (): void => {
+    useActivityStore.setState({ byRef: activityMap([makeActivity(refA, 'idle')]) });
+  };
+
+  it('карточка pending поднимает работу до needs-you, смена состояния на elsewhere снимает', () => {
+    idleA();
+    renderHook(() => useSidebarSectionsSync());
+    expect(useSidebarSectionsStore.getState().attention[keyA]?.level).toBe('idle');
+
+    act(() => setFeed([card('pending')]));
+    expect(useSidebarSectionsStore.getState().attention[keyA]).toMatchObject({ level: 'needs-you', needsYou: 1 });
+
+    act(() => setFeed([card('elsewhere')]));
+    expect(useSidebarSectionsStore.getState().attention[keyA]?.level).toBe('idle');
+  });
+
+  it('пока множество сессий с pending то же, внимание не пересчитывается — прежний объект карты', () => {
+    idleA();
+    renderHook(() => useSidebarSectionsSync());
+    act(() => setFeed([card('pending')]));
+    const before = useSidebarSectionsStore.getState().attention;
+    act(() => setFeed([card('pending'), { id: 'p2', at: '2026-10-01T00:00:01.000Z', kind: 'prompt', text: 'x', images: 0 }]));
+    expect(useSidebarSectionsStore.getState().attention).toBe(before);
   });
 });

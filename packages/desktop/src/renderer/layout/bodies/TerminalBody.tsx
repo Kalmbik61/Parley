@@ -16,7 +16,7 @@ import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
-import { effectiveView, useFeedAvailability, useHostHasFeed, type TerminalTab } from '../../lib/feed-view.js';
+import { effectiveView, useFeedAvailability, useHostHasFeed, useSessionStarted, type TerminalTab } from '../../lib/feed-view.js';
 import type { SendWithToastDeps } from '../../terminal/send.js';
 
 export interface TerminalBodyProps {
@@ -33,7 +33,8 @@ export interface TerminalBodyProps {
 export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge, sendDeps }: TerminalBodyProps): JSX.Element {
   const hasFeed = useHostHasFeed();
   const available = useFeedAvailability()(session.provider);
-  const view = effectiveView(tab, available);
+  const started = useSessionStarted(sessionRef);
+  const view = effectiveView(tab, available, started);
   if (view === null) return <div data-testid="tab-view-pending" className="h-full w-full" />;
   if (view === 'chat') {
     return (

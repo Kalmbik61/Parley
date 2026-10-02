@@ -651,6 +651,21 @@ export const S = {
       queue: 'Queue',
     },
     model: 'Model',
+    /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
+    mode: {
+      label: 'Permission mode',
+      unknown: 'Mode',
+      manual: 'Manual',
+      acceptEdits: 'Accept edits',
+      plan: 'Plan',
+      /** Хост не смог сверить подвал или дошёл не до того режима: переключить может только человек в терминале. */
+      openTerminal: 'Open the terminal to switch the mode',
+    },
+    /** Баннер над полем ввода: агент ждёт в терминале (диалог без хука). */
+    waitingBanner: {
+      text: 'Claude Code is waiting in the terminal',
+      open: 'Open terminal',
+    },
     stop: 'Stop',
     stopTitle: 'Interrupt the turn (Esc in the terminal)',
   },
@@ -951,6 +966,7 @@ export const S = {
       commit: 'commit',
       merge: 'merge',
       assignToAgent: 'send to agent',
+      switchMode: 'switch the mode',
       createRoom: 'create room',
       loadSettings: 'load settings',
       saveSettings: 'save settings',

@@ -22,13 +22,15 @@ function connect(methods: string[] | null = FEED_METHODS): void {
   useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods } });
 }
 
+type Snap = { items: FeedItem[]; revision: number; mode?: string | null };
+
 /** Снимок по очереди ответов: каждый вызов `feed.snapshot` берёт следующий. */
-function setSnapshots(bridge: FakeBridge, answers: Array<{ items: FeedItem[]; revision: number } | Promise<{ items: FeedItem[]; revision: number }>>): void {
+function setSnapshots(bridge: FakeBridge, answers: Array<Snap | Promise<Snap>>): void {
   let n = 0;
   bridge.setHandler('feed.snapshot', async () => {
     const answer = await answers[Math.min(n, answers.length - 1)]!;
     n += 1;
-    return { ...answer, schemaVersion: 1 };
+    return { mode: null, ...answer, schemaVersion: 1 };
   });
 }
 
@@ -68,7 +70,7 @@ describe('открытие ленты', () => {
     expect(feed()?.status).toBe('loading');
     await flush();
     expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot']);
-    expect(feed()).toEqual({ items: [prompt('a'), prompt('b')], revision: 5, status: 'ready' });
+    expect(feed()).toEqual({ items: [prompt('a'), prompt('b')], revision: 5, mode: null, status: 'ready' });
   });
 
   it('две вкладки одной сессии — одна подписка; отписка только при закрытии последней', async () => {
@@ -116,7 +118,7 @@ describe('дельты по revision', () => {
   });
 
   it('r+1 применяется: известный — на месте, новые — в конец по порядку, removed удаляет', () => {
-    bridge.emit('feed.changed', {
+    bridge.emit('feed.changed', { mode: null,
       ref: REF,
       revision: 6,
       upsert: [prompt('c'), prompt('a', 'a2'), prompt('d')],
@@ -127,30 +129,30 @@ describe('дельты по revision', () => {
   });
 
   it('дельта ≤ r отбрасывается', () => {
-    bridge.emit('feed.changed', { ref: REF, revision: 5, upsert: [prompt('x')], removed: [] });
-    bridge.emit('feed.changed', { ref: REF, revision: 3, upsert: [prompt('y')], removed: ['a'] });
-    expect(feed()).toEqual({ items: [prompt('a'), prompt('b')], revision: 5, status: 'ready' });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 5, upsert: [prompt('x')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 3, upsert: [prompt('y')], removed: ['a'] });
+    expect(feed()).toEqual({ items: [prompt('a'), prompt('b')], revision: 5, mode: null, status: 'ready' });
   });
 
   it('чужая сессия ленту не трогает', () => {
-    bridge.emit('feed.changed', { ref: { ...REF, sessionId: 's-02' }, revision: 6, upsert: [prompt('x')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: { ...REF, sessionId: 's-02' }, revision: 6, upsert: [prompt('x')], removed: [] });
     expect(feed()?.revision).toBe(5);
   });
 
   it('разрыв > r+1 — снимок заново, дельты до его прихода отброшены', async () => {
     let answer!: (value: { items: FeedItem[]; revision: number }) => void;
     setSnapshots(bridge, [new Promise((resolve) => (answer = resolve))]);
-    bridge.emit('feed.changed', { ref: REF, revision: 8, upsert: [prompt('gap')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 8, upsert: [prompt('gap')], removed: [] });
     await flush();
     expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot', 'feed.subscribe', 'feed.snapshot']);
     expect(feed()?.status).toBe('loading');
     // Пока снимок в пути — дельты отбрасываются, даже «следующие».
-    bridge.emit('feed.changed', { ref: REF, revision: 6, upsert: [prompt('lost')], removed: [] });
-    bridge.emit('feed.changed', { ref: REF, revision: 9, upsert: [prompt('lost2')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 6, upsert: [prompt('lost')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 9, upsert: [prompt('lost2')], removed: [] });
     answer({ items: [prompt('a'), prompt('z')], revision: 10 });
     await flush();
-    expect(feed()).toEqual({ items: [prompt('a'), prompt('z')], revision: 10, status: 'ready' });
-    bridge.emit('feed.changed', { ref: REF, revision: 11, upsert: [prompt('next')], removed: [] });
+    expect(feed()).toEqual({ items: [prompt('a'), prompt('z')], revision: 10, mode: null, status: 'ready' });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 11, upsert: [prompt('next')], removed: [] });
     expect(feed()?.items.map((item) => item.id)).toEqual(['a', 'z', 'next']);
   });
 });
@@ -166,9 +168,9 @@ describe('переподключение', () => {
     dispose = useFeedStore.getState().init(next);
     await flush();
     expect(feedCalls(next)).toEqual(['feed.subscribe', 'feed.snapshot']);
-    expect(feed()).toEqual({ items: [prompt('fresh')], revision: 1, status: 'ready' });
+    expect(feed()).toEqual({ items: [prompt('fresh')], revision: 1, mode: null, status: 'ready' });
     // Старый мост ленту больше не двигает.
-    bridge.emit('feed.changed', { ref: REF, revision: 2, upsert: [prompt('old')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [prompt('old')], removed: [] });
     expect(feed()?.revision).toBe(1);
   });
 });
@@ -211,7 +213,7 @@ describe('решения по карточкам (decide)', () => {
     await first;
     // Применено — ждём дельту: решение в пути до неё, а дельта со сменой состояния его снимает.
     expect(deciding()).toBe(true);
-    bridge.emit('feed.changed', { ref: REF, revision: 2, upsert: [card('allowed')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [card('allowed')], removed: [] });
     expect(deciding()).toBeUndefined();
   });
 
@@ -263,5 +265,17 @@ describe('решения по карточкам (decide)', () => {
     useFeedStore.getState().close(REF);
     expect(note()).toBeUndefined();
     expect(useChatUiStore.getState().cardDrafts).toEqual({});
+  });
+});
+
+describe('режим разрешений в ленте (кусок 4a, решение К)', () => {
+  it('режим снимка попадает в запись ленты, дельта без элементов его меняет', async () => {
+    setSnapshots(bridge, [{ items: [prompt('a')], revision: 2, mode: 'default' }]);
+    useFeedStore.getState().open(REF);
+    await flush();
+    expect(feed()?.mode).toBe('default');
+    bridge.emit('feed.changed', { ref: REF, revision: 3, upsert: [], removed: [], mode: 'plan' });
+    expect(feed()).toMatchObject({ revision: 3, mode: 'plan' });
+    expect(feed()?.items.map((item) => item.id)).toEqual(['a']);
   });
 });

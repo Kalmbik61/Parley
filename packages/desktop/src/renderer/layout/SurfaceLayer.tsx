@@ -21,16 +21,17 @@
  * (`FeedSubscription`) — на каждую открытую вкладку, а не только активную в группе. Когда хост знает
  * ленту, поверхность опускается под тулбар вкладки с сегментом (`TAB_TOOLBAR_PX`). Пока доступность
  * вида неизвестна (`effectiveView` — `null`: первый ответ `providers.list` не пришёл), у вкладки нет ни
- * поверхности, ни подписки: иначе она мигнула бы одним видом и перескочила в другой.
+ * поверхности, ни подписки: иначе она мигнула бы одним видом и перескочила в другой. Без явного выбора
+ * вкладка сессии, что ещё не стартовала (нет `lastEventAt` активности), — терминал (решение М куска 4a).
  */
 
 import { useMemo } from 'react';
-import type { SessionRef } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
 import { TAB_TOOLBAR_PX } from '../chat/ChatToolbar.js';
 import { FeedSubscription } from '../chat/use-feed.js';
-import { effectiveView, useFeedAvailability, useHostHasFeed } from '../lib/feed-view.js';
+import { effectiveView, useFeedAvailability, useHostHasFeed, useStartedKeys } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
@@ -62,6 +63,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
     state.entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey),
   );
   const feedAvailable = useFeedAvailability();
+  const started = useStartedKeys();
   const topInset = useHostHasFeed() ? TAB_TOOLBAR_PX : 0;
 
   // Один объект sessionRef на сессию, пока не сменились проект и работа: новый литерал на каждый
@@ -91,7 +93,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
         if (tab.kind !== 'terminal') continue;
         const provider = providers.get(tab.sessionId);
         if (provider === undefined) continue;
-        const view = effectiveView(tab, feedAvailable(provider));
+        const view = effectiveView(tab, feedAvailable(provider), started.has(refKey(sessionRefOf(tab.sessionId))));
         if (view === null) continue;
         if (view === 'chat') {
           surfaces.push({ kind: 'feed', tabId: tab.id, sessionId: tab.sessionId });

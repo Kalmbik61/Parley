@@ -13,26 +13,36 @@
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
  * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
  *
+ * Меню режима в тулбаре (кусок 4a, решения К и Л): подпись — `mode` ленты, выбор — `sessions.setMode`;
+ * пока запрос в пути, меню выключено; `verified: false` — тост «откройте терминал». Баннер «ждёт в
+ * терминале» (решение Н) — когда активность сессии `blocked`, а карточки `pending` в ленте нет (диалог
+ * без хука); с карточкой ждёт человека сама карточка.
+ *
  * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
  * Queue не показываются, даже если лента кончилась промптом без конца хода.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
+import { errorText, S } from '../../shared/strings.js';
 import type { TerminalTab } from '../lib/feed-view.js';
+import { useHostSupports } from '../lib/capabilities.js';
+import { activityFor, useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
-import { ChatToolbar } from './ChatToolbar.js';
+import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
 import { Composer } from './Composer.js';
-import { currentModel, turnActive } from './feed-model.js';
+import { currentModel, hasPendingCard, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
+import { WaitingBanner } from './WaitingBanner.js';
 
 export interface ChatViewProps {
   workKey: string;
@@ -69,6 +79,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const items = feed?.items ?? NO_ITEMS;
   const active = live && turnActive(items);
   const model = currentModel(items);
+  const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
+  const showBanner = blocked && !hasPendingCard(items);
+  const canSetMode = useHostSupports('sessions.setMode');
+  const [modeBusy, setModeBusy] = useState(false);
 
   const sessionKey = refKey(sessionRef);
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
@@ -97,6 +111,22 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     });
   };
 
+  const setMode = (mode: ModeChoice): void => {
+    if (modeBusy || mode === feed?.mode) return;
+    setModeBusy(true);
+    bridge
+      .call('sessions.setMode', { ref: sessionRef, mode })
+      .then((result) => {
+        if (!result.verified) toast(S.chat.mode.openTerminal);
+      })
+      .catch((error: unknown) => {
+        const { code, message } = decodeIpcError(error);
+        console.warn('[parley] sessions.setMode', message);
+        toast.error(errorText(code, S.errors.actions.switchMode));
+      })
+      .finally(() => setModeBusy(false));
+  };
+
   const stop = (): void => bridge.notify('pty.input', { ref: sessionRef, data: '\x1b' });
   const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
 
@@ -109,6 +139,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           view="chat"
           available
           model={model}
+          {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy, onSelect: setMode } } : {})}
           {...(active ? { onStop: stop } : {})}
         />
         <FeedList
@@ -117,6 +148,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           note={noteOf(feed)}
           {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
         />
+        {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         <Composer
           busy={active}
           visible={visible}

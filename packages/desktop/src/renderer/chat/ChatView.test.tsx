@@ -13,13 +13,16 @@ import type { FeedItem, WorkSession } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
+import { EMPTY_HISTORY } from '../layout/history.js';
 import { TerminalBody } from '../layout/bodies/TerminalBody.js';
+import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeSession } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeSession } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
@@ -72,6 +75,8 @@ beforeEach(() => {
   hostWith(FEED_METHODS);
   useProvidersStore.setState({ providers: [CLAUDE_OK], loaded: true });
   useUiStore.setState({ visibleSessionRefs: {} });
+  // Сессия стартовала (есть событие журнала): вид без явного выбора — чат (кусок 4a, решение М).
+  useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]) });
   vi.mocked(toast).mockClear();
   vi.mocked(toast.error).mockClear();
 });
@@ -83,6 +88,7 @@ afterEach(() => {
   resetChatUiStoreForTests();
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
+  useActivityStore.setState({ byRef: {} });
 });
 
 describe('TerminalBody — вид вкладки', () => {
@@ -162,7 +168,7 @@ const text = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'text'
 
 function setFeed(items: FeedItem[], revision = 1): void {
   act(() => {
-    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, status: 'ready' } } });
+    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, mode: null, status: 'ready' } } });
   });
 }
 
@@ -206,7 +212,7 @@ describe('ChatView — лента', () => {
     expect(screen.getByTestId('chat-feed').textContent).toBe(S.chat.loading);
     expect(screen.queryByRole('button', { name: S.common.retry })).toBeNull();
     act(() => {
-      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, status: 'error', error: 'boom' } } });
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, mode: null, status: 'error', error: 'boom' } } });
     });
     expect(screen.getByTestId('chat-feed').textContent).toBe(`${S.chat.feedUnavailable}${S.common.retry}`);
   });
@@ -218,7 +224,7 @@ describe('ChatView — лента', () => {
       if (fail) throw new Error('boom');
       return { ok: true };
     });
-    bridge.setHandler('feed.snapshot', () => ({ items: [prompt('p1', 'back')], revision: 3, schemaVersion: 1 }));
+    bridge.setHandler('feed.snapshot', () => ({ items: [prompt('p1', 'back')], revision: 3, schemaVersion: 1, mode: null }));
     const dispose = useFeedStore.getState().init(bridge);
     useFeedStore.getState().open(REF);
     renderBody(makeSession('s-01', 'S01'));
@@ -439,5 +445,179 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
     expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toEqual([S.send.busy('S01')]);
+  });
+});
+
+describe('автопоказ терминала до SessionStart (кусок 4a, решение М)', () => {
+  it('без явного view и без событий журнала — терминал; первое событие переключает на чат', () => {
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle', { lastEventAt: null })]) });
+    renderBody(makeSession('s-01', 'S01'));
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+    expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]) }));
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
+  });
+
+  it('записи активности нет вовсе — терминал', () => {
+    useActivityStore.setState({ byRef: {} });
+    renderBody(makeSession('s-01', 'S01'));
+    expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
+  });
+
+  it('явный view побеждает: chat до старта остаётся чатом, terminal после старта — терминалом', () => {
+    useActivityStore.setState({ byRef: {} });
+    const view = renderBody(makeSession('s-01', 'S01'), 'chat');
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
+    view.unmount();
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]) });
+    renderBody(makeSession('s-01', 'S01'), 'terminal');
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+  });
+});
+
+describe('ChatView — баннер ожидания в терминале (кусок 4a, решение Н)', () => {
+  const WORK_KEY = '/tmp/p w-01';
+  const card = (state: 'pending' | 'allowed'): FeedItem => ({
+    id: 'card-1',
+    at: AT,
+    kind: 'permission',
+    cardId: 'card-1',
+    state,
+    toolUseId: null,
+    toolName: 'Bash',
+    toolInput: { command: 'ls' },
+    suggestions: [],
+    notified: false,
+  });
+  const activity = (value: 'blocked' | 'idle'): void =>
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, value)]) });
+
+  it('blocked без pending-карточки — баннер есть; клик уводит вкладку в терминал', () => {
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: {
+        [WORK_KEY]: {
+          root: { type: 'group', id: 'g1', tabs: [{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }], activeTabId: 'terminal:s-01' },
+          activeGroupId: 'g1',
+          closedTabs: [],
+        },
+      },
+      hydrated: { [WORK_KEY]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    activity('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain(S.chat.waitingBanner.text);
+    fireEvent.click(screen.getByTestId('chat-waiting-open'));
+    const layout = useLayoutStore.getState().layouts[WORK_KEY]!;
+    const root = layout.root;
+    expect(root.type === 'group' ? root.tabs[0] : null).toMatchObject({ id: 'terminal:s-01', view: 'terminal' });
+  });
+
+  it('blocked с pending-карточкой — баннера нет; карточка улажена — баннер появляется', () => {
+    activity('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([card('pending')]);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    setFeed([card('allowed')], 2);
+    expect(screen.getByTestId('chat-waiting-banner')).not.toBeNull();
+  });
+
+  it('idle — баннера нет', () => {
+    activity('idle');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+});
+
+describe('ChatView — меню режима (кусок 4a, решения К и Л)', () => {
+  const MODE_METHODS = [...FEED_METHODS, 'sessions.setMode'];
+  const trigger = (): HTMLElement => screen.getByTestId('chat-mode');
+  const openMenu = (): void => {
+    fireEvent.keyDown(trigger(), { key: 'Enter' });
+  };
+  const options = (): HTMLElement[] => screen.getAllByTestId('chat-mode-option');
+
+  function setMode(mode: string | null): void {
+    act(() => {
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 1, mode, status: 'ready' } } });
+    });
+  }
+
+  it('хост без sessions.setMode — меню нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setMode('default');
+    expect(screen.queryByTestId('chat-mode')).toBeNull();
+  });
+
+  it('подпись — текущий режим ленты: Manual, Accept edits, Plan, сырая строка, Mode без режима', () => {
+    hostWith(MODE_METHODS);
+    renderBody(makeSession('s-01', 'S01'));
+    setMode(null);
+    expect(trigger().textContent).toBe(S.chat.mode.unknown);
+    setMode('default');
+    expect(trigger().textContent).toBe('Manual');
+    setMode('acceptEdits');
+    expect(trigger().textContent).toBe('Accept edits');
+    setMode('plan');
+    expect(trigger().textContent).toBe('Plan');
+    setMode('bypassPermissions');
+    expect(trigger().textContent).toBe('bypassPermissions');
+  });
+
+  it('пункты Manual, Accept edits, Plan; текущий отмечен; выбор зовёт sessions.setMode', async () => {
+    hostWith(MODE_METHODS);
+    bridge.setHandler('sessions.setMode', () => ({ mode: 'plan', verified: true }));
+    renderBody(makeSession('s-01', 'S01'));
+    setMode('default');
+    openMenu();
+    expect(options().map((option) => option.dataset.mode)).toEqual(['default', 'acceptEdits', 'plan']);
+    expect(options()[0]!.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(options()[2]!);
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'sessions.setMode').map((call) => call.params)).toEqual([
+      { ref: REF, mode: 'plan' },
+    ]);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('verified false — тост «откройте терминал»; ошибка моста — тост с отказом', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    hostWith(MODE_METHODS);
+    bridge.setHandler('sessions.setMode', () => ({ mode: null, verified: false }));
+    renderBody(makeSession('s-01', 'S01'));
+    setMode('default');
+    openMenu();
+    fireEvent.click(options()[1]!);
+    await act(async () => {});
+    expect(vi.mocked(toast).mock.calls.map((call) => call[0])).toEqual([S.chat.mode.openTerminal]);
+
+    bridge.setHandler('sessions.setMode', () => {
+      throw new Error('boom');
+    });
+    openMenu();
+    fireEvent.click(options()[1]!);
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  it('пока запрос в пути — меню выключено', async () => {
+    hostWith(MODE_METHODS);
+    let answer!: (value: { mode: string; verified: boolean }) => void;
+    bridge.setHandler('sessions.setMode', () => new Promise((resolve) => (answer = resolve)));
+    renderBody(makeSession('s-01', 'S01'));
+    setMode('default');
+    openMenu();
+    fireEvent.click(options()[1]!);
+    await act(async () => {});
+    expect((trigger() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => answer({ mode: 'acceptEdits', verified: true }));
+    expect((trigger() as HTMLButtonElement).disabled).toBe(false);
   });
 });
