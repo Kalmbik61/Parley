@@ -552,7 +552,76 @@ export const S = {
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
     /** Карточка разрешения, вопроса или плана до кнопок куска 4. */
-    waiting: 'Waiting for your answer',
+    waiting: 'Waiting for your answer — open the terminal',
+    /** Состояния карточки после ожидания (решение 3); `pending` — `waiting`. */
+    cardState: {
+      allowed: 'Allowed',
+      denied: 'Denied',
+      answered: 'Answered',
+      elsewhere: 'Answered in the terminal',
+      stale: 'Waited too long — answer in the terminal',
+    },
+    cardKind: { permission: 'Permission', question: 'Question', plan: 'Plan' },
+    /** Лента прокручена вверх, а снизу пришло новое. */
+    jumpToLatest: 'Jump to latest',
+    /** Подпись курсора текста, который ещё пишется. */
+    streaming: 'Writing…',
+    textTruncated: 'Text truncated — open the terminal for the rest',
+    resultTruncated: 'Truncated, open the terminal',
+    inputTruncated: 'Arguments truncated — open the terminal for the rest',
+    patchTruncated: 'Diff truncated — open the terminal for the rest',
+    images: (count: number): string => (count === 1 ? '1 image' : `${count} images`),
+    toolStatus: { running: 'Running', done: 'Done', failed: 'Failed', rejected: 'Rejected' },
+    toolDetails: 'Show details',
+    arguments: 'Arguments',
+    result: 'Result',
+    noResult: 'No result yet',
+    changes: 'Changes',
+    notice: {
+      sessionStart: (source: string | null, model: string | null): string => {
+        const what =
+          source === 'resume'
+            ? 'Session resumed'
+            : source === 'clear'
+              ? 'Conversation cleared'
+              : source === 'compact'
+                ? 'Session continued after compaction'
+                : 'Session started';
+        return model === null ? what : `${what} · ${model}`;
+      },
+      sessionEnd: (reason: string | null): string => (reason === null ? 'Session ended' : `Session ended · ${reason}`),
+      compactPre: 'Compacting the conversation…',
+      compactPost: 'Conversation compacted',
+      modelSwitch: (from: string | null, to: string | null): string =>
+        from === null ? `Model: ${to ?? 'unknown'}` : `Model: ${from} → ${to ?? 'unknown'}`,
+      agentReported: (summary: string | null): string => (summary === null ? 'Agent reported' : `Agent reported · ${summary}`),
+    },
+    turn: (duration: string | null): string => (duration === null ? 'Turn finished' : `Turn finished · ${duration}`),
+    error: 'Request failed',
+    agent: {
+      fallbackTitle: 'Agent',
+      toolCalls: (count: number): string => (count === 1 ? '1 tool call' : `${count} tool calls`),
+      status: { running: 'Running', done: 'Done', failed: 'Failed' },
+      background: 'background',
+      details: 'Show agent details',
+      result: 'Result',
+      transcriptLoading: 'Loading the transcript…',
+      transcriptFailed: "Couldn't load the transcript — open the terminal",
+      transcriptEmpty: 'The transcript is empty',
+    },
+    showTranscript: 'Show transcript',
+    hideTranscript: 'Hide transcript',
+    /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
+    queued: 'Queued — Claude reads it when the turn ends',
+    composer: {
+      label: 'Message to Claude',
+      placeholder: 'Message Claude — Enter to send',
+      send: 'Send',
+      queue: 'Queue',
+    },
+    model: 'Model',
+    stop: 'Stop',
+    stopTitle: 'Interrupt the turn (Esc in the terminal)',
   },
 
   /**

@@ -87,6 +87,8 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
           session={session}
           sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }}
           active={host.active}
+          bridge={host.bridge}
+          sendDeps={host.sendDeps}
         />
       );
     }

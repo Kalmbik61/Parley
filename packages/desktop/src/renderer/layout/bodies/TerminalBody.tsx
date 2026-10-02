@@ -11,9 +11,11 @@
 
 import type { WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
 import { effectiveView, useFeedAvailability, useHostHasFeed, type TerminalTab } from '../../lib/feed-view.js';
+import type { SendWithToastDeps } from '../../terminal/send.js';
 
 export interface TerminalBodyProps {
   workKey: string;
@@ -22,13 +24,15 @@ export interface TerminalBodyProps {
   sessionRef: SessionRef;
   /** Работа активна (`LayoutBodyContext.active`). */
   active: boolean;
+  bridge: ParleyBridge;
+  sendDeps: SendWithToastDeps;
 }
 
-export function TerminalBody({ workKey, tab, session, sessionRef, active }: TerminalBodyProps): JSX.Element {
+export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge, sendDeps }: TerminalBodyProps): JSX.Element {
   const hasFeed = useHostHasFeed();
   const available = useFeedAvailability()(session.provider);
   if (effectiveView(tab, available) === 'chat') {
-    return <ChatView workKey={workKey} tab={tab} sessionRef={sessionRef} visible={active} />;
+    return <ChatView workKey={workKey} tab={tab} sessionRef={sessionRef} visible={active} bridge={bridge} sendDeps={sendDeps} />;
   }
   return (
     <div data-testid="terminal-body" className="flex h-full w-full flex-col">

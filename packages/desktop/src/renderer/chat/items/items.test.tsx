@@ -1,0 +1,331 @@
+/**
+ * Элементы ленты вида «Chat» (план 2026-10-01, Task 3, п. 2) на настоящих фикстурах core: события хуков
+ * проб разведки (`*.events.jsonl`) прогоняются через `applyHookEvent`, журналы — через
+ * `feedFromTranscript` (модуль ленты core — по пути исходников, см. импорт). Плюс крайние случаи Review Focus 2: длинная команда и путь, результат 64 КБ,
+ * дифф на 5 000 строк, агент с длинным описанием и 50 вложенными вызовами.
+ */
+
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { FeedAgent, FeedItem, FeedState, FeedTool } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
+import { S } from '../../../shared/strings.js';
+import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
+import { ChatEnvContext } from '../chat-env.js';
+import { FeedList } from '../FeedList.js';
+import { AgentItem } from './AgentItem.js';
+import { ToolItem } from './ToolItem.js';
+// Редьюсер и разбор журнала — прямо из исходников ленты core, а не из `@parley/core`: корневой модуль
+// тянет `work/mcp-config.ts`, а тот на загрузке строит путь из `import.meta.url`, которого под jsdom нет.
+import { applyHookEvent, emptyFeedState, feedFromTranscript } from '../../../../../core/src/feed/index.js';
+
+const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../core/src/feed/fixtures');
+const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
+const AT = '2026-10-01T00:00:00.000Z';
+
+function jsonl(name: string): Array<Record<string, unknown>> {
+  return readFileSync(path.join(FIXTURES, name), 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Поток событий пробы через редьюсер core — как его соберёт хост из HTTP-хуков. */
+function replay(probe: string): FeedState {
+  let state = emptyFeedState();
+  for (const line of jsonl(`${probe}.events.jsonl`)) {
+    if (line['ev'] === undefined) continue;
+    state = applyHookEvent(state, line['ev'], new Date(line['t'] as number).toISOString()).state;
+  }
+  return state;
+}
+
+const transcript = (name: string): FeedState => feedFromTranscript(jsonl(`${name}.jsonl`));
+
+let bridge: FakeBridge;
+
+function renderWithEnv(node: JSX.Element): ReturnType<typeof render> {
+  bridge = createFakeBridge();
+  return render(<ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}>{node}</ChatEnvContext.Provider>);
+}
+
+function renderFeed(items: readonly FeedItem[]): ReturnType<typeof render> {
+  return renderWithEnv(
+    <div style={{ height: 600 }}>
+      <FeedList items={items} queued={[]} note={null} />
+    </div>,
+  );
+}
+
+function tool(patch: Partial<FeedTool> = {}): FeedTool {
+  return { id: 't1', at: AT, kind: 'tool', toolUseId: 'tu1', name: 'Bash', input: { command: 'ls' }, status: 'done', ...patch };
+}
+
+function agent(patch: Partial<FeedAgent> = {}): FeedAgent {
+  return {
+    id: 'a1',
+    at: AT,
+    kind: 'agent',
+    toolUseId: 'tu-a',
+    agentId: 'ag1',
+    agentType: 'Explore',
+    description: 'List project files',
+    prompt: 'List files',
+    model: 'haiku',
+    background: true,
+    status: 'running',
+    toolCount: 0,
+    children: [],
+    ...patch,
+  };
+}
+
+/**
+ * virtual-core мерит прокрутчик `offsetHeight` (в jsdom — 0, и список был бы пуст): у прокрутчиков ленты
+ * и диффа — 600 px, у прочего — 0, поэтому элементы ленты «нулевой высоты» видны все.
+ */
+const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      const id = this.getAttribute('data-testid');
+      return id === 'chat-feed' || id === 'chat-diff' ? 600 : 0;
+    },
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  if (originalOffsetHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
+});
+
+describe('лента на фикстурах core', () => {
+  it('p1: промпт, текст ответа Markdown и черта конца хода', () => {
+    const { items } = replay('p1-stream');
+    renderFeed(items);
+    expect(screen.getAllByTestId('chat-prompt').length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('chat-text').length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('chat-turn').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('chat-streaming')).toBeNull();
+  });
+
+  it('p2: вызов Bash и снятая карточка разрешения — «Answered in the terminal», без кнопок решения', () => {
+    const { items } = replay('p2-permissions');
+    renderFeed(items);
+    expect(screen.getAllByTestId('chat-tool').length).toBeGreaterThan(0);
+    const cards = screen.getAllByTestId('chat-card');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.some((card) => card.getAttribute('data-card-state') === 'elsewhere')).toBe(true);
+    expect(screen.getAllByText(S.chat.cardState.elsewhere).length).toBeGreaterThan(0);
+    // Решение контролёра И: ни одной кнопки Allow/Deny.
+    expect(screen.queryByRole('button', { name: /allow|deny/i })).toBeNull();
+  });
+
+  it('p4: карточки вопроса и плана — вид и сводка (вопрос)', () => {
+    const { items } = replay('p4-questions-plan');
+    renderFeed(items);
+    const kinds = screen.getAllByTestId('chat-card').map((card) => card.getAttribute('data-card-kind'));
+    expect(kinds).toContain('question');
+    expect(kinds).toContain('plan');
+  });
+
+  it('p5b журнал: вызов Edit с диффом -beta/+gamma, номера строк и цвета ревью', () => {
+    const { items } = transcript('transcript-p5b-write');
+    renderFeed(items);
+    const edit = screen.getAllByTestId('chat-tool').find((row) => row.textContent?.includes('Edit'));
+    expect(edit).toBeDefined();
+    fireEvent.click(within(edit!).getByRole('button'));
+    const diff = within(edit!).getByTestId('chat-diff');
+    const added = diff.querySelector('[data-diff-row="added"]')!;
+    const removed = diff.querySelector('[data-diff-row="removed"]')!;
+    expect(added.textContent).toContain('gamma');
+    expect(added.className).toContain('--diff-added-ground');
+    expect(removed.textContent).toContain('beta');
+    expect(removed.className).toContain('--diff-removed-ground');
+    // Номера: «-beta» — вторая строка старого файла, «+gamma» — вторая нового.
+    expect(removed.textContent).toMatch(/^2/);
+    expect(added.textContent).toMatch(/^2/);
+  });
+
+  it('p6b: карточка агента Explore, «agent reported» — служебная строка, а не промпт', () => {
+    const { items } = replay('p6b-subagents');
+    renderFeed(items);
+    const card = screen.getByTestId('chat-agent');
+    expect(card.textContent).toContain('List project files');
+    expect(card.getAttribute('data-agent-status')).toBe('done');
+    expect(screen.getAllByTestId('chat-notice').some((row) => row.getAttribute('data-notice') === 'agent-reported')).toBe(true);
+  });
+
+  it('streaming — курсор за текстом, пока текст пишется', () => {
+    renderFeed([{ id: 'x', at: AT, kind: 'text', messageId: 'm', text: 'Hello', streaming: true }]);
+    expect(screen.getByTestId('chat-streaming').getAttribute('aria-label')).toBe(S.chat.streaming);
+  });
+
+  it('усечённый текст — пометка', () => {
+    renderFeed([{ id: 'x', at: AT, kind: 'text', messageId: 'm', text: 'Hello', streaming: false, truncated: true }]);
+    expect(screen.getByText(S.chat.textTruncated)).toBeTruthy();
+  });
+
+  it('промпт с картинками — их число; notice, error и turn — свои строки', () => {
+    renderFeed([
+      { id: 'p', at: AT, kind: 'prompt', text: 'look', images: 2 },
+      { id: 'n', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'claude-opus-5-5' } },
+      { id: 'n2', at: AT, kind: 'notice', notice: { type: 'compact', phase: 'post', trigger: 'auto' } },
+      { id: 'n3', at: AT, kind: 'notice', notice: { type: 'model-switch', from: 'a', to: 'b', source: 'user' } },
+      { id: 'n4', at: AT, kind: 'notice', notice: { type: 'session-end', reason: 'exit' } },
+      { id: 'e', at: AT, kind: 'error', error: 'rate_limit', message: 'Too many requests' },
+      { id: 'u', at: AT, kind: 'turn', durationMs: 4648 },
+    ]);
+    expect(screen.getByText(S.chat.images(2))).toBeTruthy();
+    expect(screen.getByText(S.chat.notice.sessionStart('startup', 'claude-opus-5-5'))).toBeTruthy();
+    expect(screen.getByText(S.chat.notice.compactPost)).toBeTruthy();
+    expect(screen.getByText(S.chat.notice.modelSwitch('a', 'b'))).toBeTruthy();
+    expect(screen.getByText(S.chat.notice.sessionEnd('exit'))).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('Too many requests');
+    expect(screen.getByText(S.chat.turn('5s'))).toBeTruthy();
+  });
+
+  it('ожидающая карточка — «ждёт ответа в терминале» с командой, без кнопок', () => {
+    renderFeed([
+      {
+        id: 'c',
+        at: AT,
+        kind: 'permission',
+        cardId: 'c',
+        state: 'pending',
+        toolUseId: null,
+        toolName: 'Bash',
+        toolInput: { command: 'rm -rf build' },
+        suggestions: [],
+        notified: false,
+      },
+    ]);
+    const card = screen.getByTestId('chat-card');
+    expect(card.textContent).toContain('rm -rf build');
+    expect(card.textContent).toContain(S.chat.waiting);
+    expect(within(card).queryByRole('button')).toBeNull();
+  });
+});
+
+describe('ToolItem', () => {
+  const renderTool = (item: FeedTool): ReturnType<typeof render> => renderWithEnv(<ToolItem item={item} />);
+
+  it('строка: Bash — команда, Edit — путь, MCP — сервер и инструмент, прочее — имя', () => {
+    renderTool(tool({ id: 'a', input: { command: 'pnpm test' } }));
+    renderTool(tool({ id: 'b', name: 'Edit', input: { file_path: '/src/a.ts' } }));
+    renderTool(tool({ id: 'c', name: 'mcp__parley__send_message', input: {} }));
+    renderTool(tool({ id: 'd', name: 'Glob', input: { pattern: '*.ts' } }));
+    expect(screen.getByText('pnpm test')).toBeTruthy();
+    expect(screen.getByText('/src/a.ts')).toBeTruthy();
+    expect(screen.getByText('parley · send_message')).toBeTruthy();
+    expect(screen.getByText('Glob')).toBeTruthy();
+  });
+
+  it('статусы: running — спиннер, failed и rejected — словом', () => {
+    renderTool(tool({ id: 'a', status: 'running' }));
+    renderTool(tool({ id: 'b', status: 'failed' }));
+    renderTool(tool({ id: 'c', status: 'rejected' }));
+    expect(document.querySelector('[data-status="running"]')?.getAttribute('class')).toContain('animate-spin');
+    expect(screen.getByText(S.chat.toolStatus.failed)).toBeTruthy();
+    expect(screen.getByText(S.chat.toolStatus.rejected)).toBeTruthy();
+  });
+
+  it('длинная команда (2 000 символов) и путь (300) обрезаются многоточием, а не раздвигают строку', () => {
+    const command = 'x'.repeat(2_000);
+    const file = `/${'dir/'.repeat(74)}file.ts`;
+    renderTool(tool({ id: 'a', input: { command } }));
+    renderTool(tool({ id: 'b', name: 'Write', input: { file_path: file } }));
+    const summaries = [...document.querySelectorAll('[data-tool-summary]')];
+    expect(summaries.map((node) => node.textContent?.length)).toEqual([2_000, file.length]);
+    for (const node of summaries) {
+      expect(node.className).toContain('truncate');
+      expect(node.className).toContain('min-w-0');
+    }
+    for (const row of screen.getAllByRole('button')) expect(row.className).toContain('min-w-0');
+  });
+
+  it('раскрытие: аргументы JSON и результат; усечённый 64 КБ результат — пометка открыть терминал', () => {
+    const text = 'y'.repeat(64 * 1024);
+    renderTool(tool({ response: { text, size: 2 * 1024 * 1024, truncated: true } }));
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText(/"command": "ls"/)).toBeTruthy();
+    const result = screen.getByTestId('chat-tool-result');
+    expect(result.textContent).toHaveLength(64 * 1024);
+    expect(result.className).toContain('max-h-60');
+    expect(result.className).toContain('overflow-auto');
+    expect(screen.getByText(S.chat.resultTruncated)).toBeTruthy();
+  });
+
+  it('дифф на 5 000 строк рисуется виртуально: в DOM строк меньше, чем в данных', () => {
+    const lines = Array.from({ length: 5_000 }, (_, at) => `+line ${at}`);
+    renderTool(tool({ name: 'Write', patch: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 5_000, lines }], patchTruncated: true }));
+    fireEvent.click(screen.getByRole('button'));
+    const rows = screen.getByTestId('chat-diff').querySelectorAll('[data-diff-row]');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(200);
+    expect(screen.getByText(S.chat.patchTruncated)).toBeTruthy();
+  });
+});
+
+describe('AgentItem', () => {
+  const renderAgent = (item: FeedAgent, expanded = false): ReturnType<typeof render> =>
+    renderWithEnv(<AgentItem item={item} expanded={expanded} onToggle={() => undefined} />);
+
+  it('running — спиннер и «Running»; done — длительность и число вызовов; failed — «Failed»', () => {
+    renderAgent(agent({ id: 'r' }));
+    renderAgent(agent({ id: 'd', status: 'done', durationMs: 65_000, toolCount: 3, endedAt: AT }));
+    renderAgent(agent({ id: 'f', status: 'failed', toolCount: 1 }));
+    const [running, done, failed] = screen.getAllByTestId('chat-agent');
+    expect(running!.querySelector('.animate-spin')).not.toBeNull();
+    expect(running!.textContent).toContain(S.chat.agent.status.running);
+    expect(done!.textContent).toContain('1m');
+    expect(done!.textContent).toContain(S.chat.agent.toolCalls(3));
+    expect(done!.querySelector('.animate-spin')).toBeNull();
+    expect(failed!.textContent).toContain(S.chat.agent.status.failed);
+    expect(failed!.textContent).toContain(S.chat.agent.toolCalls(1));
+  });
+
+  it('длинное описание (300 символов) — одной обрезанной строкой', () => {
+    const description = 'd'.repeat(300);
+    renderAgent(agent({ description }));
+    const title = document.querySelector('[data-agent-title]')!;
+    expect(title.textContent).toBe(description);
+    expect(title.className).toContain('truncate');
+  });
+
+  it('развёрнуто: 50 вложенных вызовов сжатыми строками и итоговый текст', () => {
+    const children = Array.from({ length: 50 }, (_, at) => tool({ id: `c${at}`, toolUseId: `cu${at}`, agentId: 'ag1', input: { command: `echo ${at}` } }));
+    renderAgent(agent({ status: 'done', toolCount: 50, children, result: 'All **done**' }), true);
+    expect(within(screen.getByTestId('chat-agent-children')).getAllByTestId('chat-tool')).toHaveLength(50);
+    expect(screen.getByText('done').tagName).toBe('STRONG');
+  });
+
+  it('«Show transcript» зовёт feed.snapshot с agentId и рисует ленту субагента; второе нажатие сворачивает', async () => {
+    renderAgent(agent({ status: 'done' }), true);
+    const sub = transcript('transcript-p6b-agent-ad2fe21e96ffde3ba');
+    bridge.setHandler('feed.snapshot', () => ({ items: [...sub.items], revision: 0, schemaVersion: 1 }));
+    fireEvent.click(screen.getByRole('button', { name: S.chat.showTranscript }));
+    expect(bridge.calls).toContainEqual({ method: 'feed.snapshot', params: { ref: REF, agentId: 'ag1' } });
+    const area = await screen.findByTestId('chat-agent-transcript');
+    expect(within(area).getAllByTestId('chat-tool').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.hideTranscript }));
+    expect(screen.queryByTestId('chat-agent-transcript')).toBeNull();
+  });
+
+  it('ошибка снимка субагента — подсказка открыть терминал', async () => {
+    renderAgent(agent({ status: 'done' }), true);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.showTranscript }));
+    await waitFor(() => expect(screen.getByText(S.chat.agent.transcriptFailed)).toBeTruthy());
+  });
+
+  it('в ленте два агента подряд — стопкой (меньший отступ у второго)', () => {
+    renderFeed([agent({ id: 'a1' }), agent({ id: 'a2', agentId: 'ag2' })]);
+    const rows = [...document.querySelectorAll('[data-feed-id]')];
+    expect(rows[0]!.className).toContain('pt-3');
+    expect(rows[1]!.className).toContain('pt-1');
+  });
+});
