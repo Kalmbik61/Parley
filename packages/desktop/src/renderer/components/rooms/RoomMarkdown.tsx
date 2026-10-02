@@ -31,6 +31,10 @@
  * `remark-breaks`, которого в зависимостях нет. `white-space: pre-line` на `li` не годится: `react-markdown`
  * кладёт `\n` между блоками внутри пункта, и вложенный или «свободный» список растёт вдвое пустыми строками.
  *
+ * Текст пишет агент, и разбор или отрисовка могут не осилить его (тысячи вложенных `>` переполняют стек): отрисовка
+ * стоит под `MarkdownBoundary` — вместо Markdown сообщение показывается сырым текстом (`whitespace-pre-wrap`), а вкладка
+ * не падает; новый текст — новая попытка.
+ *
  * Типографика — потомковые селекторы на корне, как в `MarkdownPreview.tsx`, по токенам темы: светлая и тёмная.
  *
  * Строчный вид (`inline`) — для превью в одну строку, плашка решений `mail/Decisions.tsx` под `line-clamp-2`:
@@ -44,6 +48,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import { S } from '../../../shared/strings.js';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
+import { MarkdownBoundary } from '../MarkdownBoundary.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
 import { HUMAN_MENTION_ATTR, MENTION_ATTR, remarkPluginsFor } from './room-remark.js';
 
@@ -234,16 +239,20 @@ export function RoomMarkdown({
   // работы.
   const content = useMemo(
     () => (
-      <ReactMarkdown
-        remarkPlugins={remarkPluginsFor(inline, humanChips)}
-        components={components}
-        allowedElements={inline ? INLINE_ELEMENTS : undefined}
-        unwrapDisallowed={inline}
-        // Штатная чистка react-markdown пропустила бы `mailto:`, `irc:`, `xmpp:`; своя — только http(s), пути и якоря.
-        urlTransform={safeUrlTransform}
-      >
-        {text}
-      </ReactMarkdown>
+      // Текст пишет агент: вложенность глубже стека роняет разбор или отрисовку — тогда вместо Markdown сырой текст, а
+      // не ошибка вкладки.
+      <MarkdownBoundary text={text}>
+        <ReactMarkdown
+          remarkPlugins={remarkPluginsFor(inline, humanChips)}
+          components={components}
+          allowedElements={inline ? INLINE_ELEMENTS : undefined}
+          unwrapDisallowed={inline}
+          // Штатная чистка react-markdown пропустила бы `mailto:`, `irc:`, `xmpp:`; своя — только http(s), пути и якоря.
+          urlTransform={safeUrlTransform}
+        >
+          {text}
+        </ReactMarkdown>
+      </MarkdownBoundary>
     ),
     [text, components, inline, humanChips],
   );

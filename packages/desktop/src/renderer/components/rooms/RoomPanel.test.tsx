@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
+import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -1223,6 +1224,50 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       for (const spy of spies) spy.mockRestore();
     }
   });
+});
+
+describe('RoomPanel — сообщение, которое Markdown не осилил (Parley 0.3.0)', () => {
+  it("'>'.repeat(5000) + ' текст' в сообщении и в цитате ответа — вкладка жива: сырой текст в ленте, соседи и поле ввода на месте", () => {
+    // React логирует пойманную ошибку в консоль — тестовому выводу это не нужно.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const deep = `${'>'.repeat(5000)} текст`;
+      const entry = entryOf({
+        messages: [
+          message('m-1', { text: deep, at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-02',
+            to: ['human'],
+            text: 'Ответ **жирным** и @human',
+            replyTo: 'm-1',
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+        ],
+      });
+      render(
+        <ErrorBoundary title="Tab crashed">
+          <RoomPanel {...props(entry)} />
+        </ErrorBoundary>,
+      );
+      // Вкладка не ушла в `ErrorBoundary`: панель, лента, сообщения и поле ввода — на месте.
+      expect(screen.queryByText('Tab crashed')).toBeNull();
+      expect(document.querySelector('[data-room-panel]')).not.toBeNull();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
+      // Упавшее сообщение — сырой текст (или цитаты Markdown, если стек больше обычного): текст виден в любом случае.
+      expect(messageRow('m-1').textContent).toContain('текст');
+      const fallback = messageRow('m-1').querySelector('[data-markdown-fallback]');
+      if (fallback === null) expect(messageRow('m-1').querySelector('blockquote')).not.toBeNull();
+      else expect(fallback.textContent).toBe(deep);
+      // Соседнее сообщение отрисовано как обычно, а цитата ответа не уронила ленту.
+      expect(messageRow('m-2').querySelector('strong')?.textContent).toBe('жирным');
+      expect(messageRow('m-2').querySelector('[data-mention-human]')?.textContent).toBe('@you');
+      expect(
+        (document.querySelector('[data-message-reply="m-1"]') as HTMLElement).textContent,
+      ).toMatch(/^↩ You/);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 30_000);
 });
 
 describe('RoomPanel — строка ожидания по readBy (1.3)', () => {
