@@ -33,6 +33,11 @@ export interface ProvidersState {
   /** В порядке ответа хоста; строка статуса показывает `available`, а Claude Code и Codex и без CLI — «not found». */
   providers: ProviderInfo[];
   /**
+   * Первый ответ `providers.list` пришёл (успехом или отказом). До него версия `claude` неизвестна не
+   * потому, что её нет, а потому, что её ещё не спросили: вид вкладки (`lib/feed-view.ts`) ждёт.
+   */
+  loaded: boolean;
+  /**
    * Один запрос `providers.list` и подписка на `providers.limitsChanged`; возвращает отписку — ответ,
    * пришедший позже неё, и события после неё в стор не попадают.
    */
@@ -41,6 +46,7 @@ export interface ProvidersState {
 
 export const useProvidersStore = create<ProvidersState>((set) => ({
   providers: [],
+  loaded: false,
   init: (bridge) => {
     let disposed = false;
     bridge
@@ -55,13 +61,14 @@ export const useProvidersStore = create<ProvidersState>((set) => ({
             version: provider.version ?? null,
             limits: provider.limits ?? null,
           })),
+          loaded: true,
         });
       })
       .catch((error: unknown) => {
         if (disposed) return;
         // Русский текст хоста — только в консоль (сквозное правило); строка статуса просто без сегментов.
         console.warn('[parley] providers.list failed', decodeIpcError(error).message);
-        set({ providers: [] });
+        set({ providers: [], loaded: true });
       });
     const offLimits = bridge.on('providers.limitsChanged', ({ id, limits }) => {
       // Неизвестный провайдер — тот же объект состояния: подписчики строки статуса не перерисовываются.

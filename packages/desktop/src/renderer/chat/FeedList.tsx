@@ -8,19 +8,26 @@
  * низа — новое и выросшее прижимается к низу; человек читает выше — его не дёргают, а снизу появляется
  * «Jump to latest».
  *
- * Раскрытые вызовы и карточки агентов лента помнит по `id`: строку вне экрана виртуальный список
- * размонтирует, и своё состояние элемента пропало бы. В конце — серые сообщения из очереди
- * (`queued`, решение 8). Несколько агентов подряд — стопкой: между ними отступ меньше.
+ * Программная прокрутка к низу сама порождает `scroll`, а виртуализатор между ней и событием успевает
+ * поправить высоты по замеру — такое событие «не у низа» сорвало бы прилипание без действий человека,
+ * поэтому ближайший `scroll` после неё не учитывается.
+ *
+ * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
+ * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
+ * сообщения из очереди (`queued`, решение 8). Несколько агентов подряд — стопкой: между ними отступ меньше.
+ *
+ * Строка элемента — `memo`: дельта ленты сохраняет ссылки нетронутых элементов (`applyDelta`), а
+ * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FeedItem } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
-import { AgentItem } from './items/AgentItem.js';
+import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
 import { NoticeItem } from './items/NoticeItem.js';
@@ -49,15 +56,20 @@ export interface FeedListProps {
   queued: readonly QueuedPrompt[];
   /** Подпись пустой ленты: загрузка, пусто, ошибка; `null` — не нужна. */
   note: string | null;
+  /** Есть — рядом с подписью кнопка «Retry» (лента не загрузилась). */
+  onRetry?: () => void;
 }
 
 interface ItemViewProps {
   item: FeedItem;
   expanded: boolean;
+  /** Транскрипт карточки агента; у прочих элементов — `null`. */
+  transcript: Transcript | null;
   onToggle: (id: string) => void;
+  onTranscript: (id: string, update: TranscriptUpdate) => void;
 }
 
-function ItemView({ item, expanded, onToggle }: ItemViewProps): JSX.Element {
+const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, onTranscript }: ItemViewProps): JSX.Element {
   switch (item.kind) {
     case 'prompt':
       return <PromptItem text={item.text} images={item.images} />;
@@ -70,7 +82,15 @@ function ItemView({ item, expanded, onToggle }: ItemViewProps): JSX.Element {
     case 'plan':
       return <CardItem item={item} />;
     case 'agent':
-      return <AgentItem item={item} expanded={expanded} onToggle={() => onToggle(item.id)} />;
+      return (
+        <AgentItem
+          item={item}
+          expanded={expanded}
+          onToggle={() => onToggle(item.id)}
+          transcript={transcript}
+          onTranscript={(update) => onTranscript(item.id, update)}
+        />
+      );
     case 'notice':
       return <NoticeItem item={item} />;
     case 'error':
@@ -78,9 +98,9 @@ function ItemView({ item, expanded, onToggle }: ItemViewProps): JSX.Element {
     case 'turn':
       return <TurnItem item={item} />;
   }
-}
+});
 
-export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, note, onRetry }: FeedListProps): JSX.Element {
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
@@ -93,6 +113,17 @@ export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
       const next = new Set(was);
       if (!next.delete(id)) next.add(id);
       return next;
+    });
+  }, []);
+  const [transcripts, setTranscripts] = useState<Readonly<Record<string, Transcript>>>({});
+  const updateTranscript = useCallback((id: string, update: TranscriptUpdate): void => {
+    setTranscripts((was) => {
+      const next = update(was[id] ?? null);
+      if (next === (was[id] ?? null)) return was;
+      const copy = { ...was };
+      if (next === null) delete copy[id];
+      else copy[id] = next;
+      return copy;
     });
   }, []);
 
@@ -109,8 +140,14 @@ export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
   // «У низа» — по последнему `scroll`: после роста ленты по DOM уже не понять, где стоял человек.
   const atBottomRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  /** Ближайший `scroll` вызван нашей же прокруткой к низу — его не учитываем. */
+  const ownScrollRef = useRef(false);
   const onScroll = useCallback((): void => {
     if (scroller === null) return;
+    if (ownScrollRef.current) {
+      ownScrollRef.current = false;
+      return;
+    }
     const next = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_PX;
     atBottomRef.current = next;
     setAtBottom(next);
@@ -118,7 +155,11 @@ export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
 
   const pinToBottom = useCallback((): void => {
     if (scroller === null) return;
+    const before = scroller.scrollTop;
     scroller.scrollTop = scroller.scrollHeight;
+    // Флаг — только на сдвиг: без него события не будет, и флаг съел бы следующую прокрутку человека.
+    // Событие браузера приходит позже записи, поэтому флаг ставится после неё.
+    if (scroller.scrollTop !== before) ownScrollRef.current = true;
     atBottomRef.current = true;
     setAtBottom(true);
   }, [scroller]);
@@ -133,7 +174,16 @@ export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={setScroller} onScroll={onScroll} data-testid="chat-feed" className="min-h-0 flex-1 overflow-y-auto">
-        {note === null || rows.length > 0 ? null : <p className="m-0 px-4 py-3 text-sm text-muted-foreground">{note}</p>}
+        {note === null || rows.length > 0 ? null : (
+          <div className="flex items-center gap-2 px-4 py-3">
+            <p className="m-0 text-sm text-muted-foreground">{note}</p>
+            {onRetry === undefined ? null : (
+              <Button type="button" size="xs" variant="outline" onClick={onRetry}>
+                {S.common.retry}
+              </Button>
+            )}
+          </div>
+        )}
         <div className="relative w-full" style={{ height: total }}>
           {virtualizer.getVirtualItems().map((virtual) => {
             const row = rows[virtual.index];
@@ -152,7 +202,13 @@ export function FeedList({ items, queued, note }: FeedListProps): JSX.Element {
               >
                 <div className="mx-auto w-full max-w-[860px]">
                   {'item' in row ? (
-                    <ItemView item={row.item} expanded={expanded.has(row.item.id)} onToggle={toggle} />
+                    <ItemView
+                      item={row.item}
+                      expanded={expanded.has(row.item.id)}
+                      transcript={transcripts[row.item.id] ?? null}
+                      onToggle={toggle}
+                      onTranscript={updateTranscript}
+                    />
                   ) : (
                     <PromptItem text={row.queued.text} queued />
                   )}

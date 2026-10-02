@@ -1,8 +1,15 @@
 /** Чистые выводы из ленты (план 2026-10-01, Task 3): идёт ли ход, модель, строка вызова. */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { FeedItem } from '@parley/core';
+// Разбор журнала — из исходников ленты core (корневой `@parley/core` под jsdom не грузится, см. items.test.tsx).
+import { feedFromTranscript } from '../../../../core/src/feed/index.js';
 import { currentModel, firstLine, toolHeadline, turnActive } from './feed-model.js';
+
+const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../core/src/feed/fixtures');
 
 const AT = '2026-10-01T00:00:00.000Z';
 const prompt: FeedItem = { id: 'p', at: AT, kind: 'prompt', text: 'hi', images: 0 };
@@ -55,6 +62,30 @@ describe('turnActive', () => {
   it('живой субагент после конца хода родителя хода не держит', () => {
     expect(turnActive([prompt, agent, turn])).toBe(false);
     expect(turnActive([turn, agent])).toBe(false);
+  });
+
+  it('слеш-команда без ответа после неё (только notice) хода не открывает', () => {
+    const exit: FeedItem = { id: 'x', at: AT, kind: 'prompt', text: '  /exit ', images: 0 };
+    const end: FeedItem = { id: 'n', at: AT, kind: 'notice', notice: { type: 'session-end', reason: 'prompt_input_exit' } };
+    expect(turnActive([prompt, turn, exit])).toBe(false);
+    expect(turnActive([prompt, turn, exit, end])).toBe(false);
+  });
+
+  it('слеш-команда, за которой пошёл ответ (/review), — обычный ход', () => {
+    const review: FeedItem = { id: 'r', at: AT, kind: 'prompt', text: '/review', images: 0 };
+    expect(turnActive([turn, review, text(false)])).toBe(true);
+    expect(turnActive([turn, review, tool('done')])).toBe(true);
+  });
+
+  it('журнал пробы p5b кончается промптом /exit — хода нет', () => {
+    const records = readFileSync(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const { items } = feedFromTranscript(records);
+    const last = items.findLast((item) => item.kind === 'prompt');
+    expect(last?.kind === 'prompt' ? last.text.trim() : null).toBe('/exit');
+    expect(turnActive(items)).toBe(false);
   });
 });
 

@@ -10,7 +10,7 @@
  * экрана) или, без `expanded`, самим элементом.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Ban, Check, ChevronRight, LoaderCircle, X } from 'lucide-react';
 import type { FeedTool, FeedToolStatus } from '@parley/core';
 import { S } from '../../../shared/strings.js';
@@ -51,6 +51,8 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
   const open = expanded ?? ownOpen;
   const toggle = onToggle ?? (() => setOwnOpen((value) => !value));
   const headline = toolHeadline(item.name, item.input);
+  // Вход `Write` бывает в сотни КБ: JSON строится, только пока вызов раскрыт, и лишь при новом входе.
+  const args = useMemo(() => (open ? JSON.stringify(item.input, null, 2) : ''), [open, item.input]);
   const failedWord = item.status === 'failed' || item.status === 'rejected' ? S.chat.toolStatus[item.status] : null;
 
   return (
@@ -80,7 +82,7 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
       {open ? (
         <div data-testid="chat-tool-details" className="flex min-w-0 flex-col gap-1.5 pl-6">
           <span className="text-xs text-muted-foreground">{S.chat.arguments}</span>
-          <pre className={cn(PRE, 'max-h-48')}>{JSON.stringify(item.input, null, 2)}</pre>
+          <pre className={cn(PRE, 'max-h-48')}>{args}</pre>
           {item.truncated === true ? <Note>{S.chat.inputTruncated}</Note> : null}
           {item.patch === undefined || item.patch.length === 0 ? null : (
             <>

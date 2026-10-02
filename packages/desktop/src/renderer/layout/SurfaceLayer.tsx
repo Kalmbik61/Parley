@@ -19,7 +19,9 @@
  * поверхности терминала нет — размонтирование и есть `pty.detach`, переход в терминал монтирует её
  * заново обычным `pty.attach` со снимком экрана. Вместо неё слой держит подписку на ленту сессии
  * (`FeedSubscription`) — на каждую открытую вкладку, а не только активную в группе. Когда хост знает
- * ленту, поверхность опускается под тулбар вкладки с сегментом (`TAB_TOOLBAR_PX`).
+ * ленту, поверхность опускается под тулбар вкладки с сегментом (`TAB_TOOLBAR_PX`). Пока доступность
+ * вида неизвестна (`effectiveView` — `null`: первый ответ `providers.list` не пришёл), у вкладки нет ни
+ * поверхности, ни подписки: иначе она мигнула бы одним видом и перескочила в другой.
  */
 
 import { useMemo } from 'react';
@@ -89,7 +91,9 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
         if (tab.kind !== 'terminal') continue;
         const provider = providers.get(tab.sessionId);
         if (provider === undefined) continue;
-        if (effectiveView(tab, feedAvailable(provider)) === 'chat') {
+        const view = effectiveView(tab, feedAvailable(provider));
+        if (view === null) continue;
+        if (view === 'chat') {
           surfaces.push({ kind: 'feed', tabId: tab.id, sessionId: tab.sessionId });
           continue;
         }

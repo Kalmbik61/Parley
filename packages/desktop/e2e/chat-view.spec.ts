@@ -7,9 +7,13 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Вид «Chat» вкладки сессии (план 2026-10-01, Task 3). Проба версий CLI в E2E выключена
- * (`global-setup.ts`), версия `claude` неизвестна — вид Chat доступен (решение контролёра Е), а хост
- * хуков ленты стабу не пишет. Поэтому лента берётся севом из журнала: в корень истории прогона
+ * Вид «Chat» вкладки сессии (план 2026-10-01, Task 3). Вид доступен только при известной версии
+ * `claude` не ниже порога ленты, а в E2E проба версий выключена (`global-setup.ts`) — этот спек её
+ * включает (`PARLEY_SKIP_VERSION_PROBE: ''`; хост сверяет с '1'). Проба зовёт `--version` у каждой
+ * команды реестра: `claude` и `codex` — стабы (`2.1.286 (Claude Code)` и `codex-cli 0.44.0`), у `glm`
+ * — несуществующий путь (проба даёт null): настоящие CLI в E2E не запускаются никогда.
+ *
+ * Хост хуков ленты стабу не пишет, поэтому лента берётся севом из журнала: в корень истории прогона
  * (`PARLEY_CLAUDE_PROJECTS_DIR`) кладётся настоящий журнал пробы p5b с `providerSessionId` сессии,
  * индекс логов хоста подхватывает его наблюдателем, и снимок ленты сеет из него промпты, вызовы
  * `Write`/`Edit` с диффом и текст ответа.
@@ -24,6 +28,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
+const stubCodex = path.resolve(dirname, 'stub-codex-agent.mjs');
 const transcript = path.resolve(dirname, '../../core/src/feed/fixtures/transcript-p5b-write.jsonl');
 /** `sessionId` записей журнала пробы p5b. */
 const TRANSCRIPT_SESSION_ID = 'a879774d-1db9-4645-af69-cab9e03df081';
@@ -99,7 +104,16 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
   });
 
   test('лента из журнала, переключение в терминал и обратно, отправка из поля ввода, снимки', async () => {
-    const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom', STUB_BRACKETED: '1' };
+    const env = {
+      ...process.env,
+      PARLEY_HOME: home,
+      PARLEY_CLAUDE_BIN: stubAgent,
+      PARLEY_CODEX_BIN: stubCodex,
+      PARLEY_GLM_BIN: path.join(home, 'no-glm'),
+      PARLEY_SKIP_VERSION_PROBE: '',
+      PARLEY_TERMINAL_RENDERER: 'dom',
+      STUB_BRACKETED: '1',
+    };
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
     const window = await app.firstWindow();
@@ -137,28 +151,40 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
     await pickTheme(window, 'Theme: light');
     await window.locator(`[data-session-id="${ref.sessionId}"]`).click();
 
-    // Вкладка открывается чатом: промпт, вызов Edit с диффом и текст ответа.
+    // Проба дала версию 2.1.286 — сегмент включён, вкладка открывается чатом: промпт, вызов Edit с
+    // диффом и текст ответа.
     const chat = window.getByTestId('chat-view');
     await expect(chat).toBeVisible();
+    await expect(window.getByRole('radio', { name: 'Chat' })).toBeEnabled();
+    await expect(window.getByRole('radio', { name: 'Chat' })).toHaveAttribute('aria-checked', 'true');
     await expect(window.locator('.xterm')).toHaveCount(0);
     await expect(chat.getByTestId('chat-prompt').first()).toContainText('notes.txt');
     await expect(chat.getByTestId('chat-text').first()).toContainText('done');
     const edit = chat.getByTestId('chat-tool').filter({ hasText: 'Edit' });
     await expect(edit).toHaveCount(1);
+    // Журнал кончается `/exit` без конца хода: хода нет — ни Stop, ни Queue, кнопка — Send.
+    await expect(chat.getByRole('button', { name: 'Stop' })).toHaveCount(0);
+    await expect(chat.getByRole('button', { name: 'Queue' })).toHaveCount(0);
+    await expect(chat.getByRole('button', { name: 'Send' })).toHaveCount(1);
 
     await shot(window, 'chat-1400x900-light');
+    await resize(app, 800, 500);
+    await expect(chat).toBeVisible();
+    await shot(window, 'chat-800x500-light');
+    await pickTheme(window, 'Theme: dark');
+    await shot(window, 'chat-800x500-dark');
+    await resize(app, 1400, 900);
+    await shot(window, 'chat-1400x900-dark');
+    await pickTheme(window, 'Theme: light');
+
     await edit.getByRole('button').first().click();
     await expect(edit.getByTestId('chat-diff')).toContainText('gamma');
     await expect(edit.locator('[data-diff-row="added"]')).toContainText('gamma');
     await shot(window, 'chat-tool-expanded');
-
-    await pickTheme(window, 'Theme: dark');
-    await shot(window, 'chat-1400x900-dark');
     await resize(app, 800, 500);
-    await expect(chat).toBeVisible();
-    await shot(window, 'chat-800x500-dark');
-    await pickTheme(window, 'Theme: light');
-    await shot(window, 'chat-800x500-light');
+    await edit.getByTestId('chat-diff').scrollIntoViewIfNeeded();
+    await expect(edit.getByTestId('chat-diff')).toBeInViewport();
+    await shot(window, 'chat-800x500-light-expanded');
     await resize(app, 1400, 900);
 
     // Сегмент Terminal: поверхность xterm смонтирована, экран стаба виден; обратно — лента на месте.
@@ -169,11 +195,16 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
     await expect(chat.getByTestId('chat-tool').filter({ hasText: 'Edit' })).toHaveCount(1);
     await expect(window.locator('.xterm')).toHaveCount(0);
 
-    // Поле ввода: Enter — pty.send с Enter, стаб печатает echo; видно в терминале.
+    // Поле ввода в фокусе после возврата в чат. Enter — pty.send с Enter, стаб печатает echo; видно в
+    // терминале. Тоста «Sent to» в чате нет — отправленное видно в ленте.
     const field = chat.getByRole('textbox', { name: 'Message to Claude' });
+    await expect(field).toBeFocused();
     await field.fill('hello from chat');
     await field.press('Enter');
     await expect(field).toHaveValue('');
+    await expect(field).toBeFocused();
+    await window.waitForTimeout(500);
+    await expect(window.getByText(/^Sent to /)).toHaveCount(0);
     await window.getByRole('radio', { name: 'Terminal' }).click();
     await expect.poll(() => screenText(window)).toContain('echo: hello from chat');
     await window.getByRole('radio', { name: 'Chat' }).click();

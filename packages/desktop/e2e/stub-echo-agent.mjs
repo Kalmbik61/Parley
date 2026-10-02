@@ -21,6 +21,14 @@ import readline from 'node:readline';
  */
 const fromEnv = (key) => process.env[`PARLEY_${key}`] ?? process.env[`HARNAS_${key}`];
 
+// Проба версий хоста (`<команда> --version`, host/src/providers/versions.ts) — ответ как у настоящего
+// Claude Code, не ниже порога ленты (FEED_MIN_VERSION): спек вида «Chat» включает пробу, чтобы вид
+// был доступен. Выход сразу — ни хука, ни экрана.
+if (process.argv[2] === '--version') {
+  process.stdout.write('2.1.286 (Claude Code)\n');
+  process.exit(0);
+}
+
 // Хук при старте (fix-final-b): настоящий Claude Code в доверенной папке шлёт SessionStart, и
 // хост узнаёт, что хуки процесса доходят; без единого хука с запуска pty.send отвечает blocked
 // (вопрос доверия к папке хуков не шлёт). Нейтральное `StubReady` состояния не меняет — точка

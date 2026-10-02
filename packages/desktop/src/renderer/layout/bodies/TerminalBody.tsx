@@ -6,7 +6,9 @@
  *
  * Вид «Chat» (план 2026-10-01, решение 6): при эффективном виде `chat` тело рисует `ChatView`, а
  * поверхности терминала у вкладки нет. В виде терминала, когда хост знает ленту, сверху — тулбар
- * с сегментом «Chat | Terminal», а поверхность опускается под него (`TAB_TOOLBAR_PX`).
+ * с сегментом «Chat | Terminal», а поверхность опускается под него (`TAB_TOOLBAR_PX`). Пока доступность
+ * вида неизвестна (версия `claude` ещё не пришла), тело — пустая заглушка, а слой поверхностей не
+ * монтирует ни терминал, ни подписку на ленту.
  */
 
 import type { WorkSession } from '@parley/core';
@@ -31,12 +33,24 @@ export interface TerminalBodyProps {
 export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge, sendDeps }: TerminalBodyProps): JSX.Element {
   const hasFeed = useHostHasFeed();
   const available = useFeedAvailability()(session.provider);
-  if (effectiveView(tab, available) === 'chat') {
-    return <ChatView workKey={workKey} tab={tab} sessionRef={sessionRef} visible={active} bridge={bridge} sendDeps={sendDeps} />;
+  const view = effectiveView(tab, available);
+  if (view === null) return <div data-testid="tab-view-pending" className="h-full w-full" />;
+  if (view === 'chat') {
+    return (
+      <ChatView
+        workKey={workKey}
+        tab={tab}
+        sessionRef={sessionRef}
+        visible={active}
+        live={session.lifecycle === 'active'}
+        bridge={bridge}
+        sendDeps={sendDeps}
+      />
+    );
   }
   return (
     <div data-testid="terminal-body" className="flex h-full w-full flex-col">
-      {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available} /> : null}
+      {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} /> : null}
     </div>
   );
 }

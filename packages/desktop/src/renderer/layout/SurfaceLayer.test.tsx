@@ -12,6 +12,7 @@ import type { LayoutNode } from '../../shared/layout-types.js';
 import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
@@ -429,12 +430,17 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
     bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1 }));
     disposeFeed = useFeedStore.getState().init(bridge);
+    useProvidersStore.setState({
+      providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
+      loaded: true,
+    });
   });
 
   afterEach(() => {
     disposeFeed();
     resetFeedStoreForTests();
     useHostStore.setState({ status: { state: 'connecting' } });
+    useProvidersStore.setState({ providers: [], loaded: false });
   });
 
   const feedCalls = (method: string, sessionId: string): number =>
@@ -476,7 +482,7 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(first.style.getPropertyValue('height')).toContain('36px');
     expect(attachCount('a')).toBe(1);
     expect(feedCalls('feed.unsubscribe', 'a')).toBe(1);
-    expect(within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!).getByTestId('chat-toolbar')).toBeTruthy();
+    expect(within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!).getAllByTestId('chat-toolbar')).toHaveLength(1);
 
     setView('terminal:a', 'chat');
     await flush();
@@ -505,8 +511,50 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(surface('terminal:a')).not.toBeNull();
   });
 
+  it('providers.list ещё не ответил — ни поверхности, ни подписки; ответ пришёл — подписка (2.1.286) или поверхность (null)', async () => {
+    useProvidersStore.setState({ providers: [], loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(attachCount('a')).toBe(0);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+
+    act(() => {
+      useProvidersStore.setState({
+        providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
+        loaded: true,
+      });
+    });
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(feedCalls('feed.subscribe', 'a')).toBe(1);
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(2);
+  });
+
+  it('версия claude неизвестна (null) после ответа — терминал с поверхностью, подписки нет', async () => {
+    useProvidersStore.setState({ providers: [], loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    act(() => {
+      useProvidersStore.setState({
+        providers: [{ id: 'claude', label: 'Claude Code', available: true, version: null, limits: null }],
+        loaded: true,
+      });
+    });
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+  });
+
   it('хост без feed.snapshot — терминал без тулбара, как раньше', async () => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: '0.2.0', methods: [...REQUIRED_METHODS] } });
+    // Без ленты у хоста ответа providers.list не ждём.
+    useProvidersStore.setState({ providers: [], loaded: false });
     setLayout(twoGroups(), 'g1');
     renderWork();
     await flush();

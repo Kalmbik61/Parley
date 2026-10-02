@@ -12,6 +12,10 @@
  * `feed.changed` на стор, а открытые ленты после переподключения подписываются и берут снимок
  * заново (хост забыл подписки ушедшего клиента). Хост без `feed.snapshot` — стор ничего не зовёт.
  * Решений (`feed.decide`) кусок 3 не шлёт вовсе (решение контролёра И).
+ *
+ * Ошибка subscribe/snapshot оставляет ленту в `error`, пока человек не нажмёт «Retry» в ноте ленты
+ * (`retry`: subscribe → snapshot заново) или окно не переподключится. Сам стор не повторяет: хост,
+ * отказавший раз, скорее всего откажет и через секунду.
  */
 
 import { create } from 'zustand';
@@ -40,6 +44,8 @@ export interface FeedState {
   open(ref: SessionRef): void;
   /** Вкладка закрылась или ушла в терминал. */
   close(ref: SessionRef): void;
+  /** Повторить subscribe → snapshot открытой ленты (кнопка «Retry» после ошибки). */
+  retry(ref: SessionRef): void;
 }
 
 interface Opened {
@@ -164,6 +170,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
         });
       }
     },
+    retry: (ref) => load(refKey(ref)),
   };
 });
 

@@ -5,18 +5,19 @@
  * дифф на 5 000 строк, агент с длинным описанием и 50 вложенными вызовами.
  */
 
+import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedAgent, FeedItem, FeedState, FeedTool } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { FeedList } from '../FeedList.js';
-import { AgentItem } from './AgentItem.js';
+import { AgentItem, type Transcript } from './AgentItem.js';
 import { ToolItem } from './ToolItem.js';
 // Редьюсер и разбор журнала — прямо из исходников ленты core, а не из `@parley/core`: корневой модуль
 // тянет `work/mcp-config.ts`, а тот на загрузке строит путь из `import.meta.url`, которого под jsdom нет.
@@ -107,18 +108,28 @@ describe('лента на фикстурах core', () => {
   it('p1: промпт, текст ответа Markdown и черта конца хода', () => {
     const { items } = replay('p1-stream');
     renderFeed(items);
-    expect(screen.getAllByTestId('chat-prompt').length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId('chat-text').length).toBeGreaterThan(0);
-    expect(screen.getAllByTestId('chat-turn').length).toBeGreaterThan(0);
+    // Число строк каждого вида — столько же, сколько элементов этого вида в ленте пробы.
+    const count = (kind: FeedItem['kind']): number => items.filter((item) => item.kind === kind).length;
+    expect(count('prompt')).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('chat-prompt')).toHaveLength(count('prompt'));
+    expect(screen.getAllByTestId('chat-text')).toHaveLength(count('text'));
+    expect(screen.getAllByTestId('chat-turn')).toHaveLength(count('turn'));
+    const firstPrompt = items.find((item) => item.kind === 'prompt');
+    expect(screen.getAllByTestId('chat-prompt')[0]!.textContent).toBe(firstPrompt?.kind === 'prompt' ? firstPrompt.text.trim() : null);
     expect(screen.queryByTestId('chat-streaming')).toBeNull();
   });
 
   it('p2: вызов Bash и снятая карточка разрешения — «Answered in the terminal», без кнопок решения', () => {
     const { items } = replay('p2-permissions');
     renderFeed(items);
-    expect(screen.getAllByTestId('chat-tool').length).toBeGreaterThan(0);
+    // Лента виртуальная: сверяем строки, что в DOM, с их элементами по `data-feed-id`.
+    const rendered = new Set([...document.querySelectorAll('[data-feed-id]')].map((row) => row.getAttribute('data-feed-id')));
+    const inDom = (kind: FeedItem['kind']): number => items.filter((item) => item.kind === kind && rendered.has(item.id)).length;
+    const tools = screen.getAllByTestId('chat-tool');
+    expect(tools).toHaveLength(inDom('tool'));
+    expect(tools[0]!.querySelector('[data-tool-name]')?.textContent).toBe('Bash');
     const cards = screen.getAllByTestId('chat-card');
-    expect(cards.length).toBeGreaterThan(0);
+    expect(cards).toHaveLength(inDom('permission'));
     expect(cards.some((card) => card.getAttribute('data-card-state') === 'elsewhere')).toBe(true);
     expect(screen.getAllByText(S.chat.cardState.elsewhere).length).toBeGreaterThan(0);
     // Решение контролёра И: ни одной кнопки Allow/Deny.
@@ -136,10 +147,11 @@ describe('лента на фикстурах core', () => {
   it('p5b журнал: вызов Edit с диффом -beta/+gamma, номера строк и цвета ревью', () => {
     const { items } = transcript('transcript-p5b-write');
     renderFeed(items);
-    const edit = screen.getAllByTestId('chat-tool').find((row) => row.textContent?.includes('Edit'));
-    expect(edit).toBeDefined();
-    fireEvent.click(within(edit!).getByRole('button'));
-    const diff = within(edit!).getByTestId('chat-diff');
+    const edits = screen.getAllByTestId('chat-tool').filter((row) => row.querySelector('[data-tool-name]')?.textContent === 'Edit');
+    expect(edits).toHaveLength(1);
+    const edit = edits[0]!;
+    fireEvent.click(within(edit).getByRole('button'));
+    const diff = within(edit).getByTestId('chat-diff');
     const added = diff.querySelector('[data-diff-row="added"]')!;
     const removed = diff.querySelector('[data-diff-row="removed"]')!;
     expect(added.textContent).toContain('gamma');
@@ -167,7 +179,7 @@ describe('лента на фикстурах core', () => {
 
   it('усечённый текст — пометка', () => {
     renderFeed([{ id: 'x', at: AT, kind: 'text', messageId: 'm', text: 'Hello', streaming: false, truncated: true }]);
-    expect(screen.getByText(S.chat.textTruncated)).toBeTruthy();
+    expect(screen.getByTestId('chat-text').textContent).toBe(`Hello${S.chat.textTruncated}`);
   });
 
   it('промпт с картинками — их число; notice, error и turn — свои строки', () => {
@@ -180,13 +192,15 @@ describe('лента на фикстурах core', () => {
       { id: 'e', at: AT, kind: 'error', error: 'rate_limit', message: 'Too many requests' },
       { id: 'u', at: AT, kind: 'turn', durationMs: 4648 },
     ]);
-    expect(screen.getByText(S.chat.images(2))).toBeTruthy();
-    expect(screen.getByText(S.chat.notice.sessionStart('startup', 'claude-opus-5-5'))).toBeTruthy();
-    expect(screen.getByText(S.chat.notice.compactPost)).toBeTruthy();
-    expect(screen.getByText(S.chat.notice.modelSwitch('a', 'b'))).toBeTruthy();
-    expect(screen.getByText(S.chat.notice.sessionEnd('exit'))).toBeTruthy();
+    expect(screen.getByTestId('chat-prompt').textContent).toBe(`look${S.chat.images(2)}`);
+    expect(screen.getAllByTestId('chat-notice').map((row) => row.textContent)).toEqual([
+      'Session started · claude-opus-5-5',
+      'Conversation compacted',
+      'Model: a → b',
+      'Session ended · exit',
+    ]);
     expect(screen.getByRole('alert').textContent).toContain('Too many requests');
-    expect(screen.getByText(S.chat.turn('5s'))).toBeTruthy();
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Turn finished · 5s');
   });
 
   it('ожидающая карточка — «ждёт ответа в терминале» с командой, без кнопок', () => {
@@ -219,10 +233,16 @@ describe('ToolItem', () => {
     renderTool(tool({ id: 'b', name: 'Edit', input: { file_path: '/src/a.ts' } }));
     renderTool(tool({ id: 'c', name: 'mcp__parley__send_message', input: {} }));
     renderTool(tool({ id: 'd', name: 'Glob', input: { pattern: '*.ts' } }));
-    expect(screen.getByText('pnpm test')).toBeTruthy();
-    expect(screen.getByText('/src/a.ts')).toBeTruthy();
-    expect(screen.getByText('parley · send_message')).toBeTruthy();
-    expect(screen.getByText('Glob')).toBeTruthy();
+    const rows = screen.getAllByTestId('chat-tool').map((row) => [
+      row.querySelector('[data-tool-name]')?.textContent,
+      row.querySelector('[data-tool-summary]')?.textContent ?? null,
+    ]);
+    expect(rows).toEqual([
+      ['Bash', 'pnpm test'],
+      ['Edit', '/src/a.ts'],
+      ['parley · send_message', null],
+      ['Glob', null],
+    ]);
   });
 
   it('статусы: running — спиннер, failed и rejected — словом', () => {
@@ -230,8 +250,11 @@ describe('ToolItem', () => {
     renderTool(tool({ id: 'b', status: 'failed' }));
     renderTool(tool({ id: 'c', status: 'rejected' }));
     expect(document.querySelector('[data-status="running"]')?.getAttribute('class')).toContain('animate-spin');
-    expect(screen.getByText(S.chat.toolStatus.failed)).toBeTruthy();
-    expect(screen.getByText(S.chat.toolStatus.rejected)).toBeTruthy();
+    const [running, failed, rejected] = screen.getAllByTestId('chat-tool');
+    expect(running!.querySelector('button')?.textContent).toBe('Bashls');
+    expect(failed!.querySelector('button')?.textContent).toBe(`Bashls${S.chat.toolStatus.failed}`);
+    expect(rejected!.querySelector('button')?.textContent).toBe(`Bashls${S.chat.toolStatus.rejected}`);
+    expect(failed!.querySelector('[data-status="failed"]')?.getAttribute('aria-label')).toBe('Failed');
   });
 
   it('длинная команда (2 000 символов) и путь (300) обрезаются многоточием, а не раздвигают строку', () => {
@@ -252,28 +275,48 @@ describe('ToolItem', () => {
     const text = 'y'.repeat(64 * 1024);
     renderTool(tool({ response: { text, size: 2 * 1024 * 1024, truncated: true } }));
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText(/"command": "ls"/)).toBeTruthy();
+    expect(screen.getByTestId('chat-tool-details').querySelector('pre')?.textContent).toBe('{\n  "command": "ls"\n}');
     const result = screen.getByTestId('chat-tool-result');
     expect(result.textContent).toHaveLength(64 * 1024);
     expect(result.className).toContain('max-h-60');
     expect(result.className).toContain('overflow-auto');
-    expect(screen.getByText(S.chat.resultTruncated)).toBeTruthy();
+    expect(result.nextElementSibling?.textContent).toBe(S.chat.resultTruncated);
   });
 
-  it('дифф на 5 000 строк рисуется виртуально: в DOM строк меньше, чем в данных', () => {
+  it('дифф на 5 000 строк рисуется виртуально: в DOM строк меньше, чем в данных; прокрутка — другие строки', () => {
     const lines = Array.from({ length: 5_000 }, (_, at) => `+line ${at}`);
     renderTool(tool({ name: 'Write', patch: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 5_000, lines }], patchTruncated: true }));
     fireEvent.click(screen.getByRole('button'));
-    const rows = screen.getByTestId('chat-diff').querySelectorAll('[data-diff-row]');
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.length).toBeLessThan(200);
-    expect(screen.getByText(S.chat.patchTruncated)).toBeTruthy();
+    const diff = screen.getByTestId('chat-diff');
+    /** Номера новой строки в DOM (вторая колонка), без заголовка хунка. */
+    const numbers = (): number[] =>
+      [...diff.querySelectorAll('[data-diff-row="added"]')].map((row) => Number(row.children[1]!.textContent));
+    const top = numbers();
+    expect(diff.querySelectorAll('[data-diff-row]').length).toBeLessThan(200);
+    expect(top[0]).toBe(1);
+    expect(top).not.toContain(4_000);
+    // Прокрутка к 4 000-й строке (18 px на строку): в DOM — строки около неё, первых больше нет.
+    act(() => {
+      diff.scrollTop = 4_000 * 18;
+      fireEvent.scroll(diff);
+    });
+    const scrolled = numbers();
+    expect(scrolled).toContain(4_000);
+    expect(scrolled).not.toContain(1);
+    expect(diff.querySelectorAll('[data-diff-row]').length).toBeLessThan(200);
+    expect(diff.nextElementSibling?.textContent).toBe(S.chat.patchTruncated);
   });
 });
 
+/** Карточка агента с состоянием транскрипта рядом — как его держит лента. */
+function AgentHarness({ item, expanded }: { item: FeedAgent; expanded: boolean }): JSX.Element {
+  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  return <AgentItem item={item} expanded={expanded} onToggle={() => undefined} transcript={transcript} onTranscript={setTranscript} />;
+}
+
 describe('AgentItem', () => {
   const renderAgent = (item: FeedAgent, expanded = false): ReturnType<typeof render> =>
-    renderWithEnv(<AgentItem item={item} expanded={expanded} onToggle={() => undefined} />);
+    renderWithEnv(<AgentHarness item={item} expanded={expanded} />);
 
   it('running — спиннер и «Running»; done — длительность и число вызовов; failed — «Failed»', () => {
     renderAgent(agent({ id: 'r' }));
@@ -319,7 +362,9 @@ describe('AgentItem', () => {
   it('ошибка снимка субагента — подсказка открыть терминал', async () => {
     renderAgent(agent({ status: 'done' }), true);
     fireEvent.click(screen.getByRole('button', { name: S.chat.showTranscript }));
-    await waitFor(() => expect(screen.getByText(S.chat.agent.transcriptFailed)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-agent-details').lastElementChild?.textContent).toBe(S.chat.agent.transcriptFailed),
+    );
   });
 
   it('в ленте два агента подряд — стопкой (меньший отступ у второго)', () => {

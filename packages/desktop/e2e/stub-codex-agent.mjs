@@ -26,6 +26,12 @@
 import { spawn } from 'node:child_process';
 import { clearInterval, setInterval } from 'node:timers';
 
+// Проба версий хоста (`<команда> --version`): ответ как у настоящего Codex, выход сразу.
+if (process.argv[2] === '--version') {
+  process.stdout.write('codex-cli 0.44.0\n');
+  process.exit(0);
+}
+
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 const THREAD = process.env.STUB_CODEX_THREAD ?? '019ce3d5-584a-7be2-922e-b8185a8d7c19';

@@ -546,8 +546,8 @@ export const S = {
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
-    /** Подсказка выключенного сегмента: Codex или `claude` ниже порога версии ленты. */
-    terminalOnly: `Chat view is available for Claude Code ${FEED_MIN_VERSION} or newer — this session runs in the terminal`,
+    /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
+    terminalOnly: `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
@@ -608,6 +608,8 @@ export const S = {
       transcriptLoading: 'Loading the transcript…',
       transcriptFailed: "Couldn't load the transcript — open the terminal",
       transcriptEmpty: 'The transcript is empty',
+      /** Транскрипт длиннее предела показа: видны последние `shown` из `total`. */
+      transcriptTail: (shown: number, total: number): string => `Showing the last ${shown} of ${total}`,
     },
     showTranscript: 'Show transcript',
     hideTranscript: 'Hide transcript',

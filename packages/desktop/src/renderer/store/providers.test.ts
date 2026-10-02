@@ -14,7 +14,7 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useProvidersStore } from './providers.js';
 
 beforeEach(() => {
-  useProvidersStore.setState({ providers: [] });
+  useProvidersStore.setState({ providers: [], loaded: false });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -35,9 +35,12 @@ describe('useProvidersStore.init', () => {
     bridge.setHandler('providers.list', handler);
 
     const dispose = useProvidersStore.getState().init(bridge);
+    expect(useProvidersStore.getState().loaded).toBe(false);
     await flush();
 
     expect(handler).toHaveBeenCalledTimes(1);
+    // Первый ответ пришёл — вид вкладки (lib/feed-view.ts) перестаёт ждать.
+    expect(useProvidersStore.getState().loaded).toBe(true);
     expect(useProvidersStore.getState().providers).toEqual([
       { id: 'claude', label: 'Claude', available: true, version: '2.1.276', limits: null },
       { id: 'codex', label: 'Codex', available: false, version: null, limits: null },
@@ -66,6 +69,8 @@ describe('useProvidersStore.init', () => {
     await flush();
 
     expect(useProvidersStore.getState().providers).toEqual([]);
+    // Отказ — тоже ответ: версия неизвестна, вид вкладки — терминал, а не вечное ожидание.
+    expect(useProvidersStore.getState().loaded).toBe(true);
     dispose();
   });
 

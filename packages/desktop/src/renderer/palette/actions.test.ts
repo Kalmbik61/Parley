@@ -18,6 +18,7 @@ import { emptyLayout, focusGroup, groups, openTab, splitGroup } from '../layout/
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -181,10 +182,17 @@ function expectation(id: ActionId): (spies: Spies) => void {
   return check;
 }
 
-/** Хост с лентой и работа KEY с сессией s-09 нужного провайдера — для `chat.toggleView`. */
+/**
+ * Хост с лентой, `claude` с версией не ниже порога ленты и работа KEY с сессией s-09 нужного
+ * провайдера — для `chat.toggleView`.
+ */
 function withFeedHost(provider = 'claude'): void {
   useHostStore.setState({
     status: { state: 'connected', hostVersion: '0.3.0', methods: [...REQUIRED_METHODS, 'feed.snapshot'] },
+  });
+  useProvidersStore.setState({
+    providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
+    loaded: true,
   });
   useWorksStore.setState({
     entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-09', 'S09', { provider })] })],
@@ -193,6 +201,7 @@ function withFeedHost(provider = 'claude'): void {
 
 function resetFeedHost(): void {
   useHostStore.setState({ status: { state: 'connecting' } });
+  useProvidersStore.setState({ providers: [], loaded: false });
   useWorksStore.setState({ entries: [] });
 }
 
@@ -530,7 +539,7 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     withFeedHost('codex');
     const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
-    expect(spies.toast).toHaveBeenCalledWith(expect.stringContaining('Chat view is available for Claude Code'));
+    expect(spies.toast).toHaveBeenCalledWith('Chat needs Claude Code 2.1.286 or newer');
     expect(spies.layout.apply).not.toHaveBeenCalled();
   });
 });

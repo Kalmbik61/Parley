@@ -1,9 +1,14 @@
 /**
  * Вид вкладки сессии — «Chat» или терминал (план 2026-10-01, решение 6). Вид «Chat» доступен сессии,
  * когда у хоста есть лента (`feed.snapshot` в `hello.methods`), сессия — Claude Code и его версия из
- * `providers.list` не ниже `FEED_MIN_VERSION` либо неизвестна (`null`: проба версий выключена или
- * сбоила). Codex и старый `claude` — терминал. Без поля `view` у вкладки — умолчание по доступности;
- * явный выбор человека побеждает, только пока вид доступен.
+ * `providers.list` не ниже `FEED_MIN_VERSION`. Версия неизвестна (`null`: проба версий выключена или
+ * сбоила) — вид недоступен: хост без версии HTTP-хуков ленты не пишет, и чат был бы пуст. Codex и
+ * старый `claude` — терминал. Без поля `view` у вкладки — умолчание по доступности; явный выбор
+ * человека побеждает, только пока вид доступен.
+ *
+ * Третье состояние — «неизвестно» (`null`): хост ленту знает, сессия — Claude Code, но первый ответ
+ * `providers.list` ещё не пришёл. Тогда вид не выбирается вовсе — ни поверхности терминала, ни подписки
+ * на ленту, — иначе вкладка мигнула бы одним видом и перескочила в другой (лишний `pty.attach`).
  */
 
 import { FEED_MIN_VERSION } from '@parley/protocol';
@@ -32,11 +37,24 @@ function atLeast(version: string, min: string): boolean {
 export function feedAvailable({ hostMethods: methods, provider, version }: FeedAvailabilityInput): boolean {
   if (!methods.has('feed.snapshot')) return false;
   if (provider !== 'claude') return false;
-  return version === null || atLeast(version, FEED_MIN_VERSION);
+  return version !== null && atLeast(version, FEED_MIN_VERSION);
 }
 
-/** Вид, который вкладка показывает сейчас. */
-export function effectiveView(tab: { view?: TerminalView }, available: boolean): TerminalView {
+/**
+ * Доступность с третьим состоянием: `null` — неизвестно, пока версии `claude` ещё нет (`loaded`
+ * ложно). Хост без ленты и не-Claude сессия ответа `providers.list` не ждут — сразу `false`.
+ */
+export function feedAvailability(input: FeedAvailabilityInput & { loaded: boolean }): boolean | null {
+  if (!input.hostMethods.has('feed.snapshot') || input.provider !== 'claude') return false;
+  if (!input.loaded) return null;
+  return feedAvailable(input);
+}
+
+/** Вид, который вкладка показывает сейчас; `null` — доступность ещё неизвестна, вид не выбран. */
+export function effectiveView(tab: { view?: TerminalView }, available: boolean): TerminalView;
+export function effectiveView(tab: { view?: TerminalView }, available: boolean | null): TerminalView | null;
+export function effectiveView(tab: { view?: TerminalView }, available: boolean | null): TerminalView | null {
+  if (available === null) return null;
   if (!available) return 'terminal';
   return tab.view ?? 'chat';
 }
@@ -47,14 +65,16 @@ export function useHostHasFeed(): boolean {
 }
 
 /**
- * Доступность вида «Chat» по провайдеру сессии — функция для слоя, где вкладок много. Подписка — на
- * признак ленты у хоста и версию `claude`, не на весь список провайдеров.
+ * Доступность вида «Chat» по провайдеру сессии — функция для слоя, где вкладок много; `null` —
+ * неизвестно (`feedAvailability`). Подписка — на признак ленты у хоста, версию `claude` и признак
+ * первого ответа `providers.list`, не на весь список провайдеров.
  */
-export function useFeedAvailability(): (provider: string) => boolean {
+export function useFeedAvailability(): (provider: string) => boolean | null {
   const hasFeed = useHostHasFeed();
   const version = useProvidersStore((state) => claudeVersion(state.providers));
+  const loaded = useProvidersStore((state) => state.loaded);
   const methods = hasFeed ? FEED_METHODS : NO_METHODS;
-  return (provider) => feedAvailable({ hostMethods: methods, provider, version });
+  return (provider) => feedAvailability({ hostMethods: methods, provider, version, loaded });
 }
 
 const FEED_METHODS: ReadonlySet<string> = new Set(['feed.snapshot']);

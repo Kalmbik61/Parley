@@ -11,9 +11,14 @@
  * Ввод (решение 8): текст уходит `pty.send` с `submit: true` через `sendWithToast` — те же отказы и
  * тосты, что у отправки из комнаты и ревью. Отправленное во время хода показывается в ленте серым,
  * пока не придёт промпт с тем же текстом, или до отказа отправки. «Stop» — Esc агенту (`pty.input`).
+ * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
+ * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
+ *
+ * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
+ * Queue не показываются, даже если лента кончилась промптом без конца хода.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { FeedItem } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -25,8 +30,9 @@ import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar } from './ChatToolbar.js';
 import { Composer } from './Composer.js';
 import { currentModel, turnActive } from './feed-model.js';
-import { FeedList, type QueuedPrompt } from './FeedList.js';
-import type { FeedEntry } from './store.js';
+import { FeedList } from './FeedList.js';
+import { useFeedStore, type FeedEntry } from './store.js';
+import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
 
 export interface ChatViewProps {
@@ -35,17 +41,18 @@ export interface ChatViewProps {
   sessionRef: SessionRef;
   /** Работа активна; вкладка активна в группе по построению — тело рисуется только у активной. */
   visible: boolean;
+  /** Сессия живая (lifecycle `active`): только тогда может идти ход. */
+  live: boolean;
   bridge: ParleyBridge;
   /** `SendWithToastDeps` окна (из `AppShell` через раскладку). */
   sendDeps: SendWithToastDeps;
 }
 
 const NO_ITEMS: readonly FeedItem[] = [];
+const NO_QUEUED: readonly Queued[] = [];
 
-/** Ждущее сообщение и сколько промптов с тем же текстом было в ленте, когда оно ушло. */
-interface Queued extends QueuedPrompt {
-  seen: number;
-}
+/** Номер серого элемента — общий на окно: элементы разных сессий живут в одном сторе. */
+let nextQueuedId = 0;
 
 function promptCount(items: readonly FeedItem[], text: string): number {
   const wanted = text.trim();
@@ -58,35 +65,36 @@ function noteOf(feed: FeedEntry | null): string | null {
   return S.chat.empty;
 }
 
-export function ChatView({ workKey, tab, sessionRef, visible, bridge, sendDeps }: ChatViewProps): JSX.Element {
+export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, sendDeps }: ChatViewProps): JSX.Element {
   const feed = useFeed(sessionRef);
   const items = feed?.items ?? NO_ITEMS;
-  const active = turnActive(items);
+  const active = live && turnActive(items);
   const model = currentModel(items);
 
   const sessionKey = refKey(sessionRef);
+  const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
+  const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
   useEffect(() => {
     useUiStore.getState().setSessionVisible(sessionKey, visible);
   }, [sessionKey, visible]);
   useEffect(() => () => useUiStore.getState().setSessionVisible(sessionKey, false), [sessionKey]);
 
-  const [queued, setQueued] = useState<Queued[]>([]);
-  const nextId = useRef(0);
   // Настоящий промпт с тем же текстом пришёл — серый элемент уходит.
   useEffect(() => {
-    setQueued((was) => {
+    useChatUiStore.getState().updateQueued(sessionKey, (was) => {
       const left = was.filter((entry) => promptCount(items, entry.text) <= entry.seen);
       return left.length === was.length ? was : left;
     });
-  }, [items]);
+  }, [items, sessionKey]);
 
   const submit = (text: string): void => {
-    const id = String((nextId.current += 1));
-    if (active) setQueued((was) => [...was, { id, text, seen: promptCount(items, text) }]);
-    void sendWithToast(sendDeps, sessionRef, text, true).then((outcome) => {
+    const { updateQueued } = useChatUiStore.getState();
+    const id = String((nextQueuedId += 1));
+    if (active) updateQueued(sessionKey, (was) => [...was, { id, text, seen: promptCount(items, text) }]);
+    void sendWithToast(sendDeps, sessionRef, text, true, { silentSuccess: true }).then((outcome) => {
       if (!('error' in outcome) && outcome.submitted) return;
       // Отказ или вставка без Enter: в очередь CLI сообщение не попало.
-      setQueued((was) => was.filter((entry) => entry.id !== id));
+      updateQueued(sessionKey, (was) => (was.some((entry) => entry.id === id) ? was.filter((entry) => entry.id !== id) : was));
     });
   };
 
@@ -104,8 +112,19 @@ export function ChatView({ workKey, tab, sessionRef, visible, bridge, sendDeps }
           model={model}
           {...(active ? { onStop: stop } : {})}
         />
-        <FeedList items={items} queued={queued} note={noteOf(feed)} />
-        <Composer busy={active} onSubmit={submit} />
+        <FeedList
+          items={items}
+          queued={queued}
+          note={noteOf(feed)}
+          {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
+        />
+        <Composer
+          busy={active}
+          visible={visible}
+          text={draft}
+          onTextChange={(text) => useChatUiStore.getState().setDraft(sessionKey, text)}
+          onSubmit={submit}
+        />
       </div>
     </ChatEnvContext.Provider>
   );
