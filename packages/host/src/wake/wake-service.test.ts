@@ -53,6 +53,7 @@ let claudeRoot = '';
 let codexRoot = '';
 let broadcasts: Array<{ event: EventName; data: unknown }>;
 let logErrors: string[] = [];
+let logInfos: Array<Record<string, unknown>> = [];
 let stoppers: Array<() => Promise<void> | void> = [];
 let extraEnv: string[] = [];
 
@@ -66,7 +67,12 @@ function fakeHost(): HostContext {
     version: '0.0.0',
     startedAt: new Date().toISOString(),
     paths: { dir: '', socket: '', token: '', pid: '', log: '' },
-    log: { info: () => {}, warn: () => {}, error: (message: string) => logErrors.push(message) },
+    log: {
+      info: (message: string, fields?: Record<string, unknown>) =>
+        logInfos.push({ message, ...(fields === undefined ? {} : fields) }),
+      warn: () => {},
+      error: (message: string) => logErrors.push(message),
+    },
     clients: () => [],
     liveSessions: () => 0,
     broadcast: (event, data) => broadcasts.push({ event, data: data as EventData<EventName> }),
@@ -86,6 +92,7 @@ beforeEach(async () => {
   setEnv('PARLEY_CLAUDE_PROJECTS_DIR', claudeRoot);
   broadcasts = [];
   logErrors = [];
+  logInfos = [];
 });
 
 afterEach(async () => {
@@ -231,6 +238,12 @@ describe('WakeService', () => {
     await sendLetter(workId, sessionId);
     await settle(300);
     expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+    // Причина ожидания — в логе хоста, раз на причину: по файлам работы её потом не восстановить.
+    const reasons = logInfos
+      .filter((entry) => entry.message === 'будильник: письма ждут')
+      .map((entry) => entry.reason);
+    expect(reasons.at(-1)).toBe('draft');
+    expect(reasons.filter((reason) => reason === 'draft')).toHaveLength(1);
 
     pty.input(ref, '\r');
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);

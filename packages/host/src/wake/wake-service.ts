@@ -78,11 +78,16 @@ const PASTE_MODE_RETRY_MS = 200;
 const PASTE_MODE_RETRIES = 15;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
+/** Причины `deliveryAction`, при которых письма живой сессии лежат и ждут: о них — строка в логе. */
+const WAITING_REASONS: ReadonlySet<string> = new Set(['busy', 'draft', 'in-flight', 'no-hooks']);
+
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
   pointed: Set<string>;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
+  /** Причина, по которой письма живой сессии сейчас ждут, — уже записанная в лог; `null` — не ждут. */
+  waiting: string | null;
   /**
    * Печать указателя, чей Enter ещё не ушёл (`typeAndSubmit`). Наружу — `inFlight(ref)`:
    * `pty.send` в это время отвечает busy, а не печатает поверх.
@@ -168,6 +173,7 @@ export function createWakeService(
       state = {
         pointed: new Set(),
         inFlight: false,
+        waiting: null,
         typing: undefined,
         timeoutTimer: undefined,
         resuming: false,
@@ -211,6 +217,8 @@ export function createWakeService(
   }
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {
+    // И в лог: уведомление видит только открытое окно, а разбирать «сессия не ответила» приходится позже.
+    host.log.info('будильник: уведомление', { kind, ref });
     host.broadcast('host.notice', { kind, ref, text, at: new Date().toISOString() });
   }
 
@@ -478,6 +486,15 @@ export function createWakeService(
       hooked: hookedSince(live?.activity, handle.startedAt),
       queueWhileBusy: codex,
     });
+
+    // След в логе, почему письма живой сессии ждут, — раз на причину: черновик и попытка живут только в
+    // памяти хоста, и без следа «сессия не отвечает в комнате» по файлам работы не разобрать.
+    const waiting =
+      action.kind === 'none' && WAITING_REASONS.has(action.reason) ? action.reason : null;
+    if (waiting !== state.waiting) {
+      state.waiting = waiting;
+      if (waiting !== null) host.log.info('будильник: письма ждут', { ref, reason: waiting });
+    }
 
     if (action.kind !== 'type-pointer') return;
     if (codex) {
