@@ -5,8 +5,7 @@
  * Подписку на ленту держит слой поверхностей (`FeedSubscription` в `SurfaceLayer.tsx`), здесь лента
  * только читается. Поверхности терминала в этом виде нет (решение контролёра Ж), поэтому «видимость»
  * сессии для «просмотрено» и уведомлений (`attention/seen.ts`) ставит сам вид — как `TerminalSurface`.
- * Карточки разрешения, вопроса и плана — одной строкой «ждёт ответа», без кнопок: решения в окне —
- * кусок 4 (решение контролёра И).
+ * Карточки разрешения, вопроса и плана — с кнопками (`cards/`, кусок 4a): решения уходят `feed.decide`.
  *
  * Ввод (решение 8): текст уходит `pty.send` с `submit: true` через `sendWithToast` — те же отказы и
  * тосты, что у отправки из комнаты и ревью. Отправленное во время хода показывается в ленте серым,
@@ -99,7 +98,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   };
 
   const stop = (): void => bridge.notify('pty.input', { ref: sessionRef, data: '\x1b' });
-  const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef }), [bridge, sessionKey]);
+  const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
 
   return (
     <ChatEnvContext.Provider value={env}>

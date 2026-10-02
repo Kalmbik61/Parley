@@ -11,7 +11,10 @@
  * Мост — из `init`, который `App` зовёт на каждый статус `connected`: одна подписка на
  * `feed.changed` на стор, а открытые ленты после переподключения подписываются и берут снимок
  * заново (хост забыл подписки ушедшего клиента). Хост без `feed.snapshot` — стор ничего не зовёт.
- * Решений (`feed.decide`) кусок 3 не шлёт вовсе (решение контролёра И).
+ * Решения человека (`decide`, кусок 4a, решение П): пока запрос в пути, повторный клик по той же
+ * карточке игнорируется (`deciding`); `applied: true` — ждём дельту, карточка сменит состояние сама;
+ * `applied: false` при `pending` — хук ещё не удержан, строка «попробуй ещё раз» (`notes`); ошибка —
+ * строка «не отправилось». Ни повторов, ни умолчаний по таймеру: ответ хуку — только кликом человека.
  *
  * Ошибка subscribe/snapshot оставляет ленту в `error`, пока человек не нажмёт «Retry» в ноте ленты
  * (`retry`: subscribe → snapshot заново) или окно не переподключится. Сам стор не повторяет: хост,
@@ -19,12 +22,13 @@
  */
 
 import { create } from 'zustand';
-import type { FeedItem } from '@parley/core';
+import type { FeedDecision, FeedItem } from '@parley/core';
 import { refKey, type EventData, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { cardKey, useChatUiStore } from './ui-store.js';
 
 export type FeedStatus = 'loading' | 'ready' | 'error';
 
@@ -36,8 +40,15 @@ export interface FeedEntry {
   error?: string;
 }
 
+/** Пометка под кнопками карточки после неудачного решения. */
+export type CardNote = 'not-applied' | 'failed';
+
 export interface FeedState {
   feeds: Record<string /* refKey */, FeedEntry>;
+  /** Карточки, чьё решение в пути (по `cardKey`). */
+  deciding: Record<string, true>;
+  /** Пометки карточек (по `cardKey`). */
+  notes: Record<string, CardNote>;
   /** Мост подключения и подписка на `feed.changed`; возвращает отписку. Зовётся на каждый `connected`. */
   init(bridge: ParleyBridge): () => void;
   /** Вкладка сессии открыла вид «Chat». */
@@ -46,6 +57,8 @@ export interface FeedState {
   close(ref: SessionRef): void;
   /** Повторить subscribe → snapshot открытой ленты (кнопка «Retry» после ошибки). */
   retry(ref: SessionRef): void;
+  /** Решение человека по карточке (`feed.decide`); ждёт ответа хоста, но не дельты. */
+  decide(ref: SessionRef, cardId: string, decision: FeedDecision): Promise<void>;
 }
 
 interface Opened {
@@ -92,6 +105,20 @@ export const useFeedStore = create<FeedState>((set, get) => {
       return { feeds: { ...state.feeds, [key]: entry } };
     });
 
+  /** Забыть решения в пути и пометки карточек; `only` — только эти `cardId` сессии, иначе всей сессии. */
+  const forgetCards = (sessionKey: string, only?: readonly string[]): void =>
+    set((state) => {
+      const prefix = `${sessionKey}\n`;
+      const drop = (key: string): boolean => (only === undefined ? key.startsWith(prefix) : only.some((id) => key === cardKey(sessionKey, id)));
+      const deciding = Object.keys(state.deciding).some(drop)
+        ? Object.fromEntries(Object.entries(state.deciding).filter(([key]) => !drop(key)))
+        : state.deciding;
+      const notes = Object.keys(state.notes).some(drop)
+        ? Object.fromEntries(Object.entries(state.notes).filter(([key]) => !drop(key)))
+        : state.notes;
+      return deciding === state.deciding && notes === state.notes ? state : { deciding, notes };
+    });
+
   /** subscribe → snapshot; ответ устаревшего поколения или чужого моста не применяется. */
   const load = (key: string): void => {
     const feed = opened.get(key);
@@ -109,6 +136,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
       .then((snapshot) => {
         if (snapshot === null || stale()) return;
         feed.loading = false;
+        forgetCards(key);
         patch(key, { items: snapshot.items, revision: snapshot.revision, status: 'ready' });
       })
       .catch((error: unknown) => {
@@ -132,10 +160,15 @@ export const useFeedStore = create<FeedState>((set, get) => {
       return;
     }
     patch(key, { ...entry, items: applyDelta(entry.items, delta.upsert, delta.removed), revision: delta.revision });
+    // Карточка сменила состояние — её решение и пометка своё отслужили.
+    const settled = delta.upsert.filter((item) => 'cardId' in item && item.state !== 'pending').map((item) => item.id);
+    if (settled.length > 0) forgetCards(key, settled);
   };
 
   return {
     feeds: {},
+    deciding: {},
+    notes: {},
     init: (next) => {
       bridge = next;
       const off = next.on('feed.changed', onChanged);
@@ -164,6 +197,8 @@ export const useFeedStore = create<FeedState>((set, get) => {
       opened.delete(key);
       feed.generation += 1;
       patch(key, null);
+      forgetCards(key);
+      useChatUiStore.getState().clearCardDrafts(key);
       if (bridge !== null && hostHasFeed()) {
         bridge.call('feed.unsubscribe', { ref: feed.ref }).catch((error: unknown) => {
           console.warn('[parley] feed.unsubscribe', decodeIpcError(error).message);
@@ -171,6 +206,31 @@ export const useFeedStore = create<FeedState>((set, get) => {
       }
     },
     retry: (ref) => load(refKey(ref)),
+    decide: async (ref, cardId, decision) => {
+      const current = bridge;
+      if (current === null || !hostMethods(useHostStore.getState().status).has('feed.decide')) return;
+      const sessionKey = refKey(ref);
+      const key = cardKey(sessionKey, cardId);
+      if (get().deciding[key] === true) return;
+      set((state) => ({
+        deciding: { ...state.deciding, [key]: true },
+        notes: Object.fromEntries(Object.entries(state.notes).filter(([noted]) => noted !== key)),
+      }));
+      const release = (note: CardNote | null): void =>
+        set((state) => ({
+          deciding: Object.fromEntries(Object.entries(state.deciding).filter(([busy]) => busy !== key)),
+          notes: note === null ? state.notes : { ...state.notes, [key]: note },
+        }));
+      try {
+        const result = await current.call('feed.decide', { ref, cardId, decision });
+        // Применено — карточка сменит состояние дельтой, она же снимет `deciding`.
+        if (result.applied) return;
+        release(result.state === 'pending' ? 'not-applied' : null);
+      } catch (error: unknown) {
+        console.warn('[parley] feed.decide', decodeIpcError(error).message);
+        release('failed');
+      }
+    },
   };
 });
 
@@ -178,5 +238,5 @@ export const useFeedStore = create<FeedState>((set, get) => {
 export function resetFeedStoreForTests(): void {
   bridge = null;
   opened.clear();
-  useFeedStore.setState({ feeds: {} });
+  useFeedStore.setState({ feeds: {}, deciding: {}, notes: {} });
 }

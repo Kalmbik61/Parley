@@ -11,6 +11,9 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 export interface ChatEnv {
   bridge: ParleyBridge;
   sessionRef: SessionRef;
+  /** Работа и вкладка вида «Chat»: карточке плана нужны, чтобы уйти в терминал («Change the plan…»). */
+  workKey?: string;
+  tabId?: string;
 }
 
 export const ChatEnvContext = createContext<ChatEnv | null>(null);

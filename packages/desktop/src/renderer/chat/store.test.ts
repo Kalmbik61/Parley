@@ -3,13 +3,14 @@
  * subscribe → snapshot, правила `revision`, разрыв, отписка, переподключение и хост без ленты.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedItem } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
+import { cardKey, resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
 const KEY = refKey(REF);
@@ -169,5 +170,98 @@ describe('переподключение', () => {
     // Старый мост ленту больше не двигает.
     bridge.emit('feed.changed', { ref: REF, revision: 2, upsert: [prompt('old')], removed: [] });
     expect(feed()?.revision).toBe(1);
+  });
+});
+
+describe('решения по карточкам (decide)', () => {
+  const CARD = 'card-1';
+  const DECISION = { kind: 'permission', behavior: 'allow' } as const;
+  const card = (state: 'pending' | 'allowed'): FeedItem => ({
+    id: CARD,
+    at: '2026-10-01T00:00:00.000Z',
+    kind: 'permission',
+    cardId: CARD,
+    state,
+    toolUseId: null,
+    toolName: 'Bash',
+    toolInput: { command: 'ls' },
+    suggestions: [],
+    notified: false,
+  });
+  const deciding = () => useFeedStore.getState().deciding[cardKey(KEY, CARD)];
+  const note = () => useFeedStore.getState().notes[cardKey(KEY, CARD)];
+  const decideCalls = () => bridge.calls.filter((call) => call.method === 'feed.decide');
+
+  beforeEach(async () => {
+    resetChatUiStoreForTests();
+    connect([...FEED_METHODS, 'feed.decide']);
+    setSnapshots(bridge, [{ items: [card('pending')], revision: 1 }]);
+    useFeedStore.getState().open(REF);
+    await flush();
+  });
+
+  it('второй клик, пока запрос в пути, второго вызова не шлёт', async () => {
+    let answer: (value: { applied: boolean; state: 'allowed' }) => void = () => undefined;
+    bridge.setHandler('feed.decide', () => new Promise((resolve) => (answer = resolve)));
+    const first = useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(deciding()).toBe(true);
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(decideCalls()).toHaveLength(1);
+    answer({ applied: true, state: 'allowed' });
+    await first;
+    // Применено — ждём дельту: решение в пути до неё, а дельта со сменой состояния его снимает.
+    expect(deciding()).toBe(true);
+    bridge.emit('feed.changed', { ref: REF, revision: 2, upsert: [card('allowed')], removed: [] });
+    expect(deciding()).toBeUndefined();
+  });
+
+  it('applied false при pending — пометка not-applied, кнопки снова доступны', async () => {
+    bridge.setHandler('feed.decide', () => ({ applied: false, state: 'pending' as const }));
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBe('not-applied');
+    expect(deciding()).toBeUndefined();
+  });
+
+  it('applied false при уже улаженной карточке — без пометки', async () => {
+    bridge.setHandler('feed.decide', () => ({ applied: false, state: 'allowed' as const }));
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBeUndefined();
+    expect(deciding()).toBeUndefined();
+  });
+
+  it('ошибка моста — пометка failed и предупреждение в консоли', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    bridge.setHandler('feed.decide', () => {
+      throw new Error('boom');
+    });
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBe('failed');
+    expect(deciding()).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('новый клик стирает прежнюю пометку', async () => {
+    bridge.setHandler('feed.decide', () => ({ applied: false, state: 'pending' as const }));
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBe('not-applied');
+    bridge.setHandler('feed.decide', () => new Promise(() => undefined));
+    void useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(note()).toBeUndefined();
+  });
+
+  it('хост без feed.decide — вызова нет', async () => {
+    connect(FEED_METHODS);
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    expect(decideCalls()).toHaveLength(0);
+  });
+
+  it('закрытие ленты забывает пометки, решения в пути и черновики карточек', async () => {
+    bridge.setHandler('feed.decide', () => ({ applied: false, state: 'pending' as const }));
+    await useFeedStore.getState().decide(REF, CARD, DECISION);
+    useChatUiStore.getState().setCardDraft(cardKey(KEY, CARD), { message: 'no' });
+    useFeedStore.getState().close(REF);
+    expect(note()).toBeUndefined();
+    expect(useChatUiStore.getState().cardDrafts).toEqual({});
   });
 });
