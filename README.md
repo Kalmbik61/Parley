@@ -698,20 +698,36 @@ on its card, and the host never answers a hook by itself.
 **What the feed shows.** Your prompts, the reply text as it streams, tool calls with their
 results and diffs, permission, question and plan cards, an agent card for each subagent
 (type, description, model, status, tool calls, the final text and "Show transcript"), and
-notices: session start, `/clear`, compaction, a model switch. A line marks the end of each
-turn. The input field at the bottom sends text to the session like the terminal does.
+notices: session start, `/clear`, compaction, a model switch. While the agent works and no
+text is streaming yet, a "Working…" row shows the elapsed time. A line marks the end of each
+turn; a turn interrupted with Esc ends with "Interrupted". A session that is not running shows
+the same "Resume" card as the terminal.
 
-**What stays in the terminal.** Folder trust, sign-in, menus such as `/model`, elicitation
-dialogs and Esc. When Claude Code waits for one of these, the feed shows the banner "Claude
-Code is waiting in the terminal" with "Open terminal"; the dialog itself is never hidden or
-answered for you.
+**Input.** The field at the bottom sends text to the session like the terminal does. While a
+turn runs, the button reads "Queue" (the message waits in Claude Code's own queue) and "Stop"
+sends Esc. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
+and `@` lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab
+insert, Esc closes. The window only inserts the text — Claude Code parses it.
+
+**Attachments.** A screenshot pasted from the clipboard, files dropped onto the chat and files
+picked with the paperclip become attachments: chips above the field, with a thumbnail for
+images. On send they go to Claude Code as `@"path"` file mentions after your text, so the CLI
+attaches the files itself; the feed shows them as the same chips instead of paths.
+
+**What stays in the terminal.** Folder trust, sign-in, commands that open a menu (`/permissions`,
+`/mcp`, `/resume` and the like — the list marks them "opens in the terminal") and elicitation
+dialogs. When Claude Code waits for one of these, the feed shows the banner "Claude Code is
+waiting in the terminal" with "Open terminal"; the dialog itself is never hidden or answered
+for you.
 
 **Which view opens.** A new session opens in the terminal until Claude Code has started, then
 switches to the chat once. Your own choice of view is remembered per tab and wins over this.
 
-**Mode.** The toolbar menu sets Manual, Accept edits or Plan. The host presses Shift+Tab in the
-hidden terminal and checks the footer of the screen; if it cannot confirm the change, it asks
-you to open the terminal. Auto and bypass modes are set in the terminal only.
+**Mode and model.** The toolbar's mode menu sets Manual, Accept edits, Plan or Auto. The host
+presses Shift+Tab in the hidden terminal until the footer of the screen shows the chosen mode;
+if it cannot confirm the change, it asks you to open the terminal. Bypass mode is set in the
+terminal only. The model menu lists the provider's models and sends `/model <id>` to the
+session.
 
 **Version.** Chat view needs Claude Code 2.1.286 or newer. Codex and older versions of Claude
 Code stay terminal-only: the segment is disabled and says why.
@@ -720,11 +736,13 @@ Code stay terminal-only: the segment is disabled and says why.
 `127.0.0.1` with a per-launch token. The feed lives on the host: the window gets a snapshot,
 then deltas. The host holds a permission request, a plan or a question until you decide, and
 answers the hook with your decision; everything else it acknowledges at once. The history of
-a resumed session is seeded from its transcript, without streamed text.
+a session is seeded from its transcript — when its process starts or as soon as the host has
+indexed the transcript — without streamed text.
 
 **Limits.**
 
-- Thinking is not shown.
+- Thinking is not shown: hooks do not carry it, only the "Working…" row tells that the agent
+  is busy.
 - A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
 - A question with two identical question texts collapses into one answer.
 - Badges for subagents in the sidebar, the room and the toolbar are planned.
