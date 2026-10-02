@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import type { ParleyConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@parley/core';
+import type {
+  FeedCardState,
+  FeedItem,
+  ParleyConfig,
+  MergeCheck,
+  MergeResult,
+  ProjectChanges,
+  WorktreeDiff,
+} from '@parley/core';
+import { feedDecision } from './feed.js';
 import type { ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
@@ -145,6 +154,19 @@ export const METHODS = {
   // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
   // байтов не видит, поэтому здесь только «не пусто».
   'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
+  // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
+  // журнала: id идёт в путь `subagents/agent-<id>.jsonl`, поэтому только буквы, цифры, `_` и `-`.
+  'feed.snapshot': z.object({
+    ref: sessionRef,
+    agentId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,80}$/)
+      .optional(),
+  }),
+  'feed.subscribe': z.object({ ref: sessionRef }),
+  'feed.unsubscribe': z.object({ ref: sessionRef }),
+  // Решение человека — единственный путь, которым `allow`/`deny` доходит до хука (Review Focus 5).
+  'feed.decide': z.object({ ref: sessionRef, cardId: z.string().max(200), decision: feedDecision }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -223,6 +245,12 @@ export interface Results {
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
+  /** `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`. */
+  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number };
+  'feed.subscribe': { ok: true };
+  'feed.unsubscribe': { ok: true };
+  /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
+  'feed.decide': { applied: boolean; state: FeedCardState };
 }
 
 export type MethodName = keyof typeof METHODS;

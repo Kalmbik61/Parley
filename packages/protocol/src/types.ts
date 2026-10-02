@@ -12,6 +12,12 @@ export type { LimitWindow, ProviderLimits } from '@parley/core';
  */
 export type { ModelOption } from '@parley/core';
 
+/**
+ * Лента вида «Chat» (план 2026-10-01, решение 14): элемент, решение окна и состояние карточки. Типы
+ * живут в core рядом с редьюсером; схемы zod к ним — в `feed.ts`.
+ */
+export type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
+
 /** Адрес сессии: без него не различить два «work-01» в разных проектах. */
 export interface SessionRef {
   projectPath: string;

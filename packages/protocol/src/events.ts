@@ -1,4 +1,4 @@
-import type { SessionActivity } from '@parley/core';
+import type { FeedItem, SessionActivity } from '@parley/core';
 import type {
   HostNotice,
   LiveMetrics,
@@ -21,6 +21,12 @@ export interface Events {
    * провайдера; `null` — данных больше нет или окна сбросились.
    */
   'providers.limitsChanged': { id: string; limits: ProviderLimits | null };
+  /**
+   * Дельта ленты сессии (план 2026-10-01, Task 2) — только подписчикам `feed.subscribe`. `upsert` —
+   * новые и изменённые элементы, `removed` — `id` вытесненных из кольца; `revision` идёт подряд за
+   * `revision` снимка.
+   */
+  'feed.changed': { ref: SessionRef; revision: number; upsert: FeedItem[]; removed: string[] };
 }
 
 export type EventName = keyof Events;
