@@ -457,8 +457,12 @@ the messages: Markdown (headings, lists, code, tables, links) with mention chips
 message is shown as text, and a link opens in your browser. A message whose Markdown cannot
 be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
-  tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
-  picked up yet by S02, S03" stays while the recipients have not read the message. An agent's
+  tag (`note`, `question`, `decision`), the time and a dot for an unread one. Under a message
+  addressed to agents stands its delivery line: "✓ Picked up by S03" for those who have read
+  it (the times are in the tooltip) and "▤ Not picked up yet by S01 (busy)" for those who have
+  not, with the reason the host knows — busy, unsent text in its terminal, notified, sleeping,
+  auto-wake paused and the like. "Picked up" means the agent took the message with
+  `check_inbox`, not that it has acted on it. An agent's
   `@human` in the text (not in code or a link) is a "@you" chip, and the room opens at the
   earliest such mention you have not read; `@human` in your own message stays text. An answer
   to a particular message carries a one-line quote of it above the text ("↩ You: …", the start
