@@ -12,7 +12,7 @@
  * `batchMs` (решение Д): в пачке каждый элемент — один раз, в последней версии.
  */
 
-import { lstat } from 'node:fs/promises';
+import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
 import {
   applyDecision,
@@ -22,6 +22,7 @@ import {
   emptyFeedState,
   feedFromTranscript,
   forEachJsonlRecord,
+  interruptedAt,
   settleCards,
 } from '@parley/core';
 import type {
@@ -57,6 +58,8 @@ export const FEED_BATCH_MS = 50;
  * больше пары элементов), а память не растёт с файлом — журналы долгих сессий весят десятки мегабайт.
  */
 export const SEED_RECORD_WINDOW = 10_000;
+/** Сколько байт хвоста журнала читается в поисках записи о прерывании: несколько последних записей. */
+const INTERRUPT_TAIL_BYTES = 64 * 1024;
 
 const QUESTION_TOOL = 'AskUserQuestion';
 const PLAN_TOOL = 'ExitPlanMode';
@@ -66,7 +69,7 @@ const SAFE_AGENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
-  activity: Pick<ActivityService, 'onChange' | 'logFile' | 'questionHeld'>;
+  activity: Pick<ActivityService, 'onChange' | 'logFile' | 'questionHeld' | 'onLogChange'>;
   pty: Pick<PtyManager, 'on'>;
 }
 
@@ -489,6 +492,43 @@ export function createFeedService(
     return readRecords(file);
   }
 
+  /**
+   * Последние записи журнала (хвост в `INTERRUPT_TAIL_BYTES`); `null` — читать нельзя, те же проверки,
+   * что у `readTranscript`. Первая, обрезанная строка хвоста отбрасывается, битые строки пропускаются.
+   */
+  async function readTail(file: string): Promise<RawRecord[] | null> {
+    if (!path.isAbsolute(file) || !insideRoots(file, roots())) return null;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      const info = await lstat(file);
+      if (!info.isFile()) return null;
+      handle = await open(file, 'r');
+      const length = Math.min(info.size, INTERRUPT_TAIL_BYTES);
+      const offset = info.size - length;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, offset);
+      const lines = buffer.toString('utf8').split('\n');
+      if (offset > 0) lines.shift();
+      const records: RawRecord[] = [];
+      for (const line of lines) {
+        if (line.trim() === '') continue;
+        try {
+          const parsed: unknown = JSON.parse(line);
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+            records.push(parsed as RawRecord);
+          }
+        } catch {
+          // Недописанная или битая строка — журнал ещё пишется.
+        }
+      }
+      return records;
+    } catch {
+      return null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
   function sessionOf(ref: SessionRef): { provider: string } {
     const session = deps.works
       .entry(ref.projectPath, ref.workId)
@@ -576,6 +616,50 @@ export function createFeedService(
     commit(feed, closeFeedTurn(feed.state, time));
   });
 
+  /**
+   * Прерывание Esc (решение 5): `Stop` не приходит, и ход в ленте остался бы открытым (Stop, Queue в
+   * окне). Его видно только записью «[Request interrupted by user…]» в журнале сессии — по изменению
+   * журнала хост читает его хвост у лент с идущим ходом и, найдя запись новее начала хода, закрывает
+   * ход чертой `interrupted`: идущие вызовы отклонены, ждущие карточки — `elsewhere`, их хукам `{}`.
+   * Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг.
+   */
+  let checkingInterrupts = false;
+  let recheckInterrupts = false;
+  async function checkInterrupts(): Promise<void> {
+    if (checkingInterrupts) {
+      recheckInterrupts = true;
+      return;
+    }
+    checkingInterrupts = true;
+    try {
+      do {
+        recheckInterrupts = false;
+        for (const feed of Array.from(feeds.values())) {
+          if (stopped) return;
+          const started = feed.state.turnStartedAt;
+          if (started === null) continue;
+          const file = deps.activity.logFile(feed.ref) ?? feed.transcriptPath;
+          if (file === null) continue;
+          const records = await readTail(file);
+          // За время чтения ход мог кончиться или начаться заново — тогда записи сверяются уже с ним.
+          if (records === null || stopped || feed.state.turnStartedAt !== started) continue;
+          const latest = records
+            .map(interruptedAt)
+            .filter((time): time is string => time !== null)
+            .sort()
+            .at(-1);
+          if (latest === undefined || latest <= started) continue;
+          commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+        }
+      } while (recheckInterrupts);
+    } finally {
+      checkingInterrupts = false;
+    }
+  }
+  const unsubscribeLogs = deps.activity.onLogChange(() => {
+    if (!stopped) void checkInterrupts();
+  });
+
   return {
     onHook,
 
@@ -661,6 +745,7 @@ export function createFeedService(
       unsubscribeActivity();
       unsubscribeExit();
       unsubscribeWorks();
+      unsubscribeLogs();
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

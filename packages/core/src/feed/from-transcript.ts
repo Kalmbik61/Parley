@@ -37,6 +37,25 @@ const LOCAL_COMMAND = /^\s*<local-command-(stdout|stderr|caveat)>/;
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
 
+/**
+ * Время записи прерывания человеком («[Request interrupted by user…]» — реплика пользователя в журнале);
+ * `null` — запись не о прерывании. Живая лента узнаёт Esc только так: `Stop` при прерывании не
+ * приходит (решение 5), и хост читает хвост журнала по его изменению.
+ */
+export function interruptedAt(raw: RawRecord): string | null {
+  if (raw['type'] !== 'user' || typeof raw['timestamp'] !== 'string') return null;
+  const message = isRecord(raw['message']) ? raw['message'] : null;
+  const content = message?.['content'];
+  const texts: string[] = [];
+  if (typeof content === 'string') texts.push(content);
+  else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (isRecord(block) && block['type'] === 'text' && typeof block['text'] === 'string') texts.push(block['text']);
+    }
+  }
+  return texts.some((text) => text.startsWith(INTERRUPTED)) ? raw['timestamp'] : null;
+}
+
 /** Реплика человека: промпт, слеш-команда, пробуждение субагентом или прерывание. */
 function onUserText(draft: FeedDraft, text: string, images: number, at: string): void {
   if (text.startsWith(INTERRUPTED)) {

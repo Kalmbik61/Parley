@@ -839,3 +839,69 @@ describe('режим разрешений (план 2026-10-01, решение 4
     await expect(service.snapshot(REF)).resolves.toMatchObject({ mode: 'default', revision: 0 });
   });
 });
+
+describe('прерывание Esc по записи журнала (решение 5)', () => {
+  const interruptRecord = (at: string, suffix = ''): string =>
+    `${JSON.stringify({
+      type: 'user',
+      timestamp: at,
+      sessionId: SESSION,
+      message: { role: 'user', content: [{ type: 'text', text: `[Request interrupted by user${suffix}]` }] },
+    })}\n`;
+
+  async function logUnder(root: string): Promise<string> {
+    const file = path.join(root, 'log.jsonl');
+    await writeFile(file, '');
+    fakes.setLogFile(file);
+    return file;
+  }
+
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
+
+  it('запись о прерывании новее начала хода: черта interrupted, вызов отклонён, удержанный вопрос — {} и questionHeld(false)', async () => {
+    const root = await tempRoot();
+    const file = await logUnder(root);
+    start({ roots: () => [root] });
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'sleep 9' }));
+    const question = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    expect(question.responses).toEqual([]);
+    const startedAt = ofKind((await service.snapshot(REF)).items, 'prompt')[0]!.at;
+
+    await writeFile(file, interruptRecord(new Date(Date.parse(startedAt) + 1_000).toISOString(), ' for tool use'), { flag: 'a' });
+    fakes.emitLog();
+
+    await vi.waitFor(async () => {
+      expect((await service.snapshot(REF)).items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+    });
+    const { items } = await service.snapshot(REF);
+    expect(ofKind(items, 'tool')[0]?.status).toBe('rejected');
+    expect(ofKind(items, 'question')[0]?.state).toBe('elsewhere');
+    expect(question.responses).toEqual([{}]);
+    expect(vi.mocked(fakes.deps.activity.questionHeld).mock.calls.at(-1)).toEqual([REF, false]);
+
+    // Журнал изменился ещё раз — второй черты нет: ход уже закрыт.
+    fakes.emitLog();
+    await settle();
+    expect(ofKind((await service.snapshot(REF)).items, 'turn')).toHaveLength(1);
+  });
+
+  it('запись старше начала хода не закрывает ход; журнал вне корней истории не читается', async () => {
+    const root = await tempRoot();
+    const file = await logUnder(root);
+    await writeFile(file, interruptRecord(new Date(Date.now() - 60_000).toISOString()), { flag: 'a' });
+    start({ roots: () => [root] });
+    send(prompt('go'));
+    fakes.emitLog();
+    await settle();
+    expect(ofKind((await service.snapshot(REF)).items, 'turn')).toHaveLength(0);
+
+    const outside = await tempRoot();
+    const foreign = path.join(outside, 'log.jsonl');
+    await writeFile(foreign, interruptRecord(new Date(Date.now() + 60_000).toISOString()));
+    fakes.setLogFile(foreign);
+    fakes.emitLog();
+    await settle();
+    expect(ofKind((await service.snapshot(REF)).items, 'turn')).toHaveLength(0);
+  });
+});

@@ -35,6 +35,8 @@ export interface FakeFeedDeps {
   setLogFile(file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
   emitExit(ref: SessionRef): void;
+  /** Индекс логов сообщил об изменении журнала (`activity.onLogChange`). */
+  emitLog(): void;
   /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
   setSessions(next: FakeSession[]): void;
 }
@@ -63,6 +65,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
   let sessions = initial;
   let logFile: string | null = null;
   const activityListeners = new Set<ActivityListener>();
+  const logListeners = new Set<() => void>();
   const exitListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
   const log = silentLog();
@@ -97,6 +100,10 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);
       },
+      onLogChange: (listener: () => void) => {
+        logListeners.add(listener);
+        return () => logListeners.delete(listener);
+      },
     },
     pty: {
       on: (event: string, listener: ExitListener) => {
@@ -118,6 +125,9 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     emitExit(ref) {
       for (const listener of exitListeners) listener(ref);
+    },
+    emitLog() {
+      for (const listener of logListeners) listener();
     },
     setSessions(next) {
       const previous = worksSnapshotOf(sessions);

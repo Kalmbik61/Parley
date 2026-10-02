@@ -111,6 +111,11 @@ export interface ActivityService {
    * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
    */
   questionHeld(ref: SessionRef, held: boolean): void;
+  /**
+   * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
+   * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
+   */
+  onLogChange(listener: () => void): () => void;
   stop(): Promise<void>;
 }
 
@@ -778,6 +783,9 @@ export function createActivityService(
       if (held) questionHeldKeys.add(key);
       else questionHeldKeys.delete(key);
       recompute(ref);
+    },
+    onLogChange(listener) {
+      return logIndex.onChange(listener);
     },
     logFile(ref) {
       const session = works

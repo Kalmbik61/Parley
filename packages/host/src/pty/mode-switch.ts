@@ -24,11 +24,6 @@ export const QUIET_MAX_MS = 2_000;
 /** Как часто сверяется подвал после нажатия и сколько ждётся смена. */
 export const POLL_MS = 50;
 export const STEP_MAX_MS = 1_500;
-/**
- * Сколько нижних строк экрана читается в поиске подвала: подвал с режимом — последние 1–2 строки
- * экрана, над ним строка статуса (в уликах p3 так). Больше — и в прокрутке подцепится чужая подпись.
- */
-const FOOTER_ROWS = 4;
 
 const CYCLE: readonly PermissionModeChoice[] = ['default', 'acceptEdits', 'plan'];
 
@@ -82,8 +77,12 @@ export async function switchMode(
       setTimer(resolve, ms);
     });
 
+  // Читается вся видимая область, а не несколько нижних строк: пока разговор короче экрана, CLI
+  // рисует поле ввода и подвал сразу под текстом, и ниже остаются пустые строки (живая проверка
+  // 2026-10-02 — «Open the terminal» на каждую смену режима). Прокрутка в видимую область не входит,
+  // а внутри неё нижняя подпись — всегда подвал: вывод агента лежит выше поля ввода.
   const read = (): string | null => {
-    const lines = pty.screenText(ref, FOOTER_ROWS);
+    const lines = pty.screenText(ref);
     return lines === undefined ? null : modeFromFooter(lines);
   };
 

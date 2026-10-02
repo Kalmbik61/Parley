@@ -43,6 +43,6 @@ export {
   emptyFeedState,
   settleCards,
 } from './reduce.js';
-export { feedFromTranscript } from './from-transcript.js';
+export { feedFromTranscript, interruptedAt } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';

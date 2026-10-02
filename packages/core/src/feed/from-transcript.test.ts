@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RawRecord } from '../jsonl.js';
-import { feedFromTranscript } from './from-transcript.js';
+import { feedFromTranscript, interruptedAt } from './from-transcript.js';
 import { applyHookEvent } from './reduce.js';
 import type { FeedAgent, FeedItem, FeedPrompt, FeedTool, FeedTurn } from './types.js';
 
@@ -298,5 +298,23 @@ describe('feedFromTranscript: режим разрешений', () => {
     const mode = (permissionMode: string): RawRecord => ({ type: 'permission-mode', permissionMode });
     expect(feedFromTranscript([mode('default'), mode('plan')]).permissionMode).toBe('plan');
     expect(feedFromTranscript([]).permissionMode).toBeNull();
+  });
+});
+
+describe('interruptedAt', () => {
+  it('время записи прерывания — строкой и блоками; прочие записи — null', () => {
+    const at = '2026-10-02T10:00:00.000Z';
+    const user = (content: unknown, extra: Record<string, unknown> = {}): RawRecord => ({
+      type: 'user',
+      timestamp: at,
+      message: { role: 'user', content },
+      ...extra,
+    });
+    expect(interruptedAt(user('[Request interrupted by user]'))).toBe(at);
+    expect(interruptedAt(user([{ type: 'text', text: '[Request interrupted by user for tool use]' }]))).toBe(at);
+    expect(interruptedAt(user('hello'))).toBeNull();
+    expect(interruptedAt(user([{ type: 'tool_result', content: 'x' }]))).toBeNull();
+    expect(interruptedAt({ type: 'assistant', timestamp: at, message: { content: '[Request interrupted by user]' } })).toBeNull();
+    expect(interruptedAt({ type: 'user', message: { content: '[Request interrupted by user]' } })).toBeNull();
   });
 });
