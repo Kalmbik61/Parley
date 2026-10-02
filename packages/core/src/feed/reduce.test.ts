@@ -9,7 +9,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isHookNoise } from './noise.js';
-import { applyDecision, applyHookEvent, emptyFeedState, settleCards } from './reduce.js';
+import {
+  applyDecision,
+  applyHookEvent,
+  closeFeedTurn,
+  emptyFeedState,
+  settleCards,
+} from './reduce.js';
 import type {
   FeedAgent,
   FeedDecision,
@@ -916,6 +922,25 @@ describe('прочность и пределы', () => {
 
     expect(ofKind(stopped.items, 'tool')[0]?.status).toBe('rejected');
     expect(ofKind(ended.items, 'tool')[0]?.status).toBe('rejected');
+  });
+
+  it('closeFeedTurn: процесс вышел посреди хода — текст закрыт, вызов отклонён, черта хода', () => {
+    const state = run([
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      { hook_event_name: 'MessageDisplay', message_id: 'm1', index: 0, delta: 'a\n' },
+      pre('t1', 'Bash', { command: 'ls' }),
+      request('Bash', { command: 'ls' }),
+    ]);
+    const stale = settleCards(state, 'stale', LATER);
+    const closed = closeFeedTurn(stale.state, LATER);
+
+    expect(ofKind(closed.state.items, 'permission')[0]?.state).toBe('stale');
+    expect(ofKind(closed.state.items, 'text')[0]?.streaming).toBe(false);
+    expect(ofKind(closed.state.items, 'tool')[0]?.status).toBe('rejected');
+    expect(closed.state.items.at(-1)?.kind).toBe('turn');
+    expect(closed.state.turnStartedAt).toBeNull();
+    // Хода нет — закрывать нечего, черта не добавляется.
+    expect(closeFeedTurn(closed.state, LATER).changes).toEqual([]);
   });
 
   it('два одинаковых запроса без tool_use_id: PostToolUse снимает только самую раннюю карточку', () => {

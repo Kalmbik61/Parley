@@ -33,7 +33,13 @@ export type {
   FeedTurn,
   FeedUpdate,
 } from './types.js';
-export { applyDecision, applyHookEvent, emptyFeedState, settleCards } from './reduce.js';
+export {
+  applyDecision,
+  applyHookEvent,
+  closeFeedTurn,
+  emptyFeedState,
+  settleCards,
+} from './reduce.js';
 export { feedFromTranscript } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';

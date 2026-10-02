@@ -1136,3 +1136,14 @@ export function settleCards(
   }
   return draft.done();
 }
+
+/**
+ * Закрывает ход, оборванный без `Stop` и `SessionEnd` (процесс агента вышел): тексты закрыты, идущие
+ * вызовы отклонены, ждущие карточки — `elsewhere`, черта `turn` — если ход шёл. Карточки, которым
+ * положено `stale`, хост сначала снимает `settleCards`.
+ */
+export function closeFeedTurn(state: FeedState, at: string): FeedUpdate {
+  const draft = new FeedDraft(state);
+  closeTurn(draft, at);
+  return draft.done();
+}
