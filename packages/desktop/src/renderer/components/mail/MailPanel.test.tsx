@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Message, WorkEntry, WorkSession } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
+import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
@@ -104,6 +105,39 @@ describe('MailPanel (тест 6)', () => {
 
     expect(container.textContent).not.toContain('↓');
   });
+
+  it("письмо с '>'.repeat(5000) + ' текст' не роняет вкладку почты: сырой текст, соседнее письмо цело (Parley 0.3.0)", () => {
+    // React логирует пойманную ошибку в консоль — тестовому выводу это не нужно.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const deep = `${'>'.repeat(5000)} текст`;
+      const letters = [
+        { ...message('m-1', '2026-01-01T10:00:00.000Z'), text: deep },
+        { ...message('m-2', '2026-01-01T10:01:00.000Z'), text: '**целое** письмо' },
+      ];
+      const { container } = render(
+        <ErrorBoundary title="Tab crashed">
+          <MailPanel
+            entry={entryWith(letters)}
+            providers={[]}
+            models={{}}
+            bridge={bridge}
+            active
+            onOpenExternal={() => {}}
+          />
+        </ErrorBoundary>,
+      );
+      expect(screen.queryByText('Tab crashed')).toBeNull();
+      const first = container.querySelector('[data-letter-id="m-1"]') as HTMLElement;
+      expect(first.textContent).toContain('текст');
+      const fallback = first.querySelector('[data-markdown-fallback]');
+      if (fallback === null) expect(first.querySelector('blockquote')).not.toBeNull();
+      else expect(fallback.textContent).toBe(deep);
+      expect(container.querySelector('[data-letter-id="m-2"] strong')?.textContent).toBe('целое');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 30_000);
 });
 
 // Тест 7 куска 4.2 (часть useMarkRead): «непрочитано человеком» — isHumanUnread, а не

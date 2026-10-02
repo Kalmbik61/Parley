@@ -456,11 +456,11 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
     expect(build(entry).messages.map((item) => item.reply)).toEqual([null, null]);
   });
 
-  it('ответ на вопрос человека: оригинал найден, подпись «You», выдержка — первая строка текста', () => {
+  it('ответ на вопрос человека: оригинал найден, подпись «You», выдержка — первый абзац текста', () => {
     const entry = entryOf({
       messages: [
         message('m-1', {
-          text: 'Что с миграцией?\nИ ещё вопрос',
+          text: 'Что с миграцией?\nИ ещё вопрос\n\nВторой абзац',
           kind: 'question',
           at: '2026-09-27T09:00:00.000Z',
         }),
@@ -478,7 +478,7 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
     expect(answer?.reply).toEqual({
       id: 'm-1',
       from: 'You',
-      excerpt: 'Что с миграцией?',
+      excerpt: 'Что с миграцией? И ещё вопрос',
       found: true,
     });
   });
@@ -560,7 +560,7 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
     });
   });
 
-  it('выдержка из оригинала — по правилам excerpt.ts: разрыв и ограда пропущены, флажок снят, упоминание в коде остаётся кодом', () => {
+  it('выдержка из оригинала — по правилам excerpt.ts: разрыв и пустой блок кода пропущены, флажок снят, упоминание в коде остаётся кодом', () => {
     const entry = entryOf({
       messages: [
         message('m-1', {
@@ -572,6 +572,48 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
       ],
     });
     expect(build(entry).messages[1]?.reply?.excerpt).toBe('проверить @human и @S02 бэкенд');
+  });
+
+  it('выдержка — из того же разбора, что лента: @human в подписи ссылки и в коде остаётся буквальным', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          text: 'Спросить [@human](https://example.com) про `@human` и @human',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages[1]?.reply?.excerpt).toBe('Спросить @human про @human и @you');
+  });
+
+  it('оригинал человека: его @human в цитате — текст, как в ленте; у агента и системной строки — «@you»', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { text: 'Сам себе, @human', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 's-01',
+          text: 'Нужен ответ, @human',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', {
+          from: 'system',
+          to: ['human'],
+          text: 'Writing to @human',
+          at: '2026-09-27T09:02:00.000Z',
+        }),
+        message('m-4', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:04:00.000Z' }),
+        message('m-6', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:05:00.000Z' }),
+      ],
+    });
+    const replies = build(entry).messages.slice(3);
+    expect(replies.map((item) => item.reply?.excerpt)).toEqual([
+      'Сам себе, @human',
+      'Нужен ответ, @you',
+      'Writing to @you',
+    ]);
   });
 
   it('ответ на ответ: цитата ведёт к ближайшему сообщению, а не по цепочке; текст самого ответа не подмешивается', () => {

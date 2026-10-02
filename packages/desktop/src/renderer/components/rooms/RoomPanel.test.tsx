@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
+import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -534,6 +535,35 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(Array.from(document.querySelectorAll('[data-message-id]')).map((row) => row.getAttribute('data-message-id'))).toEqual(['m-1', 'm-2']);
   });
 
+  it('свой @human человека — текст, а не чип «@you»; у сообщения агента чип остаётся (Parley 0.3.0)', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { text: 'Сам себе, @human и @s02', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-02',
+            to: ['human'],
+            text: 'Нужен ответ, @human',
+            readBy: { human: 'x' },
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+        ],
+      }),
+    );
+    const own = messageRow('m-1');
+    expect(own.querySelector('[data-mention-human]')).toBeNull();
+    expect(own.querySelector('[title="Mentions you"]')).toBeNull();
+    // Чипы сессий у человека, как и прежде.
+    expect(own.querySelector('[data-mention="s-02"]')?.textContent).toBe('@S02 бэкенд');
+    expect(own.querySelector('[data-room-markdown]')?.textContent).toBe(
+      'Сам себе, @human и @S02 бэкенд',
+    );
+
+    const theirs = messageRow('m-2');
+    expect(theirs.querySelector('[data-mention-human]')?.textContent).toBe('@you');
+    expect(theirs.querySelector('[data-room-markdown]')?.textContent).toBe('Нужен ответ, @you');
+  });
+
   it('★ у сообщений ведущего', () => {
     const entry = entryOf({ messages: [message('m-1', { from: 's-01', readBy: {} }), message('m-2', { from: 's-02', readBy: {} })] });
     renderPanel(entry);
@@ -732,6 +762,25 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     ).toBe(quote('m-1'));
   });
 
+  it('цитата сообщения человека — его @human текстом, как в ленте; цитата сообщения агента — «@you»', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { text: 'Сам себе, @human', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-01',
+            text: 'Нужен ответ, @human',
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+          message('m-3', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:02:00.000Z' }),
+          message('m-4', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:03:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ You: Сам себе, @human');
+    expect(quote('m-2').textContent).toBe('↩ S01 архитектор: Нужен ответ, @you');
+  });
+
   it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
     renderPanel(
       entryOf({
@@ -885,6 +934,199 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  describe('плавная прокрутка: подсветка перезапускается по scrollend', () => {
+    /** Цепочка: m-2 отвечает на m-1, m-3 — на m-2; цитат две, и переходов можно сделать два подряд. */
+    const chain = (): Message[] => [
+      ...replyMessages(),
+      message('m-3', {
+        from: 's-03',
+        to: ['human'],
+        replyTo: 'm-2',
+        at: '2026-09-27T09:02:00.000Z',
+      }),
+    ];
+    /** Лента доехала: браузер присылает `scrollend` на самой ленте. */
+    const scrollEnd = (): void => {
+      fireEvent(feed(), new Event('scrollend'));
+    };
+    /** Сколько слушателей `scrollend` сейчас висит на элементе: поставленных минус снятых. */
+    const watchScrollEnd = (element: HTMLElement): (() => number) => {
+      const add = vi.spyOn(element, 'addEventListener');
+      const remove = vi.spyOn(element, 'removeEventListener');
+      const count = (spy: { mock: { calls: unknown[][] } }): number =>
+        spy.mock.calls.filter((call) => call[0] === 'scrollend').length;
+      return () => count(add) - count(remove);
+    };
+    const advance = (ms: number): void => {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+
+    it('scrollend перезапускает подсветку: атрибут жив через 1,2 с после клика, если лента доехала на 1 с', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: replyMessages() }));
+      const row = messageRow('m-1');
+      const set = vi.spyOn(row, 'setAttribute');
+      const remove = vi.spyOn(row, 'removeAttribute');
+      fireEvent.click(quote('m-1'));
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(remove).not.toHaveBeenCalled();
+
+      advance(1000);
+      scrollEnd();
+      // Снято и поставлено заново: анимация CSS идёт сначала.
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(set).toHaveBeenCalledTimes(2);
+      expect(flashed('m-1')).toBe(true);
+
+      // 1,2 с от клика прошло — без перезапуска подсветка уже погасла бы; отсчёт идёт от `scrollend`.
+      advance(200);
+      expect(flashed('m-1')).toBe(true);
+      advance(999);
+      expect(flashed('m-1')).toBe(true);
+      advance(1);
+      expect(flashed('m-1')).toBe(false);
+    });
+
+    it('дорога длиннее подсветки: та успела погаснуть по пути, scrollend зажигает её снова на месте', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: replyMessages() }));
+      fireEvent.click(quote('m-1'));
+      advance(1500);
+      expect(flashed('m-1')).toBe(false);
+
+      scrollEnd();
+      expect(flashed('m-1')).toBe(true);
+      advance(1199);
+      expect(flashed('m-1')).toBe(true);
+      advance(1);
+      expect(flashed('m-1')).toBe(false);
+    });
+
+    it('перезапуск один: второй scrollend подряд подсветку не продлевает', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: replyMessages() }));
+      fireEvent.click(quote('m-1'));
+      advance(500);
+      scrollEnd();
+      advance(500);
+      scrollEnd();
+      // Продлила бы второй раз — подсветка жила бы до 2,2 с; живёт до 1,7 (500 + 1200).
+      advance(699);
+      expect(flashed('m-1')).toBe(true);
+      advance(1);
+      expect(flashed('m-1')).toBe(false);
+    });
+
+    it('без scrollend всё как раньше: подсветка гаснет на 1,2 с, ожидание — на 2 с, опоздавший scrollend её не возвращает', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: replyMessages() }));
+      // Таймер панели, не связанный с переходом: обновление относительного времени сообщений.
+      const idle = vi.getTimerCount();
+      const listeners = watchScrollEnd(feed());
+      fireEvent.click(quote('m-1'));
+      expect(listeners()).toBe(1);
+
+      advance(1199);
+      expect(flashed('m-1')).toBe(true);
+      advance(1);
+      expect(flashed('m-1')).toBe(false);
+      // Подсветка погасла, а ожидание живёт: лента могла ещё ехать.
+      expect(listeners()).toBe(1);
+      advance(799);
+      expect(listeners()).toBe(1);
+      advance(1);
+      expect(listeners()).toBe(0);
+
+      scrollEnd();
+      expect(flashed('m-1')).toBe(false);
+      expect(vi.getTimerCount()).toBe(idle);
+    });
+
+    it('второй переход до scrollend первого снимает первое ожидание: слушатель один, и срабатывает он для второго', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: chain() }));
+      const listeners = watchScrollEnd(feed());
+      fireEvent.click(quote('m-2'));
+      expect(flashed('m-2')).toBe(true);
+      expect(listeners()).toBe(1);
+      const firstTarget = vi.spyOn(messageRow('m-2'), 'setAttribute');
+
+      fireEvent.click(quote('m-1'));
+      expect(flashed('m-1')).toBe(true);
+      expect(flashed('m-2')).toBe(false);
+      expect(listeners()).toBe(1);
+
+      scrollEnd();
+      expect(listeners()).toBe(0);
+      // Подсветка первого сообщения не возвращалась: его ожидание снято вместе с переходом.
+      expect(firstTarget).not.toHaveBeenCalled();
+      expect(flashed('m-2')).toBe(false);
+      expect(flashed('m-1')).toBe(true);
+      expect(document.querySelectorAll('[data-reply-flash]')).toHaveLength(1);
+    });
+
+    it('новый переход снимает и страховочный таймер прежнего ожидания: он не обрывает новое', () => {
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: chain() }));
+      const listeners = watchScrollEnd(feed());
+      fireEvent.click(quote('m-2'));
+      advance(1500);
+      // Страховка первого ожидания сработала бы на 2 с, то есть через 500 мс; второе ждёт до 3,5 с.
+      fireEvent.click(quote('m-1'));
+      advance(600);
+      expect(listeners()).toBe(1);
+
+      scrollEnd();
+      expect(flashed('m-1')).toBe(true);
+      advance(1199);
+      expect(flashed('m-1')).toBe(true);
+      advance(1);
+      expect(flashed('m-1')).toBe(false);
+    });
+
+    it('вкладку закрыли — слушателя scrollend и таймеров не остаётся, а опоздавшее событие ничего не зажигает', () => {
+      vi.useFakeTimers();
+      const { unmount } = renderPanel(entryOf({ messages: replyMessages() }));
+      const feedElement = feed();
+      const row = messageRow('m-1');
+      const listeners = watchScrollEnd(feedElement);
+      fireEvent.click(quote('m-1'));
+      expect(listeners()).toBe(1);
+
+      unmount();
+      expect(listeners()).toBe(0);
+      // Перенос фокуса в jsdom ставит свою отложенную задачу (`selectionchange`): она не наша и срабатывает сразу.
+      vi.advanceTimersByTime(0);
+      expect(vi.getTimerCount()).toBe(0);
+      fireEvent(feedElement, new Event('scrollend'));
+      expect(row.hasAttribute('data-reply-flash')).toBe(false);
+    });
+
+    it('prefers-reduced-motion: reduce — ничего не ждёт: слушателя scrollend нет, подсветка идёт как раньше', () => {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: query === '(prefers-reduced-motion: reduce)',
+        media: query,
+      }));
+      vi.useFakeTimers();
+      renderPanel(entryOf({ messages: replyMessages() }));
+      const idle = vi.getTimerCount();
+      const listeners = watchScrollEnd(feed());
+      fireEvent.click(quote('m-1'));
+      expect(scrolled[0]?.options).toEqual({ block: 'center', behavior: 'auto' });
+      expect(listeners()).toBe(0);
+      expect(flashed('m-1')).toBe(true);
+
+      scrollEnd();
+      expect(flashed('m-1')).toBe(true);
+      advance(1200);
+      expect(flashed('m-1')).toBe(false);
+      // Страховочного таймера нет: после подсветки ничего не осталось.
+      expect(vi.getTimerCount()).toBe(idle);
+    });
+  });
+
   it('id оригинала с кавычкой, скобкой и косой чертой находится без подстановки в селектор', () => {
     const id = 'm-"1"]\\';
     renderPanel(
@@ -982,6 +1224,50 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
       for (const spy of spies) spy.mockRestore();
     }
   });
+});
+
+describe('RoomPanel — сообщение, которое Markdown не осилил (Parley 0.3.0)', () => {
+  it("'>'.repeat(5000) + ' текст' в сообщении и в цитате ответа — вкладка жива: сырой текст в ленте, соседи и поле ввода на месте", () => {
+    // React логирует пойманную ошибку в консоль — тестовому выводу это не нужно.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const deep = `${'>'.repeat(5000)} текст`;
+      const entry = entryOf({
+        messages: [
+          message('m-1', { text: deep, at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-02',
+            to: ['human'],
+            text: 'Ответ **жирным** и @human',
+            replyTo: 'm-1',
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+        ],
+      });
+      render(
+        <ErrorBoundary title="Tab crashed">
+          <RoomPanel {...props(entry)} />
+        </ErrorBoundary>,
+      );
+      // Вкладка не ушла в `ErrorBoundary`: панель, лента, сообщения и поле ввода — на месте.
+      expect(screen.queryByText('Tab crashed')).toBeNull();
+      expect(document.querySelector('[data-room-panel]')).not.toBeNull();
+      expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
+      // Упавшее сообщение — сырой текст (или цитаты Markdown, если стек больше обычного): текст виден в любом случае.
+      expect(messageRow('m-1').textContent).toContain('текст');
+      const fallback = messageRow('m-1').querySelector('[data-markdown-fallback]');
+      if (fallback === null) expect(messageRow('m-1').querySelector('blockquote')).not.toBeNull();
+      else expect(fallback.textContent).toBe(deep);
+      // Соседнее сообщение отрисовано как обычно, а цитата ответа не уронила ленту.
+      expect(messageRow('m-2').querySelector('strong')?.textContent).toBe('жирным');
+      expect(messageRow('m-2').querySelector('[data-mention-human]')?.textContent).toBe('@you');
+      expect(
+        (document.querySelector('[data-message-reply="m-1"]') as HTMLElement).textContent,
+      ).toMatch(/^↩ You/);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 30_000);
 });
 
 describe('RoomPanel — строка ожидания по readBy (1.3)', () => {
@@ -1337,6 +1623,26 @@ describe('RoomPanel — открытие комнаты: к самому ран�
     vi.advanceTimersByTime(0);
     expect(vi.getTimerCount()).toBe(0);
     unmount();
+  });
+
+  it('при открытии ничего не ждёт: слушателя scrollend нет, а подсветка — единственный таймер перехода', () => {
+    vi.useFakeTimers();
+    const add = vi.spyOn(EventTarget.prototype, 'addEventListener');
+    try {
+      const { unmount } = renderPanel(entryOf({ messages: mentionMessages() }));
+      expect(add.mock.calls.filter((call) => call[0] === 'scrollend')).toEqual([]);
+      expect(flashed('m-3')).toBe(true);
+      // Таймер панели, не связанный с переходом, — обновление относительного времени сообщений.
+      const withFlash = vi.getTimerCount();
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+      expect(flashed('m-3')).toBe(false);
+      expect(vi.getTimerCount()).toBe(withFlash - 1);
+      unmount();
+    } finally {
+      add.mockRestore();
+    }
   });
 
   it('прочитанное упоминание, @human в коде и в ссылке, упоминание от человека и системное — не цель: лента у низа', () => {

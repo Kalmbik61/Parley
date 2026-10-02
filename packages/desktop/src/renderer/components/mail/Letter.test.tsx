@@ -4,12 +4,22 @@
  *
  * Облик Organic (спека окна 2026-09-29, 1.8, «Почта»): карточка до 640px — тег вида, `S03 ревью → you`,
  * время, точка `accent-600` у непрочитанного и текст 14px.
+ *
+ * Письмо пишет агент: Markdown, который не удалось отрисовать (тысячи вложенных `>`), показывается сырым текстом
+ * (`MarkdownBoundary`), а не роняет вкладку почты (Parley 0.3.0).
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import ReactMarkdown from 'react-markdown';
 import type { LetterView } from '../../lib/mail-view.js';
 import { Letter } from './Letter.js';
+
+// Сбой отрисовки Markdown задаёт тест: `react-markdown` зовётся как раньше, пока он не велит иное.
+vi.mock('react-markdown', async (importOriginal) => {
+  const original = await importOriginal<typeof import('react-markdown')>();
+  return { ...original, default: vi.fn(original.default) };
+});
 
 afterEach(cleanup);
 
@@ -99,5 +109,85 @@ describe('Letter — карточка Organic (1.8)', () => {
     expect(card.className).toContain('min-w-0');
     expect(container.querySelector('[data-letter-meta]')?.className).toContain('flex-wrap');
     expect(container.querySelector('[data-letter-body]')?.className).toContain('break-words');
+  });
+});
+
+describe('Letter — Markdown, который не удалось отрисовать (Parley 0.3.0)', () => {
+  const fallbackOf = (root: ParentNode): HTMLElement | null =>
+    root.querySelector<HTMLElement>('[data-markdown-fallback]');
+
+  // React логирует пойманную ошибку в консоль — тестовому выводу это не нужно.
+  let errorSpy: MockInstance;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it('тысячи вложенных «>» не роняют письмо: текст виден — Markdown или сырой, смотря как велик стек', () => {
+    const text = `${'>'.repeat(5000)} текст`;
+    const { container } = render(<Letter letter={letter({ text })} onOpenExternal={() => {}} />);
+    const body = container.querySelector('[data-letter-body]') as HTMLElement;
+    expect(body.textContent).toContain('текст');
+    // Стек переполнился — в теле сырой текст; не переполнился — цитаты Markdown. Третьего нет.
+    const fallback = fallbackOf(container);
+    if (fallback === null) expect(container.querySelector('blockquote')).not.toBeNull();
+    else expect(fallback.textContent).toBe(text);
+    // Шапка письма цела в обоих случаях.
+    expect(container.querySelector('[data-letter-meta]')?.textContent).toContain('S01 (Opus 5.5)');
+  }, 20_000);
+
+  describe('сбой отрисовки Markdown (react-markdown падает, как его роняет вложенность глубже стека)', () => {
+    /** Текст с этим началом роняет `react-markdown`, прочие он рисует как обычно. */
+    const BAD = 'СБОЙ: ';
+    const real = vi.mocked(ReactMarkdown).getMockImplementation();
+    beforeEach(() => {
+      vi.mocked(ReactMarkdown).mockImplementation((props) => {
+        if (String(props.children).startsWith(BAD)) {
+          throw new RangeError('Maximum call stack size exceeded');
+        }
+        return (real as NonNullable<typeof real>)(props);
+      });
+    });
+    afterEach(() => {
+      if (real !== undefined) vi.mocked(ReactMarkdown).mockImplementation(real);
+    });
+
+    it('вместо Markdown — сырой текст письма как есть (whitespace-pre-wrap) в теле, шапка цела', () => {
+      const text = `${BAD}**жирный**\n\n- пункт\n> цитата`;
+      const { container } = render(
+        <Letter letter={letter({ text, time: '10:05' })} onOpenExternal={() => {}} />,
+      );
+      const body = container.querySelector('[data-letter-body]') as HTMLElement;
+      const fallback = fallbackOf(body);
+      expect(fallback?.textContent).toBe(text);
+      expect(fallback?.className).toContain('whitespace-pre-wrap');
+      expect(body.className).toContain('text-sm');
+      expect(body.querySelector('strong, li, blockquote')).toBeNull();
+      expect(container.querySelector('[data-letter-meta]')?.textContent).toContain('10:05');
+    });
+
+    it('смена текста сбрасывает границу: нормальное письмо снова рисуется Markdown', () => {
+      const { container, rerender } = render(
+        <Letter letter={letter({ text: `${BAD}раз` })} onOpenExternal={() => {}} />,
+      );
+      expect(fallbackOf(container)).not.toBeNull();
+
+      rerender(<Letter letter={letter({ text: '**жирный** текст' })} onOpenExternal={() => {}} />);
+      expect(fallbackOf(container)).toBeNull();
+      expect(container.querySelector('strong')?.textContent).toBe('жирный');
+    });
+
+    it('упало одно письмо — соседнее рисуется как обычно', () => {
+      const { container } = render(
+        <>
+          <Letter letter={letter({ id: 'm-1', text: `${BAD}упавшее` })} onOpenExternal={() => {}} />
+          <Letter letter={letter({ id: 'm-2', text: '**целое**' })} onOpenExternal={() => {}} />
+        </>,
+      );
+      expect(container.querySelectorAll('[data-markdown-fallback]')).toHaveLength(1);
+      expect(container.querySelector('[data-letter-id="m-2"] strong')?.textContent).toBe('целое');
+    });
   });
 });

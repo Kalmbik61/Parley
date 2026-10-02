@@ -28,10 +28,13 @@
  *
  * Сообщение-ответ несёт цитату (`RoomMessage.tsx`): клик по ней прокручивает ленту к оригиналу (`jumpTo`),
  * переносит на него фокус (строка сообщения принимает его программно, `tabIndex={-1}`) и на 1.2 с подсвечивает —
- * атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик перезапускает отсчёт. К упоминанию при
+ * атрибутом `data-reply-flash` (`styles/reply-flash.css`), повторный клик перезапускает отсчёт. Подсветка ставится
+ * сразу, а плавная прокрутка до далёкого оригинала длится дольше неё: чтобы подсветка не угасла по дороге, лента один
+ * раз ждёт `scrollend` на себе (не дольше 2 с — оригинал мог уже стоять на месте) и по нему перезапускает подсветку
+ * того же сообщения. Новый переход и закрытие вкладки снимают и ожидание, и его страховочный таймер. К упоминанию при
  * открытии комнаты лента переходит так же (`showMessage`), но сразу, без плавности и без фокуса: человек ещё
- * ничего не нажимал в ленте. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по событию
- * `scroll`), поэтому новое сообщение человека от оригинала не уводит.
+ * ничего не нажимал в ленте, и ждать нечего. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по
+ * событию `scroll`), поэтому новое сообщение человека от оригинала не уводит.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -77,6 +80,9 @@ const AT_BOTTOM_PX = 48;
 
 /** Сколько оригинал цитаты остаётся подсвеченным после клика по ней (`data-reply-flash`). */
 const REPLY_FLASH_MS = 1200;
+
+/** Дольше лента не ждёт `scrollend` после плавной прокрутки: оригинал мог уже стоять на месте — тогда события не будет. */
+const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
@@ -128,14 +134,47 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     flash.element.removeAttribute('data-reply-flash');
     flashRef.current = null;
   }, []);
-  // Вкладку закрыли — таймер подсветки не должен её пережить.
-  useEffect(() => () => clearFlash(), [clearFlash]);
+  /** Подсветить сообщение на 1.2 с; уже подсвеченное (это же или другое) — заново: подсветка одна на ленту. */
+  const flashMessage = useCallback(
+    (element: HTMLElement): void => {
+      // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
+      clearFlash();
+      void element.offsetWidth;
+      element.setAttribute('data-reply-flash', '');
+      flashRef.current = { element, timer: setTimeout(clearFlash, REPLY_FLASH_MS) };
+    },
+    [clearFlash],
+  );
+
+  // Ожидание конца плавной прокрутки: слушатель `scrollend` ленты и страховочный таймер, который его снимает.
+  // Как и подсветка, оно одно на ленту; ленту хранит запись сама — при закрытии вкладки `containerRef` уже пуст.
+  const settleRef = useRef<{
+    feed: HTMLElement;
+    onEnd: () => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const clearSettle = useCallback((): void => {
+    const settle = settleRef.current;
+    if (settle === null) return;
+    clearTimeout(settle.timer);
+    settle.feed.removeEventListener('scrollend', settle.onEnd);
+    settleRef.current = null;
+  }, []);
+  // Вкладку закрыли — таймеры подсветки и ожидания, как и слушатель `scrollend`, не должны её пережить.
+  useEffect(
+    () => () => {
+      clearSettle();
+      clearFlash();
+    },
+    [clearSettle, clearFlash],
+  );
 
   /**
    * Лента прокручивается к сообщению по центру (выше ленты — к верху), и оно коротко подсвечивается; `false` — такого
    * сообщения в ленте нет.
    * `smooth` — плавная прокрутка (клик по цитате) или мгновенная (открытие комнаты); `focus` — перенести на сообщение
-   * фокус.
+   * фокус. Подсветка ставится сразу; при плавной прокрутке она перезапускается ещё раз, когда лента доехала
+   * (`scrollend`, не дольше `SCROLL_END_WAIT_MS`).
    */
   const showMessage = useCallback(
     (messageId: string, { smooth, focus }: { smooth: boolean; focus: boolean }): boolean => {
@@ -146,20 +185,26 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         (element) => element.dataset.messageId === messageId,
       );
       if (target === undefined) return false;
+      // Новый переход: прежнего конца прокрутки больше не ждём.
+      clearSettle();
       // Сообщение выше ленты по центру ушло бы строкой меты за верхний край, а прочтение смотрит именно на неё
       // (`use-mark-read.ts`): такое сообщение встаёт к верху.
       const block = target.offsetHeight > feed.clientHeight ? 'start' : 'center';
       target.scrollIntoView({ block, behavior: smooth ? 'smooth' : 'auto' });
       // Фокус — на сообщение: читающий с клавиатуры продолжит с него. Без прокрутки — её уже запустила строка выше.
       if (focus) target.focus({ preventScroll: true });
-      // Снять и поставить заново: повторная подсветка перезапускает анимацию CSS (как `attention/flash.ts`).
-      clearFlash();
-      void target.offsetWidth;
-      target.setAttribute('data-reply-flash', '');
-      flashRef.current = { element: target, timer: setTimeout(clearFlash, REPLY_FLASH_MS) };
+      flashMessage(target);
+      if (smooth) {
+        const onEnd = (): void => {
+          clearSettle();
+          flashMessage(target);
+        };
+        settleRef.current = { feed, onEnd, timer: setTimeout(clearSettle, SCROLL_END_WAIT_MS) };
+        feed.addEventListener('scrollend', onEnd);
+      }
       return true;
     },
-    [clearFlash],
+    [clearSettle, flashMessage],
   );
 
   /** Клик по цитате ответа: переход к оригиналу — плавный (без движения, если человек его отключил) и с фокусом. */

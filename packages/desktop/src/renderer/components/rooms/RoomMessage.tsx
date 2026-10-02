@@ -18,6 +18,9 @@
  * `title` показывает выдержку целиком, когда строка обрезана. Строка сообщения принимает фокус программно
  * (`tabIndex={-1}`): переход по цитате переносит его на оригинал, и читающий с клавиатуры продолжает оттуда.
  * Текст ответа — Markdown, как у любого сообщения.
+ *
+ * Свой `@human` человека (Parley 0.3.0) — текст, а не чип «@you»: себя человек не упоминает (`humanChips`); у сообщений
+ * агентов чип остаётся — по нему агент зовёт человека.
  */
 
 import { S } from '../../../shared/strings.js';
@@ -121,7 +124,12 @@ export function RoomMessage({
           ) : null}
         </div>
         {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} />}
-        <RoomMarkdown text={message.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
+        <RoomMarkdown
+          text={message.text}
+          labelOf={labelOf}
+          onOpenExternal={onOpenExternal}
+          humanChips={message.sender.kind !== 'human'}
+        />
         {message.waiting.length > 0 ? (
           <span data-message-waiting className="text-xs text-muted-foreground">
             {S.rooms.notPickedUp(message.waiting.join(', '))}

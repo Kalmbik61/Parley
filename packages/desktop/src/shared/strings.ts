@@ -399,7 +399,7 @@ export const S = {
     worktreeRoot: 'Worktree root',
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',
-    notifyMail: 'mail to you',
+    notifyMail: 'mail and mentions to you',
     notifySound: 'sound',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
