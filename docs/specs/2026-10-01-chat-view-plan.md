@@ -144,11 +144,17 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    через `PermissionRequest(ExitPlanMode)`; хост держит его за карточкой `plan`, которую завёл
    `PreToolUse`. «Approve, auto-accept edits» = `allow` + `updatedPermissions: [{ type:
    setMode, mode: acceptEdits, destination: session }]` (форма `setMode` проверена в p2b),
-   «Approve, approve each edit» = `allow` — гипотеза, кусок 4 проверяет её на стенде; не
-   сошлось — клавиши с проверкой экрана (Enter / Down+Enter после «Ready to code?»). Третий
-   вариант («Tell Claude what to change») — только через терминал. Решение по карточке, чей
-   хук ещё не удержан или уже отпущен, не применяется (`applied: false`): иначе окно показало
-   бы «allowed», а CLI ничего бы не получил.
+   «Approve, approve each edit» = `allow` — гипотеза; в куске 4a живых запусков не было,
+   проверяется в живой проверке куска 5; не сошлось — клавиши с проверкой экрана (Enter /
+   Down+Enter после «Ready to code?»). Третий вариант («Tell Claude what to change») — только
+   через терминал. Решение по карточке, чей хук ещё не удержан или уже отпущен, не применяется
+   (`applied: false`): иначе окно показало бы «allowed», а CLI ничего бы не получил. Окно при
+   `applied: false` и состоянии `pending` (например, `PermissionRequest(ExitPlanMode)` ещё не
+   дошёл за `PreToolUse`) показывает «Not applied yet — try again» и ждёт нового клика —
+   само не повторяет; пока запрос `feed.decide` в пути, кнопки карточки выключены (второй
+   клик не шлёт решения). Ключ ответа на вопрос — текст вопроса (улика p4: `answers:
+   { "Which fruit?": "Pear" }`); `multiSelect` — выбранные подписи через `, ` (сверить
+   вживую в куске 5); «Other» — свободный текст как ответ.
 5. **Снятие карточки без решения.** Хост отвечает хуку пустым `{}` и помечает карточку
    `elsewhere`, когда для той же сессии пришёл `PostToolUse`/`PostToolUseFailure` с тем же
    инструментом, `Stop`, `UserPromptSubmit`, `SessionEnd`, либо активность стала `idle`
@@ -171,21 +177,40 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    Chat сам ставит видимость сессии и «просмотрено», как делала поверхность.
 7. **Автопоказ терминала** — ровно один случай: до `SessionStart` вкладка показывает
    терминал, а после него один раз сама переходит в чат, если человек не трогал
-   переключатель. Во всех прочих случаях (меню, elicitation, отказ по Esc, экран без
-   карточки при `blocked`) чат показывает баннер «Claude Code is waiting in the terminal»
-   с кнопкой «Open terminal» и обычную метку «нужен ты». Переключать вид под руками
-   человека нельзя.
+   переключатель. «Был `SessionStart`» окно узнаёт из активности, а не из ленты (лента
+   подписана только в чате): у записи `activity.changed` сессии `lastEventAt !== null` —
+   первое событие файлового журнала и есть `SessionStart`. Возобновлённая сессия с журналом
+   поэтому открывается сразу чатом (диалог доверия у неё маловероятен — папка уже доверена);
+   явный `view` вкладки побеждает в обе стороны. Во всех прочих случаях (меню, elicitation,
+   отказ по Esc, экран без карточки при `blocked`) чат показывает баннер «Claude Code is
+   waiting in the terminal» с кнопкой «Open terminal» и обычную метку «нужен ты»; условие
+   баннера одно — активность `blocked` без карточки `pending` в ленте (elicitation активность
+   хоста уже считает `blocked`, отдельного разбора `Notification` в ленте нет). Переключать
+   вид под руками человека нельзя. Ожидающая карточка открытой ленты даёт сессии и работе
+   «нужен ты» в `derive.ts`; карточку вкладки, которой нет (лента не открыта), окно не видит,
+   а активность по тишине считает удержанный вопрос оконченным ходом — хвост для хоста
+   (удержанный `PreToolUse(AskUserQuestion)` должен давать `blocked`).
 8. **Ввод.** Поле чата шлёт `pty.send` с теми же отказами и тостами, что у отправки из
    комнаты (`terminal/send.ts`: busy, blocked, draft). Enter — отправить, Shift+Enter —
    перенос. Кнопка «Stop» — Esc через `pty.input`. Сообщение во время хода уходит в очередь
    CLI, лента показывает его серым до `UserPromptSubmit`.
 9. **Режим.** В строке состояния чата — текущий режим из последнего хука (`permission_mode`)
-   и меню «Manual / Accept edits / Plan». Метод `sessions.setMode`: хост считает число
-   `Shift+Tab` от текущего режима по циклу manual → accept edits → plan, жмёт по одному и
-   после каждого сверяет подвал экрана своего headless-терминала («manual mode on»,
-   «accept edits on», «plan mode on»); не сошлось — отвечает фактическим режимом и
-   `verified: false`, окно просит открыть терминал. `plan` можно ставить и текстом `/plan`.
-   Режимы `auto` и `bypassPermissions` в меню не предлагаем.
+   и меню «Manual / Accept edits / Plan». Режим живёт в ленте: `FeedState.permissionMode`
+   ставится из `permission_mode` каждого хука и из записей `permission-mode` журнала при
+   севе; `feed.snapshot` отдаёт `mode`, каждая дельта `feed.changed` несёт `mode`, пачка
+   сбрасывается и когда изменился только режим. Значения — сырые строки CLI (`default` —
+   «Manual», `acceptEdits` — «Accept edits», `plan` — «Plan», прочие как есть). Метод
+   `sessions.setMode { ref, mode } → { mode, verified }`: хост ждёт тишины вывода PTY
+   (200 мс, не дольше 2 с), читает подвал экрана своего headless-терминала чистым текстом
+   (`Screen.text(rows)`), узнаёт текущий режим по подписям со словом «on» («manual mode on»,
+   «accept edits on», «plan mode on», «bypass permissions on», «auto mode on» — в строке
+   статуса бывает «auto mode unavailable for this model»), считает число `Shift+Tab` по циклу
+   manual → accept edits → plan, жмёт по одному (печать хоста, `ESC [ Z`) и после каждого ждёт
+   до 1,5 с, пока подвал не покажет ожидаемый режим; подвала нет или текущий режим вне цикла
+   (`bypass`, `auto`) — не жмёт вовсе и отвечает `verified: false`; не сошлось — отвечает
+   фактическим режимом и `verified: false`, окно просит открыть терминал. Сверенный режим
+   хост сразу кладёт в ленту (`noteMode`), чтобы меню не ждало следующего хука. `plan` можно
+   ставить и текстом `/plan`. Режимы `auto` и `bypassPermissions` в меню не предлагаем.
 10. **Текст и результаты.** Markdown — `components/rooms/RoomMarkdown.tsx` и
     `lib/markdown-links.ts` (0.2.0), код моноширинный. Результат инструмента свёрнут;
     показываем до 64 КБ, дальше «truncated, open the terminal». Дифф — хунки
@@ -456,11 +481,13 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    «Other» (свободный текст — как вариант «Type something» в CLI); несколько вопросов — по
    очереди; «Submit» шлёт `answers`.
 3. **Карточка плана.** Markdown плана, кнопки «Approve, auto-accept edits», «Approve,
-   approve each edit», «Change the plan in the terminal» (открывает терминал). Сначала —
-   проверка на стенде (`docs/research/2026-10-01-chat-view-spike/`, новый сценарий): ответ
-   хуком `PreToolUse(ExitPlanMode)` `allow` + `updatedInput` с исходным `plan`. Работает —
-   хост отвечает хуком; нет — хост жмёт клавиши после сверки «Ready to code?» на своём
-   экране (решение 4). Результат проверки — в отчёт разведки и в этот план.
+   approve each edit», «Change the plan in the terminal» (открывает терминал). Ответ — по
+   решению 4 (`PermissionRequest(ExitPlanMode)`: `allow`, при auto-accept ещё `setMode`);
+   проверка гипотезы «approve each edit = `allow`» на настоящем `claude` — в живой проверке
+   куска 5 (в 4a живых запусков не было); не сошлось — хост жмёт клавиши после сверки «Ready
+   to code?» на своём экране. Результат проверки — в отчёт разведки и в этот план. Черновики
+   ответов карточек (выбор, «Other», текст отказа) живут в `chat/ui-store.ts` по `cardId`:
+   строки ленты виртуализированы и размонтируются при прокрутке.
 4. **Режим** по решению 9: меню в тулбаре, `sessions.setMode`, на `verified: false` — тост
    «Open the terminal to switch the mode».
 5. **Автопоказ** по решению 7: до `SessionStart` вкладка новой сессии открывается
@@ -481,9 +508,11 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
   появляется только с подсказкой, второй клик не шлёт `decide`;
 - `derive.ts`: `pending` даёт `needs-you`, `elsewhere` снимает;
 - host: `mode-switch` на фальшивом экране — manual → plan это два нажатия, подвал не
-  сошёлся → `verified: false`; `screen.text()` режет управляющие последовательности;
-- автопоказ: вкладка без `SessionStart` — терминал; после `SessionStart` — чат; если человек
-  переключил сам — не трогаем;
+  сошёлся → `verified: false`, подвала нет или `bypass` — ни одного нажатия; `screen.text()`
+  режет управляющие последовательности; режим в снимке и в дельте без элементов,
+  `noteMode`; core: `permissionMode` из события и из журнала;
+- автопоказ: вкладка без `SessionStart` (`lastEventAt` пуст) — терминал; после
+  `SessionStart` — чат; если человек переключил сам — не трогаем;
 - 4b: бейдж в строке сессии и поповер у участника комнаты из `metrics.tasks`; без поля —
   `▤N`; поповер с длинным описанием в 800×500; `heldByBackground` прячет «Stop» и не
   блокирует ввод.
