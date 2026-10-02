@@ -21,12 +21,14 @@
  */
 
 import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FeedItem } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
+import { formatDuration } from '../lib/metrics-line.js';
+import { useNow } from '../lib/use-now.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
@@ -58,6 +60,23 @@ export interface FeedListProps {
   note: string | null;
   /** Есть — рядом с подписью кнопка «Retry» (лента не загрузилась). */
   onRetry?: () => void;
+  /** Есть — под лентой строка «Working…» (агент работает, а текста ещё нет); `since` — начало хода, ISO, или `null`. */
+  working?: { since: string | null };
+}
+
+/** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
+function WorkingRow({ since }: { since: string | null }): JSX.Element {
+  const now = useNow(1000);
+  const started = since === null ? Number.NaN : Date.parse(since);
+  const elapsed = Number.isNaN(started) ? null : Math.max(0, now.getTime() - started);
+  return (
+    <div data-testid="chat-working" className="px-4 pb-3 pt-1">
+      <div className="mx-auto flex w-full max-w-[860px] items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+        <span>{elapsed === null ? S.chat.working : `${S.chat.working} ${formatDuration(elapsed)}`}</span>
+      </div>
+    </div>
+  );
 }
 
 interface ItemViewProps {
@@ -100,7 +119,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, note, onRetry }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, note, onRetry, working }: FeedListProps): JSX.Element {
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
@@ -169,7 +188,7 @@ export function FeedList({ items, queued, note, onRetry }: FeedListProps): JSX.E
   // Новый элемент, выросший текст, замер высоты — у низа лента остаётся у низа.
   useLayoutEffect(() => {
     if (atBottomRef.current) pinToBottom();
-  }, [pinToBottom, total, rows.length, last]);
+  }, [pinToBottom, total, rows.length, last, working !== undefined]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -217,6 +236,7 @@ export function FeedList({ items, queued, note, onRetry }: FeedListProps): JSX.E
             );
           })}
         </div>
+        {working === undefined ? null : <WorkingRow since={working.since} />}
       </div>
       {atBottom ? null : (
         <Button

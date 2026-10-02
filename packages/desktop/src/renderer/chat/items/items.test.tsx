@@ -177,6 +177,22 @@ describe('лента на фикстурах core', () => {
     expect(screen.getByTestId('chat-streaming').getAttribute('aria-label')).toBe(S.chat.streaming);
   });
 
+  it('прерванный ход — черта «Interrupted · 12s» с предупреждающим цветом и меткой (живая проверка 2026-10-02)', () => {
+    renderFeed([{ id: 'u', at: AT, kind: 'turn', durationMs: 12_000, interrupted: true }]);
+    const line = screen.getByTestId('chat-turn');
+    expect(line.textContent).toBe('Interrupted · 12s');
+    expect(line.hasAttribute('data-turn-interrupted')).toBe(true);
+    expect(line.className).toContain('--status-warning-text');
+  });
+
+  it('прерванный ход без длительности — «Interrupted»; обычный конец хода метки не имеет', () => {
+    renderFeed([{ id: 'u', at: AT, kind: 'turn', durationMs: null, interrupted: true }]);
+    expect(screen.getByTestId('chat-turn').textContent).toBe('Interrupted');
+    cleanup();
+    renderFeed([{ id: 'u', at: AT, kind: 'turn', durationMs: 5000 }]);
+    expect(screen.getByTestId('chat-turn').hasAttribute('data-turn-interrupted')).toBe(false);
+  });
+
   it('усечённый текст — пометка', () => {
     renderFeed([{ id: 'x', at: AT, kind: 'text', messageId: 'm', text: 'Hello', streaming: false, truncated: true }]);
     expect(screen.getByTestId('chat-text').textContent).toBe(`Hello${S.chat.textTruncated}`);

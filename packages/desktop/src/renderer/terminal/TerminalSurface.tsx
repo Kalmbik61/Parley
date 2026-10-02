@@ -59,7 +59,7 @@ import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
-import { canResume, sendWithToast, type SendWithToastDeps } from './send.js';
+import { canResume, resumeSession, sendWithToast, type SendWithToastDeps } from './send.js';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
@@ -109,15 +109,6 @@ function sessionOf(ref: SessionRef, entries = useWorksStore.getState().entries):
 function openSessionTab(ref: SessionRef): void {
   const applied = applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps());
   if (!applied) toast(S.notifications.targetGone);
-}
-
-/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2). */
-function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
-  bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
-    const { code, message } = decodeIpcError(error);
-    console.warn('[parley] sessions.resume', message);
-    toast.error(errorText(code, S.errors.actions.resumeSession));
-  });
 }
 
 /** Случайный id монтирования — не `crypto.randomUUID`: тот требует защищённого контекста. */

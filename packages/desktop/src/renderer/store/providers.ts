@@ -15,7 +15,7 @@
  */
 
 import { create } from 'zustand';
-import type { ProviderLimits } from '@parley/protocol';
+import type { ModelOption, ProviderLimits } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
@@ -27,6 +27,8 @@ export interface ProviderInfo {
   version: string | null;
   /** Лимиты подписки из данных самого CLI; `null` — данных нет, окна сбросились или хост их не шлёт. */
   limits: ProviderLimits | null;
+  /** Модели для выбора (`providers.list.models`); нет поля или `null` — списка нет. */
+  models?: ModelOption[] | null;
 }
 
 export interface ProvidersState {
@@ -60,6 +62,7 @@ export const useProvidersStore = create<ProvidersState>((set) => ({
             available: provider.available,
             version: provider.version ?? null,
             limits: provider.limits ?? null,
+            ...(provider.models === undefined ? {} : { models: provider.models }),
           })),
           loaded: true,
         });

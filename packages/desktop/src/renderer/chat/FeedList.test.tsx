@@ -30,10 +30,10 @@ const text = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'text'
 
 let bridge: FakeBridge;
 
-function feed(items: readonly FeedItem[]): JSX.Element {
+function feed(items: readonly FeedItem[], working?: { since: string | null }): JSX.Element {
   return (
     <ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}>
-      <FeedList items={items} queued={[]} note={null} />
+      <FeedList items={items} queued={[]} note={null} {...(working === undefined ? {} : { working })} />
     </ChatEnvContext.Provider>
   );
 }
@@ -116,5 +116,31 @@ describe('FeedList — транскрипт субагента', () => {
     expect(rows).toHaveLength(TRANSCRIPT_TAIL);
     expect(rows[0]).toBe('line 50');
     expect(rows.at(-1)).toBe('line 249');
+  });
+});
+
+describe('FeedList — строка «Working…» (живая проверка 2026-10-02)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('без working строки нет; с working — спиннер, подпись и прошедшее время, раз в секунду', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-01T00:00:13.000Z'));
+    const view = render(feed([text('a', 'one')]));
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    view.rerender(feed([text('a', 'one')], { since: AT }));
+    expect(screen.getByTestId('chat-working').textContent).toBe(`${S.chat.working} 13s`);
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByTestId('chat-working').textContent).toBe(`${S.chat.working} 15s`);
+    // Прокручивается вместе с лентой: строка внутри прокручиваемой области.
+    expect(screen.getByTestId('chat-feed').contains(screen.getByTestId('chat-working'))).toBe(true);
+  });
+
+  it('since null — без времени', () => {
+    render(feed([text('a', 'one')], { since: null }));
+    expect(screen.getByTestId('chat-working').textContent).toBe(S.chat.working);
   });
 });

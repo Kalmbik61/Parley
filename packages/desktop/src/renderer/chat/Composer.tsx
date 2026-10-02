@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { Square } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 
@@ -21,9 +22,11 @@ export interface ComposerProps {
   text: string;
   onTextChange: (text: string) => void;
   onSubmit: (text: string) => void;
+  /** Есть — слева от «Send/Queue» кнопка «Stop» (ход идёт; живая проверка 2026-10-02). */
+  onStop?: () => void;
 }
 
-export function Composer({ busy, visible, text, onTextChange, onSubmit }: ComposerProps): JSX.Element {
+export function Composer({ busy, visible, text, onTextChange, onSubmit, onStop }: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (visible) field.current?.focus();
@@ -52,6 +55,12 @@ export function Composer({ busy, visible, text, onTextChange, onSubmit }: Compos
         onKeyDown={onKeyDown}
         className="box-border max-h-[180px] min-h-[38px] min-w-0 flex-1 resize-none overflow-y-auto rounded-[19px] border border-input bg-transparent px-4 py-2 text-sm leading-5 caret-ring [field-sizing:content] [overflow-wrap:anywhere] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-offset-0"
       />
+      {onStop === undefined ? null : (
+        <Button type="button" variant="outline" data-testid="chat-stop" title={S.chat.stopTitle} onClick={onStop}>
+          <Square className="size-3" aria-hidden="true" />
+          {S.chat.stop}
+        </Button>
+      )}
       <Button type="button" onClick={submit} disabled={text.trim() === ''} variant={busy ? 'outline' : 'default'}>
         {busy ? S.chat.composer.queue : S.chat.composer.send}
       </Button>

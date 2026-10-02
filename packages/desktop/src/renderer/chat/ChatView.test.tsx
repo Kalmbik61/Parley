@@ -21,8 +21,9 @@ import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
+import { useWorksStore } from '../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeSession } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
@@ -89,6 +90,7 @@ afterEach(() => {
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
   useActivityStore.setState({ byRef: {}, loaded: false });
+  useWorksStore.setState(useWorksStore.getInitialState(), true);
 });
 
 describe('TerminalBody — вид вкладки', () => {
@@ -363,6 +365,15 @@ describe('ChatView — поле ввода и тулбар', () => {
     setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'again')], 2);
     fireEvent.click(screen.getByRole('button', { name: S.chat.stop }));
     expect(bridge.notified).toContainEqual({ method: 'pty.input', params: { ref: REF, data: '\x1b' } });
+  });
+
+  it('Stop — в поле ввода, рядом с Queue, и не в тулбаре (живая проверка 2026-10-02)', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    const stop = screen.getByTestId('chat-stop');
+    expect(screen.getByTestId('chat-composer').contains(stop)).toBe(true);
+    expect(screen.getByTestId('chat-toolbar').contains(stop)).toBe(false);
+    expect(screen.getByTestId('chat-toolbar').querySelector('button[title="' + S.chat.stopTitle + '"]')).toBeNull();
   });
 
   it('модель — из notice старта сессии и смены модели; нет — ничего', () => {
@@ -680,5 +691,96 @@ describe('ChatView — меню режима (кусок 4a, решения К �
     expect((trigger() as HTMLButtonElement).disabled).toBe(true);
     await act(async () => answer({ mode: 'acceptEdits', verified: true }));
     expect((trigger() as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('ChatView — индикатор работы, Resume и меню моделей (живая проверка 2026-10-02)', () => {
+  const model = (): HTMLElement => screen.getByTestId('chat-model');
+
+  it('ход идёт, текста нет — «Working…» со временем от последнего промпта; пишущийся текст или карточка — строки нет; конец хода — нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    expect(screen.getByTestId('chat-working').textContent).toContain(S.chat.working);
+    setFeed([prompt('p1', 'go'), { ...text('t1', 'typing'), streaming: true }], 2);
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    setFeed([prompt('p1', 'go'), turn('u1')], 3);
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    setFeed(
+      [
+        prompt('p1', 'go'),
+        { id: 'c1', at: AT, kind: 'permission', cardId: 'c1', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: {}, suggestions: [], notified: false },
+      ],
+      4,
+    );
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+  });
+
+  it('уснувшая сессия — карточка с Resume между лентой и полем; клик зовёт sessions.resume', async () => {
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'S01', { lifecycle: 'sleeping' })] })],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+    const resumes: unknown[] = [];
+    bridge.setHandler('sessions.resume', (params) => {
+      resumes.push(params);
+      return undefined;
+    });
+    renderBody(makeSession('s-01', 'S01', { lifecycle: 'sleeping' }));
+    setFeed([]);
+    expect(screen.getByTestId('terminal-not-running')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: S.sidebar.sessionMenu.resume }));
+    await act(async () => {});
+    expect(resumes).toEqual([{ ref: REF }]);
+    // Поле ввода остаётся.
+    expect(screen.getByRole('textbox', { name: S.chat.composer.label })).not.toBeNull();
+  });
+
+  it('живая сессия — карточки нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+  });
+
+  it('у провайдера есть модели — подпись становится меню; выбор шлёт «/model <id>» с submit: true', async () => {
+    useProvidersStore.setState({
+      providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: '' }] }],
+      loaded: true,
+    });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([
+      { id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'opus' } },
+    ]);
+    expect(model().textContent).toBe('opus');
+    fireEvent.keyDown(model(), { key: 'Enter' });
+    const options = screen.getAllByTestId('chat-model-option');
+    expect(options.map((option) => [option.dataset.model, option.textContent])).toEqual([
+      ['opus', 'Opus'],
+      ['sonnet', 'sonnet'],
+    ]);
+    expect(options[0]!.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(options[1]!);
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
+      { ref: REF, text: '/model sonnet', submit: true },
+    ]);
+  });
+
+  it('модель ещё не известна — триггер с подписью «Model»', () => {
+    useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }] }], loaded: true });
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    expect(model().textContent).toBe(S.chat.model);
+  });
+
+  it('у провайдера нет моделей (нет поля или null) — меню нет, подпись как была', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([{ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'opus' } }]);
+    expect(model().tagName).toBe('SPAN');
+    useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: null }], loaded: true });
+    expect(model().tagName).toBe('SPAN');
+    expect(screen.queryByTestId('chat-model-option')).toBeNull();
   });
 });

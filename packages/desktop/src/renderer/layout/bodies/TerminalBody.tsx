@@ -46,6 +46,7 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
         live={session.lifecycle === 'active'}
         bridge={bridge}
         sendDeps={sendDeps}
+        provider={session.provider}
       />
     );
   }

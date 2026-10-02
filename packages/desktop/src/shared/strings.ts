@@ -626,6 +626,10 @@ export const S = {
       agentReported: (summary: string | null): string => (summary === null ? 'Agent reported' : `Agent reported · ${summary}`),
     },
     turn: (duration: string | null): string => (duration === null ? 'Turn finished' : `Turn finished · ${duration}`),
+    /** Черта прерванного хода (живая проверка 2026-10-02): человек нажал Esc. */
+    turnInterrupted: (duration: string | null): string => (duration === null ? 'Interrupted' : `Interrupted · ${duration}`),
+    /** Строка «агент работает» под лентой, пока текста ещё нет (живая проверка 2026-10-02). */
+    working: 'Working…',
     error: 'Request failed',
     agent: {
       fallbackTitle: 'Agent',
@@ -651,6 +655,8 @@ export const S = {
       queue: 'Queue',
     },
     model: 'Model',
+    /** Меню моделей в тулбаре: выбор уходит в CLI текстом `/model <id>` (живая проверка 2026-10-02). */
+    modelMenu: { label: 'Switch model' },
     /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
     mode: {
       label: 'Permission mode',

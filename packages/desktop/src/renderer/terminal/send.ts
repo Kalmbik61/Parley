@@ -40,6 +40,15 @@ export function canResume(session: WorkSession): boolean {
   return session.lifecycle !== 'closed' && RESUMABLE.has(displayStatus(session));
 }
 
+/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2); общая у терминала и чата. */
+export function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
+  bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
+    const { code, message } = decodeIpcError(error);
+    console.warn('[parley] sessions.resume', message);
+    toast.error(errorText(code, S.errors.actions.resumeSession));
+  });
+}
+
 export interface SendToast {
   text: string;
   actions: Array<'copy' | 'open' | 'retry' | 'resume'>;
