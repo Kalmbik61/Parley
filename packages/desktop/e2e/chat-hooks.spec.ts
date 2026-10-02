@@ -377,11 +377,12 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     // i) Меню режима: три пункта; у стаба нет подвала с режимом — хост не может сверить смену, окно говорит об этом тостом.
     await chat.getByTestId('chat-mode').click();
     const options = window.getByTestId('chat-mode-option');
-    await expect(options).toHaveCount(3);
+    await expect(options).toHaveCount(4);
     await expect(options.nth(0)).toHaveText('Manual');
     await expect(options.nth(1)).toHaveText('Accept edits');
     await expect(options.nth(2)).toHaveText('Plan');
     await expect(options.nth(2)).toHaveAttribute('data-mode', 'plan');
+    await expect(options.nth(3)).toHaveText('Auto');
     await options.nth(2).click();
     await expect(window.locator('[data-sonner-toast]').filter({ hasText: 'Open the terminal to switch the mode' })).toBeVisible({ timeout: 20_000 });
 

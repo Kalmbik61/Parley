@@ -664,6 +664,8 @@ export const S = {
       manual: 'Manual',
       acceptEdits: 'Accept edits',
       plan: 'Plan',
+      /** Режим auto Claude Code — когда модель его даёт (живая проверка 2026-10-02: у пользователя он основной). */
+      auto: 'Auto',
       /** Хост не смог сверить подвал или дошёл не до того режима: переключить может только человек в терминале. */
       openTerminal: 'Open the terminal to switch the mode',
     },

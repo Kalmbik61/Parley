@@ -351,11 +351,11 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
 describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
   const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
 
-  it('принимает три режима окна и отвергает прочие', () => {
-    for (const mode of ['default', 'acceptEdits', 'plan']) {
+  it('принимает четыре режима окна и отвергает прочие', () => {
+    for (const mode of ['default', 'acceptEdits', 'plan', 'auto']) {
       expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(true);
     }
-    for (const mode of ['bypassPermissions', 'auto', '', 5]) {
+    for (const mode of ['bypassPermissions', 'dontAsk', '', 5]) {
       expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(false);
     }
     expect(METHODS['sessions.setMode'].safeParse({ mode: 'plan' }).success).toBe(false);

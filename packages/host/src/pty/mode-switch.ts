@@ -4,10 +4,12 @@
  * самом CLI, и угадать его по числу нажатий нельзя (диалог поверх, режимы вне цикла, потерянная
  * клавиша). Не сошлось — хост останавливается и говорит, что видит; человек решает дальше сам.
  *
- * Цикл окна: default → acceptEdits → plan → default. `auto` в него не входит: из него хост ничего не
- * нажимает. Подпись режима обхода разрешений («bypass permissions on») хост не распознаёт вовсе —
- * само имя этого режима в исходниках запрещено стражем рамки (`test/frame-scan.ts`, YOLO-флаги); в нём
- * подвал считается неизвестным, ответ `mode: null`, нажатий нет, а окно видит режим из хуков ленты.
+ * Порядок цикла Shift+Tab хост не предполагает: у модели с режимом auto он длиннее (живая проверка
+ * 2026-10-02 — сессия стояла в auto, стенд этого режима не видел). Хост жмёт по одному, пока подвал
+ * не покажет цель, не больше `MAX_PRESSES`; подвал вернулся к исходному режиму — цели в цикле нет.
+ * Подпись режима обхода разрешений («bypass permissions on») хост не распознаёт вовсе — само имя
+ * этого режима в исходниках запрещено стражем рамки (`test/frame-scan.ts`, YOLO-флаги); в нём подвал
+ * считается неизвестным, ответ `mode: null`, нажатий нет, а окно видит режим из хуков ленты.
  */
 
 import { refKey } from '@parley/protocol';
@@ -24,8 +26,8 @@ export const QUIET_MAX_MS = 2_000;
 /** Как часто сверяется подвал после нажатия и сколько ждётся смена. */
 export const POLL_MS = 50;
 export const STEP_MAX_MS = 1_500;
-
-const CYCLE: readonly PermissionModeChoice[] = ['default', 'acceptEdits', 'plan'];
+/** Сколько нажатий Shift+Tab хост делает, прежде чем сдаться: режимов в цикле не больше четырёх. */
+export const MAX_PRESSES = 5;
 
 /** Подпись подвала → сырая строка режима CLI; со словом «on» — «auto mode unavailable» не режим. */
 const FOOTER_LABELS: readonly (readonly [RegExp, string])[] = [
@@ -107,11 +109,11 @@ export async function switchMode(
       arm();
     });
 
-  /** Ждёт, пока подвал покажет `expected`; возвращает последнее, что видел. */
-  const waitFor = async (expected: string): Promise<string | null> => {
+  /** Ждёт, пока подвал покажет что-то кроме `before` (не дольше `STEP_MAX_MS`); возвращает последнее, что видел. */
+  const waitChange = async (before: string): Promise<string | null> => {
     let waited = 0;
     let seen = read();
-    while (seen !== expected && waited < STEP_MAX_MS) {
+    while (seen === before && waited < STEP_MAX_MS) {
       await sleep(POLL_MS);
       waited += POLL_MS;
       seen = read();
@@ -120,21 +122,23 @@ export async function switchMode(
   };
 
   await waitQuiet();
-  const current = read();
-  if (current === null) return { mode: null, verified: false };
-  if (current === target) return { mode: current, verified: true };
-  const from = CYCLE.indexOf(current as PermissionModeChoice);
-  // Режим вне цикла (bypass, auto): Shift+Tab ушёл бы в другое место — не нажимаем ничего.
-  if (from === -1) return { mode: current, verified: false };
+  const start = read();
+  if (start === null) return { mode: null, verified: false };
+  if (start === target) return { mode: start, verified: true };
 
-  const presses = (CYCLE.indexOf(target) - from + CYCLE.length) % CYCLE.length;
-  let shown: string = current;
-  for (let step = 1; step <= presses; step += 1) {
-    const expected = CYCLE[(from + step) % CYCLE.length] as string;
+  // Порядок цикла хост не предполагает: у модели с режимом auto он длиннее (живая проверка
+  // 2026-10-02 — сессия стояла в auto, и хост отказывался нажимать). Жмём по одному, после каждого
+  // ждём смены подвала; цель показалась — готово; подвал вернулся к исходному (полный круг без цели),
+  // не сменился (нажатие потеряно) или пропал (диалог поверх) — стоп, отвечаем тем, что видим.
+  let shown: string = start;
+  for (let press = 0; press < MAX_PRESSES; press += 1) {
+    const before = shown;
     pty.write(ref, SHIFT_TAB);
-    const seen = await waitFor(expected);
-    if (seen !== expected) return { mode: seen, verified: false };
+    const seen = await waitChange(before);
+    if (seen === null || seen === before) return { mode: seen, verified: false };
     shown = seen;
+    if (shown === target) return { mode: shown, verified: true };
+    if (shown === start) return { mode: shown, verified: false };
   }
-  return { mode: shown, verified: shown === target };
+  return { mode: shown, verified: false };
 }

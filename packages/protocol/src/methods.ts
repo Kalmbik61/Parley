@@ -20,8 +20,8 @@ export const sessionRef = z.object({
 /** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
-/** Режимы, которые окно выбирает само: цикл Shift+Tab без `auto` и обхода разрешений. */
-export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan']);
+/** Режимы, которые окно выбирает само: цикл Shift+Tab (auto — когда модель его даёт) без обхода разрешений. */
+export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan', 'auto']);
 export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */

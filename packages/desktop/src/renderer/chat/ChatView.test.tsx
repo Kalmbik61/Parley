@@ -628,17 +628,19 @@ describe('ChatView — меню режима (кусок 4a, решения К �
     expect(trigger().textContent).toBe('Accept edits');
     setMode('plan');
     expect(trigger().textContent).toBe('Plan');
+    setMode('auto');
+    expect(trigger().textContent).toBe('Auto');
     setMode('bypassPermissions');
     expect(trigger().textContent).toBe('bypassPermissions');
   });
 
-  it('пункты Manual, Accept edits, Plan; текущий отмечен; выбор зовёт sessions.setMode', async () => {
+  it('пункты Manual, Accept edits, Plan, Auto; текущий отмечен; выбор зовёт sessions.setMode', async () => {
     hostWith(MODE_METHODS);
     bridge.setHandler('sessions.setMode', () => ({ mode: 'plan', verified: true }));
     renderBody(makeSession('s-01', 'S01'));
     setMode('default');
     openMenu();
-    expect(options().map((option) => option.dataset.mode)).toEqual(['default', 'acceptEdits', 'plan']);
+    expect(options().map((option) => option.dataset.mode)).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
     expect(options()[0]!.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(options()[2]!);
     await act(async () => {});
