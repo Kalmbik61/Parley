@@ -11,6 +11,8 @@ export type { LimitWindow, ProviderLimits } from '@parley/core';
  * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
  */
 export type { ModelOption } from '@parley/core';
+/** Подсказки поля ввода вида «Chat» (`capabilities.list`): команды, скиллы и субагенты CLI провайдера. */
+export type { Capabilities, CapabilityAgent, CapabilityCommand, CapabilitySkill, CapabilitySource } from '@parley/core';
 
 /**
  * Лента вида «Chat» (план 2026-10-01, решение 14): элемент, решение окна и состояние карточки. Типы

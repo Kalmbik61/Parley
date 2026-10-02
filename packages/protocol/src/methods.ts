@@ -9,7 +9,7 @@ import type {
   WorktreeDiff,
 } from '@parley/core';
 import { feedDecision } from './feed.js';
-import type { ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -85,6 +85,9 @@ export const METHODS = {
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
+  // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
+  // провайдера у человека и в проекте — хост только читает их папки.
+  'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
@@ -229,6 +232,8 @@ export interface Results {
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
   'sessions.setMode': { mode: string | null; verified: boolean };
+  /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
+  'capabilities.list': Capabilities;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };

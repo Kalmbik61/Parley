@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
-import type { FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
+import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
 
 describe('типы методов', () => {
   it('у Params<sessions.create> поле workId имеет тип string | null', () => {
@@ -364,5 +364,17 @@ describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
   it('результат и тип выбора', () => {
     expectTypeOf<Result<'sessions.setMode'>>().toEqualTypeOf<{ mode: string | null; verified: boolean }>();
     expectTypeOf<Params<'sessions.setMode'>['mode']>().toEqualTypeOf<PermissionModeChoice>();
+  });
+});
+
+describe('capabilities.list (живая проверка 2026-10-02: подсказки поля ввода)', () => {
+  it('принимает проект и провайдера, отвергает пустые', () => {
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p', provider: 'claude' }).success).toBe(true);
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '', provider: 'claude' }).success).toBe(false);
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p' }).success).toBe(false);
+  });
+
+  it('результат — команды, скиллы и субагенты', () => {
+    expectTypeOf<Result<'capabilities.list'>>().toEqualTypeOf<Capabilities>();
   });
 });

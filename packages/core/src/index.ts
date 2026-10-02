@@ -323,6 +323,13 @@ export type {
 } from './work/settings-file.js';
 export { FEED_MIN_VERSION, feedSupported } from './work/feed-version.js';
 export * from './feed/index.js';
+export type {
+  Capabilities,
+  CapabilityAgent,
+  CapabilityCommand,
+  CapabilitySkill,
+  CapabilitySource,
+} from './capabilities/types.js';
 export {
   MCP_SERVER_BIN,
   codexMcpOverride,
