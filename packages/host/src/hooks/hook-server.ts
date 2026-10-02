@@ -249,6 +249,8 @@ export function createHookServer(options: HookServerOptions): HookServer {
       open.delete(respond);
       abandon?.();
     });
+    // Сбой записи ответа (CLI закрыл сокет первым) — не повод падать: `close` уже всё снял.
+    res.on('error', () => {});
 
     const request: HookRequest = {
       ref: registration.ref,

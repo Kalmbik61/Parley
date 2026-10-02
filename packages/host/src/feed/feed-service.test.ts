@@ -5,7 +5,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +23,7 @@ import type { EventData } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_MAX_ITEMS } from './feed-service.js';
+import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 
 const FIXTURES = path.resolve(
@@ -209,6 +209,45 @@ describe('снимок и дельты', () => {
     await expect(service.snapshot(ref)).rejects.toMatchObject({ code: 'not_found' });
     expect(() => service.subscribe(ref, fakeClient())).toThrow(HostError);
   });
+
+  it('клиент отключился от хоста — dropClient снимает его подписки', () => {
+    vi.useFakeTimers();
+    start();
+    const gone = fakeClient();
+    const stays = fakeClient();
+    service.subscribe(REF, gone);
+    service.subscribe(REF, stays);
+    service.dropClient(gone);
+
+    send(prompt('a'));
+    vi.advanceTimersByTime(50);
+
+    expect(feedChanged(gone)).toHaveLength(0);
+    expect(feedChanged(stays)).toHaveLength(1);
+  });
+
+  it('сессия пропала из работ: удержанным {}, лента и подписки забыты, таймеры сняты', async () => {
+    vi.useFakeTimers();
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    const request = send(permission('Bash', { command: 'ls' }));
+
+    fakes.setSessions([]);
+
+    expect(request.responses).toEqual([{}]);
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(service.snapshot(REF)).rejects.toMatchObject({ code: 'not_found' });
+
+    // Та же сессия заведена заново — лента с чистого листа, старый подписчик ничего не получает.
+    fakes.setSessions([{ ref: REF }]);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [], revision: 0 });
+    send(prompt('again'));
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(0);
+  });
 });
 
 describe('кольцо', () => {
@@ -243,6 +282,16 @@ describe('кольцо', () => {
     expect(bytes).toBeLessThanOrEqual(4_000);
     expect(items.length).toBeGreaterThan(0);
     expect(items.at(-1)).toMatchObject({ kind: 'prompt', text: `19:${'x'.repeat(500)}` });
+  });
+
+  it('один элемент тяжелее предела байтов остаётся: лента не пустеет', async () => {
+    start({ maxBytes: 100 });
+    send(prompt('x'.repeat(500)));
+    send(prompt('y'.repeat(500)));
+
+    const { items } = await service.snapshot(REF);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: 'prompt', text: 'y'.repeat(500) });
   });
 
   it('вытесненная ждущая карточка отпускает свой хук пустым ответом', () => {
@@ -378,6 +427,29 @@ describe('удержание хуков и решения', () => {
     ]);
   });
 
+  it('PermissionRequest(ExitPlanMode) без карточки plan: карточка permission, решение plan не идёт, permission — allow', async () => {
+    start();
+    send(prompt('go'));
+    const request = send(permission('ExitPlanMode', PLAN));
+    expect(request.responses).toEqual([]);
+
+    const card = ofKind((await service.snapshot(REF)).items, 'permission')[0] as FeedPermissionCard;
+    expect(card.toolName).toBe('ExitPlanMode');
+    expect(service.decide(REF, card.cardId, { kind: 'plan', choice: 'auto-accept' })).toEqual({
+      applied: false,
+      state: 'pending',
+    });
+    expect(request.responses).toEqual([]);
+
+    expect(service.decide(REF, card.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({
+      applied: true,
+      state: 'allowed',
+    });
+    expect(request.responses).toEqual([
+      { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } },
+    ]);
+  });
+
   it('карточка плана до PermissionRequest: решать нечем — applied false, состояние pending', () => {
     start();
     send(pre('pl1', 'ExitPlanMode', PLAN));
@@ -470,6 +542,19 @@ describe('удержание хуков и решения', () => {
     expect(request.responses).toEqual([{}]);
     expect(send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS })).responses).toEqual([{}]);
   });
+
+  it('stop() снимает таймеры пачки и удержания', () => {
+    vi.useFakeTimers();
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    void service.stop();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('сев из журнала', () => {
@@ -546,6 +631,19 @@ describe('сев из журнала', () => {
     start({ roots: () => [root], readRecords: reader.read });
     await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [], revision: 0 });
     expect(reader.files).toHaveLength(0);
+  });
+
+  it('readRecordsTail: только последние записи журнала, по порядку', async () => {
+    const dir = await tempRoot();
+    const file = path.join(dir, 'big.jsonl');
+    const lines = Array.from({ length: 25 }, (_, i) => JSON.stringify({ type: 'user', i }));
+    await writeFile(file, `${lines.join('\n')}\n`);
+
+    const tail = await readRecordsTail(file, 10);
+    expect(tail.map((record) => record['i'])).toEqual(
+      Array.from({ length: 10 }, (_, i) => i + 15),
+    );
+    expect(await readRecordsTail(file, 100)).toHaveLength(25);
   });
 
   it('снимок субагента по agentId — из его журнала, revision 0', async () => {

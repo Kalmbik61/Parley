@@ -25,6 +25,8 @@ type ActivityListener = (
   value: { activity: { activity: string }; metrics: null },
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
+type FakeSession = { ref: SessionRef; provider?: string };
+type WorksListener = (snapshot: unknown, previous: unknown) => void;
 
 export interface FakeFeedDeps {
   deps: FeedServiceDeps;
@@ -33,14 +35,36 @@ export interface FakeFeedDeps {
   setLogFile(file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
   emitExit(ref: SessionRef): void;
+  /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
+  setSessions(next: FakeSession[]): void;
 }
 
-export function fakeFeedDeps(
-  sessions: Array<{ ref: SessionRef; provider?: string }> = [{ ref: REF }],
-): FakeFeedDeps {
+type FakeEntry = { projectPath: string; map: { work: { id: string }; sessions: unknown[] } };
+
+/** Снимок работ по списку сессий: записи по проекту и работе. */
+function worksSnapshotOf(sessions: FakeSession[]): { entries: FakeEntry[] } {
+  const entries = new Map<string, FakeEntry>();
+  for (const session of sessions) {
+    const key = `${session.ref.projectPath}\u0000${session.ref.workId}`;
+    let entry = entries.get(key);
+    if (entry === undefined) {
+      entry = {
+        projectPath: session.ref.projectPath,
+        map: { work: { id: session.ref.workId }, sessions: [] },
+      };
+      entries.set(key, entry);
+    }
+    entry.map.sessions.push({ id: session.ref.sessionId, provider: session.provider ?? 'claude' });
+  }
+  return { entries: Array.from(entries.values()) };
+}
+
+export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedDeps {
+  let sessions = initial;
   let logFile: string | null = null;
   const activityListeners = new Set<ActivityListener>();
   const exitListeners = new Set<ExitListener>();
+  const worksListeners = new Set<WorksListener>();
   const log = silentLog();
   const deps = {
     host: { log },
@@ -53,12 +77,17 @@ export function fakeFeedDeps(
         return {
           projectPath,
           map: {
+            work: { id: workId },
             sessions: own.map((session) => ({
               id: session.ref.sessionId,
               provider: session.provider ?? 'claude',
             })),
           },
         };
+      },
+      onChange: (listener: WorksListener) => {
+        worksListeners.add(listener);
+        return () => worksListeners.delete(listener);
       },
     },
     activity: {
@@ -88,6 +117,12 @@ export function fakeFeedDeps(
     },
     emitExit(ref) {
       for (const listener of exitListeners) listener(ref);
+    },
+    setSessions(next) {
+      const previous = worksSnapshotOf(sessions);
+      sessions = next;
+      const snapshot = worksSnapshotOf(sessions);
+      for (const listener of worksListeners) listener(snapshot, previous);
     },
   };
 }

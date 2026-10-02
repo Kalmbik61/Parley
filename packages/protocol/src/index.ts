@@ -21,6 +21,7 @@ export type {
 } from './types.js';
 export { METHODS, NOTIFICATIONS, sessionRef } from './methods.js';
 export {
+  FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
   FEED_DECISION_ANSWERS,
   FEED_DECISION_ANSWER_LIMIT,

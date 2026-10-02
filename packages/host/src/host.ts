@@ -276,7 +276,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       handle.addClient(client);
       for (const data of activityService.current()) client.send({ event: 'activity.changed', data });
     },
-    unregisterClient: handle.removeClient,
+    // Ушедший клиент снимается и с подписок ленты: иначе его `Client` жил бы в них до следующей дельты.
+    unregisterClient: (client) => {
+      handle.removeClient(client);
+      feedService.dropClient(client);
+    },
   });
 
   // 5. `listen`, затем сокет переводится на 0600 (изначально его создаёт `listen`).

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import * as core from '@parley/core';
 import type { FeedDecision, FeedItem, FeedState } from '@parley/core';
 import {
+  FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
@@ -302,7 +303,38 @@ describe('пределы и версия', () => {
     expect(FEED_PATCH_LINES).toBe(core.FEED_PATCH_LINES);
     expect(FEED_AGENT_TEXT_LIMIT).toBe(core.FEED_AGENT_TEXT_LIMIT);
     expect(FEED_TEXT_LIMIT).toBe(core.FEED_TEXT_LIMIT);
+    expect(FEED_AGENT_CHILDREN).toBe(core.FEED_AGENT_CHILDREN);
     expect(FEED_SCHEMA_VERSION).toBe(1);
+  });
+
+  it('карточка агента: вложенных вызовов не больше FEED_AGENT_CHILDREN', () => {
+    const child = (i: number) => ({
+      id: `tool:c${i}`,
+      at: '2026-10-01T10:00:00.000Z',
+      kind: 'tool',
+      toolUseId: `c${i}`,
+      name: 'Bash',
+      input: { command: 'ls' },
+      status: 'done',
+      agentId: 'ag1',
+    });
+    const agent = (children: number) => ({
+      id: 'agent:a1',
+      at: '2026-10-01T10:00:00.000Z',
+      kind: 'agent',
+      toolUseId: 'a1',
+      agentId: 'ag1',
+      agentType: 'Explore',
+      description: 'x',
+      prompt: null,
+      model: null,
+      background: false,
+      status: 'running',
+      toolCount: children,
+      children: Array.from({ length: children }, (_, i) => child(i)),
+    });
+    expect(feedItem.safeParse(agent(FEED_AGENT_CHILDREN)).success).toBe(true);
+    expect(feedItem.safeParse(agent(FEED_AGENT_CHILDREN + 1)).success).toBe(false);
   });
 
   it('feedCardState — шесть состояний карточки', () => {

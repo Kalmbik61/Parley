@@ -52,6 +52,11 @@ export const FEED_MAX_ITEMS = 2_000;
 export const FEED_MAX_BYTES = 4 * 1024 * 1024;
 /** Не чаще одной дельты `feed.changed` на сессию за этот срок. */
 export const FEED_BATCH_MS = 50;
+/**
+ * Сколько последних записей журнала читается при севе: на кольцо хватает с запасом (запись даёт не
+ * больше пары элементов), а память не растёт с файлом — журналы долгих сессий весят десятки мегабайт.
+ */
+export const SEED_RECORD_WINDOW = 10_000;
 
 const QUESTION_TOOL = 'AskUserQuestion';
 const PLAN_TOOL = 'ExitPlanMode';
@@ -60,7 +65,7 @@ const SAFE_AGENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
-  works: Pick<WorksService, 'entry'>;
+  works: Pick<WorksService, 'entry' | 'onChange'>;
   activity: Pick<ActivityService, 'onChange' | 'logFile'>;
   pty: Pick<PtyManager, 'on'>;
 }
@@ -87,6 +92,8 @@ export interface FeedService {
   snapshot(ref: SessionRef, agentId?: string): Promise<FeedSnapshot>;
   subscribe(ref: SessionRef, client: Client): void;
   unsubscribe(ref: SessionRef, client: Client): void;
+  /** Клиент отключился от хоста: все его подписки сняты. */
+  dropClient(client: Client): void;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
@@ -139,10 +146,20 @@ function insideRoots(file: string, roots: readonly string[]): boolean {
   });
 }
 
-async function readAllRecords(file: string): Promise<RawRecord[]> {
-  const records: RawRecord[] = [];
-  await forEachJsonlRecord(file, (record) => records.push(record));
-  return records;
+/** Последние `window` записей файла по порядку: кольцевой буфер, файл целиком в память не ложится. */
+export async function readRecordsTail(
+  file: string,
+  window: number = SEED_RECORD_WINDOW,
+): Promise<RawRecord[]> {
+  const ring: RawRecord[] = [];
+  let next = 0;
+  let count = 0;
+  await forEachJsonlRecord(file, (record) => {
+    ring[next] = record;
+    next = (next + 1) % window;
+    count += 1;
+  });
+  return count < window ? ring : [...ring.slice(next), ...ring.slice(0, next)];
 }
 
 /** Хвост списка, чей JSON не больше `maxBytes`. */
@@ -168,7 +185,7 @@ export function createFeedService(
   const batchMs = options.batchMs ?? FEED_BATCH_MS;
   const now = options.now ?? Date.now;
   const roots = options.roots ?? (() => claudeProjectRoots());
-  const readRecords = options.readRecords ?? readAllRecords;
+  const readRecords = options.readRecords ?? readRecordsTail;
 
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
@@ -205,12 +222,15 @@ export function createFeedService(
     return feed;
   }
 
-  /** Кольцо: старые элементы уходят, пока лента длиннее `maxItems` или тяжелее `maxBytes`. */
+  /**
+   * Кольцо: старые элементы уходят, пока лента длиннее `maxItems` или тяжелее `maxBytes`. Самый новый
+   * остаётся всегда — лента не пустеет, даже если он один тяжелее предела.
+   */
   function trim(feed: SessionFeed, track: boolean): void {
     const items = feed.state.items;
     let drop = 0;
     const evicted: string[] = [];
-    while (drop < items.length && (items.length - drop > maxItems || feed.bytes > maxBytes)) {
+    while (drop < items.length - 1 && (items.length - drop > maxItems || feed.bytes > maxBytes)) {
       const item = items[drop] as FeedItem;
       feed.bytes -= feed.sizes.get(item.id) ?? 0;
       feed.sizes.delete(item.id);
@@ -438,6 +458,34 @@ export function createFeedService(
     if (ids.length > 0) settle(feed.ref, 'elsewhere', ids);
   });
 
+  /** Сессии больше нет в работах: её лента, подписчики и удержанные хуки никому не нужны. */
+  function forget(key: string): void {
+    const feed = feeds.get(key);
+    if (feed !== undefined) {
+      if (feed.timer !== undefined) clearTimeout(feed.timer);
+      feed.timer = undefined;
+      pending.settle(feed.ref);
+      feeds.delete(key);
+    }
+    lastActivity.delete(key);
+    subscribers.delete(key);
+  }
+
+  const unsubscribeWorks = deps.works.onChange((snapshot) => {
+    if (stopped) return;
+    const alive = new Set<string>();
+    for (const entry of snapshot.entries) {
+      for (const session of entry.map.sessions) {
+        alive.add(
+          refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }),
+        );
+      }
+    }
+    for (const key of [...feeds.keys(), ...subscribers.keys(), ...lastActivity.keys()]) {
+      if (!alive.has(key)) forget(key);
+    }
+  });
+
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
     const feed = feeds.get(refKey(ref));
@@ -488,6 +536,13 @@ export function createFeedService(
       if (clients?.size === 0) subscribers.delete(key);
     },
 
+    dropClient(client) {
+      for (const [key, clients] of subscribers) {
+        clients.delete(client);
+        if (clients.size === 0) subscribers.delete(key);
+      }
+    },
+
     decide(ref, cardId, decision) {
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
@@ -523,6 +578,7 @@ export function createFeedService(
       stopped = true;
       unsubscribeActivity();
       unsubscribeExit();
+      unsubscribeWorks();
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

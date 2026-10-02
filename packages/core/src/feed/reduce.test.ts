@@ -29,7 +29,10 @@ import type {
   FeedTool,
 } from './types.js';
 import {
+  FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
+  FEED_CHILD_INPUT_LIMIT,
+  FEED_CHILD_RESULT_LIMIT,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
@@ -941,6 +944,49 @@ describe('прочность и пределы', () => {
     expect(closed.state.turnStartedAt).toBeNull();
     // Хода нет — закрывать нечего, черта не добавляется.
     expect(closeFeedTurn(closed.state, LATER).changes).toEqual([]);
+  });
+
+  it('вложенные вызовы субагента: последние FEED_AGENT_CHILDREN, короткие вход и сводка, без хунков', () => {
+    const total = FEED_AGENT_CHILDREN + 1;
+    const events: Record<string, unknown>[] = [
+      { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+      pre('a1', 'Agent', { description: 'edit a lot', prompt: 'p', subagent_type: 'Explore' }),
+      { hook_event_name: 'SubagentStart', agent_id: 'ag1', agent_type: 'Explore' },
+    ];
+    const nested = { agent_id: 'ag1', agent_type: 'Explore' };
+    const bash = { command: 'x'.repeat(5_000) };
+    const output = { stdout: 'o'.repeat(5_000), stderr: '' };
+    for (let i = 0; i < total; i += 1) {
+      events.push(pre(`c${i}`, 'Bash', bash, 'ag1'));
+      events.push({ ...post(`c${i}`, 'Bash', bash, output), ...nested });
+    }
+    const edit = { file_path: '/p/f.ts', old_string: 'x', new_string: 'y' };
+    const patched = {
+      filePath: '/p/f.ts',
+      structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-x', '+y'] }],
+      originalFile: 'x',
+    };
+    events.push(pre('e1', 'Edit', edit, 'ag1'));
+    events.push({ ...post('e1', 'Edit', edit, patched), ...nested });
+    const state = run(events);
+    const agent = ofKind(state.items, 'agent')[0] as FeedAgent;
+
+    // 102 вызова: остались последние 100, счётчик помнит все.
+    expect(agent.toolCount).toBe(total + 1);
+    expect(agent.children).toHaveLength(FEED_AGENT_CHILDREN);
+    expect(agent.children[0]?.toolUseId).toBe('c2');
+    expect(agent.children.at(-1)?.toolUseId).toBe('e1');
+    const child = agent.children[0] as FeedTool;
+    expect((child.input['command'] as string).length).toBe(FEED_CHILD_INPUT_LIMIT);
+    expect(child.truncated).toBe(true);
+    expect(child.response?.text.length).toBe(FEED_CHILD_RESULT_LIMIT);
+    expect(child.response?.truncated).toBe(true);
+    expect(child.response?.size).toBe(5_000);
+    expect(agent.children.at(-1)?.patch).toBeUndefined();
+    expect(JSON.stringify(agent).length).toBeLessThan(FEED_AGENT_CHILDREN * 6 * 1024);
+    // Известный вызов обновляется на месте и второй раз не считается.
+    const again = applyHookEvent(state, { ...post('c2', 'Bash', bash, output), ...nested }, AT);
+    expect((ofKind(again.state.items, 'agent')[0] as FeedAgent).toolCount).toBe(total + 1);
   });
 
   it('два одинаковых запроса без tool_use_id: PostToolUse снимает только самую раннюю карточку', () => {

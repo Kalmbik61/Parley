@@ -1,7 +1,10 @@
 /** Лента вида «Chat» (план 2026-10-01, Task 1): модель, редьюсер событий хуков, разбор журнала. */
 
 export {
+  FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
+  FEED_CHILD_INPUT_LIMIT,
+  FEED_CHILD_RESULT_LIMIT,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,

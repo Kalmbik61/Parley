@@ -96,6 +96,23 @@ describe('createPendingHooks', () => {
     expect(pending.size()).toBe(0);
   });
 
+  it('resolve, settle и drop снимают таймер: колбэк таймаута потом не зовётся', () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pending = createPendingHooks({ onTimeout });
+    pending.hold(held('a'));
+    pending.hold(held('b'));
+    pending.hold(held('c'));
+
+    pending.resolve(REF, 'a', { ok: 1 });
+    pending.settle(REF, ['b']);
+    pending.drop(REF, 'c');
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(PENDING_TIMEOUT_MS);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
   it('упавший ответ не мешает снять соседей', () => {
     const pending = createPendingHooks();
     const broken = held('a');

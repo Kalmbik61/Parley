@@ -14,7 +14,10 @@
 import { eventRecordOf, isRecord, textOf, type EventRecord } from '../work/events.js';
 import { isHookNoise } from './noise.js';
 import {
+  FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
+  FEED_CHILD_INPUT_LIMIT,
+  FEED_CHILD_RESULT_LIMIT,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
@@ -68,17 +71,17 @@ export function limitText(value: string, limit: number): { text: string; truncat
     : { text: value, truncated: false };
 }
 
-/** Значение с обрезанными до `FEED_INPUT_LIMIT` строками; без длинных строк — то же значение. */
-function limitStrings(value: unknown, cut: { truncated: boolean }): unknown {
+/** Значение с обрезанными до `limit` строками; без длинных строк — то же значение. */
+function limitStrings(value: unknown, cut: { truncated: boolean }, limit: number): unknown {
   if (typeof value === 'string') {
-    if (value.length <= FEED_INPUT_LIMIT) return value;
+    if (value.length <= limit) return value;
     cut.truncated = true;
-    return value.slice(0, FEED_INPUT_LIMIT);
+    return value.slice(0, limit);
   }
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const limited = limitStrings(item, cut);
+      const limited = limitStrings(item, cut, limit);
       if (limited !== item) changed = true;
       return limited;
     });
@@ -88,7 +91,7 @@ function limitStrings(value: unknown, cut: { truncated: boolean }): unknown {
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      const limited = limitStrings(item, cut);
+      const limited = limitStrings(item, cut, limit);
       if (limited !== item) changed = true;
       next[key] = limited;
     }
@@ -97,13 +100,16 @@ function limitStrings(value: unknown, cut: { truncated: boolean }): unknown {
   return value;
 }
 
-/** Вход вызова или карточки с пределом `FEED_INPUT_LIMIT` на каждую строку внутри. */
-export function limitInput(input: Record<string, unknown>): {
+/** Вход вызова или карточки с пределом `limit` (по умолчанию `FEED_INPUT_LIMIT`) на каждую строку внутри. */
+export function limitInput(
+  input: Record<string, unknown>,
+  limit: number = FEED_INPUT_LIMIT,
+): {
   input: Record<string, unknown>;
   truncated: boolean;
 } {
   const cut = { truncated: false };
-  const limited = limitStrings(input, cut) as Record<string, unknown>;
+  const limited = limitStrings(input, cut, limit) as Record<string, unknown>;
   return { input: limited, truncated: cut.truncated };
 }
 
@@ -131,9 +137,12 @@ export function blocksText(value: unknown): string | null {
 
 /**
  * Сводка результата инструмента: у `Bash` — вывод, у `Read` — содержимое файла, строка — как есть,
- * прочее — JSON. Усечение явное: `truncated` и полный `size`.
+ * прочее — JSON. Усечение явное: `truncated` и полный `size`; предел — `limit`.
  */
-export function toolResponseOf(value: unknown): FeedToolResponse | undefined {
+export function toolResponseOf(
+  value: unknown,
+  limit: number = FEED_RESULT_LIMIT,
+): FeedToolResponse | undefined {
   if (value === undefined || value === null) return undefined;
   let text: string;
   if (typeof value === 'string') {
@@ -160,9 +169,9 @@ export function toolResponseOf(value: unknown): FeedToolResponse | undefined {
   } else {
     text = JSON.stringify(value, null, 2);
   }
-  const truncated = text.length > FEED_RESULT_LIMIT;
+  const truncated = text.length > limit;
   return {
-    text: truncated ? text.slice(0, FEED_RESULT_LIMIT) : text,
+    text: truncated ? text.slice(0, limit) : text,
     size: text.length,
     truncated,
   };
@@ -360,7 +369,10 @@ export function mainTool(draft: FeedDraft, toolUseId: string): FeedTool | undefi
   return item !== undefined && isMainTool(item) ? item : undefined;
 }
 
-/** Новый вызов инструмента; длинные строки входа обрезаны (`FEED_INPUT_LIMIT`). */
+/**
+ * Новый вызов инструмента; длинные строки входа обрезаны: `FEED_INPUT_LIMIT`, у вложенного вызова
+ * субагента — `FEED_CHILD_INPUT_LIMIT`.
+ */
 export function newTool(
   toolUseId: string,
   name: string,
@@ -368,7 +380,7 @@ export function newTool(
   at: string,
   agentId: string | null,
 ): FeedTool {
-  const limited = limitInput(input);
+  const limited = limitInput(input, agentId === null ? FEED_INPUT_LIMIT : FEED_CHILD_INPUT_LIMIT);
   const tool: FeedTool = {
     id: `tool:${toolUseId}`,
     at,
@@ -410,17 +422,21 @@ export function withResult(agent: FeedAgent, value: string): FeedAgent {
   return next;
 }
 
-/** Закрытый вызов: статус, сводка результата и хунки. */
+/**
+ * Закрытый вызов: статус, сводка результата и хунки. У вложенного вызова субагента сводка короче
+ * (`FEED_CHILD_RESULT_LIMIT`), а хунков нет — дифф есть в журнале субагента.
+ */
 export function finishTool(
   tool: FeedTool,
   status: FeedToolStatus,
   response: unknown,
   at: string,
 ): FeedTool {
+  const nested = tool.agentId !== undefined;
   const next: FeedTool = { ...tool, status, endedAt: at };
-  const summary = toolResponseOf(response);
+  const summary = toolResponseOf(response, nested ? FEED_CHILD_RESULT_LIMIT : FEED_RESULT_LIMIT);
   if (summary !== undefined) next.response = summary;
-  const patch = patchOf(response);
+  const patch = nested ? undefined : patchOf(response);
   if (patch !== undefined) {
     next.patch = patch.hunks;
     if (patch.truncated) next.patchTruncated = true;
@@ -544,12 +560,21 @@ function rejectTool(draft: FeedDraft, toolUseId: string, agentId: string | null,
   draft.put(withChild(agent, { ...child, status: 'rejected', endedAt: at }));
 }
 
+/**
+ * Карточка с вложенным вызовом: новый — в конец (старше `FEED_AGENT_CHILDREN` уходят, `toolCount`
+ * считает и их), известный — на своём месте.
+ */
 function withChild(agent: FeedAgent, child: FeedTool): FeedAgent {
   const index = agent.children.findIndex((item) => item.toolUseId === child.toolUseId);
   const children = agent.children.slice();
-  if (index === -1) children.push(child);
-  else children[index] = child;
-  return { ...agent, children, toolCount: Math.max(agent.toolCount, children.length) };
+  if (index !== -1) {
+    children[index] = child;
+    return { ...agent, children };
+  }
+  children.push(child);
+  const extra = children.length - FEED_AGENT_CHILDREN;
+  if (extra > 0) children.splice(0, extra);
+  return { ...agent, children, toolCount: agent.toolCount + 1 };
 }
 
 function settleAllPending(draft: FeedDraft, at: string): void {

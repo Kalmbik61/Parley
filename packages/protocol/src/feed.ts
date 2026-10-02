@@ -26,6 +26,8 @@ export const FEED_PATCH_LINES = 2_000;
 export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 /** = `FEED_TEXT_LIMIT` core: символов текста ответа модели. */
 export const FEED_TEXT_LIMIT = 256 * 1024;
+/** = `FEED_AGENT_CHILDREN` core: вложенных вызовов у карточки субагента. */
+export const FEED_AGENT_CHILDREN = 100;
 
 /** Текст отказа для модели в `feed.decide` (как заметка возврата `rooms.resolveProposal`). */
 export const FEED_DECISION_MESSAGE_LIMIT = 4000;
@@ -171,7 +173,7 @@ const agent = z.strictObject({
   endedAt: z.string().exactOptional(),
   durationMs: z.number().min(0).exactOptional(),
   toolCount: z.number().int().min(0),
-  children: z.array(tool),
+  children: z.array(tool).max(FEED_AGENT_CHILDREN),
   result: agentText.exactOptional(),
   transcriptPath: z.string().exactOptional(),
   truncated: z.boolean().exactOptional(),
