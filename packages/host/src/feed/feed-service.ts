@@ -66,7 +66,7 @@ const SAFE_AGENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
-  activity: Pick<ActivityService, 'onChange' | 'logFile'>;
+  activity: Pick<ActivityService, 'onChange' | 'logFile' | 'questionHeld'>;
   pty: Pick<PtyManager, 'on'>;
 }
 
@@ -199,11 +199,54 @@ export function createFeedService(
   const lastActivity = new Map<string, string>();
   let stopped = false;
 
-  const pending: PendingHooks = createPendingHooks({
+  const rawPending: PendingHooks = createPendingHooks({
     timeoutMs: options.pendingTimeoutMs ?? PENDING_TIMEOUT_MS,
     // Хук ждал дольше предела и получил `{}`: отвечать теперь в терминале.
     onTimeout: (ref, cardId) => settle(ref, 'stale', [cardId]),
   });
+
+  /**
+   * Сессии, у которых службе активности сказано «вопрос агента удержан» (решение О): последнее
+   * переданное значение по ключу сессии; служба зовётся только при смене.
+   */
+  const questionHeld = new Map<string, SessionRef>();
+
+  function syncHeld(ref: SessionRef): void {
+    const key = refKey(ref);
+    const held = rawPending.list(ref).some((info) => info.hookEvent === 'PreToolUse');
+    if (held === questionHeld.has(key)) return;
+    if (held) questionHeld.set(key, ref);
+    else questionHeld.delete(key);
+    deps.activity.questionHeld(ref, held);
+  }
+
+  /** Удержанные хуки; каждое место, где удержание меняется, сверяет «вопрос удержан» со службой активности. */
+  const pending: PendingHooks = {
+    ...rawPending,
+    hold(held) {
+      rawPending.hold(held);
+      syncHeld(held.ref);
+    },
+    resolve(ref, cardId, json) {
+      const result = rawPending.resolve(ref, cardId, json);
+      syncHeld(ref);
+      return result;
+    },
+    settle(ref, cardIds) {
+      const settled = rawPending.settle(ref, cardIds);
+      syncHeld(ref);
+      return settled;
+    },
+    drop(ref, cardId) {
+      const result = rawPending.drop(ref, cardId);
+      syncHeld(ref);
+      return result;
+    },
+    settleAll() {
+      rawPending.settleAll();
+      for (const ref of Array.from(questionHeld.values())) syncHeld(ref);
+    },
+  };
 
   const at = (): string => new Date(now()).toISOString();
 

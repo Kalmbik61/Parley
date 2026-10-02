@@ -39,6 +39,8 @@ export interface PendingHooks {
   /** Держит хук. Прежний хук той же карточки (повтор запроса) получает `{}`. */
   hold(held: HeldHook): void;
   get(ref: SessionRef, cardId: string): HeldHookInfo | undefined;
+  /** Все удержанные хуки сессии (без права ответить). */
+  list(ref: SessionRef): HeldHookInfo[];
   /** Отвечает удержанному хуку телом решения; `false` — такого хука нет. */
   resolve(ref: SessionRef, cardId: string, json: HookResponse): boolean;
   /** Снимает без решения (`{}`) хуки сессии: перечисленных карточек или все. */
@@ -96,6 +98,18 @@ export function createPendingHooks(options: PendingHooksOptions = {}): PendingHo
       if (entry === undefined) return undefined;
       const { ref: heldRef, hookEvent, rawToolInput, kind } = entry.held;
       return { ref: heldRef, cardId, hookEvent, rawToolInput, kind };
+    },
+    list(ref) {
+      const sessionKey = refKey(ref);
+      return Array.from(entries.values())
+        .filter((entry) => entry.sessionKey === sessionKey)
+        .map(({ held: { ref: heldRef, cardId, hookEvent, rawToolInput, kind } }) => ({
+          ref: heldRef,
+          cardId,
+          hookEvent,
+          rawToolInput,
+          kind,
+        }));
     },
     resolve(ref, cardId, json) {
       return finish(keyOf(refKey(ref), cardId), json) !== undefined;

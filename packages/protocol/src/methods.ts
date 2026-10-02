@@ -20,11 +20,11 @@ export const sessionRef = z.object({
 /** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
-/** Схемы параметров запросов (с ответом, с числовым `id`). */
 /** Режимы, которые окно выбирает само: цикл Shift+Tab без `bypassPermissions` и `auto`. */
 export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan']);
 export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 
+/** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
   'host.info': z.object({}),

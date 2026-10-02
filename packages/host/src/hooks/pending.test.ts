@@ -45,6 +45,21 @@ describe('createPendingHooks', () => {
     expect(pending.size()).toBe(0);
   });
 
+  it('list отдаёт удержанные хуки только своей сессии, без respond', () => {
+    const pending = createPendingHooks();
+    pending.hold(held('a'));
+    pending.hold(held('b'));
+    pending.hold(held('c', OTHER));
+
+    const own = pending.list(REF);
+    expect(own.map((info) => info.cardId).sort()).toEqual(['a', 'b']);
+    expect(own[0]).not.toHaveProperty('respond');
+    expect(pending.list(OTHER)).toHaveLength(1);
+
+    pending.settle(REF, ['a']);
+    expect(pending.list(REF).map((info) => info.cardId)).toEqual(['b']);
+  });
+
   it('settle снимает только свою сессию и перечисленные карточки — {}', () => {
     const pending = createPendingHooks();
     const a = held('a');

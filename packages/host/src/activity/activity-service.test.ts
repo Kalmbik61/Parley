@@ -825,3 +825,72 @@ describe('createActivityService: субагенты и ожидание (Parley 
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
 });
+
+describe('удержанный вопрос агента (план 2026-10-01, кусок 4a, решение О)', () => {
+  const journal = (ref: SessionRef): string =>
+    path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+
+  it('questionHeld(true) у working-сессии публикует blocked, questionHeld(false) возвращает working', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    const seen: string[] = [];
+    a.onChange((changed, value) => {
+      if (refKey(changed) === refKey(ref)) seen.push(value.activity.activity);
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    a.questionHeld(ref, true);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(activityChanges(ref).at(-1)?.activity).toBe('blocked');
+    expect(seen.at(-1)).toBe('blocked');
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(activityChanges(ref).at(-1)?.activity).toBe('working');
+  }, 20_000);
+
+  it('тишина дольше порога при удержании — по-прежнему blocked; после отпускания — по журналу', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w, { silenceThresholdMs: 300 });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    a.questionHeld(ref, true);
+
+    await settle(900);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.activity).toMatch(/^(unseen|idle)$/);
+  }, 20_000);
+
+  it('повторный questionHeld с тем же значением ничего не публикует; неизвестная сессия — без исключения', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    a.questionHeld(ref, false);
+    const base = activityChanges(ref).length;
+    a.questionHeld(ref, true);
+    expect(activityChanges(ref).length).toBe(base + 1);
+    a.questionHeld(ref, true);
+    expect(activityChanges(ref).length).toBe(base + 1);
+
+    const unknown: SessionRef = { projectPath: project, workId: 'w-нет', sessionId: 's-99' };
+    expect(() => a.questionHeld(unknown, true)).not.toThrow();
+    expect(() => a.questionHeld(unknown, false)).not.toThrow();
+  }, 20_000);
+});

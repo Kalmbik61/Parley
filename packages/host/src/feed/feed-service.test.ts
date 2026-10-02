@@ -518,6 +518,66 @@ describe('удержание хуков и решения', () => {
     expect(ofKind(items, 'question')[0]?.state).toBe('pending');
   });
 
+  it('удержанный вопрос: службе активности — questionHeld(ref, true) один раз; ответ окна — false', () => {
+    start();
+    const held = vi.mocked(fakes.deps.activity.questionHeld);
+    send(prompt('go'));
+    const request = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    expect(request.responses).toEqual([]);
+    expect(held.mock.calls).toEqual([[REF, true]]);
+
+    service.decide(REF, 'question:q1', { kind: 'question', answers: { 'Which fruit?': 'Pear' } });
+    expect(held.mock.calls).toEqual([
+      [REF, true],
+      [REF, false],
+    ]);
+  });
+
+  it('вопрос: CLI закрыл запрос сам — questionHeld(ref, false)', () => {
+    start();
+    const held = vi.mocked(fakes.deps.activity.questionHeld);
+    send(prompt('go'));
+    const request = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    request.abandon();
+    expect(held.mock.calls).toEqual([
+      [REF, true],
+      [REF, false],
+    ]);
+  });
+
+  it('вопрос: таймаут часа — questionHeld(ref, false)', () => {
+    vi.useFakeTimers();
+    start();
+    const held = vi.mocked(fakes.deps.activity.questionHeld);
+    send(prompt('go'));
+    send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    vi.advanceTimersByTime(3_600_000);
+    expect(held.mock.calls).toEqual([
+      [REF, true],
+      [REF, false],
+    ]);
+  });
+
+  it('вопрос: stop() — questionHeld(ref, false)', () => {
+    start();
+    const held = vi.mocked(fakes.deps.activity.questionHeld);
+    send(prompt('go'));
+    send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    void service.stop();
+    expect(held.mock.calls).toEqual([
+      [REF, true],
+      [REF, false],
+    ]);
+  });
+
+  it('удержанный PermissionRequest службу активности не трогает: диалог показывает сам CLI', () => {
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    expect(fakes.deps.activity.questionHeld).not.toHaveBeenCalled();
+  });
+
   it('pty.exit: висящим {}, карточки stale, ход закрыт чертой', async () => {
     start();
     send(prompt('go'));

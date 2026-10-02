@@ -105,6 +105,12 @@ export interface ActivityService {
   terminalSignal(ref: SessionRef, signal: CodexSignal): void;
   /** Процесс вышел: состояние по терминалу больше не действует, сессия снова читается по журналу и логу. */
   terminalStopped(ref: SessionRef): void;
+  /**
+   * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
+   * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
+   * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
+   */
+  questionHeld(ref: SessionRef, held: boolean): void;
   stop(): Promise<void>;
 }
 
@@ -235,6 +241,8 @@ export function createActivityService(
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
+  /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
+  const questionHeldKeys = new Set<string>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -589,7 +597,12 @@ export function createActivityService(
     });
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
-    const value: SessionLive = { activity, metrics };
+    // Удержанный вопрос агента: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
+    const published: SessionActivity =
+      questionHeldKeys.has(key) && activity.activity !== 'blocked'
+        ? { ...activity, activity: 'blocked' }
+        : activity;
+    const value: SessionLive = { activity: published, metrics };
 
     if (driven) clearSilenceTimer(key);
     else scheduleSilenceTimer(ref, key, activity, log, now);
@@ -597,7 +610,7 @@ export function createActivityService(
     const previous = live.get(key);
     live.set(key, value);
     if (previous === undefined || !sameLive(previous, value)) {
-      host.broadcast('activity.changed', { ref, activity, metrics });
+      host.broadcast('activity.changed', { ref, activity: published, metrics });
       for (const listener of listeners) listener(ref, value);
     }
 
@@ -699,6 +712,9 @@ export function createActivityService(
     }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
+    for (const key of Array.from(questionHeldKeys)) {
+      if (!validSessions.has(key)) questionHeldKeys.delete(key);
+    }
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
     }
@@ -756,6 +772,13 @@ export function createActivityService(
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
+    questionHeld(ref, held) {
+      const key = refKey(ref);
+      if (questionHeldKeys.has(key) === held) return;
+      if (held) questionHeldKeys.add(key);
+      else questionHeldKeys.delete(key);
+      recompute(ref);
+    },
     logFile(ref) {
       const session = works
         .entry(ref.projectPath, ref.workId)

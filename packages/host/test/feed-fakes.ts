@@ -92,6 +92,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     activity: {
       logFile: () => logFile,
+      questionHeld: vi.fn(),
       onChange: (listener: ActivityListener) => {
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);

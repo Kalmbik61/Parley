@@ -77,9 +77,9 @@ describe('Screen.text', () => {
 
   it('rows — последние строки видимой области', async () => {
     const screen = createScreen(40, 5);
-    screen.write('a\r\nb\r\nc');
-    await waitFor(() => screen.text().includes('c'));
-    expect(screen.text(2)).toEqual(['', '']);
+    screen.write('a\r\nb\r\nc\r\nd\r\ne');
+    await waitFor(() => screen.text().includes('e'));
+    expect(screen.text(2)).toEqual(['d', 'e']);
     expect(screen.text(0)).toEqual([]);
     expect(screen.text(99)).toHaveLength(5);
     screen.dispose();
