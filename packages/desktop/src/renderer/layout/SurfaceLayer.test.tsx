@@ -5,11 +5,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { refKey } from '@parley/protocol';
 import type { WorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
+import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
@@ -20,7 +26,7 @@ import { LayoutView } from './LayoutView.js';
 import { useLayoutStore } from './store.js';
 import { SurfaceLayer } from './SurfaceLayer.js';
 import { tabMeta } from './tab-meta.js';
-import { focusTab, moveTab } from './tree.js';
+import { focusTab, moveTab, updateTab } from './tree.js';
 
 vi.mock('@xterm/xterm', async () => (await import('../test-utils/xterm-mock.js')).xtermModule);
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn().mockImplementation(() => ({ fit: () => {} })) }));
@@ -412,5 +418,194 @@ describe('SurfaceLayer — вкладка браузера (тест 4 куск�
     expect(order()).toEqual(orderBefore);
     // Тело группы с вкладкой браузера — без запасного вида ошибки.
     expect(document.body.textContent).not.toContain("Couldn't show layout");
+  });
+});
+
+describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 6, решение контролёра Ж)', () => {
+  const FEED_METHODS = [...REQUIRED_METHODS, 'feed.snapshot', 'feed.subscribe', 'feed.unsubscribe'];
+  let disposeFeed: () => void = () => {};
+
+  beforeEach(() => {
+    resetFeedStoreForTests();
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods: FEED_METHODS } });
+    bridge.setHandler('feed.subscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.snapshot', () => ({ items: [], revision: 0, schemaVersion: 1, mode: null }));
+    // Сессии стартовали (есть событие журнала): без явного выбора вид — чат (кусок 4a, решение М).
+    useActivityStore.setState({
+      byRef: activityMap(['a', 'b', 'x'].map((id) => makeActivity(refOf(id), 'idle'))),
+      loaded: true,
+    });
+    disposeFeed = useFeedStore.getState().init(bridge);
+    useProvidersStore.setState({
+      providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
+      loaded: true,
+    });
+  });
+
+  afterEach(() => {
+    disposeFeed();
+    resetFeedStoreForTests();
+    useActivityStore.setState({ byRef: {}, loaded: false });
+    useHostStore.setState({ status: { state: 'connecting' } });
+    useProvidersStore.setState({ providers: [], loaded: false });
+  });
+
+  const feedCalls = (method: string, sessionId: string): number =>
+    bridge.calls.filter(
+      (call) => call.method === method && (call.params as { ref: { sessionId: string } }).ref.sessionId === sessionId,
+    ).length;
+
+  const setView = (tabId: string, view: 'chat' | 'terminal'): void => {
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => updateTab(layout, tabId, { view }));
+    });
+  };
+
+  it('Claude без поля view — чат: поверхности нет, лента подписана, сессия видима', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(2); // a в g1 и b в g2
+    expect(attachCount('a')).toBe(0);
+    // Подписка — на каждую открытую вкладку в чате, не только активную: x в g1 скрыта.
+    expect(feedCalls('feed.subscribe', 'x')).toBe(1);
+    expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('a'))]).toBe(true);
+    expect(useUiStore.getState().visibleSessionRefs[refKey(refOf('x'))]).toBeUndefined();
+  });
+
+  it('сессия ещё не стартовала (нет lastEventAt) — терминал; первое событие журнала переводит в чат', async () => {
+    useActivityStore.setState({ byRef: {} });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(refOf('a'), 'working')]) });
+    });
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(detachCount('a')).toBe(1);
+    expect(feedCalls('feed.subscribe', 'a')).toBe(1);
+    // b и x событий не имели — остаются терминалами.
+    expect(surface('terminal:b')).not.toBeNull();
+  });
+
+  it('снимок активности ещё не пришёл — ни поверхности, ни подписки; после снимка — терминал', async () => {
+    useActivityStore.setState({ byRef: {}, loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(attachCount('a')).toBe(0);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+
+    act(() => {
+      useActivityStore.setState({ loaded: true });
+    });
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
+  });
+
+  it('view terminal — поверхность под тулбаром; переход туда и обратно монтирует её заново', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+
+    setView('terminal:a', 'terminal');
+    await flush();
+    const first = surface('terminal:a');
+    if (first === null) throw new Error('нет поверхности terminal:a');
+    const mountId = first.dataset.mountId;
+    // jsdom переставляет слагаемые calc и роняет голый anchor(): сверяем только отступ.
+    expect(first.style.getPropertyValue('top')).toContain('36px');
+    expect(first.style.getPropertyValue('height')).toContain('36px');
+    expect(attachCount('a')).toBe(1);
+    expect(feedCalls('feed.unsubscribe', 'a')).toBe(1);
+    expect(within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!).getAllByTestId('chat-toolbar')).toHaveLength(1);
+
+    setView('terminal:a', 'chat');
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(detachCount('a')).toBe(1);
+    expect(feedCalls('feed.subscribe', 'a')).toBe(2);
+
+    setView('terminal:a', 'terminal');
+    await flush();
+    const second = surface('terminal:a');
+    expect(second).not.toBeNull();
+    expect(second?.dataset.mountId).not.toBe(mountId);
+    expect(attachCount('a')).toBe(2);
+  });
+
+  it('клик по сегменту Terminal пишет view в раскладку', async () => {
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    const body = within(document.querySelector<HTMLElement>('[data-group-body="g1"]')!);
+    fireEvent.click(body.getByRole('radio', { name: 'Terminal' }));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[WORK_KEY]!;
+    const tab = layout.root.type === 'split' && layout.root.children[0].type === 'group' ? layout.root.children[0].tabs[0] : null;
+    expect(tab).toMatchObject({ id: 'terminal:a', view: 'terminal' });
+    expect(surface('terminal:a')).not.toBeNull();
+  });
+
+  it('providers.list ещё не ответил — ни поверхности, ни подписки; ответ пришёл — подписка (2.1.286) или поверхность (null)', async () => {
+    useProvidersStore.setState({ providers: [], loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(attachCount('a')).toBe(0);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+
+    act(() => {
+      useProvidersStore.setState({
+        providers: [{ id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null }],
+        loaded: true,
+      });
+    });
+    await flush();
+    expect(surface('terminal:a')).toBeNull();
+    expect(feedCalls('feed.subscribe', 'a')).toBe(1);
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(2);
+  });
+
+  it('версия claude неизвестна (null) после ответа — терминал с поверхностью, подписки нет', async () => {
+    useProvidersStore.setState({ providers: [], loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    act(() => {
+      useProvidersStore.setState({
+        providers: [{ id: 'claude', label: 'Claude Code', available: true, version: null, limits: null }],
+        loaded: true,
+      });
+    });
+    await flush();
+    expect(surface('terminal:a')).not.toBeNull();
+    expect(attachCount('a')).toBe(1);
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+  });
+
+  it('хост без feed.snapshot — терминал без тулбара, как раньше', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.2.0', methods: [...REQUIRED_METHODS] } });
+    // Без ленты у хоста ответа providers.list не ждём.
+    useProvidersStore.setState({ providers: [], loaded: false });
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    expect(surface('terminal:a')?.style.getPropertyValue('top')).not.toContain('36px');
+    expect(screen.queryByTestId('chat-toolbar')).toBeNull();
+    expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
   });
 });

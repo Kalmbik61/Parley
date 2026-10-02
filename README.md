@@ -56,6 +56,8 @@ launch. Allow it once, in either of two ways:
 - `claude` and/or `codex`, installed and signed in. Parley starts the CLIs you already use,
   under your own login: it does not sign you in and does not touch your credentials. The window
   finds them on the `PATH` of your login shell (see "Environment of the window");
+- Chat view (optional) needs Claude Code 2.1.286 or newer; older versions and Codex stay in the
+  terminal;
 - git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
   older git a conflict shows up only when you try to merge.
 
@@ -455,8 +457,12 @@ the messages: Markdown (headings, lists, code, tables, links) with mention chips
 message is shown as text, and a link opens in your browser. A message whose Markdown cannot
 be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
-  tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
-  picked up yet by S02, S03" stays while the recipients have not read the message. An agent's
+  tag (`note`, `question`, `decision`), the time and a dot for an unread one. Under a message
+  addressed to agents stands its delivery line: "✓ Picked up by S03" for those who have read
+  it (the times are in the tooltip) and "▤ Not picked up yet by S01 (busy)" for those who have
+  not, with the reason the host knows — busy, unsent text in its terminal, notified, sleeping,
+  auto-wake paused and the like. "Picked up" means the agent took the message with
+  `check_inbox`, not that it has acted on it. An agent's
   `@human` in the text (not in code or a link) is a "@you" chip, and the room opens at the
   earliest such mention you have not read; `@human` in your own message stays text. An answer
   to a particular message carries a one-line quote of it above the text ("↩ You: …", the start
@@ -698,6 +704,76 @@ node packages/core/dist/cli.js index
 node packages/core/dist/cli.js session <id>
 ```
 
+### Chat view
+
+A Claude Code session tab can show the session as a conversation instead of a terminal. The
+agent is the same unmodified CLI, running in a terminal that is hidden, not removed: the
+**Chat | Terminal** segment in the tab's toolbar switches between the two at any moment.
+Nothing is sent on your behalf: every permission, question and plan is answered by your click
+on its card, and the host never answers a hook by itself.
+
+**What the feed shows.** Your prompts, the reply text as it streams, tool calls with their
+results and diffs, permission, question and plan cards, an agent card for each subagent
+(type, description, model, status, tool calls, the final text and "Show transcript"), and
+notices: session start, `/clear`, compaction, a model switch. While the agent works and no
+text is streaming yet, a "Working…" row shows the elapsed time. A line marks the end of each
+turn; a turn interrupted with Esc ends with "Interrupted". A session that is not running shows
+the same "Resume" card as the terminal.
+
+**Subagents.** Besides the agent cards in the feed, running subagents show as a badge
+"N agents" in the session's row of the sidebar and on the participant's card in a room: a
+popover lists each one's type, description and whether it runs in the background, and a click
+opens the session's chat at that agent's card. The chat toolbar shows "N agents running" and
+scrolls to the first running card. While only background subagents keep a session busy, the
+input stays open and there is no "Stop".
+
+**Input.** The field at the bottom sends text to the session like the terminal does. While a
+turn runs, the button reads "Queue" (the message waits in Claude Code's own queue) and "Stop"
+interrupts the turn with Esc. A turn stopped before any reply leaves no trace in Claude Code,
+which also puts the prompt back into its terminal input: the host closes such a turn in the
+feed itself and erases that text, so the next message is not glued to it. If the host refuses
+a message (the session is not running, is busy or waits for an answer), the text and the
+attachments return to the field. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
+and `@` lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab
+insert, Esc closes. The window only inserts the text — Claude Code parses it.
+
+**Attachments.** A screenshot pasted from the clipboard, files dropped onto the chat and files
+picked with the paperclip become attachments: chips above the field, with a thumbnail for
+images. On send they go to Claude Code as `@"path"` file mentions after your text, so the CLI
+attaches the files itself; the feed shows them as the same chips instead of paths.
+
+**What stays in the terminal.** Folder trust, sign-in, commands that open a menu (`/permissions`,
+`/mcp`, `/resume` and the like — the list marks them "opens in the terminal") and elicitation
+dialogs. When Claude Code waits for one of these, the feed shows the banner "Claude Code is
+waiting in the terminal" with "Open terminal"; the dialog itself is never hidden or answered
+for you.
+
+**Which view opens.** A new session opens in the terminal until Claude Code has started, then
+switches to the chat once. Your own choice of view is remembered per tab and wins over this.
+
+**Mode and model.** The toolbar's mode menu sets Manual, Accept edits, Plan or Auto. The host
+presses Shift+Tab in the hidden terminal until the footer of the screen shows the chosen mode;
+if it cannot confirm the change, it asks you to open the terminal. Bypass mode is set in the
+terminal only. The model menu lists the provider's models and sends `/model <id>` to the
+session.
+
+**Version.** Chat view needs Claude Code 2.1.286 or newer. Codex and older versions of Claude
+Code stay terminal-only: the segment is disabled and says why.
+
+**How it works.** The session's settings file carries HTTP hooks that post to the host on
+`127.0.0.1` with a per-launch token. The feed lives on the host: the window gets a snapshot,
+then deltas. The host holds a permission request, a plan or a question until you decide, and
+answers the hook with your decision; everything else it acknowledges at once. The history of
+a session is seeded from its transcript — when its process starts or as soon as the host has
+indexed the transcript — without streamed text.
+
+**Limits.**
+
+- Thinking is not shown: hooks do not carry it, only the "Working…" row tells that the agent
+  is busy.
+- A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
+- A question with two identical question texts collapses into one answer.
+
 ## Settings
 
 The window has Settings (⌘,), with five tabs:
@@ -813,6 +889,8 @@ session stays `working` after its turn ended, and silence does not end it; such 
 gets the pointer to new letters, because the agent itself is at its prompt. Around `wait_for` the
 session's MCP server appends two lines of its own to the same log, `ParleyWaitStart` (with
 `parley_wait_target`) and `ParleyWaitEnd`, so the window can show what an agent waits for.
+In Chat view, each subagent also gets an agent card in the feed: its type, description, model and
+status, its tool calls, its final text and a "Show transcript" link.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP

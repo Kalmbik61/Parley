@@ -14,12 +14,25 @@
  *
  * У вкладки удалённой сессии поверхности нет: её `pty.attach` падает, и
  * пустой xterm закрыл бы `MissingBody` с «Закрыть» (спека 5.10).
+ *
+ * Вид «Chat» (план 2026-10-01, решение 6, решение контролёра Ж): у вкладки в эффективном виде `chat`
+ * поверхности терминала нет — размонтирование и есть `pty.detach`, переход в терминал монтирует её
+ * заново обычным `pty.attach` со снимком экрана. Вместо неё слой держит подписку на ленту сессии
+ * (`FeedSubscription`) — на каждую открытую вкладку, а не только активную в группе. Когда хост знает
+ * ленту, поверхность опускается под тулбар вкладки с сегментом (`TAB_TOOLBAR_PX`). Пока доступность
+ * вида неизвестна (`effectiveView` — `null`: первый ответ `providers.list` не пришёл), у вкладки нет ни
+ * поверхности, ни подписки: иначе она мигнула бы одним видом и перескочила в другой. Без явного выбора
+ * вкладка сессии, что ещё не стартовала (нет `lastEventAt` активности), — терминал (решение М куска 4a); пока снимок
+ * активности не пришёл (`loaded` ложно), вид тоже не выбран.
  */
 
 import { useMemo } from 'react';
-import type { SessionRef } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
+import { TAB_TOOLBAR_PX } from '../chat/ChatToolbar.js';
+import { FeedSubscription } from '../chat/use-feed.js';
+import { effectiveView, useFeedAvailability, useHostHasFeed, useStartedKeys } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
@@ -42,6 +55,7 @@ export interface SurfaceLayerProps {
 
 type SurfaceSpec =
   | { kind: 'terminal'; tabId: string; sessionId: string; groupId: string; visible: boolean }
+  | { kind: 'feed'; tabId: string; sessionId: string }
   | { kind: 'browser'; tabId: string; url: string; groupId: string; visible: boolean };
 
 export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: SurfaceLayerProps): JSX.Element {
@@ -49,6 +63,9 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
   const entry = useWorksStore((state) =>
     state.entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === workKey),
   );
+  const feedAvailable = useFeedAvailability();
+  const started = useStartedKeys();
+  const topInset = useHostHasFeed() ? TAB_TOOLBAR_PX : 0;
 
   // Один объект sessionRef на сессию, пока не сменились проект и работа: новый литерал на каждый
   // рендер слоя заставлял бы поверхность снимать и заново вешать слушатель paste (он зависит от ref).
@@ -66,7 +83,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
 
   const surfaces: SurfaceSpec[] = [];
   if (layout !== undefined && entry !== undefined) {
-    const sessionIds = new Set(entry.map.sessions.map((session) => session.id));
+    const providers = new Map(entry.map.sessions.map((session) => [session.id, session.provider]));
     for (const group of groups(layout)) {
       for (const tab of group.tabs) {
         const visible = active && group.activeTabId === tab.id;
@@ -74,7 +91,15 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
           surfaces.push({ kind: 'browser', tabId: tab.id, url: tab.url, groupId: group.id, visible });
           continue;
         }
-        if (tab.kind !== 'terminal' || !sessionIds.has(tab.sessionId)) continue;
+        if (tab.kind !== 'terminal') continue;
+        const provider = providers.get(tab.sessionId);
+        if (provider === undefined) continue;
+        const view = effectiveView(tab, feedAvailable(provider), started(refKey(sessionRefOf(tab.sessionId))));
+        if (view === null) continue;
+        if (view === 'chat') {
+          surfaces.push({ kind: 'feed', tabId: tab.id, sessionId: tab.sessionId });
+          continue;
+        }
         surfaces.push({ kind: 'terminal', tabId: tab.id, sessionId: tab.sessionId, groupId: group.id, visible });
       }
     }
@@ -86,7 +111,9 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
       {entry === undefined
         ? null
         : surfaces.map((surface) =>
-            surface.kind === 'browser' ? (
+            surface.kind === 'feed' ? (
+              <FeedSubscription key={surface.tabId} sessionRef={sessionRefOf(surface.sessionId)} />
+            ) : surface.kind === 'browser' ? (
               <BrowserSurface
                 key={surface.tabId}
                 workKey={workKey}
@@ -108,6 +135,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
                 visible={surface.visible}
                 fontFamily={fontFamily}
                 fontSize={fontSize}
+                topInset={topInset}
               />
             ),
           )}

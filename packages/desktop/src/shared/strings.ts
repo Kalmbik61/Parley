@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import type { HostNotice, NoticeKind } from '@parley/protocol';
+import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -323,7 +323,25 @@ export const S = {
     lead: 'Lead',
     /** Пустая комната. */
     emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
+    /** Строка доставки под сообщением: кто уже забрал его (`readBy`) и кто ещё нет. */
+    pickedUp: (tags: string): string => `✓ Picked up by ${tags}`,
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /**
+     * Почему сообщение ещё не забрано — в скобках после тега, `S01 (busy)`. Ключи — `MailWait` протокола: причину
+     * присылает хост в живых метриках сессии (`metrics.mailWaiting`); таблица обязана покрывать их все.
+     */
+    mailWait: {
+      busy: 'busy',
+      draft: 'unsent text in its terminal',
+      'no-hooks': 'waiting in its terminal',
+      'in-flight': 'notified, not started',
+      pointed: 'notified',
+      paused: 'auto-wake paused',
+      sleeping: 'sleeping',
+      resuming: 'resuming',
+      'resume-limit': 'resume limit reached',
+      pending: 'not launched',
+    } satisfies Record<MailWait, string>,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
     /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` — вторая строка. */
@@ -548,6 +566,160 @@ export const S = {
     disconnected: 'Disconnected — reconnecting…',
     /** Мета карточки неживой сессии (спека окна 2026-09-29, 1.8): `Claude Code · last event 3h ago`. */
     lastEvent: (when: string): string => `last event ${when}`,
+  },
+
+  /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
+  chat: {
+    /** Сегмент тулбара вкладки «Chat | Terminal». */
+    segment: { chat: 'Chat', terminal: 'Terminal' },
+    viewLabel: 'Session view',
+    /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
+    terminalOnly: `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    loading: 'Loading the conversation…',
+    empty: 'Nothing here yet',
+    feedUnavailable: "Couldn't load the conversation — open the terminal",
+    /** Карточка разрешения, вопроса или плана до кнопок куска 4. */
+    waiting: 'Waiting for your answer — open the terminal',
+    /** Состояния карточки после ожидания (решение 3); `pending` — `waiting`. */
+    cardState: {
+      allowed: 'Allowed',
+      denied: 'Denied',
+      answered: 'Answered',
+      elsewhere: 'Answered in the terminal',
+      stale: 'Waited too long — answer in the terminal',
+    },
+    cardKind: { permission: 'Permission', question: 'Question', plan: 'Plan' },
+    /** Карточки с кнопками (план 2026-10-01, кусок 4a, решение Р). */
+    card: {
+      allow: 'Allow',
+      allowAlways: "Allow and don't ask again",
+      /** Подсказка кнопки: какие правила добавит «не спрашивать больше». */
+      allowAlwaysTitle: (rules: string): string => `Adds the rule: ${rules}`,
+      deny: 'Deny',
+      denyMessage: 'Tell Claude what to do instead',
+      showContent: 'Show content',
+      hideContent: 'Hide content',
+      showArguments: 'Show arguments',
+      hideArguments: 'Hide arguments',
+      before: 'Before',
+      after: 'After',
+      other: 'Other',
+      otherAnswer: 'Your answer',
+      questionOf: (index: number, total: number): string => `Question ${index} of ${total}`,
+      next: 'Next',
+      submit: 'Submit',
+      approveAuto: 'Approve, auto-accept edits',
+      approveManual: 'Approve, approve each edit',
+      openTerminal: 'Change the plan in the terminal',
+      notApplied: 'Not applied yet — try again',
+      failed: "Couldn't send — try again",
+      allowedAlways: "Allowed · won't ask again",
+      deniedWith: (message: string): string => `Denied · ${message}`,
+      answer: (question: string, answer: string): string => `${question} — ${answer}`,
+      planApproved: { 'auto-accept': 'Approved · auto-accept edits', manual: 'Approved · approve each edit' },
+    },
+    /** Лента прокручена вверх, а снизу пришло новое. */
+    jumpToLatest: 'Jump to latest',
+    /** Подпись курсора текста, который ещё пишется. */
+    streaming: 'Writing…',
+    textTruncated: 'Text truncated — open the terminal for the rest',
+    resultTruncated: 'Truncated, open the terminal',
+    inputTruncated: 'Arguments truncated — open the terminal for the rest',
+    patchTruncated: 'Diff truncated — open the terminal for the rest',
+    images: (count: number): string => (count === 1 ? '1 image' : `${count} images`),
+    toolStatus: { running: 'Running', done: 'Done', failed: 'Failed', rejected: 'Rejected' },
+    toolDetails: 'Show details',
+    arguments: 'Arguments',
+    result: 'Result',
+    noResult: 'No result yet',
+    changes: 'Changes',
+    notice: {
+      sessionStart: (source: string | null, model: string | null): string => {
+        const what =
+          source === 'resume'
+            ? 'Session resumed'
+            : source === 'clear'
+              ? 'Conversation cleared'
+              : source === 'compact'
+                ? 'Session continued after compaction'
+                : 'Session started';
+        return model === null ? what : `${what} · ${model}`;
+      },
+      sessionEnd: (reason: string | null): string => (reason === null ? 'Session ended' : `Session ended · ${reason}`),
+      compactPre: 'Compacting the conversation…',
+      compactPost: 'Conversation compacted',
+      modelSwitch: (from: string | null, to: string | null): string =>
+        from === null ? `Model: ${to ?? 'unknown'}` : `Model: ${from} → ${to ?? 'unknown'}`,
+      agentReported: (summary: string | null): string => (summary === null ? 'Agent reported' : `Agent reported · ${summary}`),
+    },
+    turn: (duration: string | null): string => (duration === null ? 'Turn finished' : `Turn finished · ${duration}`),
+    /** Черта прерванного хода (живая проверка 2026-10-02): человек нажал Esc. */
+    turnInterrupted: (duration: string | null): string => (duration === null ? 'Interrupted' : `Interrupted · ${duration}`),
+    /** Строка «агент работает» под лентой, пока текста ещё нет (живая проверка 2026-10-02). */
+    working: 'Working…',
+    error: 'Request failed',
+    agent: {
+      fallbackTitle: 'Agent',
+      toolCalls: (count: number): string => (count === 1 ? '1 tool call' : `${count} tool calls`),
+      status: { running: 'Running', done: 'Done', failed: 'Failed' },
+      background: 'background',
+      /** Бейдж с поповером в строке сессии и в ленте участников комнаты (кусок 4b): `2 agents`. */
+      count: (count: number): string => (count === 1 ? '1 agent' : `${count} agents`),
+      /** Кнопка тулбара чата: сколько карточек агентов ещё работает. */
+      running: (count: number): string => (count === 1 ? '1 agent running' : `${count} agents running`),
+      /** Подпись (`aria-label`) строки поповера: открыть карточку агента в ленте сессии; `kind` — тип агента. */
+      open: (kind: string): string => `Open ${kind}`,
+      /** Имя поповера для скринридера. */
+      list: 'Agents',
+      details: 'Show agent details',
+      result: 'Result',
+      transcriptLoading: 'Loading the transcript…',
+      transcriptFailed: "Couldn't load the transcript — open the terminal",
+      transcriptEmpty: 'The transcript is empty',
+      /** Транскрипт длиннее предела показа: видны последние `shown` из `total`. */
+      transcriptTail: (shown: number, total: number): string => `Showing the last ${shown} of ${total}`,
+    },
+    showTranscript: 'Show transcript',
+    hideTranscript: 'Hide transcript',
+    /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
+    queued: 'Queued — Claude reads it when the turn ends',
+    composer: {
+      label: 'Message to Claude',
+      placeholder: 'Message Claude — Enter to send',
+      send: 'Send',
+      queue: 'Queue',
+      attach: 'Attach a file',
+      removeAttachment: (name: string): string => `Remove ${name}`,
+    },
+    /** Подсказки поля ввода: команды, скиллы, модели, `@`-файлы и субагенты (живая проверка 2026-10-02). */
+    suggestions: {
+      label: 'Suggestions',
+      terminal: 'opens in the terminal',
+      agent: 'agent',
+      source: { user: 'user skill', project: 'project skill', plugin: 'plugin skill' },
+    },
+    model: 'Model',
+    /** Меню моделей в тулбаре: выбор уходит в CLI текстом `/model <id>` (живая проверка 2026-10-02). */
+    modelMenu: { label: 'Switch model' },
+    /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
+    mode: {
+      label: 'Permission mode',
+      unknown: 'Mode',
+      manual: 'Manual',
+      acceptEdits: 'Accept edits',
+      plan: 'Plan',
+      /** Режим auto Claude Code — когда модель его даёт (живая проверка 2026-10-02: у пользователя он основной). */
+      auto: 'Auto',
+      /** Хост не смог сверить подвал или дошёл не до того режима: переключить может только человек в терминале. */
+      openTerminal: 'Open the terminal to switch the mode',
+    },
+    /** Баннер над полем ввода: агент ждёт в терминале (диалог без хука). */
+    waitingBanner: {
+      text: 'Claude Code is waiting in the terminal',
+      open: 'Open terminal',
+    },
+    stop: 'Stop',
+    stopTitle: 'Interrupt the turn (Esc in the terminal)',
   },
 
   /**
@@ -775,6 +947,7 @@ export const S = {
     tabNumber: (n: number): string => `Tab ${n}`,
     find: 'Find',
     clearTerminal: 'Clear terminal',
+    toggleChatTerminal: 'Toggle chat / terminal',
     settings: 'Settings',
     nextNeedsYou: 'Next session that needs you',
     // Реестр берёт pause; палитра подменяет на resume по wakePaused (6.2).
@@ -847,6 +1020,7 @@ export const S = {
       commit: 'commit',
       merge: 'merge',
       assignToAgent: 'send to agent',
+      switchMode: 'switch the mode',
       createRoom: 'create room',
       loadSettings: 'load settings',
       saveSettings: 'save settings',

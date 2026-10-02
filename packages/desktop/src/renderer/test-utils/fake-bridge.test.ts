@@ -159,3 +159,14 @@ describe('fake-bridge: onUpdateAvailable (V6 плана релиза 0.1.0)', ()
     expect(fourth).toEqual([]);
   });
 });
+
+describe('fake-bridge: app.imageThumbnail (миниатюры вложений «Chat»)', () => {
+  it('null по умолчанию, ответ по сеттеру для своего пути, журнал thumbnailCalls', async () => {
+    const bridge = createFakeBridge();
+    expect(await bridge.app.imageThumbnail('/a.png')).toBeNull();
+    bridge.setThumbnail('/a.png', 'data:image/png;base64,AAAA');
+    expect(await bridge.app.imageThumbnail('/a.png')).toBe('data:image/png;base64,AAAA');
+    expect(await bridge.app.imageThumbnail('/b.png')).toBeNull();
+    expect(bridge.thumbnailCalls).toEqual(['/a.png', '/a.png', '/b.png']);
+  });
+});

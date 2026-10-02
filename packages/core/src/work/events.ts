@@ -105,18 +105,18 @@ export const bareEvent = (at: string, name: string): EventRecord => ({
   waitId: null,
 });
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Непустая строка или `null`: Claude Code шлёт пустую строку вместо отсутствующего значения. */
-const textOf = (value: unknown): string | null =>
+export const textOf = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null;
 
 /**
  * Разбирает `background_tasks`. Кривой элемент (не объект, нет `id`, `type` или `status`)
  * пропускается, остальные и сама строка живут. Не список — `null`: прочитать нечего.
  */
-function parseTasks(value: unknown): BackgroundTask[] | null {
+export function parseTasks(value: unknown): BackgroundTask[] | null {
   if (!Array.isArray(value)) return null;
   const tasks: BackgroundTask[] = [];
   for (const item of value) {
@@ -144,6 +144,14 @@ function parseEvent(line: string, at: string): EventRecord | null {
   } catch {
     return null;
   }
+  return eventRecordOf(data, at);
+}
+
+/**
+ * Общие поля события хука из его stdin-JSON — тот же разбор, что у журнала `events/`; им же
+ * пользуется лента вида «Chat», получая события HTTP-хуком. `null` — не объект или нет имени события.
+ */
+export function eventRecordOf(data: unknown, at: string): EventRecord | null {
   if (!isRecord(data)) return null;
 
   const name = data.hook_event_name;

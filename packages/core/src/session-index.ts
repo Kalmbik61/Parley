@@ -34,6 +34,13 @@ export interface SessionIndex {
    * разрешение выдано — появляется запись (дизайн TUI v2, раздел 4.3).
    */
   lastUserRecordAt: string | null;
+  /**
+   * Время последней записи человека или ассистента (`message.role`). Служебные записи — итоги хуков
+   * (`stop_hook_summary`), `turn_duration`, вложения — Claude Code дописывает и после конца хода: по общему
+   * `endedAt` «страховка по логу» считала бы закончившую ход сессию работающей ещё порог тишины, а
+   * письма ей всё это время ждали бы (живая проверка 2026-10-02).
+   */
+  lastWorkRecordAt: string | null;
   durationMs: number | null;
   records: number;
   malformedLines: number;
@@ -117,6 +124,7 @@ export async function indexSessionFile(
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let lastUserRecordAt: string | null = null;
+  let lastWorkRecordAt: string | null = null;
 
   // Заголовки дописываются в файл снова и снова — побеждает последний.
   let title: string | null = null;
@@ -191,6 +199,9 @@ export async function indexSessionFile(
       if (record.role === 'user' && (lastUserRecordAt === null || at > lastUserRecordAt)) {
         lastUserRecordAt = at;
       }
+      if (record.role !== null && (lastWorkRecordAt === null || at > lastWorkRecordAt)) {
+        lastWorkRecordAt = at;
+      }
     }
   });
 
@@ -222,6 +233,7 @@ export async function indexSessionFile(
     startedAt,
     endedAt,
     lastUserRecordAt,
+    lastWorkRecordAt,
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,

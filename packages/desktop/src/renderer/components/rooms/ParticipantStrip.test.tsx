@@ -1,10 +1,12 @@
 /**
  * Лента участников: вторая строка карточки — чем занят участник (`doing`), а без этого — его задача
- * (Parley 0.2.0, активность агентов). Подсказка второй строки — `doingDetail`.
+ * (Parley 0.2.0, активность агентов). Подсказка второй строки — `doingDetail`. Строка субагентов — бейдж с поповером
+ * (кусок 4b плана 2026-10-01): клик по агенту открывает сессию участника на карточке этого агента.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import type { LiveTask } from '@parley/protocol';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
 
@@ -25,6 +27,7 @@ function participant(patch: Partial<ParticipantModel> = {}): ParticipantModel {
     task: 'Спроектировать возвраты',
     doing: null,
     doingDetail: null,
+    agents: [],
     lead: false,
     closed: false,
     ...patch,
@@ -67,7 +70,69 @@ describe('ParticipantStrip — чем занят участник', () => {
     ]);
 
     expect(card('s-01').getAttribute('title')).toBe('Claude Code · Opus 5.5');
-    fireEvent.click(card('s-01'));
+    fireEvent.click(within(card('s-01')).getByRole('button'));
     expect(onOpenSession).toHaveBeenCalledWith('s-01');
+  });
+});
+
+const task = (id: string, extra: Partial<LiveTask> = {}): LiveTask => ({
+  id,
+  agentType: 'Explore',
+  description: `Task ${id}`,
+  background: true,
+  ...extra,
+});
+
+describe('ParticipantStrip — поповер агентов на строке субагентов (кусок 4b)', () => {
+  const subagents = (tasks: LiveTask[]): Partial<ParticipantModel> => ({
+    doing: `${tasks.length} subagents: Task ${tasks[0]?.id}`,
+    doingDetail: `${tasks.length} subagents\n• Task a\n• Task b`,
+    agents: tasks,
+  });
+
+  it('строка субагентов — бейдж с той же подписью и подсказкой; на карточке одна кнопка открытия, а не вложенная в неё', () => {
+    renderStrip([participant(subagents([task('a'), task('b')]))]);
+    const line = within(card('s-01')).getByTestId('agents-badge');
+    expect(line.textContent).toBe('2 subagents: Task a');
+    expect(line.getAttribute('title')).toBe('2 subagents\n• Task a\n• Task b');
+    expect(line.className).toContain('truncate');
+    // Кнопка в кнопке недопустима: открывающая кнопка карточки и бейдж — соседи.
+    const buttons = within(card('s-01')).getAllByRole('button');
+    expect(buttons).toHaveLength(2);
+    expect(buttons.some((button) => button !== line && button.contains(line))).toBe(false);
+    expect(within(card('s-01')).queryByText('Спроектировать возвраты')).toBeNull();
+  });
+
+  it('клик по бейджу открывает поповер и не открывает сессию; клик по строке агента — onOpenSession(сессия, агент)', () => {
+    const onOpenSession = renderStrip([
+      participant(subagents([task('a', { description: 'Look around' }), task('b', { agentType: 'Plan', description: 'Plan it', background: false })])),
+    ]);
+    fireEvent.click(within(card('s-01')).getByTestId('agents-badge'));
+    expect(onOpenSession).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId('agents-popover-row');
+    expect(rows.map((row) => row.textContent)).toEqual(['ExplorebackgroundLook around', 'PlanPlan it']);
+    fireEvent.click(rows[1]!);
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    expect(onOpenSession).toHaveBeenCalledWith('s-01', 'b');
+  });
+
+  it('клик по самой карточке — по-прежнему только сессия, без агента', () => {
+    const onOpenSession = renderStrip([participant(subagents([task('a'), task('b')]))]);
+    fireEvent.click(within(card('s-01')).getAllByRole('button')[0]!);
+    expect(onOpenSession).toHaveBeenCalledWith('s-01');
+  });
+
+  it('ожидание важнее субагентов (agents пуст): строка — обычный текст без поповера, подсказка несёт оба', () => {
+    renderStrip([participant({ doing: 'Waiting for S03', doingDetail: 'Waiting for S03\nSubagent: Task a', agents: [] })]);
+    expect(within(card('s-01')).queryByTestId('agents-badge')).toBeNull();
+    expect(within(card('s-01')).getByText('Waiting for S03').getAttribute('title')).toBe('Waiting for S03\nSubagent: Task a');
+  });
+
+  it('карточка 230px, подкраска и тултип — у блока карточки; ★ с подсказкой Lead остаётся внутри кнопки', () => {
+    renderStrip([participant({ ...subagents([task('a'), task('b')]), lead: true, attention: 'needs-you' })]);
+    expect(card('s-01').className).toContain('w-[230px]');
+    expect(card('s-01').className).toContain('bg-accent-200');
+    expect(card('s-01').getAttribute('title')).toBe('Claude Code');
+    expect(within(card('s-01')).getByTitle('Lead').closest('button')).not.toBeNull();
   });
 });

@@ -48,6 +48,8 @@ export interface PtyManager {
   input(ref: SessionRef, data: string): void;
   resize(ref: SessionRef, cols: number, rows: number): void;
   snapshot(ref: SessionRef): { snapshot: string; cols: number; rows: number };
+  /** Последние `rows` строк экрана сессии чистым текстом (`Screen.text`); `undefined` — сессии нет. */
+  screenText(ref: SessionRef, rows?: number): string[] | undefined;
   /** Черновик хоста: текст, вставленный печатью хоста без Enter. Событие draft не шлёт; смена значения — host-draft. */
   setHostDraft(ref: SessionRef, value: boolean): void;
   stop(ref: SessionRef, options?: { graceMs?: number }): Promise<ExitInfo>;
@@ -292,6 +294,10 @@ export function createPtyManager(host: HostContext): PtyManager {
     snapshot(ref) {
       const session = requireSession(ref);
       return { snapshot: session.screen.snapshot(), cols: session.cols, rows: session.rows };
+    },
+
+    screenText(ref, rows) {
+      return sessions.get(refKey(ref))?.screen.text(rows);
     },
 
     async stop(ref, options = {}) {

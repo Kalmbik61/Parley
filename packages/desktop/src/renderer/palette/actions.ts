@@ -20,7 +20,11 @@ import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
-import { findTab, focusGroup, focusTab, groups, reopenClosed } from '../layout/tree.js';
+import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
+import { effectiveView, feedAvailableNow, sessionStartedOrUnknown } from '../lib/feed-view.js';
+import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { activityFor, useActivityStore } from '../store/activity.js';
+import { useWorksStore } from '../store/works.js';
 import { neighborInOrder } from '../sidebar/sort.js';
 import type { TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import type { PaletteState } from './store.js';
@@ -319,7 +323,34 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'tab.mruPrev':
       stepMru(ctx, key, layout, -1);
       return;
+    case 'chat.toggleView':
+      toggleChatView(ctx, key, layout);
+      return;
     default:
       return;
   }
+}
+
+/**
+ * «Toggle chat / terminal» (план 2026-10-01, решение 6): то же, что сегмент тулбара, для активной
+ * вкладки активной группы. Не вкладка сессии — ничего; вид «Chat» сессии недоступен — тост с подсказкой
+ * выключенного сегмента.
+ */
+function toggleChatView(ctx: ActionContext, key: string, layout: WorkLayout): void {
+  const group = groups(layout).find((candidate) => candidate.id === layout.activeGroupId);
+  const tab = group?.tabs.find((candidate) => candidate.id === group.activeTabId);
+  if (tab?.kind !== 'terminal') return;
+  const entry = useWorksStore.getState().entries.find((item) => workKeyOf(item.projectPath, item.map.work.id) === key);
+  const session = entry?.map.sessions.find((candidate) => candidate.id === tab.sessionId);
+  if (session === undefined) return;
+  const available = feedAvailableNow(session.provider);
+  if (!available) {
+    ctx.toast(S.chat.terminalOnly);
+    return;
+  }
+  const ref = { projectPath: entry?.projectPath ?? '', workId: entry?.map.work.id ?? '', sessionId: tab.sessionId };
+  const { byRef, loaded } = useActivityStore.getState();
+  const started = sessionStartedOrUnknown(loaded, activityFor(byRef, ref));
+  const view = effectiveView(tab, available, started) === 'chat' ? 'terminal' : 'chat';
+  ctx.layout.apply(key, (l) => updateTab(l, tab.id, { view }));
 }

@@ -5,7 +5,7 @@
  * «группа не помещается») — это не поломка, а обычный ответ пользователю.
  */
 
-import type { FileRootSpec, GroupNode, LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { FileRootSpec, GroupNode, LayoutNode, TabSpec, TerminalView, WorkLayout } from '../../shared/layout-types.js';
 import { nodeId } from './ids.js';
 
 export const LIMITS: {
@@ -28,7 +28,7 @@ export interface OpResult {
 }
 export type Edge = 'left' | 'right' | 'top' | 'bottom';
 export type Where = 'active' | { groupId: string; index?: number };
-export type TabPatch = { url?: string };
+export type TabPatch = { url?: string; view?: TerminalView };
 
 // ---- обход и поиск в дереве ------------------------------------------------
 
@@ -245,17 +245,22 @@ export function closeTab(layout: WorkLayout, tabId: string): WorkLayout {
   return { ...layout, root, activeGroupId, closedTabs };
 }
 
-/** Поля вкладки без kind и id; растёт по нужде. Пока одно — адрес вкладки браузера (9.2). */
+/**
+ * Поля вкладки без kind и id; растёт по нужде: адрес вкладки браузера (9.2) и вид вкладки сессии
+ * (план 2026-10-01, решение 6). Поле чужого вида вкладки не применяется.
+ */
 export function updateTab(layout: WorkLayout, tabId: string, patch: TabPatch): WorkLayout {
   const found = findTab(layout, tabId);
   if (found === null) return layout;
-  if (patch.url === undefined) return layout;
 
   const tab = found.group.tabs[found.index];
-  if (tab === undefined || tab.kind !== 'browser') return layout;
+  if (tab === undefined) return layout;
+  let next: TabSpec;
+  if (tab.kind === 'browser' && patch.url !== undefined) next = { ...tab, url: patch.url };
+  else if (tab.kind === 'terminal' && patch.view !== undefined) next = { ...tab, view: patch.view };
+  else return layout;
 
-  const url = patch.url;
-  const newTabs = found.group.tabs.map((t, i) => (i === found.index ? { ...t, url } : t));
+  const newTabs = found.group.tabs.map((t, i) => (i === found.index ? next : t));
   const newGroup: GroupNode = { ...found.group, tabs: newTabs };
   const root = replaceNode(layout.root, found.group.id, () => newGroup);
   return { ...layout, root };
@@ -526,8 +531,13 @@ function parseTabSpec(value: unknown): TabSpec | null {
   if (!isRecord(value) || typeof value.id !== 'string') return null;
   const id = value.id;
   switch (value.kind) {
-    case 'terminal':
-      return typeof value.sessionId === 'string' ? { kind: 'terminal', id, sessionId: value.sessionId } : null;
+    case 'terminal': {
+      if (typeof value.sessionId !== 'string') return null;
+      // Нет поля — раскладка до вида «Chat», это норма; мусор в поле — раскладка невалидна.
+      if (value.view === undefined) return { kind: 'terminal', id, sessionId: value.sessionId };
+      if (value.view !== 'chat' && value.view !== 'terminal') return null;
+      return { kind: 'terminal', id, sessionId: value.sessionId, view: value.view };
+    }
     case 'mail':
       return id === 'mail' ? { kind: 'mail', id: 'mail' } : null;
     case 'room':

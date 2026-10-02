@@ -27,8 +27,10 @@ import {
   findRunnerBinary,
   GitStateError,
   InvalidRevisionError,
+  feedSupported,
   isGitRepo,
   loadConfig,
+  loadProviders,
   openEvents,
   planLaunch,
   planNew,
@@ -51,7 +53,9 @@ import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
-import type { PtyManager } from '../pty/pty-manager.js';
+import type { HookServer } from '../hooks/hook-server.js';
+import type { ProviderVersions } from '../providers/versions.js';
+import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -107,6 +111,15 @@ export interface SessionsService {
   resumeInterrupted(refs: readonly SessionRef[]): Promise<void>;
 }
 
+/**
+ * Лента вида «Chat» (план 2026-10-01, Task 2): приёмник HTTP-хуков и версии CLI для порога. Оба
+ * необязательны — без них сессии запускаются как до ленты: файл настроек без HTTP-хуков, токена нет.
+ */
+export interface SessionsFeedOptions {
+  hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
+  providerVersions?: ProviderVersions;
+}
+
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
@@ -115,7 +128,10 @@ export function createSessionsService(
   works: WorksService,
   pty: PtyManager,
   activity: ActivityService,
+  feed: SessionsFeedOptions = {},
 ): SessionsService {
+  const { hooks, providerVersions } = feed;
+
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
   // ручной `sessions.resume` поверх ещё не отработавшего autoLaunch или два
@@ -151,6 +167,8 @@ export function createSessionsService(
   // Итог `done`/`failed` — другая ось, выход процесса его не трогает.
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
+    // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
+    hooks?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(() =>
         finishExited(ref.projectPath, ref.workId, ref.sessionId, {
@@ -166,6 +184,22 @@ export function createSessionsService(
       });
     finalizing.set(key, done);
   });
+
+  /**
+   * Адрес приёмника хуков для запуска — только `claude` не ниже `FEED_MIN_VERSION`. Версия — проба
+   * старта хоста по команде провайдера (короткая, ждём её); нет версии, старый `claude`, codex и прочие —
+   * без хуков, окно покажет терминал.
+   */
+  async function feedHookUrl(provider: string): Promise<string | undefined> {
+    if (provider !== 'claude' || hooks === undefined || providerVersions === undefined) return undefined;
+    const url = hooks.url();
+    if (url === null) return undefined;
+    await providerVersions.ready;
+    const entry = (await loadProviders())[provider];
+    if (entry === undefined) return undefined;
+    const version = providerVersions.get(entry.runner.command);
+    return version !== null && feedSupported(version) ? url : undefined;
+  }
 
   async function launch(
     ref: SessionRef,
@@ -231,9 +265,11 @@ export function createSessionsService(
       // останавливает — `installSkill` его не бросает.
       await installSkill(ref, session.worktree?.path ?? null);
 
+      const hookUrl = await feedHookUrl(session.provider);
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
+        ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
@@ -256,15 +292,26 @@ export function createSessionsService(
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
       // (П0), `plan.env` поверх добавляет свои `PARLEY_*` и `HARNAS_*`.
       const env = { ...agentEnv(process.env), ...plan.env };
+      // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
+      // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
+      if (hookUrl !== undefined && hooks !== undefined) {
+        env.PARLEY_HOOK_TOKEN = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
+      }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
-      const handle = pty.start(ref, {
-        command,
-        args: plan.args,
-        cwd: plan.cwd,
-        env,
-        provider: session.provider,
-      });
+      let handle: PtyHandle;
+      try {
+        handle = pty.start(ref, {
+          command,
+          args: plan.args,
+          cwd: plan.cwd,
+          env,
+          provider: session.provider,
+        });
+      } catch (error) {
+        if (hookUrl !== undefined) hooks?.unregister(ref);
+        throw error;
+      }
       const started = (async () => {
         await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
           pid: handle.pid,

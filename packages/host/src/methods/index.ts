@@ -1,6 +1,7 @@
 import type { MethodName, NotificationName } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
+import type { FeedService } from '../feed/feed-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
@@ -8,7 +9,9 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
+import { createCapabilitiesList } from './capabilities.js';
 import { createChangesHandlers } from './changes.js';
+import { createFeedHandlers } from './feed.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
@@ -27,6 +30,8 @@ export interface MethodDeps {
   sessions: SessionsService;
   wake: WakeService;
   worktrees: WorktreesService;
+  /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
+  feed?: FeedService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
@@ -51,10 +56,16 @@ export const WORKS_GATED_METHODS = [
   'sessions.close',
   'sessions.delete',
   'sessions.interrupted',
+  'sessions.setMode',
   'sessions.resumeInterrupted',
   'pty.attach',
   'pty.detach',
   'pty.send',
+  'feed.snapshot',
+  'feed.subscribe',
+  'feed.unsubscribe',
+  'feed.decide',
+  'feed.interrupt',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -104,6 +115,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.delete': sessions.sessionsDelete as AnyHandler,
     'sessions.close': sessions.sessionsClose as AnyHandler,
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
+    'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
     'wake.pause': wake.wakePause as AnyHandler,
     'wake.resume': wake.wakeResume as AnyHandler,
@@ -121,7 +133,16 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'changes.project': changes.changesProject as AnyHandler,
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
     'mail.markRead': mailMarkRead as AnyHandler,
+    'capabilities.list': createCapabilitiesList() as AnyHandler,
   };
+  if (deps.feed !== undefined) {
+    const feed = createFeedHandlers({ feed: deps.feed });
+    methods['feed.snapshot'] = feed.feedSnapshot as AnyHandler;
+    methods['feed.subscribe'] = feed.feedSubscribe as AnyHandler;
+    methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
+    methods['feed.decide'] = feed.feedDecide as AnyHandler;
+    methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
+  }
   const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
     'pty.input': pty.ptyInput as AnyNotificationHandler,
     'pty.resize': pty.ptyResize as AnyNotificationHandler,

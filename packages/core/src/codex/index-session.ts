@@ -174,6 +174,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     startedAt,
     endedAt,
     lastUserRecordAt,
+    // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
+    lastWorkRecordAt: endedAt,
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,

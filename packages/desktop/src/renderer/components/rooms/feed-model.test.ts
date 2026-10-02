@@ -1,12 +1,12 @@
 /**
  * Модель вкладки комнаты (спека окна 2026-09-29, 1.3, 2.4, решения контролёра 1, 3, 4 куска 6):
- * шапка, лента участников, сообщения с адресатами и строкой ожидания, блок `Decisions`, карточка
+ * шапка, лента участников, сообщения с адресатами и строкой доставки, блок `Decisions`, карточка
  * решения. Ведущий — `roomLiveLead`, своей копии правила здесь нет.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
-import type { LiveMetrics, LiveTask } from '@parley/protocol';
+import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { buildRoomModel, type RoomModel } from './feed-model.js';
 
@@ -294,6 +294,29 @@ describe('buildRoomModel — чем занят участник (Parley 0.2.0)',
       doing: 'Waiting for S02',
       doingDetail: 'Waiting for S02\nSubagent: Docs lookup',
     });
+  });
+
+  // Кусок 4b плана 2026-10-01: поповер на строке субагентов получает их списком.
+  it('agents — те же субагенты для поповера: список, пока строка — субагенты; ожидание важнее — пусто; ничем не занят — пусто', () => {
+    const agentsOf = (extra: Partial<LiveMetrics>, sessionsOver?: WorkSession[]) =>
+      build(
+        entryOf(sessionsOver === undefined ? {} : { sessions: sessionsOver }),
+        activityMap([makeActivity(REF('s-01'), 'working', { metrics: metrics(extra) })]),
+      ).participants[0]?.agents;
+    const tasks = [task('a'), task('b', { background: false })];
+    expect(agentsOf({ tasks })).toEqual(tasks);
+    expect(agentsOf({ tasks: [task('a')] })).toEqual([task('a')]);
+    expect(agentsOf({ tasks, waitingFor: 's-02' })).toEqual([]);
+    expect(agentsOf({ tasks: [], waitingFor: null })).toEqual([]);
+    expect(agentsOf({})).toEqual([]);
+    // Нет активности вовсе — пусто, а не «неизвестно».
+    expect(build(entryOf()).participants.map((participant) => participant.agents)).toEqual([[], [], []]);
+    // Только у живой сессии: у закрытой, спящей и не запущенной метрики — след прошлого процесса.
+    for (const lifecycle of ['closed', 'sleeping', 'pending'] as const) {
+      const custom = sessions();
+      custom[0] = makeSession('s-01', 'архитектор', { lifecycle });
+      expect(agentsOf({ tasks }, custom), lifecycle).toEqual([]);
+    }
   });
 
   it('данные только у живой сессии: закрытая, спящая и не запущенная ничем не заняты', () => {
@@ -645,43 +668,137 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
   });
 });
 
-describe('buildRoomModel — строка ожидания по readBy', () => {
-  it('рассылка человека: те из участников, кто ещё не прочитал', () => {
-    const entry = entryOf({ messages: [message('m-1', { readBy: { 's-02': '2026-09-27T09:01:00.000Z' } })] });
-    expect(build(entry).messages[0]?.waiting).toEqual(['S01', 'S03']);
-  });
+describe('buildRoomModel — доставка: кто забрал сообщение и кто ещё нет', () => {
+  const T1 = '2026-09-27T09:01:00.000Z';
+  const T2 = '2026-09-27T09:02:00.000Z';
+  const T3 = '2026-09-27T09:03:00.000Z';
+  const deliveryOf = (entry: WorkEntry, activity = {}, index = 0) => build(entry, activity).messages[index]?.delivery;
+  /** Живые метрики сессий с причиной ожидания; `undefined` — метрики есть, а поля `mailWaiting` нет (хост прежней версии). */
+  const withMailWaiting = (reasons: Record<string, MailWait | null | undefined>) =>
+    activityMap(
+      Object.entries(reasons).map(([id, mailWaiting]) =>
+        makeActivity(REF(id), 'working', {
+          metrics: {
+            tokensIn: null,
+            tokensOut: null,
+            durationMs: null,
+            unread: 0,
+            subagents: 0,
+            model: null,
+            ...(mailWaiting === undefined ? {} : { mailWaiting }),
+          },
+        }),
+      ),
+    );
 
-  it('все прочитали — строки нет', () => {
-    const entry = entryOf({
-      messages: [message('m-1', { readBy: { 's-01': 'x', 's-02': 'x', 's-03': 'x' } })],
+  it('рассылка человека: забравшие — с временем из readBy, остальные ждут', () => {
+    const entry = entryOf({ messages: [message('m-1', { readBy: { 's-02': T1 } })] });
+    expect(deliveryOf(entry)).toEqual({
+      picked: [{ tag: 'S02', at: T1 }],
+      waiting: [
+        { tag: 'S01', reason: null },
+        { tag: 'S03', reason: null },
+      ],
     });
-    expect(build(entry).messages[0]?.waiting).toEqual([]);
   });
 
-  it('адресные: только названные; сообщение агента — без самого отправителя', () => {
+  it('никто не забрал — забравших нет; все забрали — ждущих нет, порядок как у адресатов, а не по времени отметки', () => {
+    expect(deliveryOf(entryOf({ messages: [message('m-1')] }))?.picked).toEqual([]);
+    const entry = entryOf({ messages: [message('m-1', { readBy: { 's-03': T1, 's-01': T2, 's-02': T3 } })] });
+    expect(deliveryOf(entry)).toEqual({
+      picked: [
+        { tag: 'S01', at: T2 },
+        { tag: 'S02', at: T3 },
+        { tag: 'S03', at: T1 },
+      ],
+      waiting: [],
+    });
+  });
+
+  it('адресные: только названные, в порядке `to`; сообщение агента — без самого отправителя', () => {
     const entry = entryOf({
       messages: [
-        message('m-1', { to: ['s-02', 's-03'], readBy: { 's-03': 'x' } }),
+        message('m-1', { to: ['s-03', 's-02'], readBy: { 's-03': T1 } }),
         message('m-2', { from: 's-01', to: [] }),
       ],
     });
     const [addressed, broadcast] = build(entry).messages;
-    expect(addressed?.waiting).toEqual(['S02']);
-    expect(broadcast?.waiting).toEqual(['S02', 'S03']);
+    expect(addressed?.delivery).toEqual({
+      picked: [{ tag: 'S03', at: T1 }],
+      waiting: [{ tag: 'S02', reason: null }],
+    });
+    expect(broadcast?.delivery.picked).toEqual([]);
+    expect(broadcast?.delivery.waiting.map((item) => item.tag)).toEqual(['S02', 'S03']);
   });
 
-  it('закрытые и удалённые не ждутся: они не прочитают; не запущенная сессия — ждётся', () => {
+  it('закрытую и удалённую не ждём, а забравшая до закрытия остаётся в записи; не запущенная сессия ждётся', () => {
     const mixed = sessions();
     mixed[0] = makeSession('s-01', 'архитектор', { lifecycle: 'closed' });
     mixed[1] = makeSession('s-02', 'бэкенд', { lifecycle: 'pending' });
-    const entry = entryOf({ sessions: mixed, room: room({ members: ['s-01', 's-02', 's-03', 's-09'] }), messages: [message('m-1', { readBy: { 's-03': 'x' } })] });
+    const entry = entryOf({
+      sessions: mixed,
+      room: room({ members: ['s-01', 's-02', 's-03', 's-09'] }),
+      // Закрытая сессия успела забрать сообщение, прежде чем закрылась: запись о том, что было, остаётся.
+      messages: [message('m-1', { readBy: { 's-01': T1, 's-03': T2 } })],
+    });
     entry.map.work.deletedSessions = ['s-09'];
-    expect(build(entry).messages[0]?.waiting).toEqual(['S02']);
+    expect(deliveryOf(entry)).toEqual({
+      picked: [
+        { tag: 'S01', at: T1 },
+        { tag: 'S03', at: T2 },
+      ],
+      waiting: [{ tag: 'S02', reason: null }],
+    });
   });
 
-  it('письмо человеку (to: [human]) агентов не ждёт', () => {
-    const entry = entryOf({ messages: [message('m-1', { from: 's-02', to: ['human'] })] });
-    expect(build(entry).messages[0]?.waiting).toEqual([]);
+  it('человек и система не «забирают»: письмо человеку, системная строка и они среди названных — не в счёт', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-02', to: ['human'], readBy: { human: T1 } }),
+        message('m-2', { from: 'system', to: ['human'] }),
+        message('m-3', { from: 's-01', to: ['human', 'system', 's-02'] }),
+      ],
+    });
+    const [toHuman, system, mixed] = build(entry).messages;
+    expect(toHuman?.delivery).toEqual({ picked: [], waiting: [] });
+    expect(system?.delivery).toEqual({ picked: [], waiting: [] });
+    expect(mixed?.delivery).toEqual({ picked: [], waiting: [{ tag: 'S02', reason: null }] });
+  });
+
+  it('причина — metrics.mailWaiting сессии; нет активности, нет метрик, нет поля и null дают reason: null', () => {
+    const entry = entryOf({ messages: [message('m-1')] });
+    const reasons = (activity = {}) => deliveryOf(entry, activity)?.waiting.map((item) => item.reason);
+    expect(reasons(withMailWaiting({ 's-01': 'busy', 's-02': 'draft', 's-03': 'paused' }))).toEqual(['busy', 'draft', 'paused']);
+    // Хост прежней версии: метрики есть, поля нет.
+    expect(reasons(withMailWaiting({ 's-01': undefined, 's-02': undefined, 's-03': undefined }))).toEqual([null, null, null]);
+    expect(reasons(withMailWaiting({ 's-01': null }))).toEqual([null, null, null]);
+    // Метрик нет вовсе: активность без метрик и пустая карта активности.
+    expect(reasons(activityMap([makeActivity(REF('s-01'), 'working')]))).toEqual([null, null, null]);
+    expect(reasons()).toEqual([null, null, null]);
+  });
+
+  it('причина берётся у своей сессии: чужая активность не подмешивается; забравшему причина не нужна', () => {
+    const entry = entryOf({ messages: [message('m-1', { to: ['s-01', 's-02'], readBy: { 's-02': T1 } })] });
+    const delivery = deliveryOf(entry, withMailWaiting({ 's-02': 'busy', 's-03': 'sleeping' }));
+    expect(delivery).toEqual({
+      picked: [{ tag: 'S02', at: T1 }],
+      waiting: [{ tag: 'S01', reason: null }],
+    });
+  });
+
+  it('причина есть и у не активной сессии: sleeping, resuming и pending приходят именно для спящих и не запущенных', () => {
+    for (const [lifecycle, reason] of [
+      ['sleeping', 'sleeping'],
+      ['sleeping', 'resuming'],
+      ['pending', 'pending'],
+    ] as const) {
+      const custom = sessions();
+      custom[0] = makeSession('s-01', 'архитектор', { lifecycle });
+      const entry = entryOf({ sessions: custom, messages: [message('m-1', { to: ['s-01'] })] });
+      expect(deliveryOf(entry, withMailWaiting({ 's-01': reason }))?.waiting, `${lifecycle}/${reason}`).toEqual([
+        { tag: 'S01', reason },
+      ]);
+    }
   });
 });
 

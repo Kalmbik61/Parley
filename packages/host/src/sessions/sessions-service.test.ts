@@ -26,11 +26,13 @@ import type { WorkEntry, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
+import type { ProviderVersions } from '../providers/versions.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { createSessionsService } from './sessions-service.js';
+import type { SessionsFeedOptions } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
 const runGit = promisify(execFile);
@@ -139,6 +141,7 @@ interface StubArgs {
     HARNAS_WORK_DIR: string | null;
     HARNAS_SESSION_ID: string | null;
     CLAUDE_CODE_SESSION_ID: string | null;
+    PARLEY_HOOK_TOKEN: string | null;
   };
 }
 
@@ -460,6 +463,200 @@ describe('create(): карта после старта', () => {
     expect(session?.providerSessionId).toBe(uuid);
 
     await service.stop(ref);
+  });
+});
+
+describe('launch(): лента вида «Chat» — адрес приёмника и токен по версии claude (Task 2c)', () => {
+  const HOOK_URL = 'http://127.0.0.1:4321/hooks';
+
+  /** Заглушка приёмника: выдаёт токены по порядку и пишет, кого зарегистрировали и сняли. */
+  function fakeHooks() {
+    const registered: Array<{ ref: SessionRef; providerSessionId: string | null; token: string }> = [];
+    const unregistered: SessionRef[] = [];
+    const hooks: NonNullable<SessionsFeedOptions['hooks']> = {
+      url: () => HOOK_URL,
+      register(ref, providerSessionId) {
+        const token = `токен-${registered.length + 1}`;
+        registered.push({ ref, providerSessionId, token });
+        return token;
+      },
+      unregister(ref) {
+        unregistered.push(ref);
+      },
+    };
+    return { hooks, registered, unregistered };
+  }
+
+  /** Версии CLI по команде; `ready` — свой промис, чтобы проверить, что запуск его ждёт. */
+  function fakeVersions(versions: Record<string, string | null>, ready: Promise<void> = Promise.resolve()): ProviderVersions {
+    return { ready, get: (command) => versions[command] ?? null };
+  }
+
+  interface Launched {
+    args: StubArgs;
+    settings: { hooks: Record<string, Array<{ hooks: Array<{ type: string; url?: string }> }>> } | null;
+    ref: SessionRef;
+    stop: () => Promise<void>;
+  }
+
+  /** Создаёт и запускает сессию; файл настроек — по `--settings` из argv, если он там есть. */
+  async function launchWith(provider: string, feed: SessionsFeedOptions, extra: Partial<Record<string, string>> = {}): Promise<Launched> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    for (const [key, value] of Object.entries(extra)) if (value !== undefined) setEnv(key, value);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), feed);
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider,
+      label: 'бэкенд',
+      task: '',
+      parent: null,
+    });
+    const args = await readArgs(argsFile);
+    const index = args.argv.indexOf('--settings');
+    const settings =
+      index === -1 ? null : (JSON.parse(await readFile(args.argv[index + 1] as string, 'utf8')) as Launched['settings']);
+    return { args, settings, ref, stop: () => service.stop(ref) };
+  }
+
+  /** HTTP-хуки ленты в файле настроек: адреса всех `type: 'http'`. */
+  function httpHookUrls(settings: Launched['settings']): string[] {
+    if (settings === null) return [];
+    return Object.values(settings.hooks).flatMap((groups) =>
+      groups.flatMap((group) => group.hooks.filter((hook) => hook.type === 'http').map((hook) => hook.url ?? '')),
+    );
+  }
+
+  it('claude 2.1.286: токен приёмника в окружении процесса, HTTP-хуки на адрес приёмника в файле настроек', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.286' }) });
+
+    expect(registered).toHaveLength(1);
+    expect(registered[0]?.ref).toEqual(launched.ref);
+    // providerSessionId — тот, что план передал в `--session-id`, и он же лёг в карту.
+    const map = await readMap(project, launched.ref.workId);
+    const session = map.sessions.find((candidate) => candidate.id === launched.ref.sessionId);
+    expect(registered[0]?.providerSessionId).toBe(session?.providerSessionId);
+    expect(registered[0]?.providerSessionId).not.toBeNull();
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBe(registered[0]?.token);
+
+    const urls = httpHookUrls(launched.settings);
+    expect(urls.length).toBeGreaterThan(0);
+    expect(new Set(urls)).toEqual(new Set([HOOK_URL]));
+    expect(launched.settings?.hooks.PermissionRequest).toBeDefined();
+
+    await launched.stop();
+  });
+
+  it('claude 2.1.280 (ниже порога): ни токена, ни HTTP-хуков, прежние хуки на месте', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.280' }) });
+
+    expect(registered).toEqual([]);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(httpHookUrls(launched.settings)).toEqual([]);
+    expect(launched.settings?.hooks.Stop).toBeDefined();
+
+    await launched.stop();
+  });
+
+  it('версия claude не узнана (null): без токена и без HTTP-хуков', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: null }) });
+
+    expect(registered).toEqual([]);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(httpHookUrls(launched.settings)).toEqual([]);
+
+    await launched.stop();
+  });
+
+  it('codex — даже при «подходящей» версии своей команды — без токена', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith(
+      'codex',
+      { hooks, providerVersions: fakeVersions({ claude: '2.1.286', codex: '9.9.999' }) },
+      { PARLEY_CODEX_BIN: STUB },
+    );
+
+    expect(registered).toEqual([]);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(launched.args.argv).not.toContain('--settings');
+
+    await launched.stop();
+  });
+
+  it('без приёмника и версий (как в старых тестах) или приёмник не слушает — запуск прежний', async () => {
+    const plain = await launchWith('claude', {});
+    expect(plain.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(httpHookUrls(plain.settings)).toEqual([]);
+    await plain.stop();
+
+    const { hooks, registered } = fakeHooks();
+    const closed = await launchWith('claude', {
+      hooks: { ...hooks, url: () => null },
+      providerVersions: fakeVersions({ claude: '2.1.286' }),
+    });
+    expect(registered).toEqual([]);
+    expect(closed.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(httpHookUrls(closed.settings)).toEqual([]);
+    await closed.stop();
+  });
+
+  it('запуск ждёт пробу версий (ready): версия, пришедшая позже, всё равно включает ленту', async () => {
+    const { hooks, registered } = fakeHooks();
+    const versions: Record<string, string | null> = {};
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    setTimeout(() => {
+      versions.claude = '2.1.286';
+      markReady();
+    }, 100);
+    const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions(versions, ready) });
+
+    expect(registered).toHaveLength(1);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBe(registered[0]?.token);
+
+    await launched.stop();
+  });
+
+  it('токен снимается по выходу процесса', async () => {
+    const { hooks, registered, unregistered } = fakeHooks();
+    const launched = await launchWith(
+      'claude',
+      { hooks, providerVersions: fakeVersions({ claude: '2.1.286' }) },
+      { STUB_EXIT_AFTER_MS: '100' },
+    );
+
+    expect(registered).toHaveLength(1);
+    await waitFor(() => unregistered.length > 0);
+    expect(unregistered).toEqual([launched.ref]);
+  });
+
+  it('pty.start бросил — выданный токен снимается, ошибка доходит до вызывающего', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const { hooks, registered, unregistered } = fakeHooks();
+    const pty = createPtyManager(fakeHost());
+    const failing = {
+      ...pty,
+      start: () => {
+        throw new Error('spawn не удался');
+      },
+    };
+    const service = createSessionsService(fakeHost(), fakeWorks(), failing, fakeActivity(), {
+      hooks,
+      providerVersions: fakeVersions({ claude: '2.1.286' }),
+    });
+
+    await expect(
+      service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: '', task: '', parent: null }),
+    ).rejects.toThrow('spawn не удался');
+    expect(registered).toHaveLength(1);
+    expect(unregistered).toEqual([registered[0]?.ref]);
   });
 });
 

@@ -1,7 +1,8 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
-import type { Params, Result } from './methods.js';
-import type { ModelOption, ProviderLimits } from './types.js';
+import type { Params, PermissionModeChoice, Result } from './methods.js';
+import type { EventData } from './events.js';
+import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
 
 describe('типы методов', () => {
   it('у Params<sessions.create> поле workId имеет тип string | null', () => {
@@ -267,5 +268,118 @@ describe('модель, усилие и поля providers.list (дизайн к
       null,
       null,
     ]);
+  });
+});
+
+describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+  const decide = (decision: unknown, cardId: unknown = 'permission:t1') =>
+    METHODS['feed.decide'].safeParse({ ref, cardId, decision });
+  const answers = (count: number): Record<string, string> =>
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [`Q${i + 1}`, `A${i + 1}`]));
+
+  it('feed.decide: разрешение, вопрос и план проходят', () => {
+    expect(decide({ kind: 'permission', behavior: 'allow' }).success).toBe(true);
+    expect(decide({ kind: 'permission', behavior: 'allow', always: true }).success).toBe(true);
+    expect(decide({ kind: 'permission', behavior: 'deny', message: 'use rg' }).success).toBe(true);
+    expect(decide({ kind: 'question', answers: { 'Which?': 'Red' } }, 'question:t2').success).toBe(true);
+    expect(decide({ kind: 'plan', choice: 'auto-accept' }, 'plan:t3').success).toBe(true);
+    expect(decide({ kind: 'plan', choice: 'manual' }, 'plan:t3').success).toBe(true);
+  });
+
+  it('feed.decide: текст отказа — до 4000 знаков', () => {
+    const deny = (message: string) => decide({ kind: 'permission', behavior: 'deny', message });
+    expect(deny('я'.repeat(4000)).success).toBe(true);
+    expect(deny('я'.repeat(4001)).success).toBe(false);
+  });
+
+  it('feed.decide: ответы — до 20 вопросов, ответ до 16 КиБ', () => {
+    const answer = (value: Record<string, string>) => decide({ kind: 'question', answers: value }, 'question:t2');
+    expect(answer(answers(20)).success).toBe(true);
+    expect(answer(answers(21)).success).toBe(false);
+    expect(answer({ Q: 'x'.repeat(16 * 1024) }).success).toBe(true);
+    expect(answer({ Q: 'x'.repeat(16 * 1024 + 1) }).success).toBe(false);
+  });
+
+  it('feed.interrupt: только ref сессии', () => {
+    expect(METHODS['feed.interrupt'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['feed.interrupt'].safeParse({}).success).toBe(false);
+  });
+
+  it('feed.decide: неизвестный вид решения, cardId длиннее 200 и без ref — отвергаются', () => {
+    expect(decide({ kind: 'allow' }).success).toBe(false);
+    expect(decide({ kind: 'permission', behavior: 'maybe' }).success).toBe(false);
+    expect(decide({ kind: 'permission', behavior: 'allow' }, 'c'.repeat(200)).success).toBe(true);
+    expect(decide({ kind: 'permission', behavior: 'allow' }, 'c'.repeat(201)).success).toBe(false);
+    expect(
+      METHODS['feed.decide'].safeParse({ cardId: 'x', decision: { kind: 'plan', choice: 'manual' } }).success,
+    ).toBe(false);
+  });
+
+  it('feed.snapshot: agentId необязателен; только буквы, цифры, _ и -, до 80 знаков', () => {
+    const snapshot = (extra: Record<string, unknown>) => METHODS['feed.snapshot'].safeParse({ ref, ...extra });
+    expect(snapshot({}).success).toBe(true);
+    expect(snapshot({ agentId: 'ad2fe21e96ffde3ba' }).success).toBe(true);
+    expect(snapshot({ agentId: 'a'.repeat(80) }).success).toBe(true);
+    for (const agentId of ['../etc', '../../x', 'a/b', '', 'a'.repeat(81), 'a.b', 'a b']) {
+      expect(snapshot({ agentId }).success).toBe(false);
+    }
+  });
+
+  it('feed.subscribe и feed.unsubscribe — ref', () => {
+    expect(METHODS['feed.subscribe'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['feed.unsubscribe'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['feed.subscribe'].safeParse({}).success).toBe(false);
+  });
+
+  it('результаты feed.* и событие feed.changed', () => {
+    expectTypeOf<Result<'feed.snapshot'>>().toEqualTypeOf<{
+      items: FeedItem[];
+      revision: number;
+      schemaVersion: number;
+      mode: string | null;
+    }>();
+    expectTypeOf<Result<'feed.subscribe'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'feed.unsubscribe'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'feed.decide'>>().toEqualTypeOf<{ applied: boolean; state: FeedCardState }>();
+    expectTypeOf<EventData<'feed.changed'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      revision: number;
+      upsert: FeedItem[];
+      removed: string[];
+      mode: string | null;
+    }>();
+    expectTypeOf<Params<'feed.decide'>['decision']>().toEqualTypeOf<FeedDecision>();
+  });
+});
+
+describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
+  const ref = { projectPath: '/p', workId: 'w', sessionId: 's' };
+
+  it('принимает четыре режима окна и отвергает прочие', () => {
+    for (const mode of ['default', 'acceptEdits', 'plan', 'auto']) {
+      expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(true);
+    }
+    for (const mode of ['bypassPermissions', 'dontAsk', '', 5]) {
+      expect(METHODS['sessions.setMode'].safeParse({ ref, mode }).success).toBe(false);
+    }
+    expect(METHODS['sessions.setMode'].safeParse({ mode: 'plan' }).success).toBe(false);
+  });
+
+  it('результат и тип выбора', () => {
+    expectTypeOf<Result<'sessions.setMode'>>().toEqualTypeOf<{ mode: string | null; verified: boolean }>();
+    expectTypeOf<Params<'sessions.setMode'>['mode']>().toEqualTypeOf<PermissionModeChoice>();
+  });
+});
+
+describe('capabilities.list (живая проверка 2026-10-02: подсказки поля ввода)', () => {
+  it('принимает проект и провайдера, отвергает пустые', () => {
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p', provider: 'claude' }).success).toBe(true);
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '', provider: 'claude' }).success).toBe(false);
+    expect(METHODS['capabilities.list'].safeParse({ projectPath: '/p' }).success).toBe(false);
+  });
+
+  it('результат — команды, скиллы и субагенты', () => {
+    expectTypeOf<Result<'capabilities.list'>>().toEqualTypeOf<Capabilities>();
   });
 });

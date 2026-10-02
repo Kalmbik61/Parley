@@ -63,7 +63,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'tab.close': true, 'tab.reopen': true, 'tab.prev': true, 'tab.next': true, 'tab.mruNext': true, 'tab.mruPrev': true,
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
   'tab.goto.6': true, 'tab.goto.7': true, 'tab.goto.8': true, 'tab.goto.9': true,
-  find: true, 'terminal.clear': true, 'settings.open': true,
+  find: true, 'terminal.clear': true, 'chat.toggleView': true, 'settings.open': true,
   'attention.next': true, 'wake.toggle': true, 'host.restart': true,
   'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
   'browser.newTab': true,

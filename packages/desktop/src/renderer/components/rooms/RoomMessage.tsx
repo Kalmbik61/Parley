@@ -1,12 +1,17 @@
 /**
  * Одно сообщение ленты комнаты (спека окна 2026-09-29, 1.3): аватар 18, мета — отправитель (600), `★`
  * у ведущего, `→ all` или `→ S02 бэкенд, S03 ревью`, тег вида, время, точка «непрочитано»; текст
- * 14px/1.55 — Markdown (GFM) с чипами (`RoomMarkdown.tsx`); под ним строка ожидания
- * `▤ Not picked up yet by S02, S03`. Системная строка — аватар системы без адресата и без точки
- * (решение контролёра 4 куска 6).
+ * 14px/1.55 — Markdown (GFM) с чипами (`RoomMarkdown.tsx`); под ним строка доставки
+ * `✓ Picked up by S03 · ▤ Not picked up yet by S01 (busy), S02`. Системная строка — аватар системы без
+ * адресата и без точки (решение контролёра 4 куска 6).
  *
  * Точка — токен `--state-done`, а не `accent-2-500` handoff: тот к листу светлой темы 2.6:1, ниже порога
  * 3:1 для признака состояния (решение 11 спеки — те же токены у значков состояний).
+ *
+ * Строка доставки (`message.delivery`) одна, когда у сообщения есть хотя бы один не закрытый адресат-агент: «забрали»
+ * (`data-message-picked`, время каждого — в подсказке, а не в строке) и «ещё нет» (`data-message-waiting`; после тега
+ * в скобках причина от хоста, `S01 (busy)`) через « · ». Текст идёт обычным потоком и переносится по словам, а
+ * неразрывный (чужой id сессии) — по знакам: длинный список не раздвигает колонку и не даёт горизонтальной прокрутки.
  *
  * За «прочитано» (`observeRef`, `attention/use-mark-read.ts`) наблюдается строка меты, а не всё
  * сообщение: наблюдатель ждёт половину площади цели, а сообщение в 2000 знаков в невысоком окне выше
@@ -25,6 +30,7 @@
 
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
+import { isoMs } from '../../lib/iso-time.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { Badge } from '../../ui/badge.js';
 import type { MessageModel, ReplyModel } from './feed-model.js';
@@ -46,6 +52,15 @@ export interface RoomMessageProps {
   /** Клик по цитате ответа: показать сообщение с этим id (прокрутить ленту и подсветить его). */
   onJumpTo: (messageId: string) => void;
   observeRef?: (el: HTMLElement | null) => void;
+}
+
+/**
+ * `20:30:11` — время отметки «забрал» для подсказки: точное, в поясе окна (относительное «2m» ленты здесь ничего бы не
+ * сказало — забирают за секунды). Не ISO-время — пусто, а не «Invalid Date».
+ */
+function clockTime(iso: string): string {
+  const ms = isoMs(iso);
+  return ms === null ? '' : new Date(ms).toTimeString().slice(0, 8);
 }
 
 /** Цитата — одна строка с обрезкой и акцентной чертой слева; у кнопки и у заглушки «оригинала нет» вид общий. */
@@ -89,6 +104,7 @@ export function RoomMessage({
   onJumpTo,
   observeRef,
 }: RoomMessageProps): JSX.Element {
+  const { picked, waiting } = message.delivery;
   return (
     <div
       data-message-id={message.id}
@@ -130,11 +146,30 @@ export function RoomMessage({
           onOpenExternal={onOpenExternal}
           humanChips={message.sender.kind !== 'human'}
         />
-        {message.waiting.length > 0 ? (
-          <span data-message-waiting className="text-xs text-muted-foreground">
-            {S.rooms.notPickedUp(message.waiting.join(', '))}
-          </span>
-        ) : null}
+        {picked.length === 0 && waiting.length === 0 ? null : (
+          <div data-message-delivery="" className="break-words text-xs text-muted-foreground">
+            {picked.length === 0 ? null : (
+              <span
+                data-message-picked=""
+                title={picked.map(({ tag, at }) => `${tag} ${clockTime(at)}`.trim()).join(' · ')}
+              >
+                {S.rooms.pickedUp(picked.map(({ tag }) => tag).join(', '))}
+              </span>
+            )}
+            {picked.length === 0 || waiting.length === 0 ? null : ' · '}
+            {waiting.length === 0 ? null : (
+              <span data-message-waiting="">
+                {S.rooms.notPickedUp(
+                  waiting
+                    .map(({ tag, reason }) =>
+                      reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`,
+                    )
+                    .join(', '),
+                )}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

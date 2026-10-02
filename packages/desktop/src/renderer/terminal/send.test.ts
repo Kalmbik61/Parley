@@ -154,6 +154,24 @@ describe('sendWithToast (тест 8)', () => {
     expect(deps.onOutcome.mock.calls).toEqual([[ok(true, false, null)]]);
   });
 
+  it('silentSuccess: отправлено с Enter — тоста «Sent to» нет; исход в onOutcome и в ответе', async () => {
+    bridge.setHandler('pty.send', () => ok(true, true, null));
+    expect(await sendWithToast(deps, ref, 'p', true, { silentSuccess: true })).toEqual(ok(true, true, null));
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(deps.onOutcome.mock.calls).toEqual([[ok(true, true, null)]]);
+  });
+
+  it('silentSuccess не глушит отказы и вставки без Enter: busy — тост с Retry, draft — свой тост', async () => {
+    bridge.setHandler('pty.send', () => ok(false, false, 'busy'));
+    await sendWithToast(deps, ref, 'p', true, { silentSuccess: true });
+    expect(lastToast().text).toBe('S02 is busy with another message — retry in a second');
+    expect(lastToast().buttons.map((item) => item.label)).toEqual(['Retry']);
+    bridge.setHandler('pty.send', () => ok(true, false, 'draft'));
+    await sendWithToast(deps, ref, 'p', true, { silentSuccess: true });
+    expect(lastToast()).toMatchObject({ kind: 'toast', text: 'Inserted into S02 without Enter — your draft is in the input' });
+  });
+
   it('blocked → тост с Copy и Open S02: Copy кладёт исходный текст в буфер, Open зовёт openSession(ref)', async () => {
     bridge.setHandler('pty.send', () => ok(false, false, 'blocked'));
     await sendWithToast(deps, ref, 'исходный\nтекст', true);

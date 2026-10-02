@@ -102,7 +102,7 @@ export function otherHostBuild(
 }
 
 /** `x.y.z` (хвост `-…` не важен) → [x, y, z]; не такая версия — `null`. */
-function semver(version: string): [number, number, number] | null {
+export function semver(version: string): [number, number, number] | null {
   const found = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   return found === null ? null : [Number(found[1]), Number(found[2]), Number(found[3])];
 }

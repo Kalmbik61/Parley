@@ -5,10 +5,17 @@
  */
 
 import type { Handler } from '../context.js';
+import type { FeedService } from '../feed/feed-service.js';
+import { switchMode } from '../pty/mode-switch.js';
+import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
 export interface SessionMethodDeps {
   sessions: SessionsService;
+  /** Печать хоста и чтение экрана для `sessions.setMode`. */
+  pty: Pick<PtyManager, 'write' | 'on' | 'get' | 'screenText'>;
+  /** Лента узнаёт сверенный режим; без неё метод только отвечает. */
+  feed?: Pick<FeedService, 'noteMode'>;
 }
 
 export interface SessionHandlers {
@@ -18,6 +25,7 @@ export interface SessionHandlers {
   sessionsDelete: Handler<'sessions.delete'>;
   sessionsClose: Handler<'sessions.close'>;
   sessionsInterrupted: Handler<'sessions.interrupted'>;
+  sessionsSetMode: Handler<'sessions.setMode'>;
   sessionsResumeInterrupted: Handler<'sessions.resumeInterrupted'>;
 }
 
@@ -58,6 +66,13 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     },
 
     sessionsInterrupted: async () => ({ refs: deps.sessions.interrupted() }),
+
+    // Нажатия Shift+Tab — печать хоста по явному действию человека; ответов хукам тут нет.
+    sessionsSetMode: async (params) => {
+      const result = await switchMode({ pty: deps.pty }, params.ref, params.mode);
+      if (result.mode !== null) deps.feed?.noteMode(params.ref, result.mode);
+      return result;
+    },
 
     sessionsResumeInterrupted: async (params) => {
       await deps.sessions.resumeInterrupted(params.refs);

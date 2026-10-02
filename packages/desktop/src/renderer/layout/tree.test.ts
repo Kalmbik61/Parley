@@ -725,6 +725,20 @@ describe('updateTab', () => {
     expect(updateTab(layout, 'нет-такой', { url: 'x' })).toBe(layout);
     expect(updateTab(layout, before.id, { url: 'x' })).toBe(layout);
   });
+
+  // План 2026-10-01, решение 6: вид вкладки сессии.
+  it('вкладке терминала ставит view; view у браузера — та же ссылка', () => {
+    const term = freshTab();
+    const page = browserTab('http://localhost:5173/');
+    let layout = openTab(emptyLayout(), term, 'active');
+    layout = openTab(layout, page, 'active');
+
+    const toTerminal = updateTab(layout, term.id, { view: 'terminal' });
+    expect(groups(toTerminal)[0]?.tabs[0]).toEqual({ ...term, view: 'terminal' });
+    expect(groups(updateTab(toTerminal, term.id, { view: 'chat' }))[0]?.tabs[0]).toEqual({ ...term, view: 'chat' });
+    expect(validateLayout(toTerminal)).toEqual([]);
+    expect(updateTab(layout, page.id, { view: 'chat' })).toBe(layout);
+  });
 });
 
 describe('validateLayout — дубль id узла, не только вкладки (раунд исправлений 1, Critical B)', () => {
@@ -889,6 +903,24 @@ describe('parseWorkLayout', () => {
     (tabs[0] as Record<string, unknown>).extraTab = 'на вкладке';
 
     expect(parseWorkLayout(raw)).toEqual(layout);
+  });
+
+  // План 2026-10-01, решение 6: view вкладки сессии переживает перезапуск; старая раскладка без поля — норма.
+  it('view вкладки терминала переживает разбор; без поля — без поля; мусор — раскладка невалидна', () => {
+    const tab = freshTab();
+    const base = openTab(emptyLayout(), tab, 'active');
+    const withView = updateTab(base, tab.id, { view: 'terminal' });
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(withView)))).toEqual(withView);
+
+    const old = parseWorkLayout(JSON.parse(JSON.stringify(base)));
+    expect(old).toEqual(base);
+    expect(old === null ? null : 'view' in (groups(old)[0]?.tabs[0] ?? {})).toBe(false);
+
+    const raw = JSON.parse(JSON.stringify(withView)) as { root: { tabs: Array<Record<string, unknown>> } };
+    raw.root.tabs[0]!.view = 'grid';
+    expect(parseWorkLayout(raw)).toBeNull();
+    raw.root.tabs[0]!.view = null;
+    expect(parseWorkLayout(raw)).toBeNull();
   });
 });
 

@@ -40,6 +40,15 @@ export function canResume(session: WorkSession): boolean {
   return session.lifecycle !== 'closed' && RESUMABLE.has(displayStatus(session));
 }
 
+/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2); общая у терминала и чата. */
+export function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
+  bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
+    const { code, message } = decodeIpcError(error);
+    console.warn('[parley] sessions.resume', message);
+    toast.error(errorText(code, S.errors.actions.resumeSession));
+  });
+}
+
 export interface SendToast {
   text: string;
   actions: Array<'copy' | 'open' | 'retry' | 'resume'>;
@@ -99,6 +108,14 @@ export interface SendWithToastDeps {
   retry?(): void;
 }
 
+export interface SendWithToastOptions {
+  /**
+   * Не показывать тост успеха («Sent to S01»: отправлено с Enter): вид «Chat» и так показывает
+   * отправленное в ленте. Отказы и вставки без Enter — с прежними тостами.
+   */
+  silentSuccess?: boolean;
+}
+
 interface ToastButton {
   label: string;
   onClick: () => void;
@@ -109,13 +126,20 @@ interface ToastButton {
  * кнопки: Copy — исходный текст в буфер, Open — openSession, Retry — тот же вызов, Resume — sessions.resume.
  * Возвращает исход первой попытки; исходы всех попыток, включая Retry, — в deps.onOutcome.
  */
-export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, text: string, submit: boolean): Promise<SendOutcome> {
+export async function sendWithToast(
+  deps: SendWithToastDeps,
+  ref: SessionRef,
+  text: string,
+  submit: boolean,
+  sendOptions: SendWithToastOptions = {},
+): Promise<SendOutcome> {
   const outcome = await sendToAgent(deps.bridge, ref, text, submit);
   deps.onOutcome?.(outcome);
   const label = sessionTag(ref.sessionId);
   const session = deps.session(ref);
   const shown = sendToast(outcome, label, session !== null && canResume(session));
   if (shown === null) return outcome;
+  if (sendOptions.silentSuccess === true && !('error' in outcome) && outcome.reason === null) return outcome;
 
   const buttons: Record<SendToast['actions'][number], ToastButton> = {
     copy: {
@@ -126,7 +150,7 @@ export async function sendWithToast(deps: SendWithToastDeps, ref: SessionRef, te
     },
     open: { label: S.send.openSession(label), onClick: () => deps.openSession(ref) },
     // Повтор — тем же путём и с теми же deps: его исход тоже уходит в onOutcome.
-    retry: { label: S.common.retry, onClick: () => (deps.retry === undefined ? void sendWithToast(deps, ref, text, submit) : deps.retry()) },
+    retry: { label: S.common.retry, onClick: () => (deps.retry === undefined ? void sendWithToast(deps, ref, text, submit, sendOptions) : deps.retry()) },
     resume: {
       label: S.sidebar.sessionMenu.resume,
       onClick: () => {

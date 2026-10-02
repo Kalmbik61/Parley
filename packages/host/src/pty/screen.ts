@@ -20,6 +20,12 @@ export interface Screen {
   snapshot(): string;
   /** Агент включил bracketed paste (`ESC[?2004h`): многострочный pty.send идёт вставкой (спека 8.6). */
   bracketedPaste(): boolean;
+  /**
+   * Последние `rows` строк видимой области активного экрана чистым текстом (без цветов и управляющих
+   * последовательностей, концевые пробелы срезаны); без `rows` — вся видимая область. Хост по ним
+   * читает подвал агента (план 2026-10-01, решение 4).
+   */
+  text(rows?: number): string[];
   dispose(): void;
 }
 
@@ -53,6 +59,21 @@ export function createScreen(cols: number, rows: number, scrollback = DEFAULT_SC
 
     bracketedPaste() {
       return terminal.modes.bracketedPasteMode;
+    },
+
+    text(rows) {
+      const buffer = terminal.buffer.active;
+      const total = terminal.rows;
+      const count = rows === undefined ? total : Math.max(0, Math.min(rows, total));
+      const lines: string[] = [];
+      for (let i = total - count; i < total; i += 1) {
+        // Видимая область начинается с `baseY`: выше неё — прокрутка.
+        const line = buffer.getLine(buffer.baseY + i);
+        // `translateToString(true)` срезает только пустые ячейки; напечатанные пробелы в конце строки
+        // остаются — их срезаем сами.
+        lines.push(line === undefined ? '' : line.translateToString(true).trimEnd());
+      }
+      return lines;
     },
 
     dispose() {

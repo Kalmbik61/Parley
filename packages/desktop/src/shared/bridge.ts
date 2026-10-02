@@ -92,6 +92,8 @@ export interface ParleyBridge {
     onFocusTarget(listener: (target: FocusTarget) => void): () => void;
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
+    /** Диалог выбора файлов для вложений поля ввода «Chat»: пути выбранных, [] — отмена. */
+    chooseFiles(): Promise<string[]>;
     /**
      * Версия окна (`app.getVersion()`, 0.2.0): с ней страница сверяет версию хоста — хост другой сборки
      * перезапускают. `null` — окно не собрано (`pnpm dev`, E2E), и сверять нечего.
@@ -164,6 +166,12 @@ export interface ParleyBridge {
      * 'clipboard'; null — картинки нет или в буфере есть текст.
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
+    /**
+     * Миниатюра картинки-вложения «Chat» для чипов поля ввода и ленты (`main/image-thumbnail.ts`): data-URL не шире
+     * 320 px. `null` — не картинка (расширение, не обычный файл, больше 20 МБ) или файл не читается. Путь любой:
+     * вложения лежат где угодно, не только в корнях работ.
+     */
+    imageThumbnail(path: string): Promise<string | null>;
     /**
      * Число несохранённых буферов редактора → main (`app:dirty-buffers`, кусок 7.3a) при каждом
      * изменении: на закрытии окна и ⌘Q main спрашивает, только если оно больше нуля.

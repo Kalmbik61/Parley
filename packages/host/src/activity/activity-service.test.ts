@@ -184,6 +184,58 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
 
+  it('2а: после Stop служебные записи журнала Claude Code (итоги хуков, длительность) не возвращают working', async () => {
+    const { ref } = await activeSession({ providerSessionId: 's-tail' });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    const journal = path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(journal, hook('UserPromptSubmit'));
+    await appendFile(journal, hook('Stop'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+
+    // Как пишет Claude Code: ответ — до Stop, итоги хуков и длительность хода — после него (живая проверка
+    // 2026-10-02: по этим записям сессия ещё 30 с числилась working, и письма ей ждали).
+    const before = new Date(Date.now() - 5_000).toISOString();
+    const after = new Date(Date.now() + 2_000).toISOString();
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-tail', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-tail.jsonl'),
+      `${[
+        record({ type: 'user', timestamp: before, message: { role: 'user', content: 'привет' } }),
+        record({ type: 'assistant', timestamp: before, message: { role: 'assistant', content: [{ type: 'text', text: 'ок' }] } }),
+        record({ type: 'system', subtype: 'stop_hook_summary', timestamp: after }),
+        record({ type: 'system', subtype: 'turn_duration', timestamp: after, durationMs: 1000 }),
+      ].join('\n')}\n`,
+    );
+
+    await waitFor(() => a.logFile(ref) !== null, 15_000);
+    await settle(400);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', source: 'hooks' });
+  }, 30_000);
+
+  it('2б: mailWaiting — причина ожидания писем уходит в метрики и рассылку, null её снимает', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.mailWaiting ?? null).toBeNull();
+
+    a.mailWaiting(ref, 'draft');
+    expect(a.get(ref)?.metrics?.mailWaiting).toBe('draft');
+    const sent = activityChanges(ref).length;
+    // То же значение — ни пересчёта, ни рассылки.
+    a.mailWaiting(ref, 'draft');
+    expect(activityChanges(ref)).toHaveLength(sent);
+
+    a.mailWaiting(ref, null);
+    expect(a.get(ref)?.metrics?.mailWaiting).toBeNull();
+  });
+
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {
     const startedAt = new Date().toISOString();
     const { ref } = await activeSession({ providerSessionId: 's-log', createEventsDir: false });
@@ -823,5 +875,74 @@ describe('createActivityService: субагенты и ожидание (Parley 
     // Без защиты таймер с нулевой задержкой пересчитывал бы сессию сотни раз за полсекунды.
     expect(calls - before).toBeLessThan(50);
     expect(a.get(ref)?.activity.activity).toBe('working');
+  }, 20_000);
+});
+
+describe('удержанный вопрос агента (план 2026-10-01, кусок 4a, решение О)', () => {
+  const journal = (ref: SessionRef): string =>
+    path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+
+  it('questionHeld(true) у working-сессии публикует blocked, questionHeld(false) возвращает working', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    const seen: string[] = [];
+    a.onChange((changed, value) => {
+      if (refKey(changed) === refKey(ref)) seen.push(value.activity.activity);
+    });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    a.questionHeld(ref, true);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(activityChanges(ref).at(-1)?.activity).toBe('blocked');
+    expect(seen.at(-1)).toBe('blocked');
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(activityChanges(ref).at(-1)?.activity).toBe('working');
+  }, 20_000);
+
+  it('тишина дольше порога при удержании — по-прежнему blocked; после отпускания — по журналу', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w, { silenceThresholdMs: 300 });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    a.questionHeld(ref, true);
+
+    await settle(900);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.activity).toMatch(/^(unseen|idle)$/);
+  }, 20_000);
+
+  it('повторный questionHeld с тем же значением ничего не публикует; неизвестная сессия — без исключения', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    a.questionHeld(ref, false);
+    const base = activityChanges(ref).length;
+    a.questionHeld(ref, true);
+    expect(activityChanges(ref).length).toBe(base + 1);
+    a.questionHeld(ref, true);
+    expect(activityChanges(ref).length).toBe(base + 1);
+
+    const unknown: SessionRef = { projectPath: project, workId: 'w-нет', sessionId: 's-99' };
+    expect(() => a.questionHeld(unknown, true)).not.toThrow();
+    expect(() => a.questionHeld(unknown, false)).not.toThrow();
   }, 20_000);
 });

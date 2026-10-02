@@ -68,8 +68,8 @@ export interface RoomPanelProps {
   /** Работа активна (`LayoutBodyContext.active`): сообщения скрытой работы LRU не отмечаются прочитанными. */
   active: boolean;
   onOpenExternal: (url: string) => void;
-  /** Клик по карточке участника: открыть терминал его сессии. */
-  onOpenSession: (sessionId: string) => void;
+  /** Клик по карточке участника: открыть терминал его сессии; по агенту в поповере строки субагентов — на карточке агента (`agentId`). */
+  onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
 /** Относительное время сообщений («2m») обновляется раз в столько же, что и в сайдбаре. */

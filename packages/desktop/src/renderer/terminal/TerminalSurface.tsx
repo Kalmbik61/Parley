@@ -59,7 +59,7 @@ import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
 import { dragHasFiles, pasteHasOnlyImage, pathsToInput } from './drop.js';
-import { canResume, sendWithToast, type SendWithToastDeps } from './send.js';
+import { canResume, resumeSession, sendWithToast, type SendWithToastDeps } from './send.js';
 import { TerminalContextMenu } from './TerminalContextMenu.js';
 import { useTerminal } from './use-terminal.js';
 import { xtermTheme } from './xterm-themes.js';
@@ -74,6 +74,8 @@ export interface TerminalSurfaceProps {
   visible: boolean;
   fontFamily: string;
   fontSize: number;
+  /** Отступ сверху под тулбар вкладки с сегментом «Chat | Terminal» (план 2026-10-01); нет — 0. */
+  topInset?: number;
 }
 
 // ESC и управляющие байты в регулярках — ровно то, что вырезается из вставки.
@@ -109,15 +111,6 @@ function openSessionTab(ref: SessionRef): void {
   if (!applied) toast(S.notifications.targetGone);
 }
 
-/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2). */
-function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
-  bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
-    const { code, message } = decodeIpcError(error);
-    console.warn('[parley] sessions.resume', message);
-    toast.error(errorText(code, S.errors.actions.resumeSession));
-  });
-}
-
 /** Случайный id монтирования — не `crypto.randomUUID`: тот требует защищённого контекста. */
 function newMountId(): string {
   return `m-${Math.random().toString(36).slice(2, 10)}`;
@@ -125,6 +118,7 @@ function newMountId(): string {
 
 export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
   const { sessionRef, tabId, groupId, visible } = props;
+  const topInset = props.topInset ?? 0;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [mountId] = useState(newMountId);
   const dark = useUiStore((state) => state.dark);
@@ -154,11 +148,11 @@ export function TerminalSurface(props: TerminalSurfaceProps): JSX.Element {
     const el = rootRef.current;
     if (el === null) return;
     el.style.setProperty('position-anchor', `--g-${groupId}`);
-    el.style.setProperty('top', 'anchor(top)');
+    el.style.setProperty('top', topInset === 0 ? 'anchor(top)' : `calc(anchor(top) + ${topInset}px)`);
     el.style.setProperty('left', 'anchor(left)');
     el.style.setProperty('width', 'anchor-size(width)');
-    el.style.setProperty('height', 'anchor-size(height)');
-  }, [groupId]);
+    el.style.setProperty('height', topInset === 0 ? 'anchor-size(height)' : `calc(anchor-size(height) - ${topInset}px)`);
+  }, [groupId, topInset]);
 
   // `inert` в React 18 — не булев проп, ставится руками. Скрытая поверхность —
   // `visibility: hidden`, а не `display: none`: xterm без размеров их теряет.

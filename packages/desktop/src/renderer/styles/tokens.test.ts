@@ -491,6 +491,36 @@ describe('строка статуса — лимиты подписок: обы�
   }
 });
 
+// ── Дифф ленты вида «Chat» (ревью куска 3 плана 2026-10-01) ───────────────────────────────────
+
+/**
+ * `chat/items/DiffHunks.tsx`: подложки `--diff-*-ground` лежат на листе центра; номера строк и заголовок
+ * `@@` — `foreground` 70 % (muted на подложках бледнел), полоса слева у `+`/`−` — цвет знака
+ * (`--git-decoration-*`).
+ */
+describe('дифф ленты чата — номера строк, заголовок хунка и полоса слева', () => {
+  const FOREGROUND_70 = 0.7;
+  for (const theme of THEMES) {
+    const sheet = (): Rgb => solid(theme, '--sheet');
+    for (const ground of ['--diff-added-ground', '--diff-removed-ground']) {
+      it(`${theme}: номер строки (foreground 70 %) на «${ground}» поверх листа не ниже 4.5:1`, () => {
+        const row = on(theme, ground, sheet());
+        expect(contrastRatio(compositeOver(solid(theme, '--foreground'), FOREGROUND_70, row), row)).toBeGreaterThanOrEqual(TEXT);
+      });
+    }
+
+    it(`${theme}: заголовок @@ (foreground 70 %) на --muted поверх листа не ниже 4.5:1`, () => {
+      const row = on(theme, '--muted', sheet());
+      expect(contrastRatio(compositeOver(solid(theme, '--foreground'), FOREGROUND_70, row), row)).toBeGreaterThanOrEqual(TEXT);
+    });
+
+    it(`${theme}: полоса слева (--git-decoration-added/deleted) к подложке своей строки не ниже 3:1`, () => {
+      expect(contrastRatio(solid(theme, '--git-decoration-added'), on(theme, '--diff-added-ground', sheet()))).toBeGreaterThanOrEqual(NON_TEXT);
+      expect(contrastRatio(solid(theme, '--git-decoration-deleted'), on(theme, '--diff-removed-ground', sheet()))).toBeGreaterThanOrEqual(NON_TEXT);
+    });
+  }
+});
+
 // ── 4. Прежние имена, новые значения ────────────────────────────────────────────────────────
 
 describe('прежние переменные — значения на токенах Organic', () => {

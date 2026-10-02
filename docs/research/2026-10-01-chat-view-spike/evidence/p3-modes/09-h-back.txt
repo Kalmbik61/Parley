@@ -1,0 +1,28 @@
+ ▐▛███▛█   Claude Code v2.1.286
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /…/dab7e6c3-4dab-4bbc-b461-19f97ca741a6/scratchpad/chat-probe/proj
+
+
+❯ Use the Bash tool to run exactly this command, then reply "done": mkdir probe-g                             
+
+⏺ Bash(mkdir probe-g) 
+  ⎿  Done
+
+⏺ done
+
+✻ Churned for 4s · done 3:48 PM
+
+❯ /plan                                                                                                       
+  ⎿  Enabled plan mode
+
+❯ Reply with one word: ready                                                                                  
+
+⏺ ready
+
+✻ Crunched for 1s · done 3:48 PM
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  probe-statusline                                                      auto mode unavailable for this model
+  ⏸ plan mode on (shift+tab to cycle) · ← for agents

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +53,7 @@ let claudeRoot = '';
 let codexRoot = '';
 let broadcasts: Array<{ event: EventName; data: unknown }>;
 let logErrors: string[] = [];
+let logInfos: Array<Record<string, unknown>> = [];
 let stoppers: Array<() => Promise<void> | void> = [];
 let extraEnv: string[] = [];
 
@@ -66,7 +67,12 @@ function fakeHost(): HostContext {
     version: '0.0.0',
     startedAt: new Date().toISOString(),
     paths: { dir: '', socket: '', token: '', pid: '', log: '' },
-    log: { info: () => {}, warn: () => {}, error: (message: string) => logErrors.push(message) },
+    log: {
+      info: (message: string, fields?: Record<string, unknown>) =>
+        logInfos.push({ message, ...(fields === undefined ? {} : fields) }),
+      warn: () => {},
+      error: (message: string) => logErrors.push(message),
+    },
     clients: () => [],
     liveSessions: () => 0,
     broadcast: (event, data) => broadcasts.push({ event, data: data as EventData<EventName> }),
@@ -86,6 +92,7 @@ beforeEach(async () => {
   setEnv('PARLEY_CLAUDE_PROJECTS_DIR', claudeRoot);
   broadcasts = [];
   logErrors = [];
+  logInfos = [];
 });
 
 afterEach(async () => {
@@ -225,14 +232,43 @@ describe('WakeService', () => {
 
   it('3: черновик блокирует указатель; после \\r черновик снят — указатель уходит', async () => {
     const { workId, sessionId } = await activeSession();
-    const { stream, pty, ref } = await rig(sessionId, workId);
+    const { stream, pty, ref, activity } = await rig(sessionId, workId);
 
     pty.input(ref, 'пр');
     await sendLetter(workId, sessionId);
     await settle(300);
     expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+    // Причина ожидания — в логе хоста, раз на причину: по файлам работы её потом не восстановить.
+    const reasons = logInfos
+      .filter((entry) => entry.message === 'будильник: письма ждут')
+      .map((entry) => entry.reason);
+    expect(reasons.at(-1)).toBe('draft');
+    expect(reasons.filter((reason) => reason === 'draft')).toHaveLength(1);
+    // Та же причина — окну: комната пишет её рядом с «not picked up yet».
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('draft');
 
     pty.input(ref, '\r');
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Указатель дошёл, письмо ещё не прочитано: причина сменилась на «сообщено».
+    await waitFor(() => ['in-flight', 'pointed'].includes(activity.get(ref)?.metrics?.mailWaiting ?? ''), 3000);
+  });
+
+  it('3а: активность стала working до своего Enter — Enter всё равно уходит, указатель не остаётся в поле ввода', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, wake, ref, activity } = await rig(sessionId, workId, {}, { enterDelayMs: 700 });
+
+    await sendLetter(workId, sessionId);
+    // Текст указателя напечатан, свой Enter ещё ждёт паузы.
+    await waitFor(() => wake.inFlight(ref), 3000);
+    // Как записи журнала Claude Code сразу после Stop: активность возвращается в working, хотя ход по
+    // указателю начаться ещё не мог (живая проверка 2026-10-02: указатель оставался в поле без Enter).
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'x', prompt: 'чужой ход' })}\n`,
+    );
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    expect(wake.inFlight(ref)).toBe(true);
+
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   });
 

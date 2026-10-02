@@ -12,12 +12,18 @@ export type ActivityEntry = EventData<'activity.changed'>;
 
 export interface ActivityState {
   byRef: Record<string, ActivityEntry>;
+  /**
+   * Снимок активности от main уже пришёл (или не удался): до этого `lastEventAt` сессий неизвестен,
+   * и «стартовала ли сессия» решать рано (кусок 4a, решение М).
+   */
+  loaded: boolean;
   /** Подписывается на `activity.changed`; возвращает отписку. */
   init: (bridge: ParleyBridge) => () => void;
 }
 
 export const useActivityStore = create<ActivityState>((set) => ({
   byRef: {},
+  loaded: false,
   init: (bridge) => {
     // Сессии, чьё живое событие уже пришло после подписки: снимок main для них
     // не новее, и перетирать им живое значение нельзя.
@@ -35,8 +41,8 @@ export const useActivityStore = create<ActivityState>((set) => ({
       .then((entries) => {
         if (disposed) return;
         const fresh = entries.filter((entry) => !live.has(refKey(entry.ref)));
-        if (fresh.length === 0) return;
         set((state) => ({
+          loaded: true,
           byRef: {
             ...state.byRef,
             ...Object.fromEntries(fresh.map((entry) => [refKey(entry.ref), entry])),
@@ -45,6 +51,7 @@ export const useActivityStore = create<ActivityState>((set) => ({
       })
       .catch(() => {
         // Без снимка остаются живые события — как до повтора активности.
+        if (!disposed) set({ loaded: true });
       });
     return () => {
       disposed = true;

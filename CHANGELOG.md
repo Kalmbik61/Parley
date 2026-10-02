@@ -4,6 +4,30 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.4.0
+
+### Added
+
+- **Chat view.** A Claude Code session can be shown as a conversation on top of the unmodified CLI, which keeps running in a hidden terminal; the **Chat | Terminal** segment switches between the two.
+  - **Feed.** Prompts, streamed reply text, tool calls with results and diffs, notices (session start, `/clear`, compaction, model switch) and a line at the end of each turn.
+  - **Cards with decisions.** Permission requests, questions and plans are cards. The host holds the hook until you click, and never answers for you.
+  - **Mode and model menus.** Manual, Accept edits, Plan or Auto from the toolbar: the host presses Shift+Tab in the hidden terminal until the footer shows the chosen mode, and asks you to open the terminal when it cannot confirm. The model menu sends `/model <id>`.
+  - **Input.** "Stop" interrupts the turn (a turn stopped before any reply is closed by the host, and the prompt Claude Code puts back into its input is erased); `/` lists commands and skills, `/model ` lists models, `@` lists subagents and files. A pasted screenshot, dropped files and the paperclip add attachments — chips with image thumbnails — sent to Claude Code as `@"path"` file mentions.
+  - **Terminal auto-show and waiting banner.** A new session opens in the terminal until Claude Code starts, then switches to the chat once; your own choice is remembered per tab. When Claude Code waits in the terminal (folder trust, sign-in, menus), a banner says so, with "Open terminal".
+  - **Agent cards and badges.** Each subagent has a card: type, description, model, status, tool calls, final text and "Show transcript". Running subagents also show as an "N agents" badge with a popover in the sidebar row and on the room participant card, and as "N agents running" in the chat toolbar.
+  - **Version threshold.** Chat view needs Claude Code 2.1.286 or newer; Codex and older versions stay terminal-only.
+
+- **Delivery line in rooms.** Under a message, "✓ Picked up by S03" lists the agents that have read it, and "▤ Not picked up yet by S01 (busy)" the ones that have not, with the reason: busy, unsent text in its terminal, notified, sleeping and so on.
+
+### Fixed
+
+- A session in a room could stay silent: a message that arrived during its turn was typed into its terminal as a pointer whose Enter was then cancelled, and a turn stopped before any reply left its prompt in the terminal input, glued to the next message. Both are fixed.
+- After the end of a turn a Claude Code session was shown as working for 30 more seconds, and messages to it waited all that time.
+
+### Updating from 0.3.x
+
+Replace the app, open it and restart the host when the window asks ("Restart host…"; live agents are interrupted and come back with `--resume`). Until then the host keeps running from the old app. Chat view needs Claude Code 2.1.286 or newer; existing sessions open in Chat after the host restart.
+
 ## 0.3.0
 
 ### Added

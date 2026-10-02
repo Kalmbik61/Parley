@@ -145,6 +145,7 @@ export interface RegisterIpcOptions {
   connection: HostConnection;
   openExternal: (url: string) => Promise<void>;
   chooseFolder: () => Promise<string | null>;
+  chooseFiles: () => Promise<string[]>;
   /** Форму уже проверил и тексты обрезал `app:notify` (кусок 4.3). */
   showNotification: (note: AppNote) => void;
   /** Отложенная цель клика для окна, которое ещё грузилось (`app:take-focus-target`, кусок 4.3). */
@@ -183,6 +184,8 @@ export interface RegisterIpcOptions {
   openPath: (absPath: string) => Promise<string>;
   /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
   saveDropImage: () => Promise<string | null>;
+  /** Миниатюра картинки-вложения «Chat» (`main/image-thumbnail.ts`): путь приходит из окна как есть, проверяет сам модуль; `null` — не картинка или не читается. */
+  imageThumbnail: (absPath: unknown) => Promise<string | null>;
   /** Число грязных буферов окна-отправителя (`app:dirty-buffers`, кусок 7.3a): main/window.ts#guardWindowClose. */
   setDirtyBuffers: (sender: WebContents, count: number) => void;
   /** Ответ окна-отправителя на `app:confirm-close` (`app:close-answer`, кусок 7.3a). */
@@ -262,6 +265,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     connection,
     openExternal,
     chooseFolder,
+    chooseFiles,
     showNotification,
     takeFocusTarget,
     getUpdate,
@@ -278,6 +282,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     roots,
     openPath,
     saveDropImage,
+    imageThumbnail,
     setDirtyBuffers,
     answerClose,
     browser,
@@ -330,6 +335,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   });
 
   ipcMain.handle('app:choose-folder', withIpcError(() => chooseFolder()));
+  ipcMain.handle('app:choose-files', withIpcError(() => chooseFiles()));
 
   ipcMain.handle('app:restart-host', withIpcError(() => connection.restartHost()));
   ipcMain.handle('app:reconnect', withIpcError(() => connection.connect()));
@@ -469,6 +475,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (source !== 'clipboard') throw new HostError('bad_request', `invalid drop image source: ${String(source)}`);
       return saveDropImage();
     }),
+  );
+
+  // Миниатюра вложения для чипов «Chat»: путь любой (файлы из Finder и скрепки лежат вне корней работ),
+  // поэтому доступ ограничен самим модулем — только картинки по расширению, обычные файлы, до 20 МБ.
+  ipcMain.handle(
+    'app:image-thumbnail',
+    withIpcError(async (_event, absPath: unknown) => imageThumbnail(absPath)),
   );
 
   // Вопрос при закрытии окна (кусок 7.3a). `send`, ответа не ждут: неверная форма — тихий отказ.

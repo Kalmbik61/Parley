@@ -1,6 +1,15 @@
 import { z } from 'zod';
-import type { ParleyConfig, MergeCheck, MergeResult, ProjectChanges, WorktreeDiff } from '@parley/core';
-import type { ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type {
+  FeedCardState,
+  FeedItem,
+  ParleyConfig,
+  MergeCheck,
+  MergeResult,
+  ProjectChanges,
+  WorktreeDiff,
+} from '@parley/core';
+import { feedDecision } from './feed.js';
+import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -10,6 +19,10 @@ export const sessionRef = z.object({
 
 /** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
+
+/** Режимы, которые окно выбирает само: цикл Shift+Tab (auto — когда модель его даёт) без обхода разрешений. */
+export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan', 'auto']);
+export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
@@ -70,6 +83,11 @@ export const METHODS = {
   'sessions.delete': z.object({ ref: sessionRef, force: z.boolean().optional() }),
   'sessions.close': z.object({ ref: sessionRef }),
   'sessions.interrupted': z.object({}),
+  // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
+  'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
+  // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
+  // провайдера у человека и в проекте — хост только читает их папки.
+  'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
@@ -145,6 +163,22 @@ export const METHODS = {
   // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
   // байтов не видит, поэтому здесь только «не пусто».
   'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
+  // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
+  // журнала: id идёт в путь `subagents/agent-<id>.jsonl`, поэтому только буквы, цифры, `_` и `-`.
+  'feed.snapshot': z.object({
+    ref: sessionRef,
+    agentId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,80}$/)
+      .optional(),
+  }),
+  'feed.subscribe': z.object({ ref: sessionRef }),
+  'feed.unsubscribe': z.object({ ref: sessionRef }),
+  // Решение человека — единственный путь, которым `allow`/`deny` доходит до хука (Review Focus 5).
+  'feed.decide': z.object({ ref: sessionRef, cardId: z.string().max(200), decision: feedDecision }),
+  // «Stop» вида «Chat»: Esc агенту по нажатию человека; хост сам закрывает в ленте ход, который CLI бросил
+  // без записи, и стирает из поля ввода терминала возвращённый туда текст промпта.
+  'feed.interrupt': z.object({ ref: sessionRef }),
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -199,6 +233,10 @@ export interface Results {
   'sessions.delete': { ok: true };
   'sessions.close': { ok: true };
   'sessions.interrupted': { refs: SessionRef[] };
+  /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
+  'sessions.setMode': { mode: string | null; verified: boolean };
+  /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
+  'capabilities.list': Capabilities;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
@@ -223,6 +261,16 @@ export interface Results {
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
+  /**
+   * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.
+   * `mode` — режим разрешений сессии (сырая строка CLI), `null` — не известен.
+   */
+  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number; mode: string | null };
+  'feed.subscribe': { ok: true };
+  'feed.unsubscribe': { ok: true };
+  /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
+  'feed.decide': { applied: boolean; state: FeedCardState };
+  'feed.interrupt': { ok: true };
 }
 
 export type MethodName = keyof typeof METHODS;

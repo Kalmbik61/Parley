@@ -11,6 +11,14 @@ export type { LimitWindow, ProviderLimits } from '@parley/core';
  * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
  */
 export type { ModelOption } from '@parley/core';
+/** Подсказки поля ввода вида «Chat» (`capabilities.list`): команды, скиллы и субагенты CLI провайдера. */
+export type { Capabilities, CapabilityAgent, CapabilityCommand, CapabilitySkill, CapabilitySource } from '@parley/core';
+
+/**
+ * Лента вида «Chat» (план 2026-10-01, решение 14): элемент, решение окна и состояние карточки. Типы
+ * живут в core рядом с редьюсером; схемы zod к ним — в `feed.ts`.
+ */
+export type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
 
 /** Адрес сессии: без него не различить два «work-01» в разных проектах. */
 export interface SessionRef {
@@ -41,6 +49,32 @@ export interface LiveTask {
   background: boolean;
 }
 
+/**
+ * Почему письма сессии ещё не забраны — причина будильника хоста; окно пишет её в комнате рядом с
+ * «not picked up yet». Строки — часть протокола.
+ * - `busy` — сессия занята ходом или ждёт ответа человека;
+ * - `draft` — в поле ввода её терминала неотправленный текст;
+ * - `no-hooks` — с запуска процесса не пришло ни одного хука (диалог доверия папке или входа);
+ * - `in-flight` — указатель напечатан, ход по нему ещё не начался;
+ * - `pointed` — указатель дошёл, но письма агент ещё не прочёл;
+ * - `paused` — будильник на паузе;
+ * - `sleeping` — сессия спит, и эти письма её не будят (лежали до старта хоста, подъём недоступен);
+ * - `resuming` — хост поднимает сессию;
+ * - `resume-limit` — исчерпан лимит подъёмов в час;
+ * - `pending` — сессия ещё не запускалась.
+ */
+export type MailWait =
+  | 'busy'
+  | 'draft'
+  | 'no-hooks'
+  | 'in-flight'
+  | 'pointed'
+  | 'paused'
+  | 'sleeping'
+  | 'resuming'
+  | 'resume-limit'
+  | 'pending';
+
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
   tokensIn: number | null;
@@ -59,6 +93,11 @@ export interface LiveMetrics {
    * у хоста более ранней версии, как и у `tasks`.
    */
   waitingFor?: string | null;
+  /**
+   * Почему непрочитанные письма сессии ещё не забраны; `null` — писем нет или причина не известна.
+   * Поля нет у хоста более ранней версии.
+   */
+  mailWaiting?: MailWait | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */

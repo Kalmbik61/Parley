@@ -1,0 +1,33 @@
+ ▐▛███▛█   Claude Code v2.1.286
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /…/dab7e6c3-4dab-4bbc-b461-19f97ca741a6/scratchpad/chat-probe/proj
+
+
+❯ Use the AskUserQuestion tool to ask me exactly one question "Which color?" with two options "Red" and       
+  "Blue". After I answer, reply with only the chosen color.                                                   
+
+⏺ User answered Claude's questions:
+  ⎿  · Which color? → Blue
+
+⏺ Blue
+
+✻ Worked for 4s · done 3:50 PM
+
+❯ Use the AskUserQuestion tool again: ask exactly one question "Which fruit?" with options "Apple" and        
+  "Pear". After I answer, reply with only the chosen fruit.                                                   
+
+⏺ User answered Claude's questions:
+  ⎿  · Which fruit? → Pear
+
+⏺ Pear
+
+✻ Sautéed for 4s · done 3:50 PM
+
+❯ /plan                                                                                                       
+  ⎿  Enabled plan mode
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  probe-statusline
+  ⏸ plan mode on (shift+tab to cycle) · ← for agents

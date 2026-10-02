@@ -1,11 +1,11 @@
 /**
  * Модель вкладки комнаты (спека окна 2026-09-29, 1.3, 2.4): из карты работы — шапка с подзаголовком,
- * лента участников, сообщения с адресатами и строкой ожидания, блок `Decisions`, карточка решения.
+ * лента участников, сообщения с адресатами и строкой доставки, блок `Decisions`, карточка решения.
  * Чистая функция без React: `RoomPanel.tsx` рисует то, что она вернула.
  *
  * Вместо прежнего `roomView` из `lib/room-view.ts` (удалён): тому нужны были письма-строки `LetterView`,
  * а здесь у сообщения свои поля — отправитель для аватара, `★` ведущего, адресаты без человека,
- * ожидающие агенты. Правило ведущего — `roomLiveLead` (`lib/room-lead.ts`), общая копия `liveLead` из core;
+ * доставка агентам. Правило ведущего — `roomLiveLead` (`lib/room-lead.ts`), общая копия `liveLead` из core;
  * своей здесь нет (решение контролёра 1).
  *
  * Модель участника — из живых метрик (`activity.changed`, `metrics.model`), как её брал `RoomBody` до этого
@@ -14,14 +14,19 @@
  *
  * Чем занят участник (`doing`, `doingDetail`) — из тех же метрик (`tasks`, `waitingFor`, Parley 0.2.0): живой
  * субагент или ожидание `wait_for`. Только у живой сессии: у закрытой и спящей метрики — след прошлого процесса.
+ * `agents` — те же субагенты списком для поповера на строке `doing` (кусок 4b плана 2026-10-01).
+ *
+ * Доставка (`MessageModel.delivery`): по каждому не закрытому адресату-агенту — забрал ли он сообщение (`readBy`, с
+ * временем) или ещё нет; у ждущего есть причина из живых метрик сессии (`metrics.mailWaiting`). Хост прежней версии
+ * поля не присылает — тогда причины нет (`null`), и окно пишет один тег.
  *
  * Ответ (`Message.replyTo`, Parley 0.3.0): у сообщения-ответа модель несёт цитату — подпись и выдержку оригинала
  * (`replyExcerpt`: тот же разбор Markdown, что у ленты, и то же правило `@human` по отправителю — у сообщения человека
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
-import { refKey, type LiveTask } from '@parley/protocol';
+import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
+import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import {
   isHumanMention,
@@ -72,6 +77,11 @@ export interface ParticipantModel {
   doing: string | null;
   /** Полный список для подсказки: все субагенты по строке, ожидание — первой; `null`, когда `doing` пуст. */
   doingDetail: string | null;
+  /**
+   * Живые субагенты для поповера на строке `doing` (кусок 4b). Не пусто, только когда `doing` — сама строка субагентов:
+   * ожидание `wait_for` важнее, и тогда субагенты видны лишь в подсказке.
+   */
+  agents: readonly LiveTask[];
   lead: boolean;
   /** Закрытая сессия: в ленте участников есть, а в меню упоминаний нет. */
   closed: boolean;
@@ -115,8 +125,16 @@ export interface MessageModel {
    * такому сообщению (`RoomPanel.tsx`).
    */
   mentionsYou: boolean;
-  /** Теги (`S02`) живых адресатов-агентов, которые ещё не подхватили сообщение (`readBy`). */
-  waiting: string[];
+  /**
+   * Доставка не закрытым адресатам-агентам (человек и система сообщение не «забирают»; закрытая и удалённая сессия уже не
+   * заберёт), в порядке адресатов (`recipientsOf`). `picked` — те, кто подхватил сообщение (`readBy`, `at` — время
+   * отметки); `waiting` — кто ещё нет, `reason` — `metrics.mailWaiting` его сессии: `null`, пока хост причину не
+   * прислал (хост прежней версии, метрик ещё нет).
+   */
+  delivery: {
+    picked: Array<{ tag: string; at: string }>;
+    waiting: Array<{ tag: string; reason: MailWait | null }>;
+  };
   /** Цитата, если сообщение — ответ (`Message.replyTo`); `null` — не ответ. */
   reply: ReplyModel | null;
 }
@@ -185,7 +203,7 @@ const INBOX = 'inbox';
 function doingOf(
   tasks: readonly LiveTask[],
   waitingFor: string | null,
-): { doing: string | null; doingDetail: string | null } {
+): { doing: string | null; doingDetail: string | null; agents: readonly LiveTask[] } {
   const waiting =
     waitingFor === null
       ? null
@@ -202,7 +220,7 @@ function doingOf(
         : S.rooms.doingSubagents(tasks.length, first);
 
   const doing = waiting ?? subagents;
-  if (doing === null) return { doing: null, doingDetail: null };
+  if (doing === null) return { doing: null, doingDetail: null, agents: [] };
 
   const lines = waiting === null ? [] : [waiting];
   if (tasks.length > 1) {
@@ -213,7 +231,7 @@ function doingOf(
   } else if (subagents !== null) {
     lines.push(subagents);
   }
-  return { doing, doingDetail: lines.join('\n') };
+  return { doing, doingDetail: lines.join('\n'), agents: waiting === null ? tasks : [] };
 }
 
 export function buildRoomModel(input: RoomModelInput): RoomModel | null {
@@ -224,6 +242,10 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
 
   const lead = roomLiveLead(map, room);
 
+  /** Живая активность сессии (`activity.changed`); `undefined` — хост её ещё не присылал. */
+  const liveOf = (sessionId: string): ActivityEntry | undefined =>
+    activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId })];
+
   // Создатель-сессия в `members` не пишется (`core/work/rooms.ts#addMember`), человек — участник всегда
   // и списком не хранится: агенты комнаты — создатель и члены без человека, каждый один раз.
   const memberIds = [...new Set([room.creator, ...room.members])].filter((id) => id !== HUMAN);
@@ -232,16 +254,16 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     const session = map.sessions.find((candidate) => candidate.id === id);
     // Удалённая сессия в ленте участников не выводится: показать о ней нечего.
     if (session === undefined) continue;
-    const liveEntry = activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId: id })];
+    const liveEntry = liveOf(id);
     const live = liveEntry?.activity ?? null;
     const state = dotState(displayStatus(session), live?.activity ?? null);
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
     // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
-    const { doing, doingDetail } =
+    const { doing, doingDetail, agents } =
       session.lifecycle === 'active'
         ? doingOf(liveEntry?.metrics?.tasks ?? [], liveEntry?.metrics?.waitingFor ?? null)
-        : { doing: null, doingDetail: null };
+        : { doing: null, doingDetail: null, agents: [] };
     participants.push({
       id,
       label: sessionRowLabel(id, session.label),
@@ -256,6 +278,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       task: session.task,
       doing,
       doingDetail,
+      agents,
       lead: id === lead,
       closed: session.lifecycle === 'closed',
     });
@@ -293,6 +316,23 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     };
   };
 
+  /**
+   * Кто из не закрытых адресатов-агентов уже забрал сообщение, а кто нет. Причина ожидания — из метрик самой сессии и у
+   * не активной тоже (в отличие от `doing`): `sleeping`, `resuming` и `pending` — причины именно спящих и не запущенных.
+   */
+  const deliveryOf = (message: Message): MessageModel['delivery'] => {
+    const delivery: MessageModel['delivery'] = { picked: [], waiting: [] };
+    for (const id of recipientsOf(message, map)) {
+      if (id === HUMAN || id === SYSTEM) continue;
+      const pickedAt = message.readBy[id];
+      // Забравший остаётся в строке и после закрытия сессии: это запись о том, что было. Ждать же закрытую
+      // незачем — она письмо уже не заберёт.
+      if (pickedAt !== undefined) delivery.picked.push({ tag: sessionTag(id), at: pickedAt });
+      else if (isAlive(map, id)) delivery.waiting.push({ tag: sessionTag(id), reason: liveOf(id)?.metrics?.mailWaiting ?? null });
+    }
+    return delivery;
+  };
+
   const messages: MessageModel[] = map.messages
     .filter((message) => message.roomId === roomId)
     .sort((a, b) => a.at.localeCompare(b.at))
@@ -311,9 +351,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         unread: kind !== 'system' && isHumanUnread(message),
         needsRead: isHumanUnread(message),
         mentionsYou: isHumanMention(message),
-        waiting: recipientsOf(message, map)
-          .filter((id) => id !== HUMAN && id !== SYSTEM && isAlive(map, id) && message.readBy[id] === undefined)
-          .map(sessionTag),
+        delivery: deliveryOf(message),
         reply: replyOf(message.replyTo),
       };
     });

@@ -24,6 +24,30 @@ afterAll(async () => {
 });
 
 describe('indexSessionFile', () => {
+  it('служебные записи после конца хода (итоги хуков, длительность, вложения) время работы не двигают', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'parley-index-'));
+    const dir = path.join(root, '-Users-me-proj');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, 's2.jsonl');
+    const line = (value: Record<string, unknown>): string => `${JSON.stringify({ sessionId: 's2', ...value })}\n`;
+    await writeFile(
+      file,
+      line({ type: 'user', timestamp: '2026-09-01T10:00:00.000Z', message: { role: 'user', content: 'привет' } }) +
+        line({ type: 'assistant', timestamp: '2026-09-01T10:00:05.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'ок' }] } }) +
+        line({ type: 'attachment', timestamp: '2026-09-01T10:00:05.400Z', attachment: { type: 'hook_success' } }) +
+        line({ type: 'system', subtype: 'stop_hook_summary', timestamp: '2026-09-01T10:00:05.900Z' }) +
+        line({ type: 'system', subtype: 'turn_duration', timestamp: '2026-09-01T10:00:05.901Z', durationMs: 5000 }),
+    );
+
+    const index = await indexSessionFile(file, root);
+
+    // Конец сессии — по всем записям, а «страховке по логу» нужна последняя запись человека или ассистента: иначе
+    // сессия, закончившая ход, числилась бы работающей ещё порог тишины.
+    expect(index.endedAt).toBe('2026-09-01T10:00:05.901Z');
+    expect(index.lastWorkRecordAt).toBe('2026-09-01T10:00:05.000Z');
+    await rm(root, { recursive: true, force: true });
+  });
+
   it('собирает мету, длительность и счётчики', async () => {
     const file = await writeSession(
       '-Users-me-proj',
@@ -61,6 +85,7 @@ describe('indexSessionFile', () => {
     // Ось записей пользователя отдельно от общей: последняя запись здесь —
     // ответ модели, и страховке 4.3 она `blocked` не снимает.
     expect(index.lastUserRecordAt).toBe('2026-09-01T10:00:00.000Z');
+    expect(index.lastWorkRecordAt).toBe('2026-09-01T10:02:30.000Z');
     expect(index.durationMs).toBe(150_000);
     expect(index.records).toBe(3);
     expect(index.models).toEqual({ 'claude-opus-5': 1 });

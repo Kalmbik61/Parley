@@ -20,7 +20,7 @@ export type ActionId =
   | 'tab.close' | 'tab.reopen' | 'tab.prev' | 'tab.next' | 'tab.mruNext' | 'tab.mruPrev'
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
   | 'tab.goto.6' | 'tab.goto.7' | 'tab.goto.8' | 'tab.goto.9'
-  | 'find' | 'terminal.clear' | 'settings.open'
+  | 'find' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
   | 'attention.next' | 'wake.toggle' | 'host.restart'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
@@ -88,6 +88,8 @@ export const ACTIONS: readonly ActionDef[] = [
   ),
 
   { id: 'terminal.clear', title: S.actions.clearTerminal, keywords: ['clear', 'reset', 'terminal'], keys: 'CmdOrCtrl+K', menu: 'terminal', when: 'terminal', inPalette: true },
+  // Вид вкладки сессии (план 2026-10-01, решение 6): та же команда, что сегмент тулбара; без клавиши и меню.
+  { id: 'chat.toggleView', title: S.actions.toggleChatTerminal, keywords: ['chat', 'terminal', 'view', 'switch'], keys: null, menu: null, when: 'terminal', inPalette: true },
 
   paletteOnly('room.new', S.actions.newRoom, ['create', 'room']),
   paletteOnly('works.showArchived', S.actions.showArchivedWorkspaces, ['archive', 'archived', 'workspaces']),

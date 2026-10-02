@@ -1,7 +1,7 @@
 /**
  * Вкладка комнаты (спека окна 2026-09-29, 1.3, 2.2–2.4; кусок 6 плана): шапка и лента участников, лента
  * сообщений (текст — Markdown, подробно в `RoomMarkdown.test.tsx`) с чипами, тегами видов и строкой
- * ожидания по `readBy`, блок `Decisions`, пустая комната,
+ * доставки по `readBy` и метрикам хоста, блок `Decisions`, пустая комната,
  * отправка из поля ввода, карточка решения и ответ на неё (`rooms.resolveProposal` с `proposalId`, `rev`,
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
-import type { LiveMetrics, LiveTask } from '@parley/protocol';
+import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
@@ -104,7 +104,7 @@ const withModels = (models: Record<string, string | null>, activity: Parameters<
     ),
   );
 
-/** Живая активность с данными хоста о задачах и ожидании (`metrics.tasks`, `metrics.waitingFor`). */
+/** Живая активность с данными хоста о задачах, ожидании и письмах (`metrics.tasks`, `metrics.waitingFor`, `metrics.mailWaiting`). */
 const withDoing = (
   doing: Record<string, Partial<LiveMetrics>>,
   activity: Parameters<typeof makeActivity>[1] = 'working',
@@ -210,7 +210,7 @@ describe('RoomPanel — лента участников (1.3)', () => {
 
   it('клик по карточке открывает терминал участника', () => {
     const { initial } = renderPanel(entryOf());
-    fireEvent.click(document.querySelector('[data-participant="s-03"]') as HTMLElement);
+    fireEvent.click(within(document.querySelector('[data-participant="s-03"]') as HTMLElement).getByRole('button'));
     expect(initial.onOpenSession).toHaveBeenCalledWith('s-03');
   });
 
@@ -314,6 +314,35 @@ describe('RoomPanel — чем заняты участники (Parley 0.2.0)', 
     });
 
     expect(liveLine()).toBeNull();
+  });
+
+  // Кусок 4b плана 2026-10-01: строка субагентов карточки — бейдж с поповером; клик по агенту ведёт на его карточку в ленте.
+  it('поповер агентов у участника из metrics.tasks: строки по агентам; клик по строке — onOpenSession(сессия, агент)', () => {
+    const activity = withDoing({
+      's-01': { subagents: 2, tasks: [liveTask('agent-1', 'Orca mobile app research'), liveTask('agent-2', 'Docs lookup', { agentType: 'Plan', background: false })] },
+    });
+    const { initial } = renderPanel(entryOf(), { activity });
+
+    const trigger = within(card('s-01')).getByTestId('agents-badge');
+    expect(trigger.textContent).toBe('2 subagents: Orca mobile app research');
+    fireEvent.click(trigger);
+    expect(initial.onOpenSession).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId('agents-popover-row');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'general-purposebackgroundOrca mobile app research',
+      'PlanDocs lookup',
+    ]);
+    fireEvent.click(rows[1]!);
+    expect(initial.onOpenSession).toHaveBeenCalledWith('s-01', 'agent-2');
+    // Карточка без субагентов — без бейджа.
+    expect(within(card('s-02')).queryByTestId('agents-badge')).toBeNull();
+  });
+
+  it('участник ждёт — строка «Waiting…» без поповера, хотя субагенты есть: они в подсказке', () => {
+    const activity = withDoing({ 's-01': { waitingFor: 's-03', subagents: 1, tasks: [liveTask('agent-1', 'Docs lookup')] } });
+    renderPanel(entryOf(), { activity });
+    expect(within(card('s-01')).queryByTestId('agents-badge')).toBeNull();
+    expect(within(card('s-01')).getByText('Waiting for S03').getAttribute('title')).toBe('Waiting for S03\nSubagent: Docs lookup');
   });
 
   it('сессия с фоновыми субагентами — working и в карточке участника', () => {
@@ -1270,26 +1299,145 @@ describe('RoomPanel — сообщение, которое Markdown не оси�
   }, 30_000);
 });
 
-describe('RoomPanel — строка ожидания по readBy (1.3)', () => {
+describe('RoomPanel — строка доставки: кто забрал сообщение и кто ещё нет (1.3)', () => {
+  const deliveryLine = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-delivery]');
+  const pickedPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-picked]');
+  const waitingPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-waiting]');
+
   it('«Not picked up yet by …» — теги тех, кто ещё не прочитал', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
     renderPanel(entry);
     expect(within(messageRow('m-1')).getByText('▤ Not picked up yet by S01, S03')).toBeTruthy();
   });
 
-  it('все прочитали — строки нет; пришла отметка чтения — строка пропадает', () => {
+  it('и забравшие, и ждущие: одна строка, части через « · », у ждущего причина от хоста в скобках', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
-    const { update } = renderPanel(entry);
-    expect(messageRow('m-1').querySelector('[data-message-waiting]')).not.toBeNull();
-    update(entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-01': 'x', 's-02': 'x', 's-03': 'x' } })] }));
-    expect(messageRow('m-1').querySelector('[data-message-waiting]')).toBeNull();
+    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
+    expect(document.querySelectorAll('[data-message-delivery]')).toHaveLength(1);
+    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S02 · ▤ Not picked up yet by S01 (busy), S03');
+    expect(pickedPart()?.textContent).toBe('✓ Picked up by S02');
+    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S03');
   });
 
-  it('закрытая сессия сообщение не подхватит — её в строке нет', () => {
+  it('все забрали — только «Picked up by …»: части «не забрали» и разделителя нет', () => {
+    const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-01': 'x', 's-02': 'x', 's-03': 'x' } })] });
+    renderPanel(entry);
+    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S01, S02, S03');
+    expect(waitingPart()).toBeNull();
+  });
+
+  it('никто не забрал — только «Not picked up yet by …»: части «забрали» и разделителя нет', () => {
+    renderPanel(entryOf({ messages: [message('m-1')] }), { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S02, S03');
+    expect(pickedPart()).toBeNull();
+  });
+
+  it('подсказка у «забрали» — тег и время отметки каждого, в порядке адресатов', () => {
+    // Местное время: подсказка пишет часы в поясе окна, а не в UTC.
+    const at = (second: number): string => new Date(2026, 8, 27, 20, 30, second).toISOString();
+    const entry = entryOf({
+      messages: [message('m-1', { to: ['s-03', 's-02', 's-01'], readBy: { 's-02': at(15), 's-03': at(11) } })],
+    });
+    renderPanel(entry);
+    expect(pickedPart()?.getAttribute('title')).toBe('S03 20:30:11 · S02 20:30:15');
+    // У части «не забрали» подсказки нет: ждущему ставить время нечем.
+    expect(waitingPart()?.getAttribute('title')).toBeNull();
+  });
+
+  it('отметка не ISO-временем — в подсказке один тег, а не «Invalid Date»', () => {
+    renderPanel(entryOf({ messages: [message('m-1', { readBy: { 's-02': 'x' } })] }));
+    expect(pickedPart()?.getAttribute('title')).toBe('S02');
+  });
+
+  it('каждая причина хоста — своими словами в скобках после тега', () => {
+    const words: Record<MailWait, string> = {
+      busy: 'busy',
+      draft: 'unsent text in its terminal',
+      'no-hooks': 'waiting in its terminal',
+      'in-flight': 'notified, not started',
+      pointed: 'notified',
+      paused: 'auto-wake paused',
+      sleeping: 'sleeping',
+      resuming: 'resuming',
+      'resume-limit': 'resume limit reached',
+      pending: 'not launched',
+    };
+    for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {
+      renderPanel(entryOf({ messages: [message('m-1', { to: ['s-01'] })] }), {
+        activity: withDoing({ 's-01': { mailWaiting: reason } }),
+      });
+      expect(waitingPart()?.textContent, reason).toBe(`▤ Not picked up yet by S01 (${text})`);
+      cleanup();
+    }
+  });
+
+  it('причины нет — один тег, без пустых скобок: хост прежней версии поля не шлёт, у новой причина `null`', () => {
+    for (const metrics of [{}, { mailWaiting: null }] as const) {
+      renderPanel(entryOf({ messages: [message('m-1', { to: ['s-01'] })] }), {
+        activity: withDoing({ 's-01': metrics }),
+      });
+      expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01');
+      cleanup();
+    }
+  });
+
+  it('причина и отметка приходят позже — строка меняется на месте', () => {
+    const { rerender, initial } = renderPanel(entryOf({ messages: [message('m-1')] }));
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01, S02, S03');
+    rerender(<RoomPanel {...initial} activity={withDoing({ 's-01': { mailWaiting: 'busy' } })} />);
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S02, S03');
+    // S01 забрал: он уходит из ждущих вместе с причиной и встаёт среди забравших.
+    rerender(
+      <RoomPanel
+        {...initial}
+        entry={entryOf({ messages: [message('m-1', { readBy: { 's-01': 'x' } })] })}
+        activity={withDoing({ 's-01': { mailWaiting: 'busy' } })}
+      />,
+    );
+    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S01 · ▤ Not picked up yet by S02, S03');
+  });
+
+  it('закрытая сессия сообщение не подхватит — её в строке нет; все адресаты закрыты — строки нет вовсе', () => {
     const custom = sessions();
     custom[0] = makeSession('s-01', 'архитектор', { lifecycle: 'closed' });
     renderPanel(entryOf({ sessions: custom, messages: [message('m-1', { readBy: { human: 'x' } })] }));
     expect(within(messageRow('m-1')).getByText('▤ Not picked up yet by S02, S03')).toBeTruthy();
+    cleanup();
+
+    const closed = sessions().map((session) => ({ ...session, lifecycle: 'closed' as const }));
+    renderPanel(entryOf({ sessions: closed, messages: [message('m-1', { readBy: { human: 'x' } })] }));
+    expect(deliveryLine()).toBeNull();
+  });
+
+  it('у системной строки и у письма человеку строки доставки нет', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { from: 'system', to: ['human'], text: 'You accepted the decision', readBy: {} }),
+          message('m-2', { from: 's-02', to: ['human'], text: 'Готово' }),
+        ],
+      }),
+    );
+    expect(deliveryLine('m-1')).toBeNull();
+    expect(deliveryLine('m-2')).toBeNull();
+  });
+
+  it('длинный список переносится по словам и по знакам, а не распирает колонку: ни обрезки, ни горизонтальной прокрутки', () => {
+    const entry = entryOf({
+      messages: [message('m-1', { to: ['s-01', 's-02', 's-03'], readBy: { 's-02': 'x' } })],
+    });
+    renderPanel(entry, {
+      activity: withDoing({
+        's-01': { mailWaiting: 'draft' },
+        's-03': { mailWaiting: 'resume-limit' },
+      }),
+    });
+    const line = deliveryLine();
+    expect(line?.className).toContain('break-words');
+    expect(line?.className).not.toMatch(/truncate|whitespace-nowrap|overflow/);
+    expect(line?.textContent).toBe(
+      '✓ Picked up by S02 · ▤ Not picked up yet by S01 (unsent text in its terminal), S03 (resume limit reached)',
+    );
   });
 });
 

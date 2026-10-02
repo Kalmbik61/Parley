@@ -43,6 +43,7 @@ import {
   refKey,
   type EventData,
   type LiveMetrics,
+  type MailWait,
   type LiveTask,
   type SessionRef,
   type WorksSnapshot,
@@ -86,6 +87,11 @@ export interface ActivityServiceOptions extends MetricsRoots {
 export interface ActivityService {
   start(): Promise<void>;
   get(ref: SessionRef): SessionLive | undefined;
+  /**
+   * Журнал сессии у провайдера по индексу логов (лента вида «Chat» сеет из него историю); `null` —
+   * сессии нет, `providerSessionId` ещё не известен или индекс журнала не знает.
+   */
+  logFile(ref: SessionRef): string | null;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -100,6 +106,22 @@ export interface ActivityService {
   terminalSignal(ref: SessionRef, signal: CodexSignal): void;
   /** Процесс вышел: состояние по терминалу больше не действует, сессия снова читается по журналу и логу. */
   terminalStopped(ref: SessionRef): void;
+  /**
+   * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
+   * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
+   * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
+   */
+  questionHeld(ref: SessionRef, held: boolean): void;
+  /**
+   * Почему письма сессии ещё не забраны (причина будильника) — уходит окну в `LiveMetrics.mailWaiting`:
+   * комната пишет её рядом с «not picked up yet». `null` — писем нет.
+   */
+  mailWaiting(ref: SessionRef, reason: MailWait | null): void;
+  /**
+   * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
+   * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
+   */
+  onLogChange(listener: () => void): () => void;
   stop(): Promise<void>;
 }
 
@@ -230,6 +252,10 @@ export function createActivityService(
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
+  /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
+  const questionHeldKeys = new Set<string>();
+  /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
+  const mailWaits = new Map<string, MailWait>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -435,6 +461,7 @@ export function createActivityService(
       model: indexed?.primaryModel ?? null,
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
+      mailWaiting: mailWaits.get(key) ?? null,
     };
   }
 
@@ -584,7 +611,12 @@ export function createActivityService(
     });
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
-    const value: SessionLive = { activity, metrics };
+    // Удержанный вопрос агента: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
+    const published: SessionActivity =
+      questionHeldKeys.has(key) && activity.activity !== 'blocked'
+        ? { ...activity, activity: 'blocked' }
+        : activity;
+    const value: SessionLive = { activity: published, metrics };
 
     if (driven) clearSilenceTimer(key);
     else scheduleSilenceTimer(ref, key, activity, log, now);
@@ -592,7 +624,7 @@ export function createActivityService(
     const previous = live.get(key);
     live.set(key, value);
     if (previous === undefined || !sameLive(previous, value)) {
-      host.broadcast('activity.changed', { ref, activity, metrics });
+      host.broadcast('activity.changed', { ref, activity: published, metrics });
       for (const listener of listeners) listener(ref, value);
     }
 
@@ -694,6 +726,12 @@ export function createActivityService(
     }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
+    for (const key of Array.from(mailWaits.keys())) {
+      if (!validSessions.has(key)) mailWaits.delete(key);
+    }
+    for (const key of Array.from(questionHeldKeys)) {
+      if (!validSessions.has(key)) questionHeldKeys.delete(key);
+    }
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
     }
@@ -751,6 +789,29 @@ export function createActivityService(
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
+    mailWaiting(ref, reason) {
+      const key = refKey(ref);
+      if ((mailWaits.get(key) ?? null) === reason) return;
+      if (reason === null) mailWaits.delete(key);
+      else mailWaits.set(key, reason);
+      recompute(ref);
+    },
+    questionHeld(ref, held) {
+      const key = refKey(ref);
+      if (questionHeldKeys.has(key) === held) return;
+      if (held) questionHeldKeys.add(key);
+      else questionHeldKeys.delete(key);
+      recompute(ref);
+    },
+    onLogChange(listener) {
+      return logIndex.onChange(listener);
+    },
+    logFile(ref) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      return session === undefined ? null : (logIndex.index(session)?.file ?? null);
+    },
     terminalStarted(ref) {
       if (stopped) return;
       const key = refKey(ref);

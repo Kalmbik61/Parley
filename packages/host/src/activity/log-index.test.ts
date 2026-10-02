@@ -96,7 +96,8 @@ describe('createLogIndex', () => {
     const found = idx.index(session({ providerSessionId: 's-01' }));
     expect(found?.title).toBe('заголовок');
     expect(idx.log(session({ providerSessionId: 's-01' }))).toEqual({
-      lastRecordAt: found?.endedAt ?? null,
+      // Не `endedAt`: служебные записи после конца хода работой не считаются.
+      lastRecordAt: found?.lastWorkRecordAt ?? null,
       lastUserRecordAt: found?.lastUserRecordAt ?? null,
     });
   });
