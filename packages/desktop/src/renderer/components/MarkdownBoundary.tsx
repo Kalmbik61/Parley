@@ -11,6 +11,7 @@
  */
 
 import { Component, type ReactNode } from 'react';
+import { markdownTooDeep } from '../lib/markdown-depth.js';
 
 export interface MarkdownBoundaryProps {
   /** Исходный текст: при ошибке показывается он; смена текста сбрасывает границу. */
@@ -40,8 +41,9 @@ export class MarkdownBoundary extends Component<MarkdownBoundaryProps, MarkdownB
   }
 
   override render(): ReactNode {
-    // Строчный элемент: граница стоит и в блоке, и в строчном виде плашки решений.
-    return this.state.failed ? (
+    // Строчный элемент: граница стоит и в блоке, и в строчном виде плашки решений. Цитаты глубже предела
+    // (`markdownTooDeep`) — сразу сырой текст: отрисовка такого текста не падает, а тянется секундами.
+    return this.state.failed || markdownTooDeep(this.props.text) ? (
       <span data-markdown-fallback="" className="whitespace-pre-wrap">
         {this.props.text}
       </span>

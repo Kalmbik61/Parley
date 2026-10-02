@@ -38,6 +38,7 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified, type PluggableList } from 'unified';
 import { S } from '../../../shared/strings.js';
+import { markdownTooDeep } from '../../lib/markdown-depth.js';
 import { sessionTag } from '../../lib/participant.js';
 import { splitFeedMentions } from './mention.js';
 
@@ -312,10 +313,11 @@ const humanMentionCache = new Map<string, boolean>();
  * картинки и в email (`user@human.dev`) — нет. Границы токена — как у токена сессии (`mention.ts`).
  *
  * Разбор не должен ронять внимание окна: текст пишет агент, и вложенность глубже стека плагинов — `RangeError`.
- * Такой текст ленты не нарисовала бы, упоминанием он не считается.
+ * Такой текст ленты не нарисовала бы, упоминанием он не считается. Цитаты глубже предела (`markdownTooDeep`)
+ * лента рисует сырым текстом без чипов — их не разбирают и здесь.
  */
 export function hasHumanMention(text: string): boolean {
-  if (!HUMAN_HINT.test(text)) return false;
+  if (!HUMAN_HINT.test(text) || markdownTooDeep(text)) return false;
   const cached = humanMentionCache.get(text);
   if (cached !== undefined) return cached;
   let found: boolean;

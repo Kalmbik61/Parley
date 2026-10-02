@@ -28,6 +28,7 @@
 
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
+import { markdownTooDeep } from '../../lib/markdown-depth.js';
 import { sessionTag } from '../../lib/participant.js';
 import { MENTION_ATTR, isCodeCaption, remarkPluginsFor, type MdNode } from './room-remark.js';
 
@@ -134,7 +135,10 @@ function piecesOf(text: string, humanChips: boolean): Piece[] {
   const processor = humanChips ? withChips : withoutChips;
   let pieces: Piece[];
   try {
-    pieces = blockPieces(processor.runSync(processor.parse(source), source) as MdNode) ?? [];
+    // Цитаты глубже предела лента показывает сырым текстом (`MarkdownBoundary`) — выдержка берёт его строку.
+    pieces = markdownTooDeep(source)
+      ? (firstLine(source) ?? [])
+      : (blockPieces(processor.runSync(processor.parse(source), source) as MdNode) ?? []);
   } catch {
     // Текст пишет агент: вложенность глубже стека роняет разбор, а выдержка не должна ронять панель комнаты.
     pieces = firstLine(source) ?? [];

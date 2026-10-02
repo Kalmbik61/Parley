@@ -530,6 +530,13 @@ describe('replyExcerpt — разбор не осилил текст', () => {
     expect(excerpt('   \n\t\n')).toBe('');
   });
 
+  it('цитаты глубже предела — без разбора: первая непустая строка сырого текста, как её показывает лента', () => {
+    parse.mockClear();
+    const deep = `${'>'.repeat(101)} глубоко @human`;
+    expect(excerpt(`\n${deep}\nвторая`)).toBe(deep);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
   it('запасной вариант тоже в кеше: повторный вызов не разбирает текст снова', () => {
     const text = 'сбой-кеш: **сырой** @s02';
     failParse();

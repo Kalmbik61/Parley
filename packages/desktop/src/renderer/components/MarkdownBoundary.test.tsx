@@ -27,6 +27,18 @@ describe('MarkdownBoundary', () => {
     errorSpy.mockRestore();
   });
 
+  it('цитаты глубже предела (101 «>») — сразу сырой текст: ребёнка даже не пробуют отрисовать', () => {
+    const onRender = vi.fn();
+    const text = `${'>'.repeat(101)} глубоко`;
+    const { container } = render(
+      <MarkdownBoundary text={text}>
+        <Bomb crash={false} onRender={onRender} />
+      </MarkdownBoundary>,
+    );
+    expect(onRender).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-markdown-fallback]')?.textContent).toBe(text);
+  });
+
   it('ребёнок не бросает — граница прозрачна: виден он, а не сырой текст', () => {
     const { container } = render(
       <MarkdownBoundary text="**сырой**">

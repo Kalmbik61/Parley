@@ -171,6 +171,11 @@ describe('hasHumanMention — быстрый отсев и кеш', () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
+  it('цитаты глубже предела — не упоминание и без разбора: лента рисует такой текст сырым, чипа в нём нет', () => {
+    expect(hasHumanMention(`${'>'.repeat(101)} @human`)).toBe(false);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
   it('подстрока @human в любом регистре отправляет текст на разбор', () => {
     expect(hasHumanMention('кеш: регистр @HuMaN')).toBe(true);
     expect(parse).toHaveBeenCalledTimes(1);
