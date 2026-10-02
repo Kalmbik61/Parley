@@ -16,7 +16,8 @@
  * субагент или ожидание `wait_for`. Только у живой сессии: у закрытой и спящей метрики — след прошлого процесса.
  *
  * Ответ (`Message.replyTo`, Parley 0.3.0): у сообщения-ответа модель несёт цитату — подпись и выдержку оригинала
- * (`replyExcerpt`), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
+ * (`replyExcerpt`: тот же разбор Markdown, что у ленты, и то же правило `@human` по отправителю — у сообщения человека
+ * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
@@ -286,7 +287,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     return {
       id: original.id,
       from: labelOf(map, original.from),
-      excerpt: replyExcerpt(original.text, chipLabelOf),
+      // Свой `@human` человека — текст, а не «@you»: то же правило по отправителю, что у `RoomMessage`.
+      excerpt: replyExcerpt(original.text, chipLabelOf, { humanChips: original.from !== HUMAN }),
       found: true,
     };
   };

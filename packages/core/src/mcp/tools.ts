@@ -741,6 +741,22 @@ async function waitFor(
   }
 }
 
+/** Параметры `send_message`, которые сервер знает; прочие он пропускает с предупреждением. */
+const SEND_MESSAGE_PARAMS = new Set(['to', 'text', 'kind', 'room', 'replyTo']);
+
+/**
+ * Предупреждение о незнакомых параметрах `send_message` (Parley 0.3.0). Схема их не запрещает: строгая схема
+ * (`additionalProperties: false`) сломала бы клиентов, которые шлют лишнее. Но опечатку вроде `reply_to` сервер
+ * пропускал молча, и агент считал, что процитировал. Теперь письмо уходит, а в ответе сказано, что пропущено и что
+ * имелось в виду. `null` — незнакомых полей нет.
+ */
+function unknownParamsWarning(args: Record<string, unknown>): string | null {
+  const unknown = Object.keys(args).filter((key) => !SEND_MESSAGE_PARAMS.has(key));
+  if (unknown.length === 0) return null;
+  const named = unknown.map((key) => (/reply/i.test(key) ? `${key} (did you mean replyTo?)` : key));
+  return `unknown parameters ignored: ${named.join(', ')}`;
+}
+
 async function sendMessage(
   context: McpContext,
   sessionId: string,
@@ -802,7 +818,8 @@ async function sendMessage(
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
-  return { messageId: created };
+  const warning = unknownParamsWarning(args);
+  return warning === null ? { messageId: created } : { messageId: created, warning };
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {

@@ -3,124 +3,149 @@
  * (`feed-model.ts`) и тело уведомления об упоминании человека (`attention/notify.ts`). Правила одни, чтобы то,
  * что человек читает в ленте, и то, что приходит ему в уведомлении, не разошлось.
  *
- * Берётся первая подходящая строка текста: непустая, не ограда блока кода (```` ```ts ````, `~~~`) и не
- * тематический разрыв (`---`, `* * *`, `___`) — у них своего текста нет. Ограду и разрыв узнают после снятия
- * разметки начала строки, поэтому `> ```ts` и `- ```bash` — тоже ограды. Дальше строка очищается от простой
- * разметки Markdown: начало строки (`#`, `>`, маркер списка и флажок задачи `[ ]` / `[x]` за ним), ссылка
- * `[текст](адрес)` и картинка `![alt](адрес)` — до текста, `**`, `__`, `~~`. Инлайн-код остаётся кодом, как в
- * ленте: его содержимое не чистится и упоминания в нём не заменяются. Вне кода упоминания — как у чипов ленты
- * (`@s02` → `@S02 бэкенд`, `@human` → `@you`). Пробелы схлопываются, длиннее 140 знаков — 140 и `…`.
+ * Выдержка строится из того же разбора Markdown, что и лента: `unified` + `remark-parse` и те же плагины
+ * (`room-remark.ts`, как у `hasHumanMention`), а правила — обход дерева mdast. Прежние регулярки разметки местами
+ * расходились с лентой: `[ask @human](url)` в цитате давало «@you», а лента рисует ссылку с буквальным текстом.
  *
- * Тексты пишут агенты и длины они не знают, а регулярки разметки на длинной строке дороги (ссылка с `[` без `]`
- * — квадратична): текст не делится на строки целиком, а читается строка за строкой до первой подходящей, и
- * любая строка до всякой регулярки обрезается до `LINE_MAX` знаков.
+ * Вход обрезается до `INPUT_MAX` кодовых единиц до разбора — суррогатная пара не рвётся: выдержке нужно начало, а
+ * разбор длинного текста дорог. Блоки читаются по порядку документа, берётся первый, давший непустой текст:
+ *  — абзац, заголовок, пункт списка, ячейка таблицы — их строчный текст; цитата — по её детям;
+ *  — блок кода и сырой HTML (лента показывает его текстом) — первая непустая строка, буквально;
+ *  — тематический разрыв пропускается, как и подпись языка над блоком кода (`isCodeCaption`: это метка кода, а не
+ *    текст сообщения, — цитата сообщения, начатого с ```ts, показывает строку кода, а не «ts»).
+ * Строчное содержимое — как в ленте: текст и инлайн-код — буквально (`@human` в коде остаётся кодом); упоминание
+ * сессии — `@` и подпись (`labelOf` или тег `S02`), упоминание человека — `@you`; ссылка и ссылка-сноска — текст
+ * детей, а `@` в нём остаётся буквальным; картинка — её `alt`; перенос строки — пробел; выделения — их дети. Дальше
+ * пробелы схлопываются, а длиннее 140 знаков (графем: флаг и эмодзи с ZWJ — один знак) — 140 и `…`.
+ *
+ * Свой `@human` человека — не чип (`humanChips: false`): в цитате его сообщения он остаётся `@human`, как в ленте.
+ *
+ * Разобранные куски кешируются по тексту и правилу `@human`: цитаты считаются на каждую отрисовку панели, а текст
+ * сообщения не меняется. В кеше лежат куски, а не готовая строка: подписи упоминаний подставляются при каждом вызове —
+ * сессию могут переименовать. Не осилил разбор текст (вложенность глубже стека) — запасной путь: первая непустая
+ * строка сырого текста, обрезанная так же.
  */
 
-import { S } from '../../../shared/strings.js';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
+import { markdownTooDeep } from '../../lib/markdown-depth.js';
 import { sessionTag } from '../../lib/participant.js';
-import { splitFeedMentions } from './mention.js';
+import { MENTION_ATTR, isCodeCaption, remarkPluginsFor, type MdNode } from './room-remark.js';
 
 /** Выдержка — не больше стольких знаков (графем: флаг и эмодзи с ZWJ — один знак); длиннее обрезается с `…`. */
 const EXCERPT_MAX = 140;
-/** Строка читается не дальше стольких знаков: на выдержку хватает с запасом, а длиннее регулярки дороги. */
-const LINE_MAX = 1000;
+/** Разбирается не больше стольких кодовых единиц текста: на выдержку хватает с запасом, а длиннее разбор дорог. */
+const INPUT_MAX = 4000;
+/** Кеш — до стольких разобранных текстов; при переполнении очищается целиком (как у `hasHumanMention`). */
+const CACHE_MAX = 500;
 /** Язык не задан: границы графем от него не зависят. */
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+const LINE_BREAK = /\r\n|\r|\n/;
 
 /**
- * Один слой разметки начала строки: `#` заголовка, `>` цитаты, маркер списка (`-`, `*`, `+`, `1.`, `1)`) и флажок
- * задачи после него (`[ ]`, `[x]`). Слоёв бывает несколько подряд (`> - [ ] пункт`).
+ * Куски выдержки: готовый текст или упоминание сессии, чью подпись берут при каждом вызове (`replyExcerpt`).
+ * Упоминание человека — готовый текст «@you»: подписи у него нет.
  */
-const LINE_MARKER = /^\s*(?:#{1,6}\s+|>|(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)/;
-/** Тематический разрыв: три и больше одинаковых `-`, `*` или `_`, между ними можно пробелы. */
-const THEMATIC_BREAK = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
-/** Ограда блока кода. */
-const CODE_FENCE = /^\s*(?:```|~~~)/;
-/** Ссылка `[текст](адрес)` и картинка `![alt](адрес)` — от них остаётся текст. */
-const LINK_MARKUP = /!?\[([^\]]*)\]\([^)]*\)/g;
-/** Инлайн-код: серия обратных кавычек, содержимое и такая же серия (длиннее или короче серия — часть содержимого). */
-const CODE_SPAN = /(?<!`)(`+)(?!`)([\s\S]+?)(?<!`)\1(?!`)/g;
-/** Вне кода: жирный, подчёркнутый, зачёркнутый (`**`, `__`, `~~`) и обрывки обратных кавычек без пары. */
-const INLINE_MARKUP = /\*\*|__|~~|`/g;
+type Piece = string | { sessionId: string };
 
-/** Часть строки: инлайн-код (его содержимое, без кавычек) или всё остальное. */
-interface Part {
-  code: boolean;
-  text: string;
+/**
+ * Процессоры: один на правило `@human`. Как и у `hasHumanMention`, после первого разбора они заморожены, а
+ * состояния между разборами нет.
+ */
+const withChips = unified().use(remarkParse).use(remarkPluginsFor(false, true));
+const withoutChips = unified().use(remarkParse).use(remarkPluginsFor(false, false));
+
+const cache = new Map<string, Piece[]>();
+
+/**
+ * Текст не длиннее `INPUT_MAX` кодовых единиц. Верхняя половина суррогатной пары на краю остаётся без нижней — её
+ * отбрасывают, чтобы в разбор не попал обломок знака.
+ */
+function clip(text: string): string {
+  if (text.length <= INPUT_MAX) return text;
+  const last = text.charCodeAt(INPUT_MAX - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? INPUT_MAX - 1 : INPUT_MAX);
 }
 
-/**
- * Строка `text[start, end)` не длиннее `LINE_MAX` знаков. Верхняя половина суррогатной пары на краю остаётся без
- * нижней — её отбрасывают, чтобы в выдержку не попал обломок знака.
- */
-function capLine(text: string, start: number, end: number): string {
-  let stop = Math.min(end, start + LINE_MAX);
-  if (stop < end) {
-    const last = text.charCodeAt(stop - 1);
-    if (last >= 0xd800 && last <= 0xdbff) stop -= 1;
+/** Строчное содержимое узла — в `out`, как его показывает лента: см. шапку файла. */
+function collectInline(node: MdNode, out: Piece[]): void {
+  const sessionId = node.data?.hProperties?.[MENTION_ATTR];
+  if (typeof sessionId === 'string') {
+    out.push({ sessionId });
+    return;
   }
-  return text.slice(start, stop);
-}
-
-/**
- * Строка без разметки начала строки; `null` — строка в выдержку не годится: после любого слоя разметки она оказалась
- * тематическим разрывом (проверяется на каждом слое: `* * *` — разрыв, а не вложенные маркеры) или оградой кода.
- */
-function lineContent(line: string): string | null {
-  let rest = line;
-  for (;;) {
-    if (THEMATIC_BREAK.test(rest)) return null;
-    const marker = LINE_MARKER.exec(rest);
-    if (marker === null) break;
-    rest = rest.slice(marker[0].length);
+  if (node.type === 'break') {
+    out.push(' ');
+    return;
   }
-  return CODE_FENCE.test(rest) ? null : rest;
+  if (node.type === 'image' || node.type === 'imageReference') {
+    out.push(node.alt ?? '');
+    return;
+  }
+  // `text` (в том числе «@you» человека: это текстовый узел плагина), `inlineCode` и строчный `html` — значение
+  // как есть; у выделений и ссылок значения нет, их текст — в детях.
+  if (node.value !== undefined) out.push(node.value);
+  for (const child of node.children ?? []) collectInline(child, out);
+}
+
+/** Есть видимый текст: непробельный знак или упоминание сессии (подпись у него непустая всегда). */
+function hasText(pieces: readonly Piece[]): boolean {
+  return pieces.some((piece) => typeof piece !== 'string' || piece.trim() !== '');
+}
+
+/** Первая непустая строка значения (блок кода, сырой HTML, сырой текст) — буквально; `null` — все строки пусты. */
+function firstLine(value: string): Piece[] | null {
+  const line = value.split(LINE_BREAK).find((candidate) => candidate.trim() !== '');
+  return line === undefined ? null : [line];
 }
 
 /**
- * Первая подходящая строка текста, уже без разметки начала строки; `null` — подходящей нет. Текст читается строка
- * за строкой, а не делится целиком: нужна одна строка, а текст может быть любой длины.
+ * Куски первого блока поддерева, давшего непустой текст; `null` — такого нет. Блоки без текста (тематический
+ * разрыв, определение, пустой код) и подпись языка над кодом пропускаются; прочие узлы — цитата, список, пункт,
+ * таблица, строка таблицы — читаются по детям.
  */
-function firstLine(text: string): string | null {
-  const lineEnd = /\r\n|\r|\n/g;
-  let start = 0;
-  for (;;) {
-    lineEnd.lastIndex = start;
-    const match = lineEnd.exec(text);
-    const line = capLine(text, start, match === null ? text.length : match.index);
-    if (line.trim() !== '') {
-      const content = lineContent(line);
-      if (content !== null) return content;
+function blockPieces(node: MdNode): Piece[] | null {
+  switch (node.type) {
+    case 'paragraph':
+    case 'heading':
+    case 'tableCell': {
+      if (isCodeCaption(node)) return null;
+      const pieces: Piece[] = [];
+      collectInline(node, pieces);
+      return hasText(pieces) ? pieces : null;
     }
-    if (match === null) return null;
-    start = match.index + match[0].length;
+    case 'code':
+    case 'html':
+      return firstLine(node.value ?? '');
+    default:
+      for (const child of node.children ?? []) {
+        const found = blockPieces(child);
+        if (found !== null) return found;
+      }
+      return null;
   }
 }
 
-/** Строка → части: инлайн-код и всё остальное, в порядке строки. */
-function splitCode(line: string): Part[] {
-  const parts: Part[] = [];
-  let last = 0;
-  for (const match of line.matchAll(CODE_SPAN)) {
-    if (match.index > last) parts.push({ code: false, text: line.slice(last, match.index) });
-    parts.push({ code: true, text: match[2] as string });
-    last = match.index + match[0].length;
+/** Куски выдержки из текста (из кеша или разбором); пусто — в тексте нет блока с текстом. */
+function piecesOf(text: string, humanChips: boolean): Piece[] {
+  const source = clip(text);
+  const key = `${humanChips ? 1 : 0}${source}`;
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const processor = humanChips ? withChips : withoutChips;
+  let pieces: Piece[];
+  try {
+    // Цитаты глубже предела лента показывает сырым текстом (`MarkdownBoundary`) — выдержка берёт его строку.
+    pieces = markdownTooDeep(source)
+      ? (firstLine(source) ?? [])
+      : (blockPieces(processor.runSync(processor.parse(source), source) as MdNode) ?? []);
+  } catch {
+    // Текст пишет агент: вложенность глубже стека роняет разбор, а выдержка не должна ронять панель комнаты.
+    pieces = firstLine(source) ?? [];
   }
-  if (last < line.length) parts.push({ code: false, text: line.slice(last) });
-  return parts;
-}
-
-/** Текст вне кода: простая разметка снята, упоминания — ярлыками, как у чипов ленты. */
-function plainText(text: string, labelOf: (sessionId: string) => string | null): string {
-  return splitFeedMentions(text.replace(INLINE_MARKUP, ''))
-    .map((segment) =>
-      segment.kind === 'text'
-        ? segment.text
-        : segment.kind === 'human'
-          ? S.rooms.humanMention
-          : `@${labelOf(segment.sessionId) ?? sessionTag(segment.sessionId)}`,
-    )
-    .join('');
+  if (cache.size >= CACHE_MAX) cache.clear();
+  cache.set(key, pieces);
+  return pieces;
 }
 
 /** Текст не длиннее `EXCERPT_MAX` знаков: длиннее — обрезан по графеме, без пробела перед `…`. */
@@ -136,15 +161,22 @@ function truncate(text: string): string {
 }
 
 /**
- * Выдержка из текста сообщения: см. шапку файла. Пусто, если от строки ничего не осталось (сообщение из одной
- * картинки без `alt`) или подходящей строки нет (одни ограды и разрывы): цитата тогда покажет только подпись.
- * `labelOf` — ярлык участника для упоминания, как у `RoomMarkdown`: `null` — сессии нет в карте, берётся тег.
+ * Выдержка из текста сообщения: см. шапку файла. Пусто, если в тексте нет блока с текстом (одна картинка без `alt`,
+ * одни ограды и разрывы): цитата тогда покажет только подпись. `labelOf` — ярлык участника для упоминания, как у
+ * `RoomMarkdown`: `null` — сессии нет в карте, берётся тег. `humanChips` (по умолчанию `true`) — как у `RoomMarkdown`:
+ * `false` у сообщения человека, в нём `@human` остаётся текстом.
  */
-export function replyExcerpt(text: string, labelOf: (sessionId: string) => string | null): string {
-  const line = firstLine(text);
-  if (line === null) return '';
-  const joined = splitCode(line.replace(LINK_MARKUP, '$1'))
-    .map((part) => (part.code ? part.text : plainText(part.text, labelOf)))
+export function replyExcerpt(
+  text: string,
+  labelOf: (sessionId: string) => string | null,
+  options?: { humanChips?: boolean },
+): string {
+  const joined = piecesOf(text, options?.humanChips ?? true)
+    .map((piece) =>
+      typeof piece === 'string'
+        ? piece
+        : `@${labelOf(piece.sessionId) ?? sessionTag(piece.sessionId)}`,
+    )
     .join('');
   return truncate(joined.replace(/\s+/g, ' ').trim());
 }

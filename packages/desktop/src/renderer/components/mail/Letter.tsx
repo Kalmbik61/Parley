@@ -26,6 +26,7 @@ import remarkGfm from 'remark-gfm';
 import { S } from '../../../shared/strings.js';
 import type { LetterView } from '../../lib/mail-view.js';
 import { Badge } from '../../ui/badge.js';
+import { MarkdownBoundary } from '../MarkdownBoundary.js';
 
 export interface LetterProps {
   letter: LetterView;
@@ -67,10 +68,14 @@ function markdownComponents(onOpenExternal: (url: string) => void): Components {
 const TAG_VARIANT = { question: 'accent', decision: 'accent-2', note: 'neutral' } as const;
 
 export function Letter({ letter, onOpenExternal, observeRef }: LetterProps): JSX.Element {
+  // Письмо пишет агент: если Markdown не осилил текст (вложенность глубже стека), письмо показывается сырым текстом,
+  // а вкладка почты не падает (`MarkdownBoundary`).
   const body = (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(onOpenExternal)}>
-      {letter.text}
-    </ReactMarkdown>
+    <MarkdownBoundary text={letter.text}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(onOpenExternal)}>
+        {letter.text}
+      </ReactMarkdown>
+    </MarkdownBoundary>
   );
 
   return (

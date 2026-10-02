@@ -107,6 +107,23 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     );
   });
 
+  it('переключатель почты называет и упоминания — «mail and mentions to you» (Parley 0.3.0): уведомление о @human идёт под ним', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    expect(await screen.findByLabelText('mail and mentions to you')).toBeTruthy();
+    expect(screen.queryByLabelText('mail to you')).toBeNull();
+    fireEvent.click(screen.getByLabelText('mail and mentions to you'));
+
+    await waitFor(() =>
+      expect(saveUiSpy).toHaveBeenCalledWith({
+        notifications: { ...DEFAULT_UI.notifications, mail: false },
+      }),
+    );
+  });
+
   it('тест 5 куска 4.3: в секции «Notifications» всегда видна подсказка про системные настройки', async () => {
     openSettings(createFakeBridge());
     switchTo('Notifications');

@@ -573,7 +573,8 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     expect(h.notes).toEqual([
       {
         title: 'S02 mentioned you in Mobile APP',
-        body: 'Ready for review, @you',
+        // Абзац целиком: вторая строка — его продолжение, как в ленте.
+        body: 'Ready for review, @you second line',
         tag: TAG,
         target: TARGET,
         silent: false,
@@ -727,7 +728,20 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
         }),
       ]),
     ]);
-    expect(h.notes.map((note) => note.body)).toEqual(['Ready for review, @you']);
+    // Строка без `>` — продолжение того же абзаца внутри пункта и цитаты, как в ленте.
+    expect(h.notes.map((note) => note.body)).toEqual(['Ready for review, @you second line']);
+  });
+
+  it('тело — из того же разбора, что лента: @human в подписи ссылки и в коде остаётся буквальным, второй абзац не берётся', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', {
+          text: 'Ask [the @human](https://x.dev) about `@human`, @human\n\nSecond paragraph',
+        }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Ask the @human about @human, @you']);
   });
 
   it('подписи упоминаний — по карте работы, как у чипов ленты: @s01 — «S01 planner», нет в карте — тег, код остаётся кодом', () => {

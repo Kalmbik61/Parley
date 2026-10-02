@@ -380,7 +380,8 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   there is unread mail or an unseen result), `✉N` (messages to you: letters, and room
   messages where an agent wrote `@human`; with only such mentions it is `@N`, and a click opens
   the room instead of the mail), `#` or `#N` (the menu of
-  the workspace's rooms; the number counts rooms with unread messages) and the time. Below
+  the workspace's rooms; the number counts rooms with unread messages, and in the menu a room
+  where an agent mentioned you is marked with `@`) and the time. Below
   it are the meta line "folder · N sessions · branch" and the rows. A session row has the
   state and agent icons, `S02 backend`, the state word (`working`, `needs you`,
   `done · unseen`, `idle`, `not started`, `done`, `failed`, `asleep`, `closed`), a branch icon
@@ -451,14 +452,16 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   ones are "+N earlier"; a decision takes up to two lines of running text, where bold, code and
 links stay but headings and list marks do not), then
 the messages: Markdown (headings, lists, code, tables, links) with mention chips. HTML in a
-message is shown as text, and a link opens in your browser. Each
+message is shown as text, and a link opens in your browser. A message whose Markdown cannot
+be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
   tag (`note`, `question`, `decision`), the time and a dot for an unread one. The line "▤ Not
   picked up yet by S02, S03" stays while the recipients have not read the message. An agent's
   `@human` in the text (not in code or a link) is a "@you" chip, and the room opens at the
-  earliest such mention you have not read. An answer to a particular message carries a one-line
-  quote of it above the text ("↩ You: …"); a click on the quote scrolls the feed to the original
-  and highlights it for a moment. The feed follows new messages only while it is at the bottom
+  earliest such mention you have not read; `@human` in your own message stays text. An answer
+  to a particular message carries a one-line quote of it above the text ("↩ You: …", the start
+  of the original as the feed shows it); a click on the quote scrolls the feed to the original
+  and highlights it once it is on screen. The feed follows new messages only while it is at the bottom
   or the message is your own; while you read above, what comes is counted in a `↓N` button over
   the bottom of the feed, and a click takes you down. A waiting
   decision is the last card in the feed, with "Accept" and "Return for rework" (a note "What
@@ -491,7 +494,7 @@ message is shown as text, and a link opens in your browser. Each
   more than 1 s while the window is focused;
 - macOS notifications: a session waits for you or has finished its turn, a message to you
   arrived (an agent's `@human` in a room too: "S02 mentioned you in {room}", one per room, under
-  the same "mail to you" setting), a session failed to start, failed to resume or waits for
+  the same "mail and mentions to you" setting), a session failed to start, failed to resume or waits for
   folder trust. When you are
   already looking at that tab, there is no notification; after a window or host restart there
   is no burst of notifications about earlier states. A click opens the window (also when the
@@ -704,7 +707,7 @@ The window has Settings (⌘,), with five tabs:
 - **Agents** — "Silence threshold, ms", "Message cap per hour", "Session wake-ups per hour
   (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Worktree
   root".
-- **Notifications** — "needs you" / "finished" / "mail to you" / "sound"; if notifications do
+- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound"; if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.

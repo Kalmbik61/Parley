@@ -124,7 +124,7 @@ kinds of messages are in topic \`letters\`.`,
   },
   {
     topic: 'rooms',
-    summary: 'rooms: create_room, messages to a room, read_room',
+    summary: 'rooms: create_room, messages to a room, replies (replyTo), @human, read_room',
     text: `## Rooms
 
 A room is a standing circle of conversation for several sessions. Create one with

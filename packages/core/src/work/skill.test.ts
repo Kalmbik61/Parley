@@ -101,6 +101,21 @@ describe('заглушка скилла parley: тело', () => {
       /answer only a `question`, do not answer a `note` or a `decision`\. A human's message is not a colleague's reply: answer the human's task in a room whatever the kind of message \(even `note`\)\./,
     );
   });
+
+  it('правило про ответы в комнате (Parley 0.3.0): replyTo с id сообщения, человеку — без to, @human — простым текстом и по делу', () => {
+    // Агент, который не открыл тему `rooms`, всё равно должен ответить с цитатой и не звать человека через `to`.
+    expect(body).toMatch(
+      /Answering a particular message in a room — above all the human's question — pass `replyTo` with its id: the window shows a quote of it above your answer\./,
+    );
+    expect(body).toMatch(/The human is not a session: answer the human in the room without `to`\./);
+    expect(body).toMatch(
+      /Write `@human` as plain text, and only when you need the human's answer or attention: it notifies the human\./,
+    );
+    // Тема `rooms` в списке называет и ответы, и `@human`: по подписи агент поймёт, что открыть.
+    expect(body).toContain(
+      '- `rooms` — rooms: create_room, messages to a room, replies (replyTo), @human, read_room',
+    );
+  });
 });
 
 describe('заглушка скилла parley: как приходят письма', () => {
@@ -165,9 +180,11 @@ describe('заглушка и гид согласованы', () => {
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     try {
       const tools = new Set((await client.listTools()).tools.map((tool) => tool.name));
-      // Слова в кавычках, которые не инструменты: аргумент, виды писем, имя сервера и темы гида.
+      // Слова в кавычках, которые не инструменты: аргументы (`topic` у read_guide, `to` у send_message), виды писем,
+      // имя сервера и темы гида.
       const notTools = new Set([
         'topic',
+        'to',
         'question',
         'note',
         'decision',

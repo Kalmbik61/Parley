@@ -1825,6 +1825,28 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
     expect(direct).not.toHaveProperty('replyTo');
   });
 
+  it('незнакомое поле (reply_to вместо replyTo) — письмо уходит, а в ответе предупреждение с подсказкой (Parley 0.3.0)', async () => {
+    const { a } = await replySetup();
+
+    const sent = await callOk(a, 'send_message', {
+      room: 'r-01',
+      text: 'Беру',
+      reply_to: 'm-03',
+      urgent: true,
+    });
+
+    expect(sent).toEqual({
+      messageId: 'm-06',
+      warning: 'unknown parameters ignored: reply_to (did you mean replyTo?), urgent',
+    });
+    const stored = (await readMapFile()).messages.find((message) => message.id === 'm-06');
+    expect(stored).toMatchObject({ roomId: 'r-01', text: 'Беру' });
+    expect(stored).not.toHaveProperty('replyTo');
+    // Знакомые поля предупреждения не дают: ответ — один `messageId`.
+    const plain = await callOk(a, 'send_message', { room: 'r-01', text: 'Ещё', replyTo: 'm-03' });
+    expect(plain).toEqual({ messageId: 'm-07' });
+  });
+
   it('read_room, wait_for("inbox") и check_inbox: у ответа есть replyTo, у обычного письма ключа нет совсем', async () => {
     const { owner, a } = await replySetup();
     await callOk(a, 'send_message', { room: 'r-01', text: 'Беру', replyTo: 'm-03' }); // m-06

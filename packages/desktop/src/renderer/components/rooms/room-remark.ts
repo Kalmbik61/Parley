@@ -24,14 +24,21 @@
  * `linkReference` (`@s02` в адресе — часть адреса, а чип внутри `<a>` открывал бы ссылку, а не участника) и в тексте,
  * который `remarkReveal` вставил как есть (`literal`).
  *
- * Список плагинов (`REMARK_PLUGINS`, `INLINE_REMARK_PLUGINS`) один: им разбирает `RoomMarkdown` и им же
- * `hasHumanMention`. Правка плагинов правит оба сразу — расходиться им негде.
+ * Свой `@human` человека — не чип «@you» (Parley 0.3.0): себя человек не упоминает, а чип «для тебя» в его же слове
+ * выглядел бы странно. Опция `humanChips: false` оставляет `@human` обычным текстом; ленту с ней рисует
+ * `RoomMessage` для сообщений человека (`remarkPluginsFor`). Внимание окна от этого не меняется: сообщения человека оно
+ * и так не считает упоминаниями (`attention/derive.ts#isHumanMention`), поэтому `hasHumanMention` — без опции.
+ *
+ * Списки плагинов (`REMARK_PLUGINS`, `INLINE_REMARK_PLUGINS` и их двойники без чипа человека) собраны здесь же: ими
+ * разбирает `RoomMarkdown`, а основным из них — и `hasHumanMention`. Правка плагинов правит всех сразу — расходиться им
+ * негде.
  */
 
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified, type PluggableList } from 'unified';
 import { S } from '../../../shared/strings.js';
+import { markdownTooDeep } from '../../lib/markdown-depth.js';
 import { sessionTag } from '../../lib/participant.js';
 import { splitFeedMentions } from './mention.js';
 
@@ -43,10 +50,10 @@ export const MENTION_ATTR = 'data-mention';
 export const HUMAN_MENTION_ATTR = 'data-mention-human';
 
 /**
- * Узел mdast в той мере, в какой его читает и пишет плагин. Пакета типов `mdast` в зависимостях окна нет
- * (его тянет только `react-markdown`), поэтому форма своя.
+ * Узел mdast в той мере, в какой его читает и пишет плагин (и выдержка, `excerpt.ts`). Пакета типов `mdast` в
+ * зависимостях окна нет (его тянет только `react-markdown`), поэтому форма своя.
  */
-interface MdNode {
+export interface MdNode {
   type: string;
   value?: string;
   children?: MdNode[];
@@ -56,6 +63,8 @@ interface MdNode {
   position?: { start: { offset?: number }; end: { offset?: number } };
   /** `link` и `image`. */
   title?: string | null;
+  /** `image` и `imageReference`: то, что лента показывает вместо картинки. */
+  alt?: string | null;
   /** `code`: язык и остаток строки после тройных кавычек. */
   lang?: string | null;
   meta?: string | null;
@@ -72,6 +81,14 @@ const LINE_BREAK = /\r\n|\r|\n/;
 
 /** Мелкая приглушённая подпись над блоком кода. */
 const CAPTION_CLASS = 'text-xs text-muted-foreground';
+
+/**
+ * Узел — подпись над блоком кода (язык и всё за ```): `remarkReveal` ставит её абзацем перед самим блоком. Это
+ * метка кода, а не текст сообщения: выдержка (`excerpt.ts`) её пропускает и берёт строку кода.
+ */
+export function isCodeCaption(node: MdNode): boolean {
+  return node.type === 'paragraph' && node.data?.hProperties?.className === CAPTION_CLASS;
+}
 
 /** Абзац из готового текста, который не разбирается дальше: это исходник, а не разметка. */
 function literalParagraph(value: string, className?: string): MdNode {
@@ -177,9 +194,15 @@ function isHumanMentionNode(node: MdNode): boolean {
 
 /**
  * Текстовый узел → текст, упоминания и `break` на каждом переводе строки (в строчном виде `\n` остаётся
- * в тексте и читается пробелом). Разбор токенов — `mention.ts`.
+ * в тексте и читается пробелом). Разбор токенов — `mention.ts`. `@human` — чип, а при `humanChips: false` —
+ * обычный текст, как он написан.
  */
-function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNode[] {
+function expandText(
+  value: string,
+  lineBreaks: boolean,
+  literal: boolean,
+  humanChips: boolean,
+): MdNode[] {
   const out: MdNode[] = [];
   const segments = literal ? [{ kind: 'text' as const, text: value }] : splitFeedMentions(value);
   for (const segment of segments) {
@@ -187,15 +210,16 @@ function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNod
       out.push(mentionNode(segment.sessionId));
       continue;
     }
-    if (segment.kind === 'human') {
+    if (segment.kind === 'human' && humanChips) {
       out.push(humanMentionNode());
       continue;
     }
+    const text = segment.kind === 'human' ? segment.raw : segment.text;
     if (!lineBreaks) {
-      out.push({ type: 'text', value: segment.text });
+      out.push({ type: 'text', value: text });
       continue;
     }
-    segment.text.split(LINE_BREAK).forEach((line, index) => {
+    text.split(LINE_BREAK).forEach((line, index) => {
       if (index > 0) out.push({ type: 'break' });
       if (line !== '') out.push({ type: 'text', value: line });
     });
@@ -207,24 +231,28 @@ function expandText(value: string, lineBreaks: boolean, literal: boolean): MdNod
  * Код (`inlineCode`, `code`) и разметка HTML — узлы-листья со своим `value`, а не `text`: их плагин не
  * трогает, `@s02` в них остаётся буквальным.
  */
-function expandChildren(parent: MdNode, lineBreaks: boolean): void {
+function expandChildren(parent: MdNode, lineBreaks: boolean, humanChips: boolean): void {
   if (parent.children === undefined) return;
   const next: MdNode[] = [];
   for (const child of parent.children) {
     if (child.type === 'text' && child.value !== undefined) {
-      next.push(...expandText(child.value, lineBreaks, child.literal === true));
+      next.push(...expandText(child.value, lineBreaks, child.literal === true, humanChips));
       continue;
     }
-    if (!LITERAL_PARENTS.has(child.type)) expandChildren(child, lineBreaks);
+    if (!LITERAL_PARENTS.has(child.type)) expandChildren(child, lineBreaks, humanChips);
     next.push(child);
   }
   parent.children = next;
 }
 
-/** Плагин remark: упоминания и переносы строк в текстовых узлах. */
-export function remarkMentions(options?: { lineBreaks?: boolean }) {
+/**
+ * Плагин remark: упоминания и переносы строк в текстовых узлах. `humanChips` (по умолчанию `true`): `@human` — чип
+ * «@you»; `false` — обычный текст (сообщение самого человека).
+ */
+export function remarkMentions(options?: { lineBreaks?: boolean; humanChips?: boolean }) {
   const lineBreaks = options?.lineBreaks ?? true;
-  return (tree: MdNode): void => expandChildren(tree, lineBreaks);
+  const humanChips = options?.humanChips ?? true;
+  return (tree: MdNode): void => expandChildren(tree, lineBreaks, humanChips);
 }
 
 export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkReveal, remarkMentions];
@@ -233,6 +261,26 @@ export const INLINE_REMARK_PLUGINS: PluggableList = [
   remarkReveal,
   [remarkMentions, { lineBreaks: false }],
 ];
+/** Те же списки для сообщения человека: `@human` в них — текст, а не чип «@you». */
+const PLAIN_HUMAN_REMARK_PLUGINS: PluggableList = [
+  remarkGfm,
+  remarkReveal,
+  [remarkMentions, { humanChips: false }],
+];
+const PLAIN_HUMAN_INLINE_REMARK_PLUGINS: PluggableList = [
+  remarkGfm,
+  remarkReveal,
+  [remarkMentions, { lineBreaks: false, humanChips: false }],
+];
+
+/**
+ * Список плагинов для вида (`inline` — строчный вид плашки решений) и правила `@human` (`humanChips`). Списки
+ * готовые и каждый раз те же: по ним `RoomMarkdown` решает, нужен ли новый разбор.
+ */
+export function remarkPluginsFor(inline: boolean, humanChips: boolean): PluggableList {
+  if (humanChips) return inline ? INLINE_REMARK_PLUGINS : REMARK_PLUGINS;
+  return inline ? PLAIN_HUMAN_INLINE_REMARK_PLUGINS : PLAIN_HUMAN_REMARK_PLUGINS;
+}
 
 /** В дереве есть узел упоминания человека: тот, что лента превращает в чип «@you». */
 function containsHumanMention(node: MdNode): boolean {
@@ -265,10 +313,11 @@ const humanMentionCache = new Map<string, boolean>();
  * картинки и в email (`user@human.dev`) — нет. Границы токена — как у токена сессии (`mention.ts`).
  *
  * Разбор не должен ронять внимание окна: текст пишет агент, и вложенность глубже стека плагинов — `RangeError`.
- * Такой текст ленты не нарисовала бы, упоминанием он не считается.
+ * Такой текст ленты не нарисовала бы, упоминанием он не считается. Цитаты глубже предела (`markdownTooDeep`)
+ * лента рисует сырым текстом без чипов — их не разбирают и здесь.
  */
 export function hasHumanMention(text: string): boolean {
-  if (!HUMAN_HINT.test(text)) return false;
+  if (!HUMAN_HINT.test(text) || markdownTooDeep(text)) return false;
   const cached = humanMentionCache.get(text);
   if (cached !== undefined) return cached;
   let found: boolean;
