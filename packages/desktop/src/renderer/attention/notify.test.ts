@@ -531,6 +531,246 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
   });
 });
 
+// Parley 0.3.0: сообщение комнаты с `@human` — письмо человеку: уведомление «S02 mentioned you in <комната>», по одному
+// на комнату; настройка та же, что у писем (`prefs().mail`), цель — вкладка комнаты.
+describe('createAttentionNotifier.onWorks — упоминание человека в комнате (Parley 0.3.0)', () => {
+  const TAG = 'mention:/tmp/p w-01:r-01';
+  const TARGET: FocusTarget = {
+    kind: 'room',
+    projectPath: '/tmp/p',
+    workId: 'w-01',
+    roomId: 'r-01',
+  };
+  const mention = (id: string, patch: Partial<Message> = {}): Message =>
+    letter(id, {
+      roomId: 'r-01',
+      from: 's-02',
+      to: [],
+      text: 'Ready for review, @human',
+      ...patch,
+    });
+  /** Работа с комнатами `rooms` (по умолчанию — `r-01` «Mobile APP») и заданными сообщениями. */
+  const withMessages = (
+    messages: Message[],
+    rooms: Room[] = [room('r-01', 'Mobile APP', null)],
+  ): WorkEntry => {
+    const base = roomsEntry(rooms);
+    return { ...base, map: { ...base.map, messages } };
+  };
+
+  /** Уведомитель, у которого первый снимок — комната без сообщений: база есть, дальше всё — «после подключения». */
+  function started(): Harness {
+    const h = harness([]);
+    h.notifier.onWorks([withMessages([])]);
+    return h;
+  }
+
+  it('новое упоминание — одно уведомление macOS: заголовок «S02 mentioned you in Mobile APP», выдержка из текста, тег mention:<workKey>:<roomId>, цель — комната', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([mention('m-1', { text: '\n\nReady for review, @human\nsecond line' })]),
+    ]);
+    expect(h.notes).toEqual([
+      {
+        title: 'S02 mentioned you in Mobile APP',
+        // Абзац целиком: вторая строка — его продолжение, как в ленте.
+        body: 'Ready for review, @you second line',
+        tag: TAG,
+        target: TARGET,
+        silent: false,
+      },
+    ]);
+    // Карточкой в окне показываются только решения.
+    expect(h.windowNotes).toEqual([]);
+  });
+
+  it('первый снимок — база: упоминание, ждавшее на старте окна, не уведомляет; следующее — уведомляет', () => {
+    const h = harness([]);
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(h.notes).toEqual([]);
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(h.notes).toEqual([]);
+    h.notifier.onWorks([
+      withMessages([mention('m-1'), mention('m-2', { text: 'Second ping, @human' })]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Second ping, @you']);
+  });
+
+  it('prefs().mail: false — нет, и упоминание запомнено: включение настройки его не повторяет', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, mail: false };
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(h.notes).toEqual([]);
+    h.prefs = { ...h.prefs, mail: true };
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('вкладка комнаты видна — уведомления нет; видна вкладка другой комнаты — есть', () => {
+    const h = started();
+    h.visible.add(JSON.stringify(TARGET));
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(h.notes).toEqual([]);
+    h.visible.clear();
+    h.visible.add(JSON.stringify({ ...TARGET, roomId: 'r-02' }));
+    h.notifier.onWorks([withMessages([mention('m-1'), mention('m-2')])]);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('два новых упоминания в одной комнате — одно уведомление, текст — самого позднего', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'First, @human' }),
+        mention('m-2', { text: 'Second, @human' }),
+      ]),
+    ]);
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0]).toMatchObject({ body: 'Second, @you', tag: TAG });
+  });
+
+  it('упоминания в двух комнатах — два уведомления с тегами своих комнат и своими отправителями', () => {
+    const h = harness([]);
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Backend', null)];
+    h.notifier.onWorks([withMessages([], rooms)]);
+    h.notifier.onWorks([
+      withMessages(
+        [
+          mention('m-1', { roomId: 'r-02', from: 's-01', text: 'API is ready, @human' }),
+          mention('m-2', { text: 'Ready for review, @human' }),
+        ],
+        rooms,
+      ),
+    ]);
+    expect(h.notes.map((note) => [note.tag, note.title, note.body])).toEqual([
+      ['mention:/tmp/p w-01:r-01', 'S02 mentioned you in Mobile APP', 'Ready for review, @you'],
+      ['mention:/tmp/p w-01:r-02', 'S01 mentioned you in Backend', 'API is ready, @you'],
+    ]);
+  });
+
+  it('не уведомляют: без @human, @humans, от человека, системное, письмо без комнаты, прочитанное', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'just a status' }),
+        mention('m-2', { text: 'ask the @humans' }),
+        mention('m-3', { from: 'human', to: ['s-01'] }),
+        mention('m-4', { from: 'system' }),
+        mention('m-5', { roomId: null, to: ['s-01'] }),
+        mention('m-6', { readBy: { human: '2026-01-01T00:05:00.000Z' } }),
+      ]),
+    ]);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('не уведомляют и там, где лента чипа не рисует: @human в коде, в подписи и адресе ссылки', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'run `@human` in the shell' }),
+        mention('m-2', { text: '```\n@human\n```' }),
+        mention('m-3', { text: '[ask @human](https://x.dev)' }),
+        mention('m-4', { text: 'see https://github.com/@human' }),
+      ]),
+    ]);
+    expect(h.notes).toEqual([]);
+    // А в выделении лента чип рисует, и уведомление идёт.
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'run `@human` in the shell' }),
+        mention('m-5', { text: 'cc **@human**' }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['cc @you']);
+  });
+
+  it('упоминание, уже бывшее в прошлом снимке и всё ещё не прочитанное, второй раз не уведомляет', () => {
+    const h = started();
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    h.notifier.onWorks([withMessages([mention('m-1'), mention('m-2', { text: 'plain status' })])]);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('пустое название комнаты — «Room»', () => {
+    const h = harness([]);
+    h.notifier.onWorks([withMessages([], [room('r-01', '', null)])]);
+    h.notifier.onWorks([withMessages([mention('m-1')], [room('r-01', '', null)])]);
+    expect(h.notes[0]?.title).toBe('S02 mentioned you in Room');
+  });
+
+  it('письмо человеку и упоминание в одном снимке — два уведомления: mail:<workKey> и mention:<workKey>:<roomId>', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([letter('m-1', { kind: 'question', text: 'Which API?' }), mention('m-2')]),
+    ]);
+    expect(h.notes.map((note) => [note.tag, note.title])).toEqual([
+      ['mail:/tmp/p w-01', 'Redesign · question from S01'],
+      [TAG, 'S02 mentioned you in Mobile APP'],
+    ]);
+  });
+
+  it('sound: false → silent: true; длинная первая строка — выдержка в 140 знаков и «…», заголовок цел', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, sound: false };
+    h.notifier.onWorks([withMessages([mention('m-1', { text: `@human ${'😀'.repeat(201)}` })])]);
+    expect(h.notes[0]?.silent).toBe(true);
+    // «@you » — пять знаков, остальные 135 — эмодзи: всего 140 знаков и «…».
+    expect(h.notes[0]?.body).toBe(`@you ${'😀'.repeat(135)}…`);
+    expect(h.notes[0]?.title).toBe('S02 mentioned you in Mobile APP');
+  });
+
+  it('тело — выдержка, как у цитаты ответа: разрыв пропущен, разметка снята, текст в одну строку', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', {
+          text: '---\n> - **Ready** for [review](https://x.dev/1), @human\nsecond line',
+        }),
+      ]),
+    ]);
+    // Строка без `>` — продолжение того же абзаца внутри пункта и цитаты, как в ленте.
+    expect(h.notes.map((note) => note.body)).toEqual(['Ready for review, @you second line']);
+  });
+
+  it('тело — из того же разбора, что лента: @human в подписи ссылки и в коде остаётся буквальным, второй абзац не берётся', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', {
+          text: 'Ask [the @human](https://x.dev) about `@human`, @human\n\nSecond paragraph',
+        }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Ask the @human about @human, @you']);
+  });
+
+  it('подписи упоминаний — по карте работы, как у чипов ленты: @s01 — «S01 planner», нет в карте — тег, код остаётся кодом', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([
+        mention('m-1', { text: 'Ask @s01 or @s09, @human; but `@s01` and `@human` stay code' }),
+      ]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'Ask @S01 planner or @S09, @you; but @s01 and @human stay code',
+    ]);
+  });
+
+  it('письма человеку по-прежнему — первая строка как есть: выдержка только у упоминаний', () => {
+    const h = started();
+    h.notifier.onWorks([
+      withMessages([letter('m-1', { kind: 'question', text: '**Which** API, @s01?' })]),
+    ]);
+    expect(h.notes.map((note) => note.body)).toEqual(['**Which** API, @s01?']);
+  });
+
+  it('в уведомлении нет кириллицы из слов окна: заголовок — английский', () => {
+    const h = started();
+    h.notifier.onWorks([withMessages([mention('m-1')])]);
+    expect(JSON.stringify(h.notes)).not.toMatch(/[Ѐ-ӿ]/);
+  });
+});
+
 function notice(kind: HostNotice['kind'], ref: SessionRef | null, text = 'текст хоста по-русски'): HostNotice {
   return { kind, ref, text, at: '2026-01-01T00:00:00.000Z' };
 }
@@ -691,6 +931,30 @@ describe('wireAttentionNotifications на подставном мосте и н�
     expect(bridge.appNotified).toEqual([]);
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1'), letter('m-2')] } }] });
     expect(bridge.appNotified.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01']);
+    off();
+  });
+
+  it('упоминание человека в комнате: первый снимок работ — база; следующий с новым упоминанием — уведомление macOS с целью-комнатой', () => {
+    const off = wire();
+    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const base = { ...current, map: { ...current.map, rooms: [room('r-01', 'Mobile APP', null)] } };
+    const mention = (id: string): Message =>
+      letter(id, { roomId: 'r-01', from: 's-02', to: [], text: 'Take a look, @human' });
+    useWorksStore.setState({
+      entries: [{ ...base, map: { ...base.map, messages: [mention('m-1')] } }],
+    });
+    expect(bridge.appNotified).toEqual([]);
+    useWorksStore.setState({
+      entries: [{ ...base, map: { ...base.map, messages: [mention('m-1'), mention('m-2')] } }],
+    });
+    expect(bridge.appNotified).toMatchObject([
+      {
+        title: 'S02 mentioned you in Mobile APP',
+        body: 'Take a look, @you',
+        tag: 'mention:/tmp/p w-01:r-01',
+        target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' },
+      },
+    ]);
     off();
   });
 

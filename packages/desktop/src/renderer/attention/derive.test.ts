@@ -4,11 +4,16 @@ import { refKey } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import {
   ATTENTION_RANK,
+  attentionOf,
+  forYouTarget,
   humanUnreadLetters,
+  humanUnreadMentions,
+  isHumanMention,
   isHumanUnread,
   roomAwaitsDecision,
   roomDecisionReturned,
   roomUnreadForHuman,
+  sameWorkAttention,
   sessionAttention,
   workAttention,
 } from './derive.js';
@@ -304,5 +309,266 @@ describe('workAttention — решение и почта человеку (2.7)'
     const e = entry([session('s-01')], [letter({ id: 'm1', from: 's-01', to: ['human'] })]);
     const a = workAttention(e, activityOf(e, { 's-01': live('working') }));
     expect(a).toMatchObject({ needsYou: 0, unseen: 0, humanUnread: 1 });
+  });
+});
+
+// Parley 0.3.0: сообщение комнаты с `@human` адресовано человеку, как прямое письмо ему. Распознаёт `hasHumanMention` из
+// `components/rooms/room-remark.ts` — тот же разбор Markdown, которым лента рисует чип «@you» (сверка с лентой на корпусе
+// текстов — `components/rooms/room-remark.test.tsx`).
+describe('isHumanMention и humanUnreadMentions (Parley 0.3.0)', () => {
+  const mention = (patch: Partial<Message> = {}): Message =>
+    letter({
+      id: 'm1',
+      from: 's-02',
+      to: [],
+      roomId: 'r-01',
+      text: 'Ready for review, @human',
+      ...patch,
+    });
+
+  it('сообщение комнаты от сессии с @human — упоминание; регистр не важен, токен может стоять в любой строке', () => {
+    expect(isHumanMention(mention())).toBe(true);
+    expect(isHumanMention(mention({ text: '@Human, ping' }))).toBe(true);
+    expect(isHumanMention(mention({ text: 'first line\n\nand @human at the end' }))).toBe(true);
+  });
+
+  it('не упоминание: письмо без комнаты, сообщение от человека, системное и текст без токена', () => {
+    expect(isHumanMention(mention({ roomId: null, to: ['human'] }))).toBe(false);
+    expect(isHumanMention(mention({ from: 'human' }))).toBe(false);
+    expect(isHumanMention(mention({ from: 'system' }))).toBe(false);
+    expect(isHumanMention(mention({ text: 'no mention here' }))).toBe(false);
+  });
+
+  it('@humans и user@human.dev — не упоминание: границы те же, что у чипа ленты', () => {
+    expect(isHumanMention(mention({ text: 'ask the @humans' }))).toBe(false);
+    expect(isHumanMention(mention({ text: 'mail user@human.dev' }))).toBe(false);
+  });
+
+  it('правило ленты: в коде, в подписи и адресе ссылки, в alt картинки — не упоминание; в выделении и цитате — упоминание', () => {
+    for (const text of [
+      '`@human`',
+      '```\n@human\n```',
+      '[ask @human](https://x.dev)',
+      'https://github.com/@human',
+      '![@human](https://x.dev/a.png)',
+    ]) {
+      expect(isHumanMention(mention({ text })), text).toBe(false);
+    }
+    for (const text of ['_@human_', '__@human__', '**@human**', '> @human here', '- @human here']) {
+      expect(isHumanMention(mention({ text })), text).toBe(true);
+    }
+  });
+
+  it('humanUnreadMentions: только непрочитанные упоминания, в порядке карты; письма с @human в них не входят', () => {
+    const e = entry(
+      [],
+      [
+        mention({ id: 'm1' }),
+        mention({ id: 'm2', readBy: { human: '2026-09-27T11:00:00.000Z' } }),
+        mention({ id: 'm3', text: 'no token' }),
+        mention({ id: 'm4', from: 'human' }),
+        mention({ id: 'm5', roomId: 'r-02' }),
+        letter({ id: 'm6', from: 's-01', to: ['human'], text: '@human, direct letter' }),
+      ],
+    );
+    expect(humanUnreadMentions(e.map).map((m) => m.id)).toEqual(['m1', 'm5']);
+    expect(humanUnreadLetters(e.map).map((m) => m.id)).toEqual(['m6']);
+  });
+});
+
+describe('workAttention — упоминания человека в комнатах (Parley 0.3.0)', () => {
+  const mention = (id: string, patch: Partial<Message> = {}): Message =>
+    letter({
+      id,
+      from: 's-02',
+      to: [],
+      roomId: 'r-01',
+      text: '@human, please take a look',
+      ...patch,
+    });
+  const room = (id: string): Room => ({
+    id,
+    title: id,
+    creator: 'human',
+    members: ['s-01', 's-02'],
+    createdAt: '2026-09-27T09:00:00.000Z',
+    lead: null,
+    proposal: null,
+  });
+  const withRooms = (
+    rooms: Room[],
+    messages: Message[],
+    sessions: WorkSession[] = [],
+  ): WorkEntry => {
+    const base = entry(sessions, messages);
+    return { ...base, map: { ...base.map, rooms } };
+  };
+
+  it('непрочитанное упоминание: humanUnread +1, roomMentions[комната] = 1, уровень — unseen; счётчики сессий не трогает', () => {
+    const e = entry([], [mention('m1')]);
+    const a = workAttention(e, {});
+    expect(a.humanUnread).toBe(1);
+    expect(a.roomMentions).toEqual({ 'r-01': 1 });
+    // Упоминание — и сообщение комнаты тоже: `#N` и слово «N new» строки комнаты считают его, как прежде.
+    expect(a.roomsUnread).toEqual({ 'r-01': 1 });
+    expect(a.level).toBe('unseen');
+    expect(a).toMatchObject({ needsYou: 0, unseen: 0 });
+  });
+
+  it('не считаются: прочитанное, от человека, системное и @humans', () => {
+    const e = entry(
+      [],
+      [
+        mention('m1', { readBy: { human: '2026-09-27T11:00:00.000Z' } }),
+        mention('m2', { from: 'human' }),
+        mention('m3', { from: 'system' }),
+        mention('m4', { text: 'the @humans decide' }),
+      ],
+    );
+    const a = workAttention(e, {});
+    expect(a.humanUnread).toBe(0);
+    expect(a.roomMentions).toEqual({});
+    expect(a.level).toBe('off');
+  });
+
+  it('счётчик идёт по правилу ленты: упоминание в коде и в ссылке не считается, в выделении — считается', () => {
+    const e = entry(
+      [],
+      [
+        mention('m1', { text: 'run `@human` in the shell' }),
+        mention('m2', { text: '[ask @human](https://x.dev)' }),
+        mention('m3', { text: 'cc _@human_' }),
+      ],
+    );
+    const a = workAttention(e, {});
+    expect(a.humanUnread).toBe(1);
+    expect(a.roomMentions).toEqual({ 'r-01': 1 });
+    expect(humanUnreadMentions(e.map).map((m) => m.id)).toEqual(['m3']);
+  });
+
+  it('прямое письмо плюс упоминание — 2: каждое сообщение считается один раз', () => {
+    const e = entry([], [letter({ id: 'm1', from: 's-01', to: ['human'] }), mention('m2')]);
+    const a = workAttention(e, {});
+    expect(a.humanUnread).toBe(2);
+    expect(a.roomMentions).toEqual({ 'r-01': 1 });
+    expect(a.level).toBe('unseen');
+  });
+
+  it('roomMentions — только комнаты с упоминанием; roomsUnread считает и простые сообщения комнат', () => {
+    const e = withRooms(
+      [room('r-01'), room('r-02'), room('r-03')],
+      [
+        mention('m1'),
+        mention('m2'),
+        mention('m3', { roomId: 'r-02', text: 'just a status' }),
+        mention('m4', { roomId: 'r-03', readBy: { human: '2026-09-27T11:00:00.000Z' } }),
+      ],
+    );
+    const a = workAttention(e, {});
+    expect(a.roomMentions).toEqual({ 'r-01': 2 });
+    expect(a.roomsUnread).toEqual({ 'r-01': 2, 'r-02': 1 });
+    expect(a.humanUnread).toBe(2);
+  });
+
+  it('упоминание поднимает работу до unseen поверх working и простоя; простое сообщение комнаты — нет', () => {
+    for (const state of ['working', 'idle'] as const) {
+      const mentioned = entry([session('s-01')], [mention('m1')]);
+      expect(workAttention(mentioned, activityOf(mentioned, { 's-01': live(state) })).level).toBe(
+        'unseen',
+      );
+      const plain = entry([session('s-01')], [mention('m1', { text: 'just a status' })]);
+      expect(workAttention(plain, activityOf(plain, { 's-01': live(state) })).level).toBe(state);
+    }
+  });
+
+  it('упоминание не перебивает blocked и ждущее решение: уровень остаётся needs-you', () => {
+    const blocked = entry([session('s-01')], [mention('m1')]);
+    expect(workAttention(blocked, activityOf(blocked, { 's-01': live('blocked') })).level).toBe(
+      'needs-you',
+    );
+    const proposal: Proposal = {
+      id: 'p-01',
+      from: 's-01',
+      text: 'Решение',
+      rev: 0,
+      at: '2026-09-29T10:00:00.000Z',
+    };
+    const decision = withRooms([{ ...room('r-01'), proposal }], [mention('m1')], [session('s-01')]);
+    expect(workAttention(decision, activityOf(decision, { 's-01': live('idle') })).level).toBe(
+      'needs-you',
+    );
+  });
+});
+
+describe('sameWorkAttention и attentionOf — roomMentions (Parley 0.3.0)', () => {
+  const base = workAttention(
+    entry([], [letter({ id: 'm1', from: 's-02', to: [], roomId: 'r-01', text: '@human' })]),
+    {},
+  );
+
+  it('различает roomMentions: число упоминаний и состав комнат', () => {
+    expect(base.roomMentions).toEqual({ 'r-01': 1 });
+    expect(sameWorkAttention(base, { ...base, roomMentions: { 'r-01': 1 } })).toBe(true);
+    expect(sameWorkAttention(base, { ...base, roomMentions: { 'r-01': 2 } })).toBe(false);
+    expect(sameWorkAttention(base, { ...base, roomMentions: { 'r-02': 1 } })).toBe(false);
+    expect(sameWorkAttention(base, { ...base, roomMentions: {} })).toBe(false);
+    expect(sameWorkAttention(base, { ...base, roomMentions: { 'r-01': 1, 'r-02': 1 } })).toBe(
+      false,
+    );
+  });
+
+  it('работе без расчёта attentionOf отдаёт пустые roomMentions и roomsUnread', () => {
+    const fallback = attentionOf({}, entry([]));
+    expect(fallback).toMatchObject({
+      level: 'off',
+      humanUnread: 0,
+      roomsUnread: {},
+      roomMentions: {},
+    });
+  });
+});
+
+// Кнопка «для тебя» карточки: письма ведут в Mail, одни упоминания — в комнату самого позднего из них.
+describe('forYouTarget (Parley 0.3.0)', () => {
+  const mention = (id: string, roomId: string, patch: Partial<Message> = {}): Message =>
+    letter({ id, from: 's-02', to: [], roomId, text: '@human, your call', ...patch });
+  const mapOf = (messages: Message[]) => entry([], messages).map;
+
+  it('есть непрочитанное письмо человеку — Mail, даже если есть и упоминания', () => {
+    const messages = [mention('m1', 'r-01'), letter({ id: 'm2', from: 's-01', to: ['human'] })];
+    expect(forYouTarget(mapOf(messages))).toEqual({ kind: 'mail' });
+  });
+
+  it('одни упоминания — комната самого позднего непрочитанного (по порядку карты)', () => {
+    expect(forYouTarget(mapOf([mention('m1', 'r-01'), mention('m2', 'r-02')]))).toEqual({
+      kind: 'room',
+      roomId: 'r-02',
+    });
+    expect(forYouTarget(mapOf([mention('m1', 'r-02'), mention('m2', 'r-01')]))).toEqual({
+      kind: 'room',
+      roomId: 'r-01',
+    });
+    // Позднее упоминание уже прочитано — берётся самое позднее из непрочитанных.
+    const read = { human: '2026-09-27T11:00:00.000Z' };
+    expect(
+      forYouTarget(mapOf([mention('m1', 'r-01'), mention('m2', 'r-02', { readBy: read })])),
+    ).toEqual({
+      kind: 'room',
+      roomId: 'r-01',
+    });
+  });
+
+  it('прочитанные письма и упоминания, простые сообщения комнат и пустая карта — null', () => {
+    const read = { human: '2026-09-27T11:00:00.000Z' };
+    expect(forYouTarget(mapOf([]))).toBeNull();
+    expect(
+      forYouTarget(
+        mapOf([
+          letter({ id: 'm1', from: 's-01', to: ['human'], readBy: read }),
+          mention('m2', 'r-01', { readBy: read }),
+        ]),
+      ),
+    ).toBeNull();
+    expect(forYouTarget(mapOf([mention('m1', 'r-01', { text: 'just a status' })]))).toBeNull();
   });
 });

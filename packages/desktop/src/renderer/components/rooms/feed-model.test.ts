@@ -419,6 +419,40 @@ describe('buildRoomModel — сообщения', () => {
     expect(build(entry).messages.map((item) => item.unread)).toEqual([true, false, false]);
   });
 
+  it('mentionsYou — агент назвал человека (@human) по правилу ленты: код и ссылка не в счёт, свои и системные — нет', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-02', text: 'Готово, @human' }),
+        message('m-2', { from: 's-02', text: 'Готово, `@human`' }),
+        message('m-3', { from: 's-02', text: '[ask @human](https://x.dev)' }),
+        message('m-4', {
+          from: 's-02',
+          text: '_@human_ решает',
+          readBy: { human: '2026-09-27T09:00:00.000Z' },
+        }),
+        message('m-5', { from: 'human', text: 'я сам, @human' }),
+        message('m-6', { from: 'system', to: ['human'], text: '@human' }),
+        message('m-7', { from: 's-02', text: 'без упоминаний' }),
+        message('m-8', { from: 's-02', text: 'ask the @humans' }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages.map((item) => item.mentionsYou)).toEqual([
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    // Прочитанность — отдельно: упоминание m-4 уже прочитано, и открытие комнаты (`unread && mentionsYou`) его не ищет.
+    expect(
+      messages.filter((item) => item.unread && item.mentionsYou).map((item) => item.id),
+    ).toEqual(['m-1']);
+  });
+
   it('needsRead — кандидат в mail.markRead: и системная строка без отметки человека, у неё точки нет', () => {
     const entry = entryOf({
       messages: [
@@ -436,6 +470,201 @@ describe('buildRoomModel — сообщения', () => {
   it('письма других комнат и без комнаты в ленту не попадают', () => {
     const entry = entryOf({ messages: [message('m-1'), message('m-2', { roomId: 'r-02' }), message('m-3', { roomId: null })] });
     expect(build(entry).messages.map((item) => item.id)).toEqual(['m-1']);
+  });
+});
+
+describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () => {
+  it('сообщение без replyTo — reply: null', () => {
+    const entry = entryOf({ messages: [message('m-1'), message('m-2', { from: 's-02' })] });
+    expect(build(entry).messages.map((item) => item.reply)).toEqual([null, null]);
+  });
+
+  it('ответ на вопрос человека: оригинал найден, подпись «You», выдержка — первый абзац текста', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          text: 'Что с миграцией?\nИ ещё вопрос\n\nВторой абзац',
+          kind: 'question',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', {
+          from: 's-02',
+          to: ['human'],
+          text: 'Готово',
+          replyTo: 'm-1',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+      ],
+    });
+    const [question, answer] = build(entry).messages;
+    expect(question?.reply).toBeNull();
+    expect(answer?.reply).toEqual({
+      id: 'm-1',
+      from: 'You',
+      excerpt: 'Что с миграцией? И ещё вопрос',
+      found: true,
+    });
+  });
+
+  it('подпись оригинала — как у сообщения в ленте: ярлык с номером, Parley у системной строки, «(deleted)» у удалённой сессии', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 's-03', text: 'Ревью готово', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 'system',
+          to: ['human'],
+          text: 'You accepted the decision',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', { from: 's-05', text: 'Ушла', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-4', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:04:00.000Z' }),
+        message('m-6', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:05:00.000Z' }),
+      ],
+    });
+    entry.map.work.deletedSessions = ['s-05'];
+    const replies = build(entry)
+      .messages.slice(3)
+      .map((item) => item.reply);
+    expect(replies.map((reply) => [reply?.from, reply?.excerpt, reply?.found])).toEqual([
+      ['S03 ревью', 'Ревью готово', true],
+      ['Parley', 'You accepted the decision', true],
+      ['S05 (deleted)', 'Ушла', true],
+    ]);
+  });
+
+  it('оригинал из другой комнаты или несуществующий — found: false, подпись и выдержка пусты, id остаётся', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { roomId: 'r-02', text: 'В чужой комнате', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', { roomId: null, text: 'Без комнаты', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-3', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-4', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-99', at: '2026-09-27T09:04:00.000Z' }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages.map((item) => item.id)).toEqual(['m-3', 'm-4', 'm-5']);
+    expect(messages.map((item) => item.reply)).toEqual([
+      { id: 'm-1', from: '', excerpt: '', found: false },
+      { id: 'm-2', from: '', excerpt: '', found: false },
+      { id: 'm-99', from: '', excerpt: '', found: false },
+    ]);
+  });
+
+  it('порядок хранения не важен: оригинал ищется и когда лежит в массиве позже ответа', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-1', { text: 'Вопрос', at: '2026-09-27T09:00:00.000Z' }),
+      ],
+    });
+    const [question, answer] = build(entry).messages;
+    expect(question?.id).toBe('m-1');
+    expect(answer?.reply).toEqual({ id: 'm-1', from: 'You', excerpt: 'Вопрос', found: true });
+  });
+
+  it('выдержка из оригинала: разметка снята, упоминания — ярлыками участников, как у чипов ленты', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          text: '## **@s02**, @human и @s09: что с [API](https://example.com)?',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages[1]?.reply).toEqual({
+      id: 'm-1',
+      from: 'S01 архитектор',
+      excerpt: '@S02 бэкенд, @you и @S09: что с API?',
+      found: true,
+    });
+  });
+
+  it('выдержка из оригинала — по правилам excerpt.ts: разрыв и пустой блок кода пропущены, флажок снят, упоминание в коде остаётся кодом', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          text: '---\n> ```ts\n- [ ] проверить `@human` и @s02',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages[1]?.reply?.excerpt).toBe('проверить @human и @S02 бэкенд');
+  });
+
+  it('выдержка — из того же разбора, что лента: @human в подписи ссылки и в коде остаётся буквальным', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', {
+          from: 's-01',
+          text: 'Спросить [@human](https://example.com) про `@human` и @human',
+          at: '2026-09-27T09:00:00.000Z',
+        }),
+        message('m-2', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages[1]?.reply?.excerpt).toBe('Спросить @human про @human и @you');
+  });
+
+  it('оригинал человека: его @human в цитате — текст, как в ленте; у агента и системной строки — «@you»', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { text: 'Сам себе, @human', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 's-01',
+          text: 'Нужен ответ, @human',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', {
+          from: 'system',
+          to: ['human'],
+          text: 'Writing to @human',
+          at: '2026-09-27T09:02:00.000Z',
+        }),
+        message('m-4', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-5', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:04:00.000Z' }),
+        message('m-6', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:05:00.000Z' }),
+      ],
+    });
+    const replies = build(entry).messages.slice(3);
+    expect(replies.map((item) => item.reply?.excerpt)).toEqual([
+      'Сам себе, @human',
+      'Нужен ответ, @you',
+      'Writing to @you',
+    ]);
+  });
+
+  it('ответ на ответ: цитата ведёт к ближайшему сообщению, а не по цепочке; текст самого ответа не подмешивается', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { text: 'Первый вопрос', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', {
+          from: 's-02',
+          replyTo: 'm-1',
+          text: 'Первый ответ',
+          at: '2026-09-27T09:01:00.000Z',
+        }),
+        message('m-3', {
+          from: 's-03',
+          replyTo: 'm-2',
+          text: 'Второй ответ',
+          at: '2026-09-27T09:02:00.000Z',
+        }),
+      ],
+    });
+    const messages = build(entry).messages;
+    expect(messages[2]?.reply).toEqual({
+      id: 'm-2',
+      from: 'S02 бэкенд',
+      excerpt: 'Первый ответ',
+      found: true,
+    });
+    expect(messages[2]?.text).toBe('Второй ответ');
   });
 });
 

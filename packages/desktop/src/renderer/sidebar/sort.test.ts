@@ -6,7 +6,15 @@ import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../t
 import { buildSections, cardRows, compareWorks, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
-  return { level, needsYou: 0, unseen: 0, humanUnread: 0, roomsUnread: {}, lastEventAt };
+  return {
+    level,
+    needsYou: 0,
+    unseen: 0,
+    humanUnread: 0,
+    roomsUnread: {},
+    roomMentions: {},
+    lastEventAt,
+  };
 }
 
 function work(projectPath: string, id: string, status: WorkStatus = 'active', createdAt = '2026-09-27T08:00:00.000Z'): WorkEntry {

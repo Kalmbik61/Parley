@@ -3,13 +3,22 @@
  * меню и его фильтр. DOM-часть редактора проверяет `Composer.test.tsx`.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { contrastRatio } from '../../test-utils/contrast.js';
+import { parseTokens, resolveColor, type Theme } from '../../test-utils/css-tokens.js';
 import {
+  HUMAN_MENTION_CHIP_CLASS,
+  MENTION_CHIP_CLASS,
   MENTION_QUERY_MAX,
   filterMentions,
   findMentionQuery,
   mentionToken,
+  splitFeedMentions,
   splitMentions,
+  type FeedSegment,
   type TextSegment,
 } from './mention.js';
 
@@ -47,6 +56,130 @@ describe('splitMentions — токены в тексте (поле ввода и
     expect(splitMentions('(@s02)')).toEqual([text('('), mention('s-02', '@s02'), text(')')]);
     expect(splitMentions('раз\n@s03')).toEqual([text('раз\n'), mention('s-03', '@s03')]);
   });
+});
+
+describe('@human — упоминание человека (Parley 0.3.0)', () => {
+  const human = (raw: string): FeedSegment => ({ kind: 'human', raw });
+  const mention = (sessionId: string, raw: string): FeedSegment => ({
+    kind: 'mention',
+    sessionId,
+    raw,
+  });
+  const text = (value: string): FeedSegment => ({ kind: 'text', text: value });
+
+  it('splitFeedMentions: @human — свой сегмент, упоминания сессий — как у splitMentions', () => {
+    expect(splitFeedMentions('@human, глянь')).toEqual([human('@human'), text(', глянь')]);
+    expect(splitFeedMentions('@s02 и @Human')).toEqual([
+      mention('s-02', '@s02'),
+      text(' и '),
+      human('@Human'),
+    ]);
+    expect(splitFeedMentions('(@HUMAN)')).toEqual([text('('), human('@HUMAN'), text(')')]);
+  });
+
+  it('@ внутри слова, email и продолжение слова упоминанием человека не считаются', () => {
+    for (const value of [
+      'user@human.dev',
+      'a@human',
+      '@humans',
+      '@human_team',
+      '@human2',
+      '@@human',
+      '@s02@human',
+    ]) {
+      expect(
+        splitFeedMentions(value).some((segment) => segment.kind === 'human'),
+        value,
+      ).toBe(false);
+    }
+  });
+
+  it('поле ввода человека @human не трогает: splitMentions оставляет его текстом', () => {
+    expect(splitMentions('@human @s02')).toEqual([text('@human '), mention('s-02', '@s02')]);
+  });
+
+  // Что из текста лента вырежет чипом «@you», а что нет, решает разбор Markdown (`room-remark.ts`): здесь только
+  // разбор токенов в тексте одного узла, и он ничего не теряет.
+  it('сегменты splitFeedMentions склеиваются в исходный текст: ничего не теряется и не добавляется', () => {
+    const samples = [
+      '',
+      '@human',
+      'вопрос к @human: что дальше?',
+      'раз\n@human\nдва',
+      '**@human** решай',
+      '@s02 @human @s-03',
+      'user@human.dev',
+      '@humans и @human_',
+      '@s02@human',
+      '@human@human',
+      'нет упоминаний',
+      '@ human',
+      '`@human` в коде',
+    ];
+    for (const value of samples) {
+      const joined = splitFeedMentions(value)
+        .map((segment) => (segment.kind === 'text' ? segment.text : segment.raw))
+        .join('');
+      expect(joined, value).toBe(value);
+    }
+  });
+});
+
+/**
+ * Чип «@you» (Parley 0.3.0): форма та же, что у чипа сессии, но заливка плотная — пара главной кнопки, `--primary` и
+ * `--primary-foreground`. Пару тест читает из самого класса, поэтому правка класса без правки токенов ловится здесь.
+ */
+describe('HUMAN_MENTION_CHIP_CLASS — чип «@you»', () => {
+  const tokens = parseTokens(
+    readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../styles/tokens.css'),
+      'utf8',
+    ),
+  );
+  const classes = HUMAN_MENTION_CHIP_CLASS.split(/\s+/);
+  const solid = (theme: Theme, name: string): [number, number, number] => {
+    const { rgb, alpha } = resolveColor(tokens, theme, name);
+    if (alpha !== 1) throw new Error(`${name} (${theme}) прозрачный: alpha ${alpha}`);
+    return rgb;
+  };
+
+  it('форма та же, что у чипа сессии: пилюля, без переноса, с обрезкой', () => {
+    for (const token of [
+      'mx-px',
+      'inline-block',
+      'max-w-full',
+      'overflow-hidden',
+      'text-ellipsis',
+      'whitespace-nowrap',
+      'rounded-full',
+      'px-[7px]',
+      'align-bottom',
+      'font-semibold',
+    ]) {
+      expect(MENTION_CHIP_CLASS.split(/\s+/), `у чипа сессии: ${token}`).toContain(token);
+      expect(classes, token).toContain(token);
+    }
+  });
+
+  it('заметнее чипа сессии: плотная заливка акцентом (пара главной кнопки), а не подкраска 22 %', () => {
+    expect(classes).toContain('bg-primary');
+    expect(classes).toContain('text-primary-foreground');
+    expect(classes.some((token) => token.startsWith('bg-[color-mix'))).toBe(false);
+  });
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme}: текст чипа на его заливке — не ниже 4.5:1`, () => {
+      expect(
+        contrastRatio(solid(theme, '--primary-foreground'), solid(theme, '--primary')),
+      ).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it(`${theme}: заливка чипа к листу центра, на котором стоит лента, — не ниже 3:1`, () => {
+      expect(
+        contrastRatio(solid(theme, '--primary'), solid(theme, '--sheet')),
+      ).toBeGreaterThanOrEqual(3);
+    });
+  }
 });
 
 describe('findMentionQuery — когда открывается меню (2.3)', () => {

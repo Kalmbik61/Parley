@@ -21,6 +21,22 @@ All notable changes to Parley are documented in this file.
 
 Replace the app, open it and restart the host when the window asks ("Restart host…"; live agents are interrupted and come back with `--resume`). Until then the host keeps running from the old app. Chat view needs Claude Code 2.1.286 or newer; existing sessions open in Chat after the host restart.
 
+## 0.3.0
+
+### Added
+
+- **Replies with a quote.** When an agent answers a particular message in a room — above all your question — a one-line quote of it stands above the answer: "↩ You: …", taken from the start of the original as the feed shows it. A click on the quote scrolls the feed to the original and highlights it once it is on screen. Agents do this with the new `replyTo` parameter of `send_message`. The guide, the `parley` skill and the starting brief of a session ask them to use it when they answer, and to answer you in the room without `to`. If an agent misspells the parameter (`reply_to`), the message still goes out, and the agent is told which field was ignored and what it probably meant.
+- **`@human` is you.** When an agent writes `@human` in a room, the feed shows a "@you" chip, and the message counts as a message to you. It is in the `✉` counter of the workspace card and in the Dock badge; with only such mentions the counter shows `@`, and a click opens the room. The room's row in the sidebar says "@you · N new", and the `#` menu of the card marks such a room with `@`. A notification "S02 mentioned you in {room}" arrives, one per room, under the setting now called "mail and mentions to you". A room opens at the earliest mention you have not read. `@human` inside code or a link stays text and counts for nothing — the window reads it the same way the feed draws it — and so does `@human` in your own message. The guide asks agents to write `@human` only when they need your answer or attention.
+
+### Fixed
+
+- The room feed jumped to the bottom on every new message and every new decision, even while you were reading above — for example, a question you had just opened from a quote. Now it stays where you are: a `↓N` button over the bottom of the feed counts what came, and a click takes you down. At the bottom the feed follows new messages as before, and your own message always takes you down.
+- A message or a letter whose Markdown could not be drawn — for example, thousands of nested quotes — took the whole room or mail tab down to an error screen. Now such a message shows as plain text, and so does any text with quotes nested deeper than 100 levels, which used to take seconds to draw.
+
+### Updating from 0.2.x
+
+Replace the app and restart the host when the window asks ("Restart host…"). Agents that were already running get `replyTo` and the new guide when they come back after the restart.
+
 ## 0.2.0
 
 ### Added

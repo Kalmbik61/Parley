@@ -4,10 +4,10 @@
  * текстом: правила письма (`Letter.tsx`), `rehype-raw` нет.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import ReactMarkdown from 'react-markdown';
-import { MENTION_CHIP_CLASS } from './mention.js';
+import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 
 // Счётчик разборов: `react-markdown` зовётся как раньше, но каждая его отрисовка — один разбор текста.
@@ -186,6 +186,186 @@ describe('RoomMarkdown — упоминания', () => {
     expect(container.querySelector('[data-mention]')?.textContent).toBe('@S02 бэкенд');
     rerender(<RoomMarkdown text="@s02" labelOf={() => 'S02 тесты'} onOpenExternal={() => {}} />);
     expect(container.querySelector('[data-mention]')?.textContent).toBe('@S02 тесты');
+  });
+});
+
+describe('RoomMarkdown — упоминание человека @human (Parley 0.3.0)', () => {
+  const humanChips = (root: ParentNode): HTMLElement[] =>
+    Array.from(root.querySelectorAll<HTMLElement>('[data-mention-human]'));
+
+  it('@human — чип «@you»: data-mention-human, подсказка «Mentions you» (aria-label нет: у span нет роли), вид плотнее чипа сессии', () => {
+    const { container } = renderText('Вопрос к @human: что дальше?');
+    const [chip] = humanChips(container);
+    expect(humanChips(container)).toHaveLength(1);
+    expect(chip?.tagName).toBe('SPAN');
+    expect(chip?.getAttribute('data-mention-human')).toBe('');
+    expect(chip?.textContent).toBe('@you');
+    expect(chip?.getAttribute('title')).toBe('Mentions you');
+    expect(chip?.hasAttribute('aria-label')).toBe(false);
+    expect(chip?.hasAttribute('role')).toBe(false);
+    expect(chip?.className).toBe(HUMAN_MENTION_CHIP_CLASS);
+    expect(chip?.className).not.toBe(MENTION_CHIP_CLASS);
+    expect(container.querySelector('[data-mention]')).toBeNull();
+    expect(container.textContent).toBe('Вопрос к @you: что дальше?');
+  });
+
+  it('регистр не важен: @Human и @HUMAN — тоже чипы', () => {
+    const { container } = renderText('@Human и @HUMAN');
+    expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you', '@you']);
+    expect(container.textContent).toBe('@you и @you');
+  });
+
+  it('@humans, @human_team, user@human.dev и a@human остаются текстом, чипа нет', () => {
+    for (const text of ['@humans', '@human_team', 'user@human.dev', 'a@human']) {
+      const { container, unmount } = renderText(text);
+      expect(humanChips(container), text).toEqual([]);
+      expect(container.textContent, text).toBe(text);
+      unmount();
+    }
+  });
+
+  it('`@human` в инлайн-коде и в блоке кода — буквальный текст, чипа нет', () => {
+    const { container } = renderText('Токен `@human` в коде\n\n```\n@human в блоке\n```');
+    expect(humanChips(container)).toEqual([]);
+    expect(container.querySelector('p code')?.textContent).toBe('@human');
+    expect(container.querySelector('pre code')?.textContent).toContain('@human в блоке');
+  });
+
+  it('в подписи ссылки `@human` — текст ссылки, а не чип: внутри <a> он открывал бы ссылку', () => {
+    const { container } = renderText('[спросить @human](https://example.com/ask)');
+    expect(humanChips(container)).toEqual([]);
+    expect(screen.getByRole('link', { name: 'спросить @human' })).toBeTruthy();
+  });
+
+  it('рядом с @s02 — оба чипа, каждый своего вида; порядок слов сохранён', () => {
+    const { container } = renderText('@s02, @human и @s03 — смотрите');
+    const chips = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-mention], [data-mention-human]'),
+    );
+    expect(chips.map((chip) => chip.textContent)).toEqual(['@S02 бэкенд', '@you', '@S03 ревью']);
+    expect(chips.map((chip) => chip.className)).toEqual([
+      MENTION_CHIP_CLASS,
+      HUMAN_MENTION_CHIP_CLASS,
+      MENTION_CHIP_CLASS,
+    ]);
+    expect(container.textContent).toBe('@S02 бэкенд, @you и @S03 ревью — смотрите');
+  });
+
+  it('чип стоит и внутри жирного, и в пункте списка, и после переноса строки', () => {
+    const { container } = renderText('**@human**\n\n- @human — решай\n\nраз\n@human');
+    expect(container.querySelector('strong [data-mention-human]')).not.toBeNull();
+    expect(container.querySelector('li [data-mention-human]')).not.toBeNull();
+    const last = Array.from(container.querySelectorAll('p')).at(-1) as HTMLElement;
+    expect(last.querySelector('br')).not.toBeNull();
+    expect(last.querySelector('[data-mention-human]')).not.toBeNull();
+  });
+
+  it('строчный вид (плашка решений) рисует тот же чип «@you»', () => {
+    const { container } = render(
+      <RoomMarkdown
+        inline
+        text="**Решение:** @human, глянь"
+        labelOf={labelOf}
+        onOpenExternal={() => {}}
+      />,
+    );
+    expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you']);
+    expect(container.textContent).toBe('Решение: @you, глянь');
+  });
+
+  it('перерисовка с новыми колбэками не разбирает текст заново и не пересоздаёт чип', () => {
+    const text = '@human, ответьте';
+    const view = render(<RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={() => {}} />);
+    const chip = humanChips(view.container)[0];
+    const first = parses();
+    view.rerender(
+      <RoomMarkdown text={text} labelOf={(id) => labelOf(id)} onOpenExternal={() => {}} />,
+    );
+    expect(parses()).toBe(first);
+    expect(humanChips(view.container)[0]).toBe(chip);
+  });
+
+  describe('свой @human человека — текст, а не чип: humanChips={false}', () => {
+    const renderOwn = (text: string, inline = false) =>
+      render(
+        <RoomMarkdown
+          text={text}
+          inline={inline}
+          humanChips={false}
+          labelOf={labelOf}
+          onOpenExternal={() => {}}
+        />,
+      );
+
+    it('@human остаётся текстом, как написан: без чипа, без «@you», регистр сохранён', () => {
+      const { container } = renderOwn('Вопрос к @human: что дальше? @Human и @HUMAN');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('[title="Mentions you"]')).toBeNull();
+      expect(container.textContent).toBe('Вопрос к @human: что дальше? @Human и @HUMAN');
+    });
+
+    it('чипы сессий остаются: правило касается только @human', () => {
+      const { container } = renderOwn('@s02, @human и @s03 — смотрите');
+      expect(container.querySelectorAll('[data-mention]')).toHaveLength(2);
+      expect(humanChips(container)).toEqual([]);
+      expect(container.textContent).toBe('@S02 бэкенд, @human и @S03 ревью — смотрите');
+    });
+
+    it('в выделении, заголовке, пункте и после переноса строки — тоже текст; перенос остаётся переносом', () => {
+      const { container } = renderOwn('# @human\n\n**@human**\n\n- @human — решай\n\nраз\n@human');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('h1')?.textContent).toBe('@human');
+      expect(container.querySelector('strong')?.textContent).toBe('@human');
+      expect(container.querySelector('li')?.textContent).toBe('@human — решай');
+      const last = Array.from(container.querySelectorAll('p')).at(-1) as HTMLElement;
+      expect(last.querySelector('br')).not.toBeNull();
+      expect(last.textContent).toBe('раз\n@human');
+    });
+
+    it('код, ссылка и email — как и без правила: буквальный текст', () => {
+      const { container } = renderOwn('`@human`, [спросить @human](https://example.com), a@human');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('code')?.textContent).toBe('@human');
+      expect(screen.getByRole('link', { name: 'спросить @human' })).toBeTruthy();
+      expect(container.textContent).toBe('@human, спросить @human, a@human');
+    });
+
+    it('строчный вид (плашка решений) — тот же текст без чипа', () => {
+      const { container } = renderOwn('**Решение:** @human, глянь', true);
+      expect(humanChips(container)).toEqual([]);
+      expect(container.textContent).toBe('Решение: @human, глянь');
+    });
+
+    it('humanChips={true} и значение по умолчанию — чип, как было', () => {
+      const { container } = render(
+        <RoomMarkdown text="@human" humanChips labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you']);
+    });
+
+    it('правило входит в мемоизацию разбора: смена humanChips разбирает текст заново, тот же — нет', () => {
+      const text = '@human, ответьте';
+      const view = render(<RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={() => {}} />);
+      expect(humanChips(view.container)).toHaveLength(1);
+      const first = parses();
+
+      view.rerender(
+        <RoomMarkdown text={text} humanChips={false} labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(parses()).toBe(first + 1);
+      expect(humanChips(view.container)).toEqual([]);
+      expect(view.container.textContent).toBe('@human, ответьте');
+
+      view.rerender(
+        <RoomMarkdown
+          text={text}
+          humanChips={false}
+          labelOf={(id) => labelOf(id)}
+          onOpenExternal={() => {}}
+        />,
+      );
+      expect(parses()).toBe(first + 1);
+    });
   });
 });
 
@@ -706,5 +886,123 @@ describe.each([
     );
     expect(words.length).toBeGreaterThan(0);
     expect(words.filter((word) => !text.includes(word))).toEqual([]);
+  });
+});
+
+describe('RoomMarkdown — Markdown, который не удалось отрисовать (Parley 0.3.0)', () => {
+  const fallbackOf = (root: ParentNode): HTMLElement | null =>
+    root.querySelector<HTMLElement>('[data-markdown-fallback]');
+
+  // React логирует пойманную ошибку в консоль — тестовому выводу это не нужно.
+  let errorSpy: MockInstance;
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it('тысячи вложенных «>» не роняют отрисовку: текст виден — Markdown или сырой, смотря как велик стек', () => {
+    const text = `${'>'.repeat(5000)} текст`;
+    const { container } = renderText(text);
+    const root = container.querySelector('[data-room-markdown]') as HTMLElement;
+    expect(root).not.toBeNull();
+    expect(container.textContent).toContain('текст');
+    // Стек переполнился — в корне сырой текст; не переполнился — цитаты Markdown. Третьего нет.
+    const fallback = fallbackOf(container);
+    if (fallback === null) expect(container.querySelector('blockquote')).not.toBeNull();
+    else expect(fallback.textContent).toBe(text);
+  }, 20_000);
+
+  describe('сбой отрисовки Markdown (react-markdown падает, как его роняет вложенность глубже стека)', () => {
+    /** Текст с этим началом роняет `react-markdown`, прочие он рисует как обычно. */
+    const BAD = 'СБОЙ: ';
+    const real = vi.mocked(ReactMarkdown).getMockImplementation();
+    beforeEach(() => {
+      vi.mocked(ReactMarkdown).mockImplementation((props) => {
+        if (String(props.children).startsWith(BAD)) {
+          throw new RangeError('Maximum call stack size exceeded');
+        }
+        return (real as NonNullable<typeof real>)(props);
+      });
+    });
+    afterEach(() => {
+      if (real !== undefined) vi.mocked(ReactMarkdown).mockImplementation(real);
+    });
+
+    it('вместо Markdown — сырой текст как есть: whitespace-pre-wrap, внутри корня с той же типографикой', () => {
+      const text = `${BAD}**жирный** и @s02\n\n- пункт\n> цитата`;
+      const { container } = renderText(text);
+      const fallback = fallbackOf(container);
+      expect(fallback?.textContent).toBe(text);
+      expect(fallback?.className).toContain('whitespace-pre-wrap');
+      expect(container.querySelector('strong, li, blockquote, [data-mention]')).toBeNull();
+      // Корень на месте — размер и перенос слов от него, цвет — от окружения, как у отрисованного текста.
+      const root = container.querySelector('[data-room-markdown]') as HTMLElement;
+      expect(root.contains(fallback)).toBe(true);
+      expect(root.className).toContain('text-sm');
+      expect(root.className).toContain('[overflow-wrap:anywhere]');
+    });
+
+    it('в строчном виде (плашка решений) — тоже сырой текст, корень остаётся span', () => {
+      const { container } = render(
+        <RoomMarkdown inline text={`${BAD}текст`} labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(fallbackOf(container)?.textContent).toBe(`${BAD}текст`);
+      expect((container.firstElementChild as HTMLElement).tagName).toBe('SPAN');
+      expect(container.querySelector('div')).toBeNull();
+    });
+
+    it('смена текста сбрасывает границу: нормальный текст снова рисуется Markdown, а упавший — опять сырым', () => {
+      const view = render(
+        <RoomMarkdown text={`${BAD}раз`} labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(fallbackOf(view.container)).not.toBeNull();
+
+      view.rerender(
+        <RoomMarkdown text="**жирный** текст" labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(fallbackOf(view.container)).toBeNull();
+      expect(view.container.querySelector('strong')?.textContent).toBe('жирный');
+
+      view.rerender(
+        <RoomMarkdown text={`${BAD}два`} labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(fallbackOf(view.container)?.textContent).toBe(`${BAD}два`);
+    });
+
+    it('перерисовка с новыми колбэками упавший текст заново не разбирает', () => {
+      const text = `${BAD}текст`;
+      const view = render(<RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={() => {}} />);
+      const first = parses();
+      view.rerender(
+        <RoomMarkdown text={text} labelOf={(id) => labelOf(id)} onOpenExternal={() => {}} />,
+      );
+      expect(parses()).toBe(first);
+      expect(fallbackOf(view.container)?.textContent).toBe(text);
+    });
+
+    it('упало одно сообщение — соседнее рисуется как обычно: жирный, чип сессии и чип «@you»', () => {
+      const { container } = render(
+        <>
+          <RoomMarkdown text={`${BAD}упавшее`} labelOf={labelOf} onOpenExternal={() => {}} />
+          <RoomMarkdown
+            text="**жирный**, @s02 и @human"
+            labelOf={labelOf}
+            onOpenExternal={() => {}}
+          />
+        </>,
+      );
+      expect(container.querySelectorAll('[data-markdown-fallback]')).toHaveLength(1);
+      expect(container.querySelector('strong')?.textContent).toBe('жирный');
+      expect(container.querySelector('[data-mention="s-02"]')?.textContent).toBe('@S02 бэкенд');
+      expect(container.querySelector('[data-mention-human]')?.textContent).toBe('@you');
+    });
+  });
+
+  it('здоровый текст границы не замечает: запасного вида нет', () => {
+    const { container } = renderText('**жирный** и @human');
+    expect(fallbackOf(container)).toBeNull();
+    expect(container.querySelector('[data-mention-human]')).not.toBeNull();
   });
 });

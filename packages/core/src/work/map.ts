@@ -177,12 +177,18 @@ export interface NewMessage {
   kind?: MessageKind;
   /** Комната письма; без неё письмо прямое. */
   roomId?: string | null;
+  /**
+   * Ответ на сообщение этой комнаты (Parley 0.3.0): id того, над чем окно рисует цитату. Принадлежность
+   * сообщения комнате проверяет вызывающий; без `replyTo` ключа в письме не будет.
+   */
+  replyTo?: string;
 }
 
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
 export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
   // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
+  // По той же причине `replyTo` дописывается только заданный.
   const message: Message = {
     id: nextMessageId(map),
     roomId: init.roomId ?? null,
@@ -192,6 +198,7 @@ export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISO
     kind: init.kind ?? 'note',
     at,
     readBy: {},
+    ...(init.replyTo === undefined ? {} : { replyTo: init.replyTo }),
   };
   map.messages.push(message);
   return message;

@@ -155,7 +155,8 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
       };
     }
     case 'mail': {
-      // Письма без комнаты, которые человек ещё не прочёл, — те же, что считает `✉N` карточки.
+      // Письма без комнаты, которые человек ещё не прочёл: вкладка показывает только их. `✉N` карточки считает больше —
+      // ещё и упоминания `@human` в комнатах (`WorkAttention.humanUnread`): они живут во вкладке своей комнаты.
       const unread = entry !== null && humanUnreadLetters(entry.map).length > 0;
       return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty, tint: unread ? 'accent' : null };
     }

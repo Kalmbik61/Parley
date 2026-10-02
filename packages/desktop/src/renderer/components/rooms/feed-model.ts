@@ -15,18 +15,28 @@
  * Чем занят участник (`doing`, `doingDetail`) — из тех же метрик (`tasks`, `waitingFor`, Parley 0.2.0): живой
  * субагент или ожидание `wait_for`. Только у живой сессии: у закрытой и спящей метрики — след прошлого процесса.
  * `agents` — те же субагенты списком для поповера на строке `doing` (кусок 4b плана 2026-10-01).
+ *
+ * Ответ (`Message.replyTo`, Parley 0.3.0): у сообщения-ответа модель несёт цитату — подпись и выдержку оригинала
+ * (`replyExcerpt`: тот же разбор Markdown, что у ленты, и то же правило `@human` по отправителю — у сообщения человека
+ * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
 import type { MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
 import { refKey, type LiveTask } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
-import { isHumanUnread, sessionAttention, type Attention } from '../../attention/derive.js';
+import {
+  isHumanMention,
+  isHumanUnread,
+  sessionAttention,
+  type Attention,
+} from '../../attention/derive.js';
 import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../../lib/participant.js';
 import { modelName } from '../../lib/participant-tag.js';
 import { roomLiveLead } from '../../lib/room-lead.js';
 import type { ActivityEntry } from '../../store/activity.js';
+import { replyExcerpt } from './excerpt.js';
 
 // Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
@@ -73,6 +83,18 @@ export interface ParticipantModel {
   closed: boolean;
 }
 
+/** Цитата над сообщением-ответом: на что оно отвечает. */
+export interface ReplyModel {
+  /** Id оригинала — по нему кнопка цитаты ведёт к сообщению. */
+  id: string;
+  /** Подпись отправителя оригинала, как в ленте: `You`, `Parley`, `S02 бэкенд`. У пропавшего оригинала — пусто. */
+  from: string;
+  /** Выдержка из текста оригинала (`replyExcerpt`). Пусто у пропавшего и у оригинала без текста — цитата тогда одна подпись. */
+  excerpt: string;
+  /** Оригинал лежит в этой же комнате. */
+  found: boolean;
+}
+
 export interface MessageModel {
   id: string;
   /** Для аватара; `provider` — только у агента с известной сессией. */
@@ -93,8 +115,16 @@ export interface MessageModel {
    * отличается системной строкой: точки у неё нет, а счётчик сайдбара, пока она не отмечена, — есть.
    */
   needsRead: boolean;
+  /**
+   * Агент назвал человека в сообщении (`@human`) — по тому же правилу, что чип «@you» ленты и счётчик «для тебя»
+   * (`isHumanMention`); прочитано оно или нет, говорит `unread`. Открытие комнаты ведёт к самому раннему непрочитанному
+   * такому сообщению (`RoomPanel.tsx`).
+   */
+  mentionsYou: boolean;
   /** Теги (`S02`) живых адресатов-агентов, которые ещё не подхватили сообщение (`readBy`). */
   waiting: string[];
+  /** Цитата, если сообщение — ответ (`Message.replyTo`); `null` — не ответ. */
+  reply: ReplyModel | null;
 }
 
 export interface ProposalModel {
@@ -246,6 +276,30 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     workTitleText(map.work.title),
   ].join(' · ');
 
+  // Оригинал цитаты ищется только среди сообщений этой комнаты: id из другой комнаты — «оригинала нет».
+  const roomMessageById = new Map(
+    map.messages
+      .filter((message) => message.roomId === roomId)
+      .map((message) => [message.id, message] as const),
+  );
+  /** Ярлык упоминания в выдержке — как у чипа в ленте (`RoomPanel`): сессии нет в карте — `null`, берётся тег. */
+  const chipLabelOf = (sessionId: string): string | null => {
+    const session = map.sessions.find((candidate) => candidate.id === sessionId);
+    return session === undefined ? null : sessionRowLabel(sessionId, session.label);
+  };
+  const replyOf = (replyTo: string | undefined): ReplyModel | null => {
+    if (replyTo === undefined) return null;
+    const original = roomMessageById.get(replyTo);
+    if (original === undefined) return { id: replyTo, from: '', excerpt: '', found: false };
+    return {
+      id: original.id,
+      from: labelOf(map, original.from),
+      // Свой `@human` человека — текст, а не «@you»: то же правило по отправителю, что у `RoomMessage`.
+      excerpt: replyExcerpt(original.text, chipLabelOf, { humanChips: original.from !== HUMAN }),
+      found: true,
+    };
+  };
+
   const messages: MessageModel[] = map.messages
     .filter((message) => message.roomId === roomId)
     .sort((a, b) => a.at.localeCompare(b.at))
@@ -263,9 +317,11 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         text: message.text,
         unread: kind !== 'system' && isHumanUnread(message),
         needsRead: isHumanUnread(message),
+        mentionsYou: isHumanMention(message),
         waiting: recipientsOf(message, map)
           .filter((id) => id !== HUMAN && id !== SYSTEM && isAlive(map, id) && message.readBy[id] === undefined)
           .map(sessionTag),
+        reply: replyOf(message.replyTo),
       };
     });
 

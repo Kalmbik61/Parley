@@ -1,8 +1,9 @@
 /**
  * Уведомления macOS окна (кусок 4.3, спека 7.4): переход сессии в «ждёт тебя» или «закончил
  * ход», новое прямое письмо человеку, уведомления хоста о запуске сессии; с куска 8 «Organic» —
- * решение ведущего, которое ждёт человека в комнате (спека окна 2026-09-29, 1.10). Тексты — из
- * `shared/strings.ts`; название работы, ярлык, задача, итог и письмо — данные, идут как есть.
+ * решение ведущего, которое ждёт человека в комнате (спека окна 2026-09-29, 1.10); с Parley 0.3.0 —
+ * сообщение комнаты, где человека назвали через `@human`. Тексты — из `shared/strings.ts`; название
+ * работы и комнаты, ярлык, задача, итог и письмо — данные, идут как есть.
  * Русский `HostNotice.text` сюда не попадает: его пишет в консоль `store/notices.ts`.
  */
 
@@ -12,6 +13,7 @@ import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
+import { replyExcerpt } from '../components/rooms/excerpt.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
@@ -20,7 +22,14 @@ import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { humanUnreadLetters, roomAwaitsDecision, roomDecisionReturned, sessionAttention, type Attention } from './derive.js';
+import {
+  humanUnreadLetters,
+  humanUnreadMentions,
+  roomAwaitsDecision,
+  roomDecisionReturned,
+  sessionAttention,
+  type Attention,
+} from './derive.js';
 import { visibleSessions } from './seen.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
@@ -73,15 +82,19 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   /** Переход — по sessionAttention (3.2); первое значение сессии — база без уведомления. */
   onActivity(ref: SessionRef, activity: SessionActivity): void;
   /**
-   * Новые прямые письма человеку (isHumanUnread) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`,
-   * переделанное — по выросшему `rev` или по новому `id` после возврата на доработку); первый снимок — база.
+   * Новые прямые письма человеку (isHumanUnread), новые упоминания человека в комнатах (`@human`, по уведомлению на
+   * комнату) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`, переделанное — по выросшему `rev`
+   * или по новому `id` после возврата на доработку); первый снимок — база.
    */
   onWorks(entries: readonly WorkEntry[]): void;
   /** trust-wait, launch-failed, resume-failed; ref: null или сессии нет в снимке — без уведомления. */
   onHostNotice(notice: HostNotice): void;
 } {
   const levels = new Map<string /* refKey */, Attention>();
-  /** Письма прошлого снимка (`workKey` + id: id писем уникальны только в работе); null — снимка ещё не было. */
+  /**
+   * Письма и сообщения комнат прошлого снимка (`workKey` + id: id сообщений уникальны только в работе); null — снимка
+   * ещё не было.
+   */
   let knownLetters: Set<string> | null = null;
   /**
    * Решения комнат, о которых окно знает: `workKey` + id комнаты → решение (`id`, `rev`) и ждёт ли оно ещё; null —
@@ -196,7 +209,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       const known = knownLetters;
       knownLetters = current;
       trackDecisions(entries);
-      // Письма, которые уже были на старте окна, не уведомляют.
+      // Письма и упоминания, которые уже были на старте окна, не уведомляют.
       if (known === null || !deps.prefs().mail) return;
       for (const entry of entries) {
         const key = workKey(entry.projectPath, entry.map.work.id);
@@ -210,6 +223,33 @@ export function createAttentionNotifier(deps: NotifyDeps): {
           tag: `mail:${key}`,
           target: { kind: 'mail', projectPath: entry.projectPath, workId: entry.map.work.id },
         });
+      }
+      // Упоминания человека в комнатах (`@human`): одно уведомление на комнату (тег `mention:<workKey>:<roomId>`),
+      // текст — выдержка (`replyExcerpt`, как у цитаты ответа) из самого позднего нового упоминания. Настройка та же,
+      // что у писем человеку.
+      for (const { projectPath, map } of entries) {
+        const key = workKey(projectPath, map.work.id);
+        const fresh = humanUnreadMentions(map).filter(
+          (message) => !known.has(`${key}\u0000${message.id}`),
+        );
+        // Подписи упоминаний в выдержке — по карте работы, как у чипов ленты: сессии нет в карте — берётся тег.
+        const labelOf = (sessionId: string): string | null => {
+          const found = map.sessions.find((candidate) => candidate.id === sessionId);
+          return found === undefined ? null : sessionRowLabel(sessionId, found.label);
+        };
+        for (const room of map.rooms) {
+          const latest = fresh.findLast((message) => message.roomId === room.id);
+          if (latest === undefined) continue;
+          send({
+            title: S.notifications.mentionTitle(
+              sessionTag(latest.from),
+              room.title === '' ? S.rooms.fallbackTitle : room.title,
+            ),
+            body: replyExcerpt(latest.text, labelOf),
+            tag: `mention:${key}:${room.id}`,
+            target: { kind: 'room', projectPath, workId: map.work.id, roomId: room.id },
+          });
+        }
       }
     },
 
