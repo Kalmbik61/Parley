@@ -29,6 +29,8 @@ import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createFeedService } from './feed/feed-service.js';
+import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
@@ -179,6 +181,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const unlinkTerminal = linkTerminalActivity(ptyManager, activityService);
   handle.context.onShutdown(async () => unlinkTerminal());
 
+  // Лента вида «Chat» (план 2026-10-01, Task 2): служба ленты и приёмник HTTP-хуков Claude Code. Приёмник
+  // заводится до сервиса сессий — запуск сессии берёт у него адрес и токен (`register`/`unregister`,
+  // подкусок 2c), — а слушает с шага 5а, до первого чтения работ и автозапуска.
+  const feedService = createFeedService({
+    host: handle.context,
+    works: worksService,
+    activity: activityService,
+    pty: ptyManager,
+  });
+  const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
+
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`.
   const sessionsService = createSessionsService(
@@ -188,6 +201,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activityService,
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
+  // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
+  // висящим хукам — `{}`, и приёмник закрывается.
+  handle.context.onShutdown(async () => {
+    await feedService.stop();
+    await hookServer.close();
+  });
 
   // Будильник (1.8, 3.4): печатает указатель на непрочитанные письма
   // простаивающему агенту без канала и поднимает спящих письмом. Останавливается
@@ -238,6 +257,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sessions: sessionsService,
     wake: wakeService,
     worktrees: worktreesService,
+    feed: feedService,
   });
   const server = createHostServer({
     context: handle.context,
@@ -270,6 +290,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     throw error;
   }
   await chmod(paths.socket, 0o600);
+
+  // 5а. Приёмник хуков ленты — до запуска сессий. Не поднялся — хост живёт без ленты: сессии
+  //     запускаются без HTTP-хуков (`hookServer.url()` — null), окно показывает терминал.
+  await hookServer.listen().catch((error: unknown) => {
+    log.error('приёмник хуков ленты не поднялся', { error: String(error) });
+  });
 
   // 6. pid-файл — уже замок из шага 3.
 

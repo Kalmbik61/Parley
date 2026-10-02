@@ -39,7 +39,7 @@ const request = { client: {} } as unknown as RequestInfo;
 const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 
 describe('методы на старте хоста ждут первого чтения работ (lane-r4, п. 4)', () => {
-  it('перечень: works.list, sessions.*, pty.attach/detach/send и activity.seen', () => {
+  it('перечень: works.list, sessions.*, pty.attach/detach/send, feed.* и activity.seen', () => {
     expect([...WORKS_GATED_METHODS].sort()).toEqual(
       [
         'works.list',
@@ -53,6 +53,11 @@ describe('методы на старте хоста ждут первого чт
         'pty.attach',
         'pty.detach',
         'pty.send',
+        // Лента вида «Chat» сверяет сессию со снимком работ.
+        'feed.snapshot',
+        'feed.subscribe',
+        'feed.unsubscribe',
+        'feed.decide',
       ].sort(),
     );
     expect([...WORKS_GATED_NOTIFICATIONS]).toEqual(['activity.seen']);

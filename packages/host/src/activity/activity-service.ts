@@ -86,6 +86,11 @@ export interface ActivityServiceOptions extends MetricsRoots {
 export interface ActivityService {
   start(): Promise<void>;
   get(ref: SessionRef): SessionLive | undefined;
+  /**
+   * Журнал сессии у провайдера по индексу логов (лента вида «Chat» сеет из него историю); `null` —
+   * сессии нет, `providerSessionId` ещё не известен или индекс журнала не знает.
+   */
+  logFile(ref: SessionRef): string | null;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -751,6 +756,12 @@ export function createActivityService(
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
+    logFile(ref) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      return session === undefined ? null : (logIndex.index(session)?.file ?? null);
+    },
     terminalStarted(ref) {
       if (stopped) return;
       const key = refKey(ref);

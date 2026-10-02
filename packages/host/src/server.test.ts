@@ -165,6 +165,10 @@ describe('список методов в hello', () => {
     // вступление в комнату и кнопки решения.
     expect(methods).toContain('rooms.addMember');
     expect(methods).toContain('rooms.resolveProposal');
+    // Лента вида «Chat» (план 2026-10-01, Task 2): без `feed.snapshot` окно вид Chat не предлагает.
+    for (const name of ['feed.snapshot', 'feed.subscribe', 'feed.unsubscribe', 'feed.decide']) {
+      expect(methods).toContain(name);
+    }
     client.close();
   });
 });
