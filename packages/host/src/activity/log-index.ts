@@ -84,7 +84,9 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
       const found = indexOf(session);
       return found === undefined
         ? null
-        : { lastRecordAt: found.endedAt, lastUserRecordAt: found.lastUserRecordAt };
+        : // Не `endedAt`: итоги хуков и длительность хода Claude Code пишет уже после `Stop`, и по ним
+          // закончившая ход сессия числилась бы `working` ещё порог тишины — письма ей всё это время ждали бы.
+          { lastRecordAt: found.lastWorkRecordAt, lastUserRecordAt: found.lastUserRecordAt };
     },
     onChange(listener) {
       listeners.add(listener);
