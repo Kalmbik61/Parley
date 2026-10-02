@@ -17,7 +17,9 @@ import { S } from '../../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { FeedList } from '../FeedList.js';
+import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { AgentItem, type Transcript } from './AgentItem.js';
+import { PromptItem } from './PromptItem.js';
 import { ToolItem } from './ToolItem.js';
 // Редьюсер и разбор журнала — прямо из исходников ленты core, а не из `@parley/core`: корневой модуль
 // тянет `work/mcp-config.ts`, а тот на загрузке строит путь из `import.meta.url`, которого под jsdom нет.
@@ -90,6 +92,7 @@ function agent(patch: Partial<FeedAgent> = {}): FeedAgent {
  */
 const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
 beforeEach(() => {
+  resetThumbnailCacheForTests();
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
     configurable: true,
     get(this: HTMLElement) {
@@ -238,6 +241,93 @@ describe('лента на фикстурах core', () => {
     expect(card.textContent).toContain('rm -rf build');
     expect(card.textContent).toContain(S.chat.waiting);
     expect(within(card).queryByRole('button')).toBeNull();
+  });
+});
+
+describe('PromptItem — вложения: хвостовые упоминания @"путь" чипами', () => {
+  const PNG = 'data:image/png;base64,AAAA';
+  const paths = (): Array<string | null> => screen.getAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'));
+
+  /** Элемент в окружении ленты с заданным мостом: миниатюры берутся у него. */
+  function renderPrompt(node: JSX.Element, fake: FakeBridge = createFakeBridge()): ReturnType<typeof render> {
+    return render(<ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>{node}</ChatEnvContext.Provider>);
+  }
+
+  it('текст и упоминания: чипы над текстом по порядку, самих путей в пузыре нет', () => {
+    renderPrompt(<PromptItem text={'what is this? @"/a/notes.txt" @"/a/b c.pdf" '} />);
+    expect(paths()).toEqual(['/a/notes.txt', '/a/b c.pdf']);
+    const bubble = screen.getByTestId('chat-prompt');
+    expect(bubble.textContent).not.toContain('@');
+    expect(bubble.textContent).not.toContain('/a/');
+    const text = screen.getByText('what is this?');
+    const firstChip = screen.getAllByTestId('chat-attachment')[0]!;
+    expect(firstChip.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('только упоминания — текста нет, в пузыре одни чипы', () => {
+    renderPrompt(<PromptItem text={'@"/a/notes.txt" '} />);
+    expect(paths()).toEqual(['/a/notes.txt']);
+    expect(screen.getByTestId('chat-prompt').textContent).toBe('notes.txt');
+  });
+
+  it('картинка — миниатюра из моста (без подписи пути), файл — чип с именем; без миниатюры картинка тоже чип', async () => {
+    const fake = createFakeBridge();
+    fake.setThumbnail('/h/drops/a.png', PNG);
+    renderPrompt(<PromptItem text={'look @"/h/drops/a.png" @"/a/doc.pdf" @"/h/drops/gone.png"'} />, fake);
+    await waitFor(() => expect(screen.getByRole('img', { name: 'a.png' }).getAttribute('src')).toBe(PNG));
+    const [shot, doc, gone] = screen.getAllByTestId('chat-attachment');
+    expect(shot!.hasAttribute('data-thumbnail')).toBe(true);
+    expect(screen.getByRole('img', { name: 'a.png' }).getAttribute('title')).toBe('/h/drops/a.png');
+    expect(doc!.textContent).toBe('doc.pdf');
+    expect(doc!.getAttribute('title')).toBe('/a/doc.pdf');
+    expect(gone!.textContent).toBe('gone.png');
+    expect(gone!.querySelector('img')).toBeNull();
+    expect(screen.getByTestId('chat-prompt').textContent).toBe('doc.pdfgone.pnglook');
+    // Миниатюру просят только у картинок, и по разу на путь.
+    expect([...fake.thumbnailCalls].sort()).toEqual(['/h/drops/a.png', '/h/drops/gone.png']);
+  });
+
+  it('вне окружения ленты (моста нет) промпт рисуется: чип без миниатюры, без исключения', () => {
+    render(<PromptItem text={'@"/h/drops/a.png" '} />);
+    expect(screen.getByTestId('chat-attachment').textContent).toBe('a.png');
+    expect(screen.queryByRole('img', { name: 'a.png' })).toBeNull();
+  });
+
+  it('упоминание посреди текста, относительные и shell-кавычки остаются текстом, чипов нет', () => {
+    renderPrompt(<PromptItem text={`see @"/a.png" and @src/a.ts or '/h/a #1.png' `} />);
+    expect(screen.queryByTestId('chat-attachment')).toBeNull();
+    expect(screen.getByTestId('chat-prompt').textContent).toBe(`see @"/a.png" and @src/a.ts or '/h/a #1.png'`);
+  });
+
+  it('серый элемент очереди — те же чипы, подпись «Queued» и текст без путей', () => {
+    renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} queued />);
+    const grey = screen.getByTestId('chat-queued');
+    expect(within(grey).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/a/notes.txt');
+    expect(grey.textContent).toBe(`notes.txtnext${S.chat.queued}`);
+  });
+
+  it('лента: промпт и серый элемент очереди рисуют упоминания чипами', () => {
+    renderWithEnv(
+      <div style={{ height: 600 }}>
+        <FeedList
+          items={[{ id: 'p', at: AT, kind: 'prompt', text: 'one @"/x/y.txt" ', images: 0 }]}
+          queued={[{ id: 'q1', text: 'two @"/x/z.txt" ' }]}
+          note={null}
+        />
+      </div>,
+    );
+    expect(within(screen.getByTestId('chat-prompt')).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/x/y.txt');
+    expect(within(screen.getByTestId('chat-queued')).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/x/z.txt');
+    expect(screen.getByTestId('chat-feed').textContent).not.toContain('/x/');
+  });
+
+  it('промпт без вложений — прежний вид: один текст; пустой текст с картинками — только подпись числа', () => {
+    renderPrompt(<PromptItem text={'  plain words\n'} />);
+    expect(screen.getByTestId('chat-prompt').textContent).toBe('plain words');
+    expect(screen.queryByTestId('chat-attachment')).toBeNull();
+    cleanup();
+    renderPrompt(<PromptItem text="" images={1} />);
+    expect(screen.getByTestId('chat-prompt').textContent).toBe(S.chat.images(1));
   });
 });
 

@@ -113,6 +113,7 @@ function setup(
   getUpdate: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
+  imageThumbnail: ReturnType<typeof vi.fn>;
   chooseFiles: ReturnType<typeof vi.fn>;
   setDirtyBuffers: ReturnType<typeof vi.fn>;
   answerClose: ReturnType<typeof vi.fn>;
@@ -159,6 +160,8 @@ function setup(
   // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
   const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
   const chooseFiles = vi.fn().mockResolvedValue(['/h/a.png']);
+  // Настоящий nativeImage тесты не зовут: модуль миниатюр проверяет `image-thumbnail.test.ts`.
+  const imageThumbnail = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
   const setDirtyBuffers = vi.fn();
   const answerClose = vi.fn();
   const roots: RootsRegistry =
@@ -196,6 +199,7 @@ function setup(
     roots,
     openPath,
     saveDropImage,
+    imageThumbnail,
     setDirtyBuffers,
     answerClose,
     browser: {
@@ -220,6 +224,7 @@ function setup(
     getUpdate,
     openPath,
     saveDropImage,
+    imageThumbnail,
     chooseFiles,
     setDirtyBuffers,
     answerClose,
@@ -453,6 +458,21 @@ describe('registerIpc', () => {
       });
     }
     expect(saveDropImage).not.toHaveBeenCalled();
+  });
+
+  it('app:image-thumbnail отдаёт путь из окна модулю миниатюр как есть и возвращает его ответ; сбой доходит с кодом failed', async () => {
+    const { ipcMain, imageThumbnail } = setup();
+    expect(await ipcMain.invoke('app:image-thumbnail', '/h/a b.png')).toBe('data:image/png;base64,AAAA');
+    expect(imageThumbnail).toHaveBeenCalledWith('/h/a b.png');
+    // Проверка пути — забота модуля: чужое значение доходит до него, а не отсекается каналом.
+    imageThumbnail.mockResolvedValue(null);
+    expect(await ipcMain.invoke('app:image-thumbnail', { path: '/etc/passwd' })).toBeNull();
+    expect(imageThumbnail).toHaveBeenLastCalledWith({ path: '/etc/passwd' });
+    imageThumbnail.mockRejectedValue(new Error('boom'));
+    await expect(ipcMain.invoke('app:image-thumbnail', '/h/a.png')).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'boom' });
+      return true;
+    });
   });
 
   it('app:choose-files зовёт chooseFiles и отдаёт список путей; отказ доходит с кодом failed', async () => {

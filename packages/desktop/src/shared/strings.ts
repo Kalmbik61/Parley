@@ -654,6 +654,7 @@ export const S = {
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
+      removeAttachment: (name: string): string => `Remove ${name}`,
     },
     /** Подсказки поля ввода: команды, скиллы, модели, `@`-файлы и субагенты (живая проверка 2026-10-02). */
     suggestions: {

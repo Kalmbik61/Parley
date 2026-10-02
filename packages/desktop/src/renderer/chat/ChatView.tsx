@@ -20,13 +20,16 @@
  *
  * Подсказки и вложения поля ввода (живая проверка 2026-10-02): команды, скиллы и субагенты берутся у хоста
  * (`capabilities-store.ts`), модели — из провайдера, файлы — из рабочей папки сессии (`files.list`). Файлы,
- * брошенные на вид, и скриншот из буфера вставляются в поле путём — отправляет их только человек.
+ * брошенные на вид, скриншот из буфера и скрепка встают чипами над полем (`Composer`; список путей — в
+ * `ui-store.ts`), а при отправке уходят упоминаниями `@"путь"` после текста (`attachments.ts`) — отправляет
+ * их только человек. Серый элемент очереди хранит уже собранный текст; промпт ленты (`PromptItem`) снова
+ * показывает хвостовые упоминания чипами.
  *
  * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
  * Queue не показываются, даже если лента кончилась промптом без конца хода.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
 import { refKey, type ModelOption, type SessionRef } from '@parley/protocol';
@@ -45,10 +48,11 @@ import { useWorksStore } from '../store/works.js';
 import { NotRunningCard } from '../terminal/NotRunningCard.js';
 import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
+import { addAttachments } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
-import { Composer, type ComposerHandle } from './Composer.js';
+import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { useFeedStore, type FeedEntry } from './store.js';
@@ -95,6 +99,7 @@ function useHeldFor(condition: boolean, delayMs: number): boolean {
 const NO_ITEMS: readonly FeedItem[] = [];
 const NO_QUEUED: readonly Queued[] = [];
 const NO_MODELS: readonly ModelOption[] = [];
+const NO_PATHS: readonly string[] = [];
 
 /** Номер серого элемента — общий на окно: элементы разных сессий живут в одном сторе. */
 let nextQueuedId = 0;
@@ -148,9 +153,9 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     () => ({ capabilities, models: modelOptions, listDir }),
     [capabilities, modelOptions, listDir],
   );
-  const composer = useRef<ComposerHandle>(null);
   const [dropping, setDropping] = useState(false);
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
+  const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
   const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
   useEffect(() => {
     useUiStore.getState().setSessionVisible(sessionKey, visible);
@@ -218,7 +223,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     }
   }, [bridge]);
 
-  // Файлы из Finder на весь вид: подсветка, затем пути в поле (как бросок на терминал).
+  // Файлы из Finder на весь вид: подсветка, затем пути вложениями над полем ввода.
   const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
     if (!dragHasFiles(event.dataTransfer)) return;
     event.preventDefault();
@@ -236,7 +241,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const paths = Array.from(event.dataTransfer.files)
       .map((file) => bridge.app.pathForFile(file))
       .filter((path) => path !== '');
-    composer.current?.insertPaths(paths);
+    useChatUiStore.getState().setAttachments(sessionKey, addAttachments(attachments, paths));
   };
 
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
@@ -276,14 +281,16 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         <Composer
-          ref={composer}
           source={suggestionSource}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
+          bridge={bridge}
           busy={active}
           visible={visible}
           text={draft}
           onTextChange={(text) => useChatUiStore.getState().setDraft(sessionKey, text)}
+          attachments={attachments}
+          onAttachmentsChange={(next) => useChatUiStore.getState().setAttachments(sessionKey, next)}
           onSubmit={submit}
           {...(active ? { onStop: stop } : {})}
         />

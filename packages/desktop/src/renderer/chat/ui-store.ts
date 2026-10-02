@@ -1,8 +1,9 @@
 /**
  * Состояние вида «Chat», которое переживает размонтирование `ChatView` (ревью куска 3): черновик поля
- * ввода и серые элементы очереди по `refKey` сессии. Тело вкладки рисуется только у активной вкладки
- * группы и только в виде «Chat», поэтому переход Chat → Terminal → Chat или на соседнюю вкладку
- * размонтирует вид — а набранный текст и сообщение, уже ушедшее в очередь CLI, пропадать не должны.
+ * ввода, вложения над ним и серые элементы очереди по `refKey` сессии. Тело вкладки рисуется только у
+ * активной вкладки группы и только в виде «Chat», поэтому переход Chat → Terminal → Chat или на соседнюю
+ * вкладку размонтирует вид — а набранный текст, добавленные файлы и сообщение, уже ушедшее в очередь CLI,
+ * пропадать не должны.
  */
 
 import { create } from 'zustand';
@@ -39,8 +40,12 @@ export interface Queued extends QueuedPrompt {
 
 export interface ChatUiState {
   drafts: Record<string /* refKey */, string>;
+  /** Вложения поля ввода: пути файлов, которые уйдут упоминаниями вместе с текстом (`attachments.ts`). */
+  attachments: Record<string /* refKey */, readonly string[]>;
   queued: Record<string /* refKey */, readonly Queued[]>;
   setDraft(key: string, text: string): void;
+  /** Заменить вложения сессии; тот же массив — стор не трогается. */
+  setAttachments(key: string, paths: readonly string[]): void;
   /** Черновики карточек по `cardKey`. */
   cardDrafts: Record<string, CardDraft>;
   setCardDraft(key: string, patch: Partial<CardDraft>): void;
@@ -51,9 +56,11 @@ export interface ChatUiState {
 }
 
 const NONE: readonly Queued[] = [];
+const NO_PATHS: readonly string[] = [];
 
 export const useChatUiStore = create<ChatUiState>((set) => ({
   drafts: {},
+  attachments: {},
   queued: {},
   cardDrafts: {},
   setCardDraft: (key, patch) =>
@@ -67,6 +74,8 @@ export const useChatUiStore = create<ChatUiState>((set) => ({
       return { cardDrafts: Object.fromEntries(Object.entries(state.cardDrafts).filter(([key]) => !drop(key))) };
     }),
   setDraft: (key, text) => set((state) => ({ drafts: { ...state.drafts, [key]: text } })),
+  setAttachments: (key, paths) =>
+    set((state) => ((state.attachments[key] ?? NO_PATHS) === paths ? state : { attachments: { ...state.attachments, [key]: paths } })),
   updateQueued: (key, update) =>
     set((state) => {
       const was = state.queued[key] ?? NONE;
@@ -77,5 +86,5 @@ export const useChatUiStore = create<ChatUiState>((set) => ({
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, queued: {}, cardDrafts: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, cardDrafts: {} });
 }

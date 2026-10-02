@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, WorkSession } from '@parley/core';
 import { refKey, type Capabilities, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
@@ -29,6 +29,7 @@ import type { SendWithToastDeps } from '../terminal/send.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
+import { resetThumbnailCacheForTests } from './use-thumbnail.js';
 
 vi.mock('sonner', () => {
   const fn = Object.assign(vi.fn(), { error: vi.fn() });
@@ -76,6 +77,7 @@ beforeEach(() => {
   resetFeedStoreForTests();
   resetChatUiStoreForTests();
   resetCapabilitiesStoreForTests();
+  resetThumbnailCacheForTests();
   hostWith(FEED_METHODS);
   useProvidersStore.setState({ providers: [CLAUDE_OK], loaded: true });
   useUiStore.setState({ visibleSessionRefs: {} });
@@ -850,6 +852,22 @@ describe('ChatView — подсказки поля ввода (живая про
     expect(document.activeElement).toBe(field());
   });
 
+  it('вложения подсказкам не мешают: Enter при открытом попапе принимает подсказку, без попапа — отправляет с вложением', async () => {
+    await renderWithCapabilities();
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    bridge.setChosenFiles(['/a/notes.txt']);
+    fireEvent.click(screen.getByTestId('chat-attach'));
+    await act(async () => {});
+    type('/cl');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('/clear ');
+    expect(sends()).toEqual([]);
+    expect(screen.getAllByTestId('chat-attachment')).toHaveLength(1);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sends()).toEqual([{ ref: REF, text: '/clear @"/a/notes.txt" ', submit: true }]);
+    await act(async () => {});
+  });
+
   it('↑/↓ двигают выбор, Tab и клик принимают, Esc закрывает до следующей буквы', async () => {
     await renderWithCapabilities();
     type('/');
@@ -947,23 +965,40 @@ describe('ChatView — вложения в поле ввода (живая пр�
   const type = (value: string): void => {
     fireEvent.change(field(), { target: { value } });
   };
+  const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
   const imageData = { items: [{ kind: 'file', type: 'image/png' }], getData: () => '' };
+  const chips = (): HTMLElement[] => screen.queryAllByTestId('chat-attachment');
+  const chipPaths = (): Array<string | null> => chips().map((chip) => chip.getAttribute('data-path'));
+  const chip = (path: string): HTMLElement => {
+    const found = chips().find((item) => item.getAttribute('data-path') === path);
+    if (found === undefined) throw new Error(`нет чипа ${path}`);
+    return found;
+  };
+  const sendButton = (): HTMLButtonElement => screen.getByRole('button', { name: S.chat.composer.send }) as HTMLButtonElement;
+  /** Скрепка: диалог отвечает `paths`, чипы встают после ответа. */
+  async function attach(...paths: string[]): Promise<void> {
+    bridge.setChosenFiles(paths);
+    fireEvent.click(screen.getByTestId('chat-attach'));
+    await act(async () => {});
+  }
 
-  it('вставка картинки без текста — saveDropImage, путь в кавычках по каретке, браузерная вставка отменена', async () => {
+  it('вставка картинки без текста — saveDropImage, чип над полем, текст поля не меняется, браузерная вставка отменена', async () => {
     bridge.setSaveDropImage('/h/drops/a b.png');
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
     type('ab');
-    field().setSelectionRange(1, 1);
     const notCancelled = fireEvent.paste(field(), { clipboardData: imageData });
     expect(notCancelled).toBe(false);
     await act(async () => {});
     expect(bridge.saveDropImageCalls).toEqual(['clipboard']);
-    expect(field().value).toBe("a'/h/drops/a b.png' b");
-    expect(field().selectionStart).toBe(20);
+    expect(field().value).toBe('ab');
+    expect(chipPaths()).toEqual(['/h/drops/a b.png']);
+    // Чип стоит над полем, внутри блока поля ввода.
+    expect(within(screen.getByTestId('chat-attachments')).getByTestId('chat-attachment')).toBe(chips()[0]);
+    expect(screen.getByTestId('chat-composer').contains(screen.getByTestId('chat-attachments'))).toBe(true);
   });
 
-  it('вставка с текстом в буфере — saveDropImage не зовётся, вставка не отменяется', async () => {
+  it('вставка с текстом в буфере — saveDropImage не зовётся, вставка не отменяется, чипов нет', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
     const notCancelled = fireEvent.paste(field(), {
@@ -972,9 +1007,10 @@ describe('ChatView — вложения в поле ввода (живая пр�
     expect(notCancelled).toBe(true);
     await act(async () => {});
     expect(bridge.saveDropImageCalls).toEqual([]);
+    expect(chips()).toEqual([]);
   });
 
-  it('отказ saveDropImage — тост: слишком большая картинка отдельным текстом, прочее — по коду', async () => {
+  it('отказ saveDropImage — тост: слишком большая картинка отдельным текстом; поле и чипы пусты', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
     bridge.setSaveDropImage({ code: 'drops:too-large', message: 'big' });
@@ -982,33 +1018,169 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledWith(S.terminal.imageTooLarge);
     expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
   });
 
-  it('бросок файлов на вид: подсветка data-dropping, пути в поле; бросок без файлов не принимается', async () => {
+  it('бросок файлов на вид: подсветка data-dropping, чипы без дублей, текст поля не меняется; бросок без файлов не принимается', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
+    type('draft');
     const view = screen.getByTestId('chat-view');
     fireEvent.dragOver(view, { dataTransfer: { types: ['Files'] } });
     expect(view.hasAttribute('data-dropping')).toBe(true);
     fireEvent.drop(view, { dataTransfer: { types: ['Files'], files: [new File([], 'one.png'), new File([], 'two words.txt')] } });
     expect(view.hasAttribute('data-dropping')).toBe(false);
-    expect(field().value).toBe("'/fake/one.png' '/fake/two words.txt' ");
+    expect(chipPaths()).toEqual(['/fake/one.png', '/fake/two words.txt']);
+    expect(field().value).toBe('draft');
+    // Поле снова в фокусе: вопрос дописывают сразу.
+    expect(document.activeElement).toBe(field());
+
+    // Тот же файл ещё раз — без дубля; файл без пути на диске (синтетический) пропускается.
+    fireEvent.drop(view, { dataTransfer: { types: ['Files'], files: [new File([], 'one.png'), new File([], ''), new File([], 'three.txt')] } });
+    expect(chipPaths()).toEqual(['/fake/one.png', '/fake/two words.txt', '/fake/three.txt']);
 
     fireEvent.dragOver(view, { dataTransfer: { types: ['text/plain'] } });
     expect(view.hasAttribute('data-dropping')).toBe(false);
+    fireEvent.drop(view, { dataTransfer: { types: ['text/plain'], files: [] } });
+    expect(chipPaths()).toHaveLength(3);
   });
 
-  it('скрепка — chooseFiles, пути в поле; отмена диалога ничего не вставляет', async () => {
+  it('скрепка — chooseFiles, чипы без дублей, текст поля не меняется; отмена диалога ничего не добавляет', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
-    const attach = screen.getByTestId('chat-attach');
-    expect(attach.getAttribute('title')).toBe(S.chat.composer.attach);
-    fireEvent.click(attach);
+    const attachButton = screen.getByTestId('chat-attach');
+    expect(attachButton.getAttribute('title')).toBe(S.chat.composer.attach);
+    fireEvent.click(attachButton);
     await act(async () => {});
     expect(field().value).toBe('');
-    bridge.setChosenFiles(['/a/notes.txt']);
-    fireEvent.click(attach);
+    expect(chips()).toEqual([]);
+    expect(screen.queryByTestId('chat-attachments')).toBeNull();
+
+    await attach('/a/notes.txt');
+    expect(chipPaths()).toEqual(['/a/notes.txt']);
+    expect(field().value).toBe('');
+    expect(document.activeElement).toBe(field());
+    await attach('/a/notes.txt', '/a/more.txt');
+    expect(chipPaths()).toEqual(['/a/notes.txt', '/a/more.txt']);
+  });
+
+  it('чип картинки — миниатюра из app.imageThumbnail, файла — значок и имя; миниатюру просят только у картинок', async () => {
+    bridge.setThumbnail('/h/drops/shot.png', 'data:image/png;base64,AAAA');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/h/drops/shot.png', '/a/notes.txt', '/h/drops/gone.png');
+    await waitFor(() => expect(chip('/h/drops/shot.png').hasAttribute('data-thumbnail')).toBe(true));
+
+    const image = within(chip('/h/drops/shot.png')).getByRole('img', { name: 'shot.png' });
+    expect(image.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+    expect(image.getAttribute('title')).toBe('/h/drops/shot.png');
+    // Файл — чип с именем и полным путём в title, без картинки.
+    expect(chip('/a/notes.txt').textContent).toBe('notes.txt');
+    expect(chip('/a/notes.txt').getAttribute('title')).toBe('/a/notes.txt');
+    expect(chip('/a/notes.txt').querySelector('img')).toBeNull();
+    // Картинка без миниатюры (файла уже нет) — тоже чип с именем.
+    expect(chip('/h/drops/gone.png').textContent).toBe('gone.png');
+    expect(chip('/h/drops/gone.png').hasAttribute('data-thumbnail')).toBe(false);
+    expect([...bridge.thumbnailCalls].sort()).toEqual(['/h/drops/gone.png', '/h/drops/shot.png']);
+  });
+
+  it('крестик убирает чип и возвращает фокус в поле; без текста и без чипов Send снова выключена', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    expect(sendButton().disabled).toBe(true);
+    await attach('/a/one.txt', '/a/two.txt');
+    expect(sendButton().disabled).toBe(false);
+    screen.getByTestId('chat-attach').focus();
+
+    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.removeAttachment('one.txt') }));
+    expect(chipPaths()).toEqual(['/a/two.txt']);
+    expect(document.activeElement).toBe(field());
+    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.removeAttachment('two.txt') }));
+    expect(chips()).toEqual([]);
+    expect(screen.queryByTestId('chat-attachments')).toBeNull();
+    expect(sendButton().disabled).toBe(true);
+    expect(useChatUiStore.getState().attachments[refKey(REF)]).toEqual([]);
+  });
+
+  it('Enter с текстом и вложениями — pty.send «текст @"путь" … » с submit: true; поле и чипы очищаются', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/b c.png', '/a/notes.txt');
+    type('what is this?');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sends()).toEqual([{ ref: REF, text: 'what is this? @"/a/b c.png" @"/a/notes.txt" ', submit: true }]);
+    expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
+    expect(document.activeElement).toBe(field());
+    // Без хода — без серого элемента: промпт придёт хуком сразу.
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
     await act(async () => {});
-    expect(field().value).toBe("'/a/notes.txt' ");
+  });
+
+  it('одни вложения без текста отправляются: Send доступна, уходят только упоминания, Enter в пустом поле — то же', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/b c.png');
+    fireEvent.click(sendButton());
+    expect(sends()).toEqual([{ ref: REF, text: '@"/a/b c.png" ', submit: true }]);
+    expect(chips()).toEqual([]);
+    expect(sendButton().disabled).toBe(true);
+
+    await attach('/a/d.txt');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sends()).toHaveLength(2);
+    expect(sends()[1]).toEqual({ ref: REF, text: '@"/a/d.txt" ', submit: true });
+    await act(async () => {});
+  });
+
+  it('путь, который нельзя упомянуть (#), уходит в shell-кавычках', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/Shot #1.png');
+    type('look');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sends()).toEqual([{ ref: REF, text: "look '/a/Shot #1.png' ", submit: true }]);
+    await act(async () => {});
+  });
+
+  it('во время хода: Queue — серый элемент с чипом и текстом без пути; настоящий промпт его заменяет, тоже чипом', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    await attach('/a/notes.txt');
+    type('next');
+    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.queue }));
+    const grey = screen.getByTestId('chat-queued');
+    expect(within(grey).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/a/notes.txt');
+    expect(grey.textContent).toContain('next');
+    expect(grey.textContent).not.toContain('/a/notes.txt');
+    await act(async () => {});
+    expect(sends()).toEqual([{ ref: REF, text: 'next @"/a/notes.txt" ', submit: true }]);
+
+    // Хук отдаёт промпт как набран — с упоминанием; серый уходит, чип остаётся уже в настоящем.
+    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'next @"/a/notes.txt" ')], 2);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    const real = screen.getAllByTestId('chat-prompt')[1]!;
+    expect(within(real).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/a/notes.txt');
+    expect(real.textContent).toContain('next');
+    expect(real.textContent).not.toContain('/a/notes.txt');
+  });
+
+  it('вложения живут в сторе по сессии: переживают Chat → Terminal → Chat и размонтирование вида', async () => {
+    const view = renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await attach('/a/notes.txt');
+    view.rerender(body(makeSession('s-01', 'S01'), 'terminal'));
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+    expect(useChatUiStore.getState().attachments[refKey(REF)]).toEqual(['/a/notes.txt']);
+    view.rerender(body(makeSession('s-01', 'S01'), 'chat'));
+    expect(chipPaths()).toEqual(['/a/notes.txt']);
+
+    view.unmount();
+    renderBody(makeSession('s-01', 'S01'));
+    expect(chipPaths()).toEqual(['/a/notes.txt']);
   });
 });

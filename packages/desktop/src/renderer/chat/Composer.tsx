@@ -2,24 +2,24 @@
  * Поле ввода вида «Chat» (план 2026-10-01, решение 8): textarea на 1–8 строк (растёт по тексту —
  * `field-sizing: content`, дальше прокрутка), Enter — отправить, Shift+Enter — перенос строки. Пока
  * ход идёт, кнопка — «Queue»: сообщение уйдёт в очередь CLI. Саму отправку (`pty.send`, отказы и
- * тосты) делает владелец — `ChatView`; поле лишь отдаёт текст и очищается.
+ * тосты) делает владелец — `ChatView`; поле лишь отдаёт текст (с упоминаниями вложений) и очищается.
  *
- * Текст — снаружи (черновик в `ui-store.ts` по сессии): переключение вида и вкладки его не теряет.
- * Поле получает фокус, когда вид появляется (`visible`), и держит его после отправки — в том числе
- * кнопкой, которая иначе забрала бы фокус себе.
+ * Текст и вложения — снаружи (черновик и список путей в `ui-store.ts` по сессии): переключение вида и
+ * вкладки их не теряет. Поле получает фокус, когда вид появляется (`visible`), и держит его после
+ * отправки — в том числе кнопкой, которая иначе забрала бы фокус себе.
  *
  * Подсказки (живая проверка 2026-10-02): `/` — команды и скиллы, `/model ` — модели, `@` — субагенты и
  * файлы; попап над полем (`SuggestionList`), ↑/↓ выбирают, Enter и Tab принимают (Enter тогда не отправляет),
  * Esc закрывает. Окно только вставляет текст — разбирает его CLI.
  *
- * Вложения: картинка из буфера (вставка без текста), файлы, брошенные на вид, и скрепка кладут в поле
- * путь файла — как терминал; Claude Code сам читает файл или картинку по пути. Ничего не отправляется.
+ * Вложения: картинка из буфера (вставка без текста), файлы, брошенные на вид (их кладёт в стор владелец), и
+ * скрепка в текст поля не попадают — это чипы над ним: у картинки миниатюра, у файла значок и имя,
+ * крестик убирает. При отправке к тексту дописываются упоминания Claude Code `@"путь"` (`attachments.ts`),
+ * и CLI сам прикладывает файл. Одни вложения без текста тоже можно отправить. Ничего не отправляется само.
  */
 
 import {
-  forwardRef,
   useEffect,
-  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -28,9 +28,12 @@ import {
   type SyntheticEvent,
 } from 'react';
 import { Paperclip, Square } from 'lucide-react';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
-import { pasteHasOnlyImage, pathsToInput } from '../terminal/drop.js';
+import { pasteHasOnlyImage } from '../terminal/drop.js';
+import { addAttachments, composePrompt } from './attachments.js';
+import { AttachmentChip } from './AttachmentChip.js';
 import { applySuggestion, suggestionContext } from './suggestions.js';
 import { SuggestionList } from './SuggestionList.js';
 import { useSuggestions, type SuggestionItem, type SuggestionSource } from './use-suggestions.js';
@@ -42,6 +45,12 @@ export interface ComposerProps {
   visible: boolean;
   text: string;
   onTextChange: (text: string) => void;
+  /** Вложения над полем — пути файлов; при отправке уходят упоминаниями после текста. */
+  attachments: readonly string[];
+  onAttachmentsChange: (next: readonly string[]) => void;
+  /** Мост окна: по нему чипы берут миниатюры картинок. */
+  bridge: ParleyBridge;
+  /** Текст вместе с упоминаниями вложений (`composePrompt`) — тот, что и уйдёт в CLI. */
   onSubmit: (text: string) => void;
   /** Есть — слева от «Send/Queue» кнопка «Stop» (ход идёт; живая проверка 2026-10-02). */
   onStop?: () => void;
@@ -53,15 +62,20 @@ export interface ComposerProps {
   onPasteImage: () => Promise<string | null>;
 }
 
-/** Что владелец может сделать с полем: вставить пути брошенных на вид файлов по каретке. */
-export interface ComposerHandle {
-  insertPaths: (paths: string[]) => void;
-}
-
-export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { busy, visible, text, onTextChange, onSubmit, onStop, source, onPickFiles, onPasteImage },
-  ref,
-): JSX.Element {
+export function Composer({
+  busy,
+  visible,
+  text,
+  onTextChange,
+  attachments,
+  onAttachmentsChange,
+  bridge,
+  onSubmit,
+  onStop,
+  source,
+  onPickFiles,
+  onPasteImage,
+}: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (visible) field.current?.focus();
@@ -71,8 +85,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const [caretAt, setCaretAt] = useState(text.length);
   const caret = Math.min(caretAt, text.length);
   const pendingCaret = useRef<number | null>(null);
-  const latestText = useRef(text);
-  latestText.current = text;
   useLayoutEffect(() => {
     const target = pendingCaret.current;
     if (target === null) return;
@@ -104,33 +116,43 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     replaceText(applySuggestion(text, caret, context, item.insert));
   };
 
-  // Вложение — путь в тексте (как в терминале: Claude Code читает файл или картинку по пути).
-  // Пути в кавычках через пробел и пробел в конце: человек дописывает вопрос сразу за ними.
-  const insertPaths = (paths: string[]): void => {
-    if (paths.length === 0) return;
-    const now = latestText.current;
-    const at = Math.min(field.current?.selectionStart ?? now.length, now.length);
-    const insert = pathsToInput(paths);
-    replaceText({ text: `${now.slice(0, at)}${insert}${now.slice(at)}`, caret: at + insert.length });
+  // Вложение — чип над полем, а не текст: путь уходит упоминанием при отправке (`composePrompt`). Ответы
+  // IPC (скрепка, скриншот) приходят позже отрисовки, поэтому и список — через ссылку на свежий.
+  const latestAttachments = useRef(attachments);
+  latestAttachments.current = attachments;
+  const attach = (paths: readonly string[]): void => {
+    onAttachmentsChange(addAttachments(latestAttachments.current, paths));
   };
-  useImperativeHandle(ref, () => ({ insertPaths }));
+  const detach = (path: string): void => {
+    onAttachmentsChange(attachments.filter((item) => item !== path));
+    field.current?.focus();
+  };
+  // Новое вложение — скрепка, скриншот или бросок на вид, который кладёт владелец, — возвращает фокус в поле:
+  // вопрос дописывают сразу.
+  const attachedCount = useRef(attachments.length);
+  useEffect(() => {
+    if (attachments.length > attachedCount.current) field.current?.focus();
+    attachedCount.current = attachments.length;
+  }, [attachments.length]);
 
   const pickFiles = (): void => {
-    void onPickFiles().then(insertPaths);
+    void onPickFiles().then(attach);
   };
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
     // Текст в буфере — обычная вставка; перехватывается только картинка без текста.
     if (!pasteHasOnlyImage(event.clipboardData)) return;
     event.preventDefault();
     void onPasteImage().then((saved) => {
-      if (saved !== null) insertPaths([saved]);
+      if (saved !== null) attach([saved]);
     });
   };
 
+  const canSend = text.trim() !== '' || attachments.length > 0;
   const submit = (): void => {
-    if (text.trim() === '') return;
-    onSubmit(text);
+    if (!canSend) return;
+    onSubmit(composePrompt(text, attachments));
     onTextChange('');
+    if (attachments.length > 0) onAttachmentsChange([]);
     field.current?.focus();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -161,47 +183,57 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     submit();
   };
   return (
-    <div data-testid="chat-composer" className="relative flex shrink-0 items-end gap-2 border-t border-border px-4 pb-3 pt-2.5">
+    <div data-testid="chat-composer" className="relative flex shrink-0 flex-col gap-2 border-t border-border px-4 pb-3 pt-2.5">
       {open ? <SuggestionList items={items} selected={current} onSelect={setSelected} onAccept={accept} /> : null}
-      <Button
-        type="button"
-        variant="outline"
-        data-testid="chat-attach"
-        title={S.chat.composer.attach}
-        aria-label={S.chat.composer.attach}
-        onClick={pickFiles}
-        className="size-[38px] shrink-0 rounded-full px-0"
-      >
-        <Paperclip className="size-4" aria-hidden="true" />
-      </Button>
-      <textarea
-        ref={field}
-        aria-label={S.chat.composer.label}
-        aria-expanded={open}
-        aria-controls={open ? 'chat-suggestions' : undefined}
-        placeholder={S.chat.composer.placeholder}
-        value={text}
-        rows={1}
-        onChange={(event) => {
-          setCaretAt(event.target.selectionStart);
-          onTextChange(event.target.value);
-        }}
-        onSelect={syncCaret}
-        onKeyUp={syncCaret}
-        onClick={syncCaret}
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        className="box-border max-h-[180px] min-h-[38px] min-w-0 flex-1 resize-none overflow-y-auto rounded-[19px] border border-input bg-transparent px-4 py-2 text-sm leading-5 caret-ring [field-sizing:content] [overflow-wrap:anywhere] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-offset-0"
-      />
-      {onStop === undefined ? null : (
-        <Button type="button" variant="outline" data-testid="chat-stop" title={S.chat.stopTitle} onClick={onStop}>
-          <Square className="size-3" aria-hidden="true" />
-          {S.chat.stop}
-        </Button>
+      {attachments.length === 0 ? null : (
+        // Предел высоты: десятки брошенных файлов не должны вытеснить ленту — лишние прокручиваются.
+        <div data-testid="chat-attachments" className="flex max-h-[124px] flex-wrap items-center gap-2 overflow-y-auto">
+          {attachments.map((path) => (
+            <AttachmentChip key={path} path={path} bridge={bridge} size="composer" onRemove={() => detach(path)} />
+          ))}
+        </div>
       )}
-      <Button type="button" onClick={submit} disabled={text.trim() === ''} variant={busy ? 'outline' : 'default'}>
-        {busy ? S.chat.composer.queue : S.chat.composer.send}
-      </Button>
+      <div className="flex items-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          data-testid="chat-attach"
+          title={S.chat.composer.attach}
+          aria-label={S.chat.composer.attach}
+          onClick={pickFiles}
+          className="size-[38px] shrink-0 rounded-full px-0"
+        >
+          <Paperclip className="size-4" aria-hidden="true" />
+        </Button>
+        <textarea
+          ref={field}
+          aria-label={S.chat.composer.label}
+          aria-expanded={open}
+          aria-controls={open ? 'chat-suggestions' : undefined}
+          placeholder={S.chat.composer.placeholder}
+          value={text}
+          rows={1}
+          onChange={(event) => {
+            setCaretAt(event.target.selectionStart);
+            onTextChange(event.target.value);
+          }}
+          onSelect={syncCaret}
+          onKeyUp={syncCaret}
+          onClick={syncCaret}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          className="box-border max-h-[180px] min-h-[38px] min-w-0 flex-1 resize-none overflow-y-auto rounded-[19px] border border-input bg-transparent px-4 py-2 text-sm leading-5 caret-ring [field-sizing:content] [overflow-wrap:anywhere] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-offset-0"
+        />
+        {onStop === undefined ? null : (
+          <Button type="button" variant="outline" data-testid="chat-stop" title={S.chat.stopTitle} onClick={onStop}>
+            <Square className="size-3" aria-hidden="true" />
+            {S.chat.stop}
+          </Button>
+        )}
+        <Button type="button" onClick={submit} disabled={!canSend} variant={busy ? 'outline' : 'default'}>
+          {busy ? S.chat.composer.queue : S.chat.composer.send}
+        </Button>
+      </div>
     </div>
   );
-});
+}

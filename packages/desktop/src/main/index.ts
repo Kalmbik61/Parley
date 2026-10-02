@@ -31,6 +31,7 @@ import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
 import { HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
+import { imageThumbnail } from './image-thumbnail.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
@@ -452,6 +453,7 @@ if (!gotLock) {
         if ((await clipboard.readText()) !== '') return null;
         return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
+      imageThumbnail: (absPath) => imageThumbnail(absPath, nativeImage),
       setDirtyBuffers: (sender, count) => closeGuards.get(sender)?.setDirtyCount(count),
       answerClose: (sender, answer) => closeGuards.get(sender)?.answer(answer),
       chooseFolder: async () => {

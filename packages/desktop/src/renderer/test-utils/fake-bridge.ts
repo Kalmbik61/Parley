@@ -114,6 +114,10 @@ export interface FakeBridge extends ParleyBridge {
   readonly saveDropImageCalls: Array<'clipboard'>;
   /** Чем ответит `app.chooseFiles` (диалог вложений поля ввода «Chat»); по умолчанию `[]`. */
   setChosenFiles(paths: string[]): void;
+  /** Ответ `app.imageThumbnail` для пути — data-URL; по умолчанию `null` (миниатюры нет, чип без картинки). */
+  setThumbnail(path: string, dataUrl: string | null): void;
+  /** Вызовы `app.imageThumbnail` — пути по порядку. */
+  readonly thumbnailCalls: string[];
   /** Ответ `files.list`; по умолчанию `[]`. Отказ — объект с code (кусок 7.1a). */
   setDir(root: FileRoot, dir: string, entries: DirEntry[] | IpcErrorInfo): void;
   /** Ответ `files.readText`; по умолчанию отказ `not_found`. */
@@ -205,6 +209,8 @@ export function createFakeBridge(): FakeBridge {
   let saveDropImageAnswer: string | null | IpcErrorInfo = null;
   const saveDropImageCalls: Array<'clipboard'> = [];
   let chosenFiles: string[] = [];
+  const thumbnails = new Map<string, string | null>();
+  const thumbnailCalls: string[] = [];
   const dirs = new Map<string, DirEntry[] | IpcErrorInfo>();
   const textFiles = new Map<string, TextFile | IpcErrorInfo>();
   const byteFiles = new Map<string, Uint8Array | IpcErrorInfo>();
@@ -299,6 +305,10 @@ export function createFakeBridge(): FakeBridge {
     setChosenFiles: (paths) => {
       chosenFiles = paths;
     },
+    setThumbnail: (path, dataUrl) => {
+      thumbnails.set(path, dataUrl);
+    },
+    thumbnailCalls,
     setDir: (root, dir, entries) => {
       dirs.set(fileKey(root, dir), entries);
     },
@@ -623,6 +633,10 @@ export function createFakeBridge(): FakeBridge {
         const answer = saveDropImageAnswer;
         if (answer !== null && typeof answer === 'object') throw answer;
         return answer;
+      },
+      imageThumbnail: async (path) => {
+        thumbnailCalls.push(path);
+        return thumbnails.get(path) ?? null;
       },
       setDirtyBuffers: (count) => {
         dirtyBufferCounts.push(count);

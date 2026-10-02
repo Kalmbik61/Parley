@@ -24,6 +24,10 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * `PreToolUse(AskUserQuestion)`), спек ждёт по строке ответа в журнале: события идут строго по одному и в
  * порядке отправки, иначе два POST на разных соединениях могли бы прийти в другом порядке.
  *
+ * Вложения поля ввода (живая проверка 2026-10-02): скриншот — `PARLEY_DROPS=fake` (main кладёт в `drops/` картинку 1×1,
+ * буфер обмена человека тесты не читают и не пишут), файл с диска — синтетический бросок `File` из скрытого `<input
+ * type=file>` (как в `terminal-send.spec.ts`). Отправленное стабу видно в экране терминала: `PASTE<<…>>` и `echo: …`.
+ *
  * Не покрыто: бейдж агентов в сайдбаре и у участника комнаты (кусок 4b ещё не сделан); хост без `feed.*`
  * (подменить `hello` без правки кода окна нечем).
  *
@@ -55,6 +59,7 @@ type Parley = {
   parley: {
     call: (method: string, params: unknown) => Promise<unknown>;
     notify: (method: string, params: unknown) => void;
+    app: { imageThumbnail: (file: string) => Promise<string | null> };
   };
 };
 
@@ -63,6 +68,11 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
     ({ method: name, params: body }) => (globalThis as unknown as Parley).parley.call(name, body),
     { method, params },
   )) as T;
+}
+
+/** Ответ main на запрос миниатюры картинки-вложения: data-URL или `null`. */
+async function thumbnailOf(window: Page, file: string): Promise<string | null> {
+  return window.evaluate((target) => (globalThis as unknown as Parley).parley.app.imageThumbnail(target), file);
 }
 
 async function providerSessionIdOf(window: Page, ref: Ref): Promise<string | null> {
@@ -99,6 +109,48 @@ async function resize(app: ElectronApplication, width: number, height: number): 
     ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, ...size }),
     { width, height },
   );
+}
+
+/**
+ * Бросок файла с диска на вид «Chat»: у `File` есть путь только у выбранного в `<input type=file>`
+ * (`setInputFiles` обходится без системного окна), из него и собирается синтетический `DataTransfer`.
+ */
+async function dropFileOnChat(window: Page, file: string): Promise<void> {
+  await window.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'e2e-drop-input';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+  });
+  await window.locator('#e2e-drop-input').setInputFiles(file);
+  await window.getByTestId('chat-view').evaluate((view) => {
+    const input = document.getElementById('e2e-drop-input') as HTMLInputElement;
+    const picked = input.files?.[0];
+    if (picked === undefined) throw new Error('файл не выбран');
+    const data = new DataTransfer();
+    data.items.add(picked);
+    view.dispatchEvent(new DragEvent('dragover', { dataTransfer: data, bubbles: true, cancelable: true }));
+    view.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }));
+    input.remove();
+  });
+}
+
+/** Скриншот из буфера: синтетический `paste` с картинкой без текста; main подменяет её своей (`PARLEY_DROPS=fake`). */
+async function pasteScreenshot(field: Locator): Promise<boolean> {
+  return field.evaluate((textarea) => {
+    const data = new DataTransfer();
+    data.items.add(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'shot.png', { type: 'image/png' }));
+    const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+}
+
+async function boxOf(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error('у элемента нет рамки — он не показан');
+  return box;
 }
 
 /**
@@ -414,6 +466,114 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await field.pressSequentially('/model ');
     expect(await suggestions.getByTestId('chat-suggestion').count()).toBeGreaterThanOrEqual(1);
     await field.fill('');
+
+    expect(errors).toEqual([]);
+  });
+
+  test('вложения: скриншот чипом с миниатюрой, отправка упоминанием @"путь", в ленте — миниатюра, длинное имя не раздвигает пузырь и поле', async () => {
+    const { app, window, hooks, errors } = await open();
+    // Чат виден — стаб уже прошёл свой старт (как в тесте карточек ниже).
+    const chat = window.getByTestId('chat-view');
+    await expect(chat).toBeVisible();
+    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+    const field = chat.getByRole('textbox', { name: 'Message to Claude' });
+    const composer = chat.getByTestId('chat-composer');
+    const composerChips = composer.getByTestId('chat-attachment');
+
+    // k) Скриншот: чип над полем с настоящей миниатюрой (IPC → main → data-URL), текст поля не тронут, путь не вставлен.
+    expect(await pasteScreenshot(field)).toBe(true);
+    await expect(composerChips).toHaveCount(1);
+    await expect(composerChips).toHaveAttribute('data-path', /[\\/]desktop[\\/]drops[\\/]\d{8}-\d{6}-[0-9a-f]{4}\.png$/);
+    await expect(composerChips).toHaveAttribute('data-thumbnail', '');
+    const thumbnail = composerChips.locator('img');
+    await expect(thumbnail).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect.poll(() => thumbnail.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await expect(field).toHaveValue('');
+    const screenshotPath = (await composerChips.getAttribute('data-path'))!;
+
+    // l) Отправка: агенту уходит «текст @"путь" » (пробел в конце — подсказка `@` у CLI не съест Enter хоста), поле и чипы очищаются.
+    await field.fill('What is this?');
+    await field.press('Enter');
+    await expect(field).toHaveValue('');
+    await expect(composerChips).toHaveCount(0);
+    const sent = `What is this? @"${screenshotPath}" `;
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window), { timeout: 15_000 }).toContain(`PASTE<<${sent}>>`);
+    await expect.poll(() => screenText(window)).toContain(`echo: ${sent}`);
+    await window.getByRole('radio', { name: 'Chat' }).click();
+    await expect(chat).toBeVisible();
+
+    // m) Хук отдаёт промпт как набран: в пузыре чип с миниатюрой, пути текстом нет.
+    await hooks.fire('UserPromptSubmit', { prompt: sent, permission_mode: 'default' });
+    const prompt = chat.getByTestId('chat-prompt').filter({ hasText: 'What is this?' });
+    await expect(prompt).toHaveCount(1);
+    const promptChip = prompt.getByTestId('chat-attachment');
+    await expect(promptChip).toHaveAttribute('data-path', screenshotPath);
+    await expect(promptChip.locator('img')).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(prompt).not.toContainText('@"');
+    await expect(prompt).not.toContainText('drops');
+    await hooks.fire('MessageDisplay', { message_id: 'msg-shot', index: 0, final: true, delta: 'A one-pixel PNG.' });
+    await hooks.fire('Stop', { last_assistant_message: 'A one-pixel PNG.', stop_hook_active: false });
+
+    // n) 800×500: ещё скриншот и файл с именем в 124 знака (брошен на вид) — чипы над полем в пределах поля,
+    // кнопки остаются в окне.
+    await resize(app, 800, 500);
+    await expect(chat).toBeVisible();
+    expect(await pasteScreenshot(field)).toBe(true);
+    const longName = `${'very-long-file-name-'.repeat(6)}.txt`;
+    const longFile = path.join(project, longName);
+    await writeFile(longFile, 'x');
+    await dropFileOnChat(window, longFile);
+    await expect(composerChips).toHaveCount(2);
+    await expect(composerChips.nth(1)).toHaveAttribute('data-path', longFile);
+    await expect(field).toBeFocused();
+    await expect(composer).toBeInViewport();
+    await expect(chat.getByRole('button', { name: 'Send' })).toBeInViewport();
+    const composerBox = await boxOf(composer);
+    for (const chip of await composerChips.all()) {
+      const box = await boxOf(chip);
+      expect(box.x).toBeGreaterThanOrEqual(composerBox.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(composerBox.x + composerBox.width + 0.5);
+    }
+
+    // Отказы main — `null`, а не исключение: картинки нет, файл не картинка, путь не абсолютный; настоящая картинка — data-URL.
+    expect(await thumbnailOf(window, screenshotPath)).toMatch(/^data:image\/png;base64,/);
+    expect(await thumbnailOf(window, path.join(project, 'missing', 'gone.png'))).toBeNull();
+    expect(await thumbnailOf(window, longFile)).toBeNull();
+    expect(await thumbnailOf(window, 'relative.png')).toBeNull();
+
+    // o) Промпт ленты с несуществующими файлами — очень длинное имя (не картинка) и картинка, которой уже нет:
+    // чипы без миниатюр, чип не шире пузыря, имя обрезано многоточием.
+    const missingLong = path.join(project, 'missing', longName);
+    const missingImage = path.join(project, 'missing', 'gone.png');
+    await hooks.fire('UserPromptSubmit', { prompt: `Summarize these @"${missingLong}" @"${missingImage}"`, permission_mode: 'default' });
+    const longPrompt = chat.getByTestId('chat-prompt').filter({ hasText: 'Summarize these' });
+    await expect(longPrompt).toHaveCount(1);
+    const promptChips = longPrompt.getByTestId('chat-attachment');
+    await expect(promptChips).toHaveCount(2);
+    const longChip = promptChips.nth(0);
+    await expect(longChip).toHaveAttribute('data-path', missingLong);
+    await expect(longChip).toBeInViewport();
+    await expect(promptChips.nth(1)).toHaveText('gone.png');
+    await expect(promptChips.locator('img')).toHaveCount(0);
+    const bubbleBox = await boxOf(longPrompt.locator(':scope > div'));
+    const chipBox = await boxOf(longChip);
+    expect(chipBox.x).toBeGreaterThanOrEqual(bubbleBox.x - 0.5);
+    expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(bubbleBox.x + bubbleBox.width + 0.5);
+    const feed = chat.getByTestId('chat-feed');
+    const feedBox = await boxOf(feed);
+    expect(bubbleBox.x + bubbleBox.width).toBeLessThanOrEqual(feedBox.x + feedBox.width + 0.5);
+    expect(await feed.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await longChip.locator('span.truncate').evaluate((name) => name.scrollWidth > name.clientWidth)).toBe(true);
+    await shot(window, 'attachments-800x500');
+    await pickTheme(window, 'Theme: dark');
+    await shot(window, 'attachments-800x500-dark');
+    await pickTheme(window, 'Theme: light');
+
+    // Крестик чипа убирает вложение; поле остаётся в фокусе.
+    await composerChips.nth(1).getByRole('button', { name: `Remove ${longName}` }).click();
+    await expect(composerChips).toHaveCount(1);
+    await expect(field).toBeFocused();
 
     expect(errors).toEqual([]);
   });

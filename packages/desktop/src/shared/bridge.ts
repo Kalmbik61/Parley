@@ -167,6 +167,12 @@ export interface ParleyBridge {
      */
     saveDropImage(source: 'clipboard'): Promise<string | null>;
     /**
+     * Миниатюра картинки-вложения «Chat» для чипов поля ввода и ленты (`main/image-thumbnail.ts`): data-URL не шире
+     * 320 px. `null` — не картинка (расширение, не обычный файл, больше 20 МБ) или файл не читается. Путь любой:
+     * вложения лежат где угодно, не только в корнях работ.
+     */
+    imageThumbnail(path: string): Promise<string | null>;
+    /**
      * Число несохранённых буферов редактора → main (`app:dirty-buffers`, кусок 7.3a) при каждом
      * изменении: на закрытии окна и ⌘Q main спрашивает, только если оно больше нуля.
      */
