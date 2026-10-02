@@ -5,7 +5,8 @@
  * (`room-remark.ts`), а сам чип рисует `MentionChip` — ярлык берётся при отрисовке (`labelOf`), и переименование
  * сессии обновляет чипы, не заставляя разбирать текст заново. Упоминание человека `@human` (Parley 0.3.0) плагин
  * вырезает так же, а рисует его `HumanMentionChip` — чип «@you» плотнее чипа сессии: так агент, обратившийся к
- * человеку, заметен в ленте (поле ввода человека `@human` не разбирает: себя человек не упоминает). Что считается
+ * человеку, заметен в ленте (поле ввода человека `@human` не разбирает: себя человек не упоминает, и в ленте его
+ * собственное сообщение — тоже: `humanChips={false}` оставляет `@human` текстом, как он написан). Что считается
  * упоминанием, решает разбор в `room-remark.ts`: по нему же окно считает сообщение письмом человеку.
  *
  * Правила безопасности — те же, что у письма (`mail/Letter.tsx`) и у превью файлов
@@ -44,12 +45,7 @@ import { S } from '../../../shared/strings.js';
 import { resolveMarkdownLink, safeUrlTransform } from '../../lib/markdown-links.js';
 import { sessionTag } from '../../lib/participant.js';
 import { HUMAN_MENTION_CHIP_CLASS, MENTION_CHIP_CLASS } from './mention.js';
-import {
-  HUMAN_MENTION_ATTR,
-  INLINE_REMARK_PLUGINS,
-  MENTION_ATTR,
-  REMARK_PLUGINS,
-} from './room-remark.js';
+import { HUMAN_MENTION_ATTR, MENTION_ATTR, remarkPluginsFor } from './room-remark.js';
 
 export interface RoomMarkdownProps {
   text: string;
@@ -58,6 +54,11 @@ export interface RoomMarkdownProps {
   onOpenExternal: (url: string) => void;
   /** Строчный вид для превью в одну строку (плашка решений): блоки сворачиваются в текст, корень — `span`. */
   inline?: boolean;
+  /**
+   * `@human` рисуется чипом «@you» (по умолчанию). `false` — обычным текстом: так лента показывает сообщение самого
+   * человека (`RoomMessage`), себя он не упоминает.
+   */
+  humanChips?: boolean;
 }
 
 /**
@@ -218,6 +219,7 @@ export function RoomMarkdown({
   labelOf,
   onOpenExternal,
   inline = false,
+  humanChips = true,
 }: RoomMarkdownProps): JSX.Element {
   // Один набор компонентов на экземпляр: новые функции React счёл бы новыми типами и пересоздал бы ссылки и
   // таблицы при каждой перерисовке ленты — выделение текста в них сбрасывалось бы. Колбэк читается из ref.
@@ -227,12 +229,13 @@ export function RoomMarkdown({
 
   // Разбор Markdown — ~0.5 мс на сообщение, а лента перерисовывается на каждое событие активности (`RoomBody`
   // подписан на всю карту) и каждый раз зовёт со свежими `labelOf` и `onOpenExternal`. Дерево от них не зависит
-  // (ярлыки чипам отдаёт контекст), поэтому пока текст тот же, элемент остаётся прежним и React не разбирает его
-  // заново. Замыканий над `labelOf` в нём нет: иначе каждое сообщение держало бы устаревшую карту работы.
+  // (ярлыки чипам отдаёт контекст), поэтому пока текст, вид и правило `@human` те же, элемент остаётся прежним и React
+  // не разбирает его заново. Замыканий над `labelOf` в нём нет: иначе каждое сообщение держало бы устаревшую карту
+  // работы.
   const content = useMemo(
     () => (
       <ReactMarkdown
-        remarkPlugins={inline ? INLINE_REMARK_PLUGINS : REMARK_PLUGINS}
+        remarkPlugins={remarkPluginsFor(inline, humanChips)}
         components={components}
         allowedElements={inline ? INLINE_ELEMENTS : undefined}
         unwrapDisallowed={inline}
@@ -242,7 +245,7 @@ export function RoomMarkdown({
         {text}
       </ReactMarkdown>
     ),
-    [text, components, inline],
+    [text, components, inline, humanChips],
   );
 
   return (

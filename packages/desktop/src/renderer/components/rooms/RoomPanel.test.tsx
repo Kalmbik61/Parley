@@ -534,6 +534,35 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(Array.from(document.querySelectorAll('[data-message-id]')).map((row) => row.getAttribute('data-message-id'))).toEqual(['m-1', 'm-2']);
   });
 
+  it('свой @human человека — текст, а не чип «@you»; у сообщения агента чип остаётся (Parley 0.3.0)', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { text: 'Сам себе, @human и @s02', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-02',
+            to: ['human'],
+            text: 'Нужен ответ, @human',
+            readBy: { human: 'x' },
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+        ],
+      }),
+    );
+    const own = messageRow('m-1');
+    expect(own.querySelector('[data-mention-human]')).toBeNull();
+    expect(own.querySelector('[title="Mentions you"]')).toBeNull();
+    // Чипы сессий у человека, как и прежде.
+    expect(own.querySelector('[data-mention="s-02"]')?.textContent).toBe('@S02 бэкенд');
+    expect(own.querySelector('[data-room-markdown]')?.textContent).toBe(
+      'Сам себе, @human и @S02 бэкенд',
+    );
+
+    const theirs = messageRow('m-2');
+    expect(theirs.querySelector('[data-mention-human]')?.textContent).toBe('@you');
+    expect(theirs.querySelector('[data-room-markdown]')?.textContent).toBe('Нужен ответ, @you');
+  });
+
   it('★ у сообщений ведущего', () => {
     const entry = entryOf({ messages: [message('m-1', { from: 's-01', readBy: {} }), message('m-2', { from: 's-02', readBy: {} })] });
     renderPanel(entry);

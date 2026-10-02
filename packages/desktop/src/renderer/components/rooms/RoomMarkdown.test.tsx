@@ -284,6 +284,89 @@ describe('RoomMarkdown — упоминание человека @human (Parley 
     expect(parses()).toBe(first);
     expect(humanChips(view.container)[0]).toBe(chip);
   });
+
+  describe('свой @human человека — текст, а не чип: humanChips={false}', () => {
+    const renderOwn = (text: string, inline = false) =>
+      render(
+        <RoomMarkdown
+          text={text}
+          inline={inline}
+          humanChips={false}
+          labelOf={labelOf}
+          onOpenExternal={() => {}}
+        />,
+      );
+
+    it('@human остаётся текстом, как написан: без чипа, без «@you», регистр сохранён', () => {
+      const { container } = renderOwn('Вопрос к @human: что дальше? @Human и @HUMAN');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('[title="Mentions you"]')).toBeNull();
+      expect(container.textContent).toBe('Вопрос к @human: что дальше? @Human и @HUMAN');
+    });
+
+    it('чипы сессий остаются: правило касается только @human', () => {
+      const { container } = renderOwn('@s02, @human и @s03 — смотрите');
+      expect(container.querySelectorAll('[data-mention]')).toHaveLength(2);
+      expect(humanChips(container)).toEqual([]);
+      expect(container.textContent).toBe('@S02 бэкенд, @human и @S03 ревью — смотрите');
+    });
+
+    it('в выделении, заголовке, пункте и после переноса строки — тоже текст; перенос остаётся переносом', () => {
+      const { container } = renderOwn('# @human\n\n**@human**\n\n- @human — решай\n\nраз\n@human');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('h1')?.textContent).toBe('@human');
+      expect(container.querySelector('strong')?.textContent).toBe('@human');
+      expect(container.querySelector('li')?.textContent).toBe('@human — решай');
+      const last = Array.from(container.querySelectorAll('p')).at(-1) as HTMLElement;
+      expect(last.querySelector('br')).not.toBeNull();
+      expect(last.textContent).toBe('раз\n@human');
+    });
+
+    it('код, ссылка и email — как и без правила: буквальный текст', () => {
+      const { container } = renderOwn('`@human`, [спросить @human](https://example.com), a@human');
+      expect(humanChips(container)).toEqual([]);
+      expect(container.querySelector('code')?.textContent).toBe('@human');
+      expect(screen.getByRole('link', { name: 'спросить @human' })).toBeTruthy();
+      expect(container.textContent).toBe('@human, спросить @human, a@human');
+    });
+
+    it('строчный вид (плашка решений) — тот же текст без чипа', () => {
+      const { container } = renderOwn('**Решение:** @human, глянь', true);
+      expect(humanChips(container)).toEqual([]);
+      expect(container.textContent).toBe('Решение: @human, глянь');
+    });
+
+    it('humanChips={true} и значение по умолчанию — чип, как было', () => {
+      const { container } = render(
+        <RoomMarkdown text="@human" humanChips labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(humanChips(container).map((chip) => chip.textContent)).toEqual(['@you']);
+    });
+
+    it('правило входит в мемоизацию разбора: смена humanChips разбирает текст заново, тот же — нет', () => {
+      const text = '@human, ответьте';
+      const view = render(<RoomMarkdown text={text} labelOf={labelOf} onOpenExternal={() => {}} />);
+      expect(humanChips(view.container)).toHaveLength(1);
+      const first = parses();
+
+      view.rerender(
+        <RoomMarkdown text={text} humanChips={false} labelOf={labelOf} onOpenExternal={() => {}} />,
+      );
+      expect(parses()).toBe(first + 1);
+      expect(humanChips(view.container)).toEqual([]);
+      expect(view.container.textContent).toBe('@human, ответьте');
+
+      view.rerender(
+        <RoomMarkdown
+          text={text}
+          humanChips={false}
+          labelOf={(id) => labelOf(id)}
+          onOpenExternal={() => {}}
+        />,
+      );
+      expect(parses()).toBe(first + 1);
+    });
+  });
 });
 
 describe('RoomMarkdown — ссылки', () => {
