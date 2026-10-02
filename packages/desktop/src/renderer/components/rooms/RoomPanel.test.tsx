@@ -761,6 +761,25 @@ describe('RoomPanel — ответы с цитатой (Parley 0.3.0)', () => {
     ).toBe(quote('m-1'));
   });
 
+  it('цитата сообщения человека — его @human текстом, как в ленте; цитата сообщения агента — «@you»', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { text: 'Сам себе, @human', at: '2026-09-27T09:00:00.000Z' }),
+          message('m-2', {
+            from: 's-01',
+            text: 'Нужен ответ, @human',
+            at: '2026-09-27T09:01:00.000Z',
+          }),
+          message('m-3', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:02:00.000Z' }),
+          message('m-4', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:03:00.000Z' }),
+        ],
+      }),
+    );
+    expect(quote('m-1').textContent).toBe('↩ You: Сам себе, @human');
+    expect(quote('m-2').textContent).toBe('↩ S01 архитектор: Нужен ответ, @you');
+  });
+
   it('от текста оригинала ничего не осталось (одна картинка без alt) — цитата показывает одну подпись', () => {
     renderPanel(
       entryOf({

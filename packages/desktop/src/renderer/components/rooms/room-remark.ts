@@ -49,10 +49,10 @@ export const MENTION_ATTR = 'data-mention';
 export const HUMAN_MENTION_ATTR = 'data-mention-human';
 
 /**
- * Узел mdast в той мере, в какой его читает и пишет плагин. Пакета типов `mdast` в зависимостях окна нет
- * (его тянет только `react-markdown`), поэтому форма своя.
+ * Узел mdast в той мере, в какой его читает и пишет плагин (и выдержка, `excerpt.ts`). Пакета типов `mdast` в
+ * зависимостях окна нет (его тянет только `react-markdown`), поэтому форма своя.
  */
-interface MdNode {
+export interface MdNode {
   type: string;
   value?: string;
   children?: MdNode[];
@@ -62,6 +62,8 @@ interface MdNode {
   position?: { start: { offset?: number }; end: { offset?: number } };
   /** `link` и `image`. */
   title?: string | null;
+  /** `image` и `imageReference`: то, что лента показывает вместо картинки. */
+  alt?: string | null;
   /** `code`: язык и остаток строки после тройных кавычек. */
   lang?: string | null;
   meta?: string | null;
@@ -78,6 +80,14 @@ const LINE_BREAK = /\r\n|\r|\n/;
 
 /** Мелкая приглушённая подпись над блоком кода. */
 const CAPTION_CLASS = 'text-xs text-muted-foreground';
+
+/**
+ * Узел — подпись над блоком кода (язык и всё за ```): `remarkReveal` ставит её абзацем перед самим блоком. Это
+ * метка кода, а не текст сообщения: выдержка (`excerpt.ts`) её пропускает и берёт строку кода.
+ */
+export function isCodeCaption(node: MdNode): boolean {
+  return node.type === 'paragraph' && node.data?.hProperties?.className === CAPTION_CLASS;
+}
 
 /** Абзац из готового текста, который не разбирается дальше: это исходник, а не разметка. */
 function literalParagraph(value: string, className?: string): MdNode {
