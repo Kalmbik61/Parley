@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -63,6 +63,15 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
     ({ method: name, params: body }) => (globalThis as unknown as Parley).parley.call(name, body),
     { method, params },
   )) as T;
+}
+
+async function providerSessionIdOf(window: Page, ref: Ref): Promise<string | null> {
+  const list = await call<{ entries: Array<{ map: { sessions: Array<{ id: string; providerSessionId: string | null }> } }> }>(
+    window,
+    'works.list',
+    {},
+  );
+  return list.entries.flatMap((entry) => entry.map.sessions).find((candidate) => candidate.id === ref.sessionId)?.providerSessionId ?? null;
 }
 
 /** Текст экрана терминала: строки DOM-рендера подряд. */
@@ -301,6 +310,52 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await hooks.fire('Stop', { last_assistant_message: 'Edited notes.txt.', stop_hook_active: false });
     await expect(chat.getByTestId('chat-turn')).toHaveCount(2);
 
+    // c2) Прерывание Esc (решение 5; живая проверка 2026-10-02): пока идёт вызов, в поле ввода Stop, под
+    // лентой «Working…». `Stop`-хука при прерывании нет — хост видит запись «[Request interrupted by
+    // user]» в журнале сессии (индекс логов узнаёт журнал по `sessionId` записей) и закрывает ход чертой
+    // «Interrupted»: вызов отклонён, Stop и «Working…» пропали.
+    await hooks.fire('UserPromptSubmit', { prompt: 'Run a slow command', permission_mode: 'default' });
+    await hooks.fire('PreToolUse', {
+      tool_name: 'Bash',
+      tool_input: { command: 'sleep 30', description: 'A slow command' },
+      tool_use_id: 'toolu_slow1',
+      permission_mode: 'default',
+    });
+    await expect(chat.getByTestId('chat-stop')).toBeVisible();
+    await expect(chat.getByTestId('chat-working')).toBeVisible();
+    await expect.poll(() => providerSessionIdOf(window, ref)).not.toBeNull();
+    const providerSessionId = (await providerSessionIdOf(window, ref))!;
+    const historyRoot = process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+    if (historyRoot === undefined) throw new Error('нет PARLEY_CLAUDE_PROJECTS_DIR — global-setup не отработал');
+    const historyDir = path.join(historyRoot, `-e2e-chat-hooks-${ref.sessionId}-${Date.now()}`);
+    await mkdir(historyDir, { recursive: true });
+    // Запись новее начала хода на секунду: часы хоста и теста одни, но запас не повредит.
+    const interruptedAt = new Date(Date.now() + 1000).toISOString();
+    const record = (text: string, uuid: string): string =>
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+        uuid,
+        timestamp: interruptedAt,
+        sessionId: providerSessionId,
+        cwd: project,
+        userType: 'external',
+        entrypoint: 'cli',
+        version: '2.1.286',
+      });
+    await writeFile(
+      path.join(historyDir, `${providerSessionId}.jsonl`),
+      `${record('Run a slow command', 'u-slow-1')}\n${record('[Request interrupted by user]', 'u-slow-2')}\n`,
+    );
+    await expect(chat.locator('[data-testid="chat-turn"][data-turn-interrupted]')).toHaveCount(1, { timeout: 20_000 });
+    await expect(chat.locator('[data-testid="chat-turn"][data-turn-interrupted]')).toContainText('Interrupted');
+    await expect(chat.getByTestId('chat-tool').filter({ hasText: 'sleep 30' })).toHaveAttribute('data-tool-status', 'rejected');
+    await expect(chat.getByTestId('chat-stop')).toHaveCount(0);
+    await expect(chat.getByTestId('chat-working')).toHaveCount(0);
+    await expect(chat.getByTestId('chat-turn')).toHaveCount(3);
+
     // h) Сегмент Terminal: поверхность xterm, чата нет, ответы хоста видны в экране стаба; обратно — лента на месте.
     const before = await call<{ items: unknown[]; revision: number }>(window, 'feed.snapshot', { ref });
     const promptsBefore = await chat.getByTestId('chat-prompt').count();
@@ -313,7 +368,7 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await expect(window.locator('.xterm')).toHaveCount(0);
     await expect(chat.getByTestId('chat-tool').filter({ hasText: 'Edit' })).toHaveCount(1);
     await expect(chat.getByTestId('chat-prompt')).toHaveCount(promptsBefore);
-    await expect(chat.getByTestId('chat-turn')).toHaveCount(2);
+    await expect(chat.getByTestId('chat-turn')).toHaveCount(3);
     // Ревизия ленты хоста не обнуляется переключением: событий за это время не было, снимок тот же.
     const after = await call<{ items: unknown[]; revision: number }>(window, 'feed.snapshot', { ref });
     expect(after.revision).toBe(before.revision);
