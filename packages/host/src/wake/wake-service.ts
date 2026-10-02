@@ -25,12 +25,13 @@ import {
   unreadFor,
   updateMap,
   workPaths,
+  type DeliveryAction,
   type DeliveryInput,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
 import { refKey } from '@parley/protocol';
-import type { NoticeKind, SessionRef } from '@parley/protocol';
+import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
@@ -78,16 +79,16 @@ const PASTE_MODE_RETRY_MS = 200;
 const PASTE_MODE_RETRIES = 15;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
-/** Причины `deliveryAction`, при которых письма живой сессии лежат и ждут: о них — строка в логе. */
-const WAITING_REASONS: ReadonlySet<string> = new Set(['busy', 'draft', 'in-flight', 'no-hooks']);
+/** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
+const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks']);
 
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
   pointed: Set<string>;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
-  /** Причина, по которой письма живой сессии сейчас ждут, — уже записанная в лог; `null` — не ждут. */
-  waiting: string | null;
+  /** Причина, по которой письма сессии сейчас не забраны, — уже отданная окну и записанная в лог; `null` — писем нет. */
+  waiting: MailWait | null;
   /**
    * Печать указателя, чей Enter ещё не ушёл (`typeAndSubmit`). Наружу — `inFlight(ref)`:
    * `pty.send` в это время отвечает busy, а не печатает поверх.
@@ -220,6 +221,21 @@ export function createWakeService(
     // И в лог: уведомление видит только открытое окно, а разбирать «сессия не ответила» приходится позже.
     host.log.info('будильник: уведомление', { kind, ref });
     host.broadcast('host.notice', { kind, ref, text, at: new Date().toISOString() });
+  }
+
+  /**
+   * Причина, по которой письма сессии ещё не забраны, — окну (`LiveMetrics.mailWaiting`: комната пишет её
+   * рядом с «not picked up yet») и в лог хоста, раз на причину: черновик и попытка живут только в памяти
+   * хоста, и без следа «сессия не отвечает в комнате» по файлам работы не разобрать. Зовётся последним
+   * делом пересчёта: рассылка активности возвращается сюда же вложенным пересчётом.
+   */
+  function publishWaiting(ref: SessionRef, state: AttemptState, reason: MailWait | null): void {
+    if (reason === state.waiting) return;
+    state.waiting = reason;
+    if (reason !== null && LOGGED_REASONS.has(reason)) {
+      host.log.info('будильник: письма ждут', { ref, reason });
+    }
+    activity.mailWaiting(ref, reason);
   }
 
   /** Письма, непрочитанные сейчас, считаются уже указанными: будить ими некого. */
@@ -434,10 +450,23 @@ export function createWakeService(
     const handle = pty.get(ref);
 
     if (handle === undefined) {
+      const letters = unreadFor(entry.map, session.id).length > 0;
       // Без нашего PTY письмо поднимает только спящую: живая без него —
       // сессия, поднятая не хостом (CLI), со своим каналом звонка, `pending`
       // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2).
-      if (session.lifecycle !== 'sleeping' || state.resuming || state.resumeUnavailable) return;
+      if (session.lifecycle !== 'sleeping' || state.resuming || state.resumeUnavailable) {
+        const reason: MailWait | null = !letters
+          ? null
+          : session.lifecycle === 'pending'
+            ? 'pending'
+            : session.lifecycle !== 'sleeping'
+              ? null
+              : state.resuming
+                ? 'resuming'
+                : 'sleeping';
+        publishWaiting(ref, state, reason);
+        return;
+      }
       const input: DeliveryInput = {
         session,
         activity: null,
@@ -459,6 +488,19 @@ export function createWakeService(
       }
       if (action.kind === 'resume') void resumeSession(ref, session, state, action);
       else if (action.kind === 'none' && action.reason === 'resume-limit') limitNotice(ref);
+      publishWaiting(
+        ref,
+        state,
+        !letters
+          ? null
+          : action.kind === 'resume'
+            ? 'resuming'
+            : action.kind === 'none' && action.reason === 'resume-limit'
+              ? 'resume-limit'
+              : action.kind === 'none' && action.reason === 'paused'
+                ? 'paused'
+                : 'sleeping',
+      );
       return;
     }
 
@@ -467,7 +509,10 @@ export function createWakeService(
     const live = activity.get(ref);
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
-      if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) return;
+      if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) {
+        publishWaiting(ref, state, unreadFor(entry.map, session.id).length > 0 ? 'resuming' : null);
+        return;
+      }
       state.pointerAfter = null;
     }
 
@@ -487,27 +532,48 @@ export function createWakeService(
       queueWhileBusy: codex,
     });
 
-    // След в логе, почему письма живой сессии ждут, — раз на причину: черновик и попытка живут только в
-    // памяти хоста, и без следа «сессия не отвечает в комнате» по файлам работы не разобрать.
-    const waiting =
-      action.kind === 'none' && WAITING_REASONS.has(action.reason) ? action.reason : null;
-    if (waiting !== state.waiting) {
-      state.waiting = waiting;
-      if (waiting !== null) host.log.info('будильник: письма ждут', { ref, reason: waiting });
+    if (action.kind !== 'type-pointer') {
+      publishWaiting(ref, state, waitingOf(action, state));
+      return;
     }
-
-    if (action.kind !== 'type-pointer') return;
     if (codex) {
       // Codex — только вставкой, как в `pty.send`: без режима вставки на экране TUI ещё не поднялся (или его
       // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
       // повторяется сам.
       if (!handle.bracketedPaste()) {
         waitForPasteMode(ref, state);
+        publishWaiting(ref, state, 'busy');
         return;
       }
       state.pasteRetries = 0;
     }
     beginAttempt(ref, state, action, codex);
+    // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
+    publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');
+  }
+
+  /** Причина ожидания по отказу `deliveryAction` у сессии с живым процессом; `null` — писем нет. */
+  function waitingOf(action: Extract<DeliveryAction, { kind: 'none' | 'resume' }>, state: AttemptState): MailWait | null {
+    if (action.kind === 'resume') return 'resuming';
+    switch (action.reason) {
+      case 'no-letters':
+      case 'closed':
+        return null;
+      case 'paused':
+        return 'paused';
+      // Указатель напечатан: ход по нему ещё не начался — или уже идёт, а письма агент пока не прочёл.
+      case 'already-pointed':
+        return state.inFlight ? 'in-flight' : 'pointed';
+      case 'not-live':
+        return 'pending';
+      case 'resume-limit':
+        return 'resume-limit';
+      case 'no-hooks':
+      case 'busy':
+      case 'draft':
+      case 'in-flight':
+        return action.reason;
+    }
   }
 
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */

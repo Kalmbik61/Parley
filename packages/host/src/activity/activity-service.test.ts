@@ -184,6 +184,58 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
 
+  it('2а: после Stop служебные записи журнала Claude Code (итоги хуков, длительность) не возвращают working', async () => {
+    const { ref } = await activeSession({ providerSessionId: 's-tail' });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    const journal = path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(journal, hook('UserPromptSubmit'));
+    await appendFile(journal, hook('Stop'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+
+    // Как пишет Claude Code: ответ — до Stop, итоги хуков и длительность хода — после него (живая проверка
+    // 2026-10-02: по этим записям сессия ещё 30 с числилась working, и письма ей ждали).
+    const before = new Date(Date.now() - 5_000).toISOString();
+    const after = new Date(Date.now() + 2_000).toISOString();
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-tail', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-tail.jsonl'),
+      `${[
+        record({ type: 'user', timestamp: before, message: { role: 'user', content: 'привет' } }),
+        record({ type: 'assistant', timestamp: before, message: { role: 'assistant', content: [{ type: 'text', text: 'ок' }] } }),
+        record({ type: 'system', subtype: 'stop_hook_summary', timestamp: after }),
+        record({ type: 'system', subtype: 'turn_duration', timestamp: after, durationMs: 1000 }),
+      ].join('\n')}\n`,
+    );
+
+    await waitFor(() => a.logFile(ref) !== null, 15_000);
+    await settle(400);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', source: 'hooks' });
+  }, 30_000);
+
+  it('2б: mailWaiting — причина ожидания писем уходит в метрики и рассылку, null её снимает', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.mailWaiting ?? null).toBeNull();
+
+    a.mailWaiting(ref, 'draft');
+    expect(a.get(ref)?.metrics?.mailWaiting).toBe('draft');
+    const sent = activityChanges(ref).length;
+    // То же значение — ни пересчёта, ни рассылки.
+    a.mailWaiting(ref, 'draft');
+    expect(activityChanges(ref)).toHaveLength(sent);
+
+    a.mailWaiting(ref, null);
+    expect(a.get(ref)?.metrics?.mailWaiting).toBeNull();
+  });
+
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {
     const startedAt = new Date().toISOString();
     const { ref } = await activeSession({ providerSessionId: 's-log', createEventsDir: false });

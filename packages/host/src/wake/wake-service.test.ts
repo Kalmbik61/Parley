@@ -232,7 +232,7 @@ describe('WakeService', () => {
 
   it('3: черновик блокирует указатель; после \\r черновик снят — указатель уходит', async () => {
     const { workId, sessionId } = await activeSession();
-    const { stream, pty, ref } = await rig(sessionId, workId);
+    const { stream, pty, ref, activity } = await rig(sessionId, workId);
 
     pty.input(ref, 'пр');
     await sendLetter(workId, sessionId);
@@ -244,9 +244,13 @@ describe('WakeService', () => {
       .map((entry) => entry.reason);
     expect(reasons.at(-1)).toBe('draft');
     expect(reasons.filter((reason) => reason === 'draft')).toHaveLength(1);
+    // Та же причина — окну: комната пишет её рядом с «not picked up yet».
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('draft');
 
     pty.input(ref, '\r');
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Указатель дошёл, письмо ещё не прочитано: причина сменилась на «сообщено».
+    await waitFor(() => ['in-flight', 'pointed'].includes(activity.get(ref)?.metrics?.mailWaiting ?? ''), 3000);
   });
 
   it('3а: активность стала working до своего Enter — Enter всё равно уходит, указатель не остаётся в поле ввода', async () => {

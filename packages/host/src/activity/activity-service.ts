@@ -43,6 +43,7 @@ import {
   refKey,
   type EventData,
   type LiveMetrics,
+  type MailWait,
   type LiveTask,
   type SessionRef,
   type WorksSnapshot,
@@ -111,6 +112,11 @@ export interface ActivityService {
    * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
    */
   questionHeld(ref: SessionRef, held: boolean): void;
+  /**
+   * Почему письма сессии ещё не забраны (причина будильника) — уходит окну в `LiveMetrics.mailWaiting`:
+   * комната пишет её рядом с «not picked up yet». `null` — писем нет.
+   */
+  mailWaiting(ref: SessionRef, reason: MailWait | null): void;
   /**
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
@@ -248,6 +254,8 @@ export function createActivityService(
   const autoTitled = new Set<string>();
   /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
   const questionHeldKeys = new Set<string>();
+  /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
+  const mailWaits = new Map<string, MailWait>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -453,6 +461,7 @@ export function createActivityService(
       model: indexed?.primaryModel ?? null,
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
+      mailWaiting: mailWaits.get(key) ?? null,
     };
   }
 
@@ -717,6 +726,9 @@ export function createActivityService(
     }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
+    for (const key of Array.from(mailWaits.keys())) {
+      if (!validSessions.has(key)) mailWaits.delete(key);
+    }
     for (const key of Array.from(questionHeldKeys)) {
       if (!validSessions.has(key)) questionHeldKeys.delete(key);
     }
@@ -777,6 +789,13 @@ export function createActivityService(
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),
+    mailWaiting(ref, reason) {
+      const key = refKey(ref);
+      if ((mailWaits.get(key) ?? null) === reason) return;
+      if (reason === null) mailWaits.delete(key);
+      else mailWaits.set(key, reason);
+      recompute(ref);
+    },
     questionHeld(ref, held) {
       const key = refKey(ref);
       if (questionHeldKeys.has(key) === held) return;

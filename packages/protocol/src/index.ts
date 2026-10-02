@@ -10,6 +10,7 @@ export type {
   LimitWindow,
   LiveMetrics,
   LiveTask,
+  MailWait,
   ModelOption,
   Capabilities,
   CapabilityAgent,
