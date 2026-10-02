@@ -248,6 +248,13 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
   }
 
   test('автопоказ чата по SessionStart, текст по порциям, вызов с диффом, переключатель, меню режима', async () => {
+    // Скилл проекта и файл для подсказок поля ввода (шаг j): лежат до запуска окна — хост читает их с диска.
+    await mkdir(path.join(project, '.claude', 'skills', 'demo-skill'), { recursive: true });
+    await writeFile(
+      path.join(project, '.claude', 'skills', 'demo-skill', 'SKILL.md'),
+      '---\nname: demo-skill\ndescription: Demo skill for E2E\n---\n\nDemo body.\n',
+    );
+    await writeFile(path.join(project, 'notes.txt'), 'alpha\nbeta\n');
     // Сессия «на вопросе доверия»: хуков нет вовсе, вкладка открывается терминалом.
     const { window, ref, hooks, errors } = await open({ STUB_NO_HOOKS: '1' });
     await expect(window.getByTestId('terminal-body')).toBeVisible();
@@ -385,6 +392,28 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await expect(options.nth(3)).toHaveText('Auto');
     await options.nth(2).click();
     await expect(window.locator('[data-sonner-toast]').filter({ hasText: 'Open the terminal to switch the mode' })).toBeVisible({ timeout: 20_000 });
+
+    // j) Подсказки поля ввода (живая проверка 2026-10-02): скилл проекта по «/», файл проекта по «@», модели по «/model ».
+    const composer = chat.getByTestId('chat-composer');
+    const field = composer.locator('textarea');
+    const suggestions = window.getByTestId('chat-suggestions');
+    await field.click();
+    await field.pressSequentially('/dem');
+    const skill = suggestions.locator('[data-testid="chat-suggestion"][data-value="/demo-skill "]');
+    await expect(skill).toBeVisible({ timeout: 20_000 });
+    await expect(skill).toContainText('Demo skill for E2E');
+    await field.press('Enter');
+    await expect(field).toHaveValue('/demo-skill ');
+    await expect(suggestions).toHaveCount(0);
+    await field.fill('');
+    await field.pressSequentially('@not');
+    await expect(suggestions.locator('[data-testid="chat-suggestion"][data-value="@notes.txt "]')).toBeVisible();
+    await field.press('Escape');
+    await expect(suggestions).toHaveCount(0);
+    await field.fill('');
+    await field.pressSequentially('/model ');
+    expect(await suggestions.getByTestId('chat-suggestion').count()).toBeGreaterThanOrEqual(1);
+    await field.fill('');
 
     expect(errors).toEqual([]);
   });

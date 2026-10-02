@@ -653,6 +653,14 @@ export const S = {
       placeholder: 'Message Claude — Enter to send',
       send: 'Send',
       queue: 'Queue',
+      attach: 'Attach a file',
+    },
+    /** Подсказки поля ввода: команды, скиллы, модели, `@`-файлы и субагенты (живая проверка 2026-10-02). */
+    suggestions: {
+      label: 'Suggestions',
+      terminal: 'opens in the terminal',
+      agent: 'agent',
+      source: { user: 'user skill', project: 'project skill', plugin: 'plugin skill' },
     },
     model: 'Model',
     /** Меню моделей в тулбаре: выбор уходит в CLI текстом `/model <id>` (живая проверка 2026-10-02). */

@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FeedItem, WorkSession } from '@parley/core';
-import { refKey, type SessionRef } from '@parley/protocol';
+import { refKey, type Capabilities, type SessionRef } from '@parley/protocol';
+import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -25,6 +26,7 @@ import { useWorksStore } from '../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
@@ -73,6 +75,7 @@ beforeEach(() => {
   sendDeps = { bridge, session: () => null, openSession: () => undefined };
   resetFeedStoreForTests();
   resetChatUiStoreForTests();
+  resetCapabilitiesStoreForTests();
   hostWith(FEED_METHODS);
   useProvidersStore.setState({ providers: [CLAUDE_OK], loaded: true });
   useUiStore.setState({ visibleSessionRefs: {} });
@@ -784,5 +787,228 @@ describe('ChatView — индикатор работы, Resume и меню мо�
     useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: null }], loaded: true });
     expect(model().tagName).toBe('SPAN');
     expect(screen.queryByTestId('chat-model-option')).toBeNull();
+  });
+});
+
+describe('ChatView — подсказки поля ввода (живая проверка 2026-10-02)', () => {
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const type = (value: string): void => {
+    fireEvent.change(field(), { target: { value } });
+  };
+  const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+  const values = (): Array<string | undefined> => screen.queryAllByTestId('chat-suggestion').map((row) => row.dataset.value);
+  const entry = (name: string, kind: 'file' | 'dir' = 'file'): DirEntry => ({ name, kind, size: 0, mtimeMs: 0, ignored: false, target: null });
+  const root = { workKey: '/tmp/p w-01', spec: { kind: 'project' as const } };
+  const CAPS: Capabilities = {
+    commands: [
+      { name: 'clear', description: 'Clear the conversation', terminal: false },
+      { name: 'config', description: 'Open settings', terminal: true },
+    ],
+    skills: [{ name: 'demo-skill', description: 'Demo skill', source: 'project', path: '/tmp/p/.claude/skills/demo-skill' }],
+    agents: [{ name: 'reviewer', description: 'Reviews code', source: 'user', path: '/h/.claude/agents/reviewer.md' }],
+  };
+
+  /** Хост с `capabilities.list`: мост отдаёт CAPS; сессия и работа в сторе — корень файлов считается из них. */
+  async function renderWithCapabilities(): Promise<void> {
+    hostWith([...FEED_METHODS, 'capabilities.list']);
+    bridge.setHandler('capabilities.list', () => CAPS);
+    useProvidersStore.setState({
+      providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] }],
+      loaded: true,
+    });
+    const session = makeSession('s-01', 'S01');
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })], branches: {}, loading: false, error: null });
+    renderBody(session);
+    setFeed([]);
+    await act(async () => {});
+  }
+
+  it('«/» — команды и скиллы с описанием; terminal — с меткой; фильтр по подстроке, точные начала первыми', async () => {
+    await renderWithCapabilities();
+    type('/');
+    expect(values()).toEqual(['/clear ', '/config ', '/demo-skill ']);
+    const rows = screen.getAllByTestId('chat-suggestion');
+    expect(rows[1]!.textContent).toContain(S.chat.suggestions.terminal);
+    expect(rows[2]!.textContent).toContain('Demo skill');
+    expect(rows[2]!.textContent).toContain(S.chat.suggestions.source.project);
+    type('/o');
+    expect(values()).toEqual(['/config ', '/demo-skill ']);
+    type('/cl');
+    expect(values()).toEqual(['/clear ']);
+    type('/zzz');
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+  });
+
+  it('Enter при открытом попапе вставляет «/clear » и не отправляет; фокус и каретка в поле', async () => {
+    await renderWithCapabilities();
+    type('/cl');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('/clear ');
+    expect(field().selectionStart).toBe(7);
+    expect(sends()).toEqual([]);
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+    expect(document.activeElement).toBe(field());
+  });
+
+  it('↑/↓ двигают выбор, Tab и клик принимают, Esc закрывает до следующей буквы', async () => {
+    await renderWithCapabilities();
+    type('/');
+    const selected = (): string | undefined => screen.getAllByTestId('chat-suggestion').find((row) => row.getAttribute('aria-selected') === 'true')?.dataset.value;
+    expect(selected()).toBe('/clear ');
+    fireEvent.keyDown(field(), { key: 'ArrowDown' });
+    expect(selected()).toBe('/config ');
+    fireEvent.keyDown(field(), { key: 'ArrowUp' });
+    fireEvent.keyDown(field(), { key: 'ArrowUp' });
+    expect(selected()).toBe('/demo-skill ');
+    fireEvent.keyDown(field(), { key: 'Tab' });
+    expect(field().value).toBe('/demo-skill ');
+
+    type('/c');
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+    // Закрытые подсказки не перехватывают Enter: он отправляет.
+    type('/cl');
+    expect(screen.getByTestId('chat-suggestions')).toBeTruthy();
+    fireEvent.click(screen.getAllByTestId('chat-suggestion')[0]!);
+    expect(field().value).toBe('/clear ');
+  });
+
+  it('«/model » — модели провайдера; выбор вставляет «/model <id>» без пробела и без отправки', async () => {
+    await renderWithCapabilities();
+    type('/model ');
+    expect(values()).toEqual(['/model opus', '/model sonnet']);
+    fireEvent.keyDown(field(), { key: 'ArrowDown' });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('/model sonnet');
+    expect(sends()).toEqual([]);
+    // Теперь попап закрыт, Enter отправляет.
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    type('/model sonnet');
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sends()).toEqual([{ ref: REF, text: '/model sonnet', submit: true }]);
+  });
+
+  it('«@» — субагенты и файлы корня; каталог продолжает подсказки, файл вставляется с пробелом', async () => {
+    await renderWithCapabilities();
+    bridge.setDir(root, '', [entry('src', 'dir'), entry('notes.txt'), entry('.git', 'dir'), entry('my file.txt')]);
+    bridge.setDir(root, 'src', [entry('components', 'dir'), entry('index.ts')]);
+    type('@');
+    await act(async () => {});
+    expect(values()).toEqual(['@reviewer ', '@src/', '@notes.txt ']);
+    type('@s');
+    await act(async () => {});
+    expect(values()).toEqual(['@src/']);
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('@src/');
+    await act(async () => {});
+    expect(values()).toEqual(['@src/components/', '@src/index.ts ']);
+    type('@src/in');
+    expect(values()).toEqual(['@src/index.ts ']);
+    fireEvent.keyDown(field(), { key: 'Tab' });
+    expect(field().value).toBe('@src/index.ts ');
+  });
+
+  it('Esc закрывает попап «@»', async () => {
+    await renderWithCapabilities();
+    bridge.setDir(root, '', [entry('notes.txt')]);
+    type('@no');
+    await act(async () => {});
+    expect(values()).toEqual(['@notes.txt ']);
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+  });
+
+  it('хост без capabilities.list — метод не зовётся, команд нет, модели работают', async () => {
+    useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }] }], loaded: true });
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    await act(async () => {});
+    type('/');
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+    type('/model ');
+    expect(values()).toEqual(['/model opus']);
+    expect(bridge.calls.filter((call) => call.method === 'capabilities.list')).toEqual([]);
+  });
+
+  it('capabilities.list не чаще раза в 60 с на проект: повторное монтирование берёт готовое', async () => {
+    await renderWithCapabilities();
+    cleanup();
+    renderBody(makeSession('s-01', 'S01'));
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'capabilities.list')).toEqual([
+      { method: 'capabilities.list', params: { projectPath: '/tmp/p', provider: 'claude' } },
+    ]);
+  });
+});
+
+describe('ChatView — вложения в поле ввода (живая проверка 2026-10-02)', () => {
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const type = (value: string): void => {
+    fireEvent.change(field(), { target: { value } });
+  };
+  const imageData = { items: [{ kind: 'file', type: 'image/png' }], getData: () => '' };
+
+  it('вставка картинки без текста — saveDropImage, путь в кавычках по каретке, браузерная вставка отменена', async () => {
+    bridge.setSaveDropImage('/h/drops/a b.png');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('ab');
+    field().setSelectionRange(1, 1);
+    const notCancelled = fireEvent.paste(field(), { clipboardData: imageData });
+    expect(notCancelled).toBe(false);
+    await act(async () => {});
+    expect(bridge.saveDropImageCalls).toEqual(['clipboard']);
+    expect(field().value).toBe("a'/h/drops/a b.png' b");
+    expect(field().selectionStart).toBe(20);
+  });
+
+  it('вставка с текстом в буфере — saveDropImage не зовётся, вставка не отменяется', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    const notCancelled = fireEvent.paste(field(), {
+      clipboardData: { items: [{ kind: 'string', type: 'text/plain' }, { kind: 'file', type: 'image/png' }], getData: () => 'text' },
+    });
+    expect(notCancelled).toBe(true);
+    await act(async () => {});
+    expect(bridge.saveDropImageCalls).toEqual([]);
+  });
+
+  it('отказ saveDropImage — тост: слишком большая картинка отдельным текстом, прочее — по коду', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    bridge.setSaveDropImage({ code: 'drops:too-large', message: 'big' });
+    fireEvent.paste(field(), { clipboardData: imageData });
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledWith(S.terminal.imageTooLarge);
+    expect(field().value).toBe('');
+  });
+
+  it('бросок файлов на вид: подсветка data-dropping, пути в поле; бросок без файлов не принимается', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    const view = screen.getByTestId('chat-view');
+    fireEvent.dragOver(view, { dataTransfer: { types: ['Files'] } });
+    expect(view.hasAttribute('data-dropping')).toBe(true);
+    fireEvent.drop(view, { dataTransfer: { types: ['Files'], files: [new File([], 'one.png'), new File([], 'two words.txt')] } });
+    expect(view.hasAttribute('data-dropping')).toBe(false);
+    expect(field().value).toBe("'/fake/one.png' '/fake/two words.txt' ");
+
+    fireEvent.dragOver(view, { dataTransfer: { types: ['text/plain'] } });
+    expect(view.hasAttribute('data-dropping')).toBe(false);
+  });
+
+  it('скрепка — chooseFiles, пути в поле; отмена диалога ничего не вставляет', async () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    const attach = screen.getByTestId('chat-attach');
+    expect(attach.getAttribute('title')).toBe(S.chat.composer.attach);
+    fireEvent.click(attach);
+    await act(async () => {});
+    expect(field().value).toBe('');
+    bridge.setChosenFiles(['/a/notes.txt']);
+    fireEvent.click(attach);
+    await act(async () => {});
+    expect(field().value).toBe("'/a/notes.txt' ");
   });
 });

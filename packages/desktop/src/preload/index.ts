@@ -169,6 +169,7 @@ const bridge = {
       ipcRenderer.send('app:set-badge', count);
     },
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
+    chooseFiles: () => ipcRenderer.invoke('app:choose-files') as Promise<string[]>,
     version: () => ipcRenderer.invoke('app:version') as Promise<string | null>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
     reconnect: () => ipcRenderer.invoke('app:reconnect') as Promise<void>,

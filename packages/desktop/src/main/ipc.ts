@@ -145,6 +145,7 @@ export interface RegisterIpcOptions {
   connection: HostConnection;
   openExternal: (url: string) => Promise<void>;
   chooseFolder: () => Promise<string | null>;
+  chooseFiles: () => Promise<string[]>;
   /** Форму уже проверил и тексты обрезал `app:notify` (кусок 4.3). */
   showNotification: (note: AppNote) => void;
   /** Отложенная цель клика для окна, которое ещё грузилось (`app:take-focus-target`, кусок 4.3). */
@@ -262,6 +263,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     connection,
     openExternal,
     chooseFolder,
+    chooseFiles,
     showNotification,
     takeFocusTarget,
     getUpdate,
@@ -330,6 +332,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   });
 
   ipcMain.handle('app:choose-folder', withIpcError(() => chooseFolder()));
+  ipcMain.handle('app:choose-files', withIpcError(() => chooseFiles()));
 
   ipcMain.handle('app:restart-host', withIpcError(() => connection.restartHost()));
   ipcMain.handle('app:reconnect', withIpcError(() => connection.connect()));

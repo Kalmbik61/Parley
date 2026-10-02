@@ -92,6 +92,8 @@ export interface ParleyBridge {
     onFocusTarget(listener: (target: FocusTarget) => void): () => void;
     setBadge(count: number): void;
     chooseFolder(): Promise<string | null>;
+    /** Диалог выбора файлов для вложений поля ввода «Chat»: пути выбранных, [] — отмена. */
+    chooseFiles(): Promise<string[]>;
     /**
      * Версия окна (`app.getVersion()`, 0.2.0): с ней страница сверяет версию хоста — хост другой сборки
      * перезапускают. `null` — окно не собрано (`pnpm dev`, E2E), и сверять нечего.

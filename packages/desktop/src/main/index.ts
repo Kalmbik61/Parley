@@ -462,6 +462,12 @@ if (!gotLock) {
         if (result.canceled || result.filePaths.length === 0) return null;
         return result.filePaths[0] ?? null;
       },
+      chooseFiles: async () => {
+        const window = mainWindow;
+        const options = { properties: ['openFile', 'multiSelections'] } satisfies Electron.OpenDialogOptions;
+        const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+        return result.canceled ? [] : result.filePaths;
+      },
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
       getUpdate: () => updates.latest(),

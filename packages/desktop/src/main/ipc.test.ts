@@ -113,6 +113,7 @@ function setup(
   getUpdate: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
+  chooseFiles: ReturnType<typeof vi.fn>;
   setDirtyBuffers: ReturnType<typeof vi.fn>;
   answerClose: ReturnType<typeof vi.fn>;
 } {
@@ -157,6 +158,7 @@ function setup(
   const openPath = vi.fn().mockResolvedValue('');
   // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
   const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
+  const chooseFiles = vi.fn().mockResolvedValue(['/h/a.png']);
   const setDirtyBuffers = vi.fn();
   const answerClose = vi.fn();
   const roots: RootsRegistry =
@@ -183,6 +185,7 @@ function setup(
     titlebarDoubleClick,
     openExternal: vi.fn().mockResolvedValue(undefined),
     chooseFolder: vi.fn(),
+    chooseFiles,
     showNotification,
     takeFocusTarget,
     getUpdate,
@@ -217,6 +220,7 @@ function setup(
     getUpdate,
     openPath,
     saveDropImage,
+    chooseFiles,
     setDirtyBuffers,
     answerClose,
   };
@@ -449,6 +453,17 @@ describe('registerIpc', () => {
       });
     }
     expect(saveDropImage).not.toHaveBeenCalled();
+  });
+
+  it('app:choose-files зовёт chooseFiles и отдаёт список путей; отказ доходит с кодом failed', async () => {
+    const { ipcMain, chooseFiles } = setup();
+    expect(await ipcMain.invoke('app:choose-files')).toEqual(['/h/a.png']);
+    expect(chooseFiles).toHaveBeenCalledTimes(1);
+    chooseFiles.mockRejectedValue(new Error('диалог упал'));
+    await expect(ipcMain.invoke('app:choose-files')).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'диалог упал' });
+      return true;
+    });
   });
 
   it('тест 9 куска 5.4: отказ saveDropImage доходит с кодом failed', async () => {

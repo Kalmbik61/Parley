@@ -18,31 +18,41 @@
  * терминале» (решение Н) — когда активность сессии `blocked`, а карточки `pending` в ленте нет (диалог
  * без хука) и так держится 300 мс подряд; с карточкой ждёт человека сама карточка.
  *
+ * Подсказки и вложения поля ввода (живая проверка 2026-10-02): команды, скиллы и субагенты берутся у хоста
+ * (`capabilities-store.ts`), модели — из провайдера, файлы — из рабочей папки сессии (`files.list`). Файлы,
+ * брошенные на вид, и скриншот из буфера вставляются в поле путём — отправляет их только человек.
+ *
  * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
  * Queue не показываются, даже если лента кончилась промптом без конца хода.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
 import { refKey, type ModelOption, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import type { FileRoot } from '../../shared/files-types.js';
 import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { defaultRoot } from '../files/store.js';
+import { cn } from '../lib/cn.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { NotRunningCard } from '../terminal/NotRunningCard.js';
+import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
-import { Composer } from './Composer.js';
+import { useCapabilitiesStore } from './capabilities-store.js';
+import { Composer, type ComposerHandle } from './Composer.js';
 import { currentModel, hasPendingCard, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { useFeedStore, type FeedEntry } from './store.js';
+import type { SuggestionSource } from './use-suggestions.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
 import { WaitingBanner } from './WaitingBanner.js';
@@ -120,6 +130,26 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   });
 
   const sessionKey = refKey(sessionRef);
+  const entry = useWorksStore((state) => state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId));
+  const capabilities = useCapabilitiesStore((state) => state.byProject[sessionRef.projectPath]?.capabilities ?? null);
+  useEffect(() => {
+    useCapabilitiesStore.getState().load(bridge, sessionRef.projectPath, provider);
+  }, [bridge, sessionRef.projectPath, provider]);
+  // Файлы подсказок — корень сессии, как у «Файлов»: рабочая копия (worktree), иначе проект.
+  const filesRoot = useMemo<FileRoot | null>(
+    () => (entry === undefined ? null : { workKey, spec: defaultRoot(entry, sessionRef.sessionId) }),
+    [entry, workKey, sessionRef.sessionId],
+  );
+  const listDir = useCallback(
+    (dir: string) => (filesRoot === null ? Promise.resolve([]) : bridge.files.list(filesRoot, dir)),
+    [bridge, filesRoot],
+  );
+  const suggestionSource = useMemo<SuggestionSource>(
+    () => ({ capabilities, models: modelOptions, listDir }),
+    [capabilities, modelOptions, listDir],
+  );
+  const composer = useRef<ComposerHandle>(null);
+  const [dropping, setDropping] = useState(false);
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
   const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
   useEffect(() => {
@@ -168,6 +198,47 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     void sendWithToast(sendDeps, sessionRef, `/model ${id}`, true, { silentSuccess: true }).finally(() => setModelBusy(false));
   };
 
+  // Скриншот из буфера → drops/ (main) → путь; отказы — теми же тостами, что у терминала.
+  const pasteImage = useCallback(async (): Promise<string | null> => {
+    try {
+      return await bridge.app.saveDropImage('clipboard');
+    } catch (error) {
+      const { code, message } = decodeIpcError(error);
+      console.warn('[parley] saveDropImage', message);
+      toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : errorText(code, S.errors.actions.saveScreenshot));
+      return null;
+    }
+  }, [bridge]);
+  const pickFiles = useCallback(async (): Promise<string[]> => {
+    try {
+      return await bridge.app.chooseFiles();
+    } catch (error) {
+      console.warn('[parley] chooseFiles', decodeIpcError(error).message);
+      return [];
+    }
+  }, [bridge]);
+
+  // Файлы из Finder на весь вид: подсветка, затем пути в поле (как бросок на терминал).
+  const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropping(true);
+  };
+  const onDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
+  };
+  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    setDropping(false);
+    if (!dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    // Пустой путь — у `File` нет места на диске (синтетический): пропускаем.
+    const paths = Array.from(event.dataTransfer.files)
+      .map((file) => bridge.app.pathForFile(file))
+      .filter((path) => path !== '');
+    composer.current?.insertPaths(paths);
+  };
+
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
   const lastItem = items.at(-1);
   const showWorking = active && !(lastItem?.kind === 'text' && lastItem.streaming) && !hasPendingCard(items);
@@ -178,7 +249,14 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
 
   return (
     <ChatEnvContext.Provider value={env}>
-      <div data-testid="chat-view" className="flex h-full min-h-0 w-full min-w-0 flex-col">
+      <div
+        data-testid="chat-view"
+        {...(dropping ? { 'data-dropping': '' } : {})}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        className={cn('flex h-full min-h-0 w-full min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
+      >
         <ChatToolbar
           workKey={workKey}
           tabId={tab.id}
@@ -198,6 +276,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         <Composer
+          ref={composer}
+          source={suggestionSource}
+          onPickFiles={pickFiles}
+          onPasteImage={pasteImage}
           busy={active}
           visible={visible}
           text={draft}
