@@ -206,11 +206,13 @@ shadcn-примитивы в `renderer/ui/`, zustand 5, `react-markdown` + `rema
    `sessions.setMode { ref, mode } → { mode, verified }`: хост ждёт тишины вывода PTY
    (200 мс, не дольше 2 с), читает подвал экрана своего headless-терминала чистым текстом
    (`Screen.text(rows)`), узнаёт текущий режим по подписям со словом «on» («manual mode on»,
-   «accept edits on», «plan mode on», «bypass permissions on», «auto mode on» — в строке
-   статуса бывает «auto mode unavailable for this model»), считает число `Shift+Tab` по циклу
+   «accept edits on», «plan mode on», «auto mode on» — в строке статуса бывает «auto mode
+   unavailable for this model»; подпись режима обхода разрешений хост не распознаёт: само имя
+   этого режима в исходниках запрещено стражем рамки `test/frame-scan.ts` (YOLO-флаги), и в нём
+   подвал считается неизвестным), считает число `Shift+Tab` по циклу
    manual → accept edits → plan, жмёт по одному (печать хоста, `ESC [ Z`) и после каждого ждёт
    до 1,5 с, пока подвал не покажет ожидаемый режим; подвала нет или текущий режим вне цикла
-   (`bypass`, `auto`) — не жмёт вовсе и отвечает `verified: false`; не сошлось — отвечает
+   (`auto`) — не жмёт вовсе и отвечает `verified: false`; не сошлось — отвечает
    фактическим режимом и `verified: false`, окно просит открыть терминал. Сверенный режим
    хост сразу кладёт в ленту (`noteMode`), чтобы меню не ждало следующего хука. `plan` можно
    ставить и текстом `/plan`. Режимы `auto` и `bypassPermissions` в меню не предлагаем.
