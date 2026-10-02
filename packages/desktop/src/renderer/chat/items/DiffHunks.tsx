@@ -3,6 +3,11 @@
  * строк слева и справа и цветами `+`/`−` из токенов ревью (`--diff-added-*`, `--git-decoration-*`).
  * Строки одной высоты — виртуальный список в своём прокрутчике с пределом высоты: дифф на тысячи
  * строк держит в DOM только видимые, а элемент ленты не растёт выше `MAX_HEIGHT_PX`.
+ *
+ * В светлой теме подложки `+` и `−` почти не различимы, поэтому у добавленных и удалённых строк —
+ * цветная полоса слева тем же цветом, что знак (`--git-decoration-*`); у строк контекста — прозрачная
+ * той же ширины, чтобы колонки не съезжали. Номера строк и заголовок `@@` — `foreground/70`, а не
+ * muted: на подложках диффа muted бледнеет (`styles/tokens.test.ts`, «дифф ленты чата»).
  */
 
 import { useMemo, useState } from 'react';
@@ -40,9 +45,9 @@ export function diffRows(hunks: readonly FeedPatchHunk[]): DiffRow[] {
 }
 
 const ROW_TONE = {
-  ' ': '',
-  '-': 'bg-[var(--diff-removed-ground)]',
-  '+': 'bg-[var(--diff-added-ground)]',
+  ' ': 'border-l-2 border-transparent',
+  '-': 'border-l-2 border-[var(--git-decoration-deleted)] bg-[var(--diff-removed-ground)]',
+  '+': 'border-l-2 border-[var(--git-decoration-added)] bg-[var(--diff-added-ground)]',
 } as const;
 
 const SIGN_TONE = {
@@ -83,7 +88,7 @@ export function DiffHunks({ hunks }: { hunks: readonly FeedPatchHunk[] }): JSX.E
               <div
                 key={virtual.key}
                 data-diff-row="hunk"
-                className="absolute left-0 top-0 min-w-full w-max whitespace-pre bg-muted px-2 leading-[18px] text-muted-foreground"
+                className="absolute left-0 top-0 min-w-full w-max whitespace-pre bg-muted px-2 leading-[18px] text-foreground/70"
                 style={style}
               >
                 {row.text}
@@ -97,8 +102,8 @@ export function DiffHunks({ hunks }: { hunks: readonly FeedPatchHunk[] }): JSX.E
               className={cn('absolute left-0 top-0 flex min-w-full w-max whitespace-pre leading-[18px]', ROW_TONE[row.sign])}
               style={style}
             >
-              <span className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground">{row.oldNo ?? ''}</span>
-              <span className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground">{row.newNo ?? ''}</span>
+              <span className="w-10 shrink-0 select-none pr-1 text-right text-foreground/70">{row.oldNo ?? ''}</span>
+              <span className="w-10 shrink-0 select-none pr-1 text-right text-foreground/70">{row.newNo ?? ''}</span>
               <span className={cn('w-4 shrink-0 select-none text-center', SIGN_TONE[row.sign])}>{SIGN_TEXT[row.sign]}</span>
               <span className="pr-3">{row.text}</span>
             </div>
