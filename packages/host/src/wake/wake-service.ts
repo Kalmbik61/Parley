@@ -540,9 +540,13 @@ export function createWakeService(
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
         // держат одни фоновые субагенты, `working` и до указателя: любой её пересчёт — не начало хода,
-        // и Enter указателя он отменять не вправе.
+        // и Enter указателя он отменять не вправе. Пока свой Enter ещё не ушёл (`typing`), `working` —
+        // тоже не ход по указателю: записи журнала Claude Code сразу после Stop возвращают сессию в
+        // `working` на порог тишины, и отмена оставляла бы указатель в поле ввода без Enter, а письма —
+        // «указанными» навсегда (живая проверка 2026-10-02: сессия не отвечала в комнате).
         if (
           state?.inFlight === true &&
+          state.typing === undefined &&
           value.activity.activity === 'working' &&
           !value.activity.heldByBackground
         ) {

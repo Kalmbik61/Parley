@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -246,6 +246,25 @@ describe('WakeService', () => {
     expect(reasons.filter((reason) => reason === 'draft')).toHaveLength(1);
 
     pty.input(ref, '\r');
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
+
+  it('3а: активность стала working до своего Enter — Enter всё равно уходит, указатель не остаётся в поле ввода', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, wake, ref, activity } = await rig(sessionId, workId, {}, { enterDelayMs: 700 });
+
+    await sendLetter(workId, sessionId);
+    // Текст указателя напечатан, свой Enter ещё ждёт паузы.
+    await waitFor(() => wake.inFlight(ref), 3000);
+    // Как записи журнала Claude Code сразу после Stop: активность возвращается в working, хотя ход по
+    // указателю начаться ещё не мог (живая проверка 2026-10-02: указатель оставался в поле без Enter).
+    await appendFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'x', prompt: 'чужой ход' })}\n`,
+    );
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    expect(wake.inFlight(ref)).toBe(true);
+
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   });
 
