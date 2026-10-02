@@ -374,12 +374,18 @@ export function createFeedService(
     });
   }
 
-  /** Сев из журнала сессии: один раз и только пока живых событий не было (решение 2). */
+  /**
+   * Сев из журнала сессии: один раз и только пока живых событий не было (решение 2). Журнал ещё не
+   * известен индексу (он строится после старта хоста, не дожидаясь окна) — сев не состоялся, и
+   * следующий снимок попробует снова.
+   */
   function seed(feed: SessionFeed, provider: string): Promise<void> {
-    feed.seeding ??= (async () => {
+    if (feed.seeding !== undefined) return feed.seeding;
+    const file = provider === 'claude' ? deps.activity.logFile(feed.ref) : null;
+    if (file === null) return Promise.resolve();
+    feed.seeding = (async () => {
       try {
-        const file = provider === 'claude' ? deps.activity.logFile(feed.ref) : null;
-        const records = file === null ? null : await readTranscript(file);
+        const records = await readTranscript(file);
         if (records === null || feed.live || stopped) return;
         const state = feedFromTranscript(records, { limit: maxItems });
         feed.state = state;

@@ -603,6 +603,20 @@ describe('сев из журнала', () => {
     expect(second.items).toEqual(first.items);
   });
 
+  it('журнал ещё не известен индексу — следующий снимок сеет, когда он появится', async () => {
+    const { root } = await history();
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [], revision: 0 });
+    expect(reader.files).toHaveLength(0);
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    const seeded = await service.snapshot(REF);
+    expect(reader.files).toHaveLength(1);
+    expect(ofKind(seeded.items, 'tool').length).toBeGreaterThan(0);
+  });
+
   it('живые события уже были — журнал не читается', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
