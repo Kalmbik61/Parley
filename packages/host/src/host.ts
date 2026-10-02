@@ -192,13 +192,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
 
+  // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
+  // запуск сессии — для порога ленты (`feedSupported`), поэтому проба заводится до сервиса сессий.
+  const providerVersions = startProviderVersions(options.probeVersion, log);
+
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
-  // живые PTY сам — той же дорогой, что и явный `sessions.stop`.
+  // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
+  // адрес приёмника и свой токен (подкусок 2c).
   const sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
+    { hooks: hookServer, providerVersions },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
@@ -237,9 +243,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // Отказ читают только ожидающие методы; без них он не должен стать необработанным.
   worksReady.catch(() => undefined);
-
-  // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт.
-  const providerVersions = startProviderVersions(options.probeVersion, log);
 
   // Лимиты подписок (спека комнат Organic, 3.5): файлы строки статуса Claude Code и логи Codex, раз в
   // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
