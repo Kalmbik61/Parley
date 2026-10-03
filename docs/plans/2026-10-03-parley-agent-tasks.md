@@ -70,7 +70,7 @@
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | running |
-| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | не назначен | pending |
+| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | running |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
@@ -271,7 +271,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p00_review (новое назначение P06), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (последовательно после P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -290,7 +290,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence перед ревью:** 32/32 targeted fixtures passed; scoped ESLint и isolated strict tsc passed; owned diff только claude.ts/test. Native evidence cwd-bound, unknown state unavailable, bodies не возвращаются. Независимый reviewer: /root/p00_review.
+**Evidence перед ревью:** 32/32 targeted fixtures passed; scoped ESLint и isolated strict tsc passed; owned diff только claude.ts/test. Native evidence cwd-bound, unknown state unavailable, bodies не возвращаются. Независимый reviewer: /root/p01_review после P07 (лимит platform threads).
 
 <a id="p07"></a>
 
@@ -443,7 +443,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p02_codex_probe (после P10), gpt-6.1-sol/high.
 
 **Зависимости:** P05, P09. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
