@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09 accepted; P10 ENOSPC policy/fixture rework; P11 в review.
+- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09 accepted; P10/P11 в review.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -30,7 +30,7 @@
 | P07 | Реализовать источники скиллов Codex | done | a0c8f2c/e15a367; reviewer /root/p01_review accepted, 7 targeted + direct probe |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
-| P10 | Подключить создание PARLEY.md и Open/Create | running | race closed; ENOSPC after exclusive open policy/fixture rework |
+| P10 | Подключить создание PARLEY.md и Open/Create | review | ENOSPC fixture/policy: 19 core/lint/types passed; final recheck /root/p01_claude_probe |
 | P11 | Реализовать каталог ролей и умолчания | review | 30 role /4 English guards, lint/strict types passed; reviewer /root/p01_review |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
@@ -124,3 +124,5 @@ P06 fix готов: 46 fixtures/lint/strict tsc passed, source-aware reserved na
 P06 `7c91a36` и P07 `e15a367` accepted повторным /root/p01_review: исходные defects закрыты, targeted independent tests/probes + lint/diff и snapshot blobs сверены. P10 conservative fix готов: no receipt unlink после write failure; 18 tests/lint/strict types passed; новые race/failure tests RED→GREEN. Shared build не повторён без новой consumer mutation. P08 dependencies теперь приняты.
 
 P10 repeat review: actual cleanup race закрыта; дополнительный ENOSPC после успешного receipt open подавляет retry, что не совпало с широкой prose policy. Spec теперь точно различает failure ДО exclusive open и ПОСЛЕ reservation/body failure; автор добавляет realistic fixture, production unlink не возвращаем. P11 ready: 9 roles files, 30 role +4 English guards/lint/strict types passed; stable snapshot/review следующим.
+
+P11 snapshot `83ac8fc` проверяет /root/p01_review. P10 ENOSPC test ready: real wx open with injected write failure; 19 core tests/lint/strict types passed, production unchanged. Final recheck передан независимому /root/p01_claude_probe; исходная race уже закрыта review /root/p01_review.

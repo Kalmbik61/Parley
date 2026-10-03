@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -14,7 +14,13 @@ import {
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename), rm: vi.fn(actual.rm), writeFile: vi.fn(actual.writeFile) };
+  return {
+    ...actual,
+    open: vi.fn(actual.open),
+    rename: vi.fn(actual.rename),
+    rm: vi.fn(actual.rm),
+    writeFile: vi.fn(actual.writeFile),
+  };
 });
 
 let project: string;
@@ -22,10 +28,12 @@ beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-md-'));
 });
 afterEach(async () => {
+  vi.mocked(open).mockReset();
   vi.mocked(rename).mockReset();
   vi.mocked(rm).mockReset();
   vi.mocked(writeFile).mockReset();
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(open).mockImplementation(actual.open);
   vi.mocked(rename).mockImplementation(actual.rename);
   vi.mocked(rm).mockImplementation(actual.rm);
   vi.mocked(writeFile).mockImplementation(actual.writeFile);
@@ -140,6 +148,36 @@ describe('PARLEY.md creation receipt', () => {
     await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     await rm(path.join(project, '.parley'));
     expect(await ensureParleyMd(project)).toEqual({ created: true });
+  });
+
+  it('ENOSPC after exclusive receipt open retains the empty receipt until explicit Create recovers', async () => {
+    await mkdir(path.join(project, '.parley'));
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const receipt = path.join(project, '.parley', 'parley-md-receipt.json');
+    let closed = false;
+    vi.mocked(open).mockImplementationOnce(async (file, flags, mode) => {
+      expect(file).toBe(receipt);
+      expect(flags).toBe('wx');
+      const handle = await actual.open(file, flags, mode);
+      vi.spyOn(handle, 'writeFile').mockRejectedValueOnce(
+        Object.assign(new Error('receipt body write failed'), { code: 'ENOSPC' }),
+      );
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, 'close').mockImplementation(async () => {
+        await close();
+        closed = true;
+      });
+      return handle;
+    });
+    await expect(ensureParleyMd(project)).rejects.toMatchObject({ code: 'ENOSPC' });
+    expect(closed).toBe(true);
+    expect(await readFile(receipt, 'utf8')).toBe('');
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await ensureParleyMd(project)).toEqual({ created: false, receiptError: true });
+    expect(await readFile(receipt, 'utf8')).toBe('');
+    expect(await createParleyMd(project)).toEqual({ created: true });
+    expect(JSON.parse(await readFile(receipt, 'utf8'))).toMatchObject({ version: 1, created: true });
+    expect((await readParleyMd(project)).text).toBe('');
   });
 
   it('malformed accounting suppresses automatic creation', async () => {

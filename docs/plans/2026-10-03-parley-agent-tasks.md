@@ -69,7 +69,7 @@
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | done |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
-| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | running |
+| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | review |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | review |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
@@ -413,7 +413,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running (ENOSPC fixture/policy rework). **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после source reviews), gpt-6.1-sol/high.
+**Статус:** review (ENOSPC fixture/policy готова). **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (ENOSPC final recheck; исходный review /root/p01_review), gpt-6.1-sol/high.
 
 **Зависимости:** P09. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -454,6 +454,8 @@
 **Evidence fixes перед recheck:** 18/18 core fixtures, scoped ESLint/strict tsc/diff check passed; cleanup unlink удалён, conservative retry и explicit Create проверены. Два новых tests были RED.
 
 **Повторный review:** исходная cleanup race закрыта; Important/P2 — spec обещала retry при body write error после успешного receipt open. Policy уточнена: retry только до reservation, после exclusive open occupied receipt сохраняется. ENOSPC fixture assigned автору.
+
+**Evidence final recheck:** 19 core fixtures, scoped lint/strict types passed; реальный wx open + injected ENOSPC write, handle close/empty receipt/auto suppression/explicit recovery подтверждены. Production behavior не менялся после e20d5b7.
 
 <a id="p11"></a>
 
