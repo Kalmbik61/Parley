@@ -116,7 +116,7 @@ CapabilitiesDialog  ── protocol ──▶  capabilities/                ─�
   - `capabilities.catalog { provider }`;
   - `capabilities.mcp.add`, `capabilities.mcp.remove`;
   - `capabilities.plugin.install`, `.uninstall`, `.setEnabled`, `.addMarketplace`;
-  - `capabilities.skill.share`, `capabilities.skill.unshare`;
+  - `capabilities.skills.share`, `capabilities.skills.unshare`;
   - событие `capabilities.changed { projectPath, snapshot }`.
 - **Окно.** Единая панель проекта `ProjectPanel` с вкладкой Capabilities; позднее
   туда добавляются Backlog, Decisions и Memory. Открывается из меню заголовка проекта
@@ -298,6 +298,8 @@ Refresh панели обновляет её снимок, индекс уже �
   создался — ошибка, без копии: копия разойдётся с оригиналом.
 
 Ручная передача проверяет обычную пользовательскую/проектную папку SKILL, её нативное происхождение и неизменность файлового контекста; она не требует доказательства загрузки скилла исходной моделью. Partial-каталог допустим только с диагностикой `availability-unverified`, если конкретная папка доказана. Неизвестная/false model availability остаётся такой же; принимающий CLI проверяет загрузку и policy самостоятельно. Известный запрет policy, managed/builtin/plugin, нечитабельность или неоднозначность источника не обходятся. `find_skill(for)` не выполняет передачу или подготовительное чтение для неё.
+
+После Refresh Unshare может убрать ранее созданный собственный симлинк, даже если исходный скилл теперь отключён или запрещён policy. Это действие требует свежего контекста и совпадения private receipt, источника и inode/readlink ссылки; оригинал и чужие замены сохраняются. Новую передачу запрет по-прежнему блокирует.
 
 ### 6.5 Запущенные сессии
 
