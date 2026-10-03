@@ -281,7 +281,7 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 
 1. Проверить переход только с точного старого/сгенерированного gitignore; custom и корневой запрет дают уведомление, не правку. Runtime-файлы не попадают в git при белом списке.
 2. Реализовать разбор/редактирование backlog с сохранением чужого текста байт в байт, назначением id, lock/mtime и конфликтными маркерами; проверить concurrent write повторным чтением.
-3. Добавить `backlog_list`, `backlog_suggest`, local preferences/suggestions, dedup и три правила ask/problems/everything. Агент не закрывает и не редактирует существующие пункты.
+3. Добавить `backlog_list`, `backlog_suggest`, local preferences/suggestions, dedup и три правила ask/problems/everything. В MCP-интерфейсе агент не закрывает и не редактирует существующие пункты. Ручные host mutations используют существующую аутентификацию общим host token; заявленное клиентом имя не подтверждает личность человека. Этот контракт не ограничивает владельца полного токена или файловый доступ того же пользователя.
 4. Подключить вкладку, Suggested, правило, Open file и Take into room; после успешного создания писать `taken`, не раньше. Добавить короткую подсказку в guidance, сохранив общий лимит.
 
 **Проверка:** `pnpm --filter @parley/core exec vitest run src/work/backlog.test.ts src/work/backlog-suggestions.test.ts src/work/state-dir.test.ts src/work/guidance.test.ts`; целевые protocol/host/UI-тесты.

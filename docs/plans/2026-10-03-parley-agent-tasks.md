@@ -85,7 +85,7 @@
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | running |
-| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | running |
+| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | review |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | не назначен | pending |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
 | [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | не назначен | pending |
@@ -102,7 +102,7 @@
 | [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | не назначен | pending |
 | [P37 — Ограничить launches/fanout и лишний старт](#p37) | audit | P23, P26 | не назначен | pending |
 | [P38 — Подготовить benchmark принятого результата](#p38) | audit | P34, P35, P36, P37, P14, P31, P39 | не назначен | pending |
-| [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | /root/p01_claude_probe | running |
+| [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | /root/p01_claude_probe | done |
 
 ## Карточки
 
@@ -881,7 +881,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant core plans/snapshots/types/map/rooms/proposals/targetedtests +coreindex narrowexports; deps accepted.
+**Статус:** review. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant core plans/snapshots/types/map/rooms/proposals/targetedtests +coreindex narrowexports; deps accepted.
 
 **Зависимости:** P20, P12. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -929,7 +929,7 @@
 
 **Работа:** Добавить mode/plan/completion методы, права и системного отправителя parley. Доставлять ready/returned/blocked/completing и события закрытия владельца через существующий wake/autoLaunch. Дедуплицировать события по rev/item/переходу; сохранить rate limits. Protocol и guide — через ведущего.
 
-**Приёмка:** Принятый scope, включая подсказку скилла, доставлен владельцу; дубликатов назначения нет. Возврат будит владельца, закрытый владелец блокирует пункт; лимит удерживает очередь.
+**Приёмка:** Принятый scope, включая подсказку скилла, доставлен владельцу; дубликатов назначения нет. Возврат будит владельца, закрытый владелец блокирует пункт; лимит удерживает очередь. Captured immutable snapshot intents доставляются после освобождения map lock и повторяются после write/ack failure. Принятое завершение плана закрывает связанные backlog IDs идемпотентно; частичный shared-write/conflict остаётся видимым и повторяемым, без заявления атомарности map + Markdown.
 
 **Проверки:**
 
@@ -1399,9 +1399,9 @@
 
 ### P39: Доставлять внутренний навык minimal-development
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant fixed second builtin/receipt LICENSE +host installer labels, no global hooks; deps accepted.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high; grant fixed second builtin/receipt LICENSE +host installer labels, no global hooks; deps accepted.
 
 **Зависимости:** P13, P14. **Источник:** [внутренний навык](../../.agents/skills/minimal-development/SKILL.md).
 
@@ -1419,4 +1419,8 @@
 
 **Проверка:** targeted installer/host fixtures для off/on, повторной установки, чужого/edited/symlink пути и license preservation; scoped types/lint. P34 сохраняет body-on-demand, P38 сравнивает режим навыка отдельно при одинаковом navigator/cache режиме.
 
+**Evidence:** commit50a878f; author84 core/17host fixtures, scoped types/lint0. Независимый /root/p01_review принял точную6-file реализацию после исправления владения temporary assets: original probe,11affected и3resource-failure fixtures GREEN; core/host builds0. Native demand-loading gate остаётся в P32.
+
 P21 shared unlock после acceptedP14/P17: protocol backlog.* и changed, MCP bounded list/suggest/guide, host backlog lifecycle (registry root-only), fixed app.openBacklog IPC/bridge, ProjectPanel/strings и dialog/store/AppShell callbacks. P22 solewriter map/types/plans/rooms/proposals и narrow coreindex; P39 solewriter skill-install/host agent-skills. Shared build — после coherent source freeze.
+
+P22 специфичный переход Checklist→Verified сохраняет выполненные неизменные пункты с truthful persisted completion basis; basis не называется verified и не задаётся draft. §6.3/§7.3 source согласованы; последующая обычная semantic change/dependency invalidation сбрасывает basis/result. P24 показывает это происхождение без фиктивного подтверждения verifier.

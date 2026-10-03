@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P13, P15/P16/P20 accepted (18/40); P14/P17 review; P21 running.
+- Текущая фаза: P00–P17, P20/P39 accepted (20/40); P21 running; P22 review.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -42,7 +42,7 @@
 | P19 | Добавить передачу скилла второму CLI | pending | — |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | running | /root/p02_codex_probe; P20accepted; новые host/UI/DTO modules, sharedpoints locked |
-| P22 | Реализовать режимы, планы, ревизии и снимки | running | /root/p01_review, Sol6.1/high; deps P20/P12 accepted; core-owned grant |
+| P22 | Реализовать режимы, планы, ревизии и снимки | review | author /root/p01_review; exact11-file bundle c98a354…8d1a applied; peer /root/p01_claude_probe |
 | P23 | Подключить инструменты планов и будильник | pending | — |
 | P24 | Показать план и итог в комнате | pending | — |
 | P25 | Реализовать рецепты и плейбук ведущего | pending | — |
@@ -59,7 +59,7 @@
 | P36 | Исправить свежесть usage и cache ledger | pending | audit-token track; dependencies P24 |
 | P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
 | P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
-| P39 | Доставлять внутренний навык minimal-development | running | /root/p01_claude_probe, Sol6.1/high; deps P13/P14 accepted; owned installer/LICENSE narrow grant |
+| P39 | Доставлять внутренний навык minimal-development | done | 50a878f; author /root/p01_claude_probe; independent /root/p01_review accepted; 84core/17host, ownership/failure probes, builds0 |
 
 ## Текущая разведка — ещё до независимой приёмки
 
@@ -228,3 +228,7 @@ P21 dispatched /root/p02_codex_probe после P20 acceptance: первая ф�
 P14 safety fix accepted: a9c1e14, original directory/leaf symlink probes foreignPreserved/rejected, 33 affected fixtures и core build exit0. Текущий результат18 accepted из40. Внутренний minimal-development добавлен в project-native folders и workflow; P39 доставит его через existing owned installer, без global hooks. Token-audit P34–P38 сохранены; новый навык — отдельная ось P38, проценты экономии не заявлены.
 
 P17 accepted0c0d1f9 после точного4-file health fix: original loss-of-proof probe и production related override/concurrent refresh/no-resurrection fixtures GREEN;43 affectedtests, SHA4/lint0 и hostbuild0. 19accepted из40. Docs/skill integration independently accepted /root/p01_review:40cards/40rows/acyclic,124local links, immutableaudithashes/LICENSE и native metadata/alias. Commitc3d8d73. P21 shared grant открыт после DTO read; registry root-only. P22 иP39 dispatched disjointcore owners; P18 пока read-onlyaudit. Current Claude symlink2.1.288 не заменяет approved2.1.287 artifact: exactстарый artifact проверен, userCLI не изменён. Native/platform/model gates не закрывались.
+
+P39 exact6 source assets applied from SHA8ebe0071…96c2: author76core/17host/strict types/lint0; peerreview /root/p01_review assigned, acceptance pending. Current source frozen. P21 prepareTake(empty patch) preserves human bytes +actual stableID, read-only inspectSharedIgnore extension granted for agent-first warning delivery. Manual host API uses actual shared-token authentication; MCP only list/suggest, no fabricated human attestation or new authentication architecture. P22 promotion exception clarified in source; ordinary amendments still invalidate prior results.
+
+P39 accepted50a878f после narrow temporary-ownership fix: foreign LICENSE.tmp сохранён, handle закрывается при stat/write failure, cleanup только собственного inode. Independent original probe/11affected/3resource-failure GREEN; точные6SHA и core/host builds0. 20accepted из40; native model loading и economic gates остаются в P32/P38. P22 final11 bundle c98a354…8d1a applied with exact hashes, independent review /root/p01_claude_probe; P21 foundation awaiting root registry integration, lifecycle/backlog closure закреплены за P23.
