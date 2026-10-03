@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -22,7 +22,50 @@ import {
   WorkNotFoundError,
   workPaths,
   worksIndexPath,
+  readSharedFile,
+  sharedProjectPaths,
+  withSharedProjectLock,
+  writeSharedFile,
 } from './store.js';
+
+describe('shared storage primitives', () => {
+  it('compares content and modification identity, and removes unique temporary files on conflict', async () => {
+    const file = path.join(project, 'shared.md'); await writeFile(file, 'Before');
+    const before = await readSharedFile(file); await writeFile(file, 'Extern');
+    await expect(writeSharedFile(file, 'Stale', before)).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(file, 'utf8')).toBe('Extern');
+    expect((await readdir(project)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+  it('bounds regular-file reads and refuses invalid UTF-8/directories without rewriting them', async () => {
+    const file = path.join(project, 'invalid'); await writeFile(file, Buffer.from([0xff]));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await expect(readSharedFile(project)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+  });
+  it('rejects symlink/FIFO readers and symlink state directories without following them', async () => {
+    const target = path.join(project, 'target'); await writeFile(target, 'private');
+    const alias = path.join(project, 'alias'); await symlink(target, alias);
+    await expect(readSharedFile(alias)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    const fifo = path.join(project, 'fifo'); await run('mkfifo', [fifo]);
+    await expect(readSharedFile(fifo)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await symlink(other, path.join(project, '.parley'));
+    await expect(sharedProjectPaths(project)).rejects.toMatchObject({ code: 'shared-state-unsafe' });
+    expect(await readdir(other)).toEqual([]);
+  });
+  it('times out on an occupied project lock, never steals it, and releases its own lock after errors', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir); await writeFile(paths.lock, 'foreign');
+    await expect(withSharedProjectLock(paths, async () => {}, { lockTimeoutMs: 0 })).rejects.toMatchObject({ code: 'backlog-lock-timeout' });
+    expect(await readFile(paths.lock, 'utf8')).toBe('foreign'); await rm(paths.lock);
+    await expect(withSharedProjectLock(paths, async () => { throw new Error('fixture'); })).rejects.toThrow('fixture');
+    expect(await exists(paths.lock)).toBe(false);
+  });
+  it('preserves an observed replacement lock during cleanup', async () => {
+    const paths = await sharedProjectPaths(project);
+    await withSharedProjectLock(paths, async () => { await rename(paths.lock, paths.lock + '.old'); await writeFile(paths.lock, 'replacement'); });
+    expect(await readFile(paths.lock, 'utf8')).toBe('replacement');
+  });
+});
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);

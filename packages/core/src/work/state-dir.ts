@@ -27,16 +27,16 @@ export function stateDir(projectPath: string): string {
   return isDirectorySync(legacy) ? legacy : current;
 }
 
-/** Строка `.gitignore` каталога состояния: он прячет сам себя и всё, что в нём, от git. */
-const SELF_IGNORE = '*\n';
+/** Stage 6 shared allowlist. Every other current/future state file remains local. */
+export const SHARED_STATE_IGNORE = '*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n';
 
 /**
- * Кладёт в каталог состояния `.gitignore` со строкой `*`. Уже лежащий не трогается: его положил соседний
+ * Кладёт в каталог состояния `.gitignore` с белым списком shared-файлов. Уже лежащий не трогается: его положил соседний
  * процесс (это то же самое) или переписал человек.
  */
 export async function writeSelfIgnore(dir: string): Promise<void> {
   try {
-    await writeFile(path.join(dir, '.gitignore'), SELF_IGNORE, { encoding: 'utf8', flag: 'wx' });
+    await writeFile(path.join(dir, '.gitignore'), SHARED_STATE_IGNORE, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
@@ -44,8 +44,8 @@ export async function writeSelfIgnore(dir: string): Promise<void> {
 
 /**
  * Заводит каталог состояния проекта и возвращает его путь. Каталог, созданный этим вызовом под новым
- * именем, сразу получает `.gitignore` со строкой `*`: в чужом репозитории состояние Parley не должно
- * попасть в коммит ни командой человека, ни «Commit all» окна. Уже существующий каталог не
+ * именем, сразу получает `.gitignore` с белым списком shared-файлов: runtime-файлы остаются локальными,
+ * а backlog и snapshots планов могут попасть в git. Уже существующий каталог не
  * трогается — в том числе прежний `.harnas` и `.parley`, у которого `.gitignore` убрал человек.
  */
 export async function ensureStateDir(projectPath: string): Promise<string> {
