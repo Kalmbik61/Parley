@@ -1356,3 +1356,35 @@ describe('native Claude navigator permission gate', () => {
     }
   });
 });
+
+describe('fresh canonical project memory on session assembly', () => {
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+  it('new/launch/resume read main project facts last, not the participant worktree copy or details', async () => {
+    const { workId, sessionId } = await pending('codex'); const session = await sessionOf(workId, sessionId);
+    const cwd = path.join(project, 'memory-branch'); await mkdir(cwd); await mkdir(path.join(cwd, '.parley'));
+    await writeFile(path.join(cwd, '.parley', 'memory.md'), '## Facts\n- BRANCH PRIVATE <!-- m-999 -->\n');
+    await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n- Main old <!-- m-001 · human -->\n  PRIVATE DETAIL\n');
+    session.worktree = { path: cwd, branch: 'memory/test', base: 'main', createdAt: null };
+    const first = codexLayer((await planNew(project, workId, session)).args);
+    expect(first).toContain('Main old'); expect(first).not.toContain('PRIVATE');
+    await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n- Main current <!-- m-001 · human -->\n');
+    for (const plan of [await planLaunch(project, workId, session), await planResume(project, workId, { ...session, providerSessionId: 'memory-thread' })]) {
+      const layer = codexLayer(plan.args); expect(plan.cwd).toBe(cwd); expect(layer).toContain('Main current'); expect(layer).not.toContain('Main old');
+      expect(layer.endsWith('Main current')).toBe(true); expect(layer).not.toContain('BRANCH PRIVATE');
+    }
+  });
+  it('missing memory is quiet, conflict memory is omitted with fixed diagnostic, oversized phrases are marked', async () => {
+    const { workId, sessionId } = await pending('codex'); const session = await sessionOf(workId, sessionId);
+    const empty = await planLaunch(project, workId, session); expect(empty.diagnostics?.some(row => row.code === 'memory-unreadable')).toBe(false);
+    await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n<<<<<<< PRIVATE CONFLICT\n');
+    const unsafe = await planResume(project, workId, { ...session, providerSessionId: 'memory-thread' });
+    expect(unsafe.diagnostics?.filter(row => row.code === 'memory-unreadable')).toHaveLength(1); expect(codexLayer(unsafe.args)).not.toContain('PRIVATE CONFLICT');
+    await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n' + Array.from({ length: 50 }, (_, n) => `- ${'界'.repeat(200)} ${n} <!-- m-${String(n + 1).padStart(3, '0')} -->\n`).join(''));
+    const large = await planLaunch(project, workId, session); expect(large.diagnostics?.filter(row => row.code === 'memory-truncated')).toHaveLength(1);
+    expect(codexLayer(large.args)).toContain('[Project memory is cut at 12 KiB');
+  });
+});

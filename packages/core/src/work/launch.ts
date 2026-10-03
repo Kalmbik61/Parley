@@ -33,8 +33,10 @@ import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
-import { readParleyMd, type LayerWarning } from './parley-md.js';
-import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput } from './session-layer.js';
+import { readParleyMd } from './parley-md.js';
+import { readProjectMemory } from './project-memory.js';
+import type { MemoryItem } from './project-memory.js';
+import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
@@ -91,7 +93,7 @@ export interface LaunchPlan {
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
-  diagnostics?: Array<LayerWarning | { code: 'role-missing'; message: string }>;
+  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -302,6 +304,9 @@ async function plan(
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
     const parley = await readParleyMd(projectPath);
     diagnostics.push(...parley.warnings);
+    let memoryItems: MemoryItem[] = [];
+    try { memoryItems = (await readProjectMemory(projectPath)).items; }
+    catch { diagnostics.push({ code: 'memory-unreadable', message: 'Parley could not read project memory; resolve memory.md conflicts or access errors before the next launch.' }); }
     const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
       ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
       : '';
@@ -313,6 +318,7 @@ async function plan(
       bridge,
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,
+      memoryItems,
     });
     blockBytes = layer.blockBytes;
     diagnostics.push(...layer.warnings);

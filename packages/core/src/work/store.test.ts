@@ -191,7 +191,8 @@ describe('createWork', () => {
     expect(paths.dir).toBe(path.join(project, '.parley', 'works', 'w-0001'));
     expect(await isDirectory(paths.briefs)).toBe(true);
     expect(await isDirectory(paths.artifacts)).toBe(true);
-    expect(await readMap(project, 'w-0001')).toEqual(map);
+    // Omitted optional plans are normalized to an empty list by the accepted map reader.
+    expect(await readMap(project, 'w-0001')).toEqual({ ...map, plans: [] });
 
     expect(worksIndexPath()).toBe(path.join(home, 'works-index.json'));
     expect((await readWorksIndex()).works).toEqual([
@@ -705,14 +706,27 @@ describe('read-only shared ignore diagnostics', () => {
     const file = path.join(paths.dir, '.gitignore'); await writeFile(file, '*\n');
     expect(await inspectSharedIgnore(paths)).toEqual([]); expect(await readFile(file, 'utf8')).toBe('*\n');
     expect(await prepareSharedIgnore(paths)).toEqual([]);
-    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
   });
   it('reuses the accepted bounded native ignore query without root ignore writes', async () => {
     const paths = await sharedProjectPaths(project);
     const calls: readonly string[][] = [];
     const options = { readGit: async (args: readonly string[]) => { (calls as string[][]).push([...args]); return { code: 0, stdout: '.parley/backlog.md\n', stderr: '' }; } };
-    expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: project, mainRoot: project, checkoutRoot: project } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
+    expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: paths.context.projectPath, mainRoot: paths.context.projectPath, checkoutRoot: paths.context.projectPath } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
     expect(calls[0]).toContain('check-ignore'); expect(calls[0]).toContain('core.fsmonitor=false');
     await expect(stat(path.join(project, '.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
+});
+
+it('memory diagnostics use the verified canonical path without writing a read-time migration', async () => {
+  const { PRE_MEMORY_STATE_IGNORE } = await import('./state-dir.js');
+  const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+  await writeFile(path.join(paths.dir, '.gitignore'), PRE_MEMORY_STATE_IGNORE);
+  const calls: string[][] = [];
+  const options = { readGit: async (args: readonly string[]) => {
+    calls.push([...args]); return { code: args.includes(path.relative(paths.context.projectPath, paths.memory)) ? 0 : 1, stdout: args.includes(path.relative(paths.context.projectPath, paths.memory)) ? '.parley/memory.md\n' : '', stderr: '' };
+  } };
+  expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: paths.context.projectPath, mainRoot: paths.context.projectPath, checkoutRoot: paths.context.projectPath } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
+  expect(calls.some(args => args.includes(path.relative(paths.context.projectPath, paths.memory)))).toBe(true);
+  expect(await readFile(path.join(paths.dir, '.gitignore'), 'utf8')).toBe(PRE_MEMORY_STATE_IGNORE);
 });

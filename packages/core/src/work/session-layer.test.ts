@@ -171,3 +171,49 @@ describe('final spawn budget', () => {
     ).toBeNull();
   });
 });
+
+describe('bounded current memory phrases', () => {
+  it('keeps IDs/sections/current provenance last, excludes details and superseded claims', async () => {
+    const { formatMemoryFactBlock } = await import('./session-layer.js');
+    const result = buildSessionLayer({ guidance: 'GUIDE', parleyMd: 'RULE', memoryItems: [
+      { id: 'm-001', kind: 'fact', fact: 'Current fact', details: 'PRIVATE_DETAIL', provenance: { scope: 'project', origin: 'human', sourceKind: 'human-amendment', sourceRefs: [], evidenceRefs: [], state: 'current', completeness: 'complete' } },
+      { id: 'm-002', kind: 'lesson', fact: 'Summary claim', details: 'PRIVATE_HISTORY', by: 's-01', provenance: { scope: 'project', origin: 'agent', sourceKind: 'agent-summary', workId: 'w-0001', sessionId: 's-01', sourceRefs: ['room:r-01'], evidenceRefs: ['test:abc'], taskRevision: 2, acceptedByHuman: true, claimedHumanRequest: true, state: 'current', completeness: 'partial' } },
+      { id: 'm-003', kind: 'agreement', fact: 'Old constraint', details: '', provenance: { scope: 'project', origin: 'human', sourceKind: 'human-amendment', sourceRefs: [], evidenceRefs: [], state: 'superseded', completeness: 'complete' } },
+    ] });
+    expect(result.text).toContain('Project memory (.parley/memory.md):\nCurrent human instructions and task constraints take precedence over memory claims.');
+    expect(result.text).toContain('## Facts\n- [m-001] [human-authored] Current fact');
+    expect(result.text).toContain('[unverified agent claim; accepted by human; human request claimed; partial; source task revision 2] Summary claim');
+    expect(result.text).not.toContain('PRIVATE'); expect(result.text).not.toContain('Old constraint'); expect(result.text).not.toContain('test:abc');
+    expect(result.text.indexOf('Project memory')).toBeGreaterThan(result.text.indexOf('Team rules'));
+    expect(formatMemoryFactBlock([])).toEqual({ text: '', truncated: false });
+  });
+  it('retains complete multibyte phrases, includes the marker in 12 KiB, emits one cleanup warning', async () => {
+    const { MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER, formatMemoryFactBlock } = await import('./session-layer.js');
+    const rows = Array.from({ length: 100 }, (_, n) => ({ id: `m-${String(n + 1).padStart(3, '0')}`, kind: 'fact' as const, fact: `${n}: ${'界🙂'.repeat(60)}`, details: 'NEVER DELIVER' }));
+    const block = formatMemoryFactBlock(rows);
+    expect(block.truncated).toBe(true); expect(Buffer.byteLength(block.text, 'utf8')).toBeLessThanOrEqual(MEMORY_MAX_BYTES);
+    expect(block.text.endsWith(MEMORY_TRUNCATION_MARKER)).toBe(true); expect(block.text).not.toContain('\uFFFD');
+    for (const line of block.text.split('\n').filter(line => line.startsWith('- '))) expect(rows.some(row => line.endsWith(row.fact))).toBe(true);
+    const layer = buildSessionLayer({ guidance: 'G', memoryItems: rows });
+    expect(layer.warnings.filter(warning => warning.code === 'memory-truncated')).toHaveLength(1);
+    expect(layer.blockBytes.memoryFacts).toBe(Buffer.byteLength(block.text));
+    const single = formatMemoryFactBlock([{ id: 'm-001', kind: 'fact', fact: '界'.repeat(5000), details: '' }]);
+    expect(single.text).not.toContain('界'); expect(single.text).toContain(MEMORY_TRUNCATION_MARKER);
+  });
+});
+
+it('direct memory formatter callers cannot smuggle body text through IDs or provenance', async () => {
+  const { formatMemoryFactBlock } = await import('./session-layer.js');
+  expect(() => formatMemoryFactBlock([{ id: 'm-001\nPRIVATE BODY', kind: 'fact', fact: 'Phrase', details: '' }])).toThrow('memory-invalid');
+  expect(() => formatMemoryFactBlock([{ id: 'm-001', kind: 'fact', fact: 'Phrase', details: '', provenance: { origin: 'human', taskRevision: 'PRIVATE BODY' } as never }])).toThrow('memory-invalid');
+});
+
+it('direct fact formatting rejects lone surrogates but preserves emoji pairs and LS/PS', async () => {
+  const { formatMemoryFactBlock } = await import('./session-layer.js');
+  for (const scalar of [String.fromCharCode(0xd800), String.fromCharCode(0xdc00)])
+    expect(() => formatMemoryFactBlock([{ id: 'm-001', kind: 'fact', fact: scalar, details: '' }])).toThrow('memory-invalid');
+  const fact = 'Keep 😀 intact\u2028and\u2029legitimate separators';
+  const result = formatMemoryFactBlock([{ id: 'm-001', kind: 'fact', fact, details: '' }]);
+  expect(result.text).toContain(fact);
+  expect(Buffer.from(result.text, 'utf8').toString('utf8')).toBe(result.text);
+});

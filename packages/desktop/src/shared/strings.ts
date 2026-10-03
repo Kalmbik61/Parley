@@ -1306,6 +1306,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
   'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
   'role-missing': 'saved role is unavailable — this session starts without role defaults',
+  'memory-truncated': 'project memory was cut at 12 KiB — clean up memory.md to include the remaining facts',
+  'memory-unreadable': 'could not read project memory — resolve memory.md conflicts or access errors',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
 };

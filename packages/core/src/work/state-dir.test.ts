@@ -23,7 +23,7 @@ describe('stage 6 shared ignore policy', () => {
     const file = path.join(dir, '.gitignore'); await writeFile(file, '*\n');
     await ensureStateDir(project); expect(await readFile(file, 'utf8')).toBe('*\n');
     await addBacklogItem(project, { title: 'Shared' });
-    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
   });
   it.each(['*\r\n', '\uFEFF*\n', '*\n\n', '*\n!mine\n', ''])('preserves custom signature %j', async text => {
     const dir = path.join(project, '.parley'); await mkdir(dir); const file = path.join(dir, '.gitignore');
@@ -149,7 +149,7 @@ describe('ensureStateDir — каталог состояния сам пряче
     const dir = await ensureStateDir(project);
 
     expect(dir).toBe(path.join(project, '.parley'));
-    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
   });
 
   it('повторный вызов .gitignore не переписывает', async () => {
@@ -182,13 +182,13 @@ describe('ensureStateDir — каталог состояния сам пряче
 
     await ensureStateDir(fresh);
 
-    expect(await readFile(path.join(fresh, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(fresh, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
   });
 
   it('параллельные вызовы: один .gitignore с shared whitelist', async () => {
     await Promise.all(Array.from({ length: 8 }, () => ensureStateDir(project)));
 
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
   });
 
   it('`.parley` — файл: вызов отказывает, а не молча пишет мимо', async () => {
@@ -219,7 +219,7 @@ describe('writeSelfIgnore — .gitignore с shared whitelist в уже суще�
     await mkdir(dir);
 
     await writeSelfIgnore(dir);
-    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
 
     await writeFile(path.join(dir, '.gitignore'), '*\n!keep\n', 'utf8');
     await writeSelfIgnore(dir);
@@ -236,7 +236,7 @@ describe('работа в проекте: новый и прежний ката�
     await createWork(project, { title: 'Первая' });
 
     expect(await exists(path.join(project, '.parley', 'works', 'w-0001', 'map.json'))).toBe(true);
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
   });
 
@@ -280,7 +280,7 @@ describe('работа в проекте: новый и прежний ката�
 
 describe('любая запись в каталог состояния, которого нет, заводит его вместе с .gitignore (R5)', () => {
   const selfIgnored = async (): Promise<void> => {
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n');
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
   };
 
@@ -315,4 +315,18 @@ describe('любая запись в каталог состояния, кото
     expect(await exists(path.join(project, '.parley'))).toBe(false);
     expect(await exists(path.join(project, '.harnas', 'works', 'w-0042', 'mcp', 's-01.json'))).toBe(true);
   });
+});
+
+it('memory whitelist migrates only exact previous generated LF bytes on a write, never a read', async () => {
+  const { PRE_MEMORY_STATE_IGNORE, SHARED_STATE_IGNORE } = await import('./state-dir.js');
+  const { readProjectMemory, addProjectMemory } = await import('./project-memory.js');
+  const dir = path.join(project, '.parley'); await mkdir(dir); const file = path.join(dir, '.gitignore');
+  await writeFile(file, PRE_MEMORY_STATE_IGNORE); await readProjectMemory(project);
+  expect(await readFile(file, 'utf8')).toBe(PRE_MEMORY_STATE_IGNORE);
+  await addProjectMemory(project, { kind: 'fact', fact: 'Shared memory' });
+  expect(await readFile(file, 'utf8')).toBe(SHARED_STATE_IGNORE);
+  for (const custom of [PRE_MEMORY_STATE_IGNORE.replaceAll('\n', '\r\n'), `\uFEFF${PRE_MEMORY_STATE_IGNORE}`, '*\n!memory.md\n']) {
+    await writeFile(file, custom); await addProjectMemory(project, { kind: 'fact', fact: `Other ${custom.length}` });
+    expect(await readFile(file, 'utf8')).toBe(custom);
+  }
 });

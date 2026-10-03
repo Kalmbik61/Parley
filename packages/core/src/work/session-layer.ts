@@ -1,8 +1,12 @@
 import { execFile } from 'node:child_process';
 import { truncateMarked, type LayerWarning } from './parley-md.js';
+import { validMemoryText, validateMemoryProvenance, type MemoryItem } from './project-memory.js';
 
 export const SESSION_ARGUMENT_MAX_BYTES = 98304;
-const MEMORY_MAX_BYTES = 12288;
+export const MEMORY_MAX_BYTES = 12288;
+export interface MemoryLayerWarning { code: 'memory-truncated' | 'memory-unreadable'; message: string }
+export type SessionLayerWarning = LayerWarning | MemoryLayerWarning;
+export const MEMORY_TRUNCATION_MARKER = '[Project memory is cut at 12 KiB; clean up memory.md to include the remaining facts.]';
 const SPAWN_RESERVE_BYTES = 32768;
 
 export interface SessionLayerInput {
@@ -17,6 +21,8 @@ export interface SessionLayerInput {
   /** Already preprocessed by processParleyMd. */
   parleyMd?: string;
   memoryFacts?: string;
+  /** Current parsed main-project phrases; formatter never includes details or local history. */
+  memoryItems?: readonly MemoryItem[];
 }
 
 export type LayerBlockBytes = Record<
@@ -25,7 +31,7 @@ export type LayerBlockBytes = Record<
 >;
 export interface SessionLayer {
   text: string;
-  warnings: LayerWarning[];
+  warnings: SessionLayerWarning[];
   blockBytes: LayerBlockBytes;
 }
 
@@ -43,8 +49,45 @@ export class SessionLayerTooLargeError extends Error {
   }
 }
 
+/** UTF-8 bound includes header/sections/marker, and never splits a phrase or Unicode scalar. */
+export function formatMemoryFactBlock(items: readonly MemoryItem[]): { text: string; truncated: boolean } {
+  if (items.length > 10000) throw new Error('memory-invalid');
+  for (const item of items) {
+    if ((item.id !== null && (typeof item.id !== 'string' || !/^m-\d{3,}$/.test(item.id))) ||
+        !['fact', 'lesson', 'agreement'].includes(item.kind) || !validMemoryText(item.fact, 1024 * 1024) || /[\r\n]/.test(item.fact)) throw new Error('memory-invalid');
+    if (item.provenance !== undefined) validateMemoryProvenance(item.provenance);
+  }
+  const current = items.filter(item => item.state !== 'superseded' && item.provenance?.state !== 'superseded');
+  if (!current.length) return { text: '', truncated: false };
+  const lines = ['Project memory (.parley/memory.md):', 'Current human instructions and task constraints take precedence over memory claims.'];
+  for (const [kind, title] of [['fact', 'Facts'], ['lesson', 'Lessons'], ['agreement', 'Agreements']] as const) {
+    const rows = current.filter(item => item.kind === kind);
+    if (!rows.length) continue;
+    lines.push(`## ${title}`);
+    for (const item of rows) {
+      const provenance = item.provenance;
+      const origin = provenance?.origin === 'human' ? 'human-authored' : provenance?.origin === 'agent' || item.by ? 'unverified agent claim' : item.human ? 'human authorship recorded' : 'source unverified';
+      const labels = [origin, ...(provenance?.acceptedByHuman ? ['accepted by human'] : []),
+        ...(provenance?.factAmendedByHuman || item.factAmendedByHuman ? ['current human fact amendment'] : provenance?.amendedByHuman || item.amendedByHuman ? ['details/state amended by human'] : []),
+        ...(provenance?.claimedHumanRequest || item.onHumanRequest ? ['human request claimed'] : []),
+        ...(provenance?.completeness === 'partial' ? ['partial'] : []),
+        ...(provenance?.taskRevision === undefined ? [] : [`source task revision ${provenance.taskRevision}`])];
+      lines.push(`- [${item.id ?? 'no-id'}] [${labels.join('; ')}] ${item.fact}`);
+    }
+  }
+  const full = lines.join('\n');
+  if (Buffer.byteLength(full, 'utf8') <= MEMORY_MAX_BYTES) return { text: full, truncated: false };
+  const kept: string[] = [];
+  for (const line of lines) {
+    const candidate = [...kept, line, MEMORY_TRUNCATION_MARKER].join('\n');
+    if (Buffer.byteLength(candidate, 'utf8') > MEMORY_MAX_BYTES) break;
+    kept.push(line);
+  }
+  return { text: [...kept, MEMORY_TRUNCATION_MARKER].join('\n'), truncated: true };
+}
+
 export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
-  const warnings: LayerWarning[] = [];
+  const warnings: SessionLayerWarning[] = [];
   const role = truncateMarked(
     input.nativeClaudeRole ? '' : (input.role ?? ''),
     '[Role is cut at 32 KB by Parley]',
@@ -64,6 +107,8 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
       message:
         'Parley cut the recipe playbook at 32 KB; shorten the playbook to include the remainder.',
     });
+  const memory = input.memoryItems === undefined ? null : formatMemoryFactBlock(input.memoryItems);
+  if (memory?.truncated) warnings.push({ code: 'memory-truncated', message: 'Parley cut project memory at 12 KiB; clean up memory.md to include the remaining facts.' });
   const parts = {
     guidance: input.guidance,
     bridge: input.bridge ?? '',
@@ -71,7 +116,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     playbook: playbook.text,
     brief: input.brief ?? '',
     parleyMd: input.parleyMd ?? '',
-    memoryFacts: input.memoryFacts ?? '',
+    memoryFacts: memory?.text ?? input.memoryFacts ?? '',
   };
   const blockBytes = Object.fromEntries(
     Object.entries(parts).map(([key, value]) => [key, Buffer.byteLength(value, 'utf8')]),

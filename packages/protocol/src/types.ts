@@ -111,6 +111,8 @@ export type NoticeKind =
   | 'parley-md-truncated'
   | 'provider-override-gap'
   | 'role-missing'
+  | 'memory-truncated'
+  | 'memory-unreadable'
   | 'role-truncated'
   | 'recipe-playbook-truncated'
   | 'pointer-timeout'

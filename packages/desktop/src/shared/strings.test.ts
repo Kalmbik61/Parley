@@ -32,6 +32,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'parley-md-unreadable',
   'parley-md-truncated',
   'provider-override-gap',
+  'memory-truncated',
+  'memory-unreadable',
   'role-truncated',
   'recipe-playbook-truncated',
 ];

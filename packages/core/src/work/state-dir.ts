@@ -27,8 +27,9 @@ export function stateDir(projectPath: string): string {
   return isDirectorySync(legacy) ? legacy : current;
 }
 
-/** Stage 6 shared allowlist. Every other current/future state file remains local. */
-export const SHARED_STATE_IGNORE = '*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n';
+/** Shared allowlist including project memory. Every other current/future state file remains local. */
+export const PRE_MEMORY_STATE_IGNORE = '*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n';
+export const SHARED_STATE_IGNORE = `${PRE_MEMORY_STATE_IGNORE}!memory.md\n`;
 
 /**
  * Кладёт в каталог состояния `.gitignore` с белым списком shared-файлов. Уже лежащий не трогается: его положил соседний
