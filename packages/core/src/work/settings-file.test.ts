@@ -5,7 +5,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -376,6 +376,55 @@ describe('writeWorkSettings', () => {
   it.each(['../outside', 's-01/../../outside', '', 's-01\\outside'])('rejects unsafe session file identity %s', async sessionId => {
     const { work } = await createWork(project, { title: 'Bounds' });
     await expect(writeWorkSettings(project, work.id, { sessionId })).rejects.toThrow('invalid-session-id');
+  });
+
+  it.each(['settings-directory', 'session-file', 'works-directory'])('rejects a redirected %s without touching foreign settings', async kind => {
+    const { work } = await createWork(project, { title: 'No-follow' });
+    const paths = workPaths(project, work.id);
+    const foreign = path.join(home, 'foreign');
+    await mkdir(foreign);
+    const target = path.join(foreign, 's-01.json');
+    const original = '{"humanNativeSetting":true}\n';
+    await writeFile(target, original);
+    if (kind === 'settings-directory') await symlink(foreign, path.join(paths.dir, 'settings'));
+    else if (kind === 'session-file') {
+      await mkdir(path.join(paths.dir, 'settings'));
+      await symlink(target, path.join(paths.dir, 'settings', 's-01.json'));
+    } else {
+      const foreignWork = path.join(foreign, work.id, 'settings');
+      await mkdir(foreignWork, { recursive: true });
+      await writeFile(path.join(foreignWork, 's-01.json'), original);
+      await rm(path.dirname(paths.dir), { recursive: true });
+      await symlink(foreign, path.dirname(paths.dir));
+    }
+    await expect(writeWorkSettings(project, work.id, { sessionId: 's-01' })).rejects.toThrow();
+    expect(await readFile(target, 'utf8')).toBe(original);
+    if (kind === 'works-directory') expect(await readFile(path.join(foreign, work.id, 'settings', 's-01.json'), 'utf8')).toBe(original);
+  });
+
+  it.each(['directory', 'fifo'])('rejects a special session leaf (%s) without opening it for writing', async kind => {
+    const { work } = await createWork(project, { title: 'Special' });
+    const parent = path.join(workPaths(project, work.id).dir, 'settings');
+    await mkdir(parent);
+    const leaf = path.join(parent, 's-01.json');
+    if (kind === 'directory') await mkdir(leaf);
+    else execFileSync('mkfifo', [leaf]);
+    await expect(writeWorkSettings(project, work.id, { sessionId: 's-01' })).rejects.toThrow();
+  });
+
+  it('atomically replaces a regular hard-linked session file without truncating its foreign link', async () => {
+    const { work } = await createWork(project, { title: 'Hard link' });
+    const parent = path.join(workPaths(project, work.id).dir, 'settings');
+    await mkdir(parent);
+    const foreign = path.join(home, 'human.json');
+    const original = '{"humanNativeSetting":true}\n';
+    await writeFile(foreign, original);
+    await link(foreign, path.join(parent, 's-01.json'));
+    const options = { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' };
+    const file = await writeWorkSettings(project, work.id, options);
+    expect(await readFile(foreign, 'utf8')).toBe(original);
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options));
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
 });

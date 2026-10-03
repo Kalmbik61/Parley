@@ -12,7 +12,9 @@
  * файле, а не в настройках человека.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { constants, type Stats } from 'node:fs';
+import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
@@ -186,6 +188,86 @@ export function workSettingsJson(options: WorkSettingsOptions = {}): string {
 }
 
 /**
+ * Session files never follow an existing settings symlink or truncate a hard-linked
+ * file. Directory handles and repeated identity checks bound path redirects; Node's
+ * portable rename API still has a final parent-check/rename race (no openat/renameat).
+ */
+async function writeSessionSettings(stateRoot: string, workDir: string, file: string, json: string): Promise<void> {
+  const unsafe = (): Error => new Error('unsafe-session-settings-path');
+  const same = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino;
+  const rootStat = await lstat(stateRoot);
+  if (!rootStat.isDirectory()) throw unsafe();
+  const canonicalRoot = await realpath(stateRoot);
+  const relative = path.relative(stateRoot, workDir);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw unsafe();
+  const canonicalWork = path.join(canonicalRoot, relative);
+  // Check every work-relative component, not only the final work directory.
+  let component = canonicalRoot;
+  const directories: { file: string; stat: Stats }[] = [{ file: component, stat: rootStat }];
+  for (const part of relative.split(path.sep)) {
+    component = path.join(component, part);
+    const current = await lstat(component);
+    if (!current.isDirectory()) throw unsafe();
+    directories.push({ file: component, stat: current });
+  }
+  const parent = path.join(canonicalWork, 'settings');
+  try { await mkdir(parent, { mode: 0o700 }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const noFollow = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  const parentHandle = await open(parent, noFollow);
+  let temporary: string | undefined;
+  try {
+    const parentStat = await parentHandle.stat();
+    if (!parentStat.isDirectory()) throw unsafe();
+    directories.push({ file: parent, stat: parentStat });
+    const verifyParents = async (): Promise<void> => {
+      if (await realpath(stateRoot) !== canonicalRoot || await realpath(workDir) !== canonicalWork) throw unsafe();
+      for (const directory of directories) {
+        const current = await lstat(directory.file);
+        if (!current.isDirectory() || !same(current, directory.stat)) throw unsafe();
+      }
+      if (await realpath(parent) !== parent) throw unsafe();
+    };
+    const target = path.join(parent, path.basename(file));
+    const leaf = async (): Promise<Stats | undefined> => {
+      let current: Stats;
+      try { current = await lstat(target); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+      if (!current.isFile()) throw unsafe();
+      const handle = await open(target, noFollow);
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || !same(current, opened)) throw unsafe();
+        return opened;
+      } finally { await handle.close(); }
+    };
+    await verifyParents();
+    const before = await leaf();
+    temporary = path.join(parent, `.settings-${randomUUID()}.tmp`);
+    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await handle.writeFile(json, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+    await verifyParents();
+    const after = await leaf();
+    if (before === undefined ? after !== undefined : after === undefined || !same(before, after) || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw unsafe();
+    await rename(temporary, target);
+    temporary = undefined;
+    await verifyParents();
+  } finally {
+    // Never remove through a redirected parent, even when cleaning up a failed write.
+    try {
+      if (temporary !== undefined) {
+        const current = await lstat(parent).catch(() => undefined);
+        const opened = await parentHandle.stat();
+        if (current?.isDirectory() && same(current, opened) && await realpath(parent).catch(() => undefined) === parent) await unlink(temporary).catch(() => undefined);
+      }
+    } finally { await parentHandle.close(); }
+  }
+}
+
+/**
  * Пишет `settings.json` работы и заводит каталог `events/`: хук умеет только
  * дописывать файл, каталог под него создаём мы.
  */
@@ -197,9 +279,9 @@ export async function writeWorkSettings(
   if (options.sessionId !== undefined && !/^s-\d+$/.test(options.sessionId)) throw new Error('invalid-session-id');
   const paths = workPaths(projectPath, workId);
   const file = options.sessionId === undefined ? paths.settings : path.join(paths.dir, 'settings', `${options.sessionId}.json`);
-  await ensureStateDir(projectPath);
+  const root = await ensureStateDir(projectPath);
+  if (options.sessionId !== undefined) await writeSessionSettings(root, paths.dir, file, workSettingsJson(options));
   await mkdir(paths.events, { recursive: true });
-  if (options.sessionId !== undefined) await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, workSettingsJson(options), 'utf8');
+  if (options.sessionId === undefined) await writeFile(file, workSettingsJson(options), 'utf8');
   return file;
 }
