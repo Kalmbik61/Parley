@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P18, P20/P21/P22/P29/P39 accepted (24/40); P19/P23 running.
+- Текущая фаза: P00–P18, P20/P21/P22/P23/P29/P39 accepted (25/40); P19/P24/P27 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -43,11 +43,11 @@
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | done | fb2784f; /root/p01_review accepted after4-file UIrework;38SHA/blob +registry,162MCP/build/types0 |
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
-| P23 | Подключить инструменты планов и будильник | running | /root/p01_review; P22/P21accepted; TMPdomain/DTO/effects; MCP/guide unlocked; rootshared registry |
-| P24 | Показать план и итог в комнате | pending | — |
+| P23 | Подключить инструменты планов и будильник | done | 6a3635f helper + b511fda integration21; correction peer9/root lifecycle peer19, actual257GREEN |
+| P24 | Показать план и итог в комнате | running | /root/p01_claude_probe; TMP UI, existing bridge/DTO, serial strings |
 | P25 | Реализовать рецепты и плейбук ведущего | pending | — |
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
-| P27 | Реализовать журнал принятых версий и историю | pending | — |
+| P27 | Реализовать журнал принятых версий и историю | running | /root/p01_review; TMP immutable journal/local history foundation |
 | P28 | Подключить Decisions и Share history | pending | — |
 | P29 | Реализовать память проекта и её слой | done | 127367e; /root/p01_claude_probe accepted; original Unicode9 GREEN,54affected/probes,16exact staged SHA,corebuild0 |
 | P30 | Реализовать search_history по записям проекта | pending | — |
@@ -254,3 +254,5 @@ P29 independent needs rework: UTF16 lone surrogate принимается как
 P29 independently accepted /root/p01_claude_probe: original9 Unicode failures GREEN +valid emoji,54affected/probes final GREEN; sixafterSHA exact, validators refuse input before local/Markdown writes. Root staged only reviewed P29 domain13+consumer3+fix6 through exact staged hashes, commit127367e; P23 shared additions остались unstaged.23accepted из40. P18 prettyJSONfix2 469c2ae…3b1322 accepted /root/p02_codex_probe original4GREEN/SHA2, hostbuild0; P18UI TMP phase opened with one bridge prop preserving P21backlog. Последний недельный остаток55% (usedPercent45).
 
 P18 full independently accepted: UI9 f1c6299e…6054a45 exact hashes, author136/peer22 GREEN, root desktop web noEmit0; c917f45+a4abc3f source checkpoints. P19 TMP foundation dispatched after acceptance. P23 integration14 f93cc387…5933b applied; independent peer isolated Cyrillic Free decision character/byte regression, narrow correction pending. Root host wiring3 b8d07d87…ff404a singleton/start/stop/safe notice +7 worksReady gates; hostbuild0 and18 host scoped checks GREEN, independent lifecycle review ongoing.24/40accepted. Недельный лимит: остаток52% (used48), порог30% остатка не достигнут.
+
+P23 full independently accepted: immutable first helper6a3635f, integration21 b511fda exact stagedSHA. Correction7 7f4ef6ef…2e0ad5 restored Cyrillic limits, exact Free response, off-guide; five authored RED→GREEN, author264GREEN/types/lint0, rootactual257GREEN/core+protocolbuild0. Peer9 relevant independent rechecks+exact7SHA, root lifecycle peer19+exact3SHA, no remaining Critical/Important. Spec/unified clarify same limits/semantics. P24 UI and P27 journal/history dispatched after fullacceptance; P19 remains running, sharedsurface grants bounded/TMPonly.25/40accepted. Недельный остаток48% (used52); остановка при30% остатка сохранена.

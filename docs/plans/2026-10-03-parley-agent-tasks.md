@@ -86,11 +86,11 @@
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | done |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
-| [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | running |
-| [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
+| [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | done |
+| [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | /root/p01_claude_probe | running |
 | [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | не назначен | pending |
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
-| [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | не назначен | pending |
+| [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | /root/p01_review | running |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
 | [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | /root/p02_codex_probe | done |
 | [P30 — Реализовать search_history по записям проекта](#p30) | 10 | P27, P29, P22 | не назначен | pending |
@@ -918,9 +918,9 @@
 
 ### P23: Подключить инструменты планов и будильник
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
+**Статус:** done. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющие:** /root/p02_codex_probe (helper/MCP/correction), /root/p01_claude_probe (root registry/lifecycle); accepted.
 
 **Зависимости:** P22. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -945,7 +945,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** first helper milestone6a3635f, full integration21 b511fda. Frozen14 f93cc387…5933b + root wiring3 b8d07d87…ff404a + correction7 7f4ef6ef…2e0ad5; exact21 staged SHA. Root core/protocol/hostbuild0; actual failed consumers repaired, final257/257 GREEN. Author264/264/types/lint0; independent helper46+4, integration Cyrillic RED→GREEN/correction9, root lifecycle/routing/real committed failure19 GREEN. UTF16 text/evidence limits preserve Cyrillic and exact Free reply; defaultfalse guide excludes optional tool, protocol/domain/MCPbacklog30. Shared authority starts after readiness before wake, stops timers before works; captured pending intent/partial failure never repeats acceptance. P32 native/model/UI parity and P35 compaction gates remain.
 
 **Текущий grant:** TMP core plan-effects/DTO/lifecycle + trusted letters filter; MCP/guide открыты после P21. Узкое расширение plan-snapshots допускает internal intent filter, чтобы immutable/semantic conflict одного captured payload не блокировал новые валидные exports. Transient IO retries ограничены; idle work не создаёт timer/map writes. Explicit plans.retryEffects повторяет только captured intents, без blind rebase. NoticeKind plan-effect-failed добавляется после P29 consumer через root.
 
@@ -955,7 +955,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
 
 **Зависимости:** P23, P21. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -979,6 +979,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Grant root:** TMP-only card6+tests, RoomPanel/RoomRow и ONE WorkCard progress prop seam; disjoint S.plans namespace serial root apply. Existing bridge/DTO, no protocol/runtime expansion. Managed writes/registry/staging/commits root-only.
 
 <a id="p25"></a>
 
@@ -1053,7 +1055,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
 
 **Зависимости:** P23, P20. **Источник:** [этап 9 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-9).
 
@@ -1079,6 +1081,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Grant root:** TMP-only NEW decision-journal/room-history +tests first; shared capture/retry/state-dir/host integration требует bounded proposal. Foreign immutable journal/Share history protected; no second plan drain authority. Managed writes/registry/staging/commits root-only.
 
 <a id="p28"></a>
 
