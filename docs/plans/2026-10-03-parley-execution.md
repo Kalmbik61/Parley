@@ -158,3 +158,7 @@ P08 fix accepted /root/p01_claude_probe: original relative config regression, nu
 P12 source preflight уточнил exact AgentsToml tuning whitelist и lossy requirements projection. Поддержан только обязательный requirements:null response; любой non-null, даже all-null fields, context-unverified. Evidence передано author и записано в research/codex.md. P15 scope|null согласован для native sources без подтверждённого scope; spec обновлена.
 
 P15 DTO-first frozen: новый protocol/capability-snapshot.ts/test + methods/events/index safe get/refresh/changed. Presence arrays/nullable scope+enabled/document locators/semantic boundaries; 15 targeted tests и прежняя полная protocol95, scoped lint/strict types/diff green. Root сохраняет отдельный wire snapshot; это не P15 acceptance. Автор продолжает owned host readers; P12 получает protocol после unlock.
+
+## Действующий protocol unlock P12
+
+P15 wire snapshot d4278ce сохранён и protocol build прошёл; root передал единственное право role-specific protocol/methods.ts/types.ts/index.ts/test агенту /root/p02_codex_probe. Независимый P15 wire precheck accepted (15 fixtures, 7 nested rejection probes, 2 strict request checks). Auto-review отклонил одну следующую P12 multi-file запись, сочтя protocol locked/root-owned; из той попытки изменений нет. Root уточнил concrete granted paths в P12 card. P15 host files и host/methods/index.ts не входят в запись. Author может повторить authorized change с этой evidence, сохраняя safe DTO.

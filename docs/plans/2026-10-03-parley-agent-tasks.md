@@ -542,6 +542,8 @@
 
 **Дополнительные grants root:** role/context.ts/test (bounded native config transport), core index exports, brief/CLI agent compatibility +tests, host methods/roles.ts/test, desktop role chips/terminal headers/feed-model/shared strings и их целевые fixtures/tests. Protocol role DTO/methods/index — после короткого P15 DTO-first этапа; до root unlock не менять. Host methods/index registry остаётся root. Новую human permissions UI/persistence не вводить: existing caller constraints и role-derived ограничения проверяются при каждом start/resume, removed-role defaults не кэшируются. Context unknown/profile/nonempty unverified requirements — отказ native role, builtins независимы.
 
+**Действующее разрешение записи root после unlock d4278ce:** protocol/methods.ts, types.ts, index.ts и role-targeted tests РАЗБЛОКИРОВАНЫ для /root/p02_codex_probe. P15 writer их заморозил, protocol-only build прошёл. Дополнительно подтверждены work/agents.ts, core/index.ts, host/methods/roles.ts и sessions.ts, host/sessions/sessions-service.ts, mcp/context.ts/tools.ts, work/brief.ts, core/cli.ts и целевые tests. Это те же P12 grants, не расширение на P15 readers или host/methods/index.ts (последний пишет root). Предыдущее временное ограничение protocol больше не действует. Прямой запрос пользователя — реализация через sol6.1/high в этом managed worktree — сохраняет авторизацию reversible edits.
+
 <a id="p13"></a>
 
 ### P13: Реализовать find_skill и настройку MCP
