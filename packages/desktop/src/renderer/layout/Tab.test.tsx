@@ -3,8 +3,8 @@
  * вкладку, «Закрыть остальные»/«Закрыть справа» — одним вызовом `requestCloseTabs`.
  *
  * Облик Organic (спека окна 2026-09-29, 1.1): вкладка — пилюля 28px; активная — фон `neutral-100`,
- * `shadow-sm`, вес 600, крестик 18×18 (значок 10); у неактивных крестика нет — закрытие средней
- * кнопкой; подкраска `blocked` — `accent-200`, `unseen` — `accent-2-200`.
+ * `shadow-sm`, вес 600, крестик 18×18 (значок 10); у неактивных крестик появляется при наведении
+ * или фокусе; подкраска `blocked` — `accent-200`, `unseen` — `accent-2-200`.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -156,23 +156,44 @@ describe('Tab — тест 3', () => {
 });
 
 describe('Tab — тест 11', () => {
-  it('крестик — только у активной вкладки: 18×18, значок 10; у неактивной его нет (закрытие средней кнопкой)', () => {
+  it('крестик 18×18 со значком 10 закрывает фоновую вкладку без её активации', async () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 
-    const { rerender } = render(
+    render(
       <Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />,
     );
-    expect(screen.queryByLabelText('Close')).toBeNull();
+    const close = screen.getByLabelText('Close');
+    expect(close.className).toContain('size-[18px]');
+    expect(close.className).toContain('rounded-full');
+    expect(close.querySelector('svg')?.classList.contains('size-2.5')).toBe(true);
+    fireEvent.click(close);
 
-    rerender(<Tab workKey={WORK_KEY} group={group} tab={tab('a')} meta={meta('A')} dot={null} isActive />);
-    const activeClose = screen.getByLabelText('Close');
-    expect(activeClose.className).toContain('size-[18px]');
-    expect(activeClose.className).toContain('rounded-full');
-    expect(activeClose.querySelector('svg')?.classList.contains('size-2.5')).toBe(true);
+    await vi.waitFor(() => expect(remainingIds()).toEqual(['a']));
+    expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'a' });
   });
 
-  it('неактивную вкладку закрывает средняя кнопка (auxclick) — вместо прежнего крестика при hover', async () => {
+  it('нажатие крестика не начинает перетаскивание, Enter/Space не активируют вкладку', () => {
+    const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
+    setLayoutWithGroup(group);
+    const pointerDown = vi.fn();
+    const keyDown = vi.fn();
+    render(
+      <div onPointerDown={pointerDown} onKeyDown={keyDown}>
+        <Tab workKey={WORK_KEY} group={group} tab={tab('b')} meta={meta('B')} dot={null} isActive={false} />
+      </div>,
+    );
+    const close = screen.getByLabelText('Close');
+    fireEvent.pointerDown(close);
+    fireEvent.keyDown(close, { key: 'Enter' });
+    fireEvent.keyDown(close, { key: ' ' });
+
+    expect(pointerDown).not.toHaveBeenCalled();
+    expect(keyDown).not.toHaveBeenCalled();
+    expect(useLayoutStore.getState().layouts[WORK_KEY]?.root).toMatchObject({ activeTabId: 'a' });
+  });
+
+  it('неактивную вкладку по-прежнему закрывает средняя кнопка (auxclick)', async () => {
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [tab('a'), tab('b')], activeTabId: 'a' };
     setLayoutWithGroup(group);
 

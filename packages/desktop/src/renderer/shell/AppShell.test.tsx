@@ -1936,19 +1936,18 @@ describe('AppShell — несохранённые файлы при закрыт
     return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
   };
 
-  it('точка «не сохранён» на грязной вкладке; крестик — вопрос, Cancel оставляет вкладку', async () => {
+  it('крестик грязной фоновой вкладки — вопрос без активации, Cancel оставляет вкладку', async () => {
     await openDirtyA();
     expect(tabEl(A).querySelector('[data-dirty-dot]')).not.toBeNull();
     expect(tabEl(B).querySelector('[data-dirty-dot]')).toBeNull();
-    // Крестик — только у активной вкладки (Organic, 1.1): фоновую A сначала активируем, а её закрытие
-    // без активации — средней кнопкой, тест ниже.
-    expect(within(tabEl(A)).queryByRole('button', { name: 'Close' })).toBeNull();
-    fireEvent.click(tabEl(A));
     fireEvent.click(within(tabEl(A)).getByRole('button', { name: 'Close' }));
     expect(await screen.findByText('Save changes to a.ts?')).toBeTruthy();
+    expect(tabEl(B).getAttribute('aria-selected')).toBe('true');
+    expect(tabEl(A).getAttribute('aria-selected')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await flush();
     expect(openIds()).toEqual([A.id, B.id]);
+    expect(tabEl(B).getAttribute('aria-selected')).toBe('true');
     expect(bridge.writes).toEqual([]);
   });
 
