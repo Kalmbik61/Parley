@@ -72,14 +72,14 @@
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | done |
-| [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | running |
+| [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | done |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | running |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
-| [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | не назначен | pending |
+| [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | running |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | не назначен | pending |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | не назначен | pending |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | не назначен | pending |
@@ -554,9 +554,9 @@
 
 ### P13: Реализовать find_skill и настройку MCP
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P13), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (P13), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P08, P12. **Источник:** [этап 4 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-4).
 
@@ -587,6 +587,8 @@
 **Single-pass evidence grant:** skills/codex.ts/test — узкий internal nativeEvidence по bound cwd/canonical path/native name/known local source, без blanket root promotion. No-evidence/traversal/namespace/policy прежние; native enabled пересекается с human/manual-only правилами. Per-document повторные обходы с искусственными root boundaries не используются.
 
 **Shared transport export grant:** core/index.ts экспорт readCodexNativeContext/CodexNativeContext/CodexContextOptions для P17 source proof; роли сохраняют прежний wrapper/projection. Stamp после успешного updateMap находится в уже granted launch.ts:startSession, no new map fields. Narrow host/sessions/sessions-service.ts/test grant: передать revision именно фактического LaunchPlan в optional startSession argument. Legacy caller без revision не подтверждает чужой контекст; закрытая сессия с pid=null сохраняет привязку по прежнему startedAtProcess. Не менять P12 permissions/defaults/notices.
+
+**Независимая приёмка:** /root/p01_review accepted 0b439e1..f3394ae:341core +62host tests,8 isolated production-path controls,25SHA/gitBlob matched, scoped lint/diff passed. Critical/Important нет; fakeActivity baseline подтверждён неизменным. Native load/report/notify/resume/platform gates остаются P32.
 
 <a id="p14"></a>
 
@@ -794,7 +796,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P20), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент gpt-6.1-sol/high после frozen snapshot.
 
 **Зависимости:** P16. **Источник:** [этап 6 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-6).
 
@@ -820,6 +822,10 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнительные grants root:** store.test.ts, project-preferences.test.ts, work/project-context.ts/test и core/index.ts только domain exports; migrate.ts/test только generated-ignore initialization/expectations. Host snapshot.ts/test для delegation main resolver пока locked под P17, выдаётся после coordinated freeze. Shared state сохраняет выбранную вложенную папку проекта относительно verified main checkout; отсутствующая corresponding folder/unknown identity не подменяется другой папкой. Native main-root helper сохраняет прежнюю семантику P15. Verified non-Git canonical directory допустим после bounded proof; failed/ambiguous Git context не даёт fallback.
+
+**Implementation решения:** versioned local sequence/terminal suggestions envelope принят, публичные b-NNN/sg-NN неизменны, terminal retention не расширяет dedup за open/pending. Новый state ignore — exact stage6 whitelist; existing exact старый *\n мигрирует лишь при первой shared write, custom/BOM/CRLF/missingexisting сохраняются. Portable compare→rename не является filesystem CAS; Markdown/JSON не одна atomic transaction, поэтому partial retry восстанавливается идемпотентно по reserved operation/ID. Local workPaths и native descriptor не меняются, real project/config writes в tests запрещены.
 
 <a id="p21"></a>
 

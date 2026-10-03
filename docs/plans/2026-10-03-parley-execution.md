@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P12, P15/P16 accepted; P13/P17 running.
+- Текущая фаза: P00–P13, P15/P16 accepted; P17/P20 running; P14 read-only preflight.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -33,14 +33,14 @@
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
-| P13 | Реализовать find_skill и настройку MCP | running | /root/p02_codex_probe; P12/P08 accepted; core-only transport/context/cache/config grants |
+| P13 | Реализовать find_skill и настройку MCP | done | f3394ae; independent341core/62host/8controls,25SHA/blob; /root/p01_review accepted |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native MCP add/remove/check | running | /root/p01_claude_probe; DTO-first wire grant; private selector/context/queue, registry root |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
-| P20 | Реализовать shared/local state и домен бэклога | pending | — |
+| P20 | Реализовать shared/local state и домен бэклога | running | /root/p02_codex_probe; P16 accepted; nested main-project context/local envelope grants |
 | P21 | Подключить бэклог к MCP, host и панели | pending | — |
 | P22 | Реализовать режимы, планы, ревизии и снимки | pending | — |
 | P23 | Подключить инструменты планов и будильник | pending | — |
@@ -194,3 +194,5 @@ P17 publisher evidence: primary installer/manifest read-only fetch подтве�
 P13 human-disable regression reproduced RED: native disabled User layer терял human skills.config selector. Root applied one-file skills/context projection preserving disabled User/SessionFlags human policy while native inventory remains required; core build exit0. P17 origin recheck accepted /root/p01_review; default positive binary proof ограничен audited publisher darwin-arm64 2.1.287, other builds unavailable до evidence, без machinepath constants.
 
 P13 snapshot f3394ae сохранён root: exact25SHA/gitBlob matched,927insertions/22deletions. Author499core/62host/lint/scopedcorefixturetypes passed, corebuild0; independentfullreview /root/p01_review запущен. Combinedhostfixturetypecheck имеет только неизменённый fakeActivity baseline mismatch. Author готовит P20 read-only preflight до write unlock; P17 продолжает host/UI, registry Add/Remove/Check root-bound и ещё unstaged.
+
+2026-10-04: пользователь восстановил лимиты; P17 author возобновлён с сохранённого состояния. P13 independent full review accepted f3394ae без Critical/Important:341core/62host/8isolatedcontrols,exact25SHA/blob/lint/diff. P20 dispatched core-only с сохранением выбранного nested project scope, versioned LOCAL sequence и idempotent partial recovery; host main-resolver delegation ждёт P17freeze. P14 remaining work готовит independent P13 reviewer read-only; strings ещё solewriter P17.

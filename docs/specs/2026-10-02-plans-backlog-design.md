@@ -96,6 +96,8 @@
 
 ## 4. Бэклог
 
+Shared project context использует verified canonical main checkout и сохраняет явно выбранную вложенную папку проекта относительно checkout root. Missing/unverified corresponding folder не заменяется repo root или participant cwd. Для non-Git допустим verified canonical project directory; ошибка Git в неоднозначном контексте не доказывает non-Git. Local workPaths сохраняются. Версионированные sequence/terminal suggestion records лежат локально и не меняют форматы b-NNN/sg-NN или dedup только open/pending. Lock + compare/retry защищает от обнаруженных внешних изменений; portable compare→rename не обещает filesystem CAS, Markdown и JSON не одна atomic transaction, partial retry идемпотентен по reserved operation/ID.
+
 ### 4.1 Формат `backlog.md`
 
 ```markdown
