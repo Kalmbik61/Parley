@@ -26,9 +26,12 @@ export function createCapabilitiesList(scan: Scan = scanClaudeCapabilities): Han
 import { createSafeCapabilitiesService } from '../capabilities/snapshot.js';
 import type { SafeCapabilitiesOptions } from '../capabilities/snapshot.js';
 import type { HostContext } from '../context.js';
+import { createCapabilitiesMcpActions } from '../capabilities/actions.js';
+import type { McpExecutor } from '../capabilities/actions.js';
+export interface CapabilitiesHandlersOptions extends SafeCapabilitiesOptions { executeMcp?: McpExecutor }
 
-/** Create once per host; root registers these two handlers alongside legacy list. */
-export function createCapabilitiesHandlers(options: SafeCapabilitiesOptions = {}) {
+/** Create once per host; root registers these handlers alongside legacy list. */
+export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions = {}) {
   let host: HostContext | undefined;
   const service = createSafeCapabilitiesService({ ...options,
     changed(projectPath, snapshot) {
@@ -36,10 +39,17 @@ export function createCapabilitiesHandlers(options: SafeCapabilitiesOptions = {}
       options.changed?.(projectPath, snapshot);
     },
   });
+  const actions = createCapabilitiesMcpActions(service, options.executeMcp);
+  const bind = (context: HostContext): void => {
+    if (!host) { host = context; host.onShutdown(async () => { actions.dispose(); service.dispose(); }); }
+  };
   const handler = (refresh: boolean): Handler<'capabilities.get'> => async (params, request) => {
     if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', 'projectPath must be an absolute path');
-    if (!host) { host = request.host; host.onShutdown(async () => { service.dispose(); }); }
+    bind(request.host);
     return refresh ? service.refresh(params.projectPath) : service.get(params.projectPath);
   };
-  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), service };
+  const capabilitiesMcpAdd: Handler<'capabilities.mcp.add'> = async (params, request) => { bind(request.host); return actions.add(params); };
+  const capabilitiesMcpRemove: Handler<'capabilities.mcp.remove'> = async (params, request) => { bind(request.host); return actions.remove(params); };
+  const capabilitiesMcpCheck: Handler<'capabilities.mcp.check'> = async (params, request) => { bind(request.host); return actions.check(params); };
+  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), capabilitiesMcpAdd, capabilitiesMcpRemove, capabilitiesMcpCheck, service };
 }

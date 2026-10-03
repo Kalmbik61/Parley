@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,7 +6,7 @@ import { readCodexSnapshot } from './codex.js';
 import type { SnapshotContext } from './snapshot.js';
 let root: string; let context: SnapshotContext;
 beforeEach(async () => { root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-p15-codex-'))); context = {
- projectPath: root, homeDir: path.join(root, 'home'), binaries: { claude: null, codex: '/fixture/codex' }, codex: { configLayers: [], roots: [] },
+ projectPath: root, homeDir: path.join(root, 'home'), env: { HOME: path.join(root, 'home') }, binaries: { claude: null, codex: '/fixture/codex' }, codex: { configLayers: [], roots: [] },
 }; await mkdir(context.homeDir); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -37,4 +37,43 @@ describe('Codex safe snapshot', () => {
   const result = await readCodexSnapshot(context, { readNative: async (_binary, args) => { if (args[0] === 'mcp') throw new Error('FIXTURE_SECRET'); return { status: 'valid', data: [] }; } });
   expect(result.phase).toBe('partial'); expect(result.entries).toEqual([]); expect(JSON.stringify(result)).not.toContain('FIXTURE_SECRET');
  });
+});
+
+
+import { createSafeCapabilitiesService } from './snapshot.js';
+import type { McpExecutor } from './actions.js';
+import { createCapabilitiesMcpActions } from './actions.js';
+import { vi } from 'vitest';
+
+it('executes positive user/global remove only after native active-layer source proof and revalidation', async () => {
+ const executable = path.join(root, 'codex-native'); await writeFile(executable, 'native fixture bytes'); await chmod(executable, 0o700); context.binaries.codex = executable;
+ const file = path.join(context.homeDir, '.codex/config.toml'); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, '[mcp_servers.example]\ncommand="node"\n');
+ const native = { config: { layers: [{ name: { type: 'user', file }, version: 'v1', config: { mcp_servers: { example: { command: 'node' } } } }] }, requirements: { requirements: null } };
+ const readContext = vi.fn(async () => native);
+ const readNative = vi.fn<import('./redact.js').NativeJsonReader>(async (_binary, argv) => ({ status: 'valid' as const, data: argv[0] === 'mcp' ? [{ name: 'example', enabled: true, transport: { type: 'stdio', command: 'node', args: [] } }] : { installed: [] } }));
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: async () => ({ entries: [], diagnostics: [], phase: 'ready' }) }, readCodexContext: readContext, readNative });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).not.toBe('loading'));
+ const presence = service.get(root).rows.find(row => row.name === 'example')!.codex[0]!;
+ expect(presence.scope).toBe('user'); expect(presence.mcpActions?.remove.allowed).toBe(true); expect(presence.mcpActions?.check).toEqual({ allowed: false, reason: 'native-only' });
+ const execute = vi.fn<McpExecutor>(async () => ({ code: 'ok' as const })); const actions = createCapabilitiesMcpActions(service, execute);
+ const result = await actions.remove({ projectPath: root, provider: 'codex', presenceId: presence.id, revision: service.get(root).revision });
+ expect(result).toEqual({ outcome: 'ok', code: 'ok' }); expect(execute.mock.calls[0]?.[0]).toBe(executable); expect(execute.mock.calls[0]?.[1]).toEqual(['mcp', 'remove', 'example']); expect(readContext.mock.calls.length).toBeGreaterThanOrEqual(2);
+ actions.dispose(); service.dispose();
+});
+
+
+it('rejects changed Codex bytes or canonical executable even when native config/list responses are unchanged', async () => {
+ const executable = path.join(root, 'native-a'); const other = path.join(root, 'native-b'); const alias = path.join(root, 'codex-alias');
+ await writeFile(executable, 'native fixture'); await writeFile(other, 'native fixture'); await chmod(executable, 0o700); await chmod(other, 0o700); await symlink(executable, alias); context.binaries.codex = alias;
+ const file = path.join(context.homeDir, '.codex/config.toml'); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, '');
+ const native = { config: { layers: [{ name: { type: 'user', file }, version: 'v1', config: { mcp_servers: { example: { command: 'node' } } } }] }, requirements: { requirements: null } };
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: async () => ({ entries: [], diagnostics: [], phase: 'ready' }) }, readCodexContext: async () => native,
+  readNative: async (_binary, argv) => ({ status: 'valid', data: argv[0] === 'mcp' ? [{ name: 'example', enabled: true, transport: { command: 'node' } }] : { installed: [] } }) });
+ const execute = vi.fn(); const actions = createCapabilitiesMcpActions(service, execute);
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).not.toBe('loading'));
+ const params = () => ({ projectPath: root, provider: 'codex' as const, revision: service.get(root).revision, presenceId: service.get(root).rows.find(row => row.name === 'example')!.codex[0]!.id });
+ await writeFile(executable, 'changed bytes'); expect(await actions.remove(params())).toEqual({ outcome: 'denied', code: 'context-changed' });
+ service.refresh(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).not.toBe('loading'));
+ await rm(alias); await symlink(other, alias); expect(await actions.remove(params())).toEqual({ outcome: 'denied', code: 'context-changed' });
+ expect(execute).not.toHaveBeenCalled(); actions.dispose(); service.dispose();
 });

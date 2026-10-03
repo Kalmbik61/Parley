@@ -5,10 +5,12 @@ import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
-import { commandBinary, loadProviders, stateDir } from '@parley/core';
+import { commandBinary, loadProviders, stateDir, readCodexNativeContext } from '@parley/core';
 import type { SkillCatalogOptions } from '@parley/core';
 import { capabilityPresence, capabilitySnapshot } from '@parley/protocol';
-import type { CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
+import type { CapabilityActionReason, CapabilityMcpTarget, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
+import { contextFingerprint, deny, readBinaryIdentity, sameBinaryIdentity, verifiedClaudeActionBinary } from './native-targets.js';
+import type { NativeMcpInventory, NativeMcpTarget } from './native-targets.js';
 import { readClaudeSnapshot } from './claude.js';
 import { readCodexSnapshot } from './codex.js';
 import { rowIdentity, object, readJsonFile, readNativeJson, safeText } from './redact.js';
@@ -26,12 +28,15 @@ export interface SnapshotContext {
     userConfigFile?: string;
     /** Source-backed native/Git identity; unresolved leaves local MCP unknown. */
     mainCheckout?: string;
+    /** Trusted native effective-winner evidence, bound to cwd and exact config contents.
+     * Local file order/get_settings/exit 0 are insufficient; no default producer. */
+    mcpWinningTargets?: { cwd: string; targets: readonly { name: string; scope: 'user' | 'project' | 'local'; configFingerprint: string }[] };
     mcpPolicy?: { verified: boolean; enabled?: readonly string[]; disabled?: readonly string[]; approved?: readonly string[] };
   };
   codex?: CodexOptions;
 }
-export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase'] }
-export interface SnapshotReaderOptions { readNative?: NativeJsonReader }
+export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase']; native?: NativeMcpInventory }
+export interface SnapshotReaderOptions { readNative?: NativeJsonReader; readCodexContext?: typeof readCodexNativeContext; readBinaryIdentity?: typeof readBinaryIdentity }
 export type ProviderSnapshotReader = (context: SnapshotContext, options: SnapshotReaderOptions) => Promise<ProviderSnapshotResult>;
 
 /** Bounded native Git output only; no repository/config output or raw errors are logged. */
@@ -184,9 +189,14 @@ async function markSharedLinks(context: SnapshotContext, columns: Partial<Record
   }
 }
 
+export type PreparedMcpAction = { ok: false; code: CapabilityActionReason | 'context-changed' | 'shutdown' } | {
+  ok: true; context: SnapshotContext; inventory: NativeMcpInventory; target?: NativeMcpTarget; isCurrent(): boolean;
+};
 export interface SafeCapabilitiesService {
   get(projectPath: string): CapabilitySnapshot;
   refresh(projectPath: string): CapabilitySnapshot;
+  prepareMcpAction(params: CapabilityMcpTarget | { projectPath: string; provider: CapabilityProvider; revision: number }): Promise<PreparedMcpAction>;
+  recordMcpCheck(projectPath: string, provider: CapabilityProvider, target: NativeMcpTarget, status: CapabilityPresence['status']): void;
   dispose(): void;
 }
 export interface SafeCapabilitiesOptions extends SnapshotReaderOptions {
@@ -196,7 +206,7 @@ export interface SafeCapabilitiesOptions extends SnapshotReaderOptions {
 }
 
 export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions = {}): SafeCapabilitiesService {
-  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>> }
+  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; health: Map<string, { fingerprint: string; status: CapabilityPresence['status'] }> }
   const cache = new Map<string, Cached>();
   let disposed = false;
   const copy = (value: CapabilitySnapshot): CapabilitySnapshot => structuredClone(value);
@@ -208,7 +218,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     const key = path.resolve(projectPath);
     const previous = cache.get(key);
     const generation = (previous?.generation ?? 0) + 1;
-    const value: Cached = { generation, entries: {}, snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
+    const value: Cached = { generation, entries: {}, inventories: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
       columns: { claude: { phase: 'loading', diagnostics: [] }, codex: { phase: 'loading', diagnostics: [] } }, rows: [] } };
     cache.set(key, value);
     const finish = async (provider: CapabilityProvider, result: ProviderSnapshotResult, context?: SnapshotContext): Promise<void> => {
@@ -220,7 +230,14 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         const safe: CapabilityPresence = { id: p.id, scope: p.scope, source: p.source, documentPath: p.documentPath,
           description: safeText(p.description), installed: p.installed, enabled: p.enabled, status: p.status,
           summary: safeText(p.summary), modelAvailable: p.modelAvailable, unavailableReason: p.unavailableReason,
-          ...(p.sharedFrom ? { sharedFrom: p.sharedFrom } : {}) };
+          ...(p.sharedFrom ? { sharedFrom: p.sharedFrom } : {}),
+          ...(entry.kind === 'mcp' ? { mcpActions: { remove: deny(), check: deny(provider === 'codex' ? 'native-only' : 'unverified') } } : {}) };
+        const target = result.native?.targets.find(target => target.id === p.id && target.provider === provider);
+        if (target && entry.kind === 'mcp') {
+          safe.mcpActions = { remove: target.remove, check: target.check };
+          const health = current.health.get(target.id);
+          if (health?.fingerprint === target.fingerprint && safe.enabled !== false) safe.status = health.status;
+        }
         const parsed = capabilityPresence.safeParse(safe);
         if (!parsed.success || !safeText(entry.name)) { diagnostics.push({ code: 'invalid-output' }); continue; }
         entries.push({ kind: entry.kind, name: safeText(entry.name)!, ...(entry.rowId && /^[a-f0-9]{64}$/.test(entry.rowId) ? { rowId: entry.rowId } : {}), presence: parsed.data });
@@ -229,25 +246,30 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         id: JSON.stringify([provider, 'mcp', 'builtin', 'parley']), scope: 'builtin', source: 'Parley launch',
         documentPath: null, description: 'Provided by Parley when a session starts.', installed: true,
         enabled: null, status: 'unknown', summary: 'Provided at session launch', modelAvailable: null, unavailableReason: null,
+        mcpActions: { remove: deny('builtin'), check: deny('builtin') },
       } });
       let bytes = 0;
       const bounded = entries.filter(entry => { bytes += Buffer.byteLength(JSON.stringify(entry)); return bytes <= 1024 * 1024; });
       if (bounded.length !== entries.length) diagnostics.push({ code: 'output-limit', count: entries.length - bounded.length });
       current.entries[provider] = bounded;
+      if (result.native) current.inventories[provider] = { ...result.native,
+        names: context ? [...new Set([...result.native.names, 'parley'])] : [...result.native.names],
+        targets: result.native.targets.filter(target => bounded.some(entry => entry.kind === 'mcp' && entry.presence.id === target.id)) };
       if (context) await markSharedLinks(context, current.entries);
       if (active(key, generation) !== current) return;
-      current.snapshot.columns[provider] = { phase: diagnostics.length && result.phase === 'ready' ? 'partial' : result.phase, diagnostics };
+      current.snapshot.columns[provider] = { phase: diagnostics.length && result.phase === 'ready' ? 'partial' : result.phase, diagnostics,
+        ...(result.native ? { mcpAdd: result.native.add } : {}) };
       current.snapshot.rows = mergeSnapshotRows(current.entries);
       current.snapshot.revision += 1;
       try { current.snapshot = capabilitySnapshot.parse(current.snapshot); }
-      catch { current.entries[provider] = []; current.snapshot.rows = mergeSnapshotRows(current.entries);
+      catch { delete current.inventories[provider]; current.entries[provider] = []; current.snapshot.rows = mergeSnapshotRows(current.entries);
         current.snapshot.columns[provider] = { phase: 'error', diagnostics: [{ code: 'invalid-output' }] }; }
       emit(key, current);
     };
     void (options.context ?? defaultSnapshotContext)(key).then(context => {
       for (const provider of ['claude', 'codex'] as const) {
         const reader = options.readers?.[provider] ?? (provider === 'claude' ? readClaudeSnapshot : readCodexSnapshot);
-        void reader(context, { readNative: options.readNative ?? readNativeJson }).then(async result => {
+        void reader(context, { readNative: options.readNative ?? readNativeJson, readCodexContext: options.readCodexContext ?? readCodexNativeContext, readBinaryIdentity: options.readBinaryIdentity ?? readBinaryIdentity }).then(async result => {
           result.diagnostics.push(...await builtinSkills(context, result.entries));
           await finish(provider, result, context);
         }).catch(() => finish(provider, { entries: [], diagnostics: [{ code: 'invalid-output' }], phase: 'error' }, context));
@@ -259,5 +281,41 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     return copy(value.snapshot);
   };
   return { get(projectPath) { const value = cache.get(path.resolve(projectPath)); return value ? copy(value.snapshot) : refresh(projectPath); },
-    refresh, dispose() { disposed = true; cache.clear(); } };
+    refresh,
+    async prepareMcpAction(params) {
+      if (disposed) return { ok: false, code: 'shutdown' };
+      const key = path.resolve(params.projectPath); const current = cache.get(key);
+      if (!current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+      const previous = current.inventories[params.provider];
+      if (!previous) return { ok: false, code: 'unverified' };
+      const oldTarget = 'presenceId' in params ? previous.targets.find(target => target.id === params.presenceId) : undefined;
+      if ('presenceId' in params && !oldTarget) return { ok: false, code: 'unverified' };
+      try {
+        const context = await (options.context ?? defaultSnapshotContext)(key);
+        if (contextFingerprint(context, params.provider) !== previous.contextFingerprint) return { ok: false, code: 'context-changed' };
+        const reader = options.readers?.[params.provider] ?? (params.provider === 'claude' ? readClaudeSnapshot : readCodexSnapshot);
+        const result = await reader(context, { readNative: options.readNative ?? readNativeJson, readCodexContext: options.readCodexContext ?? readCodexNativeContext, readBinaryIdentity: options.readBinaryIdentity ?? readBinaryIdentity });
+        if (disposed) return { ok: false, code: 'shutdown' };
+        if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+        const fresh = result.native;
+        if (!fresh || fresh.contextFingerprint !== previous.contextFingerprint || fresh.signature !== previous.signature) return { ok: false, code: 'context-changed' };
+        const target = oldTarget ? fresh.targets.find(item => item.id === oldTarget.id) : undefined;
+        if (fresh.executionBinary) {
+          const binary = params.provider === 'claude' ? await verifiedClaudeActionBinary(context, options.readBinaryIdentity ?? readBinaryIdentity)
+            : await (options.readBinaryIdentity ?? readBinaryIdentity)(fresh.executionBinary, context);
+          if (!binary || binary.canonicalPath !== fresh.executionBinary || params.provider === 'codex' && !sameBinaryIdentity(binary, fresh.binaryIdentity)) return { ok: false, code: 'context-changed' };
+          if (disposed) return { ok: false, code: 'shutdown' };
+          if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+        }
+        if (oldTarget && (!target || target.name !== oldTarget.name || target.scope !== oldTarget.scope || target.fingerprint !== oldTarget.fingerprint)) return { ok: false, code: 'context-changed' };
+        return { ok: true, context: fresh.executionBinary ? { ...context, binaries: { ...context.binaries, [params.provider]: fresh.executionBinary } } : context, inventory: { ...fresh, names: [...new Set([...fresh.names, ...previous.names.filter(name => name === 'parley')])] }, ...(target ? { target } : {}),
+          isCurrent: () => !disposed && cache.get(key) === current && current.snapshot.revision === params.revision };
+      } catch { return { ok: false, code: 'unverified' }; }
+    },
+    recordMcpCheck(projectPath, provider, target, status) {
+      const current = cache.get(path.resolve(projectPath));
+      if (!disposed && current?.inventories[provider]?.targets.some(item => item.id === target.id && item.fingerprint === target.fingerprint))
+        current.health.set(target.id, { fingerprint: target.fingerprint, status });
+    },
+    dispose() { disposed = true; cache.clear(); } };
 }

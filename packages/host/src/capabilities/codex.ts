@@ -1,4 +1,6 @@
-import { resolveSkillCatalog } from '@parley/core';
+import { allow, codexUserMcpProof, contextFingerprint, deniedAdd, deny, fingerprint, validMcpName, readBinaryIdentity, sameBinaryIdentity } from './native-targets.js';
+import type { NativeMcpTarget } from './native-targets.js';
+import { readCodexNativeContext, resolveSkillCatalog } from '@parley/core';
 import type { CapabilityDiagnostic } from '@parley/protocol';
 import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, readNativeJson, safeText, secretValues } from './redact.js';
 import type { SnapshotEntry } from './redact.js';
@@ -7,14 +9,21 @@ import type { ProviderSnapshotResult, SnapshotContext, SnapshotReaderOptions } f
 export async function readCodexSnapshot(context: SnapshotContext, options: SnapshotReaderOptions = {}): Promise<ProviderSnapshotResult> {
   const diagnostics: CapabilityDiagnostic[] = [];
   const native = options.readNative ?? readNativeJson;
-  const read = (args: readonly string[]) => native(context.binaries.codex, args, context)
+  const identify = options.readBinaryIdentity ?? readBinaryIdentity;
+  const identity = await identify(context.binaries.codex, context);
+  const executionBinary = identity?.canonicalPath ?? context.binaries.codex;
+  const read = (args: readonly string[]) => native(executionBinary, args, context)
     .catch(() => ({ status: 'invalid' as const, code: 'invalid-output' as const }));
-  const [catalog, mcp, plugins] = await Promise.all([
+  const [catalog, mcp, plugins, nativeContext] = await Promise.all([
     resolveSkillCatalog({ provider: 'codex', cwd: context.projectPath, homeDir: context.homeDir, ...context.codex,
       limits: { ...context.codex?.limits, maxEntries: Math.min(context.codex?.limits?.maxEntries ?? 2000, 2000) } }),
     read(['mcp', 'list', '--json']), read(['plugin', 'list', '--json']),
+    context.binaries.codex ? (options.readCodexContext ?? readCodexNativeContext)({ cwd: context.projectPath, command: executionBinary!, ...(context.env ? { env: context.env } : {}) }).catch(() => null) : null,
   ]);
-  const entries: SnapshotEntry[] = projectSkills(catalog);
+  const entries: SnapshotEntry[] = projectSkills(catalog); const targets: NativeMcpTarget[] = []; const names: string[] = [];
+  // Bind the active-layer proof to the same canonical executable bytes; this is not publisher approval.
+  const stableBinary = identity !== null && sameBinaryIdentity(identity, await identify(identity.canonicalPath, context));
+  const proof = stableBinary ? await codexUserMcpProof(context, nativeContext) : null;
   if (catalog.partial) diagnostics.push({ code: 'resolver-partial', source: 'skills', count: catalog.diagnostics.length });
   const secrets = [...(mcp.status === 'valid' ? secretValues(mcp.data) : []), ...(plugins.status === 'valid' ? secretValues(plugins.data) : [])];
   if (mcp.status === 'invalid') diagnostics.push({ code: mcp.code, source: 'mcp' });
@@ -24,13 +33,18 @@ export async function readCodexSnapshot(context: SnapshotContext, options: Snaps
       if (mcp.data.length > 2000) diagnostics.push({ code: 'output-limit', source: 'mcp' });
       for (const raw of mcp.data.slice(0, 2000)) {
       const data = object(raw); const name = safeText(data?.name, secrets);
+      if (typeof data?.name === 'string') names.push(data.name);
       if (!data || !name) { diagnostics.push({ code: 'invalid-output', source: 'mcp' }); continue; }
       const enabled = typeof data.enabled === 'boolean' ? data.enabled : null;
-      if (!diagnostics.some(item => item.code === 'context-unverified' && item.source === 'mcp')) diagnostics.push({ code: 'context-unverified', source: 'mcp' });
-      entries.push({ kind: 'mcp', name, rowId: rowIdentity('mcp', String(data.name)), presence: { id: nativeIdentity('codex', 'mcp', context.projectPath, data.name), scope: null,
+      if (!proof?.names.has(String(data.name)) && !diagnostics.some(item => item.code === 'context-unverified' && item.source === 'mcp')) diagnostics.push({ code: 'context-unverified', source: 'mcp' });
+      entries.push({ kind: 'mcp', name, rowId: rowIdentity('mcp', String(data.name)), presence: { id: nativeIdentity('codex', 'mcp', context.projectPath, data.name), scope: proof?.names.has(String(data.name)) ? 'user' : null,
         source: null, documentPath: null, description: null, installed: true, enabled,
         status: enabled === false ? 'off' : 'unknown',
         summary: safeText(mcpSummary(data.transport), secrets), modelAvailable: null, unavailableReason: null } });
+      if (proof?.names.has(String(data.name)) && validMcpName(String(data.name))) targets.push({
+        id: nativeIdentity('codex', 'mcp', context.projectPath, data.name), provider: 'codex', name: String(data.name), scope: 'user',
+        fingerprint: fingerprint(raw), remove: allow(), check: deny('native-only'),
+      });
     }
   }
     }
@@ -58,5 +72,11 @@ export async function readCodexSnapshot(context: SnapshotContext, options: Snaps
     entry.name = safeText(entry.name, secrets) ?? '[redacted]';
     entry.presence.description = safeText(entry.presence.description, secrets);
   }
-  return { entries, diagnostics, phase: diagnostics.length ? 'partial' : 'ready' };
+  const validList = mcp.status === 'valid' && Array.isArray(mcp.data) && names.length === mcp.data.length;
+  if (!validList || new Set(names).size !== names.length) targets.splice(0);
+  return { entries, diagnostics, phase: diagnostics.length ? 'partial' : 'ready', native: {
+    contextFingerprint: contextFingerprint(context, 'codex'), signature: fingerprint({ mcp, proof: proof?.signature, binaryIdentity: stableBinary ? identity : null }), names, targets,
+    ...(stableBinary && identity ? { executionBinary: identity.canonicalPath, binaryIdentity: identity } : {}),
+    add: proof?.add && validList && new Set(names).size === names.length ? { user: allow(), project: deny('unsupported-scope'), local: deny('unsupported-scope') } : deniedAdd(context.binaries.codex ? 'unverified' : 'not-installed'),
+  } };
 }

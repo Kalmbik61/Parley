@@ -139,6 +139,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'capabilities.list': createCapabilitiesList() as AnyHandler,
     'capabilities.get': capabilities.capabilitiesGet as AnyHandler,
     'capabilities.refresh': capabilities.capabilitiesRefresh as AnyHandler,
+    'capabilities.mcp.add': capabilities.capabilitiesMcpAdd as AnyHandler,
+    'capabilities.mcp.remove': capabilities.capabilitiesMcpRemove as AnyHandler,
+    'capabilities.mcp.check': capabilities.capabilitiesMcpCheck as AnyHandler,
   };
   if (deps.feed !== undefined) {
     const feed = createFeedHandlers({ feed: deps.feed });

@@ -135,3 +135,90 @@ it('ignores foreign repository location/config env and verifies the queried chec
  expect(await findMainCheckout(linked, poisoned)).toBe(a);
  expect(await findMainCheckout(root, poisoned)).toBeNull();
 });
+
+
+import { allow, contextFingerprint, fingerprint, deny } from './native-targets.js';
+import { createCapabilitiesMcpActions } from './actions.js';
+
+it('keeps private raw selectors out of snapshot/events and revalidates config/context before dispatch', async () => {
+ const events: CapabilitySnapshot[] = []; context.binaries.claude = '/fixture/claude'; let config = 'CONFIG_SECRET';
+ const reader = async (): Promise<ProviderSnapshotResult> => ({ entries: [{ kind: 'mcp', name: '[redacted]', presence: {
+  id: 'opaque', scope: 'user', source: null, documentPath: null, description: null, installed: true, enabled: null, status: 'unknown', summary: null, modelAvailable: null, unavailableReason: null,
+ } }], diagnostics: [], phase: 'ready', native: {
+  contextFingerprint: contextFingerprint(context, 'claude'), signature: fingerprint(config), names: ['RAW_SELECTOR_SECRET'],
+  targets: [{ id: 'opaque', provider: 'claude', name: 'RAW_SELECTOR_SECRET', scope: 'user', fingerprint: fingerprint(config), remove: allow(), check: allow() }],
+  add: { user: allow(), project: allow(), local: allow() },
+ } });
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: reader, codex: async () => ready() }, changed: (_project, value) => events.push(value) });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.claude.phase).toBe('ready'));
+ const params = { projectPath: root, provider: 'claude' as const, presenceId: 'opaque', revision: service.get(root).revision };
+ expect(JSON.stringify([service.get(root), events])).not.toContain('SECRET');
+ const prepared = await service.prepareMcpAction(params); expect(prepared.ok && prepared.target?.name).toBe('RAW_SELECTOR_SECRET');
+ config = 'CHANGED'; expect(await service.prepareMcpAction(params)).toEqual({ ok: false, code: 'context-changed' });
+ context.env = { KEY: 'NEW_ENV_SECRET' }; expect(await service.prepareMcpAction(params)).toEqual({ ok: false, code: 'context-changed' });
+ service.refresh(root); expect(await service.prepareMcpAction(params)).toEqual({ ok: false, code: 'stale' });
+ service.dispose(); expect(await service.prepareMcpAction(params)).toEqual({ ok: false, code: 'shutdown' });
+});
+
+it('retains only fingerprint-matched explicit Check health across action refresh', async () => {
+ context.binaries.claude = '/fixture/claude'; let version = 1;
+ const reader = async (): Promise<ProviderSnapshotResult> => ({ entries: [{ kind: 'mcp', name: 'example', presence: {
+  id: 'opaque', scope: 'user', source: null, documentPath: null, description: null, installed: true, enabled: true, status: 'unknown', summary: null, modelAvailable: null, unavailableReason: null,
+ } }], diagnostics: [], phase: 'ready', native: {
+  contextFingerprint: contextFingerprint(context, 'claude'), signature: fingerprint(version), names: ['example'],
+  targets: [{ id: 'opaque', provider: 'claude', name: 'example', scope: 'user', fingerprint: fingerprint(version), remove: allow(), check: allow() }],
+  add: { user: allow(), project: allow(), local: allow() },
+ } });
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: reader, codex: async () => ready() } });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.claude.phase).toBe('ready'));
+ const actions = createCapabilitiesMcpActions(service, async () => ({ code: 'ok', stdout: Buffer.from('example:\n Scope: User config\n Status: ✔ Connected\n SECRET') }));
+ expect((await actions.check({ projectPath: root, provider: 'claude', presenceId: 'opaque', revision: service.get(root).revision })).status).toBe('ok');
+ await vi.waitFor(() => expect(service.get(root).rows.find(row => row.name === 'example')?.claude[0]?.status).toBe('ok'));
+ version = 2; service.refresh(root);
+ await vi.waitFor(() => expect(service.get(root).columns.claude.phase).toBe('ready'));
+ expect(service.get(root).rows.find(row => row.name === 'example')?.claude[0]?.status).toBe('unknown'); actions.dispose(); service.dispose();
+});
+
+it('does not advertise actions from unassociated injected targets or builtin records', async () => {
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: async () => ready(), codex: async () => ready() } });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).toBe('ready'));
+ const builtin = service.get(root).rows.find(row => row.name === 'parley')!.codex[0]!;
+ expect(builtin.mcpActions).toEqual({ remove: deny('builtin'), check: deny('builtin') });
+ expect(await service.prepareMcpAction({ projectPath: root, provider: 'codex', presenceId: builtin.id, revision: service.get(root).revision })).toEqual({ ok: false, code: 'unverified' }); service.dispose();
+});
+
+
+it('prevents Add from shadowing the confirmed launch builtin', async () => {
+ context.binaries.codex = '/fixture/codex';
+ const reader = async (): Promise<ProviderSnapshotResult> => ({ ...ready(), native: {
+  contextFingerprint: contextFingerprint(context, 'codex'), signature: 'stable', names: [], targets: [],
+  add: { user: allow(), project: deny('unsupported-scope'), local: deny('unsupported-scope') },
+ } });
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: async () => ready(), codex: reader } });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).toBe('ready'));
+ const execute = vi.fn(); const actions = createCapabilitiesMcpActions(service, execute);
+ expect(await actions.add({ projectPath: root, provider: 'codex', revision: service.get(root).revision, scope: 'user', name: 'parley', input: { kind: 'stdio', command: 'node' } })).toEqual({ outcome: 'denied', code: 'conflict' });
+ expect(execute).not.toHaveBeenCalled(); actions.dispose(); service.dispose();
+});
+
+
+import { chmod } from 'node:fs/promises';
+import { readBinaryIdentity } from './native-targets.js';
+
+it('rechecks Codex bytes after fresh source proof and prevents dispatch if the executable changes in that window', async () => {
+ const executable = path.join(root, 'codex-native'); await writeFile(executable, 'native fixture'); await chmod(executable, 0o700); context.binaries.codex = executable;
+ const identity = (await readBinaryIdentity(executable, context))!; let replaceAfterProof = false;
+ const reader = async (): Promise<ProviderSnapshotResult> => {
+  if (replaceAfterProof) { replaceAfterProof = false; await writeFile(executable, 'changed after proof'); }
+  return { entries: [{ kind: 'mcp', name: 'example', presence: { id: 'opaque', scope: 'user', source: null, documentPath: null, description: null, installed: true, enabled: null, status: 'unknown', summary: null, modelAvailable: null, unavailableReason: null } }], diagnostics: [], phase: 'ready', native: {
+   contextFingerprint: contextFingerprint(context, 'codex'), signature: 'unchanged-source-proof', names: ['example'], executionBinary: executable, binaryIdentity: identity,
+   targets: [{ id: 'opaque', provider: 'codex', name: 'example', scope: 'user', fingerprint: 'unchanged-target', remove: allow(), check: deny('native-only') }],
+   add: { user: allow(), project: deny('unsupported-scope'), local: deny('unsupported-scope') },
+  } };
+ };
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: async () => ready(), codex: reader } });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).toBe('ready'));
+ const execute = vi.fn(); const actions = createCapabilitiesMcpActions(service, execute); replaceAfterProof = true;
+ expect(await actions.remove({ projectPath: root, provider: 'codex', presenceId: 'opaque', revision: service.get(root).revision })).toEqual({ outcome: 'denied', code: 'context-changed' });
+ expect(execute).not.toHaveBeenCalled(); actions.dispose(); service.dispose();
+});

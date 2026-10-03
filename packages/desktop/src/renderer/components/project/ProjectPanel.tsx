@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { capabilitySnapshot } from '@parley/protocol';
-import type { CapabilitySnapshot } from '@parley/protocol';
+import { capabilityActionResult, capabilitySnapshot } from '@parley/protocol';
+import type { CapabilityActionResult, CapabilityMcpAdd, CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
@@ -10,6 +10,7 @@ import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/dialog.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
+import { McpForm } from './McpForm.js';
 import { CapabilitiesPanel } from './CapabilitiesPanel.js';
 
 export interface ProjectPanelProps {
@@ -33,11 +34,17 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   const request = useRef<(() => void) | null>(null);
   const [parley, setParley] = useState<{ exists: boolean | null; busy: boolean; error: boolean }>({ exists: null, busy: false, error: false });
   const parleyGeneration = useRef(0);
+  const [formOpen, setFormOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionAttempted, setActionAttempted] = useState(false);
+  const [actionResult, setActionResult] = useState<CapabilityActionResult | null>(null);
+  const [runningSessions, setRunningSessions] = useState<number | null>(null);
+  const countRequest = useRef(0);
 
   useEffect(() => {
     const current = ++generation.current;
     revision.current = -1; request.current = null;
-    setSnapshot(null); setError(false); setBusy(false);
+    setSnapshot(null); setError(false); setBusy(false); setFormOpen(false); setActionBusy(false); setActionAttempted(false); setActionResult(null); setRunningSessions(null); ++countRequest.current;
     if (projectPath === null || !supported) return;
     let sequence = 0;
     const apply = (value: unknown, reportInvalid = true): void => {
@@ -95,6 +102,63 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
     });
   };
 
+  const loadRunningCount = (providers: readonly CapabilityProvider[], current: number): void => {
+    const sequence = ++countRequest.current;
+    setRunningSessions(null);
+    if (projectPath === null || !methods.has('works.list')) return;
+    void bridge.call('works.list', {}).then(value => {
+      if (generation.current !== current || countRequest.current !== sequence) return;
+      if (!Array.isArray(value.entries) || value.entries.length > 10_000) return;
+      let count = 0; let visited = 0;
+      for (const entry of value.entries) {
+        if (typeof entry.projectPath !== 'string' || !Array.isArray(entry.map?.sessions)) return;
+        if (entry.projectPath !== projectPath) continue;
+        for (const session of entry.map.sessions) {
+          if (++visited > 100_000 || !session || typeof session.provider !== 'string' ||
+            !['pending', 'active', 'sleeping', 'closed'].includes(session.lifecycle)) return;
+          if (session.lifecycle === 'active' && providers.some(provider => provider === session.provider)) ++count;
+        }
+      }
+      setRunningSessions(count);
+    }).catch(() => {});
+  };
+
+  const targetAction = (kind: 'remove' | 'check', provider: CapabilityProvider, presence: CapabilityPresence, expectedRevision: number): void => {
+    if (projectPath === null || actionBusy || !methods.has(`capabilities.mcp.${kind}`)) return;
+    const current = generation.current; const startedRevision = revision.current;
+    setActionBusy(true); setActionAttempted(true); setActionResult(null); setRunningSessions(null); ++countRequest.current;
+    const params = { projectPath, provider, presenceId: presence.id, revision: expectedRevision };
+    void bridge.call(kind === 'remove' ? 'capabilities.mcp.remove' : 'capabilities.mcp.check', params).then(value => {
+      if (generation.current !== current) return;
+      loadRunningCount([provider], current);
+      if (revision.current > startedRevision) return;
+      const parsed = capabilityActionResult.safeParse(value);
+      setActionResult(parsed.success ? parsed.data : { outcome: 'failed', code: 'invalid-output' });
+    }).catch(() => {
+      if (generation.current === current) { loadRunningCount([provider], current); if (revision.current <= startedRevision) setActionResult({ outcome: 'failed', code: 'cli-error' }); }
+    }).finally(() => { if (generation.current === current) setActionBusy(false); });
+  };
+  const submitMcp = async (requests: CapabilityMcpAdd[]): Promise<Array<{ provider: CapabilityProvider; result: CapabilityActionResult }>> => {
+    if (actionBusy || !methods.has('capabilities.mcp.add')) return [];
+    const current = generation.current; const startedRevision = revision.current;
+    setActionBusy(true); setActionAttempted(true); setActionResult(null); setRunningSessions(null); ++countRequest.current;
+    try {
+      const results = await Promise.all(requests.map(async request => {
+        let result: CapabilityActionResult;
+        try { const parsed = capabilityActionResult.safeParse(await bridge.call('capabilities.mcp.add', request));
+          result = parsed.success ? parsed.data : { outcome: 'failed', code: 'invalid-output' };
+        } catch { result = { outcome: 'failed', code: 'cli-error' }; }
+        return { provider: request.provider, result };
+      }));
+      if (generation.current !== current) return [];
+      loadRunningCount(requests.map(request => request.provider), current);
+      if (revision.current > startedRevision) return [];
+      return results;
+    } finally { if (generation.current === current) setActionBusy(false); }
+  };
+  const canAdd = methods.has('capabilities.mcp.add') && snapshot !== null &&
+    Object.values(snapshot.columns).some(column => Object.values(column.mcpAdd ?? {}).some(value => value.allowed));
+
   return <Dialog open={projectPath !== null} onOpenChange={onOpenChange}>
     <DialogContent className="w-[calc(100%-2rem)] max-w-4xl">
       <DialogTitle>{S.projectPanel.title}</DialogTitle>
@@ -123,7 +187,18 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
               }}>{S.projectPanel.restartHost}</Button>}
             </div> : <>
               {error && <p role="alert" className="text-sm text-destructive">{S.projectPanel.loadFailed}</p>}
-              <CapabilitiesPanel snapshot={snapshot} />
+              {methods.has('capabilities.mcp.add') && <Button type="button" variant="outline" disabled={!canAdd || actionBusy} onClick={() => setFormOpen(true)}>{S.mcpActions.add}</Button>}
+              {formOpen && snapshot && <McpForm key={`form:${projectPath}:${connection}`} snapshot={snapshot} submit={submitMcp} onCancel={() => setFormOpen(false)} />}
+              {actionBusy && <p role="status" className="text-sm">{S.mcpActions.queued}</p>}
+              {actionResult && <p role="status" className="text-sm">{S.mcpActions.codes[actionResult.code]}{actionResult.status ? ` · ${actionResult.status === 'ok' ? S.mcpActions.connected : S.projectPanel.statuses[actionResult.status]}` : ''}</p>}
+              {actionResult?.recovery === 'native-mcp' && <p>{S.mcpActions.nativeRecovery}</p>}
+              <CapabilitiesPanel key={`inventory:${projectPath}:${connection}`} snapshot={snapshot}
+                {...(methods.has('capabilities.mcp.remove') || methods.has('capabilities.mcp.check') ? { actions: {
+                  busy: actionBusy, supports: { remove: methods.has('capabilities.mcp.remove'), check: methods.has('capabilities.mcp.check') },
+                  remove: (provider: CapabilityProvider, presence: CapabilityPresence, expected: number) => targetAction('remove', provider, presence, expected),
+                  check: (provider: CapabilityProvider, presence: CapabilityPresence, expected: number) => targetAction('check', provider, presence, expected),
+                } } : {})} />
+              {actionAttempted || formOpen ? <p className="text-xs text-muted-foreground">{runningSessions === null ? S.mcpActions.appliesToNew : S.mcpActions.runningSessions(runningSessions)}</p> : null}
             </>}
           </TabsContent>
         </Tabs>
