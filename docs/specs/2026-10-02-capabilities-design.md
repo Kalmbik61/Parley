@@ -178,7 +178,7 @@ interface CapabilityRow {
 
 Ordinary MCP snapshot читается из файлов, не через `claude mcp list/get`: команды запускают/подключают approved серверы; unapproved pending, disabled может отсутствовать. Local MCP из основной копии виден в worktree: native storage canonical mainCheckout, даже если stdout пишет cwd worktree. Identity из bounded native/Git queries+realpath, не строки stdout или догадки dirname(.git); cwd/shared projectPath не меняются.
 `~/.claude.json` — внутренний файл Claude Code. Разбор терпимый: если поле не нашлось или формат
-другой, строки MCP Claude получают `unknown`, а `check` по-прежнему работает.
+другой, строки MCP Claude получают `unknown`; Check доступен только при подтверждённом effective target и whitelist health evidence, иначе предлагается native `/mcp`.
 
 ### 4.3 Источники: Codex
 
@@ -268,9 +268,11 @@ Refresh панели обновляет её снимок, индекс уже �
   или `<url>`; `codex mcp add <name> [--env K=V …] -- <cmd> <args…>` или `--url <url>`. Точный
   набор флагов — [матрица P04 §7](../research/2026-10-03-parley-cli/contracts.md#7-provider-actions-и-безопасные-scopes). Claude JSON: mcp add-json --scope <s> <name> <oneServerObject>; Codex add-json/SSE нет, strict convert только supported stdio/HTTP fields, unsupported headers/fields unavailable, не теряются. Codex HTTP bearer-token-env-var принимает имя переменной, не value; project/local mutations unavailable.
 
+Для Claude ownership, policy и connection health — отдельные доказательства. В подтверждённой native версии Add сам проверяет managed/plugin-only/deny/allow policy до записи; разрешение отправить команду в известный human scope не повышает unknown enabled/status до verified. Private binary/context/version evidence повторно проверяется перед действием; custom/unverified binary недоступен. `get_settings` не доказывает полную policy из-за admin tiers и отдельного managed-mcp.json. Контракт и source evidence — [P17 amendment](../research/2026-10-03-parley-cli/contracts.md#p17-action-proof-amendment--2026-10-03).
+
 ### 6.2 MCP: удалить
 
-С подтверждением: `claude mcp remove --scope <s> <name>`, `codex mcp remove <name>` user/global. Scope всегда явный у Claude, project/local mutation unavailable у Codex; plugin/system/managed MCP отдельно не удаляется. Общая product validation имени `[A-Za-z0-9_-]+` намеренно уже Codex grammar. В строке plugin MCP ссылка на плагин.
+С подтверждением: `claude mcp remove --scope <s> <name>`, `codex mcp remove <name>` user/global. Scope всегда явный у Claude, project/local mutation unavailable у Codex; plugin/system/managed MCP отдельно не удаляется. Общая product validation имени `[A-Za-z0-9_-]+` намеренно уже Codex grammar. В строке plugin MCP ссылка на плагин. Presence ID связывается только внутри host с exact native name/scope/canonical config/main identity и актуальным fingerprint. Unknown/ambiguous ownership не даёт Remove; snapshot enabled может оставаться unknown при доказанном human ownership.
 
 ### 6.3 Плагины
 
