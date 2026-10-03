@@ -108,6 +108,35 @@ const compare = (a: string, b: string): number =>
   Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 const part = (name: string): boolean => /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name);
 const nativeName = (name: string): boolean => name.split(':').every(part);
+// Reserved-name checks from the 2.1.287 loader; these do not alter native load identity.
+const foldReservedCase = (name: string): string =>
+  name
+    .replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g, '')
+    .replace(/\u1e9e/g, '\u00df')
+    .normalize('NFD')
+    .toUpperCase()
+    .toLowerCase();
+const reservedSyncedFolder = (name: string): boolean =>
+  foldReservedCase(name.replace(/[. ]+$/, '')) === 'synced';
+function reservedAccountName(name: string): boolean {
+  const normalized = /^[!-~]+$/.test(name)
+    ? name.toLowerCase()
+    : foldReservedCase(
+        name
+          .normalize('NFKC')
+          .replace(/[\p{Z}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/gu, '')
+          .replace(/[\p{Pd}\u2212]/gu, '-')
+          .replace(/[\ua789\u2236\u0589\u05c3\u02d0]/g, ':'),
+      );
+  const toolName = (value: string): string =>
+    ('skill__' + value.replaceAll(':', '__').replace(/[^a-zA-Z0-9_-]/g, '_')).toLowerCase();
+  return (
+    normalized === 'anthropic-skills' ||
+    normalized.startsWith('anthropic-skills:') ||
+    toolName(name).startsWith('skill__anthropic-skills__') ||
+    toolName(normalized).startsWith('skill__anthropic-skills__')
+  );
+}
 const inside = (base: string, file: string): boolean => {
   const relative = path.relative(base, file);
   return (
@@ -279,7 +308,10 @@ export async function discoverClaudeSkills(
     root: Root,
     optional = false,
   ): Promise<void> {
-    if (!nativeName(name)) {
+    if (
+      (root.source !== 'plugin' && root.source !== 'claude.ai' && reservedAccountName(name)) ||
+      !nativeName(name)
+    ) {
       diagnose({ code: 'invalid-name', source: root.source, path: file });
       return;
     }
@@ -310,6 +342,15 @@ export async function discoverClaudeSkills(
       return;
     }
     const data = metadata.status === 'valid' ? metadata.data : {};
+    if (
+      root.source !== 'plugin' &&
+      root.source !== 'claude.ai' &&
+      typeof data.name === 'string' &&
+      reservedAccountName(data.name)
+    ) {
+      diagnose({ code: 'invalid-name', source: root.source, path: canonical });
+      return;
+    }
     const description =
       typeof data.description === 'string' && data.description.trim() !== ''
         ? data.description
@@ -420,9 +461,30 @@ export async function discoverClaudeSkills(
     for (const entry of read.entries) {
       if (entry.name.startsWith('.')) continue;
       const full = path.join(root.directory, entry.name);
+      const localEntryName =
+        root.kind === 'command' && entry.name.endsWith('.md')
+          ? entry.name.slice(0, -3)
+          : entry.name;
+      if (
+        root.source !== 'plugin' &&
+        root.source !== 'claude.ai' &&
+        reservedAccountName(localEntryName)
+      ) {
+        diagnose({ code: 'invalid-name', source: root.source, path: full });
+        continue;
+      }
       if (root.kind === 'skill') {
-        if (root.source === 'user' && entry.name === 'synced') {
-          if (!options.nativeEvidence?.synced)
+        if (
+          root.source !== 'plugin' &&
+          root.source !== 'claude.ai' &&
+          reservedSyncedFolder(entry.name)
+        ) {
+          // The exact user directory is consumed only by the separate active-account resolver.
+          if (!(
+            root.source === 'user' &&
+            entry.name === 'synced' &&
+            options.nativeEvidence?.synced
+          ))
             diagnose({ code: 'availability-unverified', source: 'claude.ai', path: full });
           continue;
         }

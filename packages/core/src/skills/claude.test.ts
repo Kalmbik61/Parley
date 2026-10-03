@@ -39,6 +39,75 @@ async function skill(
 }
 
 describe('Claude native skill discovery', () => {
+  it.each([
+    ['user', 'skill', 'SYNCED'],
+    ['project', 'skill', 'synced'],
+    ['user', 'skill', 'anthropic-skills'],
+    ['project', 'skill', 'Anthropic-Skills:gate'],
+    ['project', 'skill', 'anthropic-skills__gate'],
+    ['user', 'skill', 'synced.'],
+    ['project', 'command', 'anthropic-skills:gate'],
+    ['user', 'command', 'anthropic-skills/nested'],
+    ['project', 'command', 'safe/anthropic-skills/gate'],
+  ])('rejects reserved account names in local %s %s: %s', async (source, kind, name) => {
+    const base = source === 'user' ? path.join(homeDir, '.claude') : path.join(cwd, '.claude');
+    if (kind === 'skill') await skill(path.join(base, 'skills', name));
+    else
+      await put(
+        path.join(base, 'commands', name + '.md'),
+        '---\ndescription: Local reserved command\n---\n',
+      );
+    const result = await discoverClaudeSkills(options());
+    expect(result.skills).toEqual([]);
+    expect(result.partial).toBe(true);
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    'anthropic-skills:gate',
+    'Ａnthropic-skills：gate',
+    'anthropic–skills:gate',
+    'anthropic-\u200bskills:gate',
+  ])(
+    'rejects a local reserved frontmatter name %s without globally filtering plugin/account sources',
+    async (name) => {
+      await put(
+        path.join(cwd, '.claude/skills/ordinary/SKILL.md'),
+        `---\nname: ${name}\ndescription: Reserved metadata\n---\n`,
+      );
+      expect((await discoverClaudeSkills(options())).skills).toEqual([]);
+    },
+  );
+
+  it('preserves genuine reserved plugin namespaces and the allowed local synced command', async () => {
+    const installPath = path.join(root, 'reserved-plugin');
+    await put(path.join(installPath, '.claude-plugin/plugin.json'), '{"name":"anthropic-skills"}');
+    await skill(path.join(installPath, 'skills/synced'));
+    await put(
+      path.join(cwd, '.claude/commands/synced.md'),
+      '---\ndescription: Allowed command\n---\n',
+    );
+    const result = await discoverClaudeSkills({
+      ...options(),
+      nativeEvidence: {
+        ...options().nativeEvidence!,
+        plugins: [
+          {
+            id: 'anthropic-skills@fixture',
+            namespace: 'anthropic-skills',
+            installPath,
+            enabled: true,
+            verified: true,
+          },
+        ],
+      },
+    });
+    expect(result.skills.map((item) => [item.name, item.modelAvailable])).toEqual([
+      ['anthropic-skills:synced', true],
+      ['synced', true],
+    ]);
+  });
+
   it('uses the directory load name and the complete description with a canonical document path', async () => {
     const file = await skill(
       path.join(homeDir, '.claude/skills/native'),
