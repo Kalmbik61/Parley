@@ -34,26 +34,58 @@ export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics:
 export interface SnapshotReaderOptions { readNative?: NativeJsonReader }
 export type ProviderSnapshotReader = (context: SnapshotContext, options: SnapshotReaderOptions) => Promise<ProviderSnapshotResult>;
 
-/** Git documents that its main worktree is listed first; no dirname(.git) inference.
- * https://git-scm.com/docs/git-worktree#_commands
- */
-export async function findMainCheckout(cwd: string, env?: NodeJS.ProcessEnv): Promise<string | null> {
-  const value = await new Promise<string | null>(resolve => {
-    const child = execFile('git', ['-c', 'core.fsmonitor=false', '-C', cwd, 'worktree', 'list', '--porcelain', '-z'],
-      { ...(env ? { env } : {}), encoding: 'buffer', timeout: 5000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL', windowsHide: true },
+/** Bounded native Git output only; no repository/config output or raw errors are logged. */
+async function readGit(args: readonly string[], env: NodeJS.ProcessEnv): Promise<string | null> {
+  return new Promise(resolve => {
+    const child = execFile('git', [...args],
+      { env, encoding: 'buffer', timeout: 5000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL', windowsHide: true },
       (error, stdout) => {
         if (error !== null) { resolve(null); return; }
-        try {
-          const fields = new TextDecoder('utf-8', { fatal: true }).decode(stdout).split('\0');
-          const first = fields[0];
-          const end = fields.indexOf('');
-          resolve(first?.startsWith('worktree ') && !fields.slice(0, end).includes('bare') ? first.slice(9) : null);
-        } catch { resolve(null); }
+        try { resolve(new TextDecoder('utf-8', { fatal: true }).decode(stdout)); } catch { resolve(null); }
       });
     child.stdin?.on('error', () => {}); child.stdin?.end();
   });
-  if (value === null || !path.isAbsolute(value)) return null;
-  try { return (await stat(value)).isDirectory() ? await realpath(value) : null; } catch { return null; }
+}
+
+/** Native --local-env-vars identifies repository-specific variables to remove for foreign queries.
+ * Git documents that its main worktree is listed first; queried root must also belong to that list.
+ * https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---local-env-vars
+ * https://git-scm.com/docs/git-worktree#_commands
+ */
+export async function findMainCheckout(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  try {
+    const canonicalCwd = await realpath(cwd);
+    if (!(await stat(canonicalCwd)).isDirectory()) return null;
+    // Only the inventory query removes all Git variables: it reads native variable names, no repository.
+    const inventoryEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('GIT_')));
+    const inventory = await readGit(['rev-parse', '--local-env-vars'], inventoryEnv);
+    if (inventory === null) return null;
+    const names = inventory.split('\n').filter(Boolean);
+    if (names.length === 0 || names.some(name => !/^GIT_[A-Z0-9_]+$/.test(name))) return null;
+    const cleanEnv = { ...env };
+    for (const name of names) delete cleanEnv[name];
+    for (const name of Object.keys(cleanEnv)) if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete cleanEnv[name];
+    const prefix = ['-c', 'core.fsmonitor=false', '-C', canonicalCwd];
+    const [listing, root] = await Promise.all([
+      readGit([...prefix, 'worktree', 'list', '--porcelain', '-z'], cleanEnv),
+      readGit([...prefix, 'rev-parse', '--show-toplevel'], cleanEnv),
+    ]);
+    if (listing === null || root === null || !root.endsWith('\n')) return null;
+    const fields = listing.split('\0');
+    const first = fields[0]; const end = fields.indexOf('');
+    if (!first?.startsWith('worktree ') || fields.slice(0, end).includes('bare')) return null;
+    const worktrees = fields.filter(field => field.startsWith('worktree ')).map(field => field.slice(9));
+    if (worktrees.length > 128 || worktrees.some(folder => !path.isAbsolute(folder))) return null;
+    const queriedRoot = root.slice(0, -1);
+    if (!path.isAbsolute(queriedRoot)) return null;
+    const canonicalRoot = await realpath(queriedRoot);
+    const relative = path.relative(canonicalRoot, canonicalCwd);
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) return null;
+    const members = await Promise.all(worktrees.map(folder => realpath(folder).catch(() => null)));
+    if (!members.includes(canonicalRoot)) return null;
+    const main = members[0];
+    return main && (await stat(main)).isDirectory() ? main : null;
+  } catch { return null; }
 }
 
 export async function defaultSnapshotContext(projectPath: string): Promise<SnapshotContext> {

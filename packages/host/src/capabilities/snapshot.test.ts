@@ -118,3 +118,20 @@ it('limits snapshot wire volume with an explicit partial diagnostic instead of a
  expect(service.get(root).rows.find(row => row.kind === 'mcp' && row.name === 'parley')?.claude[0]?.scope).toBe('builtin');
  expect(Buffer.byteLength(JSON.stringify(service.get(root)))).toBeLessThan(8 * 1024 * 1024); service.dispose();
 });
+
+it('ignores foreign repository location/config env and verifies the queried checkout membership', async () => {
+ const a = path.join(root, 'repo-a'); const b = path.join(root, 'repo-b'); const linked = path.join(root, 'linked-a');
+ const env: NodeJS.ProcessEnv = { ...process.env, HOME: context.homeDir, GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+ delete env.GIT_DIR; delete env.GIT_WORK_TREE; delete env.GIT_COMMON_DIR;
+ const git = async (args: string[]) => promisify(execFile)('git', args, { env, timeout: 3000 });
+ for (const folder of [a, b]) {
+  await git(['init', folder]);
+  await git(['-C', folder, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty', '-m', 'Fixture']);
+ }
+ await git(['-C', a, 'worktree', 'add', '-b', 'fixture', linked]);
+ const poisoned = { ...env, GIT_DIR: path.join(b, '.git'), GIT_COMMON_DIR: path.join(b, '.git'), GIT_WORK_TREE: b,
+  GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.worktree', GIT_CONFIG_VALUE_0: b };
+ expect(await findMainCheckout(a, poisoned)).toBe(a);
+ expect(await findMainCheckout(linked, poisoned)).toBe(a);
+ expect(await findMainCheckout(root, poisoned)).toBeNull();
+});

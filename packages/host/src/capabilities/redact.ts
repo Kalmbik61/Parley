@@ -79,8 +79,12 @@ export function secretValues(value: unknown): string[] {
         if (credential) values.add(credential); if (assignment) values.add(assignment);
         try {
           const url = new URL(item);
-          for (const part of [url.username, url.password, ...url.searchParams.values(), ...url.pathname.split('/')])
-            if (part) values.add(decodeURIComponent(part));
+          const rawQuery = url.search.slice(1).split('&').map(pair => pair.slice(pair.indexOf('=') + 1));
+          for (const part of [url.username, url.password, ...url.pathname.split('/'), ...rawQuery, ...url.searchParams.values()]) {
+            if (!part) continue;
+            values.add(part);
+            try { values.add(decodeURIComponent(part)); } catch { /* Retain malformed raw fragments; continue collecting other components. */ }
+          }
         } catch { /* Non-URL values remain opaque secrets. */ }
       }
       return;

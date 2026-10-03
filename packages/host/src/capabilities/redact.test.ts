@@ -19,7 +19,7 @@ describe('capability metadata projection', () => {
   });
 });
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readNativeJson } from './redact.js';
@@ -48,4 +48,28 @@ it('filters credential components and URL secrets repeated outside their raw con
 it('fails closed on excessive secret metadata instead of publishing unchecked descriptions', () => {
  const secrets = secretValues({ env: Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`KEY_${index}`, `secret-${index}`])) });
  expect(safeText('Metadata secret-299', secrets)).toBeNull();
+});
+
+import { readClaudeSnapshot } from './claude.js';
+
+it('redacts raw and decoded URL components repeated in plugin metadata', async () => {
+ const root = await mkdtemp(path.join(tmpdir(), 'parley-p15-encoded-'));
+ const fragments = ['USER%5FSECRET', 'PASS%5FSECRET', 'PATH%5FSECRET', 'QUERY%5FSECRET'];
+ const decoded = fragments.map(value => decodeURIComponent(value));
+ const url = `https://${fragments[0]}:${fragments[1]}@example.com/${fragments[2]}?token=${fragments[3]}`;
+ try {
+  await writeFile(path.join(root, '.claude.json'), JSON.stringify({ mcpServers: { fixture: { type: 'http', url } } }));
+  const result = await readClaudeSnapshot({ projectPath: root, homeDir: root, binaries: { claude: null, codex: null } }, {
+   readNative: async () => ({ status: 'valid', data: [{ id: 'fixture@market', scope: 'user', enabled: true,
+    description: [...fragments, ...decoded].join(' ') }] }),
+  });
+  const output = JSON.stringify(result);
+  for (const secret of [...fragments, ...decoded]) expect(output).not.toContain(secret);
+  expect(result.entries.find(entry => entry.kind === 'plugin')?.presence.description).toContain('[redacted]');
+ } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('keeps raw malformed percent fragments without losing later URL secrets', () => {
+ const secrets = secretValues({ url: 'https://example.com/%ZZ?token=QUERY%5FSECRET' });
+ expect(safeText('%ZZ QUERY%5FSECRET QUERY_SECRET', secrets)).toBe('[redacted] [redacted] [redacted]');
 });
