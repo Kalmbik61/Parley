@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { PROVIDERS, selectableModels } from '../providers.js';
+import { clearSecret, writeSecret } from '../secrets.js';
 import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
   addMessage,
@@ -511,8 +512,7 @@ describe('get_map', () => {
     expect(byId('claude')?.effort).toBe(true);
     expect(byId('codex')?.models).toEqual(selectableModels(PROVIDERS.codex));
     expect(byId('codex')?.effort).toBe(true);
-    // У glm нет ни шаблона с моделью, ни списка: контролов у него нет.
-    expect(byId('glm')).toMatchObject({ models: null, effort: false });
+    expect(byId('glm')).toMatchObject({ models: selectableModels(PROVIDERS.glm), effort: true });
   });
 
   it('работает без PARLEY_SESSION_ID', async () => {
@@ -521,6 +521,44 @@ describe('get_map', () => {
 
     expect(result['sessionId']).toBeNull();
     expect((result['map'] as WorkMap).work.id).toBe(workId);
+  });
+});
+
+describe('GLM readiness in MCP', () => {
+  async function versionStub(version: string): Promise<void> {
+    await writeFile(process.env.PARLEY_CLAUDE_BIN!, `#!/bin/sh\necho "${version}"\n`, { mode: 0o755 });
+  }
+  it('get_map reports unavailable without key, after key removal, or with old/unknown/custom CLI', async () => {
+    const client = await connect('s-01');
+    const available = async () => ((await callOk(client, 'get_map'))['providers'] as { id: string; available: boolean }[]).find((entry) => entry.id === 'glm')!.available;
+    await versionStub('2.1.287');
+    expect(await available()).toBe(false);
+    await writeSecret('zai', 'fake-key');
+    expect(await available()).toBe(true);
+    await clearSecret('zai');
+    expect(await available()).toBe(false);
+    await writeSecret('zai', 'fake-key');
+    for (const version of ['2.1.286', 'unknown']) {
+      await versionStub(version);
+      expect(await available()).toBe(false);
+    }
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { command: 'wrapper' } }));
+    expect(await available()).toBe(false);
+  });
+  it('spawn_session refuses before adding a session or worktree plan, then accepts supported GLM', async () => {
+    const client = await connect('s-01');
+    const before = await readMap(project, workId);
+    await versionStub('2.1.287');
+    const args = { provider: 'glm', label: 'test', task: 'test', worktree: true };
+    expect((await call(client, 'spawn_session', args)).isError).toBe(true);
+    expect(await readMap(project, workId)).toEqual(before);
+    await writeSecret('zai', 'fake-key');
+    await versionStub('2.1.286');
+    expect((await call(client, 'spawn_session', args)).isError).toBe(true);
+    expect(await readMap(project, workId)).toEqual(before);
+    await versionStub('2.1.287');
+    expect((await call(client, 'spawn_session', { ...args, worktree: false })).isError).toBe(false);
+    expect(JSON.stringify(await readMap(project, workId))).not.toContain('fake-key');
   });
 });
 

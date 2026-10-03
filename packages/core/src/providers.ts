@@ -1,8 +1,10 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, type ModelOption } from './provider-models.js';
-import type { SecretId } from './secrets.js';
+import { readSecret, type SecretId } from './secrets.js';
+import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
 import { overrideValue } from './work/find-binary.js';
 import { parleyHome } from './work/store.js';
@@ -561,6 +563,79 @@ export async function commandInPath(
     if (await isExecutableFile(path.join(dir, binary))) return true;
   }
   return false;
+}
+
+/** Local, bounded version-only probe; no session/config/authentication operation. */
+export function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = execFile(commandBinary(command, env), ['--version'], {
+      env, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true,
+    }, (error, stdout) => {
+      const version = error === null ? parseVersion(stdout) : null;
+      resolve(version === null ? null : version.join('.'));
+    });
+    child.stdin?.on('error', () => {});
+    child.stdin?.end();
+  });
+}
+
+/** Custom commands cannot receive the built-in Z.ai authentication contract. */
+export function providerCompatibilityError(entry: ProviderEntry): string | null {
+  if (entry.runner.secret !== 'zai') return null;
+  if (entry.runner.command !== 'claude') return 'GLM requires the official claude command; custom runner commands are unsupported';
+  const flags = [...(entry.runner.args ?? []), ...(entry.runner.resumeArgs ?? [])];
+  return flags.some((arg) => /^--(?:bare|safe-mode|setting-sources)(?:=|$)/.test(arg))
+    ? 'GLM runner template is unsupported: --bare, --safe-mode and --setting-sources conflict with the shared host-managed configuration'
+    : null;
+}
+
+export interface ProviderReadiness {
+  needs: 'cli' | 'key' | null;
+  /** Incompatible runner, distinct from an install/key action. */
+  error: string | null;
+  version: string | null;
+}
+
+export interface ProviderReadinessOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Explicit null means an unknown version; absence requests a fresh probe. */
+  version?: string | null;
+  probeVersion?: (command: string) => Promise<string | null>;
+  /** Optional snapshot when the caller has already read the key for its hint. */
+  keyPresent?: boolean;
+}
+
+/** Shared preflight, before map/settings/worktree changes. Never returns a key. */
+export async function providerReadiness(entry: ProviderEntry, options: ProviderReadinessOptions = {}): Promise<ProviderReadiness> {
+  const error = providerCompatibilityError(entry);
+  if (error !== null) return { needs: null, error, version: null };
+  const env = options.env ?? process.env;
+  if (!(await commandInPath(entry.runner.command, env))) return { needs: 'cli', error: null, version: null };
+  let version: string | null = null;
+  if (entry.runner.minVersion !== undefined) {
+    version = options.version !== undefined
+      ? options.version
+      : await (options.probeVersion ?? ((command) => probeCliVersion(command, 3000, env)))(entry.runner.command);
+    const have = version === null ? null : parseVersion(version);
+    const need = parseVersion(entry.runner.minVersion);
+    const supported = have !== null && need !== null && (
+      have[0] > need[0] || (have[0] === need[0] && (have[1] > need[1] || (have[1] === need[1] && have[2] >= need[2])))
+    );
+    if (!supported) return { needs: 'cli', error: null, version };
+  }
+  if (entry.runner.secret !== undefined && !(options.keyPresent ?? ((await readSecret(entry.runner.secret)) !== null))) {
+    return { needs: 'key', error: null, version };
+  }
+  return { needs: null, error: null, version };
+}
+
+/** Safe refusal text shared by MCP and host; includes no credentials. */
+export function providerReadinessError(entry: ProviderEntry, readiness: ProviderReadiness): string | null {
+  if (readiness.error !== null) return readiness.error;
+  if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
+    ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
+    : `GLM requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
+  return readiness.needs === 'key' ? 'GLM requires a saved Z.ai key in Providers' : null;
 }
 
 /** Необязательный файл переопределений и дополнений реестра. */

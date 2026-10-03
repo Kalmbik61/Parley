@@ -763,6 +763,15 @@ describe('план возобновления', () => {
 });
 
 describe('системная вставка гида', () => {
+  it('custom GLM command is refused before plan settings are generated', async () => {
+    const { workId, sessionId } = await pending('glm');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { command: 'wrapper' } }));
+    for (const makePlan of [planLaunch, planNew, planResume]) {
+      await expect(makePlan(project, workId, session)).rejects.toThrow(/official claude/);
+    }
+    await expect(stat(path.join(workPaths(project, workId).dir, 'settings-glm.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   /** Значение `--append-system-prompt` в плане запуска; '' — флага нет. */
   const guidanceOf = (args: string[]): string =>
     args[args.indexOf('--append-system-prompt') + 1] ?? '';

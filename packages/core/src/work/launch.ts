@@ -16,6 +16,7 @@ import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
+  providerCompatibilityError,
   isClaudeCode,
   resumeCommand,
   startCommand,
@@ -179,6 +180,8 @@ async function plan(
   options: LaunchOptions = {},
 ): Promise<LaunchPlan> {
   const entry = await entryOf(session.provider);
+  const incompatibility = providerCompatibilityError(entry);
+  if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
 
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
