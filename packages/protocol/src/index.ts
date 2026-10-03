@@ -65,3 +65,6 @@ export type {
   RequestMessage,
   ResponseMessage,
 } from './framing.js';
+
+export { capabilityProvider, capabilityScope, capabilityDiagnostic, capabilityPresence, capabilityRow, capabilityColumn, capabilitySnapshot } from './capability-snapshot.js';
+export type { CapabilityProvider, CapabilityScope, CapabilityDiagnostic, CapabilityPresence, CapabilityRow, CapabilityColumn, CapabilitySnapshot } from './capability-snapshot.js';

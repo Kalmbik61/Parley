@@ -8,6 +8,7 @@ import type {
   ProjectChanges,
   WorktreeDiff,
 } from '@parley/core';
+import type { CapabilitySnapshot } from './capability-snapshot.js';
 import { feedDecision } from './feed.js';
 import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
@@ -87,6 +88,8 @@ export const METHODS = {
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
+  'capabilities.get': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.refresh': z.object({ projectPath: z.string().min(1) }).strict(),
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
@@ -237,6 +240,8 @@ export interface Results {
   'sessions.setMode': { mode: string | null; verified: boolean };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
+  'capabilities.get': CapabilitySnapshot;
+  'capabilities.refresh': CapabilitySnapshot;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };

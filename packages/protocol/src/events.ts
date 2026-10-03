@@ -1,3 +1,4 @@
+import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
 import type {
   HostNotice,
@@ -9,6 +10,7 @@ import type {
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
+  'capabilities.changed': { projectPath: string; snapshot: CapabilitySnapshot };
   'works.changed': WorksSnapshot;
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
   'pty.output': { ref: SessionRef; data: string };
