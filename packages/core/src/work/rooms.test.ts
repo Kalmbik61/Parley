@@ -65,6 +65,7 @@ describe('addRoom', () => {
       members: ['s-02', 's-03'],
       createdAt: '2026-09-26T10:05:00.000Z',
       lead: null,
+      mode: 'free',
       proposal: null,
     });
     expect(map.rooms).toEqual([room]);

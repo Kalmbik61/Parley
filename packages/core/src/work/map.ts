@@ -1,3 +1,4 @@
+import { validatePlanStorage } from './plans.js';
 import type { EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
@@ -358,6 +359,8 @@ export function parseMap(raw: string, file: string): WorkMap {
   for (const room of map.rooms) {
     migrateRoom(room as unknown);
   }
+  map.plans ??= [];
+  validatePlanStorage(map);
   return map;
 }
 
@@ -420,6 +423,9 @@ function migrateRoom(room: unknown): void {
   if (!isRecord(room)) return;
   room['lead'] ??= null;
   room['proposal'] ??= null;
+  room['mode'] ??= 'free';
+  if (!['free', 'checklist', 'verified'].includes(String(room['mode']))) throw new Error('invalid room mode');
+  if (isRecord(room['proposal'])) room['proposal']['kind'] ??= 'decision';
 }
 
 /** Полей процесса в старых картах просто не было. */

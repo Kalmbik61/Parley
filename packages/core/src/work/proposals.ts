@@ -7,7 +7,9 @@
 
 import { addMessage, maxNumber } from './map.js';
 import { addSystemMessage, isRoomClosed, liveLead, RoomRuleError } from './rooms.js';
-import { HUMAN, type Room, type WorkMap } from './types.js';
+import { acceptRoomPlan, completeRoomPlan, planRoom, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
+import { proposedRoomPlan } from './plans.js';
+import { HUMAN, type PlanDraft, type Room, type WorkMap } from './types.js';
 
 /** Предел текста решения в знаках (дизайн комнат, 3.1). */
 export const PROPOSAL_TEXT_MAX = 10_000;
@@ -62,12 +64,15 @@ function nextProposalId(map: WorkMap): string {
  * решение получает новый `id`. Письма решение не создаёт: лента остаётся лентой фактов, факты
  * пишет `resolveProposal`.
  */
+export interface ProposalOptions { plan?: PlanDraft }
+
 export function setProposal(
   map: WorkMap,
   roomId: string,
   from: string,
   text: string,
   at = new Date().toISOString(),
+  options: ProposalOptions = {},
 ): { proposalId: string; rev: number } {
   const room = roomOf(map, roomId);
   if (isRoomClosed(map, room)) {
@@ -83,17 +88,24 @@ export function setProposal(
     throw new RoomRuleError(`decision text: 1–${PROPOSAL_TEXT_MAX} characters`);
   }
 
+  const mode = room.mode ?? 'free';
+  if (mode === 'free' && options.plan !== undefined || mode !== 'free' && options.plan === undefined) throw new RoomRuleError('decision must match room mode');
+  const plan = options.plan === undefined ? undefined : proposedRoomPlan(map, roomId, from, options.plan, text.length);
+  const extra = plan === undefined ? {} : { kind: 'decision' as const, plan };
   const current = room.proposal;
   if (current === null) {
-    room.proposal = { id: nextProposalId(map), from, text, rev: 0, at };
+    room.proposal = { id: nextProposalId(map), from, text, rev: 0, at, ...extra };
     return { proposalId: room.proposal.id, rev: 0 };
   }
-  room.proposal = { id: current.id, from, text, rev: current.rev + 1, at };
+  room.proposal = { id: current.id, from, text, rev: current.rev + 1, at, ...extra };
   return { proposalId: current.id, rev: current.rev + 1 };
 }
 
 /** Что человек добавляет к ответу на решение. */
 export interface ResolveOptions {
+  /** Required for plan-bearing decisions/completions, in addition to proposal rev. */
+  planId?: string;
+  planRev?: number;
   /** Заметка возврата (`return`); пустая и из одних пробелов — как без неё. */
   note?: string | undefined;
   /**
@@ -126,7 +138,7 @@ export function resolveProposal(
   options: ResolveOptions = {},
   at = new Date().toISOString(),
 ): { messageId: string } {
-  const room = roomOf(map, roomId);
+  let room = roomOf(map, roomId);
   const proposal = room.proposal;
   if (proposal === null || proposal.id !== proposalId) {
     throw new ProposalConflictError(
@@ -137,6 +149,15 @@ export function resolveProposal(
     throw new ProposalConflictError(
       `decision ${proposalId} of room ${roomId} was replaced: version ${proposal.rev} is waiting, but the answer was given to version ${options.rev}`,
     );
+  }
+  if (proposal.plan || proposal.kind === 'completion') {
+    const planId = proposal.plan?.id ?? proposal.planId; const planRev = proposal.plan?.rev ?? proposal.planRev;
+    if (options.rev !== proposal.rev || options.planId !== planId || options.planRev !== planRev) throw new ProposalConflictError('plan identity/revision must match the displayed proposal');
+    if (proposal.kind === 'completion') {
+      if (planId === undefined || planRev === undefined) throw new PlanConflictError();
+      completeRoomPlan(map, planId, planRev, action, proposal.text, at);
+    } else if (action === 'accept' && proposal.plan) acceptRoomPlan(map, proposal.plan, at);
+    room = roomOf(map, roomId);
   }
   const lead = liveLead(map, room) ?? proposal.from;
   room.proposal = null;
@@ -156,7 +177,19 @@ export function resolveProposal(
     at,
   );
   decision.readBy[HUMAN] = at;
-  addSystemMessage(map, roomId, ACCEPTED_LINE, at);
-  addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text: ACCEPTED_LETTER }, at);
+  addSystemMessage(map, roomId, proposal.kind === 'completion' ? `Plan ${proposal.planId} completed` : ACCEPTED_LINE, at);
+  addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text: proposal.kind === 'completion' ? 'Completion accepted.' : ACCEPTED_LETTER }, at);
   return { messageId: decision.id };
+}
+
+/** Completion is a separate, revision-bound human decision, never owner self-acceptance. */
+export function proposeCompletion(map: WorkMap, roomId: string, from: string, planId: string, rev: number, summary: string, at = new Date().toISOString()): { proposalId: string; rev: number } {
+  const room = planRoom(map, roomId); requirePlanLead(map, room, from);
+  const plan = map.plans?.find(plan => plan.id === planId && plan.roomId === roomId);
+  if (!plan || plan.rev !== rev || plan.mode !== 'verified' || !['active', 'completing'].includes(plan.status) || !planItemsComplete(plan)) throw new PlanConflictError();
+  if (!summary.trim() || summary.length > PROPOSAL_TEXT_MAX || summary.includes('\0') || Buffer.from(summary, 'utf8').toString('utf8') !== summary) throw new RoomRuleError('invalid completion summary');
+  const previous = room.proposal;
+  const proposal = { id: previous?.id ?? nextProposalId(map), from, text: summary, at, rev: previous ? previous.rev + 1 : 0, kind: 'completion' as const, planId, planRev: rev };
+  plan.status = 'completing'; room.proposal = proposal;
+  return { proposalId: proposal.id, rev: proposal.rev };
 }

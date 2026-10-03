@@ -277,7 +277,7 @@ describe('transitionSession', () => {
 describe('parseMap', () => {
   it('читает карту нужной формы', () => {
     const map = emptyMap();
-    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual({ ...map, plans: [] });
   });
 
   it('карта v1 поднимается до v2 поле в поле (три сессии и пять писем, как в w-0010)', () => {
@@ -431,6 +431,7 @@ describe('parseMap', () => {
       schemaVersion: 2,
       work: v1.work,
       rooms: [],
+      plans: [],
       sessions: [
         {
           ...strip(s1),
@@ -625,7 +626,7 @@ describe('parseMap', () => {
     it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
       const parsed = parseMap(withRooms([oldRoom]), 'map.json');
 
-      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null });
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free' });
     });
 
     it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
@@ -644,7 +645,7 @@ describe('parseMap', () => {
       const written = { ...oldRoom, lead: 's-03', proposal };
 
       const parsed = parseMap(withRooms([written]), 'map.json');
-      expect(parsed.rooms[0]).toEqual(written);
+      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', proposal: { ...proposal, kind: 'decision' } });
       expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
     });
 

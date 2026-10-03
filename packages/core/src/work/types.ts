@@ -159,12 +159,49 @@ export const HUMAN = 'human';
 /** Отправитель системного письма хоста («S05 не поднялась: …»). */
 export const SYSTEM = 'system';
 
+export type RoomMode = 'free' | 'checklist' | 'verified';
+export type PlanMode = Exclude<RoomMode, 'free'>;
+export type PlanStatus = 'proposed' | 'active' | 'completing' | 'completed' | 'cancelled';
+export type PlanItemStatus = 'waiting' | 'ready' | 'in_progress' | 'done' | 'blocked' | 'verified' | 'returned';
+export interface PlanEvidence { text: string; artifacts: string[] }
+export interface PlanItemInput {
+  id: number; title: string; owner: string; scope: string; after?: number[];
+  criteria?: string[]; verifier?: string | null;
+}
+export interface PlanDraft {
+  /** Required together for an amendment: the currently accepted identity/revision. */
+  id?: string; rev?: number; mode: PlanMode; goal: string; items: PlanItemInput[]; backlog?: string[];
+}
+export interface PlanItem extends PlanItemInput {
+  after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
+  evidence: PlanEvidence | null; note: string | null;
+  /** Human-accepted Checklist completion retained on promotion; never a verification claim. */
+  acceptedChecklistRevision?: number;
+  log: { at: string; by: string; status: PlanItemStatus; note: string | null }[];
+}
+export interface RoomPlan {
+  id: string; roomId: string; mode: PlanMode; status: PlanStatus; rev: number;
+  goal: string; items: PlanItem[]; backlog: string[];
+  acceptedAt: string | null; completedAt: string | null; cancelledAt: string | null;
+  completionSummary: string | null;
+}
+/** Local durable intent: exact captured Markdown, never rebuilt from a later live revision. */
+export interface PlanExportIntent {
+  file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
+  content: string; status: 'pending' | 'written';
+}
+
 /**
  * Решение ведущего, которое ждёт ответа человека (дизайн комнат, 3.1). Это изменяемый
  * слот комнаты, а не письмо: лента остаётся лентой фактов, и факты — `decision`, заметка
  * возврата, системные строки — дописываются, когда человек ответил.
  */
 export interface Proposal {
+  /** Absent in legacy Free proposals. */
+  kind?: 'decision' | 'completion';
+  plan?: RoomPlan;
+  planId?: string;
+  planRev?: number;
   /** `p-01`; счётчик `work.proposalSeq`, id не переиспользуется. */
   id: string;
   /** Ведущий, чей текст лежит в слоте. */
@@ -178,6 +215,7 @@ export interface Proposal {
 
 /** Комната — круг участников переписки (спецификация 6.1). */
 export interface Room {
+  mode?: RoomMode;
   /** `r-01`; счётчик `work.roomSeq`, id не переиспользуется. */
   id: string;
   title: string;
@@ -254,6 +292,7 @@ export interface Work {
    * по устаревшему окну принял бы чужое решение. Поле появилось 2026-09-29.
    */
   proposalSeq?: number;
+  planSeq?: number;
 }
 
 /**
@@ -266,6 +305,8 @@ export interface WorkMap {
   sessions: WorkSession[];
   messages: Message[];
   rooms: Room[];
+  plans?: RoomPlan[];
+  planExports?: PlanExportIntent[];
 }
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */

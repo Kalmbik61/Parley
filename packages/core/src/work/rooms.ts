@@ -1,6 +1,6 @@
 import { addMessage, maxNumber } from './map.js';
 import { sessionMention, sessionTag } from './thread.js';
-import { HUMAN, SYSTEM, type Message, type Room, type WorkMap } from './types.js';
+import { HUMAN, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
 /**
  * Нарушено правило комнаты: не участник, не ведущий, комната закрыта, ведущий вне круга.
@@ -34,6 +34,7 @@ export function nextRoomId(map: WorkMap): string {
 }
 
 export interface NewRoom {
+  mode?: RoomMode;
   title: string;
   /** Id сессии-создателя или `human`; создатель — участник, в `members` не пишется. */
   creator: string;
@@ -48,6 +49,7 @@ export interface NewRoom {
 /** Заводит комнату в карте. */
 export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString()): Room {
   const lead = init.lead ?? null;
+  if (init.mode !== undefined && !['free', 'checklist', 'verified'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
   // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
   if (lead !== null && (lead === HUMAN || !(lead === init.creator || init.members.includes(lead)))) {
     throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);
@@ -60,6 +62,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
     createdAt: at,
     lead,
     proposal: null,
+    mode: init.mode ?? 'free',
   };
   map.rooms.push(room);
   return room;
@@ -100,7 +103,7 @@ export function isRoomClosed(map: WorkMap, room: Room): boolean {
  */
 export function liveLead(map: WorkMap, room: Room): string | null {
   const declared = roomLead(room);
-  if (declared !== null && isAlive(map, declared)) return declared;
+  if (declared !== null && isMember(room, declared) && isAlive(map, declared)) return declared;
   return [...room.members, room.creator].find((id) => isAlive(map, id)) ?? null;
 }
 
