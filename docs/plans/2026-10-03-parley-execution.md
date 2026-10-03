@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P00–P03 accepted; P04 accepted после fix; P05/P09 running, независимые области кода.
+- Текущая фаза: P00 принят; P00–P03 accepted; P04 accepted после fix; P05 review, P09 running; независимые области кода.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -25,7 +25,7 @@
 | P02 | Проверить Codex: скиллы, слой, роли и resume | done | agent /root/p02_codex_probe; gpt-6.1-sol/high; commit ce3efc1; review accepted by /root/p00_review; native live gates remain |
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
-| P05 | Реализовать общие типы и YAML/TOML-разборщики | running | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; approved P04 e4e61cc |
+| P05 | Реализовать общие типы и YAML/TOML-разборщики | review | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; 30 targeted tests passed; reviewer /root/p00_review; whole build deferred P09 |
 | P06 | Реализовать источники скиллов Claude | pending | — |
 | P07 | Реализовать источники скиллов Codex | pending | — |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
@@ -88,3 +88,7 @@ P04 review: root передал на независимую проверку т�
 ## Начало реализации
 
 P04 accepted после fix `e4e61cc`. P05 и P09 реализуются параллельно в непересекающихся файлах. P05 — единственный writer package/lockfile; P09 — единственный writer launch/provider/host/index. Общие builds/host tests выполняются после готовности обоих patch/dependencies; целевые тесты независимы. /root/p03_capabilities_probe переносит принятые P04 контракты в пять спек и unified plan; не пишет код или tracker.
+
+P05: exact dependencies установлены (`yaml 2.9.1`, `smol-toml 1.9.0`), pnpm exit 0; целевые P09 tests больше не ждут install. P09 дополнительно получил только NoticeKind union в protocol/types.ts для существующего host notice канала; wire DTO/event contract сохранён, UI/e2e acceptance остаётся P10.
+
+P05 implementation ready: bounded strict UTF-8 readers и общие full YAML/TOML parsers; 30 целевых тестов passed, ESLint/isolated tsc passed. Передано /root/p00_review; общий core build пока не является результатом P05, ожидает завершения P09 patch.
