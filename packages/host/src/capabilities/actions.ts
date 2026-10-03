@@ -105,7 +105,8 @@ export function createCapabilitiesMcpActions(service: SafeCapabilitiesService, e
       if (kind === 'check' && executed.code === 'ok') {
         const status = parseClaudeMcpCheck(executed.stdout, target!);
         if (status === null) result = { outcome: 'failed', code: 'invalid-output', status: 'unknown' };
-        else { result = { outcome: 'ok', code: 'ok', status }; service.recordMcpCheck(params.projectPath, params.provider, target!, status); }
+        else result = service.recordMcpCheck(params.projectPath, params.provider, target!, status, prepared.checkProof)
+          ? { outcome: 'ok', code: 'ok', status } : { outcome: 'denied', code: 'context-changed', status: 'unknown' };
       }
       service.refresh(params.projectPath);
       return result;

@@ -9,7 +9,7 @@ import { commandBinary, loadProviders, stateDir, readCodexNativeContext } from '
 import type { SkillCatalogOptions } from '@parley/core';
 import { capabilityPresence, capabilitySnapshot } from '@parley/protocol';
 import type { CapabilityActionReason, CapabilityMcpTarget, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
-import { contextFingerprint, deny, readBinaryIdentity, sameBinaryIdentity, verifiedClaudeActionBinary } from './native-targets.js';
+import { contextFingerprint, deny, fingerprint, readBinaryIdentity, sameBinaryIdentity, verifiedClaudeActionBinary } from './native-targets.js';
 import type { NativeMcpInventory, NativeMcpTarget } from './native-targets.js';
 import { readClaudeSnapshot } from './claude.js';
 import { readCodexSnapshot } from './codex.js';
@@ -190,13 +190,13 @@ async function markSharedLinks(context: SnapshotContext, columns: Partial<Record
 }
 
 export type PreparedMcpAction = { ok: false; code: CapabilityActionReason | 'context-changed' | 'shutdown' } | {
-  ok: true; context: SnapshotContext; inventory: NativeMcpInventory; target?: NativeMcpTarget; isCurrent(): boolean;
+  ok: true; context: SnapshotContext; inventory: NativeMcpInventory; target?: NativeMcpTarget; checkProof: string | null; isCurrent(): boolean;
 };
 export interface SafeCapabilitiesService {
   get(projectPath: string): CapabilitySnapshot;
   refresh(projectPath: string): CapabilitySnapshot;
   prepareMcpAction(params: CapabilityMcpTarget | { projectPath: string; provider: CapabilityProvider; revision: number }): Promise<PreparedMcpAction>;
-  recordMcpCheck(projectPath: string, provider: CapabilityProvider, target: NativeMcpTarget, status: CapabilityPresence['status']): void;
+  recordMcpCheck(projectPath: string, provider: CapabilityProvider, target: NativeMcpTarget, status: CapabilityPresence['status'], proof: string | null): boolean;
   dispose(): void;
 }
 export interface SafeCapabilitiesOptions extends SnapshotReaderOptions {
@@ -205,8 +205,16 @@ export interface SafeCapabilitiesOptions extends SnapshotReaderOptions {
   changed?: (projectPath: string, snapshot: CapabilitySnapshot) => void;
 }
 
+/** Private effective-selection proof captured before Check, never published in DTOs. */
+function mcpCheckProof(inventory: NativeMcpInventory | undefined, target: NativeMcpTarget | undefined): string | null {
+  if (!inventory || !target?.check.allowed) return null;
+  return fingerprint({ context: inventory.contextFingerprint, inventory: inventory.signature,
+    executionBinary: inventory.executionBinary, binary: inventory.binaryIdentity,
+    target: { id: target.id, provider: target.provider, name: target.name, scope: target.scope, fingerprint: target.fingerprint } });
+}
+
 export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions = {}): SafeCapabilitiesService {
-  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; health: Map<string, { fingerprint: string; status: CapabilityPresence['status'] }> }
+  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
   const cache = new Map<string, Cached>();
   let disposed = false;
   const copy = (value: CapabilitySnapshot): CapabilitySnapshot => structuredClone(value);
@@ -224,6 +232,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     const finish = async (provider: CapabilityProvider, result: ProviderSnapshotResult, context?: SnapshotContext): Promise<void> => {
       const current = active(key, generation); if (!current) return;
       const entries: SnapshotEntry[] = []; const diagnostics = [...result.diagnostics];
+      const healthKeys = new Set<string>();
       for (const entry of result.entries) {
         // Rebuild the allowlist even for injected readers; no raw extra property reaches DTO/events.
         const p = entry.presence;
@@ -235,8 +244,12 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         const target = result.native?.targets.find(target => target.id === p.id && target.provider === provider);
         if (target && entry.kind === 'mcp') {
           safe.mcpActions = { remove: target.remove, check: target.check };
-          const health = current.health.get(target.id);
-          if (health?.fingerprint === target.fingerprint && safe.enabled !== false) safe.status = health.status;
+          const key = JSON.stringify([provider, target.id]);
+          const proof = mcpCheckProof(result.native, target);
+          const health = current.health.get(key);
+          if (proof !== null && health?.proof === proof && safe.enabled !== false) {
+            safe.status = health.status; healthKeys.add(key);
+          }
         }
         const parsed = capabilityPresence.safeParse(safe);
         if (!parsed.success || !safeText(entry.name)) { diagnostics.push({ code: 'invalid-output' }); continue; }
@@ -251,6 +264,9 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
       let bytes = 0;
       const bounded = entries.filter(entry => { bytes += Buffer.byteLength(JSON.stringify(entry)); return bytes <= 1024 * 1024; });
       if (bounded.length !== entries.length) diagnostics.push({ code: 'output-limit', count: entries.length - bounded.length });
+      const visibleHealthKeys = new Set(bounded.filter(entry => entry.kind === 'mcp').map(entry => JSON.stringify([provider, entry.presence.id])));
+      for (const [key, health] of current.health)
+        if (health.provider === provider && (!healthKeys.has(key) || !visibleHealthKeys.has(key))) current.health.delete(key);
       current.entries[provider] = bounded;
       if (result.native) current.inventories[provider] = { ...result.native,
         names: context ? [...new Set([...result.native.names, 'parley'])] : [...result.native.names],
@@ -308,14 +324,18 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
           if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
         }
         if (oldTarget && (!target || target.name !== oldTarget.name || target.scope !== oldTarget.scope || target.fingerprint !== oldTarget.fingerprint)) return { ok: false, code: 'context-changed' };
-        return { ok: true, context: fresh.executionBinary ? { ...context, binaries: { ...context.binaries, [params.provider]: fresh.executionBinary } } : context, inventory: { ...fresh, names: [...new Set([...fresh.names, ...previous.names.filter(name => name === 'parley')])] }, ...(target ? { target } : {}),
+        return { ok: true, context: fresh.executionBinary ? { ...context, binaries: { ...context.binaries, [params.provider]: fresh.executionBinary } } : context, inventory: { ...fresh, names: [...new Set([...fresh.names, ...previous.names.filter(name => name === 'parley')])] }, ...(target ? { target } : {}), checkProof: mcpCheckProof(fresh, target),
           isCurrent: () => !disposed && cache.get(key) === current && current.snapshot.revision === params.revision };
       } catch { return { ok: false, code: 'unverified' }; }
     },
-    recordMcpCheck(projectPath, provider, target, status) {
+    recordMcpCheck(projectPath, provider, target, status, proof) {
       const current = cache.get(path.resolve(projectPath));
-      if (!disposed && current?.inventories[provider]?.targets.some(item => item.id === target.id && item.fingerprint === target.fingerprint))
-        current.health.set(target.id, { fingerprint: target.fingerprint, status });
+      const inventory = current?.inventories[provider];
+      const winning = inventory?.targets.find(item => item.id === target.id && item.provider === provider);
+      if (disposed || !current || proof === null || proof === undefined || mcpCheckProof(inventory, winning) !== proof ||
+        mcpCheckProof(inventory, target) !== proof) return false;
+      current.health.set(JSON.stringify([provider, target.id]), { provider, proof, status });
+      return true;
     },
     dispose() { disposed = true; cache.clear(); } };
 }

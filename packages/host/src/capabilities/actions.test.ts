@@ -17,9 +17,9 @@ const targetParams = (provider: 'claude' | 'codex' = 'claude'): CapabilityMcpTar
 const addParams = (provider: 'claude' | 'codex' = 'claude'): CapabilityMcpAdd => capabilityMcpAdd.parse({ projectPath: root, provider, scope: 'user', name: 'new-example', revision: 3, input: { kind: 'stdio', command: 'node', args: ['server.js', 'SECRET with spaces'], env: { TOKEN: 'SECRET' } } });
 const prepared = (provider: 'claude' | 'codex' = 'claude') => ({ ok: true as const, context, target: target(provider), inventory: {
  contextFingerprint: 'context', signature: 'signature', names: ['native-example'], targets: [target(provider)], add: { user: allow(), project: provider === 'claude' ? allow() : deny('unsupported-scope'), local: provider === 'claude' ? allow() : deny('unsupported-scope') },
-}, isCurrent: () => true });
+}, checkProof: 'captured-check-proof', isCurrent: () => true });
 function service() {
- return { get: vi.fn(), refresh: vi.fn(), recordMcpCheck: vi.fn(), dispose: vi.fn(), prepareMcpAction: vi.fn<SafeCapabilitiesService['prepareMcpAction']>(async params => prepared(params.provider)) } satisfies SafeCapabilitiesService;
+ return { get: vi.fn(), refresh: vi.fn(), recordMcpCheck: vi.fn(() => true), dispose: vi.fn(), prepareMcpAction: vi.fn<SafeCapabilitiesService['prepareMcpAction']>(async params => prepared(params.provider)) } satisfies SafeCapabilitiesService;
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -104,7 +104,7 @@ describe('explicit native Check', () => {
   const output = Buffer.from('native-example:\n  Scope: User config (available in all projects)\n  Status: ✔ Connected\n  Environment: SECRET\n');
   const state = service(); const actions = createCapabilitiesMcpActions(state, async () => ({ code: 'ok', stdout: output }));
   expect(await actions.check(targetParams())).toEqual({ outcome: 'ok', code: 'ok', status: 'ok' });
-  expect(state.recordMcpCheck).toHaveBeenCalledWith(root, 'claude', target(), 'ok'); actions.dispose();
+  expect(state.recordMcpCheck).toHaveBeenCalledWith(root, 'claude', target(), 'ok', 'captured-check-proof'); actions.dispose();
   expect(parseClaudeMcpCheck(Buffer.from('different:\n Scope: User config\n Status: ✔ Connected'), target())).toBeNull();
   expect(parseClaudeMcpCheck(Buffer.from('native-example:\n Scope: Project config\n Status: ✔ Connected'), target())).toBeNull();
   expect(parseClaudeMcpCheck(Buffer.from('native-example:\n Scope: User config\n Status: future SECRET'), target())).toBeNull();

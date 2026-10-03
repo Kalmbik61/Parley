@@ -222,3 +222,71 @@ it('rechecks Codex bytes after fresh source proof and prevents dispatch if the e
  expect(await actions.remove({ projectPath: root, provider: 'codex', presenceId: 'opaque', revision: service.get(root).revision })).toEqual({ outcome: 'denied', code: 'context-changed' });
  expect(execute).not.toHaveBeenCalled(); actions.dispose(); service.dispose();
 });
+
+function healthFixture() {
+ context.binaries.claude = '/fixture/claude';
+ const originalEnv = context.env; const originalClaude = context.claude;
+ let signature = 'source-proof'; let selector = 'example'; let checkAllowed = true; let binaryDigest = 'binary-proof'; let includeTarget = true;
+ const reader = async (): Promise<ProviderSnapshotResult> => ({ entries: [{ kind: 'mcp', name: 'example', presence: {
+  id: 'opaque', scope: 'user', source: null, documentPath: null, description: null, installed: true, enabled: checkAllowed ? true : null, status: 'unknown', summary: null, modelAvailable: null, unavailableReason: null,
+ } }], diagnostics: [], phase: 'ready', native: {
+  contextFingerprint: contextFingerprint(context, 'claude'), signature, names: [selector],
+  binaryIdentity: { canonicalPath: '/fixture/claude', sha256: binaryDigest, size: 1 },
+  targets: includeTarget ? [{ id: 'opaque', provider: 'claude', name: selector, scope: 'user', fingerprint: 'unchanged-config', remove: allow(), check: checkAllowed ? allow() : deny() }] : [],
+  add: { user: allow(), project: allow(), local: allow() },
+ } });
+ const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude: reader, codex: async () => ready() } });
+ const loaded = async (): Promise<void> => { await vi.waitFor(() => expect(service.get(root).columns.claude.phase).toBe('ready')); };
+ const status = () => service.get(root).rows.find(row => row.name === 'example')?.claude[0]?.status;
+ const change = (kind: string): void => {
+  if (kind === 'policy') context.claude = { mcpPolicy: { verified: false } };
+  else if (kind === 'winner') selector = 'different-effective-name';
+  else if (kind === 'inventory') signature = 'different-source-proof';
+  else if (kind === 'binary') binaryDigest = 'different-bytes';
+  else if (kind === 'context') context.env = { ...context.env, CONFIG_CONTEXT: 'changed' };
+  else if (kind === 'check') checkAllowed = false;
+  else if (kind === 'absent') includeTarget = false;
+ };
+ service.get(root);
+ const reset = (): void => { if (originalClaude === undefined) delete context.claude; else context.claude = originalClaude; if (originalEnv === undefined) delete context.env; else context.env = originalEnv; signature = 'source-proof'; selector = 'example'; checkAllowed = true; binaryDigest = 'binary-proof'; includeTarget = true; };
+ return { service, loaded, status, change, reset };
+}
+const connectedOutput = Buffer.from('example:\n Scope: User config\n Status: ✔ Connected');
+
+it.each(['policy', 'winner', 'inventory', 'binary', 'context', 'check', 'absent'])('invalidates effective Check health when %s proof changes and does not resurrect it', async kind => {
+ const fixture = healthFixture(); await fixture.loaded();
+ const actions = createCapabilitiesMcpActions(fixture.service, async () => ({ code: 'ok', stdout: connectedOutput }));
+ try {
+  expect((await actions.check({ projectPath: root, provider: 'claude', presenceId: 'opaque', revision: fixture.service.get(root).revision })).status).toBe('ok');
+  await fixture.loaded(); expect(fixture.status()).toBe('ok');
+  fixture.change(kind); fixture.service.refresh(root); await fixture.loaded(); expect(fixture.status()).toBe('unknown');
+  fixture.reset(); fixture.service.refresh(root); await fixture.loaded(); expect(fixture.status()).toBe('unknown');
+ } finally { actions.dispose(); fixture.service.dispose(); }
+});
+
+it.each(['policy', 'winner', 'inventory', 'binary', 'context', 'check'])('does not record in-flight Check health into a refreshed %s proof', async kind => {
+ const fixture = healthFixture(); await fixture.loaded();
+ let started!: () => void; let complete!: () => void;
+ const executing = new Promise<void>(resolve => { started = resolve; });
+ const release = new Promise<void>(resolve => { complete = resolve; });
+ const actions = createCapabilitiesMcpActions(fixture.service, async () => { started(); await release; return { code: 'ok', stdout: connectedOutput }; });
+ try {
+  const checking = actions.check({ projectPath: root, provider: 'claude', presenceId: 'opaque', revision: fixture.service.get(root).revision });
+  await executing; fixture.change(kind); fixture.service.refresh(root); await fixture.loaded(); complete();
+  expect(await checking).toMatchObject({ outcome: 'denied', code: 'context-changed', status: 'unknown' });
+  await fixture.loaded(); expect(fixture.status()).toBe('unknown');
+ } finally { complete(); actions.dispose(); fixture.service.dispose(); }
+});
+
+it('retains effective Check health after an unchanged proof refresh while Check executes', async () => {
+ const fixture = healthFixture(); await fixture.loaded();
+ let started!: () => void; let complete!: () => void;
+ const executing = new Promise<void>(resolve => { started = resolve; });
+ const release = new Promise<void>(resolve => { complete = resolve; });
+ const actions = createCapabilitiesMcpActions(fixture.service, async () => { started(); await release; return { code: 'ok', stdout: connectedOutput }; });
+ try {
+  const checking = actions.check({ projectPath: root, provider: 'claude', presenceId: 'opaque', revision: fixture.service.get(root).revision });
+  await executing; fixture.service.refresh(root); await fixture.loaded(); complete();
+  expect((await checking).status).toBe('ok'); await fixture.loaded(); expect(fixture.status()).toBe('ok');
+ } finally { complete(); actions.dispose(); fixture.service.dispose(); }
+});
