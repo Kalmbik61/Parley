@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P01/P03 review; P02 завершает исследование Codex.
+- Текущая фаза: P00 принят; P01 accepted; P02/P03 независимый review.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -21,8 +21,8 @@
 | ID | Задача | Статус | Evidence |
 |---|---|---|---|
 | P00 | Подготовить актуальную рабочую базу | done | agent /root/p00_prepare_base; model gpt-6.1-sol/high; commit 9aedc3e; review accepted by /root/p00_review |
-| P01 | Проверить Claude: источники, budget, jev и инструменты | review | agent /root/p01_claude_probe; gpt-6.1-sol/high; evidence claude.md; reviewer /root/p01_review |
-| P02 | Проверить Codex: скиллы, слой, роли и resume | running | agent /root/p02_codex_probe; gpt-6.1-sol/high; base 9aedc3e |
+| P01 | Проверить Claude: источники, budget, jev и инструменты | done | agent /root/p01_claude_probe; gpt-6.1-sol/high; commit 09eda36; review accepted by /root/p01_review; native full-list fallback |
+| P02 | Проверить Codex: скиллы, слой, роли и resume | review | agent /root/p02_codex_probe; gpt-6.1-sol/high; evidence codex.md; reviewer /root/p00_review |
 | P03 | Проверить команды Capabilities и scopes | review | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; evidence capabilities.md; reviewer /root/p03_review |
 | P04 | Закрыть контракты разведки и выбор парсеров | pending | — |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | pending | — |
@@ -61,3 +61,7 @@
 - P02: Codex 0.156.1; `debug prompt-input` подтверждает `developer_instructions`, CLAUDE fallback и read-only; `--no-daemon` принят текущим CLI. Нативные дубликаты имён скиллов сохраняются. Это не evidence живого launch/resume/MCP.
 - P03: Claude plugin details только для установленного/plugin-dir, text output; Codex plugin add/remove и list, без enable/disable/update/details. Codex MCP list не health-check. Local MCP Claude привязан к canonical main checkout и виден в worktree.
 - Итоговые доказательства и запасные пути будут приняты отдельным review P01–P03, затем закреплены в P04. Неподтверждённые флаги не разрешены для реализации.
+
+## Назначение агентов после первой волны
+
+Лимит созданных agent threads достигнут при запросе reviewer P02. Свободные агенты той же модели переиспользуются с новым bounded назначением; автор результата и независимый reviewer остаются разными. Не создаём другую модель или фоновые runtime-состояния. P01 принят review без замечаний; оставшиеся native release gates сохраняются.

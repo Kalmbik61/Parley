@@ -60,8 +60,8 @@
 | Задача | Этап плана | Зависимости | Ответственный | Состояние |
 |---|---|---|---|---|
 | [P00 — Подготовить актуальную рабочую базу](#p00) | 0 | — | /root/p00_prepare_base | done |
-| [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | review |
-| [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | running |
+| [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | done |
+| [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | review |
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | review |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | не назначен | pending |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
@@ -128,9 +128,9 @@
 
 ### P01: Проверить Claude: источники, budget, jev и инструменты
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P00. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
@@ -149,7 +149,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence после выполнения:** `09eda36`; /root/p01_review — accepted, замечаний нет. Версия/schema, captured payload, loader/role/MCP fixture, jev/hooks и AST трёх scripts проверены независимо. Synthetic transport не считается release acceptance; production full-list fallback до P32 gates. [Evidence](../research/2026-10-03-parley-cli/claude.md).
 
 <a id="p02"></a>
 
@@ -157,7 +157,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** другой агент, профиль `verifier`.
+**Статус:** review. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p00_review (новая задача P02), gpt-6.1-sol/high.
 
 **Зависимости:** P00. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
