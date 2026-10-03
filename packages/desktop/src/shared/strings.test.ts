@@ -258,3 +258,9 @@ it('backlog labels and safe warnings are English and do not interpolate raw erro
   for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }
   expect(S.backlog.suggested(3)).toBe('Suggested (3)'); expect(S.backlog.itemTaken('w-01/r-01')).toBe('Taken: w-01/r-01');
 });
+
+it('plugin strings distinguish unknown cost, data loss and native recovery without promising live adoption',()=>{
+ expect(S.capabilities.plugins.unknown).toBe('Unknown');expect(S.capabilities.plugins.dataLoss).toContain('permanently delete');
+ expect(S.capabilities.plugins.appliesToNew).toContain('new sessions');expect(S.capabilities.plugins.codes['native-only']).not.toContain('/mcp');
+ expect(S.capabilities.plugins.codexRecovery).toContain('native Codex plugin');
+});

@@ -199,7 +199,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
               {actionBusy && <p role="status" className="text-sm">{S.mcpActions.queued}</p>}
               {actionResult && <p role="status" className="text-sm">{S.mcpActions.codes[actionResult.code]}{actionResult.status ? ` · ${actionResult.status === 'ok' ? S.mcpActions.connected : S.projectPanel.statuses[actionResult.status]}` : ''}</p>}
               {actionResult?.recovery === 'native-mcp' && <p>{S.mcpActions.nativeRecovery}</p>}
-              <CapabilitiesPanel key={`inventory:${projectPath}:${connection}`} snapshot={snapshot}
+              <CapabilitiesPanel key={`inventory:${projectPath}:${connection}`} snapshot={snapshot} bridge={bridge}
                 {...(methods.has('capabilities.mcp.remove') || methods.has('capabilities.mcp.check') ? { actions: {
                   busy: actionBusy, supports: { remove: methods.has('capabilities.mcp.remove'), check: methods.has('capabilities.mcp.check') },
                   remove: (provider: CapabilityProvider, presence: CapabilityPresence, expected: number) => targetAction('remove', provider, presence, expected),

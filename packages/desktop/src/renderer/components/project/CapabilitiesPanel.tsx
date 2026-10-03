@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Lock } from 'lucide-react';
 import type { CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import { Button } from '../../ui/button.js';
+import type { ParleyBridge } from '../../../shared/bridge.js';
+import { PluginPanel } from './PluginPanel.js';
 import { S } from '../../../shared/strings.js';
 
 const PROVIDERS: readonly CapabilityProvider[] = ['claude', 'codex'];
@@ -43,7 +45,7 @@ function Presence({ presence, provider, actions, onRemove, revision }: { presenc
 }
 
 /** Render the complete safe inventory; this view never applies the model search filter. */
-export function CapabilitiesPanel({ snapshot, actions }: { snapshot: CapabilitySnapshot | null; actions?: McpPanelActions }): JSX.Element {
+export function CapabilitiesPanel({ snapshot, actions, bridge }: { snapshot: CapabilitySnapshot | null; actions?: McpPanelActions; bridge?: ParleyBridge }): JSX.Element {
   const [pending, setPending] = useState<{ provider: CapabilityProvider; presence: CapabilityPresence; revision: number; projectPath: string } | null>(null);
   return (
     <div className="space-y-4">
@@ -70,6 +72,7 @@ export function CapabilitiesPanel({ snapshot, actions }: { snapshot: CapabilityS
         })}
       </div>
       {(['skill', 'mcp', 'plugin'] as const).map(kind => {
+        if (kind === 'plugin' && bridge && snapshot) return null;
         const rows = snapshot?.rows.filter(row => row.kind === kind) ?? [];
         if (rows.length === 0) return null;
         return <section key={kind} className="space-y-2">
@@ -93,6 +96,7 @@ export function CapabilitiesPanel({ snapshot, actions }: { snapshot: CapabilityS
           </table>
         </section>;
       })}
+      {bridge && snapshot && <PluginPanel snapshot={snapshot} bridge={bridge} renderPresence={(presence, provider) => <Presence presence={presence} provider={provider} revision={snapshot.revision} onRemove={() => {}} />} />}
       {snapshot?.rows.length === 0 && PROVIDERS.every(provider => snapshot.columns[provider].phase === 'ready') && <p>{S.projectPanel.empty}</p>}
     </div>
   );

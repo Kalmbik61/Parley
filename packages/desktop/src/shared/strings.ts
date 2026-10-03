@@ -15,6 +15,30 @@
 import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
+  capabilities: {
+    plugins: {
+      title: 'Plugins', available: 'Available plugins', search: 'Search name or description',
+      loadCatalog: 'Browse available plugins', details: 'Details', install: 'Install', uninstall: 'Uninstall…',
+      enable: 'Enable', disable: 'Disable', addMarketplace: 'Add local marketplace', localPath: 'Local marketplace folder',
+      scope: 'Native scope', chooseScope: 'Choose scope', cancel: 'Cancel', confirmInstall: 'Install plugin',
+      confirmMarketplace: 'Add marketplace', confirmUninstall: 'Uninstall plugin',
+      dataLoss: 'Uninstalling may permanently delete plugin data. Reinstalling may not restore it.',
+      unknown: 'Unknown', skills: 'Skills', agents: 'Agents', hooks: 'Hooks', mcp: 'MCP servers', tokens: 'Always-on tokens (estimate)',
+      queued: 'Waiting for the native plugin action…', empty: 'No available plugins in this catalog.',
+      partial: 'The plugin catalog is partial. Missing entries are not confirmed absent.',
+      inputFailed: 'Check the local folder and selected native scope.',
+      appliesToNew: 'Applies to new sessions. Restart affected sessions to pick up changes.',
+      unsupportedHost: 'This host does not support plugin actions. Restart or update the host.',
+      claudeRecovery: 'Use /plugin in a native Claude session for unsupported sources or approval.',
+      codexRecovery: 'Use the native Codex plugin interface or configuration for unsupported actions.',
+      codes: {
+        'native-only': 'Use the native plugin interface', ambiguous: 'The native plugin identity is ambiguous',
+        conflict: 'A marketplace with this name is already registered',
+        'policy-denied': 'The native policy denied this action',
+        'confirmation-required': 'Confirm possible plugin data loss before uninstalling',
+      },
+    },
+  },
   projectPanel: {
     title: 'Project', capabilities: 'Capabilities', refresh: 'Refresh',
     appliesToNew: 'Refresh updates this panel. Running sessions keep their current settings.',

@@ -46,7 +46,7 @@ describe('safe capabilities inventory view', () => {
 });
 
 
-import { fireEvent, within } from '@testing-library/react';
+import { fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 
 it('requires explicit Remove confirmation for an owned presence and gates builtin/unknown/Check', () => {
@@ -60,4 +60,13 @@ it('requires explicit Remove confirmation for an owned presence and gates builti
  fireEvent.click(buttons[0]!); fireEvent.click(screen.getByRole('button', { name: 'Remove server' })); expect(remove).toHaveBeenCalledWith('claude', value.rows[0]?.claude[0], 7);
  fireEvent.click(buttons[0]!); view.rerender(<CapabilitiesPanel snapshot={{ ...value, revision: 8 }} actions={actions} />); expect(screen.getByRole('button', { name: 'Remove server' }).hasAttribute('disabled')).toBe(true);
  expect(screen.getByText('Use /mcp in a native Codex session to check the connection or authenticate.')).toBeTruthy(); expect(check).not.toHaveBeenCalled();
+});
+
+import { createFakeBridge } from '../../test-utils/fake-bridge.js';
+import { useHostStore } from '../../store/host.js';
+it('uses the parent bridge for plugins while preserving separate inventory metadata', () => {
+ useHostStore.setState({status:{state:'connected',hostVersion:'old',methods:[]},connections:1});
+ const value=snapshot();value.rows.push({id:'plugin-fixture',kind:'plugin',name:'Native plugin fixture',description:null,separateCopies:false,claude:[{id:'native-copy',scope:'builtin',source:null,documentPath:null,description:'Native metadata',installed:true,enabled:null,status:'unknown',summary:null,modelAvailable:null,unavailableReason:null}],codex:[]});
+ const bridge=createFakeBridge();render(<CapabilitiesPanel snapshot={value} bridge={bridge} />);
+ expect(screen.getByText('Native metadata')).toBeTruthy();expect(screen.getByLabelText('Built-in · managed by Parley')).toBeTruthy();expect(screen.getByText('Native plugin fixture')).toBeTruthy();expect(screen.getAllByRole('button').every(b=>b.hasAttribute('disabled'))).toBe(true);expect(bridge.calls).toHaveLength(0);
 });
