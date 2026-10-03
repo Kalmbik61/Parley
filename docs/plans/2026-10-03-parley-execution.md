@@ -142,3 +142,7 @@ P08 готов:14owned files, 158 core /3host /2wire /22desktop consumers, lint/
 ## Приёмка P11 и исправление P08
 
 P11 fixes accepted /root/p01_review: native metadata identity, same-root ambiguity и Rust whitespace подтверждены независимыми fixtures/probes. P08 review нашёл Important/P2: relative configDir расходится между common skill resolver и legacy agent scanner. /root/p02_codex_probe получил только scan.ts/scan.test.ts для исправления и RED→GREEN fixture; P12 preparation пока read-only.
+
+## P15 DTO amendment перед реализацией
+
+Root согласовал с P15 preflight presence arrays вместо singular Presence, stable canonical identities, enabled:boolean|null и полный native scope union. Это сохраняет accepted Codex same-name inventory и unknown policy; spec/unified обновлены вместе. P15 code ещё ждёт P08 acceptance и последовательные shared grants с P12.

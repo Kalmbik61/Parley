@@ -131,13 +131,15 @@ CapabilitiesDialog  ── protocol ──▶  capabilities/                ─�
 
 ```ts
 type CapabilityKind = 'skill' | 'mcp' | 'plugin';
-type Scope = 'user' | 'project' | 'local' | 'plugin' | 'builtin';
+type Scope = 'user' | 'project' | 'local' | 'plugin' | 'builtin'
+  | 'system' | 'admin' | 'extra' | 'claude.ai';
 type Status = 'ok' | 'off' | 'needs-auth' | 'pending-approval' | 'failed' | 'unknown';
 
 interface Presence {
+  id: string;             // provider + canonical native identity; не только name
   scope: Scope;
   source: string | null;   // id плагина, маркетплейс, путь скилла от проекта или от ~
-  enabled: boolean;
+  enabled: boolean | null; // null: effective policy не подтверждена
   status: Status;
   summary: string | null;  // только из разрешённого списка (раздел 5)
   modelAvailable: boolean | null; // скилл: доступность модели, у MCP/плагина null
@@ -146,16 +148,17 @@ interface Presence {
 }
 
 interface CapabilityRow {
+  id: string;             // kind/name; plugins дополнительно provider-qualified
   kind: CapabilityKind;
   name: string;
   description: string | null;
-  claude: Presence | null;
-  codex: Presence | null;
+  claude: Presence[];
+  codex: Presence[];
 }
 ```
 
-- Одноимённые скилл или MCP у обоих агентов — одна строка с двумя значками. Если у скиллов две
-  независимые папки (не симлинк), в строке пометка «separate copies», и «дать второму» недоступно.
+- Одноимённые скилл или MCP у обоих агентов — одна строка с двумя колонками. Presence arrays сохраняют все canonical native identities: Codex same-name файлы не схлопываются и не получают выдуманный winner. Пустой массив означает отсутствие в готовой колонке; loading/error хранятся отдельно от rows. Unknown enabled policy — null/status unknown, не guessed true. Native system/admin/extra/claude.ai scope сохраняется без приведения к user. Если у скиллов две
+  независимые canonical файлы/папки (не подтверждённый симлинк), в строке пометка «separate copies», и «дать второму» недоступно.
 - Плагины не сливаются: у агентов разные форматы. Строка плагина держит только одного агента и
   раскрывается в его скиллы и MCP.
 - **Встроенное.** MCP `parley` в конфигах нет: его подставляет запуск. Хост добавляет его строкой
