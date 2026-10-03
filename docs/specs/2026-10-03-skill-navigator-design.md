@@ -150,7 +150,7 @@ Human rules/policy вычисляются до Parley suppression; generated pro
 Навигатор не показывает скилл, который модель сама загрузить не может или которого человек
 спрятал:
 - `disable-model-invocation: true` в заголовке `SKILL.md`;
-- `skillOverrides` со значением `off` или `user-invocable-only` (уровни настроек Claude Code);
+- effective `skillOverrides: off|user-invocable-only` только для native источников, к которым Claude применяет это правило. Plugin skills игнорируют обычные skillOverrides: например, `off` для `fixture:plugin-only` само по себе не скрывает plugin skill. Их доступность проверяется по native plugin включённости/policy и пути загрузки; неизвестность остаётся unavailable;
 - у Codex — `policy.allow_implicit_invocation: false` в `agents/openai.yaml` скилла и записи
   `[[skills.config]]` с `enabled = false`, поставленные человеком.
 
