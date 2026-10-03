@@ -32,7 +32,7 @@
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
-| P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
+| P12 | Подключить роли к запуску, MCP и диалогу | running | /root/p02_codex_probe; P11/P10 accepted; owned core first, protocol serialized with P15 |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
 | P15 | Реализовать безопасный снимок Capabilities | pending | — |
@@ -146,3 +146,7 @@ P11 fixes accepted /root/p01_review: native metadata identity, same-root ambigui
 ## P15 DTO amendment перед реализацией
 
 Root согласовал с P15 preflight presence arrays вместо singular Presence, stable canonical identities, enabled:boolean|null и полный native scope union. Это сохраняет accepted Codex same-name inventory и unknown policy; spec/unified обновлены вместе. P15 code ещё ждёт P08 acceptance и последовательные shared grants с P12.
+
+## Выдача P12 и P08 recheck
+
+P08 path fix snapshot 0caf683 (+35/−2, только scan/test) передан /root/p01_claude_probe для повторения независимого RED fixture. P12 dependencies P11/P10 accepted, назначен /root/p02_codex_probe на owned core/host/UI и минимальные согласованные grants. Protocol temporarily locked под предстоящий P15 DTO-first этап; registry root. Новые human permission features не вводятся.

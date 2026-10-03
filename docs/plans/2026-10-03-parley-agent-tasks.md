@@ -505,7 +505,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P12), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (следующее назначение), gpt-6.1-sol/high.
 
 **Зависимости:** P11, P10. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -537,6 +537,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнительные grants root:** role/context.ts/test (bounded native config transport), core index exports, brief/CLI agent compatibility +tests, host methods/roles.ts/test, desktop role chips/terminal headers/feed-model/shared strings и их целевые fixtures/tests. Protocol role DTO/methods/index — после короткого P15 DTO-first этапа; до root unlock не менять. Host methods/index registry остаётся root. Новую human permissions UI/persistence не вводить: existing caller constraints и role-derived ограничения проверяются при каждом start/resume, removed-role defaults не кэшируются. Context unknown/profile/nonempty unverified requirements — отказ native role, builtins независимы.
 
 <a id="p13"></a>
 
