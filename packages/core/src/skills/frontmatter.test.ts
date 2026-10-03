@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   parseMarkdownFrontmatter,
@@ -252,6 +254,47 @@ describe('bounded UTF-8 metadata readers', () => {
       diagnostic: { code: 'unreadable' },
     });
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects real FIFOs in all readers without waiting for a writer',
+    async () => {
+      const fifo = path.join(root, 'PRIVATE_TOKEN.md');
+      const execute = promisify(execFile);
+      await execute('mkfifo', [fifo]);
+      const moduleUrl = new URL('./frontmatter.ts', import.meta.url).href;
+      const code = `
+      import { readMarkdownFrontmatter, readYamlDocument, readTomlDocument } from ${JSON.stringify(moduleUrl)};
+      const results = await Promise.all([
+        readMarkdownFrontmatter(process.argv[1]),
+        readYamlDocument(process.argv[1], 65536),
+        readTomlDocument(process.argv[1], 65536),
+      ]);
+      console.log(JSON.stringify(results));
+    `;
+      // Isolate blocking open() from Vitest's worker; execFile kills/reaps the child on timeout.
+      let output: string;
+      try {
+        const child = await execute(
+          process.execPath,
+          ['--import', 'tsx', '--input-type=module', '-e', code, fifo],
+          {
+            timeout: 2000,
+            killSignal: 'SIGKILL',
+          },
+        );
+        output = child.stdout;
+      } catch {
+        throw new Error('Metadata reader subprocess failed or timed out while opening a FIFO');
+      }
+      expect(JSON.parse(output)).toEqual(
+        Array.from({ length: 3 }, () => ({
+          status: 'invalid',
+          diagnostic: { code: 'unreadable' },
+        })),
+      );
+      expect(output).not.toMatch(/PRIVATE_TOKEN|TOP_SECRET/);
+    },
+  );
 
   it('allows callers to choose a separate ceiling for YAML policy or role TOML', async () => {
     const yaml = '#'.repeat(70000) + '\npolicy:\n  allow_implicit_invocation: false\n';

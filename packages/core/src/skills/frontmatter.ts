@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { TextDecoder } from 'node:util';
 import { parse as parseToml, TomlError } from 'smol-toml';
@@ -87,7 +88,9 @@ async function readDocument<T extends FrontmatterResult>(
   parse: (text: string) => T,
 ): Promise<T | InvalidMetadata> {
   try {
-    const handle = await open(file, 'r');
+    // Nonblocking open prevents FIFOs from waiting for a writer before descriptor validation.
+    // fstat checks the opened object, so a path swap cannot bypass special-file rejection.
+    const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
       if (!(await handle.stat()).isFile()) return invalid('unreadable');
       const buffer = Buffer.alloc(maxBytes + 1);
