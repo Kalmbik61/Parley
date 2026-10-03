@@ -49,7 +49,7 @@
  * к фону диалога 2.69:1, ниже порога 3:1 для признака состояния.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
 import type { Result } from '@parley/protocol';
@@ -140,6 +140,35 @@ const ITEM_CLIP = '[&>span:last-child]:min-w-0 [&>span:last-child]:truncate';
 /** Пилюля провайдера (1.5): 34px, значок 14; выбранная — рамка `--ring`, фон `neutral-100`, вес 600; иначе рамка divider. */
 const PILL =
   'inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-full border pl-2.5 pr-3 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-[.45]';
+
+/** Свой наблюдатель для каждого поповера: анимация закрытия старого не отключает новый. */
+function ProviderPopoverContent(props: ComponentPropsWithoutRef<typeof PopoverContent>): JSX.Element {
+  const providerResize = useRef<ResizeObserver | null>(null);
+  const observeProviderContent = useCallback((content: HTMLDivElement | null): void => {
+    providerResize.current?.disconnect();
+    providerResize.current = null;
+    if (content === null || typeof ResizeObserver === 'undefined') return;
+    // Radix ограничивает высоту после автофокуса: раскрываем только скрытый фокус этой карточки.
+    const observer = new ResizeObserver((entries) => {
+      const focused = content.ownerDocument.activeElement;
+      if (!content.isConnected || !(focused instanceof HTMLElement) || !content.contains(focused) || content.clientHeight === 0) return;
+      const bounds = content.getBoundingClientRect();
+      const height = entries.find((entry) => entry.target === content)?.borderBoxSize[0]?.blockSize ?? content.offsetHeight;
+      // Прямоугольники учитывают zoom-анимацию, scrollTop и размеры ResizeObserver — нет.
+      const scale = bounds.height / height;
+      if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom)) return;
+      const top = bounds.top + content.clientTop * scale;
+      const bottom = Math.min(bounds.bottom - content.clientTop * scale, top + content.clientHeight * scale);
+      const rect = focused.getBoundingClientRect();
+      if (rect.height <= 0 || !Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
+      if (rect.bottom > bottom) content.scrollTop += (rect.bottom - bottom) / scale;
+      else if (rect.top < top) content.scrollTop += (rect.top - top) / scale;
+    });
+    providerResize.current = observer;
+    observer.observe(content);
+  }, []);
+  return <PopoverContent {...props} ref={observeProviderContent} />;
+}
 
 export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
@@ -429,7 +458,16 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[660px] max-w-[calc(100vw-2rem)]">
+      <DialogContent
+        className="w-[660px] max-w-[calc(100vw-2rem)]"
+        onEscapeKeyDown={(event) => {
+          // Capture-обработчик внешнего слоя может сработать первым: Escape закрывает только карточку.
+          if (providerCard !== null) {
+            event.preventDefault();
+            setProviderCard(null);
+          }
+        }}
+      >
         <div className="flex shrink-0 flex-col gap-0.5">
           <DialogTitle>{multi ? text.titleRoom : text.titleSession}</DialogTitle>
           <DialogDescription className="text-xs text-neutral-700">{multi ? text.hintRoom : text.hintSession}</DialogDescription>
@@ -533,10 +571,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                                   {provider.label}
                                 </button>
                               </PopoverTrigger>
-                              <PopoverContent
+                              <ProviderPopoverContent
                                 aria-label={providerName(provider.id, provider.label)}
                                 align="start"
-                                className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto"
+                                collisionPadding={12}
+                                className="max-h-[min(calc(100vh-48px),var(--radix-popover-content-available-height))] w-[min(360px,calc(100vw-24px))] overflow-y-auto"
                               >
                                 <ProviderCard
                                   provider={provider}
@@ -546,7 +585,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                                     useUiStore.getState().confirmRestartHost();
                                   }}
                                 />
-                              </PopoverContent>
+                              </ProviderPopoverContent>
                             </Popover>
                           );
                         })}

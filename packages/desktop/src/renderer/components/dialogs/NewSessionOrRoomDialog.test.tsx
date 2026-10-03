@@ -984,6 +984,91 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
   });
 
+  it('Escape внешнего слоя закрывает только карточку и возвращает фокус пилюле', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [PROVIDERS[0]!, { id: 'codex', label: 'Codex', available: false }] }));
+    const captures: EventListenerOrEventListenerObject[] = [];
+    const add = document.addEventListener.bind(document);
+    const spy = vi.spyOn(document, 'addEventListener').mockImplementation((type, listener, options) => {
+      if (type === 'keydown' && typeof options === 'object' && options.capture && listener !== null) captures.push(listener);
+      add(type, listener, options);
+    });
+    let onOpenChange: ReturnType<typeof vi.fn>;
+    try {
+      ({ onOpenChange } = await renderDialog());
+    } finally {
+      spy.mockRestore();
+    }
+    const outerEscape = captures.at(-1);
+    expect(outerEscape).toBeDefined();
+    const codex = providerRadio(0, 'Codex');
+    act(() => providerRadio(0, 'Claude').focus());
+    fireEvent.keyDown(providerRadio(0, 'Claude'), { key: 'ArrowRight' });
+    const copy = await screen.findByRole('button', { name: 'Copy' });
+    await waitFor(() => expect(document.activeElement).toBe(copy));
+    // В Electron первым срабатывал capture-обработчик диалога; воспроизводим именно эту границу.
+    act(() => {
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+      if (typeof outerEscape === 'function') outerEscape.call(document, escape);
+      else outerEscape?.handleEvent(escape);
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.querySelector('[data-provider-card]')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(codex));
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    fireEvent.keyDown(codex, { key: 'Escape' });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it.each([1, 0.95])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s)', async (scale) => {
+    const observers: ObservedResize[] = [];
+    class ObservedResize implements ResizeObserver {
+      target: Element | null = null;
+      constructor(readonly callback: ResizeObserverCallback) { observers.push(this); }
+      observe(target: Element): void { this.target = target; }
+      unobserve(): void {}
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal('ResizeObserver', ObservedResize);
+    try {
+      bridge.setHandler('providers.list', async () => ({ providers: list() }));
+      await renderDialog();
+      fireEvent.click(providerRadio(0, 'GLM'));
+      const input = await screen.findByLabelText('Z.ai API key');
+      await waitFor(() => expect(document.activeElement).toBe(input));
+      const content = card().parentElement as HTMLElement;
+      const observer = observers.find((entry) => entry.target === content);
+      expect(observer).toBeDefined();
+      // Геометрия реального сбоя: карточка сжалась после автофокуса, поле осталось ниже её нижнего края.
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 226 });
+      Object.defineProperty(content, 'offsetHeight', { configurable: true, value: 226 });
+      const bounds = vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(265, 12, 360 * scale, 225.6 * scale));
+      vi.spyOn(input, 'getBoundingClientRect').mockImplementation(() => new DOMRect(281, 12 + (228 - content.scrollTop) * scale, 328 * scale, 36 * scale));
+      const sizes: ResizeObserverEntry[] = [{
+        target: content, borderBoxSize: [{ blockSize: 225.6, inlineSize: 360 }],
+        contentBoxSize: [], devicePixelContentBoxSize: [], contentRect: new DOMRect(),
+      }];
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBeCloseTo(38.4);
+      // Повторная доставка не двигает уже видимое поле.
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBeCloseTo(38.4);
+      content.scrollTop = 0;
+      bounds.mockReturnValueOnce(new DOMRect(265, 12, 360, 0));
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBe(0);
+      act(() => providerRadio(0, 'Claude').focus());
+      content.scrollTop = 0;
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBe(0);
+      fireEvent.keyDown(content, { key: 'Escape' });
+      await waitFor(() => expect(observer?.disconnect).toHaveBeenCalledOnce());
+    } finally {
+      cleanup();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each([false, true])('Remove выбранного GLM блокирует запуск с понятным сообщением (room=%s)', async (room) => {
     let providers = list(true);
     bridge.setHandler('providers.list', async () => ({ providers }));
@@ -999,6 +1084,55 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     fireEvent.click(button(room ? 'Create room' : 'Start session'));
     expect(callsOf('sessions.create')).toEqual([]);
     expect(callsOf('rooms.create')).toEqual([]);
+  });
+
+  it('карточка с анимацией закрытия не отключает наблюдателя следующей карточки', async () => {
+    const observers: ObservedResize[] = [];
+    class ObservedResize implements ResizeObserver {
+      target: Element | null = null;
+      constructor(readonly callback: ResizeObserverCallback) { observers.push(this); }
+      observe(target: Element): void { this.target = target; }
+      unobserve(): void {}
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal('ResizeObserver', ObservedResize);
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+      const style = computedStyle(element, pseudo);
+      if (element.matches('[role="dialog"][data-side]')) {
+        Object.defineProperty(style, 'animationName', {
+          configurable: true,
+          get: () => element.getAttribute('data-state') === 'open' ? 'card-enter' : 'card-exit',
+        });
+      }
+      return style;
+    });
+    try {
+      bridge.setHandler('providers.list', async () => ({ providers: list() }));
+      await renderDialog();
+      fireEvent.click(providerRadio(0, 'GLM'));
+      await screen.findByLabelText('Z.ai API key');
+      const priorContent = card().parentElement as HTMLElement;
+      fireEvent.click(providerRadio(0, 'Cursor'));
+      await waitFor(() => expect(document.querySelector('[data-provider-card="cursor"]')).not.toBeNull());
+      const nextContent = document.querySelector('[data-provider-card="cursor"]')?.parentElement as HTMLElement;
+      const observer = observers.find((entry) => entry.target === nextContent);
+      expect(priorContent.isConnected).toBe(true);
+      expect(nextContent.isConnected).toBe(true);
+      expect(observer).toBeDefined();
+      expect(observer?.disconnect).not.toHaveBeenCalled();
+      // Старый узел уходит после того, как новый уже прикреплён и наблюдается.
+      const end = new Event('animationend', { bubbles: true });
+      Object.defineProperty(end, 'animationName', { value: 'card-exit' });
+      fireEvent(priorContent, end);
+      await waitFor(() => expect(priorContent.isConnected).toBe(false));
+      expect(nextContent.isConnected).toBe(true);
+      expect(observer?.disconnect).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('changed блокирует запуск до нового ответа, старый reload не возвращает подключение', async () => {
