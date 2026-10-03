@@ -80,12 +80,12 @@
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | done |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
-| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | review |
+| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe | done |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | running |
-| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | не назначен | pending |
+| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | running |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | не назначен | pending |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
 | [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | не назначен | pending |
@@ -102,7 +102,7 @@
 | [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | не назначен | pending |
 | [P37 — Ограничить launches/fanout и лишний старт](#p37) | audit | P23, P26 | не назначен | pending |
 | [P38 — Подготовить benchmark принятого результата](#p38) | audit | P34, P35, P36, P37, P14, P31, P39 | не назначен | pending |
-| [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | не назначен | pending |
+| [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | /root/p01_claude_probe | running |
 
 ## Карточки
 
@@ -717,9 +717,9 @@
 
 ### P17: Добавить native MCP add/remove/check
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_claude_probe (P17), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p01_review; f447ccd +0c0d1f9 accepted: original proof-loss/related concurrent/override probes GREEN, affected43, exact4SHA/lint0, hostbuild0; native/P32 gates pending.
 
 **Зависимости:** P15, P16. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -881,7 +881,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant core plans/snapshots/types/map/rooms/proposals/targetedtests +coreindex narrowexports; deps accepted.
 
 **Зависимости:** P20, P12. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -1401,7 +1401,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant fixed second builtin/receipt LICENSE +host installer labels, no global hooks; deps accepted.
 
 **Зависимости:** P13, P14. **Источник:** [внутренний навык](../../.agents/skills/minimal-development/SKILL.md).
 
@@ -1418,3 +1418,5 @@
 **Приёмка:** agentSkills=false ничего не пишет; оба навыка устанавливаются/обновляются только как owned assets, чужие изменения не перезаписываются. Лицензия входит в устанавливаемые файлы. Нативные каталоги узнают name/description и Claude alias; нет обязательной загрузки тела, рекламных текстов или обещанного процента экономии. Файл в проекте уже служит workflow агентов; runtime delivery считается сделанным только после этой карточки.
 
 **Проверка:** targeted installer/host fixtures для off/on, повторной установки, чужого/edited/symlink пути и license preservation; scoped types/lint. P34 сохраняет body-on-demand, P38 сравнивает режим навыка отдельно при одинаковом navigator/cache режиме.
+
+P21 shared unlock после acceptedP14/P17: protocol backlog.* и changed, MCP bounded list/suggest/guide, host backlog lifecycle (registry root-only), fixed app.openBacklog IPC/bridge, ProjectPanel/strings и dialog/store/AppShell callbacks. P22 solewriter map/types/plans/rooms/proposals и narrow coreindex; P39 solewriter skill-install/host agent-skills. Shared build — после coherent source freeze.

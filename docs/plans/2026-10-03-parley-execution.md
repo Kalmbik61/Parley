@@ -37,12 +37,12 @@
 | P14 | Подключить навигатор к CLI и Settings | done | baf9af9 + a9c1e14; independent symlink probes GREEN, 33 settings fixtures, SHA2/core build0; /root/p01_claude_probe accepted |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
-| P17 | Добавить native MCP add/remove/check | review | f447ccd +wire/strings milestones; exact18+registrySHA; independent /root/p01_review pending |
+| P17 | Добавить native действия MCP | done | f447ccd +0c0d1f9, /root/p01_review accepted; original/related probes GREEN,43affected/lint/SHA4/hostbuild0; live/P32 pending |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | running | /root/p02_codex_probe; P20accepted; новые host/UI/DTO modules, sharedpoints locked |
-| P22 | Реализовать режимы, планы, ревизии и снимки | pending | — |
+| P22 | Реализовать режимы, планы, ревизии и снимки | running | /root/p01_review, Sol6.1/high; deps P20/P12 accepted; core-owned grant |
 | P23 | Подключить инструменты планов и будильник | pending | — |
 | P24 | Показать план и итог в комнате | pending | — |
 | P25 | Реализовать рецепты и плейбук ведущего | pending | — |
@@ -59,7 +59,7 @@
 | P36 | Исправить свежесть usage и cache ledger | pending | audit-token track; dependencies P24 |
 | P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
 | P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
-| P39 | Доставлять внутренний навык minimal-development | pending | dependencies P13, P14; project skill готов, runtime delivery ещё впереди |
+| P39 | Доставлять внутренний навык minimal-development | running | /root/p01_claude_probe, Sol6.1/high; deps P13/P14 accepted; owned installer/LICENSE narrow grant |
 
 ## Текущая разведка — ещё до независимой приёмки
 
@@ -226,3 +226,5 @@ P21 dispatched /root/p02_codex_probe после P20 acceptance: первая ф�
 Прочитаны C1–C6/измерения/cache/economic gate и A11/A14/A21/A22/F01–F05 из docs/audits/2026-10-03. Immutable source copies сохранены в worktree; новый контракт docs/plans/2026-10-04-parley-token-economy-audit.md согласован с общим планом и PARLEY/navigator/memory specs. Queue расширена39: новыеP34–P38 предшествуютP32; 17accepted остаются, source line numbers исторические. Остальной audit remediation scope не перенесён. Платные native turns пока не запускались, savings не заявлены.
 
 P14 safety fix accepted: a9c1e14, original directory/leaf symlink probes foreignPreserved/rejected, 33 affected fixtures и core build exit0. Текущий результат18 accepted из40. Внутренний minimal-development добавлен в project-native folders и workflow; P39 доставит его через existing owned installer, без global hooks. Token-audit P34–P38 сохранены; новый навык — отдельная ось P38, проценты экономии не заявлены.
+
+P17 accepted0c0d1f9 после точного4-file health fix: original loss-of-proof probe и production related override/concurrent refresh/no-resurrection fixtures GREEN;43 affectedtests, SHA4/lint0 и hostbuild0. 19accepted из40. Docs/skill integration independently accepted /root/p01_review:40cards/40rows/acyclic,124local links, immutableaudithashes/LICENSE и native metadata/alias. Commitc3d8d73. P21 shared grant открыт после DTO read; registry root-only. P22 иP39 dispatched disjointcore owners; P18 пока read-onlyaudit. Current Claude symlink2.1.288 не заменяет approved2.1.287 artifact: exactстарый artifact проверен, userCLI не изменён. Native/platform/model gates не закрывались.
