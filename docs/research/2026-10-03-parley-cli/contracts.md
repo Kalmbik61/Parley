@@ -10,7 +10,7 @@
 - `projectPath` — основная копия общих PARLEY.md, памяти, бэклога, рецептов, планов и журнала через общий `stateDir` с прежним `.harnas/` fallback. Исправление native local MCP identity не меняет `cwd` или общий `projectPath`.
 - Один общий каталог и полноценные YAML/TOML parsers обслуживают navigator/Capabilities и миграцию существующего scanner chat-view. Сигнатура `capabilities.list`, команды/агенты и её ограничения сохраняются; DTO нового каталога не подменяет этот wire-контракт. P08 adapter сохраняет прежний `CapabilitySkill.path` (папка для SKILL.md, файл для command), прежний source enum `user|project|plugin` и пустые массивы у неподдержанного provider. Новый canonical document path остаётся внутренним; extra source нельзя молча привести к user. Новые источники идут в новую панель отдельной безопасной projection.
 - Один сборщик слоя используется для launch, quick start, autoLaunch и resume: `systemGuidance (≤14 строк) → мост Codex → роль → плейбук только ведущему → quiet brief → обработанный PARLEY.md → факты памяти`. Различаются только каналы `{systemPrompt}` и `{developerInstructions}`, не состав.
-- PARLEY.md/роль/плейбук — по 32768 UTF-8 байт; память — 12288; итоговый сериализованный аргумент — 98304. Обязательные инструкции не усекаются. Скиллы не меняют provider/model/effort/permissions; постоянного поля skill у сессии/рецепта/пункта нет.
+- Обработанные PARLEY.md, текст роли и плейбук — каждый ≤32768 UTF-8 байт, включая конечную marker строку. Сохраняется documented обрезка по последней строке с явной меткой и безопасным warning: PARLEY.md §5.2 (`[PARLEY.md is cut at 32 KB by Parley]`, `parley-md-truncated`), роли §5.2/§8 и рецепты §6.3 (marked line truncation). Нельзя silent truncation; native role permissions/model/effort side channels не усекаются и не ослабляются вместе с текстом. Память — 12288; итоговый сериализованный аргумент — 98304. Переполнение собранного обязательного аргумента после preprocessing/escaping — `session-layer-too-large` до spawn; не повторная обрезка сборки. Скиллы не меняют provider/model/effort/permissions; постоянного поля skill у сессии/рецепта/пункта нет.
 - `skillNavigator=false` по умолчанию; `agentSkills` независим. Один снимок настройки передаётся в launch flags/guidance/MCP env. Выключенный navigator не добавляет Parley budget, jev-disable или skills.config. Человеческие native правила остаются действующими.
 - Каталог живёт локально в MCP по provider/cwd, панель — безопасный host snapshot с Refresh без watcher. Машинные paths/catalog/config/тела SKILL.md/секреты не пишутся в общую память. Immutable accepted plan/decision rev и граница shared/local state не меняются.
 
@@ -73,7 +73,7 @@ Pinned boundary evidence Codex: depth 6, ≤2000 directories и ≤20000 entries
 | Native Codex role | Auto-discovered agents/**/*.toml: обязательные `name`, непустые developer_instructions, description после layer merge. Поздняя одноимённая роль выигрывает, metadata может наследоваться | Без filename fallback. Declared config_file name-hint — другой путь, пока вне v1. Нет main-session role flag: main fields доставляются через native args+layer |
 | Read-only / resume | P02 offline prompt/config positive; live HTTP 400, MCP/report/resume не состоялись | Не объявлять enforcement; роль без обеспечиваемой доставки/ограничений не запускать. Проверенный native CLI supported model выбирается отдельно от фиксированной модели агентов workflow |
 
-Codex CLAUDE fallback — `project_doc_fallback_filenames=["CLAUDE.md"]` (filename, не directory); native AGENTS/override в каждой папке выигрывает, root→cwd накопление observed. `.claude/CLAUDE.md`, budget exhaustion и немедленное изменение resume слоя не доказаны. User-overridden providers должны обеспечивать обязательную placeholder delivery; иначе ошибка до spawn, без silently empty role/layer. CLI flag capability проверяется фактическим бинарником; `--no-daemon` принят 0.156.1, guard ≥0.157 по старому комментарию не обоснован.
+Codex CLAUDE fallback — `project_doc_fallback_filenames=["CLAUDE.md"]` (filename, не directory); native AGENTS/override в каждой папке выигрывает, root→cwd накопление observed. `.claude/CLAUDE.md`, budget exhaustion и немедленное изменение resume слоя не доказаны. Обычный custom Codex без `{developerInstructions}` сохраняет documented поведение PARLEY.md §7: `provider-override-gap` warning и запуск без слоя/моста; Parley не переписывает пользовательский runner. Hard refusal до spawn применяется только когда выбранная обязательная роль/permissions требуют доставки, которую данный runner обеспечить не может; generic plain custom runner не запрещается из-за одного missing placeholder. CLI flag capability проверяется фактическим бинарником; `--no-daemon` принят 0.156.1, guard ≥0.157 по старому комментарию не обоснован.
 
 ## 5. P05: полноценные parsers и пределы
 
@@ -92,7 +92,7 @@ TOML: `parse(text, {integersAsBigInt:'asNeeded', useLegacyDate:true, unsafeKeyBe
 
 **Предел относится ко всему SKILL.md: 65536 bytes inclusive.** Больший документ пропускается, даже если YAML header короткий. Read bounded max+1, strict UTF-8 decode (fatal), затем извлечь начальную header область между самостоятельными `---` строками (BOM/CRLF поддержать). После закрывающего delimiter Markdown body не разбирается/не экспортируется/не индексируется. Отсутствующий начальный header — `missing`, начальный header без closing delimiter либо invalid YAML — `invalid`, корректная mapping — `valid`; общий reader возвращает только mapping/status/safe diagnostic, не body. Loader Claude/Codex позднее сам читает исходный документ своим способом.
 
-YAML/TOML helper общий для skill frontmatter, роли, рецепта и CLI settings/policy; caller выбирает свой byte ceiling (role 32768, SKILL.md 65536 и bounded settings inputs), parser не вшивает размер SKILL в любую конфигурацию. Запрет частичных regex-парсеров YAML/TOML остаётся. Nullable/missing/string-bool fields не coercing: `enabled`, `disable-model-invocation`, allow_implicit_invocation — реальные booleans; description/name/developer_instructions — strings; schema ошибки никогда не расширяют доступ.
+YAML/TOML helper общий для skill frontmatter, роли, рецепта и CLI settings/policy; caller выбирает отдельный bounded input-document ceiling (SKILL.md 65536 и bounded native role/config/settings inputs), parser не вшивает размер SKILL в любую конфигурацию. Предел role body 32768 — post-parse preprocessing текста, не лимит raw native TOML: целый bounded TOML сначала полноценно разбирается, затем developer_instructions проходит marked line truncation; прочие native fields сохраняются. Запрет частичных regex-парсеров YAML/TOML остаётся. Nullable/missing/string-bool fields не coercing: `enabled`, `disable-model-invocation`, allow_implicit_invocation — реальные booleans; description/name/developer_instructions — strings; schema ошибки никогда не расширяют доступ.
 
 Все exceptions очищаются до кода и максимум безопасных line/column; YAML/TOML error может включать исходную строку или секрет. Raw mapping/exception/config/stdout/stderr/argv в host log или DTO не попадают; field projection whitelist. Лицензии ISC/BSD-3-Clause совместимы с MIT продукта при сохранении notices; P05 сохраняет license metadata, distribution notices проверяются при release.
 
@@ -112,9 +112,9 @@ require estimatedBytes <= runtime ARG_MAX
 
 32768 — выбранный консервативный product reserve, не измеренная точная kernel overhead. Limits injectable в тестах; query bounded getconf/sysconf, не hardcode наблюдаемый 1 MiB на Linux. Учитываются substituted executable/args, длинные paths, реальный final inherited env и generated token/env. На Linux отдельно каждую argv/env string с NUL проверять против native per-string bound `32 * pageSize`; cumulative ARG_MAX зависит от stack limit. [Linux execve reference](https://man7.org/linux/man-pages/man2/execve.2.html). Если limits недоступны, aggregate check не объявлять пройденным: safe pre-spawn diagnostic/error; нельзя guess увеличить ceiling. OS E2BIG всё равно обработать безопасно без raw argv/env.
 
-Core P09 проверяет блоки, serialized args и обязательную placeholder delivery; итоговый env известен только в `packages/host/src/sessions/sessions-service.ts` после `agentEnv(process.env)`, `plan.env` **и PARLEY_HOOK_TOKEN**. Поэтому P09 получает последовательное владение этим файлом/его тестом и необходимым export `packages/core/src/index.ts` от root. Host непосредственно перед `pty.start` проверяет aggregate и выводит безопасные `LaunchPlan.warnings` один раз на launch attempt. Если guard срабатывает после register hook token, handle не стартует и token unregister выполняется; проверить отсутствие утечки. Core-only check не считается полной реализацией aggregate guard.
+Core P09 проверяет блоки, serialized args и placeholder delivery для обязательной роли/permissions; обычный custom Codex placeholder gap даёт warning с сохранением запуска; итоговый env известен только в `packages/host/src/sessions/sessions-service.ts` после `agentEnv(process.env)`, `plan.env` **и PARLEY_HOOK_TOKEN**. Поэтому P09 получает последовательное владение этим файлом/его тестом и необходимым export `packages/core/src/index.ts` от root. Host непосредственно перед `pty.start` проверяет aggregate. Безопасные `LaunchPlan.warnings` пишутся в host log на каждой попытке запуска; пользовательские notices дедуплицируются за жизнь хоста: PARLEY.md unreadable/truncated — по projectPath и warning code, provider-override-gap — один раз за жизнь хоста глобально по code, без per-project/per-provider повторов, как требует §7. User notice не повторяется на каждой попытке. Если guard срабатывает после register hook token, handle не стартует и token unregister выполняется; проверить отсутствие утечки. Core-only check не считается полной реализацией aggregate guard.
 
-Переполнение optional Parley suppression: убрать **весь generated suppression**, сохранив human flags и полный native list; пересобрать/повторно проверить args+env, показать warning один раз. Не обрезать selectors. Без optional flags всё ещё oversized → безопасная ошибка до spawn. Oversized обязательный layer аргумент → `session-layer-too-large` с размерами блоков; aggregate env/другие args → отдельная безопасная spawn-budget ошибка с числовыми размерами. Не запускать truncated роль/правила. Одна и та же проверка для launch/quick/auto/resume.
+Переполнение optional Parley suppression: убрать **весь generated suppression**, сохранив human flags и полный native list; пересобрать/повторно проверить args+env, записать warning в log текущей попытки; user notice подавлять по указанной области (PARLEY.md: host/project; provider-override-gap: host global) после первого показа. Не обрезать selectors. Без optional flags всё ещё oversized → безопасная ошибка до spawn. Oversized обязательный layer аргумент → `session-layer-too-large` с размерами блоков; aggregate env/другие args → отдельная безопасная spawn-budget ошибка с числовыми размерами. Разрешено только documented marked preprocessing блоков; нельзя молча усекать собранный аргумент, policy/permissions или роль при отсутствии обязательного канала доставки. Одна и та же проверка для launch/quick/auto/resume.
 
 Новая безопасная Node-проба P04: macOS Darwin 24.3.0 arm64, Node 25.8.0, getconf ARG_MAX=1048576, subprocess только Node, synthetic env без credentials. P02 отдельно подтвердил Codex native parser при argBytes=98304 и UTF-8=70025 на Node22 CLI.
 
@@ -203,7 +203,7 @@ Claude uninstall может удалить persistent data (observed keptData=fa
 
 7. **Unified Task0 budget row:** Find `Claude budget: skillListingBudgetFraction: 0 / env budget=1` (backticks в исходнике) → Replace `Claude budget: env budget=1 candidate; fraction=0 invalid`. **Unified Task5 step4:** Replace общий plugin-actions список на provider-specific матрицу §7, запрещая guessed Codex toggle/details/update.
 
-8. **Unified shared argv paragraph / PARLEY.md §3.3:** После per-arg ceiling вставить aggregate формулу §6 с host проверкой после final env+hook token, NUL/per-string bounds, injectable runtime limits, safe failure и once-per-attempt warnings. **P09 ownership root:** добавить `packages/host/src/sessions/sessions-service.ts`, `packages/host/src/sessions/sessions-service.test.ts` и необходимый export `packages/core/src/index.ts`; P10 получает их позже последовательно. Не утверждать full env guard по core-only tests.
+8. **Unified shared argv paragraph / PARLEY.md §3.3:** После per-arg ceiling вставить aggregate формулу §6 с host проверкой после final env+hook token, NUL/per-string bounds, injectable runtime limits, safe failure, host-log warnings per attempt и user-notice dedup: PARLEY.md once host/project, provider-override-gap once host global. Сохранить documented marked PARLEY.md/role/playbook preprocessing ≤32768 bytes включая marker (PARLEY.md §5.2, Roles §5.2/§8, Recipes §6.3) и plain custom Codex warning+launch §7; отказ только при недоставимой обязательной роли/permissions. **P09 ownership root:** добавить `packages/host/src/sessions/sessions-service.ts`, `packages/host/src/sessions/sessions-service.test.ts` и необходимый export `packages/core/src/index.ts`; P10 получает их позже последовательно. Не утверждать full env guard по core-only tests.
 
 9. **P05 parser acceptance root:** pins из §5; tests valid/invalid/missing header, whole-file limit, strict UTF-8/duplicate keys/bounded aliases, full multiline description, mapping/schema boolean/string validation, safe code+position diagnostics. Native parser errors never log source excerpts. Роль/recipe/settings переиспользуют те же generic parsers; не четыре локальных regex-парсера.
 
@@ -212,3 +212,71 @@ Claude uninstall может удалить persistent data (observed keptData=fa
 P05–P09 можно реализовать по этому контракту после independent acceptance P04; их тесты должны подтвердить implementation, не пересказать research. Не заявлять release/list-reduction readiness.
 
 P32 отдельно: реальные Claude account/synced/managed/plugin priority/collision/symlink boundary fixtures; clean main/subagent native loader для доступных role tools; интерактивный statusLine и настоящий Parley MCP report/end-turn/notify/wake; Codex live supported native model, чтение Parley-disabled document при сохранении human disables, denied write без elevation, role/main args, launch/resume/compaction boundary; native plugin/admin/extra parity; managed denial/remote install/OAuth/restart; host cumulative guard на macOS long paths/custom env/provider substitution и target Linux (без искусственного требования Docker); approved role texts/distribution notices. У каждого непроверенного пути до этого full-list/unavailable/fail-safe behavior, а не silently assumed success.
+
+## 11. Воспроизведение API и argv evidence
+
+Первоначально оба скрипта выполнялись через stdin. Для независимого review их точные тела сохранены как `/private/tmp/parley-p04-api-smoke.mjs` и `/private/tmp/parley-p04-argv-probe.mjs`; ниже долговечные копии. Node20 executable этой машины: `/Users/kalmbik61/.nvm/versions/node/v20.15.1/bin/node`. Распакованные verified modules: `/private/tmp/parley-p04-parsers-oasyp3wp/yaml/package/dist/index.js` и `/private/tmp/parley-p04-parsers-oasyp3wp/smol-toml/package/dist/index.js`.
+
+```sh
+/Users/kalmbik61/.nvm/versions/node/v20.15.1/bin/node /private/tmp/parley-p04-api-smoke.mjs
+node /private/tmp/parley-p04-argv-probe.mjs
+```
+
+Ожидается API `passed:12`, exit 0; argv: три положительные строки и `E2BIG` на cumulative overflow. Исходный argv runtime — Node25.8.0/macOS arm64. Exact stringBytes зависят от executable path; на другой машине сравнивать byte preservation/outcome и собственный runtime ARG_MAX, не копировать macOS числа на Linux. Для portable повтора сохранить тела в любые .mjs, указать installed Node20 и заменить только два module paths на локально распакованные official tarballs pinned versions; package-manager install и CLI/model запуск не требуются.
+
+API smoke (исходные 12 cases):
+
+```js
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {parse as tomlParse,stringify} from '/private/tmp/parley-p04-parsers-oasyp3wp/smol-toml/package/dist/index.js';
+const require=createRequire(import.meta.url);
+const {parseDocument}=require('/private/tmp/parley-p04-parsers-oasyp3wp/yaml/package/dist/index.js');
+const yaml=s=>{const d=parseDocument(s,{version:'1.2',strict:true,uniqueKeys:true});if(d.errors.length)throw Error('invalid-yaml');return d.toJS({maxAliasCount:100});};
+const opts={integersAsBigInt:'asNeeded',useLegacyDate:true,unsafeKeyBehaviour:'throw',maxDepth:100};
+const cases=[];
+let y=yaml('name: example\ndescription: |\n  first line\n  second "quoted" line\ndisable-model-invocation: false\n');
+assert.equal(y.description,'first line\nsecond "quoted" line\n');assert.equal(y['disable-model-invocation'],false);cases.push('yaml-literal-and-boolean');
+assert.equal(yaml('description: >\n  first\n  second\n').description,'first second\n');cases.push('yaml-folded');
+assert.equal(yaml('description: "quote \\" slash \\\\"\n').description,'quote " slash \\');cases.push('yaml-quoted');
+assert.throws(()=>yaml('a: 1\na: 2\n'));cases.push('yaml-duplicate-rejected');
+assert.throws(()=>yaml('a: [\n'));cases.push('yaml-invalid-rejected');
+assert.throws(()=>yaml('a: &a [1, 2]\nb: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a,*a]\nc: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b,*b]\nd: [*c,*c,*c,*c,*c,*c,*c,*c,*c,*c]\n'));cases.push('yaml-alias-expansion-bounded');
+let t=tomlParse('name="role"\ndeveloper_instructions="""\nfirst\nquote \\" and Unicode Ж\n"""\n[[skills.config]]\npath="/tmp/full/SKILL.md"\nenabled=false\n[policy]\nallow_implicit_invocation=false\n',opts);
+assert.equal(t.developer_instructions,'first\nquote " and Unicode Ж\n');assert.equal(t.skills.config[0].enabled,false);assert.equal(t.policy.allow_implicit_invocation,false);cases.push('toml-multiline-array-policy');
+assert.equal(tomlParse("developer_instructions='''\nfirst\nsecond\n'''\n",opts).developer_instructions,'first\nsecond\n');cases.push('toml-literal-multiline');
+assert.throws(()=>tomlParse('a=1\na=2\n',opts));assert.throws(()=>tomlParse('a=[\n',opts));cases.push('toml-invalid-and-duplicate-rejected');
+assert.throws(()=>tomlParse('__proto__.x=1\n',opts));cases.push('toml-unsafe-key-rejected');
+const value='quote " slash \\ newline\nЖ';assert.equal(tomlParse(stringify({developer_instructions:value}),opts).developer_instructions,value);cases.push('toml-serialization-roundtrip');
+assert.equal(tomlParse('enabled="false"\n',opts).enabled,'false');cases.push('semantic-validation-required');
+console.log(JSON.stringify({node:process.version,yaml:'2.9.1',toml:'1.9.0',passed:cases.length,cases},null,2));
+```
+
+macOS argv/env probe (исходное тело):
+
+```js
+import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import os from 'node:os';
+const bytes=s=>Buffer.byteLength(s,'utf8');
+const prefix='developer_instructions=';
+const serialize=s=>prefix+JSON.stringify(s);
+const argMax=Number(spawnSync('/usr/bin/getconf',['ARG_MAX'],{encoding:'utf8'}).stdout.trim());
+const code="const a=process.argv.slice(1); console.log(JSON.stringify({bytes:a.map(x=>Buffer.byteLength(x)),valid:a.every(x=>{try{return typeof JSON.parse(x.slice('developer_instructions='.length))==='string'}catch{return false}}),sha:require('node:crypto').createHash('sha256').update(a.join('')).digest('hex')}))";
+const fits=serialize('a'.repeat(98304-bytes(prefix)-2));
+const unicode=serialize('Ж'.repeat(20000)+'\n'.repeat(15000)+'"\\');
+const baseEnv={PATH:'/usr/bin:/bin'};
+const envN=n=>Object.fromEntries([...Object.entries(baseEnv),...Array.from({length:n},(_,i)=>['P04_'+i,'x'.repeat(32760)])]);
+const run=(kind,args,env)=>{
+ const argv=[process.execPath,'-e',code,'--',...args];
+ const strings=argv.reduce((n,s)=>n+bytes(s)+1,0)+Object.entries(env).reduce((n,[k,v])=>n+bytes(k+'='+v)+1,0);
+ const estimated=strings+8*(argv.length+Object.keys(env).length+2)+32768;
+ const r=spawnSync(process.execPath,argv.slice(1),{env,encoding:'utf8',timeout:5000,maxBuffer:4096});
+ const expected=createHash('sha256').update(args.join('')).digest('hex');
+ const decoded=r.status===0?JSON.parse(r.stdout):null;
+ return {kind,argBytes:args.map(bytes),envBytes:Object.entries(env).reduce((n,[k,v])=>n+bytes(k+'='+v)+1,0),stringBytes:strings,estimatedBytes:estimated,status:r.status,error:r.error?.code??null,valid:decoded?.valid??null,bytesPreserved:decoded?JSON.stringify(decoded.bytes)===JSON.stringify(args.map(bytes))&&decoded.sha===expected:null};
+};
+const results=[run('arg96KiB',[fits],baseEnv),run('utf8-escaping',[unicode],baseEnv),run('argv-env-fit',[fits,fits],envN(8)),run('argv-env-overflow',[fits,fits,fits],envN(26))];
+console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,os:os.release(),argMax,results},null,2));
+if(results[0].status!==0||!results[0].bytesPreserved||results[1].status!==0||!results[1].bytesPreserved||results[2].status!==0||results[3].error!=='E2BIG')process.exitCode=1;
+```
