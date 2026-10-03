@@ -62,7 +62,7 @@
 | [P00 — Подготовить актуальную рабочую базу](#p00) | 0 | — | /root/p00_prepare_base | done |
 | [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | review |
 | [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | running |
-| [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | running |
+| [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | review |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | не назначен | pending |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
@@ -184,7 +184,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p03_capabilities_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** другой агент, профиль `verifier`.
+**Статус:** review. **Исполнитель:** /root/p03_capabilities_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p03_review, gpt-6.1-sol/high.
 
 **Зависимости:** P00. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
