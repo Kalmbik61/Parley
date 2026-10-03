@@ -11,14 +11,19 @@
 - План: [единый план](2026-10-03-parley-unified-implementation-plan.md).
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
-- Текущая фаза: подготовка P00. Реализация функций ещё не начата.
+- Документационный стартовый коммит: 1acc937.
+- Текущая фаза: P00 принят; P01–P03 running, независимые проверки CLI.
+- Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
+- Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
+- Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
+- P00: независимая проверка /root/p00_review приняла коммит `9aedc3e`, замечаний нет; сохранность исходных checkout и snapshot подтверждена повторно.
 
 | ID | Задача | Статус | Evidence |
 |---|---|---|---|
-| P00 | Подготовить актуальную рабочую базу | pending | — |
-| P01 | Проверить Claude: источники, budget, jev и инструменты | pending | — |
-| P02 | Проверить Codex: скиллы, слой, роли и resume | pending | — |
-| P03 | Проверить команды Capabilities и scopes | pending | — |
+| P00 | Подготовить актуальную рабочую базу | done | agent /root/p00_prepare_base; model gpt-6.1-sol/high; commit 9aedc3e; review accepted by /root/p00_review |
+| P01 | Проверить Claude: источники, budget, jev и инструменты | running | agent /root/p01_claude_probe; gpt-6.1-sol/high; base 9aedc3e |
+| P02 | Проверить Codex: скиллы, слой, роли и resume | running | agent /root/p02_codex_probe; gpt-6.1-sol/high; base 9aedc3e |
+| P03 | Проверить команды Capabilities и scopes | running | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; base 9aedc3e |
 | P04 | Закрыть контракты разведки и выбор парсеров | pending | — |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | pending | — |
 | P06 | Реализовать источники скиллов Claude | pending | — |
