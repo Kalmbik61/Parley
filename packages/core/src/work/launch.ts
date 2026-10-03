@@ -220,8 +220,7 @@ async function plan(
     (session.provider !== 'claude' || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
-  // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
-  // работу, потому что команда хука не зависит от сессии (дизайн 4.2).
+  // Navigator launches isolate the generated settings file per session; off keeps the work path.
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
 
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
@@ -269,7 +268,8 @@ async function plan(
     subs.settingsFile = await writeWorkSettings(
       projectPath,
       workId,
-      options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {},
+      { ...(options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {}),
+        ...(skillNavigator ? { sessionId: session.id } : {}) },
     );
   }
   // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
@@ -309,7 +309,7 @@ async function plan(
       ...options.layer,
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
-      guidance: systemGuidance(map, session.id),
+      guidance: systemGuidance(map, session.id, { skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined }),
       bridge,
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,

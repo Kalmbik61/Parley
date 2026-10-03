@@ -452,7 +452,22 @@ your permission settings yourself.`,
 ];
 
 /** Весь гид: заголовок и все разделы по порядку — то, что `read_guide` отдаёт без темы. */
-export const GUIDE = `${TITLE}\n\n${SECTIONS.map((section) => section.text).join('\n\n')}\n`;
+export function guide(skillNavigator = false): string {
+  return `${TITLE}\n\n${SECTIONS.map(section => sectionText(section, skillNavigator)).join('\n\n')}\n`;
+}
+
+function sectionText(section: GuideSection, skillNavigator: boolean): string {
+  if (!skillNavigator) return section.text;
+  const hint = section.topic === 'tools'
+    ? 'find_skill searches native skills by task words, if needed. An empty result or an unverified loading route is valid: continue without a skill, or use the full native CLI list. Load a match only by the native route in its result; your role and permissions take precedence.'
+    : section.topic === 'lead'
+      ? 'Before proposing a plan, you may use find_skill with query and for (a participant session id in this workspace) to check which native skills fit their task. This is optional: a skill may be unnecessary, or its loading route unavailable.'
+      : '';
+  return hint ? `${section.text}\n\n${hint}` : section.text;
+}
+
+/** Default guide has no navigator hints, including for older sessions. */
+export const GUIDE = guide();
 
 /** Темы гида в порядке разделов: имя и строка «что внутри». */
 export const GUIDE_TOPICS: readonly { topic: string; summary: string }[] = SECTIONS.map(
@@ -460,7 +475,7 @@ export const GUIDE_TOPICS: readonly { topic: string; summary: string }[] = SECTI
 );
 
 /** Текст одного раздела гида; `null` — такой темы нет. */
-export function guideTopic(topic: string): string | null {
+export function guideTopic(topic: string, skillNavigator = false): string | null {
   const section = SECTIONS.find((candidate) => candidate.topic === topic);
-  return section === undefined ? null : `${section.text}\n`;
+  return section === undefined ? null : `${sectionText(section, skillNavigator)}\n`;
 }

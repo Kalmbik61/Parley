@@ -1272,3 +1272,87 @@ describe('immutable skill navigator launch snapshot', () => {
     expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
   });
 });
+
+describe('navigator launch settings and fallback', () => {
+  it.each([false, true])('Claude quiet=%s uses session-local settings on actual start/resume only when enabled', async quiet => {
+    const provider = 'claude';
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    setEnv('PARLEY_SKILL_NAVIGATOR', '0');
+    const { workId, sessionId } = await pending(provider);
+    const session = await sessionOf(workId, sessionId);
+    if (quiet) session.task = '';
+    const off = await planNew(project, workId, session);
+    const legacyFile = off.args[off.args.indexOf('--settings') + 1]!;
+    expect(legacyFile).toBe(workPaths(project, workId).settings);
+    const legacy = await readFile(legacyFile, 'utf8');
+    expect(off.args.join(' ')).not.toContain('find_skill');
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    for (const planner of [planNew, planResume]) {
+      if (planner === planResume) {
+        session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+        await claudeTranscript(session.providerSessionId);
+      }
+      const plan = await planner(project, workId, session, { hookUrl: 'http://127.0.0.1:40001/hooks' });
+      expect(plan.args.includes('--resume')).toBe(planner === planResume);
+      const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+      expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
+      expect(await readFile(file, 'utf8')).toBe(workSettingsJson({ hookUrl: 'http://127.0.0.1:40001/hooks' }));
+      expect(await readFile(legacyFile, 'utf8')).toBe(legacy);
+      expect(plan.args.join(' ')).toContain('find_skill');
+      expect(plan.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+      expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+      const settings = JSON.parse(await readFile(file, 'utf8'));
+      expect(Object.keys(settings).sort()).toEqual(['hooks', 'statusLine']);
+      expect(JSON.stringify(settings)).not.toContain('enabledPlugins');
+    }
+    setEnv('PARLEY_SKILL_NAVIGATOR', '0');
+    const restored = await planNew(project, workId, session);
+    expect(restored.args[restored.args.indexOf('--settings') + 1]).toBe(legacyFile);
+    expect(await readFile(legacyFile, 'utf8')).toBe(legacy);
+  });
+
+  it('an actual custom template without MCP gets no navigator hint or native suppression', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--append-system-prompt', '{systemPrompt}'] } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('find_skill');
+    expect(plan.args).not.toContain('--settings');
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+  });
+});
+
+describe('unsupported navigator launch', () => {
+  it.each([false, true])('GLM keeps its unchanged runner with navigator %s', async enabled => {
+    setEnv('PARLEY_GLM_BIN', STUB);
+    setEnv('PARLEY_SKILL_NAVIGATOR', enabled ? '1' : '0');
+    const { workId, sessionId } = await pending('glm');
+    for (const planner of [planNew, planResume]) {
+      const plan = await planner(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args).not.toContain('--settings');
+      expect(plan.args.join(' ')).not.toContain('find_skill');
+      expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+      if (enabled) expect(plan.warnings.join(' ')).toContain('full native skill list');
+    }
+  });
+});
+
+describe('native Claude navigator permission gate', () => {
+  it('keeps the exact native role and full list without advertising an unverified find_skill permission', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const session = await sessionOf(workId, sessionId);
+    session.role = { source: 'claude', name: 'native-reviewer' };
+    const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+    session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    await claudeTranscript(session.providerSessionId);
+    for (const planner of [planNew, planResume]) {
+      const plan = await planner(project, workId, session, { roleCatalog });
+      expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('native-reviewer');
+      expect(plan.args.join(' ')).not.toContain('find_skill');
+      expect(plan.warnings.join(' ')).toContain('full native skill list');
+      expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    }
+  });
+});

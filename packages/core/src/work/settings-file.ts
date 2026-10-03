@@ -1,7 +1,7 @@
 /**
  * Файл настроек Claude Code для сессий работы — тот, что уезжает в `--settings`
- * (дизайн TUI v2, раздел 4.2). Один на работу: команда хука не зависит от
- * сессии, её адрес приходит из окружения процесса.
+ * (дизайн TUI v2, раздел 4.2). С навигатором — отдельный файл на сессию,
+ * иначе прежний файл работы. Адрес хука приходит из окружения процесса.
  *
  * Хук не содержит логики: stdin-JSON от Claude Code дописывается в журнал
  * сессии как есть, состояние выводят читатели. В `~/.claude` при этом ничего не
@@ -13,6 +13,7 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
@@ -121,6 +122,8 @@ const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
 const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
 
 export interface WorkSettingsOptions {
+  /** Optional session-local file; omitted keeps the legacy work settings path. */
+  sessionId?: string;
   /**
    * Адрес приёмника хуков хоста (`http://127.0.0.1:<порт>/hooks`). Нет — в файле только прежние
    * хуки и строка статуса, побайтно как до ленты.
@@ -191,9 +194,12 @@ export async function writeWorkSettings(
   workId: string,
   options: WorkSettingsOptions = {},
 ): Promise<string> {
+  if (options.sessionId !== undefined && !/^s-\d+$/.test(options.sessionId)) throw new Error('invalid-session-id');
   const paths = workPaths(projectPath, workId);
+  const file = options.sessionId === undefined ? paths.settings : path.join(paths.dir, 'settings', `${options.sessionId}.json`);
   await ensureStateDir(projectPath);
   await mkdir(paths.events, { recursive: true });
-  await writeFile(paths.settings, workSettingsJson(options), 'utf8');
-  return paths.settings;
+  if (options.sessionId !== undefined) await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, workSettingsJson(options), 'utf8');
+  return file;
 }

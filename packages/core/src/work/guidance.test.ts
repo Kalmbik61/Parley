@@ -530,3 +530,17 @@ describe('подробный гид', () => {
     expect(GUIDE).toMatch(/[Ww]ithout a worktree you work right in the project folder/);
   });
 });
+
+describe('optional skill navigator guidance', () => {
+  it('adds an optional hint to the existing read_guide line without changing the baseline or line budget', () => {
+    const map = mapOf('Task', 'Goal');
+    const baseline = systemGuidance(map, 's-01');
+    expect(systemGuidance(map, 's-01', { skillNavigator: false })).toBe(baseline);
+    expect(baseline).not.toContain('find_skill');
+    const enabled = systemGuidance(map, 's-01', { skillNavigator: true });
+    expect(enabled).toContain('find_skill — skills by task, if needed.');
+    expect(enabled.split('\n')).toHaveLength(baseline.split('\n').length);
+    expect(enabled.split('\n').length).toBeLessThanOrEqual(14);
+    expect(enabled.replace(' find_skill — skills by task, if needed.', '')).toBe(baseline);
+  });
+});

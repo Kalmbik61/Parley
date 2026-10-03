@@ -24,6 +24,7 @@ const CONFIG = {
   resumeRate: 6,
   autoLaunch: true,
   agentSkills: true,
+  skillNavigator: false,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -211,7 +212,7 @@ describe('SettingsDialog — скилл агентов (кусок 10 плана
     // Так выглядит ответ хоста, оставшегося от прежней версии: ключа agentSkills в конфиге нет.
     const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
     delete oldHost.agentSkills;
-    bridge.setHandler('settings.get', () => ({ config: oldHost, locked: {} }));
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 
     switchTo('Agents');
@@ -364,5 +365,63 @@ describe('SettingsDialog — тест 10 куска 9.1: секция Browser', 
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't clear browser data: failed."));
     warn.mockRestore();
+  });
+});
+
+describe('SettingsDialog — skill navigator', () => {
+  it('defaults off, saves both ways, and stays independent of agentSkills', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: { ...CONFIG, agentSkills: false }, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, agentSkills: false, [key]: value === 'true' } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText('Applies to new and resumed sessions.')).toBeTruthy();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'true' } });
+    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'false' } });
+  });
+
+  it.each(['PARLEY_SKILL_NAVIGATOR', 'HARNAS_SKILL_NAVIGATOR'])('shows the actual env lock %s', async variable => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { skillNavigator: variable });
+    switchTo('Agents');
+    await screen.findByText(new RegExp(`set by ${variable}`));
+    expect((screen.getByRole('switch', { name: 'Skill navigator' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('hides the field for an older host while keeping other agent settings', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.skillNavigator;
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Skill navigator' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' })).toBeTruthy();
+  });
+
+  it.each(['bad_request', 'secret-code-token'])('shows a safe field error without applying failed save %s', async code => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+    bridge.setHandler('settings.set', () => { throw { code, message: 'secret-config-token' }; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      switchTo('Agents');
+      const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
+      fireEvent.click(toggle);
+      await screen.findByText(code === 'bad_request' ? "Couldn't save settings: invalid request." : "Couldn't save settings: failed.");
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(screen.queryByText(/secret-config-token/)).toBeNull();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-config-token');
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-code-token');
+      expect(warn).toHaveBeenCalledWith('[parley] settings.set', 'skillNavigator', 'failed');
+    } finally { warn.mockRestore(); }
   });
 });

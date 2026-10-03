@@ -120,7 +120,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setLoadError(null);
       })
       .catch((err: unknown) => {
-        console.warn('[parley] settings.get', err);
+        console.warn('[parley] settings.get', 'failed');
         setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadSettings));
       });
   }, [open, bridge]);
@@ -138,7 +138,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         return next;
       });
     } catch (err) {
-      console.warn('[parley] settings.set', key, err);
+      console.warn('[parley] settings.set', key, 'failed');
       const message = errorText(decodeIpcError(err).code, S.errors.actions.saveSettings);
       setErrors((prev) => ({ ...prev, [key]: message }));
     }
@@ -288,6 +288,29 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     </label>
                     {errors.agentSkills !== undefined ? (
                       <span className="text-xs text-destructive">{errors.agentSkills}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {config.skillNavigator !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {S.settings.skillNavigator}
+                        {locked.skillNavigator !== undefined ? (
+                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.skillNavigator)}</span>
+                        ) : null}
+                      </span>
+                      <Switch
+                        aria-label={S.settings.skillNavigator}
+                        checked={config.skillNavigator}
+                        disabled={locked.skillNavigator !== undefined}
+                        onCheckedChange={checked => void save('skillNavigator', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    <span className="text-xs text-muted-foreground">{S.settings.skillNavigatorHint}</span>
+                    {errors.skillNavigator !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.skillNavigator}</span>
                     ) : null}
                   </>
                 ) : null}

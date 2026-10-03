@@ -477,6 +477,8 @@ export const S = {
     autoLaunchPending: 'Auto-launch pending sessions',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
+    skillNavigator: 'Skill navigator',
+    skillNavigatorHint: 'Applies to new and resumed sessions.',
     worktreeRoot: 'Worktree root',
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',

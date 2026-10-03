@@ -27,7 +27,7 @@ import {
 } from '../providers.js';
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
-import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
+import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { finishSession } from '../work/metrics.js';
@@ -943,11 +943,11 @@ async function proposeDecision(
  * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
  * агент поправил вызов сам.
  */
-function readGuide(args: Record<string, unknown>): string {
+function readGuide(context: McpContext, args: Record<string, unknown>): string {
   const raw = args['topic'];
-  if (raw === undefined || raw === '') return GUIDE;
+  if (raw === undefined || raw === '') return guide(context.skillNavigator === true);
   if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
-  const text = guideTopic(raw.trim().toLowerCase());
+  const text = guideTopic(raw.trim().toLowerCase(), context.skillNavigator === true);
   if (text === null) {
     throw new Error(
       `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
@@ -992,7 +992,7 @@ async function dispatch(
     return roleSummaries(await (context.roleCatalog ? context.roleCatalog(cwd) : sessionRoleCatalog(cwd, { codex: true })));
   }
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
-  if (name === 'read_guide') return readGuide(args);
+  if (name === 'read_guide') return readGuide(context, args);
 
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);

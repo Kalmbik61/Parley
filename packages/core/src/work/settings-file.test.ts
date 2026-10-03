@@ -43,7 +43,8 @@ describe('workSettings', () => {
       const commands = hooks[event]?.[0]?.hooks;
       expect(commands).toHaveLength(1);
       expect(commands?.[0]?.type).toBe('command');
-      expect(commands?.[0]?.command).toBe(HOOK_COMMAND);
+      const hook = commands?.[0];
+      expect(hook?.type === 'command' ? hook.command : undefined).toBe(HOOK_COMMAND);
     }
     // Новое имя главнее, а нет его — прежнее (R3): у старой сессии в окружении только `HARNAS_*`.
     expect(HOOK_COMMAND).toBe(
@@ -241,7 +242,8 @@ describe('statusLine: скрипт строки статуса лимитов (�
 
     expect(settings.statusLine).toEqual({ type: 'command', command: statusLineCommand() });
     expect(Object.keys(settings.hooks)).toEqual([...HOOK_EVENTS]);
-    expect(settings.hooks['Stop']?.[0]?.hooks[0]?.command).toBe(HOOK_COMMAND);
+    const hook = settings.hooks['Stop']?.[0]?.hooks[0];
+    expect(hook?.type === 'command' ? hook.command : undefined).toBe(HOOK_COMMAND);
   });
 
   it('команда — node процесса и скрипт по абсолютному пути, без надежды на PATH', () => {
@@ -343,4 +345,37 @@ describe('writeWorkSettings', () => {
     await writeWorkSettings(project, work.id);
     expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
   });
+  it('session-local files preserve command/HTTP hooks and statusLine without touching the off-path file', async () => {
+    const { work } = await createWork(project, { title: 'Navigator' });
+    const legacy = await writeWorkSettings(project, work.id);
+    const baseline = await readFile(legacy, 'utf8');
+    const options = { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' };
+    const file = await writeWorkSettings(project, work.id, options);
+    expect(file).toBe(path.join(workPaths(project, work.id).dir, 'settings', 's-01.json'));
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options));
+    expect(await readFile(legacy, 'utf8')).toBe(baseline);
+    expect(await writeWorkSettings(project, work.id, options)).toBe(file);
+    const parsed = JSON.parse(await readFile(file, 'utf8'));
+    expect(parsed.statusLine).toEqual({ type: 'command', command: statusLineCommand() });
+    expect(parsed.hooks.Stop[0].hooks[0]).toEqual({ type: 'command', command: HOOK_COMMAND });
+    expect(parsed.hooks.Stop[0].hooks[1].type).toBe('http');
+    expect(Object.keys(parsed).sort()).toEqual(['hooks', 'statusLine']);
+  });
+
+  it('parallel sessions keep separate HTTP destinations and never share a settings file', async () => {
+    const { work } = await createWork(project, { title: 'Parallel' });
+    const options = [
+      { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' },
+      { sessionId: 's-02', hookUrl: 'http://127.0.0.1:40002/hooks' },
+    ];
+    const files = await Promise.all(options.map(option => writeWorkSettings(project, work.id, option)));
+    expect(new Set(files).size).toBe(2);
+    for (const [index, file] of files.entries()) expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options[index]));
+  });
+
+  it.each(['../outside', 's-01/../../outside', '', 's-01\\outside'])('rejects unsafe session file identity %s', async sessionId => {
+    const { work } = await createWork(project, { title: 'Bounds' });
+    await expect(writeWorkSettings(project, work.id, { sessionId })).rejects.toThrow('invalid-session-id');
+  });
+
 });
