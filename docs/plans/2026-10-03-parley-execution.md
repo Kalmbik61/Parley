@@ -65,3 +65,9 @@
 ## Назначение агентов после первой волны
 
 Лимит созданных agent threads достигнут при запросе reviewer P02. Свободные агенты той же модели переиспользуются с новым bounded назначением; автор результата и независимый reviewer остаются разными. Не создаём другую модель или фоновые runtime-состояния. P01 принят review без замечаний; оставшиеся native release gates сохраняются.
+
+## Подготовка следующей волны (код ещё не изменён)
+
+- Read-only P05: общий YAML/TOML mapping parser, whole-file SKILL.md 65 536-byte limit, boolean availability с явной reason; старый capabilities parser мигрирует в P08.
+- Read-only P09: один layer builder для systemPrompt/developerInstructions/quiet; окончательный env известен только в host. Для complete guard выданы P09 host sessions-service.ts/test и единственный необходимый core export; P10 получает их последовательно.
+- P04 проверяет pins `yaml 2.9.1` / `smol-toml 1.9.0`; выбор вступает в силу после независимого review.

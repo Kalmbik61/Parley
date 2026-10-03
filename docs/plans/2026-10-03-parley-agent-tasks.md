@@ -373,8 +373,11 @@
 - `packages/core/src/providers.test.ts`
 - `packages/core/src/work/guidance.ts`
 - `packages/core/src/work/guidance.test.ts`
+- `packages/core/src/index.ts` — только export проверки аргументов/окружения
+- `packages/host/src/sessions/sessions-service.ts` — окончательный env guard и доставка warning до spawn
+- `packages/host/src/sessions/sessions-service.test.ts` — поведенческие проверки этих точек
 
-**Работа:** Добавить обработку PARLEY.md и один сборщик слоя с необязательными блоками роли/рецепта/памяти. Передать Codex developer_instructions и CLAUDE.md fallback. Сохранить тихий бриф, launch/new/resume; проверить окончательный argv после экранирования и предупреждение override-gap.
+**Работа:** Добавить обработку PARLEY.md и один сборщик слоя с необязательными блоками роли/рецепта/памяти. Передать Codex developer_instructions и CLAUDE.md fallback. Сохранить тихий бриф, launch/new/resume; проверить окончательный argv после экранирования и предупреждение override-gap. Полный argv/env проверять в host после слияния inherited env и hook token, до pty.start; host обязан обработать warnings. P10 получает эти host-файлы позже, после принятия P09.
 
 **Приёмка:** Порядок совпадает с единым планом; шаблон пуст, fenced code сохранён, UTF-8-лимиты работают. Guidance ≤14 строк; переполнение даёт session-layer-too-large до spawn.
 
