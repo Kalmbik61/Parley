@@ -580,7 +580,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед full review:** snapshot f3394ae; exact25files SHA/gitBlob matched. Author499/499 core tests (12 suites),62/62 host sessions, scoped lint25/ownedcore strict fixture types0; coherentcorebuild0. Pending→bound cache и human-disable regressions RED→GREEN. Combined existing host fixture typecheck has unchanged HEAD fakeActivity helper mismatch; no broader fix. Independent /root/p01_review assigned, full acceptance pending; live native/Claude Skill/lifecycle gates P32.
 
 **Дополнительные grants root:** skills/context.ts/test (+required index exports), roles/context.ts/test shared bounded RPC transport preserving role projection, work/agents.ts/test chosen-entry config projection, work/launch.ts/test и work/mcp-config.ts/test single navigator snapshot/env, mcp/context.test.ts/server.test.ts. При необходимости work/native-context.ts/test — bounded0600 local-only participant descriptor, whitelisted roots/settings paths/human policy projection; no raw config/secret args/model defaults в map/shared/output/log. Не дублировать scanner. Unknown settings/profile/role/toolroute даёт explicit unavailable; Codex native path+name/enablement пересекается с accepted resolver policy; Claude menu не доказывает Skill tool. Protocol/UI/host registry вне grants, P16 writer независим.
 
