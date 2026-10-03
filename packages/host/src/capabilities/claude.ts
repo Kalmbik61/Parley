@@ -1,0 +1,88 @@
+import path from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { resolveSkillCatalog } from '@parley/core';
+import type { CapabilityDiagnostic, CapabilityPresence, CapabilityScope } from '@parley/protocol';
+import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, readJsonFile, readNativeJson, safeText, secretValues } from './redact.js';
+import type { SnapshotEntry } from './redact.js';
+import type { ProviderSnapshotResult, SnapshotContext, SnapshotReaderOptions } from './snapshot.js';
+
+export async function readClaudeSnapshot(context: SnapshotContext, options: SnapshotReaderOptions = {}): Promise<ProviderSnapshotResult> {
+  const diagnostics: CapabilityDiagnostic[] = [];
+  const entries: SnapshotEntry[] = [];
+  const native = options.readNative ?? readNativeJson;
+  const config = context.claude ?? {};
+  const configDir = path.resolve(context.projectPath, config.configDir ?? path.join(context.homeDir, '.claude'));
+  const [catalog, user, project, plugins] = await Promise.all([
+    resolveSkillCatalog({ provider: 'claude', cwd: context.projectPath, homeDir: context.homeDir,
+      ...(config.configDir ? { configDir: config.configDir } : {}), ...(config.settings ? { settings: config.settings } : {}),
+      ...(config.nativeEvidence ? { nativeEvidence: config.nativeEvidence } : {}),
+      limits: { ...config.limits, maxEntries: Math.min(config.limits?.maxEntries ?? 2000, 2000) } }),
+    readJsonFile(config.userConfigFile ?? (config.configDir ? path.join(configDir, '.claude.json') : path.join(context.homeDir, '.claude.json'))),
+    readJsonFile(path.join(context.projectPath, '.mcp.json')),
+    native(context.binaries.claude, ['plugin', 'list', '--json'], context).catch(() => ({ status: 'invalid' as const, code: 'invalid-output' as const })),
+  ]);
+  entries.push(...projectSkills(catalog));
+  if (catalog.partial) diagnostics.push({ code: 'resolver-partial', source: 'skills', count: catalog.diagnostics.length });
+  for (const read of [user, project]) if (read.status === 'invalid') diagnostics.push({ code: read.code, source: 'mcp' });
+  const userData = user.status === 'valid' ? object(user.data) : null;
+  const projectData = project.status === 'valid' ? object(project.data) : null;
+  if (user.status === 'valid' && !userData || project.status === 'valid' && !projectData) diagnostics.push({ code: 'invalid-config', source: 'mcp' });
+  let main: string | null = null;
+  if (config.mainCheckout && path.isAbsolute(config.mainCheckout)) try { main = await realpath(config.mainCheckout); } catch { /* no guessed storage key */ }
+  if (config.mcpPolicy?.verified !== true) diagnostics.push({ code: 'context-unverified', source: 'mcp' });
+  if (main === null) diagnostics.push({ code: 'identity-unverified', source: 'mcp' });
+  const localRecord = main ? object(object(userData?.projects)?.[main]) : null;
+  const secrets = [...secretValues(userData), ...secretValues(projectData), ...(plugins.status === 'valid' ? secretValues(plugins.data) : [])];
+  const addMcp = (value: unknown, scope: CapabilityScope): void => {
+    const servers = object(value); if (value !== undefined && !servers) { diagnostics.push({ code: 'invalid-config', source: 'mcp' }); return; }
+    if (servers && Object.keys(servers).length > 2000) diagnostics.push({ code: 'output-limit', source: 'mcp' });
+    for (const [rawName, raw] of Object.entries(servers ?? {}).slice(0, 2000)) {
+      const data = object(raw); const name = safeText(rawName, secrets);
+      if (!data || !name) { diagnostics.push({ code: 'invalid-config', source: 'mcp' }); continue; }
+      const disabled = data.disabled === true || config.mcpPolicy?.disabled?.includes(rawName) === true ||
+        scope === 'project' && Array.isArray(localRecord?.disabledMcpjsonServers) && localRecord.disabledMcpjsonServers.includes(rawName);
+      const verified = config.mcpPolicy?.verified === true;
+      const enabled = disabled ? false : verified && config.mcpPolicy?.enabled?.includes(rawName) ? true : null;
+      const approved = scope !== 'project' || config.mcpPolicy?.approved?.includes(rawName) === true ||
+        Array.isArray(localRecord?.enabledMcpjsonServers) && localRecord.enabledMcpjsonServers.includes(rawName);
+      const presence: CapabilityPresence = { id: nativeIdentity('claude', 'mcp', scope, scope === 'project' ? context.projectPath : main, rawName), scope, source: null,
+        documentPath: null, description: null, installed: true, enabled,
+        status: disabled ? 'off' : verified && !approved ? 'pending-approval' : 'unknown',
+        summary: safeText(mcpSummary(data), secrets), modelAvailable: null, unavailableReason: null };
+      entries.push({ kind: 'mcp', name, rowId: rowIdentity('mcp', rawName), presence });
+    }
+  };
+  addMcp(userData?.mcpServers, 'user'); addMcp(localRecord?.mcpServers, 'local'); addMcp(projectData?.mcpServers, 'project');
+  if (plugins.status === 'invalid') diagnostics.push({ code: plugins.code, source: 'plugins' });
+  else if (plugins.status === 'valid') {
+    if (!Array.isArray(plugins.data)) diagnostics.push({ code: 'invalid-output', source: 'plugins' });
+    else {
+      if (plugins.data.length > 2000) diagnostics.push({ code: 'output-limit', source: 'plugins' });
+      for (const raw of plugins.data.slice(0, 2000)) {
+      const data = object(raw); const name = safeText(data?.id, secrets);
+      if (!data || !name) { diagnostics.push({ code: 'invalid-output', source: 'plugins' }); continue; }
+      const scope = data.scope === 'user' || data.scope === 'project' || data.scope === 'local' ? data.scope : null;
+      if ((scope === 'project' || scope === 'local') && typeof data.projectPath === 'string') {
+        try { if (await realpath(data.projectPath) !== await realpath(context.projectPath)) continue; }
+        catch { diagnostics.push({ code: 'context-unverified', source: 'plugins' }); continue; }
+      }
+      const evidence = config.nativeEvidence;
+      let verified = false;
+      try { verified = evidence?.policyVerified === true && await realpath(evidence.cwd) === await realpath(context.projectPath) &&
+        evidence.plugins?.some(plugin => plugin.id === data.id && plugin.verified && plugin.enabled === true) === true; } catch { /* unknown evidence */ }
+      const enabled = data.enabled === false ? false : data.enabled === true && verified ? true : null;
+      if ((enabled === null || scope === null) && !diagnostics.some(item => item.code === 'context-unverified' && item.source === 'plugins'))
+        diagnostics.push({ code: 'context-unverified', source: 'plugins' });
+      entries.push({ kind: 'plugin', name, rowId: rowIdentity('plugin', String(data.id), 'claude'), presence: { id: nativeIdentity('claude', 'plugin', scope, data.id),
+        scope, source: name, documentPath: null, description: safeText(data.description, secrets), installed: true,
+        enabled, status: enabled === false ? 'off' : 'unknown', summary: null, modelAvailable: null, unavailableReason: null } });
+    }
+  }
+    }
+  // Cross-field repeats of observed secrets are filtered even in otherwise allowed metadata.
+  for (const entry of entries) {
+    entry.name = safeText(entry.name, secrets) ?? '[redacted]';
+    entry.presence.description = safeText(entry.presence.description, secrets);
+  }
+  return { entries, diagnostics, phase: diagnostics.length ? 'partial' : 'ready' };
+}

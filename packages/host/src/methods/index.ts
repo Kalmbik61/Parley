@@ -9,7 +9,7 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
-import { createCapabilitiesList } from './capabilities.js';
+import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
 import { hostInfo, hostShutdown } from './host.js';
@@ -94,6 +94,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
+  const capabilities = createCapabilitiesHandlers();
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     'host.info': hostInfo as AnyHandler,
@@ -134,6 +135,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
     'mail.markRead': mailMarkRead as AnyHandler,
     'capabilities.list': createCapabilitiesList() as AnyHandler,
+    'capabilities.get': capabilities.capabilitiesGet as AnyHandler,
+    'capabilities.refresh': capabilities.capabilitiesRefresh as AnyHandler,
   };
   if (deps.feed !== undefined) {
     const feed = createFeedHandlers({ feed: deps.feed });

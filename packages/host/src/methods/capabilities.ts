@@ -21,3 +21,25 @@ export function createCapabilitiesList(scan: Scan = scanClaudeCapabilities): Han
     return scan({ home: homedir(), projectPath: params.projectPath });
   };
 }
+
+
+import { createSafeCapabilitiesService } from '../capabilities/snapshot.js';
+import type { SafeCapabilitiesOptions } from '../capabilities/snapshot.js';
+import type { HostContext } from '../context.js';
+
+/** Create once per host; root registers these two handlers alongside legacy list. */
+export function createCapabilitiesHandlers(options: SafeCapabilitiesOptions = {}) {
+  let host: HostContext | undefined;
+  const service = createSafeCapabilitiesService({ ...options,
+    changed(projectPath, snapshot) {
+      host?.broadcast('capabilities.changed', { projectPath, snapshot });
+      options.changed?.(projectPath, snapshot);
+    },
+  });
+  const handler = (refresh: boolean): Handler<'capabilities.get'> => async (params, request) => {
+    if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', 'projectPath must be an absolute path');
+    if (!host) { host = request.host; host.onShutdown(async () => { service.dispose(); }); }
+    return refresh ? service.refresh(params.projectPath) : service.get(params.projectPath);
+  };
+  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), service };
+}
