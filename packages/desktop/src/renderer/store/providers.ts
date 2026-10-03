@@ -1,89 +1,102 @@
 /**
- * Провайдеры агентов для строки статуса (спека окна 2026-09-29, 1.1, решение 3): значок, имя и версия
- * CLI — по одному сегменту на провайдера. Данные — `providers.list`: окно зовёт его один раз при
- * подключении к хосту и снова после переподключения (`App.tsx` заводит `init` вместе с прочими
- * хранилищами на статус `connected`), а не на каждый рендер. Метода нет или хост отказал — списка нет,
- * сегментов провайдеров тоже; остальная строка статуса и окно работают как обычно.
- *
- * Поля `version` и `limits` у хоста, пережившего окно, могут отсутствовать (`PROTOCOL_VERSION` остаётся 1,
- * поля добавлялись позже) — нет поля читается как «версии нет» и «лимитов нет», `null`.
- *
- * Лимиты подписок (спека комнат Organic, 3.5) приходят с `providers.list`, дальше их обновляет событие
- * хоста `providers.limitsChanged` — по одному провайдеру за раз. Событие раньше ответа `providers.list`
- * (списка ещё нет) игнорируется: хост берёт `limits` для ответа последним, после всех ожиданий, и
- * значение в ответе не старее такого события.
+ * Снимок провайдеров при подключении, Check again и providers.changed. Поколения
+ * подключения и запроса не дают старому ответу вернуть удалённый ключ. Метаданные
+ * старого хоста необязательны; версия/лимиты без поля читаются как null. Чужие
+ * claude.ai лимиты GLM отбрасываются и в списке, и в событиях.
  */
 
 import { create } from 'zustand';
-import type { ModelOption, ProviderLimits } from '@parley/protocol';
+import type { Result } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
-export interface ProviderInfo {
-  id: string;
-  label: string;
-  available: boolean;
+export interface ProviderInfo extends Omit<
+  Result<'providers.list'>['providers'][number],
+  'version' | 'limits'
+> {
   /** Версия CLI из пробы на старте хоста; `null` — не узнали или хост её не шлёт. */
   version: string | null;
   /** Лимиты подписки из данных самого CLI; `null` — данных нет, окна сбросились или хост их не шлёт. */
-  limits: ProviderLimits | null;
-  /** Модели для выбора (`providers.list.models`); нет поля или `null` — списка нет. */
-  models?: ModelOption[] | null;
+  limits: NonNullable<Result<'providers.list'>['providers'][number]['limits']> | null;
 }
 
 export interface ProvidersState {
-  /** В порядке ответа хоста; строка статуса показывает `available`, а Claude Code и Codex и без CLI — «not found». */
+  /** В порядке ответа хоста; строка статуса сама упорядочивает основные провайдеры. */
   providers: ProviderInfo[];
   /**
    * Первый ответ `providers.list` пришёл (успехом или отказом). До него версия `claude` неизвестна не
    * потому, что её нет, а потому, что её ещё не спросили: вид вкладки (`lib/feed-view.ts`) ждёт.
    */
   loaded: boolean;
+  /** Свежий снимок того же подключения; более поздний запрос побеждает. */
+  reload: () => Promise<void>;
   /**
-   * Один запрос `providers.list` и подписка на `providers.limitsChanged`; возвращает отписку — ответ,
+   * Первый запрос и подписки на changed/limitsChanged; возвращает отписку — ответ,
    * пришедший позже неё, и события после неё в стор не попадают.
    */
   init: (bridge: ParleyBridge) => () => void;
 }
 
-export const useProvidersStore = create<ProvidersState>((set) => ({
-  providers: [],
-  loaded: false,
-  init: (bridge) => {
-    let disposed = false;
-    bridge
-      .call('providers.list', {})
-      .then((result) => {
-        if (disposed) return;
-        set({
-          providers: result.providers.map((provider) => ({
-            id: provider.id,
-            label: provider.label,
-            available: provider.available,
-            version: provider.version ?? null,
-            limits: provider.limits ?? null,
-            ...(provider.models === undefined ? {} : { models: provider.models }),
-          })),
-          loaded: true,
-        });
-      })
-      .catch((error: unknown) => {
-        if (disposed) return;
-        // Русский текст хоста — только в консоль (сквозное правило); строка статуса просто без сегментов.
-        console.warn('[parley] providers.list failed', decodeIpcError(error).message);
-        set({ providers: [], loaded: true });
+export const useProvidersStore = create<ProvidersState>((set) => {
+  let activeBridge: ParleyBridge | null = null;
+  let connection = 0;
+  let request = 0;
+  const reload = async (): Promise<void> => {
+    if (activeBridge === null) return;
+    const currentConnection = connection;
+    const currentRequest = ++request;
+    try {
+      const result = await activeBridge.call('providers.list', {});
+      if (connection !== currentConnection || request !== currentRequest) return;
+      set({
+        providers: result.providers.map((provider) => ({
+          ...provider,
+          version: provider.version ?? null,
+          // Даже старый хост может прислать claude.ai лимиты: для GLM они чужие.
+          limits: provider.id === 'glm' ? null : (provider.limits ?? null),
+        })),
+        loaded: true,
       });
-    const offLimits = bridge.on('providers.limitsChanged', ({ id, limits }) => {
-      // Неизвестный провайдер — тот же объект состояния: подписчики строки статуса не перерисовываются.
-      set((state) =>
-        state.providers.some((provider) => provider.id === id)
-          ? { providers: state.providers.map((provider) => (provider.id === id ? { ...provider, limits } : provider)) }
-          : state,
-      );
-    });
-    return () => {
-      disposed = true;
-      offLimits();
-    };
-  },
-}));
+    } catch (error: unknown) {
+      if (connection !== currentConnection || request !== currentRequest) return;
+      console.warn('[parley] providers.list failed', decodeIpcError(error).message);
+      set({ loaded: true });
+      throw error;
+    }
+  };
+  return {
+    providers: [],
+    loaded: false,
+    reload,
+    init: (bridge) => {
+      activeBridge = bridge;
+      const currentConnection = ++connection;
+      set({ providers: [], loaded: false });
+      void reload().catch(() => {});
+      const offChanged = bridge.on('providers.changed', () => {
+        if (connection === currentConnection) void reload().catch(() => {});
+      });
+      const offLimits = bridge.on('providers.limitsChanged', ({ id, limits }) => {
+        if (connection !== currentConnection || id === 'glm') return;
+        // Неизвестный провайдер — тот же объект состояния: подписчики строки статуса не перерисовываются.
+        set((state) =>
+          state.providers.some((provider) => provider.id === id)
+            ? {
+                providers: state.providers.map((provider) =>
+                  provider.id === id ? { ...provider, limits } : provider,
+                ),
+              }
+            : state,
+        );
+      });
+      return () => {
+        if (connection === currentConnection) {
+          ++connection;
+          activeBridge = null;
+        }
+        offLimits();
+        offChanged();
+      };
+    },
+  };
+});

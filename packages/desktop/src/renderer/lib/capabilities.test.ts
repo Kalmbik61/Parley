@@ -30,6 +30,10 @@ afterEach(() => {
 });
 
 describe('capabilities', () => {
+  it('методы ключа нужны новому окну: старому хосту предлагается перезапуск', () => {
+    expect(REQUIRED_METHODS).toEqual(expect.arrayContaining(['providers.setKey', 'providers.clearKey']));
+    expect(missingMethods(connected(null))).toEqual(expect.arrayContaining(['providers.setKey', 'providers.clearKey']));
+  });
   it('хост до этапа 3 (methods: null): умеет ровно BASELINE_METHODS, не хватает новых', () => {
     expect([...hostMethods(connected(null))].sort()).toEqual([...BASELINE_METHODS].sort());
     expect(missingMethods(connected(null))).toEqual(

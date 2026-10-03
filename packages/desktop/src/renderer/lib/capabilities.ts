@@ -53,6 +53,8 @@ export const BASELINE_METHODS: readonly string[] = [
  */
 export const REQUIRED_METHODS: readonly string[] = [
   ...BASELINE_METHODS,
+  'providers.setKey',
+  'providers.clearKey',
   'works.rename',
   'works.setStatus',
   'activity.seen',

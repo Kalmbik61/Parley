@@ -1,6 +1,6 @@
 /**
  * Вид вкладки сессии — «Chat» или терминал (план 2026-10-01, решение 6). Вид «Chat» доступен сессии,
- * когда у хоста есть лента (`feed.snapshot` в `hello.methods`), сессия — Claude Code и его версия из
+ * когда у хоста есть лента (`feed.snapshot` в `hello.methods`), сессия — семейства Claude Code и её версия из
  * `providers.list` не ниже `FEED_MIN_VERSION`. Версия неизвестна (`null`: проба версий выключена или
  * сбоила) — вид недоступен: хост без версии HTTP-хуков ленты не пишет, и чат был бы пуст. Codex и
  * старый `claude` — терминал. Без поля `view` у вкладки — умолчание по доступности; явный выбор
@@ -22,8 +22,10 @@ import { hostMethods, semver } from './capabilities.js';
 
 export interface FeedAvailabilityInput {
   hostMethods: ReadonlySet<string>;
-  /** `WorkSession.provider`: `claude` или `codex`. */
+  /** `WorkSession.provider`: встроенный или свой провайдер. */
   provider: string;
+  /** Семейство текущей записи; нет поля у старого хоста — Claude только по id. */
+  family?: 'claude' | null | undefined;
   /** Версия CLI провайдера из `providers.list`; `null` — неизвестна. */
   version: string | null;
 }
@@ -37,19 +39,31 @@ function atLeast(version: string, min: string): boolean {
   return at === -1 || have[at]! > need[at]!;
 }
 
-export function feedAvailable({ hostMethods: methods, provider, version }: FeedAvailabilityInput): boolean {
+export function feedAvailable({
+  hostMethods: methods,
+  provider,
+  family,
+  version,
+}: FeedAvailabilityInput): boolean {
   if (!methods.has('feed.snapshot')) return false;
-  if (provider !== 'claude') return false;
+  if (family !== 'claude' && !(family === undefined && provider === 'claude')) return false;
   return version !== null && atLeast(version, FEED_MIN_VERSION);
 }
 
 /**
- * Доступность с третьим состоянием: `null` — неизвестно, пока версии `claude` ещё нет (`loaded`
- * ложно). Хост без ленты и не-Claude сессия ответа `providers.list` не ждут — сразу `false`.
+ * Доступность с третьим состоянием: Claude/GLM ждут первый снимок провайдеров.
+ * Старый хост без family разрешает Chat только id claude. Хост без ленты и Codex не ждут.
  */
-export function feedAvailability(input: FeedAvailabilityInput & { loaded: boolean }): boolean | null {
-  if (!input.hostMethods.has('feed.snapshot') || input.provider !== 'claude') return false;
-  if (!input.loaded) return null;
+export function feedAvailability(
+  input: FeedAvailabilityInput & { loaded: boolean },
+): boolean | null {
+  if (!input.hostMethods.has('feed.snapshot')) return false;
+  if (
+    !input.loaded &&
+    (input.provider === 'claude' || input.provider === 'glm' || input.family === 'claude')
+  )
+    return null;
+  if (!input.loaded) return false;
   return feedAvailable(input);
 }
 
@@ -80,7 +94,10 @@ export function sessionStarted(entry: ActivityEntry | null | undefined): boolean
 }
 
 /** `sessionStarted` с третьим состоянием: `null`, пока снимок активности не пришёл. */
-export function sessionStartedOrUnknown(loaded: boolean, entry: ActivityEntry | null | undefined): boolean | null {
+export function sessionStartedOrUnknown(
+  loaded: boolean,
+  entry: ActivityEntry | null | undefined,
+): boolean | null {
   return loaded ? sessionStarted(entry) : null;
 }
 
@@ -117,31 +134,37 @@ export function useHostHasFeed(): boolean {
 
 /**
  * Доступность вида «Chat» по провайдеру сессии — функция для слоя, где вкладок много; `null` —
- * неизвестно (`feedAvailability`). Подписка — на признак ленты у хоста, версию `claude` и признак
- * первого ответа `providers.list`, не на весь список провайдеров.
+ * неизвестно (`feedAvailability`). Для каждой сессии выбирается family и версия
+ * именно её записи, в том числе у GLM.
  */
 export function useFeedAvailability(): (provider: string) => boolean | null {
   const hasFeed = useHostHasFeed();
-  const version = useProvidersStore((state) => claudeVersion(state.providers));
+  const providers = useProvidersStore((state) => state.providers);
   const loaded = useProvidersStore((state) => state.loaded);
   const methods = hasFeed ? FEED_METHODS : NO_METHODS;
-  return (provider) => feedAvailability({ hostMethods: methods, provider, version, loaded });
+  return (provider) => {
+    const info = providers.find((entry) => entry.id === provider);
+    return feedAvailability({
+      hostMethods: methods,
+      provider,
+      family: info?.family,
+      version: info?.version ?? null,
+      loaded,
+    });
+  };
 }
 
 const FEED_METHODS: ReadonlySet<string> = new Set(['feed.snapshot']);
 const NO_METHODS: ReadonlySet<string> = new Set();
 
-/** Версия `claude` из списка провайдеров; списка ещё нет или версии нет — `null`. */
-export function claudeVersion(providers: ReadonlyArray<{ id: string; version: string | null }>): string | null {
-  return providers.find((provider) => provider.id === 'claude')?.version ?? null;
-}
-
 /** Та же проверка вне React — для действия палитры `chat.toggleView`. */
 export function feedAvailableNow(provider: string): boolean {
+  const info = useProvidersStore.getState().providers.find((entry) => entry.id === provider);
   return feedAvailable({
     hostMethods: hostMethods(useHostStore.getState().status),
     provider,
-    version: claudeVersion(useProvidersStore.getState().providers),
+    family: info?.family,
+    version: info?.version ?? null,
   });
 }
 

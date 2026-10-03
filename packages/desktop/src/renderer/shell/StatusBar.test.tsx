@@ -210,7 +210,16 @@ function renderPlain(props: Partial<StatusBarProps> = {}) {
 const segments = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-provider-segment]')];
 
 describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
-  it('сегмент на провайдера с available: true, в порядке ответа хоста; недоступные не показываются', () => {
+  it.each([false, true])('основные кнопки в обеих темах открывают общую карточку; GLM лимитов не имеет (%s)', (dark) => {
+    useUiStore.setState({ dark });
+    useProvidersStore.setState({ providers: [provider({ id: 'glm', label: 'GLM', limits: { fiveHour: { usedPercent: 91, resetsAt: '2026-10-04T00:00:00Z' }, week: null, at: '2026-10-03T00:00:00Z' } })] });
+    const { container } = renderPlain();
+    expect(container.querySelector('[data-provider-segment="glm"] [data-limits]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'GLM — connected' }));
+    expect(screen.getByRole('dialog', { name: 'GLM' })).toBeTruthy();
+    expect(screen.getByText('Requires an active GLM Coding Plan.')).toBeTruthy();
+  });
+  it('Claude/Codex/GLM всегда в порядке продукта, за ними только найденные свои провайдеры', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'codex', label: 'Codex', version: '0.44.0' }),
@@ -219,10 +228,10 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
       ],
     });
     const { container } = renderPlain();
-    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['codex', 'claude']);
+    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex', 'glm']);
   });
 
-  it('Claude Code и Codex без CLI в PATH хоста — сегмент «not found» с подсказкой; прочие без CLI скрыты (0.2.0)', () => {
+  it('недоступные сегменты приглушены, без not found, версии и лимитов; доступны с клавиатуры', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'claude', label: 'Claude', version: '2.1.276' }),
@@ -234,13 +243,17 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual([
       'claude',
       'codex',
+      'glm',
     ]);
     const codex = segments(container)[1];
     // Версии и лимитов у ненайденного нет: версия из прошлой пробы о нынешнем CLI ничего не говорит.
-    expect(codex?.textContent).toBe(`Codex${S.statusBar.providerNotFound}`);
-    expect(screen.getByText(S.statusBar.providerNotFound).getAttribute('title')).toBe(
-      S.statusBar.providerNotFoundTitle('codex'),
-    );
+    expect(codex?.textContent).toBe('Codex');
+    expect(codex?.className).toContain('opacity-50');
+    const button = screen.getByRole('button', { name: 'Codex — not connected. Click to connect' });
+    expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'));
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(screen.queryByText('not found')).toBeNull();
   });
 
   it('значок 14, имя по handoff — «Claude Code» и «Codex», версия — моноширинным 11px neutral-700', () => {
@@ -257,11 +270,8 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(version.className).toContain('font-mono');
     expect(version.className).toContain('text-[11px]');
     expect(version.className).toContain('text-neutral-700');
-    // Сегмент — `display: contents`: значок, имя, версия и лимиты — элементы общей строки (порядок сжатия общий на всех
-    // провайдеров). Зазор строки 14 между сегментами; внутри сегмента 7 — имя и версия сдвинуты на −7.
-    expect(claude?.className).toBe('contents');
-    expect(version.className).toContain('-ml-[7px]');
-    expect(screen.getByText('Claude Code').className).toContain('-ml-[7px]');
+    expect(claude?.tagName).toBe('BUTTON');
+    expect(claude?.className).toContain('min-w-0');
   });
 
   it('версия null или нет поля (хост, переживший окно) — только значок и имя', () => {
@@ -274,13 +284,13 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
   it('прочий провайдер — метка хоста и буквенный значок, как прежде', () => {
     useProvidersStore.setState({ providers: [provider({ id: 'gemini', label: 'Gemini CLI', version: '1.2.3' })] });
     const { container } = renderPlain();
-    expect(segments(container)[0]?.textContent).toBe('GGemini CLI1.2.3');
-    expect(segments(container)[0]?.querySelector('img')).toBeNull();
+    expect(segments(container)[3]?.textContent).toBe('GGemini CLI1.2.3');
+    expect(segments(container)[3]?.querySelector('img')).toBeNull();
   });
 
-  it('провайдеров нет (метода нет, отказ) — сегментов нет, остальная строка на месте', () => {
+  it('пустой список старого хоста сохраняет три основные кнопки и остальную строку', () => {
     const { container } = renderPlain({ noticeLine: 'Что-то случилось' });
-    expect(segments(container)).toHaveLength(0);
+    expect(segments(container)).toHaveLength(3);
     expect(screen.getByText('Host 1.0.0')).toBeTruthy();
     expect(screen.getByText('Что-то случилось')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Auto-wake on' })).toBeTruthy();
@@ -406,7 +416,7 @@ describe('StatusBar — лимиты подписок: сегмент прова
     const block = limitsIn(container) as HTMLElement;
     // От версии до полоски 4 + 7 = 11: зазор строки 14 и −3 у блока. Внутри блока зазор 7 — по горизонтали: блок переносит
     // строки, и зазор между строками ему не нужен.
-    expect(block.className).toContain('-ml-[3px]');
+    expect(block.className).toContain('ml-1');
     expect(block.className).toContain('gap-x-[7px]');
     expect(block.className).not.toMatch(/\bgap-\[/);
     const track = block.firstElementChild as HTMLElement;
@@ -464,7 +474,7 @@ describe('StatusBar — лимиты подписок: сегмент прова
     });
     const { container } = renderPlain();
     expect(container.querySelector('[data-limits]')).toBeNull();
-    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGemini CLI1.2.3']);
+    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGLM', 'GGemini CLI1.2.3']);
   });
 
   it('проценты целые, округление вниз: 58.7 → 58 %, 41.99 → 41 %, 99.9 → 99 %, 0.4 → 0 %; полоска по тому же числу', () => {
@@ -632,13 +642,14 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
   const both = limitsOf({ fiveHour: limitWindow(58), week: limitWindow(41) });
   const long = { id: 'zeta', label: 'Extremely Long Provider Label For The Status Bar Layout Check', version: '123456789.987654321.123456789' };
 
-  it('сегмент провайдера — display: contents: его части сжимаются в общей строке, а не каждый сегмент целиком', () => {
+  it('сегмент — фокусируемая кнопка с ограничением ширины и сжимаемыми частями', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both }), provider({ id: 'codex', label: 'Codex' })] });
     const { container } = renderPlain();
-    const [zeta, codex] = segments(container) as HTMLElement[];
-    expect(zeta?.className).toBe('contents');
-    expect(codex?.className).toBe('contents');
-    // В DOM части — дети сегмента, а `display: contents` делает их элементами flex-строки: значок, имя, версия, блок лимитов.
+    const zeta = container.querySelector<HTMLElement>('[data-provider-segment="zeta"]')!;
+    const codex = container.querySelector<HTMLElement>('[data-provider-segment="codex"]')!;
+    expect(zeta?.tagName).toBe('BUTTON');
+    expect(zeta?.className).toContain('min-w-0');
+    expect(codex?.className).toContain('min-w-0');
     const bar = container.firstElementChild as HTMLElement;
     expect(zeta?.parentElement).toBe(bar);
     expect(zeta?.children).toHaveLength(4);

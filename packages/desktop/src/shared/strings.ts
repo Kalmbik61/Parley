@@ -169,6 +169,8 @@ export const S = {
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
+    providerTitle: (name: string, available: boolean): string =>
+      `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',
     wakeOn: 'Auto-wake on',
     /** Хосту не хватает методов этой сборки окна (спека 3.2, 5.9). */
@@ -205,6 +207,33 @@ export const S = {
       ]
         .filter((part) => part !== '')
         .join(' · '),
+  },
+
+  /** Общая карточка подключения: строка статуса и диалог новой сессии. */
+  providerCard: {
+    connected: 'Connected',
+    notConnected: 'Not connected',
+    copy: 'Copy',
+    copied: 'Copied',
+    installationGuide: 'Installation guide',
+    signInGuide: 'Sign-in guide',
+    checkAgain: 'Check again',
+    signIn: "Sign-in happens in the agent's terminal on the first session — Parley does not sign you in.",
+    path: 'Installed it into a new folder? Quit Parley (⌘Q) and open it again: the app reads PATH once at launch.',
+    account: (command: string): string => `To change your account, run ${command} in the agent's terminal.`,
+    glmDescription: 'GLM models in Claude Code, on your GLM Coding Plan (Z.ai).',
+    glmPlan: 'Requires an active GLM Coding Plan.',
+    glmCli: 'Requires the official Claude Code CLI, version 2.1.287 or newer. Check again after installing or updating it.',
+    glmUnavailable: 'This GLM runner is unavailable. Use the official Claude Code CLI and check again.',
+    glmLogout: 'Avoid /logout in GLM: it can change the shared local Claude Code sign-in used by your Claude sessions.',
+    keyLabel: 'Z.ai API key',
+    keyHint: (hint: string): string => `Key ${hint}`,
+    save: 'Save',
+    replace: 'Replace',
+    remove: 'Remove',
+    getKey: 'Get a key',
+    restartRequired: 'Restart the host to manage your saved GLM key.',
+    restartHost: 'Restart host',
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
@@ -1012,6 +1041,10 @@ export const S = {
   errors: {
     actions: {
       loadProviders: 'load providers',
+      saveProviderKey: 'save the provider key',
+      removeProviderKey: 'remove the provider key',
+      copyInstallCommand: 'copy the install command',
+      openProviderGuide: 'open the provider guide',
       loadWorkspaces: 'load workspaces',
       createSession: 'create session',
       createWorkspace: 'create workspace',
@@ -1166,6 +1199,8 @@ export function providerName(id: string, label: string): string {
       return 'Claude Code';
     case 'codex':
       return 'Codex';
+    case 'glm':
+      return 'GLM';
     default:
       return label === '' ? id : label;
   }
