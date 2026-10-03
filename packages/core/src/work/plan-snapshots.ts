@@ -243,7 +243,7 @@ export interface PlanSnapshotFlushResult {
 export async function flushPlanSnapshots(
   projectPath: string,
   workId: string,
-  options: SharedWriteOptions = {},
+  options: SharedWriteOptions & { excludedFiles?: ReadonlySet<string> } = {},
 ): Promise<PlanSnapshotFlushResult> {
   const map = await readMap(projectPath, workId);
   const result: PlanSnapshotFlushResult = {
@@ -252,7 +252,7 @@ export async function flushPlanSnapshots(
     diagnostics: [],
   };
   for (const intent of map.planExports?.filter(
-    (intent) => intent.status === "pending",
+    (intent) => intent.status === "pending" && !options.excludedFiles?.has(intent.file),
   ) ?? []) {
     try {
       const paths = await sharedProjectPaths(projectPath, options);

@@ -320,3 +320,15 @@ it("never publishes or removes a human replacement of the invocation temporary f
   ).rejects.toMatchObject({ code: "ENOENT" });
   expect(await readFile(replacement, "utf8")).toBe("Human replacement");
 });
+
+it("excluded immutable intents preserve their file and captured state while a later valid intent flushes", async () => {
+  const original = (await readMap(project, workId)).planExports![0]!;
+  await mkdir(snapshotDir(), { recursive: true });
+  await writeFile(path.join(snapshotDir(), original.file), "Human file", "utf8");
+  await updateMap(project, workId, map => cancelRoomPlan(map, "pl-01", 0, HUMAN, AT));
+  const result = await flushPlanSnapshots(project, workId, { excludedFiles: new Set([original.file]) });
+  expect(result.failed).toEqual([]);
+  expect(result.written).toHaveLength(1);
+  expect(await readFile(path.join(snapshotDir(), original.file), "utf8")).toBe("Human file");
+  expect((await readMap(project, workId)).planExports!.find(row => row.file === original.file)!.status).toBe("pending");
+});

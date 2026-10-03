@@ -87,3 +87,6 @@ export { CAPABILITY_PLUGIN_RESPONSE_BYTES, capabilityPluginCatalogRequest, capab
 export type { CapabilityPluginCatalogRequest, CapabilityPluginDetailsRequest, CapabilityPluginInstallRequest, CapabilityPluginTargetRequest,
   CapabilityPluginUninstallRequest, CapabilityPluginMarketplaceRequest, CapabilityPluginSummary, CapabilityPluginResult,
   CapabilityPluginCatalogResponse, CapabilityPluginDetailsResponse, CapabilityPluginMethodResults } from './capability-plugin-actions.js';
+
+export { planMethodSchemas, planDraft, planEvidence, planActionResult, planEffectsSummary, roomMode } from './plan-actions.js';
+export type { PlanMethodName, PlanMethodParams, PlanMethodResults, PlanActionResult } from './plan-actions.js';

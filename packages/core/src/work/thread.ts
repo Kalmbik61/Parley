@@ -1,4 +1,5 @@
 import { recipientsOf } from './letters.js';
+import { PARLEY } from './types.js';
 import type { Message, WorkMap, WorkSession } from './types.js';
 
 /**
@@ -76,6 +77,7 @@ export const decisionsOf = (thread: Thread): Message[] =>
  * чужого. Ярлыка у удалённой в карте не остаётся, поэтому подпись — её id.
  */
 export function participantLabel(map: WorkMap, id: string): string {
+  if (id === PARLEY) return 'Parley';
   const session = map.sessions.find((candidate) => candidate.id === id);
   if (session !== undefined) return session.label;
   return (map.work.deletedSessions ?? []).includes(id) ? `${id} (deleted)` : id;

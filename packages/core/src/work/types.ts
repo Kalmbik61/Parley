@@ -158,6 +158,8 @@ export const MESSAGE_KINDS: readonly MessageKind[] = ['note', 'question', 'decis
 export const HUMAN = 'human';
 /** Отправитель системного письма хоста («S05 не поднялась: …»). */
 export const SYSTEM = 'system';
+/** Trusted accepted-plan assignments, reserved by the host/domain before wake. */
+export const PARLEY = 'parley';
 
 export type RoomMode = 'free' | 'checklist' | 'verified';
 export type PlanMode = Exclude<RoomMode, 'free'>;
@@ -189,6 +191,21 @@ export interface RoomPlan {
 export interface PlanExportIntent {
   file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
   content: string; status: 'pending' | 'written';
+}
+
+/** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
+export interface PlanEffect {
+  key: string; roomId: string; planId: string | null; rev: number;
+  item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
+  occurrence: string; target: string; text: string; createdAt: string;
+  status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
+}
+/** Captured completion, then separately prepared file version; never a map/Markdown atomic claim. */
+export interface PlanBacklogIntent {
+  key: string; planId: string; rev: number; backlogId: string; completedAt: string;
+  status: 'pending' | 'written' | 'conflict';
+  expectedVersion?: string; itemFingerprint?: string;
+  code?: 'backlog-conflict' | 'backlog-unavailable';
 }
 
 /**
@@ -307,6 +324,8 @@ export interface WorkMap {
   rooms: Room[];
   plans?: RoomPlan[];
   planExports?: PlanExportIntent[];
+  planEffects?: PlanEffect[];
+  planBacklogIntents?: PlanBacklogIntent[];
 }
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */

@@ -113,6 +113,7 @@ export type NoticeKind =
   | 'role-missing'
   | 'memory-truncated'
   | 'memory-unreadable'
+  | 'plan-effect-failed'
   | 'role-truncated'
   | 'recipe-playbook-truncated'
   | 'pointer-timeout'

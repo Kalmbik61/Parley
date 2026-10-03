@@ -34,6 +34,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'provider-override-gap',
   'memory-truncated',
   'memory-unreadable',
+  'plan-effect-failed',
   'role-truncated',
   'recipe-playbook-truncated',
 ];

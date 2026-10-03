@@ -13,6 +13,8 @@ import { capabilityPluginMethodSchemas } from './capability-plugin-actions.js';
 import type { CapabilityPluginMethodResults } from './capability-plugin-actions.js';
 import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
 import type { CapabilityActionResult } from './capability-actions.js';
+import { planMethodSchemas } from './plan-actions.js';
+import type { PlanMethodResults } from './plan-actions.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
@@ -35,6 +37,7 @@ export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 export const METHODS = {
   ...capabilityPluginMethodSchemas,
   ...backlogMethodSchemas,
+  ...planMethodSchemas,
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
@@ -153,7 +156,9 @@ export const METHODS = {
     action: z.enum(['accept', 'return']),
     note: z.string().max(4000).optional(),
     rev: z.number().int().min(0).optional(),
-  }),
+    planId: z.string().regex(/^pl-\d+$/).max(128).optional(),
+    planRev: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).refine(value => (value.planId === undefined) === (value.planRev === undefined)),
   'rooms.send': z.object({
     projectPath: z.string(),
     workId: z.string(),
@@ -207,7 +212,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends BacklogMethodResults, CapabilityPluginMethodResults {
+export interface Results extends BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };

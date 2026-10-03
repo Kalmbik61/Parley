@@ -367,7 +367,7 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
 } from './mcp/tools.js';
-export { HUMAN, MESSAGE_KINDS, SYSTEM } from './work/types.js';
+export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {
   Artifact,
   HistoryEntry,
@@ -428,3 +428,7 @@ export { rememberProjectMemory, listMemorySuggestions, acceptMemorySuggestion, d
 export type { RememberInput, RememberOptions, MemorySuggestionResult } from './work/memory-suggestions.js';
 export { formatMemoryFactBlock, MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER } from './work/session-layer.js';
 export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-layer.js';
+
+export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
+export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
+export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';

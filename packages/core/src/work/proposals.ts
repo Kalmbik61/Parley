@@ -165,7 +165,8 @@ export function resolveProposal(
   if (action === 'return') {
     const remark = (options.note ?? '').trim();
     const text = remark === '' ? `${RETURNED_LETTER}.` : `${RETURNED_LETTER}: ${remark}`;
-    const letter = addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text }, at);
+    const letter = addMessage(map, { from: HUMAN, to: [proposal.kind === 'completion' ? HUMAN : lead], roomId, kind: 'note', text }, at);
+    if (proposal.kind === 'completion') letter.readBy[HUMAN] = at;
     return { messageId: letter.id };
   }
 

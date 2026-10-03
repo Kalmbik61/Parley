@@ -641,7 +641,7 @@ export function reconcileRoomPlans(
       for (const item of plan.items)
         if (
           !liveOwner(draft, room, item.owner) &&
-          !["done", "verified", "blocked"].includes(item.status)
+          item.status !== "blocked" && !planItemSatisfied(plan, item)
         )
           log(item, "system", "blocked", "Owner is closed or deleted.", at);
     }

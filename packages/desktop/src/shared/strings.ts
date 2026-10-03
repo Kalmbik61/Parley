@@ -1308,6 +1308,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'role-missing': 'saved role is unavailable — this session starts without role defaults',
   'memory-truncated': 'project memory was cut at 12 KiB — clean up memory.md to include the remaining facts',
   'memory-unreadable': 'could not read project memory — resolve memory.md conflicts or access errors',
+  'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
 };
