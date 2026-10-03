@@ -9,13 +9,13 @@
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addSession, createWork, updateMap, workPaths } from '@parley/core';
 import type { WorkMap } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createLimitsService, LIMITS_POLL_MS, limitsOptionsFromEnv } from './limits-service.js';
-import type { LimitsService } from './limits-service.js';
+import type { LimitsService, LimitsServiceOptions } from './limits-service.js';
 
 const T0 = Date.parse('2026-09-29T12:00:00.000Z');
 const sec = (ms: number): number => Math.floor(ms / 1000);
@@ -105,7 +105,7 @@ async function putLimits(
 /** Сервис на подменённых часах и таймере; снимок работ — те карты, что передал тест. */
 function service(
   maps: Array<{ project: string; map: WorkMap }>,
-  extra: { intervalMs?: number } = {},
+  extra: LimitsServiceOptions = {},
 ) {
   const ticks: Array<() => void> = [];
   const intervals: number[] = [];
@@ -136,6 +136,105 @@ const limitsEvents = (): Array<EventData<'providers.limitsChanged'>> =>
   broadcasts
     .filter((item) => item.event === 'providers.limitsChanged')
     .map((item) => item.data as EventData<'providers.limitsChanged'>);
+
+describe('manual GLM quota refresh', () => {
+  const quota = () => new Response(JSON.stringify({ success: true, data: { limits: [{ type: 'TOKENS_LIMIT', percentage: 37 }] } }));
+
+  it('startup and timer never read keys or fetch; only manual refresh requests authentic quota', async () => {
+    const readGlmKey = vi.fn().mockResolvedValue('synthetic-key');
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(quota());
+    const { limits, tick } = service([], { readGlmKey, fetch });
+    await limits.start();
+    tick();
+    await limits.refresh();
+    expect(readGlmKey).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    await limits.refresh(true);
+    expect(limits.get('glm')).toMatchObject({ source: 'zai', fiveHour: { usedPercent: 37, resetsAt: null } });
+    expect(readGlmKey).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces manual calls even when a local poll is already running', async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { limits } = service([], { readGlmKey: async () => 'synthetic-key', fetch });
+    const poll = limits.refresh();
+    const first = limits.refresh(true);
+    const second = limits.refresh(true);
+    expect(first).toBe(second);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    finish(quota());
+    await Promise.all([poll, first, second]);
+    expect(limits.get('glm')?.source).toBe('zai');
+  });
+
+  it('retains cached quota on failure while still publishing local Claude changes', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(quota()).mockRejectedValue(new Error('synthetic-key'));
+    const a = await work(projectA, ['claude', 'glm']);
+    await putLimits(projectA, a.map, a.ids[1]!, T0, 95, 95);
+    const { limits } = service([{ project: projectA, map: a.map }], { readGlmKey: async () => 'synthetic-key', fetch });
+    await limits.refresh(true);
+    const prior = limits.get('glm');
+    await putLimits(projectA, a.map, a.ids[0]!, T0, 50, 40);
+    await expect(limits.refresh(true)).rejects.toThrow('Unable to refresh GLM quota');
+    expect(limits.get('glm')).toEqual(prior);
+    expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(50);
+    expect(limits.get('glm')?.fiveHour?.usedPercent).toBe(37);
+  });
+
+  it.each([null, 'rotated-key'])('rejects late observations when the saved key changes to %s', async (replacement) => {
+    let key: string | null = 'synthetic-key';
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(quota()).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { limits } = service([], { readGlmKey: async () => key, fetch });
+    await limits.refresh(true);
+    const pending = limits.refresh(true);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    key = replacement;
+    finish(quota());
+    await expect(pending).rejects.toThrow('Unable to refresh GLM quota');
+    expect(limits.get('glm')).toBeNull();
+    expect(limitsEvents().at(-1)).toEqual({ id: 'glm', limits: null });
+  });
+
+  it('RPC invalidation clears immediately and blocks even a response for the same replaced key', async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(quota()).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { limits } = service([], { readGlmKey: async () => 'synthetic-key', fetch });
+    await limits.refresh(true);
+    const pending = limits.refresh(true);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    limits.invalidateGlm();
+    expect(limits.get('glm')).toBeNull();
+    finish(quota());
+    await pending;
+    expect(limits.get('glm')).toBeNull();
+  });
+
+  it('absent key clears cached quota and makes no HTTP request', async () => {
+    let key: string | null = 'synthetic-key';
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(quota());
+    const { limits } = service([], { readGlmKey: async () => key, fetch });
+    await limits.refresh(true);
+    key = null;
+    await limits.refresh(true);
+    expect(limits.get('glm')).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop prevents late HTTP completion from publishing', async () => {
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { limits } = service([], { readGlmKey: async () => 'synthetic-key', fetch });
+    const pending = limits.refresh(true);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    limits.stop();
+    finish(quota());
+    await pending;
+    expect(limitsEvents()).toEqual([]);
+  });
+});
 
 describe('Claude: файлы строки статуса', () => {
   it('свод по файлам всех работ и проектов: числа окна — большие при том же сбросе, at — самое позднее', async () => {

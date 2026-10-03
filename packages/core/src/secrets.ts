@@ -49,7 +49,7 @@ async function readStore(file: string): Promise<Record<string, unknown>> {
   }
 }
 
-/** Читает ключ только для запуска GLM; окно получает `secretHint`. */
+/** Ключ для запуска GLM и хостового запроса квоты Z.ai; окно получает только `secretHint`. */
 export async function readSecret(id: SecretId): Promise<string | null> {
   const entry = (await readStore(secretsPath()))[id];
   if (!isRecord(entry) || typeof entry.key !== 'string') return null;

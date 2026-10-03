@@ -236,12 +236,15 @@ The project rests on one boundary, and it is not up for discussion:
 - Parley **never reads, stores or injects the credentials of Claude Code or Codex**:
   `~/.claude/.credentials.json` and `~/.codex/auth.json` are never opened. The one secret it
   keeps is a Z.ai API key that you paste in yourself to use GLM: it is stored only on this
-  Mac (`~/.parley/secrets.json`, mode `0600`, under `PARLEY_HOME` when set) and passed only
-  to GLM sessions, which run the official `claude` against Z.ai's GLM Coding Plan endpoint;
+  Mac (`~/.parley/secrets.json`, mode `0600`, under `PARLEY_HOME` when set), passed to GLM
+  sessions running the official `claude`, and used by the host to read Z.ai quota metadata
+  from the fixed official monitor endpoint. The window receives only a key hint and validated limits;
 - history directories (`~/.claude/projects`, `~/.codex/sessions`) are opened **read-only**;
   Parley writes nothing to `~/.claude` — hooks are passed with the `--settings` flag from a
   file in the workspace directory;
-- there is no API client of its own and no wrapper around subscription tokens;
+- inference runs through the official CLI; the only provider API request made by Parley
+  itself is a read-only Z.ai quota query using the key you supplied. There is no wrapper
+  around Claude or Codex subscription tokens;
 - `--dangerously-load-development-channels` is a documented flag of Claude Code itself
   (research preview, `code.claude.com/docs/en/channels`): it turns on a built-in client
   mechanism and does not modify the binary.
@@ -251,10 +254,10 @@ The window (`packages/desktop`) and its host add six more rules to the boundary 
 
 - the Keychain item `Claude Code-credentials`, `~/.claude/.credentials.json` and
   `~/.codex/auth.json` are not read, and there are no requests to the Anthropic or OpenAI
-  APIs or to Z.ai. The window takes subscription limits only from what the CLIs themselves
-  provide:
+  APIs. Claude and Codex subscription limits come only from what the CLIs themselves provide:
   the `rate_limits` field of the Claude Code status line (a `statusLine` script in the
-  `--settings` file, like the hooks) and `rate_limits` in Codex session logs;
+  `--settings` file, like the hooks) and `rate_limits` in Codex session logs. GLM quota
+  metadata uses the separate read-only Z.ai request described above, only on Refresh limits;
 - nothing is written to `~/.claude.json`, folder trust included;
 - the agent skill (`.agents/skills/parley` and the symlink `.claude/skills/parley`) is
   installed only into the project folder and into session worktrees; nothing is written to

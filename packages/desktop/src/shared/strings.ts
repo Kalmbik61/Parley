@@ -169,6 +169,7 @@ export const S = {
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
+    refreshLimits: 'Refresh provider limits',
     providerTitle: (name: string, available: boolean): string =>
       `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',
@@ -196,8 +197,8 @@ export const S = {
         .join(' · '),
     /**
      * Тултип лимитов: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM».
-     * Окон, которых нет, в нём нет; «Updated» — всегда: числа обновляются, только пока агент работает
-     * (спека 3.5, «Свежесть»). Время и день приходят уже местными и короткими — форматирует вызывающий.
+     * Неизвестное время сброса пропускается; «Updated» — всегда. Время и день приходят уже местными
+     * и короткими — форматирует вызывающий.
      */
     limitsTooltip: (fiveHourResets: string | null, weekResets: { day: string; time: string } | null, updated: string): string =>
       [
@@ -1042,6 +1043,7 @@ export const S = {
   errors: {
     actions: {
       loadProviders: 'load providers',
+      refreshProviderLimits: 'refresh provider limits',
       saveProviderKey: 'save the provider key',
       removeProviderKey: 'remove the provider key',
       copyInstallCommand: 'copy the install command',

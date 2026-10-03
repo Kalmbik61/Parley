@@ -221,3 +221,11 @@ describe('ProviderCard', () => {
     expect(screen.getByText('Key ••••')).toBeTruthy();
   });
 });
+
+
+it('GLM показывает подтверждённую квоту Z.ai в существующей карточке', () => {
+  render(<ProviderCard provider={glm({ available: true, limits: {
+    source: 'zai', fiveHour: { usedPercent: 42.9, resetsAt: null }, week: null, at: '2026-10-03T00:00:00Z',
+  } })} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.getByText('42% 5h')).toBeTruthy();
+});

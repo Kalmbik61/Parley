@@ -113,6 +113,11 @@ describe('scanSource', () => {
 describe('узкие исключения добровольно введённого ключа GLM (спека провайдеров, 4.2–5)', () => {
   const approved = [
     {
+      file: 'packages/host/src/limits/zai-quota.ts',
+      rule: 'API провайдеров',
+      line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",
+    },
+    {
       file: 'packages/core/src/providers.ts',
       rule: 'API провайдеров',
       line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",
@@ -129,7 +134,7 @@ describe('узкие исключения добровольно введённ�
     },
   ];
 
-  it('новые исключения — только три согласованные строки GLM', () => {
+  it('новые исключения — только согласованные строки GLM', () => {
     expect(
       FRAME_EXCEPTIONS.filter((item) => item.file !== 'packages/core/src/work/statusline.ts').map(
         ({ file, rule, line }) => ({ file, rule, line }),

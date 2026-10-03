@@ -78,7 +78,7 @@ Parley ничего не ставит и не скачивает.
 - **Предупреждение.** «Avoid /logout in GLM: it can change the shared local Claude Code sign-in used by your Claude sessions.»
 - **Ошибки сохранения** выводятся текстом под полем: пустой или слишком длинный ключ, хост без нужного метода.
 
-Окно не проверяет ключ, потому что не ходит в сеть. Ошибка Z.ai появится в терминале GLM-сессии: 401 «Authentication Failed», 1113 или 1309 «subscription expired».
+Сохранение ключа не проверяет доступ к генерации. Ошибка Z.ai появится в терминале GLM-сессии: 401 «Authentication Failed», 1113 или 1309 «subscription expired». Добавление от 2026-10-04: хост отдельно запрашивает метаданные квоты; отказ этого запроса не означает, что GLM-сессия не работает.
 
 ### 3.3 Диалог новой сессии
 
@@ -157,7 +157,7 @@ API_TIMEOUT_MS=3000000
 
 ### 4.5 Чего у GLM-сессий нет
 
-- **Лимитов в строке статуса.** `rate_limits` в строке состояния бывают только у подписок claude.ai. Квоту Z.ai Parley не запрашивает: окно и хост в сеть не ходят.
+- **Лимитов claude.ai.** Файлы `rate_limits` GLM-сессий исключены из сборщика: они не описывают квоту Z.ai. По запросу пользователя от 2026-10-04 для GLM добавлен отдельный запрос метаданных квоты; контракт описан в [дополнении](2026-10-04-providers-limits-refresh.md).
 - **Канала** (`--dangerously-load-development-channels`).
 - **Картинок у GLM-5.3:** модель только текстовая. Для скриншотов из окна нужна GLM-5.3 Flash.
 - **Параллельности сверх тарифа.** Z.ai советует Lite на один проект, поэтому несколько GLM-агентов в комнате могут получать 429.
@@ -192,7 +192,7 @@ API_TIMEOUT_MS=3000000
 
 README, раздел «Legal boundary» — новая формулировка (по-английски):
 
-> Parley never reads, stores or injects the credentials of Claude Code or Codex. The one secret it keeps is a Z.ai API key that you paste in yourself to use GLM: it is stored only on this Mac (`~/.parley/secrets.json`, readable only by you) and is passed only to GLM sessions, which run the official `claude` against Z.ai's GLM Coding Plan endpoint.
+> Parley never reads, stores or injects the credentials of Claude Code or Codex. The one secret it keeps is a Z.ai API key that you paste in yourself to use GLM: it is stored only on this Mac (`~/.parley/secrets.json`, readable only by you), passed to GLM sessions running the official `claude`, and used by the host to read quota metadata from Z.ai's fixed official monitor endpoint.
 
 Остальное в «Legal boundary» не меняется:
 - Parley не входит за вас;
@@ -207,7 +207,7 @@ README, раздел «Legal boundary» — новая формулировка 
 - новый раздел «GLM (Z.ai)»: подписка, ключ, модели, что не работает, `/logout`.
 
 Страж `packages/core/test/frame-scan.ts`:
-- `api.z.ai` встречается только в записи `glm` реестра и в тестах;
+- `api.z.ai` разрешён в записи `glm` реестра и в единственном фиксированном адресе сборщика метаданных квоты; frame-check сохраняет запрет на произвольные запросы к API провайдеров;
 - `secrets.json` — только в модуле хранилища;
 - `ANTHROPIC_AUTH_TOKEN` — только там, где хост собирает окружение процесса.
 
@@ -274,7 +274,7 @@ README, раздел «Legal boundary» — новая формулировка 
 - Китайский адрес `open.bigmodel.cn`.
 - Linux и Windows.
 - Шифрование ключа.
-- Квота Z.ai в строке статуса.
+- Полная схема новых квот Z.ai: недельное окно и неизвестные форматы требуют подтверждённых метаданных; дополнение от 2026-10-04 поддерживает только однозначный формат официального плагина.
 - Проверка ключа запросом к Z.ai.
 - Вход в Claude Code и Codex из окна.
 

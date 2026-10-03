@@ -169,7 +169,7 @@ export function ProviderCard({
           </Button>
         </div>
       ) : null}
-      {!isGlm && provider.available && (fiveHour !== undefined || week !== undefined) ? (
+      {(!isGlm || provider.limits?.source === 'zai') && provider.available && (fiveHour !== undefined || week !== undefined) ? (
         <p className="text-xs tabular-nums text-muted-foreground">
           {S.statusBar.limitsText(
             fiveHour === undefined ? null : Math.floor(fiveHour),

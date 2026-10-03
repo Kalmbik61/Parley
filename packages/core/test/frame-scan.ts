@@ -79,6 +79,13 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека комнат Organic 3.5: скрипт строки статуса только читает settings.json человека и проекта, чтобы вызвать их statusLine',
   },
   {
+    file: 'packages/host/src/limits/zai-quota.ts',
+    rule: 'API провайдеров',
+    line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",
+    reason:
+      'спека провайдеров: пользователь разрешил хостовый GET квоты Z.ai с сохранённым ключом; только фиксированный read-only endpoint',
+  },
+  {
     file: 'packages/core/src/providers.ts',
     rule: 'API провайдеров',
     line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",

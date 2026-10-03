@@ -30,6 +30,7 @@ export const METHODS = {
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
+  'providers.refreshLimits': z.object({}),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
   'providers.clearKey': z.object({ provider: z.string() }),
@@ -197,6 +198,8 @@ export interface Results {
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
+  /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
+  'providers.refreshLimits': { ok: true };
   'providers.list': {
     providers: Array<{
       id: string;
@@ -224,7 +227,7 @@ export interface Results {
       /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
       version?: string | null;
       /**
-       * Лимиты подписки провайдера (спека комнат Organic, 3.5) — только из того, что отдают сами CLI.
+       * Лимиты подписки из CLI, для GLM — подтверждённая квота Z.ai (`source: 'zai'`).
        * `null` — данных нет или окна уже сбросились. Необязательно, как три поля выше, по той же причине.
        * Дальше числа приходят событием `providers.limitsChanged`.
        */

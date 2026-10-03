@@ -6,7 +6,7 @@ import type { Result } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
-import type { RunningHost } from '../host.js';
+import type { HostOptions, RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import { createProvidersList } from './providers.js';
 
@@ -35,7 +35,7 @@ async function connect(): Promise<{ client: TestClient; greeting: RawMessage }> 
   return { client, greeting };
 }
 
-async function boot(options: { cli?: boolean; version?: () => string | null; providersJson?: unknown } = {}) {
+async function boot(options: { cli?: boolean; version?: () => string | null; providersJson?: unknown; limits?: HostOptions['limits'] } = {}) {
   home = await tempHome();
   const binary = path.join(home, 'claude-stub');
   if (options.cli !== false) {
@@ -46,7 +46,7 @@ async function boot(options: { cli?: boolean; version?: () => string | null; pro
   if (options.providersJson !== undefined) {
     await writeFile(path.join(home, 'providers.json'), JSON.stringify(options.providersJson));
   }
-  host = await startHost({ home, probeVersion: async () => options.version?.() ?? '2.1.287' });
+  host = await startHost({ home, probeVersion: async () => options.version?.() ?? '2.1.287', ...(options.limits === undefined ? {} : { limits: options.limits }) });
   return connect();
 }
 
@@ -77,6 +77,25 @@ describe('provider readiness and key mutations over RPC', () => {
     expect(await glm(client)).toMatchObject({
       available: cli, needs: cli ? null : 'cli', keyHint: '••••1234', family: 'claude', limits: null,
     });
+  });
+
+  it('manual refresh advertises its method, returns Z.ai provenance, and key removal clears it immediately', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: true, data: { limits: [{ type: 'TOKENS_LIMIT', percentage: 42 }] },
+    })));
+    const { client, greeting } = await boot({ limits: { fetch } });
+    expect((greeting.result as Result<'hello'>).methods).toContain('providers.refreshLimits');
+    expect(fetch).not.toHaveBeenCalled();
+    await rpc(client, 'providers.setKey', { provider: 'glm', key: 'synthetic-quota-key' });
+    const refreshed = await rpc(client, 'providers.refreshLimits');
+    expect(refreshed.at(-1)?.result).toEqual({ ok: true });
+    expect(await glm(client)).toMatchObject({ limits: { source: 'zai', fiveHour: { usedPercent: 42, resetsAt: null }, week: null } });
+    const removed = await rpc(client, 'providers.clearKey', { provider: 'glm' });
+    expect(removed).toContainEqual({ event: 'providers.limitsChanged', data: { id: 'glm', limits: null } });
+    expect(await glm(client)).toMatchObject({ limits: null, keyHint: null });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const log = await readFile(hostPaths(home).log, 'utf8');
+    expect(log).not.toContain('synthetic-quota-key');
   });
 
   it('Check again sees an updated CLI version without restarting the host', async () => {

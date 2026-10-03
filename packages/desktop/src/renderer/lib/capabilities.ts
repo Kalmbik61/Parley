@@ -55,6 +55,7 @@ export const REQUIRED_METHODS: readonly string[] = [
   ...BASELINE_METHODS,
   'providers.setKey',
   'providers.clearKey',
+  'providers.refreshLimits',
   'works.rename',
   'works.setStatus',
   'activity.seen',

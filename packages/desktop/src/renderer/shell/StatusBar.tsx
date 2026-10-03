@@ -20,14 +20,17 @@
  */
 
 import { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
-import { providerName, S } from '../../shared/strings.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
+import { errorText, providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { ProviderCard } from '../components/providers/ProviderCard.js';
 import { cn } from '../lib/cn.js';
-import { missingMethods, otherHostBuild } from '../lib/capabilities.js';
+import { hostMethods, missingMethods, otherHostBuild } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
@@ -84,8 +87,8 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
   if (limits === null || bar === null) return null;
   const warning = (fiveHour ?? 0) >= LIMIT_WARNING_PERCENT || (week ?? 0) >= LIMIT_WARNING_PERCENT;
   const tooltip = S.statusBar.limitsTooltip(
-    fiveHourLimit === null ? null : clock(fiveHourLimit.resetsAt),
-    weekLimit === null ? null : { day: weekday(weekLimit.resetsAt), time: clock(weekLimit.resetsAt) },
+    fiveHourLimit?.resetsAt == null ? null : clock(fiveHourLimit.resetsAt),
+    weekLimit?.resetsAt == null ? null : { day: weekday(weekLimit.resetsAt), time: clock(weekLimit.resetsAt) },
     clock(limits.at),
   );
   return (
@@ -125,7 +128,7 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
           <span className="min-w-0 truncate">{name}</span>
           {provider.available && provider.version !== null ?
             <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
-          {provider.available && provider.id !== 'glm' ? <ProviderLimitsMeter limits={provider.limits} /> : null}
+          {provider.available && (provider.id !== 'glm' || provider.limits?.source === 'zai') ? <ProviderLimitsMeter limits={provider.limits} /> : null}
         </button>
       </PopoverTrigger>
       <PopoverContent aria-label={name} side="top" align="start" className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto">
@@ -150,6 +153,9 @@ export function StatusBar({
   // Хосту не хватает методов окна или он от другой сборки (окно обновили, хост остался прежним) — перезапуск.
   const outdated = missingMethods(status).length > 0 || otherHostBuild(status, appVersion) !== null;
   const snapshot = useProvidersStore((state) => state.providers);
+  const refreshing = useProvidersStore((state) => state.refreshing);
+  const refreshLimits = useProvidersStore((state) => state.refreshLimits);
+  const canRefresh = hostMethods(status).has('providers.refreshLimits') && snapshot.some((provider) => provider.available);
   const providers = [
     ...CORE_PROVIDERS.map((id): ProviderInfo => snapshot.find((provider) => provider.id === id) ??
       { id, label: providerName(id, id), available: false, version: null, limits: null }),
@@ -159,6 +165,21 @@ export function StatusBar({
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
     <div className="flex h-7 shrink-0 items-center gap-3.5 pb-0.5 pl-[18px] pr-3.5 text-xs text-neutral-800">
+      <button
+        type="button"
+        title={S.statusBar.refreshLimits}
+        aria-label={S.statusBar.refreshLimits}
+        aria-busy={refreshing}
+        disabled={!canRefresh || refreshing}
+        className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/8 disabled:opacity-50"
+        onClick={() => {
+          void refreshLimits().catch((error: unknown) => {
+            toast(errorText(decodeIpcError(error).code, S.errors.actions.refreshProviderLimits));
+          });
+        }}
+      >
+        <RefreshCw aria-hidden size={14} className={cn(refreshing && 'animate-spin')} />
+      </button>
       {providers.map((provider) => (
         <ProviderSegment key={provider.id} provider={provider} onRestartHost={() => onRestartHostOpenChange(true)} />
       ))}

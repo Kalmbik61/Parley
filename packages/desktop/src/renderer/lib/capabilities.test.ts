@@ -30,6 +30,12 @@ afterEach(() => {
 });
 
 describe('capabilities', () => {
+  it('ручное обновление лимитов требует нового метода; старому хосту предлагается перезапуск', () => {
+    expect(REQUIRED_METHODS).toContain('providers.refreshLimits');
+    expect(BASELINE_METHODS).not.toContain('providers.refreshLimits');
+    expect(missingMethods(connected(REQUIRED_METHODS.filter((method) => method !== 'providers.refreshLimits')))).toEqual(['providers.refreshLimits']);
+    expect(hostMethods(connected(null)).has('providers.refreshLimits')).toBe(false);
+  });
   it('методы ключа нужны новому окну: старому хосту предлагается перезапуск', () => {
     expect(REQUIRED_METHODS).toEqual(expect.arrayContaining(['providers.setKey', 'providers.clearKey']));
     expect(missingMethods(connected(null))).toEqual(expect.arrayContaining(['providers.setKey', 'providers.clearKey']));

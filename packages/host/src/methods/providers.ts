@@ -67,7 +67,7 @@ export function createProvidersList(
         ...item,
         // GLM's fresh probe refreshes the shared command before either family's row reads it.
         version: versions?.get(registry[item.id]!.runner.command) ?? null,
-        limits: item.id === 'glm' ? null : limits?.get(item.id) ?? null,
+        limits: limits?.get(item.id) ?? null,
       })),
     };
   };
@@ -83,26 +83,47 @@ async function providerSecret(provider: string): Promise<SecretId> {
   return entry.runner.secret;
 }
 
-export const providersSetKey: Handler<'providers.setKey'> = async ({ provider, key }, request) => {
-  const secret = await providerSecret(provider);
-  let keyHint: string;
-  try {
-    keyHint = await writeSecret(secret, key);
-  } catch (error) {
-    if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
-    throw new HostError('internal', 'Unable to save provider key');
-  }
-  request.host.broadcast('providers.changed', { provider });
-  return { keyHint };
-};
+export function createProvidersSetKey(limits?: LimitsService): Handler<'providers.setKey'> {
+  return async ({ provider, key }, request) => {
+    const secret = await providerSecret(provider);
+    let keyHint: string;
+    try {
+      keyHint = await writeSecret(secret, key);
+    } catch (error) {
+      if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
+      throw new HostError('internal', 'Unable to save provider key');
+    }
+    limits?.invalidateGlm();
+    request.host.broadcast('providers.changed', { provider });
+    return { keyHint };
+  };
+}
 
-export const providersClearKey: Handler<'providers.clearKey'> = async ({ provider }, request) => {
-  const secret = await providerSecret(provider);
-  try {
-    await clearSecret(secret);
-  } catch {
-    throw new HostError('internal', 'Unable to clear provider key');
-  }
-  request.host.broadcast('providers.changed', { provider });
-  return { ok: true };
-};
+export const providersSetKey = createProvidersSetKey();
+
+export function createProvidersClearKey(limits?: LimitsService): Handler<'providers.clearKey'> {
+  return async ({ provider }, request) => {
+    const secret = await providerSecret(provider);
+    try {
+      await clearSecret(secret);
+    } catch {
+      throw new HostError('internal', 'Unable to clear provider key');
+    }
+    limits?.invalidateGlm();
+    request.host.broadcast('providers.changed', { provider });
+    return { ok: true };
+  };
+}
+
+export const providersClearKey = createProvidersClearKey();
+
+export function createProvidersRefreshLimits(limits: LimitsService): Handler<'providers.refreshLimits'> {
+  return async () => {
+    try {
+      await limits.refresh(true);
+    } catch {
+      throw new HostError('internal', 'Unable to refresh GLM quota');
+    }
+    return { ok: true };
+  };
+}

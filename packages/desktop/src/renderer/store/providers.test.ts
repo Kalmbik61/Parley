@@ -300,3 +300,131 @@ describe('useProvidersStore — лимиты подписок', () => {
     again();
   });
 });
+
+
+describe('useProvidersStore — ручное обновление лимитов', () => {
+  const snapshot = (percent: number): Result<'providers.list'> => ({ providers: [{
+    id: 'glm', label: 'GLM', available: true,
+    limits: { source: 'zai', fiveHour: { usedPercent: percent, resetsAt: null }, week: null, at: '2026-10-03T12:00:00Z' },
+  }] });
+  const pendingRefresh = () => {
+    let resolve!: (value: { ok: true }) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<{ ok: true }>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  };
+
+  it('принимает только подтверждённые квоты GLM из списка и событий; null очищает их', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => snapshot(42));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(42);
+    const limits = snapshot(57).providers[0]!.limits!;
+    bridge.emit('providers.limitsChanged', { id: 'glm', limits });
+    expect(useProvidersStore.getState().providers[0]?.limits).toEqual(limits);
+    bridge.emit('providers.limitsChanged', { id: 'glm', limits: { ...limits, source: undefined } });
+    expect(useProvidersStore.getState().providers[0]?.limits).toEqual(limits);
+    bridge.emit('providers.limitsChanged', { id: 'glm', limits: null });
+    expect(useProvidersStore.getState().providers[0]?.limits).toBeNull();
+    dispose();
+  });
+
+  it('обновляет все лимиты одним вызовом, объединяет повторный клик и затем перечитывает снимок', async () => {
+    const bridge = createFakeBridge();
+    let percent = 42;
+    bridge.setHandler('providers.list', () => snapshot(percent));
+    const pending = pendingRefresh();
+    bridge.setHandler('providers.refreshLimits', () => pending.promise);
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    const first = useProvidersStore.getState().refreshLimits();
+    const second = useProvidersStore.getState().refreshLimits();
+    expect(useProvidersStore.getState().refreshing).toBe(true);
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toEqual([
+      { method: 'providers.refreshLimits', params: {} },
+    ]);
+    percent = 57;
+    pending.resolve({ ok: true });
+    await Promise.all([first, second]);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    expect(bridge.calls.map(({ method }) => method)).toEqual(['providers.list', 'providers.refreshLimits', 'providers.list']);
+    dispose();
+  });
+
+  it('после отказа перечитывает частичный результат и отдаёт ошибку вызывающему; можно повторить', async () => {
+    const bridge = createFakeBridge();
+    let percent = 42;
+    const error = encodeIpcError({ code: 'internal', message: 'private text' });
+    bridge.setHandler('providers.list', () => snapshot(percent));
+    bridge.setHandler('providers.refreshLimits', () => { percent = 57; throw error; });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    await expect(useProvidersStore.getState().refreshLimits()).rejects.toBe(error);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    bridge.setHandler('providers.refreshLimits', () => ({ ok: true }));
+    await expect(useProvidersStore.getState().refreshLimits()).resolves.toBeUndefined();
+    dispose();
+  });
+
+  it.each([false, true])('старое обновление после нового подключения не перечитывает новый мост и не показывает ошибку (%s)', async (reject) => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(42));
+    const pending = pendingRefresh();
+    oldBridge.setHandler('providers.refreshLimits', () => pending.promise);
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    const oldRefresh = useProvidersStore.getState().refreshLimits();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => snapshot(57));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    if (reject) pending.reject(new Error('old connection'));
+    else pending.resolve({ ok: true });
+    await expect(oldRefresh).resolves.toBeUndefined();
+    expect(bridge.calls).toHaveLength(1);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    oldDispose();
+    dispose();
+  });
+
+  it('завершение старого моста не снимает busy с обновления нового подключения', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(42));
+    const oldPending = pendingRefresh();
+    oldBridge.setHandler('providers.refreshLimits', () => oldPending.promise);
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    const oldRefresh = useProvidersStore.getState().refreshLimits();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => snapshot(57));
+    const pending = pendingRefresh();
+    bridge.setHandler('providers.refreshLimits', () => pending.promise);
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    const refresh = useProvidersStore.getState().refreshLimits();
+    oldDispose();
+    oldPending.resolve({ ok: true });
+    await oldRefresh;
+    expect(useProvidersStore.getState().refreshing).toBe(true);
+    const repeat = useProvidersStore.getState().refreshLimits();
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
+    pending.resolve({ ok: true });
+    await Promise.all([refresh, repeat]);
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    dispose();
+  });
+
+  it('без активного моста обновление ничего не вызывает', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => snapshot(42));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    dispose();
+    await useProvidersStore.getState().refreshLimits();
+    expect(bridge.calls).toHaveLength(1);
+  });
+});

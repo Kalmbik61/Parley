@@ -16,7 +16,7 @@ export interface ProviderInfo extends Omit<
 > {
   /** Версия CLI из пробы на старте хоста; `null` — не узнали или хост её не шлёт. */
   version: string | null;
-  /** Лимиты подписки из данных самого CLI; `null` — данных нет, окна сбросились или хост их не шлёт. */
+  /** Лимиты CLI или подтверждённая квота Z.ai; `null` — данных нет или хост их не шлёт. */
   limits: NonNullable<Result<'providers.list'>['providers'][number]['limits']> | null;
 }
 
@@ -28,6 +28,9 @@ export interface ProvidersState {
    * потому, что её нет, а потому, что её ещё не спросили: вид вкладки (`lib/feed-view.ts`) ждёт.
    */
   loaded: boolean;
+  /** Ручное обновление всех источников; повторные клики разделяют один запрос. */
+  refreshing: boolean;
+  refreshLimits: () => Promise<void>;
   /** Свежий снимок того же подключения; более поздний запрос побеждает. */
   reload: () => Promise<void>;
   /**
@@ -41,6 +44,7 @@ export const useProvidersStore = create<ProvidersState>((set) => {
   let activeBridge: ParleyBridge | null = null;
   let connection = 0;
   let request = 0;
+  let refreshPromise: Promise<void> | null = null;
   const reload = async (): Promise<void> => {
     if (activeBridge === null) return;
     const currentConnection = connection;
@@ -53,7 +57,7 @@ export const useProvidersStore = create<ProvidersState>((set) => {
           ...provider,
           version: provider.version ?? null,
           // Даже старый хост может прислать claude.ai лимиты: для GLM они чужие.
-          limits: provider.id === 'glm' ? null : (provider.limits ?? null),
+          limits: provider.id === 'glm' && provider.limits?.source !== 'zai' ? null : (provider.limits ?? null),
         })),
         loaded: true,
       });
@@ -64,20 +68,57 @@ export const useProvidersStore = create<ProvidersState>((set) => {
       throw error;
     }
   };
+  const refreshLimits = (): Promise<void> => {
+    if (activeBridge === null) return Promise.resolve();
+    if (refreshPromise !== null) return refreshPromise;
+    const bridge = activeBridge;
+    const currentConnection = connection;
+    set({ refreshing: true });
+    refreshPromise = (async () => {
+      try {
+        let refreshError: unknown;
+        let failed = false;
+        try {
+          await bridge.call('providers.refreshLimits', {});
+        } catch (error: unknown) {
+          failed = true;
+          refreshError = error;
+        }
+        if (connection !== currentConnection) return;
+        // Один источник мог отказать после публикации лимитов остальных.
+        try {
+          await reload();
+        } catch (error: unknown) {
+          if (!failed) throw error;
+        }
+        if (connection !== currentConnection) return;
+        if (failed) throw refreshError;
+      } finally {
+        if (connection === currentConnection) {
+          refreshPromise = null;
+          set({ refreshing: false });
+        }
+      }
+    })();
+    return refreshPromise;
+  };
   return {
     providers: [],
     loaded: false,
+    refreshing: false,
+    refreshLimits,
     reload,
     init: (bridge) => {
       activeBridge = bridge;
       const currentConnection = ++connection;
-      set({ providers: [], loaded: false });
+      refreshPromise = null;
+      set({ providers: [], loaded: false, refreshing: false });
       void reload().catch(() => {});
       const offChanged = bridge.on('providers.changed', () => {
         if (connection === currentConnection) void reload().catch(() => {});
       });
       const offLimits = bridge.on('providers.limitsChanged', ({ id, limits }) => {
-        if (connection !== currentConnection || id === 'glm') return;
+        if (connection !== currentConnection || (id === 'glm' && limits !== null && limits.source !== 'zai')) return;
         // Неизвестный провайдер — тот же объект состояния: подписчики строки статуса не перерисовываются.
         set((state) =>
           state.providers.some((provider) => provider.id === id)
@@ -93,6 +134,8 @@ export const useProvidersStore = create<ProvidersState>((set) => {
         if (connection === currentConnection) {
           ++connection;
           activeBridge = null;
+          refreshPromise = null;
+          set({ refreshing: false });
         }
         offLimits();
         offChanged();

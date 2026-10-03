@@ -16,6 +16,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { toast } from 'sonner';
+import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -26,10 +28,11 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';
 import { StatusBar, type StatusBarProps } from './StatusBar.js';
 
-afterEach(cleanup);
+vi.mock('sonner', () => ({ toast: vi.fn() }));
+afterEach(() => { cleanup(); vi.mocked(toast).mockClear(); });
 beforeEach(() => {
   useUiStore.getState().closeRestartHostDialog();
-  useProvidersStore.setState({ providers: [] });
+  useProvidersStore.setState({ providers: [], refreshing: false });
   useHostStore.setState({ appVersion: null });
 });
 
@@ -743,5 +746,93 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(notice.className).toContain('flex-1');
     expect(notice.className).toContain('text-right');
     expect(notice.nextElementSibling).toBe(screen.getByRole('button', { name: 'Auto-wake on' }).parentElement);
+  });
+});
+
+
+describe('StatusBar — ручное обновление лимитов', () => {
+  const connected: HostStatus = { state: 'connected', hostVersion: '1.0.0', methods: [...REQUIRED_METHODS, 'providers.refreshLimits'] };
+
+  it('кнопка обновления стоит самым первым элементом строки и доступна с клавиатуры', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    const { container } = renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' });
+    expect(container.firstElementChild?.firstElementChild).toBe(button);
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('title')).toBe('Refresh provider limits');
+  });
+
+  it.each<HostStatus>([
+    { state: 'connecting' },
+    { state: 'disconnected', reason: 'closed' },
+    { state: 'mismatch', hostVersion: '9.0.0', liveSessions: 0 },
+    { state: 'connected', hostVersion: '1.0.0', methods: null },
+    { state: 'connected', hostVersion: '1.0.0', methods: REQUIRED_METHODS.filter((method) => method !== 'providers.refreshLimits') },
+  ])('обновление отключено без доступного метода или связи ($state)', (status) => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    renderPlain({ status });
+    expect((screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('без подключённых провайдеров кнопка недоступна', () => {
+    renderPlain({ status: connected });
+    expect((screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('хосту той же версии без нового метода предлагает существующее подтверждение перезапуска', () => {
+    useHostStore.setState({ appVersion: '1.0.0' });
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    const restart = vi.fn();
+    renderPlain({ status: { ...connected, methods: REQUIRED_METHODS.filter((method) => method !== 'providers.refreshLimits') }, onRestartHost: restart });
+    fireEvent.click(screen.getByRole('button', { name: S.statusBar.hostOutdated }));
+    expect(screen.getByRole('dialog', { name: S.statusBar.restartHostTitle })).toBeTruthy();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('ручной клик вызывает обновление, показывает busy и блокирует повторный клик до нового снимка', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let resolve!: (value: { ok: true }) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((yes) => { resolve = yes; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.querySelector('svg')?.classList.contains('animate-spin')).toBe(true);
+    fireEvent.click(button);
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
+    await act(async () => { resolve({ ok: true }); await Promise.resolve(); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+  it('отказ показывает тост только из кода ошибки, без текста хоста и без перезапуска', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'glm' })] }));
+    bridge.setHandler('providers.refreshLimits', () => { throw encodeIpcError({ code: 'internal', message: 'secret-token /private/path' }); });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' })); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).toContain("Couldn't refresh provider limits");
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).not.toMatch(/secret-token|private/);
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+  it('показывает подтверждённые квоты Z.ai даже с неизвестным временем сброса', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'glm', limits: limitsOf({ source: 'zai', fiveHour: { usedPercent: 42.9, resetsAt: null } }) })] });
+    const { container } = renderPlain();
+    expect(limitsIn(container, 'glm')?.textContent).toBe('42% 5h');
+    expect(fillIn(container, 'glm').style.width).toBe('42%');
+    expect(limitsIn(container, 'glm')?.title).toMatch(/^Updated /);
+    expect(limitsIn(container, 'glm')?.title).not.toMatch(/Invalid|resets|1970/);
   });
 });
