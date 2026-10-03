@@ -467,9 +467,9 @@
 
 ### P11: Реализовать каталог ролей и умолчания
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review (native reader fixes готовы). **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
 
 **Зависимости:** P05, P09. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -496,6 +496,8 @@
 **Замечания review:** Important/P1 — Claude identity должна быть metadata.name, missing name недоступен; Important/P2 — Codex JS trim не совпадает с Rust Unicode whitespace. Source-backed fix/spec amendment согласованы; только owned readers/tests, recheck независимый. P12 требует настоящего effective native config context, не guessed trust.
 
 **Evidence fixes перед recheck:** четыре reader/test files +147/−42; 43 role +4 English guard tests, scoped lint/strict types/diff check passed. 15 regressions RED→GREEN. Native Claude metadata identity/ambiguity и Codex Rust whitespace/data name semantics исправлены; shared files unchanged.
+
+**Независимая приёмка fixes:** /root/p01_review accepted f321189..4c2fb305; 14 targeted fixtures, 6 отдельных probe assertions, scoped ESLint/diff check; все четыре файла совпали со snapshot. Critical/Important findings отсутствуют. P12 delivery/context и P32 live lifecycle принимаются отдельно.
 
 <a id="p12"></a>
 

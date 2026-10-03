@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P07 и P09/P10 accepted; P08/P11 fixes в review.
+- Текущая фаза: P00–P07 и P09/P10 accepted; P08 path fix в работе; P11 accepted.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -31,7 +31,7 @@
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | review | core158/host3/wire2/desktop22; builds/lint/types passed; reviewer /root/p01_claude_probe |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
-| P11 | Реализовать каталог ролей и умолчания | review | 47 tests/lint/strict types passed after native identity/Unicode fixes; reviewer recheck queued |
+| P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
@@ -138,3 +138,7 @@ P08 готов:14owned files, 158 core /3host /2wire /22desktop consumers, lint/
 ## P12 native context preflight
 
 /root/p01_review подтвердил config/read includeLayers и configRequirements/read на изолированных offline fixtures Codex 0.156.1. Parsed layers high→low, project trust disabledReason и SessionFlags проверены; named-profile API отсутствует, nonempty managed requirements не проверены. Whitelist projection и ограничения записаны в research/codex.md §8. P11 recheck запущен отдельно; P12 implementation ожидает его приёмку, /root/p02_codex_probe пока готовит read-only integration grants.
+
+## Приёмка P11 и исправление P08
+
+P11 fixes accepted /root/p01_review: native metadata identity, same-root ambiguity и Rust whitespace подтверждены независимыми fixtures/probes. P08 review нашёл Important/P2: relative configDir расходится между common skill resolver и legacy agent scanner. /root/p02_codex_probe получил только scan.ts/scan.test.ts для исправления и RED→GREEN fixture; P12 preparation пока read-only.
