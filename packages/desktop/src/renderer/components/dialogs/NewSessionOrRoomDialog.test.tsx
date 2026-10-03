@@ -55,6 +55,7 @@ const callsOf = (method: string): Array<Record<string, unknown>> =>
   bridge.calls.filter((call) => call.method === method).map((call) => call.params as Record<string, unknown>);
 
 function stubHost(): void {
+  bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
   bridge.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
   bridge.setHandler('worktrees.available', async () => ({ available: true }));
   bridge.setHandler('sessions.create', async (params) => ({
@@ -291,7 +292,7 @@ describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
     const params = callsOf('sessions.create')[0] as Record<string, unknown>;
     expect(params).not.toHaveProperty('model');
-    expect(params).toMatchObject({ provider: 'claude', effort: 'medium', label: '', task: '' });
+    expect(params).toMatchObject({ provider: 'claude', label: '', task: '' });
   });
 
   it('терминал открывается, когда снимок работ принёс сессию — не раньше', async () => {
@@ -353,7 +354,8 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
     ['models: []', { id: 'claude', label: 'Claude', available: true, models: [], effort: false }],
     ['поля models нет — старый хост', { id: 'claude', label: 'Claude', available: true }],
   ])('%s — контрола модели и усилия нет, sessions.create без model и effort', async (_name, provider) => {
-    bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
     await renderDialog();
     expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
@@ -365,7 +367,8 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
   });
 
   it('effort: false при непустом списке — модель есть, усилия нет; effort: true при models: null — наоборот', async () => {
-    bridge.setHandler('providers.list', async () => ({
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => ({
       providers: [
         { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }], effort: false },
         { id: 'codex', label: 'Codex', available: true, models: null, effort: true },
@@ -402,9 +405,9 @@ describe('NewSessionOrRoomDialog — несколько агентов: комн
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(callsOf('sessions.create')).toEqual([
-      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, model: 'sonnet', effort: 'medium' },
-      { projectPath: PROJECT, workId: 'w-01', provider: 'codex', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
-      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, model: 'sonnet' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'codex', label: '', task: '', parent: null, worktree: false },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false },
     ]);
     expect(callsOf('rooms.create')).toEqual([
       { projectPath: PROJECT, workId: 'w-01', title: 'Room 1', members: ['s-01', 's-02', 's-03'], lead: 's-03', quiet: true },
@@ -625,7 +628,8 @@ describe('NewSessionOrRoomDialog — работа диалога и ответ p
 
   it('Start session раньше ответа providers.list — кнопка неактивна; после ответа — агент по умолчанию, а не пустой', async () => {
     let release: () => void = () => {};
-    bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
     await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
     expect(button('Start session').disabled).toBe(true);
@@ -641,7 +645,8 @@ describe('NewSessionOrRoomDialog — работа диалога и ответ p
   });
 
   it('отказ providers.list — текст ошибки, кнопка неактивна', async () => {
-    bridge.setHandler('providers.list', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => {
       throw { code: 'internal', message: 'сбой' };
     });
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
@@ -913,7 +918,8 @@ describe('NewSessionOrRoomDialog — ошибка диалога в подвал
   });
 
   it('отказ providers.list: ошибка тоже в подвале', async () => {
-    bridge.setHandler('providers.list', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => {
       throw { code: 'internal', message: 'сбой' };
     });
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
@@ -925,5 +931,37 @@ describe('NewSessionOrRoomDialog — ошибка диалога в подвал
   it('без ошибки role=alert нет', async () => {
     await renderDialog();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('source-qualified role choices and explicit defaults', () => {
+  const roles = [
+    { id: 'builtin:planner', name: 'Planner', source: 'builtin' as const, provider: 'claude', description: 'Plan', model: 'opus', effort: 'high', readOnly: true, models: { claude: 'opus', codex: 'gpt-6-astra' } },
+    { id: 'claude:Planner', name: 'Planner', source: 'claude' as const, provider: 'claude', description: 'Native', model: null, effort: null, readOnly: false },
+    { id: 'codex:Planner', name: 'Planner', source: 'codex' as const, provider: 'codex', description: 'Native', model: 'gpt-6.1-sol', effort: 'xhigh', readOnly: true },
+  ];
+  const roleControl = () => within(rows()[0]!).getByRole('combobox', { name: 'Role' });
+  it('distinguishes same-name sources, displays native effort and locks its provider without persisting defaults', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+    await renderDialog();
+    await chooseOption(roleControl(), '🔒 Planner · Codex');
+    expect(screen.getByText('Default effort: xhigh')).toBeTruthy();
+    const providers = within(rows()[0]!).getByRole('radiogroup', { name: 'Agent 1' });
+    expect(within(providers).getAllByRole('radio').every(item => (item as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    const sent = callsOf('sessions.create')[0]!;
+    expect(sent).toMatchObject({ provider: 'codex', role: { source: 'codex', name: 'Planner' } });
+    expect(Object.hasOwn(sent, 'effort')).toBe(false); expect(Object.hasOwn(sent, 'model')).toBe(false);
+  });
+  it('explicit Model Default clears a role default with null while untouched effort remains absent', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+    await renderDialog();
+    await chooseOption(roleControl(), '🔒 Planner · Builtin');
+    await chooseOption(within(rows()[0]!).getByRole('combobox', { name: 'Model' }), 'Default');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ role: { source: 'builtin', name: 'planner' }, model: null });
+    expect(Object.hasOwn(callsOf('sessions.create')[0]!, 'effort')).toBe(false);
   });
 });

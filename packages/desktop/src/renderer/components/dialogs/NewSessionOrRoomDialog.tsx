@@ -52,6 +52,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
+import type { RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
@@ -103,13 +104,17 @@ interface AgentRow {
   /** `id` из списка провайдера; `null` — `Default`, без флага. */
   model: string | null;
   effort: Effort;
+  role: string | null;
+  providerTouched: boolean;
+  modelTouched: boolean;
+  effortTouched: boolean;
 }
 
 /** Итог запуска по строке агента — только после первой попытки. */
 type AgentResult = { status: 'started'; sessionId: string } | { status: 'failed'; message: string };
 
 function initialRows(room: boolean): AgentRow[] {
-  return Array.from({ length: room ? 2 : 1 }, (_, index) => ({ key: index + 1, provider: null, model: null, effort: 'medium' }));
+  return Array.from({ length: room ? 2 : 1 }, (_, index) => ({ key: index + 1, provider: null, model: null, effort: 'medium', role: null, providerTouched: false, modelTouched: false, effortTouched: false }));
 }
 
 /** Имя папки проекта — последний сегмент пути, как в мете карточки. */
@@ -142,6 +147,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const lastProvider = useUiStore((state) => state.ui.lastProvider);
 
   /** `null` — `providers.list` этого открытия ещё не ответил. */
+  const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [providers, setProviders] = useState<ProviderOption[] | null>(null);
   /**
    * Работа диалога, заданная при открытии (меню карточки — её работа) или выбранная человеком; `null` — активная. Ключ,
@@ -221,6 +227,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const selectedKey = has(workChoice) ? workChoice : has(activeWorkKey) ? activeWorkKey : firstKey;
   const selected = activeWorks.find((entry) => keyOf(entry) === selectedKey) ?? null;
   const projectPath = selected?.projectPath ?? null;
+  useEffect(() => {
+    setRoles([]);
+    if (!open || projectPath === null) return;
+    let stale = false;
+    bridge.call('roles.list', { projectPath }).then(result => { if (!stale) setRoles(result.roles); }).catch(() => {});
+    return () => { stale = true; };
+  }, [open, bridge, projectPath]);
 
   useEffect(() => {
     setWorktreeAvailable(false);
@@ -241,7 +254,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   }, [open, bridge, projectPath]);
 
   const defaultId = providers === null ? null : defaultProvider(providers, lastProvider);
-  const providerIdOf = (row: AgentRow): string | null => row.provider ?? defaultId;
+  const roleOf = (row: AgentRow): RoleSummary | undefined => roles.find(role => role.id === row.role);
+  const providerIdOf = (row: AgentRow): string | null => {
+    const role = roleOf(row);
+    return role?.source !== undefined && role.source !== 'builtin' ? role.provider : row.provider ?? role?.provider ?? defaultId;
+  };
   const infoOf = (row: AgentRow): ProviderOption | undefined => {
     const id = providerIdOf(row);
     return providers?.find((provider) => provider.id === id);
@@ -261,7 +278,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   const addAgent = (): void => {
     const last = agents[agents.length - 1];
-    setAgents((rows) => [...rows, { key: nextKey.current++, provider: last?.provider ?? null, model: null, effort: 'medium' }]);
+    setAgents((rows) => [...rows, { key: nextKey.current++, provider: last?.provider ?? null, model: null, effort: 'medium', role: null, providerTouched: false, modelTouched: false, effortTouched: false }]);
   };
 
   const removeAgent = (key: number): void => setAgents((rows) => (rows.length <= 1 ? rows : rows.filter((row) => row.key !== key)));
@@ -308,8 +325,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             parent: null,
             worktree,
             // Модель и усилие — только когда контрол на экране: провайдер без списка или флага их не получает.
-            ...(row.model !== null && (info?.models?.length ?? 0) > 0 ? { model: row.model } : {}),
-            ...(info?.effort === true ? { effort: row.effort } : {}),
+            ...(row.role === null ? {} : { role: { source: roleOf(row)!.source, name: row.role.slice(row.role.indexOf(':') + 1) } }),
+            ...(row.modelTouched && (info?.models?.length ?? 0) > 0 ? { model: row.model } : {}),
+            ...(row.effortTouched && info?.effort === true ? { effort: row.effort } : {}),
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
@@ -407,7 +425,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             <span>{text.agentsField}</span>
             <div className="flex min-w-0 flex-col gap-2">
               {agents.map((row, index) => {
+                const role = roleOf(row);
                 const info = infoOf(row);
+                const roleModel = role?.source === 'builtin' ? (providerIdOf(row) === 'codex' ? role.models?.codex : role.models?.claude) : role?.model;
+                const displayedModel = row.modelTouched ? row.model : roleModel ?? null;
+                const displayedEffort = row.effortTouched ? row.effort : role?.effort ?? row.effort;
                 const models = info?.models ?? null;
                 const chosenId = providerIdOf(row);
                 const result = results[row.key];
@@ -416,6 +438,17 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                 return (
                   <div key={row.key} data-agent-row className="flex min-w-0 flex-col gap-1">
                     <div className="flex min-w-0 items-center gap-2">
+                      <Select value={row.role ?? 'none'} disabled={rowLocked || roles.length === 0} onValueChange={value => {
+                        const selectedRole = roles.find(item => item.id === value);
+                        updateAgent(row.key, { role: value === 'none' ? null : value,
+                          ...(selectedRole && (selectedRole.source !== 'builtin' || !row.providerTouched) ? { provider: selectedRole.provider } : {}) });
+                      }}>
+                        <SelectTrigger aria-label={text.roleField} className="max-w-[180px]"><SelectValue /></SelectTrigger>
+                        <SelectContent className={LIST_HEIGHT}>
+                          <SelectItem value="none">{text.noRole}</SelectItem>
+                          {roles.map(item => <SelectItem key={item.id} value={item.id}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(item.name, item.source)}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                       {multi ? (
                         <button
                           type="button"
@@ -442,10 +475,10 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                               role="radio"
                               aria-checked={on}
                               tabIndex={on ? 0 : -1}
-                              title={providerName(provider.id, provider.label)}
-                              disabled={!provider.available || rowLocked}
+                              title={role !== undefined && role.source !== 'builtin' ? S.roles.providerLocked : providerName(provider.id, provider.label)}
+                              disabled={!provider.available || rowLocked || (role !== undefined && role.source !== 'builtin')}
                               onClick={() => {
-                                if (!on) updateAgent(row.key, { provider: provider.id, model: null });
+                                if (!on) updateAgent(row.key, { provider: provider.id, providerTouched: true, model: null, modelTouched: false });
                               }}
                               className={cn(PILL, on ? 'border-ring bg-neutral-100 font-semibold' : 'border-border hover:bg-foreground/7')}
                             >
@@ -460,9 +493,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       </div>
                       {models !== null && models.length > 0 ? (
                         <Select
-                          value={row.model ?? DEFAULT_MODEL}
+                          value={displayedModel ?? DEFAULT_MODEL}
                           disabled={rowLocked}
-                          onValueChange={(value) => updateAgent(row.key, { model: value === DEFAULT_MODEL ? null : value })}
+                          onValueChange={(value) => updateAgent(row.key, { model: value === DEFAULT_MODEL ? null : value, modelTouched: true })}
                         >
                           <SelectTrigger aria-label={text.modelField} className="min-w-0 flex-1">
                             <SelectValue />
@@ -471,6 +504,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                             <SelectItem value={DEFAULT_MODEL} className={ITEM_CLIP}>
                               {text.modelDefault}
                             </SelectItem>
+                            {displayedModel !== null && !models.some(model => model.id === displayedModel) ? <SelectItem value={displayedModel}>{displayedModel}</SelectItem> : null}
                             {models.map((model) => (
                               <SelectItem key={model.id} value={model.id} className={ITEM_CLIP}>
                                 {model.label}
@@ -481,16 +515,17 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       ) : (
                         <span className="min-w-0 flex-1" />
                       )}
+                      {!row.effortTouched && role?.effort && !EFFORTS.some(item => item.value === role.effort) ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(role.effort)}</span> : null}
                       {info?.effort === true ? (
                         <ToggleGroup
                           type="single"
-                          value={row.effort}
+                          value={displayedEffort}
                           disabled={rowLocked}
                           aria-label={text.effortField}
                           className="shrink-0"
                           onValueChange={(value) => {
                             // Повторный клик по выбранному пункту Radix сообщает пустой строкой — усилие не снимается.
-                            if (value !== '') updateAgent(row.key, { effort: value as Effort });
+                            if (value !== '') updateAgent(row.key, { effort: value as Effort, effortTouched: true });
                           }}
                         >
                           {EFFORTS.map((effort) => (

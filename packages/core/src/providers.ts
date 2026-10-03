@@ -107,6 +107,8 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
   '{developerInstructions}',
   '-c',
+  '{sandbox}',
+  '-c',
   'project_doc_fallback_filenames=["CLAUDE.md"]',
   '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
@@ -175,13 +177,15 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
         // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
         // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
-        // того же сайта), а выбор из диалога в карте не хранится.
+        // того же сайта). В карте хранится только явный выбор, без вычисленных defaults роли.
         '--model',
         '{model}',
         '--effort',
         '{effort}',
         '--agent',
         '{agent}',
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       resumeArgs: [
@@ -197,6 +201,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{channel}',
         '--agent',
         '{agent}',
+        '--disallowedTools',
+        '{disallowedTools}',
         // Указатель на письма, которыми хост поднимает спящую сессию (спека окна
         // 7.2): первым ходом возобновлённой сессии. Ручной подъём идёт без него —
         // пустая подстановка просто выпадает.
@@ -297,11 +303,13 @@ export interface RunnerSubstitutions {
    * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
    * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
    */
-  effort?: EffortLevel;
+  effort?: EffortLevel | 'none' | 'minimal' | 'xhigh';
+  disallowedTools?: string;
+  sandbox?: string;
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|model|effort|disallowedTools|sandbox)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -348,6 +356,7 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
         continue;
       }
       const effort = subs.effort;
+      if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) throw new Error('invalid-role-effort');
       args.push(item.replace(INLINE_EFFORT, () => effort));
       fromTemplate.push(false);
       continue;

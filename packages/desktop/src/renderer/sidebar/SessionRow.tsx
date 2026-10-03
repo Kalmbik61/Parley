@@ -46,6 +46,7 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { dndId, type DragSourceData } from '../layout/dnd.js';
+import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
 import { displayStatus, dotState, stateWord } from '../lib/dot-state.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -268,6 +269,7 @@ export const SessionRow = memo(function SessionRow({
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
           <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
               ★

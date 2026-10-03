@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
 
 /**
@@ -9,6 +10,8 @@ import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../n
 export interface McpContext {
   /** Корень проекта: пути артефактов в карте отсчитываются от него. */
   projectPath: string;
+  /** Internal fixture inventory adapter; never environment or protocol input. */
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
   workId: string;
   /** `<проект>/.parley/works/<work-id>/` (или прежний `.harnas`) — то, что пришло в `PARLEY_WORK_DIR`. */
   workDir: string;

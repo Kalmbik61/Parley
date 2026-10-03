@@ -236,7 +236,7 @@ describe('подробный гид', () => {
 
   it('описывает роль-агента у spawn_session', () => {
     expect(GUIDE).toContain(
-      'spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)',
+      'spawn_session(provider, label, task, contextFrom, role, agent, worktree, model, effort)',
     );
     expect(GUIDE).toContain('.claude/agents/');
   });

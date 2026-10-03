@@ -15,6 +15,11 @@
 import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
+  roles: {
+    readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
+    option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
+    defaultEffort: (effort: string): string => `Default effort: ${effort}`,
+  },
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
   common: {
     cancel: 'Cancel',
@@ -220,6 +225,8 @@ export const S = {
      * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим.
      */
     newSession: {
+      roleField: 'Role',
+      noRole: 'No role',
       titleSession: 'New session',
       titleRoom: 'New room',
       hintSession: 'Add another agent to make it a room.',
@@ -1229,6 +1236,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
   'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
   'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
+  'role-missing': 'saved role is unavailable — this session starts without role defaults',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
 };

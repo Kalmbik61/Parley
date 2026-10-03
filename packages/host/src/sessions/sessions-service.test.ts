@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
+  buildRoleCatalog,
   createPendingSession,
   createWork,
   createWorktree,
@@ -1546,5 +1547,66 @@ describe('PARLEY.md before every host launch', () => {
     expect(start).toHaveBeenCalledTimes(2);
     expect(warning.mock.calls.filter(([message]) => message.includes('accounting'))).toHaveLength(1);
     expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+  });
+});
+
+
+describe('current role delivery and explicit session choices', () => {
+  it.each([{ model: '', cleared: false }, { model: null, cleared: true }])('keeps legacy empty model omitted and exact null explicit ($cleared)', async ({ model, cleared }) => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({ projectPath: project, workId: work.id, provider: 'claude', label: 'Plan', task: 'Plan', parent: null, role: { source: 'builtin', name: 'planner' }, model, ...(cleared ? { effort: null } : {}) });
+    try {
+      const stored = (await readMap(project, work.id)).sessions.find(item => item.id === ref.sessionId)!;
+      expect(stored.role).toEqual({ source: 'builtin', name: 'planner' });
+      expect(Object.hasOwn(stored, 'agent')).toBe(false);
+      expect(Object.hasOwn(stored, 'model')).toBe(cleared);
+      expect(Object.hasOwn(stored, 'effort')).toBe(cleared);
+      const args = await readArgs(argsFile);
+      expect(args.argv[args.argv.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit');
+      if (cleared) {
+        expect(args.argv).not.toContain('--model'); expect(args.argv).not.toContain('--effort');
+      } else {
+        expect(args.argv[args.argv.indexOf('--model') + 1]).toBe('opus');
+        expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
+      }
+    } finally { await service.stop(ref); }
+  });
+  it('rejects mandatory role channel gaps and alias conflicts before map or PTY mutation', async () => {
+    const home = path.join(project, 'home'); setEnv('PARLEY_HOME', home);
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const pty = createPtyManager(fakeHost()); const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const input = { projectPath: project, workId: work.id, provider: 'claude', label: 'Plan', task: 'Plan', parent: null, role: { source: 'builtin' as const, name: 'planner' } };
+    await expect(service.create({ ...input, agent: 'legacy' })).rejects.toThrow('agent-and-role-conflict');
+    await mkdir(home, { recursive: true });
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
+    await expect(service.create(input)).rejects.toThrow('role-permissions-unavailable');
+    expect((await readMap(project, work.id)).sessions).toHaveLength(0);
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('removed role warning delivery', () => {
+  it('logs each attempt but shows the safe warning once for each participant', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const host = fakeHost(); const warn = vi.fn(); host.log.warn = warn;
+    const service = createSessionsService(host, fakeWorks(), createPtyManager(host), fakeActivity(), { roleCatalog: async () => buildRoleCatalog() });
+    const sessionId = await createPendingSession(project, work.id, { provider: 'claude', label: 'Old role', task: 'Continue', role: { source: 'claude', name: 'removed' } });
+    const ref = { projectPath: project, workId: work.id, sessionId };
+    try {
+      await service.launch(ref, 'new'); await service.stop(ref);
+      await service.launch(ref, 'new'); await service.stop(ref);
+      const notices = broadcasts.filter(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'role-missing');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]?.data).toMatchObject({ kind: 'role-missing', ref });
+      expect(JSON.stringify(notices)).not.toContain('removed');
+      expect(warn.mock.calls.filter(args => (args[1] as { code?: string } | undefined)?.code === 'role-missing')).toHaveLength(2);
+    } finally { await service.stopAll(); }
   });
 });

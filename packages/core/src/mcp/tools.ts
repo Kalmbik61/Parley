@@ -20,7 +20,7 @@ import {
   supportsEffort,
   supportsModel,
 } from '../providers.js';
-import { agentDirs, assertAgent } from '../work/agents.js';
+import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
 import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
@@ -274,6 +274,9 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'list_roles', annotations: READS, description: 'List current builtin and native roles in the participant working folder, without prompts or file paths.', inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'spawn_session',
     annotations: WRITES,
     description:
@@ -289,10 +292,11 @@ const TOOLS: Tool[] = [
           description: 'Ids of sessions whose summaries and artifacts go into the brief.',
           items: { type: 'string' },
         },
+        role: { type: 'string', description: 'Source-qualified role id from list_roles. Provider may override a builtin default; native provider must match.' },
         agent: {
           type: 'string',
           description:
-            'The session role — a Claude Code agent: the name of the file .claude/agents/<name>.md of the project or ~/.claude/agents/<name>.md. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
+            'Legacy Claude role alias: exact metadata.name from a native agent definition. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
         },
         worktree: {
           type: 'boolean',
@@ -300,18 +304,18 @@ const TOOLS: Tool[] = [
             "Isolate the session in its own git worktree — its edits do not touch the project's working copy until it is decided to merge them (the window's Changes panel). Only for a project with git; Parley itself creates it before the launch.",
         },
         model: {
-          type: 'string',
+          type: ['string', 'null'],
           description:
-            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Without the field — the default model.",
+            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
         },
         effort: {
-          type: 'string',
-          enum: [...EFFORT_LEVELS],
+          type: ['string', 'null'],
+          enum: [...EFFORT_LEVELS, null],
           description:
-            "The new session's reasoning effort. A provider with effort: false in get_map drops the value. Without the field — the default effort.",
+            "The new session's reasoning effort. A provider with effort: false in get_map drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
         },
       },
-      required: ['provider', 'label', 'task'],
+      required: ['label', 'task'],
     },
   },
   {
@@ -533,22 +537,23 @@ async function spawnSession(
   sessionId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const provider = stringArg(args, 'provider');
+  if (args['agent'] !== undefined && args['role'] !== undefined) throw new Error('agent-and-role-conflict');
+  const savedRole = args['role'] === undefined ? (args['agent'] === undefined ? null : { source: 'claude' as const, name: stringArg(args, 'agent') }) : roleFromId(stringArg(args, 'role'));
+  if (!savedRole && args['provider'] === undefined) throw new Error('provider is required without a role');
+  const catalog = savedRole ? await (context.roleCatalog ? context.roleCatalog(context.projectPath) : sessionRoleCatalog(context.projectPath, { codex: savedRole.source === 'codex' })) : undefined;
+  const provider = args['provider'] === undefined ? (catalog?.roles.find(role => role.id === roleId(savedRole))?.provider ?? 'claude') : stringArg(args, 'provider');
   const label = stringArg(args, 'label');
   const task = stringArg(args, 'task');
   const contextFrom = stringsArg(args, 'contextFrom');
   // Роль необязательна: без неё сессия идёт обычным агентом провайдера.
-  const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
   // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
-  // необязательный параметр.
+  // необязательный параметр. Только явный null очищает default роли до default CLI.
   const model =
-    args['model'] === undefined || args['model'] === '' ? undefined : stringArg(args, 'model');
+    args['model'] === undefined || args['model'] === '' ? undefined : args['model'] === null ? null : stringArg(args, 'model');
   const effort =
-    args['effort'] === undefined || args['effort'] === ''
-      ? undefined
-      : enumArg(args, 'effort', EFFORT_LEVELS);
+    args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : enumArg(args, 'effort', EFFORT_LEVELS);
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -566,22 +571,15 @@ async function spawnSession(
   // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
   // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —
   // как `sessions.create` хоста: окно узнаёт об этом из `providers.list`, агент — из `get_map`.
-  let chosenModel: string | undefined;
-  if (model !== undefined) {
+  let chosenModel: string | null | undefined = model === null && supportsModel(entry) ? null : undefined;
+  if (model !== undefined && model !== null) {
     const refusal = modelChoiceError(entry, model);
     if (refusal !== null) throw new Error(refusal);
     if (supportsModel(entry)) chosenModel = model;
   }
   const chosenEffort = effort !== undefined && supportsEffort(entry) ? effort : undefined;
 
-  // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
-  // карте (спецификация 2026-09-08, раздел 7).
-  if (agent !== null) {
-    if (!(entry.runner.args ?? []).includes('{agent}')) {
-      throw new Error(`provider ${provider} does not accept agents`);
-    }
-    await assertAgent(agent, agentDirs(context.projectPath));
-  }
+  await prepareSessionRole(context.projectPath, entry, { roleId: roleId(savedRole), provider, mode: 'create' }, catalog);
 
   // База worktree — та же причина, что и роль: пропускаем до записи в карту, а
   // не после. `updateMap` мутирует карту синхронно, поэтому асинхронные проверки
@@ -606,7 +604,7 @@ async function spawnSession(
       task,
       parent: sessionId,
       contextFrom,
-      agent,
+      role: savedRole,
       ...(chosenModel === undefined ? {} : { model: chosenModel }),
       ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
     });
@@ -982,6 +980,12 @@ async function dispatch(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (name === 'get_map') return getMap(context);
+  if (name === 'list_roles') {
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(item => item.id === context.sessionId);
+    const cwd = caller?.worktree?.path ?? context.projectPath;
+    return roleSummaries(await (context.roleCatalog ? context.roleCatalog(cwd) : sessionRoleCatalog(cwd, { codex: true })));
+  }
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
   if (name === 'read_guide') return readGuide(args);
 

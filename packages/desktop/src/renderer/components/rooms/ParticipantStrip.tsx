@@ -15,6 +15,7 @@
  */
 
 import { S } from '../../../shared/strings.js';
+import { RoleChip } from '../../lib/role-summary.js';
 import { cn } from '../../lib/cn.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { AgentsBadge } from '../AgentsBadge.js';
@@ -42,6 +43,7 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
             <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
             <AgentIcon provider={participant.provider} size={14} />
             <span className="min-w-0 flex-1 truncate font-semibold">{participant.label}</span>
+            <RoleChip {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
             {participant.lead ? (
               <span title={S.rooms.lead} className="shrink-0 text-accent-700">
                 ★

@@ -401,6 +401,8 @@ describe('план запуска', () => {
       task: 'посмотреть шаги 1–3',
       agent: 'reviewer',
     });
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'agents', 'different-file.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role.');
     const plan = await planLaunch(project, workId, await sessionOf(workId, roled));
 
     const at = plan.args.indexOf('--agent');
@@ -663,8 +665,11 @@ describe('план возобновления', () => {
     });
     await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
 
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'agents', 'filename.md'), '---\nname: reviewer\ndescription: Review\n---\nNative prompt only.');
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
     expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('reviewer');
+    expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).not.toContain('Native prompt only.');
   });
 
   it('без id у провайдера запускает новый процесс по брифу', async () => {
@@ -1154,5 +1159,72 @@ describe('common session layer delivery', () => {
     await expect(planLaunch(project, workId, session)).rejects.toThrow('session-layer-too-large');
     await expect(planNew(project, workId, session)).rejects.toThrow('session-layer-too-large');
     await expect(planResume(project, workId, { ...session, providerSessionId: 'id' })).rejects.toThrow('session-layer-too-large');
+  });
+});
+
+describe('current role delivery on every session mode', () => {
+  it.each(['claude', 'codex'])('builtin role text and read-only delivery survive resume (%s)', async provider => {
+    const created = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider, label: '', task: '', role: { source: 'builtin', name: 'planner' } });
+    const session = await sessionOf(created.work.id, sessionId);
+    session.providerSessionId = provider === 'claude' ? 'c0ffee00-1111-2222-3333-444455556666' : 'native-id';
+    if (provider === 'claude') await claudeTranscript(session.providerSessionId);
+    for (const planner of [planNew, planLaunch, planResume]) {
+      const plan = await planner(project, created.work.id, session);
+      if (provider === 'claude') {
+        expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit');
+        expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain('Your role in this workspace: Planner (builtin:planner)');
+      } else {
+        expect(plan.args).toContain('sandbox_mode="read-only"');
+        expect(plan.args.find(arg => arg.startsWith('developer_instructions='))).toContain('builtin:planner');
+      }
+    }
+    expect(Object.hasOwn((await sessionOf(created.work.id, sessionId)), 'model')).toBe(false);
+  });
+  it('current native Codex defaults use exact effort and sandbox and do not persist', async () => {
+    const created = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'codex', label: '', task: '', role: { source: 'codex', name: 'exact' } });
+    const catalog = { roles: [{ id: 'codex:exact', source: 'codex' as const, provider: 'codex' as const, name: 'Exact', description: '', path: '/fixture.toml', prompt: 'Native developer role', model: 'native-model', effort: 'xhigh', sandboxMode: 'read-only' as const, readOnly: true }], diagnostics: [], partial: false };
+    const session = await sessionOf(created.work.id, sessionId);
+    session.providerSessionId = 'native-id';
+    for (const planner of [planNew, planResume]) {
+      const plan = await planner(project, created.work.id, session, { roleCatalog: catalog });
+      if (planner === planNew) { expect(plan.args).toContain('native-model'); expect(plan.args).toContain('model_reasoning_effort="xhigh"'); }
+      else { expect(plan.args).not.toContain('--model'); expect(plan.args.join(' ')).not.toContain('model_reasoning_effort'); }
+      expect(plan.args).toContain('sandbox_mode="read-only"');
+    }
+    const removed = await planResume(project, created.work.id, session, { roleCatalog: { roles: [], diagnostics: [], partial: false } });
+    expect(removed.diagnostics?.some(item => item.code === 'role-missing')).toBe(true);
+    expect(removed.args).not.toContain('sandbox_mode="read-only"'); expect(removed.args).not.toContain('native-model');
+  });
+  it('foreign sandbox and custom mandatory-channel gaps fail before command construction', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const session = await sessionOf(workId, sessionId);
+    await expect(planLaunch(project, workId, session, { requiredPermissions: { sandboxMode: 'workspace-write' } })).rejects.toThrow('role-permissions-unavailable');
+    session.role = { source: 'builtin', name: 'planner' };
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
+    await expect(planNew(project, workId, session)).rejects.toThrow('role-permissions-unavailable');
+  });
+});
+
+
+describe('fresh role defaults versus persisted explicit CLI clears', () => {
+  it.each([false, true])('rereads new-launch defaults without storing them (explicit clear %s)', async clear => {
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, work.id, { provider: 'codex', label: 'Review', task: '', role: { source: 'codex', name: 'current' }, ...(clear ? { model: null, effort: null } : {}) });
+    const session = await sessionOf(work.id, sessionId);
+    const catalog = (model: string, effort: string) => ({ roles: [{ id: 'codex:current', source: 'codex' as const, provider: 'codex' as const, name: 'current', description: '', path: '/fixture.toml', prompt: 'Current role', model, effort, sandboxMode: null, readOnly: false }], diagnostics: [], partial: false });
+    const first = await planNew(project, work.id, session, { roleCatalog: catalog('first-native-model', 'xhigh') });
+    const next = await planNew(project, work.id, session, { roleCatalog: catalog('second-native-model', 'minimal') });
+    if (clear) {
+      expect(first.args).not.toContain('--model'); expect(next.args).not.toContain('--model');
+      expect(next.args.join(' ')).not.toContain('model_reasoning_effort');
+    } else {
+      expect(first.args).toContain('first-native-model'); expect(next.args).toContain('second-native-model');
+      expect(next.args).toContain('model_reasoning_effort="minimal"');
+    }
+    const stored = await sessionOf(work.id, sessionId);
+    expect(Object.hasOwn(stored, 'model')).toBe(clear);
+    expect(Object.hasOwn(stored, 'effort')).toBe(clear);
   });
 });

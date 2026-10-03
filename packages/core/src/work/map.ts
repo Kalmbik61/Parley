@@ -8,6 +8,7 @@ import type {
   WorkMap,
   WorkProvider,
   WorkSession,
+  SessionRole,
   WorksIndex,
 } from './types.js';
 
@@ -94,9 +95,10 @@ export interface NewSession {
   contextFrom?: string[];
   /** Роль Claude Code, которой запустится сессия; без неё — обычная сессия. */
   agent?: string | null;
+  role?: SessionRole | null;
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /** Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. */
@@ -105,6 +107,7 @@ export function addSession(
   init: NewSession,
   at = new Date().toISOString(),
 ): WorkSession {
+  if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
   const session: WorkSession = {
     id: nextSessionId(map),
     provider: init.provider,
@@ -127,7 +130,7 @@ export function addSession(
     summary: null,
     summarySource: null,
     artifacts: [],
-    agent: init.agent ?? null,
+    role: init.role ?? (init.agent == null ? null : { source: 'claude', name: init.agent }),
     worktree: null,
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
@@ -425,7 +428,14 @@ function migrateSession(session: Record<string, unknown>): void {
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
-  session['agent'] ??= null;
+  if (!Object.hasOwn(session, 'role')) {
+    session['role'] = typeof session['agent'] === 'string' && session['agent'] !== ''
+      ? { source: 'claude', name: session['agent'] } : null;
+  }
+  const role = session['role'];
+  if (role !== null && (!isRecord(role) || !['builtin', 'claude', 'codex'].includes(String(role['source'])) ||
+    typeof role['name'] !== 'string' || role['name'] === '')) throw new Error('invalid session role');
+  delete session['agent'];
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
 }

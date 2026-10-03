@@ -22,6 +22,9 @@ import {
   type ProviderEntry,
   type RunnerSubstitutions,
 } from '../providers.js';
+import { prepareSessionRole, sessionRole, roleId, assertRoleDelivery } from './agents.js';
+import type { RoleCatalog } from '../roles/types.js';
+import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
@@ -50,14 +53,15 @@ export interface LaunchOptions {
    */
   prompt?: string;
   /**
-   * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
-   * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
-   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор из диалога
-   * в карте не хранится. Перекрывают выбор, записанный в сессию `spawn_session`ом
-   * (`WorkSession.model`, `.effort`): его хост подставляет сам, когда поднимает `pending`.
+   * Явный выбор модели и усилия для нового запуска перекрывает сохранённый выбор сессии.
+   * Нет выбора — текущий default роли; null — явное очищение до default CLI.
+   * Host сохраняет только явный выбор из окна или MCP, без вычисленных defaults роли.
+   * На resume native CLI восстанавливает прежнюю модель и усилие: новых флагов нет.
    */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  roleCatalog?: RoleCatalog;
+  requiredPermissions?: RequiredRolePermissions;
+  effort?: EffortLevel | null;
   /**
    * Адрес приёмника хуков хоста: с ним файл `--settings` получает HTTP-хуки ленты (вид «Chat»,
    * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
@@ -82,7 +86,7 @@ export interface LaunchPlan {
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
-  diagnostics?: LayerWarning[];
+  diagnostics?: Array<LayerWarning | { code: 'role-missing'; message: string }>;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -186,6 +190,12 @@ async function plan(
   const paths = workPaths(projectPath, workId);
   const cwd = session.worktree?.path ?? projectPath;
 
+  const role = await prepareSessionRole(cwd, entry, { roleId: roleId(sessionRole(session)), provider: session.provider, mode: 'existing',
+    ...(options.model === undefined && session.model === undefined ? {} : { model: options.model === undefined ? session.model! : options.model }),
+    ...(options.effort === undefined && session.effort === undefined ? {} : { effort: options.effort === undefined ? session.effort! : options.effort }),
+    ...(options.requiredPermissions ? { requiredPermissions: options.requiredPermissions } : {}),
+  }, options.roleCatalog);
+
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
   // промпт, а не первым сообщением, и агент ждёт запроса пользователя
   // (план от 2026-09-06, раздел B).
@@ -208,7 +218,7 @@ async function plan(
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
   // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
   const warnings: string[] = [];
-  const diagnostics: LayerWarning[] = [];
+  const diagnostics: NonNullable<LaunchPlan['diagnostics']> = role.warnings.map(() => ({ code: 'role-missing', message: 'The saved role is no longer available. Parley kept the explicit session choices and started without role defaults.' }));
   const channel = options.channel === true && template.includes('{channel}');
   // Молчим про чужих провайдеров: push — возможность Claude Code, у codex и GLM
   // `{channel}` в шаблоне нет и быть не должно.
@@ -240,7 +250,10 @@ async function plan(
   // Code живёт в процессе, а не в транскрипте, как и системная вставка (5.1).
   // Проверка имени осталась там, где создавалась запись, — второй раз файл
   // агента читать нечего.
-  if (session.agent !== null) subs.agent = session.agent;
+  if (role.nativeAgent !== null) subs.agent = role.nativeAgent;
+  if (role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(role.sandboxMode)}`;
+  if (role.readOnly && entry.id === 'claude') subs.disallowedTools = 'Edit,Write,NotebookEdit';
+  assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(
       projectPath,
@@ -258,10 +271,10 @@ async function plan(
   }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');
-  const nativeClaudeRole = entry.id === 'claude' && options.layer?.nativeClaudeRole === true;
+  const nativeClaudeRole = role.nativeAgent !== null || (entry.id === 'claude' && options.layer?.nativeClaudeRole === true);
   if (options.layer?.role?.trim()) {
     const deliverable = nativeClaudeRole
-      ? session.agent !== null && template.includes('{agent}')
+      ? role.nativeAgent !== null && template.includes('{agent}')
       : hasSystemLayer || hasDeveloperLayer;
     if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
   }
@@ -283,6 +296,7 @@ async function plan(
       : '';
     const layer = buildSessionLayer({
       ...options.layer,
+      ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id),
       bridge,
@@ -308,10 +322,11 @@ async function plan(
     const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
     const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
-    const model = options.model ?? session.model;
-    if (model !== undefined) subs.model = model;
-    const effort = options.effort ?? session.effort;
-    if (effort !== undefined) subs.effort = effort;
+    if (role.model !== null) subs.model = role.model;
+    if (role.effort !== null) {
+      if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(role.effort)) throw new Error('invalid-role-effort');
+      subs.effort = role.effort as NonNullable<RunnerSubstitutions['effort']>;
+    }
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;

@@ -51,6 +51,9 @@ export type SenderKind = 'human' | 'system' | 'agent';
 /** Участник комнаты — карточка ленты участников, пункт меню упоминаний. */
 export interface ParticipantModel {
   id: string;
+  role?: import('@parley/core').SessionRole | null;
+  roleRevision?: string;
+  sessionRef?: import('@parley/protocol').SessionRef;
   /** `S02 бэкенд`. */
   label: string;
   /** Ярлык без номера (`бэкенд`) — для фильтра меню упоминаний. */
@@ -266,6 +269,9 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         : { doing: null, doingDetail: null, agents: [] };
     participants.push({
       id,
+      role: session.role ?? null,
+      roleRevision: `${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`,
+      sessionRef: { projectPath: entry.projectPath, workId: map.work.id, sessionId: id },
       label: sessionRowLabel(id, session.label),
       rawLabel: sessionLabelText(session.label),
       provider: session.provider,

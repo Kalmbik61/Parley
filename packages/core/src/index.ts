@@ -392,3 +392,13 @@ export type {
 } from './work/types.js';
 
 export { createParleyMd, ensureParleyMd } from './work/parley-md.js';
+
+export { BUILTIN_ROLES, modelForTier } from './roles/builtin.js';
+export { buildRoleCatalog, listRoleCatalog, resolveRoleChoice, RoleChoiceError } from './roles/catalog.js';
+export type { RoleChoice, RequiredRolePermissions, ResolvedRoleChoice } from './roles/catalog.js';
+export type { RoleCatalog, RoleDefinition, RoleDiagnostic } from './roles/types.js';
+export { readCodexRoleContext, projectCodexRoleContext } from './roles/context.js';
+export type { CodexRoleContext, CodexContextOptions } from './roles/context.js';
+export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, assertRoleDelivery, roleSummaries } from './work/agents.js';
+export type { SessionRoleCatalogOptions, RoleSummary, RoleList } from './work/agents.js';
+export type { SessionRole } from './work/types.js';

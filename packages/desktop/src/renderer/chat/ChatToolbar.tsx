@@ -16,7 +16,10 @@ import type { ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
-import { updateTab } from '../layout/tree.js';
+import { RoleChip } from '../lib/role-summary.js';
+import { useWorksStore } from '../store/works.js';
+import { workKey as keyOf } from '../lib/tree-order.js';
+import { updateTab, findTab } from '../layout/tree.js';
 import { Button } from '../ui/button.js';
 import {
   DropdownMenu,
@@ -84,6 +87,12 @@ export interface ChatToolbarProps {
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
 
 export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, modelMenu, agents }: ChatToolbarProps): JSX.Element {
+  const entries = useWorksStore(state => state.entries);
+  const layout = useLayoutStore(state => state.layouts[workKey]);
+  const found = layout ? findTab(layout, tabId) : null;
+  const tab = found?.group.tabs[found.index];
+  const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
+  const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -113,6 +122,7 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
           </ToggleGroupItem>
         </ToggleGroup>
       </span>
+      {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
       {agents === undefined ? null : (
         <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">

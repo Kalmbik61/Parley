@@ -58,6 +58,7 @@ export const METHODS = {
     workId: z.string(),
     status: z.enum(['active', 'done', 'archived']),
   }),
+  'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -65,6 +66,8 @@ export const METHODS = {
     label: z.string(),
     task: z.string(),
     parent: z.string().nullable(),
+    role: z.object({ source: z.enum(['builtin', 'claude', 'codex']), name: z.string().min(1).max(4096) }).nullable().optional(),
+    agent: z.string().min(1).max(4096).optional(),
     worktree: z.boolean().optional(),
     // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
     // — окно узнаёт об этом из `providers.list`. Модель — `id` из списка провайдера
@@ -76,8 +79,9 @@ export const METHODS = {
       .string()
       .max(200)
       .regex(/^(?:[^\s-]\S*)?$/)
+      .nullable()
       .optional(),
-    effort: z.enum(['low', 'medium', 'high']).optional(),
+    effort: z.enum(['low', 'medium', 'high']).nullable().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -230,6 +234,7 @@ export interface Results {
   'works.delete': { ok: true };
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
+  'roles.list': import('@parley/core').RoleList;
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };

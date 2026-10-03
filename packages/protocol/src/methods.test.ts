@@ -211,8 +211,8 @@ describe('модель, усилие и поля providers.list (дизайн к
   it('sessions.create: model и effort необязательны — старое окно их не шлёт', () => {
     expect(parse({}).success).toBe(true);
     expect(parse({ model: 'opus', effort: 'high' }).success).toBe(true);
-    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<'low' | 'medium' | 'high' | undefined>();
+    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | null | undefined>();
+    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<'low' | 'medium' | 'high' | null | undefined>();
   });
 
   it('effort — low, medium или high; уровни, которых нет у обоих CLI, схема не пропускает', () => {
@@ -381,5 +381,19 @@ describe('capabilities.list (живая проверка 2026-10-02: подск�
 
   it('результат — команды, скиллы и субагенты', () => {
     expectTypeOf<Result<'capabilities.list'>>().toEqualTypeOf<Capabilities>();
+  });
+});
+
+
+describe('session role protocol compatibility', () => {
+  const base = { projectPath: '/p', workId: null, provider: 'claude', label: 'Plan', task: '', parent: null };
+  it('accepts old omitted choices, exact nullable clears, and source-qualified role data', () => {
+    expect(METHODS['sessions.create'].safeParse(base).success).toBe(true);
+    expect(METHODS['sessions.create'].safeParse({ ...base, model: null, effort: null, role: { source: 'builtin', name: 'planner' } })).toMatchObject({ success: true, data: { model: null, effort: null, role: { source: 'builtin', name: 'planner' } } });
+    expect(METHODS['sessions.create'].safeParse({ ...base, role: { source: 'unknown', name: 'planner' } }).success).toBe(false);
+  });
+  it('accepts current participant scope for safe role listings', () => {
+    expect(METHODS['roles.list'].safeParse({ projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' } }).success).toBe(true);
+    expect(METHODS['roles.list'].safeParse({ projectPath: '/p' }).success).toBe(true);
   });
 });

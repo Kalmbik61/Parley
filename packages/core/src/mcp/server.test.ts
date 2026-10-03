@@ -25,6 +25,9 @@ import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
+import { planLaunch } from '../work/launch.js';
+import { buildRoleCatalog } from '../roles/catalog.js';
+import type { RoleCatalog } from '../roles/types.js';
 import { contextFromEnv } from './context.js';
 import type { Ring } from './inbox-watch.js';
 import {
@@ -75,6 +78,7 @@ async function connect(
   channel = false,
   rings: Ring[] = [],
   worktreeRoot = DEFAULT_CONFIG.worktreeRoot,
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>,
 ): Promise<Client> {
   const context = {
     projectPath: project,
@@ -85,6 +89,7 @@ async function connect(
     messageRate,
     channel,
     worktreeRoot,
+    ...(roleCatalog ? { roleCatalog } : {}),
   };
   const server = createParleyServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -216,6 +221,7 @@ describe('список инструментов', () => {
       'close_session',
       'create_room',
       'get_map',
+      'list_roles',
       'propose_decision',
       'read_guide',
       'read_room',
@@ -285,11 +291,11 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const spawn = tools.find((tool) => tool.name === 'spawn_session');
 
-    expect(spawn?.inputSchema.required).toEqual(['provider', 'label', 'task']);
-    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: 'string' });
+    expect(spawn?.inputSchema.required).toEqual(['label', 'task']);
+    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: ['string', 'null'] });
     expect(spawn?.inputSchema.properties?.['effort']).toMatchObject({
-      type: 'string',
-      enum: ['low', 'medium', 'high'],
+      type: ['string', 'null'],
+      enum: ['low', 'medium', 'high', null],
     });
     expect(JSON.stringify(spawn?.inputSchema.properties?.['model'])).toContain('get_map');
     expect(JSON.stringify(spawn?.inputSchema.properties?.['effort'])).toContain('get_map');
@@ -710,7 +716,7 @@ describe('spawn_session', () => {
 
   it('роль агента проверяется по определению проекта и попадает в карту', async () => {
     await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role body.', 'utf8');
     const client = await connect('s-01');
 
     await callOk(client, 'spawn_session', {
@@ -720,7 +726,8 @@ describe('spawn_session', () => {
       agent: 'reviewer',
     });
 
-    expect(session(await readMapFile(), 's-02').agent).toBe('reviewer');
+    expect(session(await readMapFile(), 's-02').role).toEqual({ source: 'claude', name: 'reviewer' });
+    expect(Object.hasOwn(session(await readMapFile(), 's-02'), 'agent')).toBe(false);
   });
 
   it('определения агента нет — ошибка, записи нет', async () => {
@@ -733,7 +740,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('agent reviewer does not exist');
+    expect(result.text).toContain('role-missing');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -749,7 +756,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('does not accept agents');
+    expect(result.text).toMatch(/role-missing|role-provider-mismatch/);
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -2611,5 +2618,52 @@ describe('waitTimeoutMs', () => {
     expect(waitTimeoutMs(3600)).toBe(MAX_TIMEOUT_SEC * 1000);
     expect(waitTimeoutMs(5)).toBe(5000);
     expect(waitTimeoutMs(-1)).toBe(0);
+  });
+});
+
+describe('source-qualified session roles', () => {
+  it('lists safe current participant role metadata with no prompt or file paths', async () => {
+    let observed = '';
+    await updateMap(project, workId, map => { map.sessions[0]!.worktree = { path: '/participant/worktree', branch: 'b', base: 'main', createdAt: null }; });
+    const catalog = buildRoleCatalog({ roles: [{ id: 'claude:exact', source: 'claude', provider: 'claude', name: 'exact', nativeAgent: 'exact', description: 'Native role', path: '/sensitive/role.md', readOnly: false }], diagnostics: [], partial: false });
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, async cwd => { observed = cwd; return catalog; });
+    const result = await callOk(client, 'list_roles');
+    expect(observed).toBe('/participant/worktree');
+    expect(result).toHaveProperty('roles');
+    expect(JSON.stringify(result)).not.toContain('/sensitive'); expect(JSON.stringify(result)).not.toContain('prompt');
+  });
+  it('derives builtin provider, persists only role and explicit nullable choices', async () => {
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { role: 'builtin:critic', label: 'Review', task: 'Review the patch', model: null, effort: null });
+    const created = session(await readMapFile(), 's-02');
+    expect(created).toMatchObject({ provider: 'codex', role: { source: 'builtin', name: 'critic' }, model: null, effort: null });
+    expect(Object.hasOwn(created, 'agent')).toBe(false);
+  });
+  it('agent plus role and mandatory channel gaps refuse before map mutation', async () => {
+    const client = await connect('s-01');
+    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', agent: 'legacy', label: 'Review', task: 'Review' })).text).toContain('agent-and-role-conflict');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
+    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Review', task: 'Review' })).text).toContain('role-permissions-unavailable');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+});
+
+
+describe('role defaults and explicit CLI clears through MCP', () => {
+  it.each([{ model: '', effort: '', cleared: false }, { model: null, effort: null, cleared: true }])('keeps empty strings omitted, clears only exact null ($cleared)', async ({ model, effort, cleared }) => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Plan', task: 'Plan changes', model, effort });
+    const stored = session(await readMapFile(), 's-02');
+    expect(Object.hasOwn(stored, 'model')).toBe(cleared);
+    expect(Object.hasOwn(stored, 'effort')).toBe(cleared);
+    const plan = await planLaunch(project, workId, stored);
+    if (cleared) {
+      expect(plan.args).not.toContain('--model');
+      expect(plan.args).not.toContain('--effort');
+    } else {
+      expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+      expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    }
   });
 });

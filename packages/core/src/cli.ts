@@ -3,29 +3,25 @@
 // Диагностика идёт в stderr, код возврата ненулевой при ошибке.
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+
 import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
-import { commandInPath, loadProviders, startCommand } from './providers.js';
-import type { ProviderEntry, RunnerSubstitutions } from './providers.js';
+import { commandInPath, loadProviders } from './providers.js';
+import type { ProviderEntry } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { loadConfig } from './config.js';
 import { bothEnv } from './names.js';
-import { agentDirs, assertAgent } from './work/agents.js';
+import { prepareSessionRole, roleFromId, roleId } from './work/agents.js';
+import { planLaunch } from './work/launch.js';
 import { writeBrief } from './work/brief.js';
 import {
   CHANNEL_MIN_VERSION,
-  CHANNEL_VALUE,
   NO_CHANNEL_WARNING,
   probeChannelSupport,
 } from './work/channel.js';
-import { systemGuidance } from './work/guidance.js';
 import { addSession } from './work/map.js';
-import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './work/mcp-config.js';
-import { writeWorkSettings } from './work/settings-file.js';
-import { ensureStateDir } from './work/state-dir.js';
 import {
   createWork,
   pruneWorksIndex,
@@ -51,15 +47,16 @@ const USAGE = `parley-core — an index of Claude Code sessions as JSON
   parley-core work map --work <id> [--cwd <path>]
                                             the workspace map
   parley-core work session new --work <id> --provider <p> --label <l>
-      [--task <t>] [--context s-01,s-02] [--agent <name>] [--cwd <path>]
+      [--task <t>] [--context s-01,s-02] [--role <source:name> | --agent <name>] [--cwd <path>]
                                             a pending record, the brief, the MCP
                                             config, settings.json with hooks and
                                             a ready launch command; without
                                             --task the start is quiet: the brief
                                             goes in as context, and the user
                                             types the task themselves;
-                                            --agent is a Claude Code role from
-                                            .claude/agents/<name>.md
+                                            --role is a source-qualified role;
+                                            --agent is a legacy Claude role alias
+                                            matching exact metadata.name
 
   --json   the default and only format, accepted for compatibility
   --root   history root (default ~/.claude/projects, read-only)
@@ -151,7 +148,10 @@ async function newWorkSession(argv: string[]): Promise<void> {
     .map((id) => id.trim())
     .filter((id) => id !== '');
   // Роль Claude Code необязательна: без неё сессия идёт обычным агентом.
-  const agent = optionValue(argv, '--agent') ?? null;
+  const agent = optionValue(argv, '--agent');
+  const roleArg = optionValue(argv, '--role');
+  if (agent !== undefined && roleArg !== undefined) throw new Error('agent-and-role-conflict');
+  const role = roleArg === undefined ? (agent === undefined ? null : { source: 'claude' as const, name: agent }) : roleFromId(roleArg);
   const projectPath = await resolveProject(argv, workId);
 
   // Провайдера и бинарь проверяем до записи: запись `pending`, которую нечем
@@ -169,12 +169,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
 
   // Роль проверяется там же, где провайдер и бинарь: запись `pending`, которую
   // нечем запустить ролью, — тот же мусор в карте (спецификация 2026-09-08, 7).
-  if (agent !== null) {
-    if (!(entry.runner.args ?? []).includes('{agent}')) {
-      throw new Error(`provider ${provider} does not accept agents`);
-    }
-    await assertAgent(agent, agentDirs(projectPath));
-  }
+  await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' });
 
   // Провайдеру, принимающему id снаружи, uuid выдаём сразу и кладём в карту:
   // иначе после ручного запуска связь записи с логом провайдера потерялась бы.
@@ -192,7 +187,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
       task,
       parent: null,
       contextFrom,
-      agent,
+      role,
     });
     if (uuid !== null) session.providerSessionId = uuid;
     // Процесс поднимет пользователь напечатанной командой: pid харнессу неизвестен,
@@ -204,51 +199,12 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const paths = workPaths(projectPath, workId);
   const brief = await writeBrief(projectPath, map, created);
   // Бриф читаем с диска: между записью и запуском его можно править (раздел 11).
-  const briefText = await readFile(brief, 'utf8');
-  // Push через channel: настройка, проба версии и шаблон аргументов. Сессия из
-  // терминала получает звонок наравне с сессией панели (разговор агентов, 4.4).
   const channel = await channelFor(entry);
-  // Файл конфига нужен только тем, кто принимает путь; codex получает свой
-  // сервер значением `-c`, и лишний файл ему писать незачем.
-  const mcpFile =
-    entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, created, undefined, channel)
-      : null;
-  // `env` — окружение CLI: Codex режет серверу MCP окружение, и нужные ему `PARLEY_*` и `HARNAS_*` (дом харнесса,
-  // подмены бинарей) уходят в таблицу `env` явно — как при запуске окном (`work/launch.ts`).
-  const mcp = mcpConfigValue(
-    entry.runner.mcpConfig,
-    { workDir: paths.dir, sessionId: created, env: process.env },
-    mcpFile ?? '',
-  );
-  // Файл настроек с хуками нужен только тем, кто его принимает (`claude --settings`).
-  const settingsFile = (entry.runner.args ?? []).includes('{settingsFile}')
-    ? await writeWorkSettings(projectPath, workId)
-    : null;
-
-  // Тихий старт: бриф едет не первым сообщением, а контекстом вместе со
-  // вставкой гида — агент ждёт запроса пользователя.
-  const subs: RunnerSubstitutions = task === '' ? {} : { prompt: briefText };
-  if (uuid !== null) subs.sessionUuid = uuid;
-  if (mcp !== undefined) subs.mcpConfig = mcp;
-  if (channel) subs.channel = CHANNEL_VALUE;
-  if (agent !== null) subs.agent = agent;
-  if (settingsFile !== null) subs.settingsFile = settingsFile;
-  // Конец хода Codex приходит скриптом `notify`, а тот дописывает журнал `events/` работы: каталог заводим
-  // здесь, как это делает запуск окном.
-  if ((entry.runner.args ?? []).includes('{notify}')) {
-    await ensureStateDir(projectPath);
-    await mkdir(paths.events, { recursive: true });
-    subs.notify = codexNotifyOverride();
-  }
-  // Системная вставка гида — тому, кто её принимает (`claude --append-system-prompt`):
-  // сессия, поднятая руками, должна знать про харнесс то же, что поднятая панелью.
-  if ((entry.runner.args ?? []).includes('{systemPrompt}')) {
-    const guidance = systemGuidance(map, created);
-    subs.systemPrompt = task === '' ? `${guidance}\n\n${briefText}` : guidance;
-  }
-  const { command, args } = startCommand(entry, subs);
-
+  const session = map.sessions.find(item => item.id === created)!;
+  const plan = await planLaunch(projectPath, workId, session, { channel });
+  const { command, args } = plan;
+  const mcpFile = entry.runner.mcpConfig === 'json-file' ? path.join(paths.mcp, `${created}.json`) : null;
+  const settingsFile = (entry.runner.args ?? []).includes('{settingsFile}') ? args[args.indexOf('--settings') + 1] ?? null : null;
   print({
     workId,
     sessionId: created,

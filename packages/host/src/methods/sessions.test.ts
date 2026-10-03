@@ -112,3 +112,13 @@ describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
     expect(noteMode).not.toHaveBeenCalled();
   });
 });
+
+
+describe('sessions.create role and explicit clear wire delivery', () => {
+  it('forwards source-qualified role and exact null choices without computed defaults', async () => {
+    const { create, sessionsCreate } = handlers();
+    const input = { ...params, role: { source: 'builtin' as const, name: 'planner' }, model: null, effort: null };
+    await sessionsCreate(input, request);
+    expect(create).toHaveBeenCalledWith(input);
+  });
+});

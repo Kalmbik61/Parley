@@ -109,7 +109,7 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       // по-разному, а лезть за этим в карту незачем.
       const marks = [
         ...(id === session.parent ? ['parent'] : []),
-        ...(mate.agent === null ? [] : [`agent ${mate.agent}`]),
+        ...((mate.role == null && mate.agent == null) ? [] : [`agent ${mate.role ? `${mate.role.source}:${mate.role.name}` : mate.agent}`]),
       ];
       const mark = marks.length === 0 ? '' : ` (${marks.join(', ')})`;
       lines.push(`- ${mate.id} — ${mate.label}${mark}: ${displayStatus(mate)}`);

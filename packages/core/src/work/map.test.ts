@@ -44,8 +44,10 @@ describe('addSession', () => {
       agent: 'reviewer',
     });
 
-    expect(plain.agent).toBeNull();
-    expect(roled.agent).toBe('reviewer');
+    expect(plain.role).toBeNull();
+    expect(Object.hasOwn(plain, 'agent')).toBe(false);
+    expect(roled.role).toEqual({ source: 'claude', name: 'reviewer' });
+    expect(Object.hasOwn(roled, 'agent')).toBe(false);
   });
 
   it('модель и усилие запуска (spawn_session) пишутся, когда заданы; без них ключей в записи нет', () => {
@@ -421,6 +423,8 @@ describe('parseMap', () => {
       const rest = { ...session };
       delete rest['status'];
       delete rest['history'];
+      rest['role'] = typeof rest['agent'] === 'string' ? { source: 'claude', name: rest['agent'] } : null;
+      delete rest['agent'];
       return rest;
     };
     expect(parsed).toEqual({
@@ -789,5 +793,24 @@ describe('removeSession', () => {
     expect(() => removeSession(map, 's-99')).toThrow(/s-99/);
     expect(map.sessions).toHaveLength(3);
     expect(map.work.deletedSessions).toBeUndefined();
+  });
+});
+
+describe('role-only normalized records', () => {
+  it('rejects agent plus role before mutation and never persists computed defaults', () => {
+    const map = emptyMap();
+    expect(() => addSession(map, { provider: 'claude', label: '', task: '', agent: 'legacy', role: null })).toThrow('agent-and-role-conflict');
+    expect(map.sessions).toHaveLength(0);
+    const session = addSession(map, { provider: 'codex', label: '', task: '', role: { source: 'builtin', name: 'planner' } });
+    expect(session).toMatchObject({ role: { source: 'builtin', name: 'planner' } });
+    expect(Object.hasOwn(session, 'model')).toBe(false); expect(Object.hasOwn(session, 'effort')).toBe(false);
+  });
+  it('migrates exact legacy identity once and removes agent on read', () => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: '', task: '' });
+    delete session.role; session.agent = 'two words';
+    const migrated = parseMap(JSON.stringify(map), 'map.json');
+    expect(migrated.sessions[0]?.role).toEqual({ source: 'claude', name: 'two words' });
+    expect(JSON.stringify(migrated)).not.toContain('"agent"');
   });
 });

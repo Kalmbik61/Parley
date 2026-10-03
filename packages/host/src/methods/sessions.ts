@@ -35,9 +35,11 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
       // `exactOptionalPropertyTypes`: zod даёт `worktree?: boolean | undefined`,
       // а `CreateSessionInput.worktree?: boolean` явного `undefined` ключом не
       // принимает — той же дорогой, что `LaunchOptions.prompt` в `launch.ts`.
-      const { worktree, model, effort, ...rest } = params;
+      const { worktree, model, effort, role, agent, ...rest } = params;
       const ref = await deps.sessions.create({
         ...rest,
+        ...(role === undefined ? {} : { role }),
+        ...(agent === undefined ? {} : { agent }),
         ...(worktree === undefined ? {} : { worktree }),
         ...(model === undefined ? {} : { model }),
         ...(effort === undefined ? {} : { effort }),

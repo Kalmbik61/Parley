@@ -83,7 +83,7 @@ brief and the human in the window. Artifacts are result files; the path is alway
 to the project root; the contents are not copied into the map, only the path and the kind
 ("plan", "report", "patch").
 
-\`spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)\` — a new
+\`spawn_session(provider, label, task, contextFrom, role, agent, worktree, model, effort)\` — a new
 session in this same workspace. A \`pending\` record is created and a brief is written; the
 process starts by itself as soon as the record appears in the map — nobody needs to be
 called. Prefer \`spawn_session\` to your own subagents when a subtask of this topic lives
@@ -91,10 +91,16 @@ longer than one turn, must run in parallel with yours, or its result is needed b
 else: such a session is visible in the window and has its own report and its own history.
 A short exploration or a local edit is cheaper with your own subagent.
 
-\`agent\` is optional and sets the session's role: it is the name of a Claude Code agent
-definition — the file \`.claude/agents/<name>.md\` of the project or
-\`~/.claude/agents/<name>.md\`. Parley does not accept a name without such a file, and the
-field cannot be passed to a provider that does not accept roles.
+\`list_roles()\` lists builtin and native roles in your current working folder. It returns
+source-qualified ids, descriptions and defaults, without prompts or definition paths.
+\`role\` is optional: pass an id from \`list_roles\`. Provider is optional with a role;
+builtin roles supply a default provider, while a native role requires its own CLI.
+Parley validates the role and mandatory delivery before writing the new session.
+Do not pass both \`role\` and \`agent\`.
+
+\`agent\` is the legacy alias for a native Claude role: its exact metadata.name,
+not the filename. Native Claude applies its prompt, tools and defaults through --agent.
+A native definition with a restricted tools list must retain mcp__parley__* to coordinate.
 
 \`worktree\` is optional: \`true\` — the session works in its own git worktree, on a separate
 branch, and its edits do not touch the project's working copy until the human merges the

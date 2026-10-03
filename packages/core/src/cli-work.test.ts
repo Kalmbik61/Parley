@@ -388,7 +388,7 @@ describe('parley-core work session new', () => {
   it('--agent кладёт роль в карту и в команду запуска', async () => {
     await newWork('Авторизация');
     await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role body.', 'utf8');
     const printed = await ok(
       'work',
       'session',
@@ -407,7 +407,7 @@ describe('parley-core work session new', () => {
 
     const args = printed['args'] as string[];
     expect(args[args.indexOf('--agent') + 1]).toBe('reviewer');
-    expect((await readMapFile('w-0001')).sessions[0]?.agent).toBe('reviewer');
+    expect((await readMapFile('w-0001')).sessions[0]?.role).toEqual({ source: 'claude', name: 'reviewer' });
   }, 60_000);
 
   it('агента без определения и провайдера без роли CLI отвергает до записи', async () => {
@@ -426,10 +426,10 @@ describe('parley-core work session new', () => {
       'reviewer',
     );
     expect(missing.code).toBe(1);
-    expect(missing.stderr).toContain('agent reviewer does not exist');
+    expect(missing.stderr).toContain('role-missing');
 
     await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role body.', 'utf8');
     // У codex флага роли нет: запись, которую нечем запустить ролью, не заводим.
     const foreign = await cli(
       'work',
@@ -445,7 +445,7 @@ describe('parley-core work session new', () => {
       'reviewer',
     );
     expect(foreign.code).toBe(1);
-    expect(foreign.stderr).toContain('does not accept agents');
+    expect(foreign.stderr).toContain('role-provider-mismatch');
 
     expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
@@ -497,6 +497,8 @@ describe('parley-core work session new', () => {
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
       'mcp_servers.parley',
+      'developer_instructions',
+      'project_doc_fallback_filenames',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -630,5 +632,29 @@ describe('parley-core work session new', () => {
     expect(nonsense.stdout).toBe('');
     expect(nonsense.stderr).toContain('Unknown command: work чепуха');
     expect(nonsense.stderr).toContain('a new workspace in the project');
+  }, 60_000);
+});
+
+
+describe('source-qualified role CLI compatibility', () => {
+  it('writes only the builtin role and delivers mandatory text/permissions in quiet launch argv', async () => {
+    await newWork('Roles');
+    const printed = await ok('work', 'session', 'new', '--work', 'w-0001', '--provider', 'claude', '--label', 'Plan', '--role', 'builtin:planner');
+    const created = (await readMapFile('w-0001')).sessions[0]!;
+    expect(created.role).toEqual({ source: 'builtin', name: 'planner' });
+    expect(Object.hasOwn(created, 'agent')).toBe(false);
+    expect(Object.hasOwn(created, 'model')).toBe(false);
+    expect(Object.hasOwn(created, 'effort')).toBe(false);
+    const args = printed['args'] as string[];
+    expect(args[args.indexOf('--model') + 1]).toBe('opus');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit');
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('builtin:planner');
+  }, 60_000);
+  it('rejects simultaneous legacy and role choices before writing a session', async () => {
+    await newWork('Roles');
+    const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'claude', '--label', 'Plan', '--role', 'builtin:planner', '--agent', 'legacy');
+    expect(result.code).toBe(1); expect(result.stderr).toContain('agent-and-role-conflict');
+    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
 });

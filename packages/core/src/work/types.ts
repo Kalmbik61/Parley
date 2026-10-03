@@ -2,6 +2,8 @@ import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
+export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
+
 export type WorkStatus = 'active' | 'done' | 'archived';
 
 /**
@@ -125,7 +127,9 @@ export interface WorkSession {
    * `null` — обычная сессия. На диске может отсутствовать (карты до 2026-09-08):
    * `parseMap` подставляет `null` (спецификация 2026-09-08, 3.2).
    */
-  agent: string | null;
+  /** Legacy input only; normalized maps and new writes use role. */
+  agent?: string | null;
+  role?: SessionRole | null;
   /**
    * Своя рабочая копия git; `null` — сессия работает прямо в каталоге проекта.
    * В картах на диске до этого куска поля нет вовсе: `parseMap` подставляет
@@ -133,13 +137,13 @@ export interface WorkSession {
    */
   worktree: WorktreeInfo | null;
   /**
-   * Модель и усилие, с которыми запускается новая сессия, — их задаёт `spawn_session` (`model`, `effort`).
-   * Запускает такую сессию хост позже и без диалога, поэтому выбор ложится в карту, а `planLaunch` берёт
-   * его оттуда; выбор из диалога окна в карте не хранится и перекрывает эти поля. Нет поля — модель и
-   * усилие по умолчанию, без флагов. На диске поля может не быть: `parseMap` их не подставляет.
+   * Явный выбор модели и усилия из окна или `spawn_session` хранится в карте.
+   * Нет поля — default текущей роли, иначе default провайдера; null — явный выбор default CLI.
+   * Вычисленные defaults роли не записываются и пересчитываются при каждом новом запуске.
+   * На resume модель и усилие восстанавливает native CLI, без новых флагов.
    */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /**

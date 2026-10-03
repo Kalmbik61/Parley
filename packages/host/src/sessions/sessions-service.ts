@@ -14,6 +14,10 @@
 
 import {
   addMessage,
+  prepareSessionRole,
+  roleId,
+  type SessionRole,
+  type RoleCatalog,
   agentEnv,
   baseBranchOf,
   createChildSession,
@@ -76,6 +80,8 @@ export interface CreateSessionInput {
   label: string;
   task: string;
   parent: string | null;
+  role?: SessionRole | null;
+  agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
   worktree?: boolean;
   /**
@@ -84,8 +90,8 @@ export interface CreateSessionInput {
    * Модель — значение из списка провайдера, если список есть (`resolveModelChoice`: вне списка —
    * `bad_request`); пустая — «по умолчанию», без флага.
    */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
@@ -94,8 +100,8 @@ export type LaunchMode = 'launch' | 'resume' | 'new';
 export interface LaunchChoice {
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 export interface SessionsService {
@@ -126,6 +132,8 @@ export interface SessionsFeedOptions {
   providerVersions?: ProviderVersions;
   /** Injectable native limit query; production queries the runtime before spawn. */
   spawnLimits?: () => Promise<SpawnLimits | null>;
+  /** Current snapshot injection for isolated tests, never a persisted default. */
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -153,7 +161,7 @@ export function createSessionsService(
     for (const warning of diagnostics) {
       host.log.warn('session layer warning', { ref, code: warning.code, message: warning.message });
       const key = warning.code === 'provider-override-gap'
-        ? warning.code : `${ref.projectPath}\0${warning.code}`;
+        ? warning.code : warning.code === 'role-missing' ? `${refKey(ref)}\0${warning.code}` : `${ref.projectPath}\0${warning.code}`;
       if (warned.has(key)) continue;
       warned.add(key);
       host.broadcast('host.notice', { kind: warning.code, ref, text: warning.message, at: new Date().toISOString() });
@@ -313,6 +321,7 @@ export function createSessionsService(
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
+        ...(feed.roleCatalog ? { roleCatalog: await feed.roleCatalog(session.worktree?.path ?? ref.projectPath) } : {}),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
@@ -405,13 +414,16 @@ export function createSessionsService(
    * иначе выбор человека молча терялся бы. Пустой ярлык оставляет `NEW_LABEL`,
    * и тогда сессию переименует заголовок Claude Code (автозаголовок).
    */
-  async function applyChoice(ref: SessionRef, label: string, provider: string): Promise<void> {
+  async function applyChoice(ref: SessionRef, label: string, provider: string, role: SessionRole | null, choice: LaunchChoice): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return;
       if (trimmed !== '') session.label = trimmed;
       session.provider = provider;
+      session.role = role;
+      if (choice.model !== undefined) session.model = choice.model;
+      if (choice.effort !== undefined) session.effort = choice.effort;
     });
   }
 
@@ -456,8 +468,15 @@ export function createSessionsService(
   async function create(input: CreateSessionInput): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent, worktree, effort } = input;
     // Модель — раньше всего: значение не из списка провайдера отвергается до первой записи в карте
-    // (иначе осталась бы `pending`-сессия, которую нечем запустить), а пустое — «по умолчанию».
-    const model = await resolveModelChoice(provider, input.model);
+    // (иначе осталась бы `pending`-сессия, которую нечем запустить). Пустая строка — отсутствие
+    // выбора; только явный null очищает default роли до default CLI.
+    if (input.agent !== undefined && input.role !== undefined) throw new HostError('bad_request', 'agent-and-role-conflict');
+    const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
+    const registry = await loadProviders();
+    const entry = registry[provider];
+    if (!entry) throw new HostError('bad_request', 'unknown provider');
+    await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
+    const model = input.model === null ? null : await resolveModelChoice(provider, input.model);
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
       ...(model === undefined ? {} : { model }),
@@ -473,7 +492,7 @@ export function createSessionsService(
     if (workId === null) {
       const created = await createNewSession(projectPath, null);
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new', choice);
     }
@@ -481,7 +500,7 @@ export function createSessionsService(
     if (task === '' && parent === null) {
       const created = await createNewSession(projectPath, workId);
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new', choice);
     }
@@ -489,7 +508,7 @@ export function createSessionsService(
     if (task === '' && parent !== null) {
       const created = await createChildSession(projectPath, workId, parent);
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, parent, true);
       return createInteractive(ref, 'launch', choice);
     }
@@ -500,6 +519,8 @@ export function createSessionsService(
       task,
       parent,
       contextFrom: parent === null ? [] : [parent],
+      role,
+      ...choice,
     });
     const ref = { projectPath, workId, sessionId };
     if (worktree === true) await attachWorktreePlan(ref, parent, true);

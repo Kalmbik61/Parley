@@ -68,3 +68,5 @@ export type {
 
 export { capabilityProvider, capabilityScope, capabilityDiagnostic, capabilityPresence, capabilityRow, capabilityColumn, capabilitySnapshot } from './capability-snapshot.js';
 export type { CapabilityProvider, CapabilityScope, CapabilityDiagnostic, CapabilityPresence, CapabilityRow, CapabilityColumn, CapabilitySnapshot } from './capability-snapshot.js';
+
+export type { RoleList, RoleSummary, SessionRole } from '@parley/core';
