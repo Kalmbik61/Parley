@@ -5,9 +5,9 @@
   </picture>
 </h1>
 
-Coordination of agent CLIs (Claude Code, Codex) in the `Parley.app` window — an Electron
-app on top of a local `parley-host` process. The window and the host are connected by a
-unix socket with its own handshake token; there are no network ports. Parley works locally: it
+Coordination of agent CLIs (Claude Code, Codex, and GLM through Claude Code) in the
+`Parley.app` window — an Electron app on top of a local `parley-host` process. The window and
+the host are connected by a unix socket with its own handshake token; there are no network ports. Parley works locally: it
 is not a server and not a web app.
 
 In the window: a sidebar of project workspaces with a tree of their sessions and rooms;
@@ -53,11 +53,13 @@ launch. Allow it once, in either of two ways:
 ### Requirements
 
 - macOS 13 (Ventura) or later, on Apple Silicon or Intel;
-- `claude` and/or `codex`, installed and signed in. Parley starts the CLIs you already use,
-  under your own login: it does not sign you in and does not touch your credentials. The window
-  finds them on the `PATH` of your login shell (see "Environment of the window");
-- Chat view (optional) needs Claude Code 2.1.286 or newer; older versions and Codex stay in the
-  terminal;
+- `claude` and/or `codex`, installed and signed in for Claude or Codex sessions. Parley starts
+  the CLIs you already use, under your own login; it does not sign you in or read their
+  credentials. The window finds them on the `PATH` of your login shell (see "Environment of
+  the window"). GLM instead needs official Claude Code 2.1.287 or newer, an active GLM Coding
+  Plan and a Z.ai key you save in its provider card (see "GLM (Z.ai)");
+- Chat view (optional) needs Claude Code 2.1.286 or newer; it also works for GLM sessions,
+  whose CLI minimum is 2.1.287. Older Claude Code versions and Codex stay in the terminal;
 - git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
   older git a conflict shows up only when you try to merge.
 
@@ -114,7 +116,8 @@ host. If the shell did not answer, the window's own environment remains, with th
 `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` appended to its `PATH`, and the `bin` of
 nvm's default Node (`alias/default`, or the newest installed version; `npm i -g` puts `codex`
 there) and the shims of volta, asdf and mise; the reason is printed to the window's console. If
-the host still cannot find `claude` or `codex`, the status bar shows that provider as "not found". The environment is captured once per app launch: neither
+the host still cannot find `claude` or `codex`, its provider segment stays dimmed; click it for
+connection guidance. The environment is captured once per app launch: neither
 closing the window nor "Restart host…" refreshes it, and a running host (it outlives the
 window) does not change its own. If you changed `PATH` or variables in your rc files, quit the
 app (⌘Q), open it again and choose "Restart host…" in the palette: live agents are interrupted
@@ -230,8 +233,11 @@ The project rests on one boundary, and it is not up for discussion:
 
 - only the **unmodified official binary** (`claude`, `codex`) is launched, from your
   `PATH`, under your own login;
-- Parley **never reads, stores or injects credentials**: `~/.claude/.credentials.json` and
-  `~/.codex/auth.json` are never opened, under any circumstances;
+- Parley **never reads, stores or injects the credentials of Claude Code or Codex**:
+  `~/.claude/.credentials.json` and `~/.codex/auth.json` are never opened. The one secret it
+  keeps is a Z.ai API key that you paste in yourself to use GLM: it is stored only on this
+  Mac (`~/.parley/secrets.json`, mode `0600`, under `PARLEY_HOME` when set) and passed only
+  to GLM sessions, which run the official `claude` against Z.ai's GLM Coding Plan endpoint;
 - history directories (`~/.claude/projects`, `~/.codex/sessions`) are opened **read-only**;
   Parley writes nothing to `~/.claude` — hooks are passed with the `--settings` flag from a
   file in the workspace directory;
@@ -245,7 +251,8 @@ The window (`packages/desktop`) and its host add six more rules to the boundary 
 
 - the Keychain item `Claude Code-credentials`, `~/.claude/.credentials.json` and
   `~/.codex/auth.json` are not read, and there are no requests to the Anthropic or OpenAI
-  APIs. The window takes subscription limits only from what the CLIs themselves provide:
+  APIs or to Z.ai. The window takes subscription limits only from what the CLIs themselves
+  provide:
   the `rate_limits` field of the Claude Code status line (a `statusLine` script in the
   `--settings` file, like the hooks) and `rate_limits` in Codex session logs;
 - nothing is written to `~/.claude.json`, folder trust included;
@@ -277,9 +284,9 @@ adds four more:
 The Organic rooms (spec `docs/specs/2026-09-29-desktop-rooms-organic-design.md`, sections 1.1
 and 3.5) add two more:
 
-- the only CLI launch outside a session is the `claude --version` / `codex --version` probe
-  at host start (the version appears in the window's status bar); it is turned off with
-  `PARLEY_SKIP_VERSION_PROBE=1`;
+- the only CLI launches outside sessions are `claude --version` / `codex --version` probes
+  for availability and the status bar. The startup probe can be turned off with
+  `PARLEY_SKIP_VERSION_PROBE=1`; GLM still requires a verified supported version before launch;
 - the status line script only reads the human's and the project's `settings.json` and
   writes nothing.
 
@@ -349,13 +356,17 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   connection: "Disconnected — reconnecting…" in the terminal tab. A host older than the
   window: "Host is outdated — restart". "Restart host…" interrupts live agents; they come back
   through `--resume`;
-- the status bar at the bottom, 28px, left to right. First a segment for each available
-  provider: icon, name, CLI version (`claude --version`, `codex --version`; the host asks for
-  it once at start, and with no version there is just the icon and the name) and subscription
-  limits: a bar for the five-hour window (for the weekly window if there is no five-hour one)
+- the status bar at the bottom, 28px, left to right. Claude Code, Codex and GLM always have
+  segments, followed by available custom providers. Disconnected segments are dimmed; clicking
+  any built-in segment opens its connection card with install or key guidance and "Check again".
+  Connected segments show icon, name, CLI version (`claude --version`, `codex --version`)
+  and, for Claude Code and Codex, subscription limits: a bar for the five-hour window
+  (for the weekly window if there is no five-hour one)
   and "58% 5h · 41% wk". From 80% in either window the text and the bar use the accent color,
   and the tooltip says when the windows reset and when the CLI reported the numbers. With no
-  data the segment has no limits. When space runs short, the limits text disappears first
+  data the segment has no limits. GLM has no subscription-limit bar: Parley does not request
+  Z.ai quotas or show Claude subscription limits on GLM. When space runs short, the limits
+  text disappears first
   (the bar stays), then the version, and the name last. Further right: the host's latest
   notice; "N need you · M unseen" — a click goes to the next such session or room; the
   connection to the host (for example "Host 0.1.0"); "Host is outdated — restart" if it is
@@ -706,7 +717,7 @@ node packages/core/dist/cli.js session <id>
 
 ### Chat view
 
-A Claude Code session tab can show the session as a conversation instead of a terminal. The
+A Claude Code or GLM session tab can show the session as a conversation instead of a terminal. The
 agent is the same unmodified CLI, running in a terminal that is hidden, not removed: the
 **Chat | Terminal** segment in the tab's toolbar switches between the two at any moment.
 Nothing is sent on your behalf: every permission, question and plan is answered by your click
@@ -755,10 +766,13 @@ switches to the chat once. Your own choice of view is remembered per tab and win
 presses Shift+Tab in the hidden terminal until the footer of the screen shows the chosen mode;
 if it cannot confirm the change, it asks you to open the terminal. Bypass mode is set in the
 terminal only. The model menu lists the provider's models and sends `/model <id>` to the
-session.
+session. For GLM, this Chat model choice is not saved separately and may reset on resume to
+the session's configured launch model (GLM-5.3 by default).
 
-**Version.** Chat view needs Claude Code 2.1.286 or newer. Codex and older versions of Claude
-Code stay terminal-only: the segment is disabled and says why.
+**Version.** Chat view needs Claude Code 2.1.286 or newer; GLM needs 2.1.287 or newer to
+launch at all. Codex and older versions of Claude Code stay terminal-only: the segment is
+disabled and says why. GLM shares the first-launch Terminal flow; trust, onboarding and
+permission questions are never answered automatically.
 
 **How it works.** The session's settings file carries HTTP hooks that post to the host on
 `127.0.0.1` with a per-launch token. The feed lives on the host: the window gets a snapshot,
@@ -1232,6 +1246,7 @@ to it.
   - `src/providers.ts` — the provider registry: what to launch with, how to pass the id, the
     MCP config, the settings file, the prompt, the model and the effort;
     `src/provider-models.ts` — the built-in model lists.
+  - `src/secrets.ts` — the only reader and writer of Parley's locally saved Z.ai key.
 - `packages/desktop` — the Electron window.
   - `src/main/` — the main process: the window and the menu, the IPC allowlist (`ipc.ts`,
     `files/ipc.ts`), the `~/.parley/desktop/` stores (layouts, `ui.json`, notes, `drops/`),
@@ -1275,15 +1290,23 @@ to it.
 | ----------- | ------------------------- | ---------------------- |
 | Claude Code | yes, `~/.claude/projects` | `claude --resume <id>` |
 | Codex       | yes, `~/.codex/sessions`  | `codex resume <id>`    |
-| GLM         | no                        | `glm`                  |
+| GLM (Z.ai)  | yes, `~/.claude/projects` | `claude --resume <id>` with the saved Z.ai key |
 
-In the window the agent is chosen among all the registry's available providers whose command
-is in `PATH` (or is set through `PARLEY_<COMMAND>_BIN`) — Claude Code, Codex, GLM. The agent
+The New session or room dialog shows the built-in providers even when disconnected. Click a
+dimmed provider, or the already selected provider, to open its connection card without losing
+your model selection. "Check again" refreshes availability after installation or a key change;
+the dialog also refreshes when another window changes a key or the host reconnects. Starting
+waits for a successful refresh and a connected provider. Removing the selected GLM key blocks
+the next session or room launch. With an older host, the GLM card offers "Restart host" before
+key management becomes available.
+
+An agent can start when its command is in `PATH` (or set through `PARLEY_<COMMAND>_BIN`);
+GLM additionally requires the supported official `claude` version and a saved key. The agent
 icon for Claude Code and Codex is the brand's (the marks belong to Anthropic and OpenAI, the
 origin of the files is in `NOTICE`), and for other providers it is a letter; there is no
 provider filter. A session with not a single known signal since the process started — for
-Claude Code that is no hook at all, for Codex neither `Ready` nor `Working` in the terminal
-title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
+Claude Code and GLM that is no hook at all, for Codex neither `Ready` nor `Working` in the
+terminal title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
 note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
 answer — text not inserted" with the buttons "Copy" and "Open S02"; auto-wake does not wake it
 either. The provider adapters and the registry stay in core and work from the CLI.
@@ -1293,9 +1316,9 @@ either. The provider adapters and the registry stay in core and work from the CL
 The host gives the window the providers' model lists (`providers.list`), and
 `sessions.create` accepts a model only from its provider's list: a value that is not in the
 list gives `bad_request`, the CLI does not get it, and no record appears in the map. If no
-model is chosen (the field is omitted or empty), it means "default": there is no `--model`
-flag, and the CLI uses its own model. The built-in lists are taken from the providers' public
-documentation, in the same order as there:
+model is chosen (the field is omitted or empty), it means "default": Claude Code and Codex
+use their own model without `--model`; GLM uses `glm-5.3[1m]`. The built-in lists are taken
+from the providers' public documentation, in the same order as there:
 
 - Claude Code — the `--model` aliases from `code.claude.com/docs/en/model-config`: `best`,
   `fable`, `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`, `opusplan`, `opusplan[1m]`.
@@ -1304,9 +1327,11 @@ documentation, in the same order as there:
 - Codex — the recommended models from `developers.openai.com/codex/models`: `gpt-6-astra`,
   `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`. `gpt-6-sol` is the previous Sol: the documentation
   has not retired it, and `gpt-6.1-sol` is not available in every plan. Models that the
-  documentation retires from Codex (`gpt-5.5` and older) are not taken into the list.
+  documentation retires from Codex (`gpt-5.5` and older) are not taken into the list;
+- GLM — `glm-5.3[1m]` and `glm-5.3-flash[1m]`, shown as GLM-5.3 and GLM-5.3 Flash with
+  1M context. The official Opus and Sonnet tiers map to GLM-5.3; Haiku maps to GLM-5.3 Flash.
 
-For GLM and for custom providers with no list, the model goes into the command unchecked — if
+For custom providers with no list, the model goes into the command unchecked — if
 `args` contains `{model}`.
 
 If a model comes out that is not in the list yet, do not wait for a Parley update: set the
@@ -1315,7 +1340,7 @@ list in `~/.parley/providers.json` with the `models` field. An element is a pair
 start with a hyphen, is at most 200 characters, and has no repeats in the list, otherwise the
 file will not load. The list replaces the built-in one entirely (like `args`), so the built-in
 models you need are listed again; `[]` removes the list altogether. It takes effect only if
-the provider's `args` contains `{model}` (the built-in `claude` and `codex` have it).
+the provider's `args` contains `{model}` (the built-in `claude`, `codex` and `glm` have it).
 
 ```json
 {
@@ -1327,6 +1352,64 @@ the provider's `args` contains `{model}` (the built-in `claude` and `codex` have
   }
 }
 ```
+
+### GLM (Z.ai)
+
+GLM runs the unmodified official Claude Code CLI against the built-in GLM Coding Plan
+endpoint, `https://api.z.ai/api/anthropic`. You need an active GLM Coding Plan and Claude Code
+**2.1.287 or newer**, the minimum version verified for Parley's authorization path. An
+unknown or unparseable version blocks GLM. Install or update Claude Code yourself, then use
+"Check again" in the GLM card.
+
+Open the card from GLM in the status bar or the New session or room dialog. "Get a key" opens
+Z.ai; paste your key into the password field and choose "Save". You can save it before
+installing the CLI, but GLM becomes connected only when both the key and a supported CLI are
+present. The card shows only a mask and at most the last four characters. "Replace" saves
+a new key; "Remove" deletes it. The input clears after a successful action or closing the
+card. An older host offers "Restart host" instead of key editing.
+
+The key stays in `secrets.json` under Parley's home (`~/.parley`, or `PARLEY_HOME`), with file
+mode `0600` and atomic writes. It is not encrypted. Only core's secret-store module reads or
+writes it; the window receives only the masked hint. The host reads it afresh immediately
+before a GLM launch and adds it as `ANTHROPIC_AUTH_TOKEN` to that process's environment.
+It is absent from launch plans, command arguments, workspace maps, briefs, MCP files,
+settings files, logs and notifications. Removing it leaves a running session alone, but
+blocks later launch, resume and wake attempts. The core CLI's `work session new --provider glm`
+cannot deliver the key and refuses; create GLM sessions through the window or host-backed MCP.
+
+The host uses Claude Code's provider-managed authorization mode. It removes inherited
+authentication, provider, model, cloud and gateway selectors, then supplies the built-in
+endpoint, model tier aliases and key. GLM uses your normal shared Claude Code configuration,
+MCP, skills and hooks; Parley neither reads Claude's stored credentials nor changes its
+configuration files. In the verified official 2.1.287 CLI, this mode ignores saved sign-in
+and `apiKeyHelper` for provider authorization and filters provider overrides from
+`settings.env`. Parley's `settings-glm.json` supplies the model, hooks and status line,
+with no key or provider environment inside it. This path was checked statically without
+reading real credentials or making API requests; live trust and API acceptance still need
+a manual check.
+
+Claude Code's narrow host-managed scrub removes the Z.ai credentials from Bash, command
+hooks, MCP subprocesses and HTTP-hook variable interpolation. GLM's local feed hooks use
+`PARLEY_HOOK_CAPABILITY`, which also works with the broader subprocess scrub. Parley preserves
+the user's `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` setting and its permission policy, and leaves an
+inherited `CLAUDE_CODE_MANAGED_SETTINGS_PATH` unchanged without reading or repointing it.
+Administrator hook URL, hook-variable and model restrictions remain effective: incompatible
+model restrictions can refuse a selection or cause a fallback. Environment scrubbing does
+not isolate the key from a malicious local process that can read your files or processes.
+
+GLM shares Claude Code's transcript format and Chat view. The first launch stays in Terminal
+until the first activity hook; answer trust, onboarding and permission questions there.
+Resume starts with the session's configured launch model, GLM-5.3 by default; a `/model`
+choice made in Chat is not separately persisted and may reset. Avoid `/logout` in GLM:
+it can change the shared local Claude Code sign-in used by your Claude sessions.
+
+GLM-5.3 is text-only; choose **GLM-5.3 Flash** for screenshots and other images. GLM has no
+Claude channel and no quota display: Parley never requests Z.ai quotas or shows Claude
+subscription limits on GLM. Parallel agents still share your plan's allowance and can receive
+429 errors. Custom GLM runner commands and templates containing `--bare`, `--safe-mode` or
+`--setting-sources` are refused before the key is delivered. Other safe registry overrides
+remain available; `secret`, `family`, provider environment and the minimum version cannot
+be changed through `providers.json`.
 
 ### Codex — a room agent
 
