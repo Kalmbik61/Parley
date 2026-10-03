@@ -61,9 +61,9 @@
 |---|---|---|---|---|
 | [P00 — Подготовить актуальную рабочую базу](#p00) | 0 | — | /root/p00_prepare_base | done |
 | [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | done |
-| [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | review |
+| [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | done |
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
-| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | не назначен | pending |
+| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | running |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | не назначен | pending |
@@ -155,9 +155,9 @@
 
 ### P02: Проверить Codex: скиллы, слой, роли и resume
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p00_review (новая задача P02), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p00_review (новая задача P02), gpt-6.1-sol/high.
 
 **Зависимости:** P00. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
@@ -176,7 +176,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence после выполнения:** `ce3efc1`; /root/p00_review — accepted, замечаний нет. Независимо повторены 11 offline CLI probes, argv UTF-8/JSON, macOS границы и сверка pinned source. Native live JSONL показывает failed turn, не приёмку launch/resume/MCP. До P32 — полный native list. [Evidence](../research/2026-10-03-parley-cli/codex.md).
 
 <a id="p03"></a>
 
@@ -211,7 +211,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `architect`. **Проверяющий:** другой агент, профиль `verifier`.
+**Статус:** running. **Исполнитель:** /root/p00_prepare_base (новое назначение P04), gpt-6.1-sol/high; профиль `architect`. **Проверяющий:** другой агент, профиль `verifier`.
 
 **Зависимости:** P01, P02, P03. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
