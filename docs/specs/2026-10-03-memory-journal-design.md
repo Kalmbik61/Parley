@@ -300,3 +300,8 @@ CLAUDE.md; один факт на вызов, коротко. Вставка у�
 - устаревание записей памяти;
 - память между проектами;
 - поиск в палитре команд.
+
+
+## Дополнение 2026-10-04: экономия и provenance
+
+[Audit token contract](../plans/2026-10-04-parley-token-economy-audit.md) дополняет P29/P30/P34/P35: записи и excerpts имеют scope/origin/source refs/evidence/taskRevision/current-or-superseded и completeness. Старый agent summary остаётся unverified claim; stale memory не заменяет новый human amendment. После compaction доставляются текущие constraints/pending/evidence refs в budget; полные тела читаются по demand, известные hashes не копируются снова в bootstrap. Нет общего knowledge dump или смешивания skill bodies с memory. Экономия повторных чтений проверяется P38 на принятой команде, не по размерам файлов.

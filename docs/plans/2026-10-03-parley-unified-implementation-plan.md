@@ -391,3 +391,24 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 5. Выбор ведущего относится к CLI/cwd участника и попадает текстом в назначение. Постоянного поля skill и копирования SKILL.md в общий слой нет.
 6. Переделки плана инвалидируют изменённые результаты; planId/rev защищают от запоздалой проверки, журнал и снимки сохраняют принятую версию.
 7. Непроверенные сведения CLI оставлены в разведке, включение навигатора по умолчанию не объявлено принятым.
+
+
+<a id="audit-token-economy"></a>
+
+## Дополнение 2026-10-04: экономия токенов из аудита
+
+По просьбе человека включён [отдельный контракт аудита](2026-10-04-parley-token-economy-audit.md). Общий план теперь содержит 40 задач: P00–P33 сохранены, P34–P38 и P39 предшествуют итоговым P32/P33. Принятый общий resolver P05–P08/P13 покрывает C4/A22/F01; его не заменяет старый audit baseline. Final argv/env guards P09 сохраняются, но не подменяют контекстные budgets и transport bounds.
+
+1. P34 после P25/P29: стабильная bounded policy, task/source data отдельно, budgets на guidance/brief и current revision refs; no silent task truncation, versioned bootstrap/resume, lookup overhead/repetition bounded.
+2. P35 после P27/P31: compact get_map/GUI snapshots, cursor pages/byte cap, incremental events и bounded resync; JSON map storage остаётся первым шагом, 8MiB не увеличивается как решение.
+3. P36 после P24: valid live metrics freshness, optional nullable cache counters и per-request/epoch attribution/ledger без double counting; unknown не0.
+4. P37 после P23/P26: persistent work/room admission и reservations по всем Parley spawn/invite/retry/resume paths; team start без временного лишнего агента, видимые budget settings. Не обещать принудительную квоту любых native действий или hard monetary cap.
+5. P38 после P34–P37/P14/P31/P39: offline paired benchmark принятого результата всей команды и reviewable live сценарии; P32 использует его после явного разрешения/бюджета live turns и человеческой разметки. Cold/warm, cache/tool bytes/lookup/load/fanout/retries/compaction/качество измеряются раздельно; около15 prompts — smoke, не обещание процента экономии.
+
+P29/P30 дополнены provenance/scope/revision/completeness и bounded retrieval; stale agent summaries не становятся human constraints. Native lists/full fallback, defaultfalse и suppression OFF остаются до positive quality/loading/economic gates. Остальная remediation дорожка аудита в этот scope автоматически не включена.
+
+## Внутренний навык разработки
+
+[minimal-development](../../.agents/skills/minimal-development/SKILL.md) применяется к coding workflow: существующий код, standard library/platform, затем минимальная ясная реализация; root-cause fixes, bounded context и необходимые проверки. Полнота человеческих требований и safety сохраняются. Он уже доступен агентам проекта через .agents и Claude alias. P39 добавляет owned delivery при agentSkills=true в другие project/worktree sessions, вместе с обязательным LICENSE; чужие файлы сохраняются. Тело остаётся demand-loaded и не добавляется к каждому bootstrap.
+
+P25 использует тот же принцип в коротком плейбуке без дублирования полного skill body. P34 проверяет byte budget и отсутствие повторной инъекции; P38 рассматривает навык отдельной осью сравнения, а P32 зависит от принятого P39. Ни hooks/statusLine, ни глобальные настройки провайдеров не меняются.

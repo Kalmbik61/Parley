@@ -368,3 +368,8 @@ MCP sampling вне v1 и не задерживает реализацию. До
 ## Дополнение P13: evidence нативного контекста
 
 [Read-only preflight](../research/2026-10-03-parley-cli/availability.md) подтвердил Codex0.156.1 skills/list и Claude2.1.287 init-only control get_settings/get_skills_dialog. Codex enabled не учитывает allow_implicit_invocation:false: native canonical inventory всегда пересекается с общим policy resolver по path+name. Claude menu advertised не доказывает наличие Skill tool; policy snapshot и actual load route — разные gates. Context должен совпадать с provider/cwd/settings участника, human disables сохраняются, unknown/plugin/managed/role paths не повышаются автоматически. Эти API дают путь интеграции без нового scanner; список остаётся полным до P32.
+
+
+## Дополнение 2026-10-04: экономический контракт аудита
+
+[Audit token contract](../plans/2026-10-04-parley-token-economy-audit.md) добавлен к единому плану, P34–P38 перед P32. Качество выбора и <=3000 listing chars — диагностика; экономия проверяется на принятой задаче всей команды с native descendants/retries/human corrections. Lookup/result/body/tool bytes, cache counters/freshness, no-match/повторы/fanout/compaction включены; unknown не0, jev отдельная ось, cold/warm раздельно. Local BM25/defaultfalse/full native fallback сохраняются. Не навязывать повторный поиск из обычного inbox wake без новой taskRevision, допускать bounded корректировку query. Экономический gate дополняет native loader/policy parity, не разрешает подавлять списки по одному меньшему byte size. Платный A/B и human labels — reviewable P38→P32 шаг.

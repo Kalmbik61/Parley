@@ -2,6 +2,8 @@
 
 Дата: 2026-10-03. Workflow запущен в отдельном worktree; текущий ход отражён в [журнале выполнения](2026-10-03-parley-execution.md). Это декомпозиция [единого плана](2026-10-03-parley-unified-implementation-plan.md), а не новая архитектура или отдельная очередь релизов. Общие контракты и семь спек из плана имеют приоритет.
 
+Дополнение человека 2026-10-04: [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md); добавлены P34–P38 перед итоговым P32/P33, всего 40 задач, включая P39 для внутреннего навыка разработки. Существующие ID и принятые результаты сохранены.
+
 ## Как выдавать задачи
 
 1. Ведущий начинает с P00 и хранит точный базовый SHA/checkout. Агент работает на выданной рабочей базе, не на старом коде docs/parley-md.
@@ -55,6 +57,8 @@
 Файлы автора не исправляй в рамках ревью.
 ```
 
+Перед кодовой задачей агент читает [minimal-development](../../.agents/skills/minimal-development/SKILL.md). Навык сокращает лишнюю работу, сохраняя полноту требований и проверок; он не навязывает постоянные hooks, новую роль или краткий ответ вопреки поручению.
+
 ## Очередь
 
 | Задача | Этап плана | Зависимости | Ответственный | Состояние |
@@ -73,7 +77,7 @@
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | done |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | done |
-| [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | review |
+| [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | done |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | review |
@@ -91,8 +95,14 @@
 | [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | не назначен | pending |
 | [P30 — Реализовать search_history по записям проекта](#p30) | 10 | P27, P29, P22 | не назначен | pending |
 | [P31 — Подключить память, поиск и UI](#p31) | 10 | P30, P28 | не назначен | pending |
-| [P32 — Провести сквозную проверку и сравнение навигатора](#p32) | 11 | P14, P17, P18, P19, P24, P26, P31 | не назначен | pending |
+| [P32 — Провести сквозную проверку и сравнение навигатора](#p32) | 11 | P14, P17, P18, P19, P24, P26, P31, P38, P39 | не назначен | pending |
 | [P33 — Обновить документацию по фактическому результату](#p33) | 11 | P32 | не назначен | pending |
+| [P34 — Ограничить bootstrap и повторение контекста](#p34) | audit | P25, P29 | не назначен | pending |
+| [P35 — Ввести компактные map/snapshots и страницы](#p35) | audit | P27, P31 | не назначен | pending |
+| [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | не назначен | pending |
+| [P37 — Ограничить launches/fanout и лишний старт](#p37) | audit | P23, P26 | не назначен | pending |
+| [P38 — Подготовить benchmark принятого результата](#p38) | audit | P34, P35, P36, P37, P14, P31, P39 | не назначен | pending |
+| [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | не назначен | pending |
 
 ## Карточки
 
@@ -594,9 +604,9 @@
 
 ### P14: Подключить навигатор к CLI и Settings
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_review (P14 author), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; frozen14-file snapshot baf9af9, author331 targeted checks/types/lint passed, independent acceptance pending.
+**Статус:** done. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; accepted baf9af9 + a9c1e14: исходные symlink probes GREEN, 33 affected settings fixtures, exact2 SHA, core build exit0. Portable final check→rename race явно ограничен.
 
 **Зависимости:** P13. **Источник:** [этап 4 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-4).
 
@@ -996,6 +1006,8 @@
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
+**Внутренний навык:** короткий lead playbook использует принцип minimal-development, не повторяя полное тело навыка и не ослабляя Verified/Checklist requirements. Native body доставляет P39 по demand.
+
 <a id="p26"></a>
 
 ### P26: Подключить рецепты к диалогу и Save as recipe
@@ -1120,6 +1132,8 @@
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
+**Дополнение аудита F03:** source/scope/taskRevision/evidence refs и superseded/current различаются; старый agent summary не становится human constraint. После compaction восстанавливаются текущие constraints/pending/refs в budget, не вся история; provenance не заменяется latest-write-wins.
+
 <a id="p30"></a>
 
 ### P30: Реализовать search_history по записям проекта
@@ -1146,6 +1160,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнение аудита F03:** bounded excerpts с source references/completeness; повторная загрузка известного content hash не раздувает bootstrap. Полные тела доступны по demand в P35 pages; native skill bodies не копируются в memory.
 
 <a id="p31"></a>
 
@@ -1188,16 +1204,16 @@
 
 **Статус:** pending. **Исполнитель:** не назначен; профиль `test-engineer`. **Проверяющий:** другой агент, профиль `code-reviewer`.
 
-**Зависимости:** P14, P17, P18, P19, P24, P26, P31. **Источник:** [этап 11 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-11).
+**Зависимости:** P14, P17, P18, P19, P24, P26, P31, P38, P39. **Источник:** [этап 11 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-11).
 
 **Владение файлами** (общие файлы — после выдачи права записи):
 
 - `docs/research/2026-10-03-parley-integration-spike.md`
 - `packages/desktop/e2e/parley-integration.spec.ts`
 
-**Работа:** Пройти матрицу единого плана: off/on, agentSkills, quiet, resume, worktree, provider overrides, restricted roles, plan rev, конфликты/ошибки диска и отсутствие утечек. Подготовить около 15 промптов; получить человеческую разметку и сравнить Claude/Codex с навигатором и без. Непроверенную платформу/живой сценарий явно оставить незакрытым.
+**Работа:** Пройти матрицу единого плана: off/on, agentSkills, quiet, resume, worktree, provider overrides, restricted roles, plan rev, конфликты/ошибки диска и отсутствие утечек. Использовать P38 paired benchmark принятой задачи всей команды: одинаковые CLI/model/effort/permissions/hashes, cold/warm отдельно, usage/cache/lookup/load/retries/fanout и quality. Около 15 промптов — smoke; получить человеческую разметку. Платный live model A/B выполняется после reviewable offline сценариев и явного разрешения/бюджета этого шага. Непроверенную платформу/живой сценарий явно оставить незакрытым.
 
-**Приёмка:** Целевые и итоговые проверки пройдены, evidence сохранено. Выбор скилла/«не нужен» не хуже родного списка; короткий режим подтверждён контрольным transcript, хуки живы. Default false не меняется автоматически.
+**Приёмка:** Целевые и итоговые проверки пройдены, evidence сохранено. Выбор скилла/«не нужен» не хуже родного списка; короткий режим подтверждён контрольным transcript, хуки живы. Default false не меняется автоматически. Byte/listing size не выдаётся за token/quota savings; неполные/unknown counters и непроверенный economic gate остаются явными.
 
 **Проверки:**
 
@@ -1247,3 +1263,158 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+
+<a id="p34"></a>
+
+### P34: Ограничить bootstrap и повторение контекста
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P25, P29. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
+
+**Владение файлами:**
+
+- `packages/core/src/work/context-budget.ts/test (new)`
+- `packages/core/src/work/{guidance,brief,thread,session-layer,launch}.ts и целевые тесты`
+- `packages/core/src/mcp/tools.ts только bounded read_guide/find_skill responses; grants отдельно`
+
+**Работа:** Проверить C1/C5/C6 и A08/A09/A14 на актуальном коде. Отделить stable policy от session/task/source-attributed data, добавить byte budgets и diagnostic size lint рядом с 14-line invariant. Сократить повторение цели/правил и bootstrap решений до current revision + refs. Версионировать brief refresh при task/room/role amendment/resume. Для overflow сохранять задачу через bounded ref/hash/size или отказ, без молчаливого truncation. Find_skill query/results bounded, no-match допускает максимум одну корректирующую попытку в guidance; обычный inbox wake без новой taskRevision не навязывает повторный подбор.
+
+**Приёмка:** 100k single-line goal не обходит budget; UTF-8/escaping учитываются. Mandatory policy/role delivery и human constraints сохранены; claims не повышены до authority. Off/native fallback и P09 final argv/env guards остаются. Разные session IDs не меняют stable policy prefix; факт cache hit не выводится из этого.
+
+**Проверки:** pnpm --filter @parley/core exec vitest run src/work/context-budget.test.ts src/work/guidance.test.ts src/work/brief.test.ts src/work/session-layer.test.ts src/work/launch.test.ts.
+
+**Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
+
+
+**Внутренний навык:** не добавлять body minimal-development в каждый bootstrap/turn; P39 native delivery сохраняет demand loading, а short policy укладывается в byte budget.
+
+<a id="p35"></a>
+
+### P35: Ввести компактные map/snapshots и страницы
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P27, P31. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
+
+**Владение файлами:**
+
+- `packages/core/src/work/context-pages.ts/test (new), mcp/tools.ts и server tests`
+- `packages/host/src/works/works-service.ts/test, host/methods/context-pages.ts/test (new)`
+- `packages/protocol/src/context-pages.ts/test (new); methods/events/types только staged grant`
+- `desktop stores/selected room history/host-connection только согласованная projection/pages integration`
+
+**Работа:** Первая ступень A14: JSON map остаётся storage. Get_map по умолчанию отдаёт topology/status/active revision/unread/refs/cursors; история/summary/archive/artifacts отдельными bounded pages. GUI snapshot перестаёт включать все тексты писем, incremental revision events и bounded reconnect resync. Byte cap проверяется до serialization; page cursor не пропускает/дублирует IDs при append. Старому клиенту oversized legacy answer даёт actionable upgrade/error, не reconnect loop. Не поднимать 8MiB limit как исправление.
+
+**Приёмка:** Оба >8MiB воспроизведения и 10k-message/multiple-work fixture сохраняют GUI connection. Проверены concurrent cursor append, total-known/unknown/completeness и отсутствие утраты истории; payload, latency и heap измерены. Нет обязательного storage journal rewrite без измеренного bottleneck.
+
+**Проверки:** pnpm --filter @parley/core exec vitest run src/work/context-pages.test.ts src/mcp/server.test.ts; targeted host works/pages, protocol framing/projections и desktop reconnect/history checks.
+
+**Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
+
+
+<a id="p36"></a>
+
+### P36: Исправить свежесть usage и cache ledger
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P24. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
+
+**Владение файлами:**
+
+- `packages/host/src/activity/activity-service.ts/test`
+- `packages/core/src/work/metrics.ts/test, session-index.ts/test, codex/index-session.ts + tests только semantics usage`
+- `packages/core/src/work/usage-ledger.ts/test (new)`
+- `protocol LiveMetrics/usage DTO и desktop lib/metrics-line.ts/test, totals UI только grants`
+
+**Работа:** A21/C2/C3/QA-V4: свежий валидный live index того же binding/epoch побеждает frozen snapshot для живой conversation. Frozen fallback/closed period имеют source/observedAt/stale/completeness. Передать nullable optional cacheRead/cacheWrite, total/uncached input без double count. Ledger по native request/message identity либо verified offset: cumulative vs delta/reset/rotation, source/model/epoch и attributable task/room/run. Native descendant учитывается один раз, unknown fields/coverage остаются unknown. Старые totals не выдумываются в per-turn history.
+
+**Приёмка:** Active snapshot100/20 + live1000/200 показывает1000/200; wrong epoch/stale index не выигрывает. Report/sleep/resume/rotation/partial duplicates/cumulative resets и same-thread-two-views не теряют и не удваивают totals. Codex unobserved cacheWrite не показывается как измеренный0. Обязателен service-level test; token totals не названы деньгами или quota percent.
+
+**Проверки:** pnpm --filter @parley/core exec vitest run src/work/usage-ledger.test.ts src/work/metrics.test.ts src/session-index.test.ts; host activity service + protocol/desktop metrics targeted suites.
+
+**Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
+
+
+<a id="p37"></a>
+
+### P37: Ограничить launches/fanout и лишний старт
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P23, P26. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
+
+**Владение файлами:**
+
+- `packages/core/src/work/resource-policy.ts/test (new), config/map/types только grants`
+- `packages/core/src/mcp/tools.ts admission paths и targeted tests`
+- `host sessions/auto-launch, sessions-service и wake/resume-limiter только reservation/generation integration`
+- `desktop new-room/recipe start UI и resource limits только grants`
+
+**Работа:** Выбранная token часть A11/A25: единый work budget и более узкий room budget для concurrent/new sessions, depth, launches/resumes/retry за окно, messages/fanout/invitations. Слоты/attempt IDs резервируются до операции; spent counters сохраняются после host restart, отмена освобождает только собственный pending slot. Все пути проходят admission; Stop/error/control не блокируются conversational quota. Прямой team/recipe старт не создаёт лишнюю временную одиночную agent session. Пороги видимы/настраиваемы человеком; legacy migration сохраняет compatibility и не объявляет hard monetary cap. Ambiguous owner reservation не снимается по одному TTL. Полное audit A03/A04 восстановление процессов/Stop не объявляется реализованным этой задачей.
+
+**Приёмка:** Concurrent spawn/invite/retry/resume не обходят общую квоту; host restart не выдаёт новый budget. Human budget change явное; exhausted budget показывает safe outcome и не запускает новую модель. Team start имеет только требуемых участников. Fork/native subagent usage, которое CLI не ограничивает, явно отделено по completeness; обходы не называются предотвращёнными без proof.
+
+**Проверки:** core resource-policy/admission fixtures; host auto-launch/sessions/wake cancellation+restart fixtures; desktop team/recipe start and budget UI targeted checks.
+
+**Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
+
+
+<a id="p38"></a>
+
+### P38: Подготовить benchmark принятого результата
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P34, P35, P36, P37, P14, P31, P39. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
+
+**Владение файлами:**
+
+- `tools/parley-token-benchmark.ts/test (new)`
+- `docs/research/2026-10-04-parley-token-benchmark.md и scenario fixtures (new)`
+
+**Работа:** F05: offline harness с фиксацией paired stock-native vs navigator условий и принятой задачи/команды. Собирать usage/cache и bytes раздельно, lookup/load/no-match/reformulation/duplicate loads, messages/fanout, attempts/compactions, duration/quality/human corrections и completeness. Сравнивать cold/warm отдельно, jev отдельная ось; не выдавать chars/4 или <=3000 listing за доказанные tokens. Подготовить reviewable native run scripts/fixture project, budget и человеческую разметку для P32; не выполнять платные native turns до отдельного явного разрешения.
+
+**Приёмка:** Fixture ledger не удваивает request/descendant; missing counters unknown. Отчёт показывает paired differences/median/tails и неполные данные; scenario coverage охватывает no-skill/obvious/ambiguous/RU/multiple/mixed/DM/broadcast/amendment/stop-resume/disabled/unavailable/long-skill/compaction. Экономия определяется снижением ресурса на принятый результат без потери качества; offline evidence не закрывает live economic gate.
+
+**Проверки:** offline benchmark fixtures/tests + dry-run fixed scripts; live results и human labels принимает P32.
+
+**Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
+
+**Внутренний навык:** фиксировать hash minimal-development и сравнивать его off/on отдельной осью при одинаковых navigator/cache/provider/model/effort; не переносить внешние проценты экономии.
+
+<a id="p39"></a>
+
+### P39: Доставлять внутренний навык minimal-development
+
+- [ ] Принято ведущим после независимой проверки.
+
+**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+
+**Зависимости:** P13, P14. **Источник:** [внутренний навык](../../.agents/skills/minimal-development/SKILL.md).
+
+**Владение файлами:**
+
+- `packages/core/src/work/minimal-development.ts/test (new)`
+- `packages/core/src/work/skill-install.ts/test`
+- `packages/host/src/sessions/agent-skills.ts/test`
+- `packages/core/src/index.ts только нужный export, grant отдельно`
+- `.agents/skills/minimal-development/{SKILL.md,LICENSE}` и Claude alias — эталон, правки только согласованно
+
+**Работа:** Добавить этот короткий навык в owned native skill delivery при существующем agentSkills=true, для project/worktree и launch/resume/autoLaunch. Использовать существующий installer и ownership receipts; расширять их только для второй фиксированной skill definition и LICENSE. Сохранять foreign/edited assets, symlink safety, fallback copy, идемпотентность и прежнюю установку parley. Не менять глобальные настройки CLI, hooks/statusLine, модель/роль или человеческие ограничения. Тело загружается по native demand, не повторяется в каждом prompt.
+
+**Приёмка:** agentSkills=false ничего не пишет; оба навыка устанавливаются/обновляются только как owned assets, чужие изменения не перезаписываются. Лицензия входит в устанавливаемые файлы. Нативные каталоги узнают name/description и Claude alias; нет обязательной загрузки тела, рекламных текстов или обещанного процента экономии. Файл в проекте уже служит workflow агентов; runtime delivery считается сделанным только после этой карточки.
+
+**Проверка:** targeted installer/host fixtures для off/on, повторной установки, чужого/edited/symlink пути и license preservation; scoped types/lint. P34 сохраняет body-on-demand, P38 сравнивает режим навыка отдельно при одинаковом navigator/cache режиме.

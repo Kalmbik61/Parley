@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P13, P15/P16/P20 accepted (17/34); P14/P17 review; P21 running.
+- Текущая фаза: P00–P13, P15/P16/P20 accepted (18/40); P14/P17 review; P21 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -34,7 +34,7 @@
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
 | P13 | Реализовать find_skill и настройку MCP | done | f3394ae; independent341core/62host/8controls,25SHA/blob; /root/p01_review accepted |
-| P14 | Подключить навигатор к CLI и Settings | review | baf9af9 exact14SHA; author331checks; independent /root/p01_claude_probe pending, no suppression |
+| P14 | Подключить навигатор к CLI и Settings | done | baf9af9 + a9c1e14; independent symlink probes GREEN, 33 settings fixtures, SHA2/core build0; /root/p01_claude_probe accepted |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native MCP add/remove/check | review | f447ccd +wire/strings milestones; exact18+registrySHA; independent /root/p01_review pending |
@@ -54,6 +54,12 @@
 | P31 | Подключить память, поиск и UI | pending | — |
 | P32 | Провести сквозную проверку и сравнение навигатора | pending | — |
 | P33 | Обновить документацию по фактическому результату | pending | — |
+| P34 | Ограничить bootstrap и повторение контекста | pending | audit-token track; dependencies P25, P29 |
+| P35 | Ввести компактные map/snapshots и страницы | pending | audit-token track; dependencies P27, P31 |
+| P36 | Исправить свежесть usage и cache ledger | pending | audit-token track; dependencies P24 |
+| P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
+| P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
+| P39 | Доставлять внутренний навык minimal-development | pending | dependencies P13, P14; project skill готов, runtime delivery ещё впереди |
 
 ## Текущая разведка — ещё до независимой приёмки
 
@@ -213,3 +219,10 @@ P20 independent review needs rework: два Important, оба воспроизв
 P20 accepted independently /root/p01_review после exact2-file fixes: оригинальные race/LS/PS probes GREEN, 28 affected fixtures passed; author full181/runtime checks/types/lint. Root snapshot4391680 exact14SHA/gitBlob. P17 frozen f447ccd exact18owned+rootregistry matched; hostbuild0. P14 reviewer переназначен /root/p01_claude_probe для параллельной независимой проверки.
 
 P21 dispatched /root/p02_codex_probe после P20 acceptance: первая фаза только новые host/BacklogPanel/protocol-backlog modules. P14/P17 shared points frozen под independent review; unlock/DTO surface согласует root отдельно.
+
+
+## Дополнение человека: audit token economy
+
+Прочитаны C1–C6/измерения/cache/economic gate и A11/A14/A21/A22/F01–F05 из docs/audits/2026-10-03. Immutable source copies сохранены в worktree; новый контракт docs/plans/2026-10-04-parley-token-economy-audit.md согласован с общим планом и PARLEY/navigator/memory specs. Queue расширена39: новыеP34–P38 предшествуютP32; 17accepted остаются, source line numbers исторические. Остальной audit remediation scope не перенесён. Платные native turns пока не запускались, savings не заявлены.
+
+P14 safety fix accepted: a9c1e14, original directory/leaf symlink probes foreignPreserved/rejected, 33 affected fixtures и core build exit0. Текущий результат18 accepted из40. Внутренний minimal-development добавлен в project-native folders и workflow; P39 доставит его через existing owned installer, без global hooks. Token-audit P34–P38 сохранены; новый навык — отдельная ось P38, проценты экономии не заявлены.

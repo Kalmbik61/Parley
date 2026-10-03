@@ -386,3 +386,8 @@ warnings — в host.log каждой попытки; PARLEY.md notices — од
   изменения дописываются; изменённый `developer_instructions` до сжатия не шлётся
   (вывод по `core/src/session/mod.rs`).
 - Ключи `-c` делятся по точкам; значение разбирается как TOML.
+
+
+## Дополнение 2026-10-04: бюджет контекста из аудита
+
+[Audit token contract](../plans/2026-10-04-parley-token-economy-audit.md), P34/P35: stable coordination policy и session/task/source-attributed data разделяются, byte budget проверяется рядом с <=14 lines и существующим final serialized argv/env guard. Общие правила/цель не дублируются во всех lazy слоях; brief восстанавливает current task revision/constraints/pending/refs, не всю историю. Большая задача имеет hash/size/contentRef с явной неполнотой excerpt либо диагностируемый отказ, не молчаливое урезание. Native role/permission channels и порядок P09/P12 сохраняются. Claims/memory не получают authority человеческих правил. Cache hit и token savings требуют P36/P38 измерений.
