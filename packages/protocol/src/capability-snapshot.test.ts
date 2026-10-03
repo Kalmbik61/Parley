@@ -51,3 +51,46 @@ describe('safe capability snapshot wire', () => {
     expectTypeOf<EventData<'capabilities.changed'>>().toEqualTypeOf<{ projectPath: string; snapshot: CapabilitySnapshot }>();
   });
 });
+
+
+describe('MCP action availability wire', () => {
+  const yes = { allowed: true, reason: null };
+  const no = { allowed: false, reason: 'unverified' };
+  const mcp = (provider: 'claude' | 'codex' = 'claude', scope: string | null = 'user') => {
+    const value = snapshot();
+    const target = { ...presence('mcp'), scope, documentPath: null, modelAvailable: null, unavailableReason: null,
+      mcpActions: { remove: yes, check: provider === 'codex' ? no : yes } };
+    return { ...value, rows: [{ ...value.rows[0], kind: 'mcp',
+      claude: provider === 'claude' ? [target] : [], codex: provider === 'codex' ? [target] : [] }] };
+  };
+  it('advertises provider-specific scoped Add and opaque per-presence actions without native selectors', () => {
+    const value = mcp();
+    const result = capabilitySnapshot.parse({ ...value, columns: { ...value.columns,
+      claude: { ...value.columns.claude, mcpAdd: { user: yes, project: yes, local: yes } },
+      codex: { ...value.columns.codex, mcpAdd: { user: yes, project: { allowed: false, reason: 'unsupported-scope' }, local: { allowed: false, reason: 'unsupported-scope' } } },
+    } });
+    expect(result.columns.claude.mcpAdd?.project.allowed).toBe(true);
+    expect(result.rows[0]?.claude[0]?.mcpActions?.remove.allowed).toBe(true);
+    expect(capabilitySnapshot.safeParse(mcp('codex')).success).toBe(true);
+  });
+  it('rejects actions attached to skills/plugins and unsupported native sources', () => {
+    for (const scope of ['builtin', 'system', 'admin', 'plugin', 'extra', 'claude.ai', null])
+      expect(capabilitySnapshot.safeParse(mcp('claude', scope)).success).toBe(false);
+    for (const scope of ['project', 'local']) expect(capabilitySnapshot.safeParse(mcp('codex', scope)).success).toBe(false);
+    const value = snapshot();
+    for (const kind of ['skill', 'plugin']) expect(capabilitySnapshot.safeParse({ ...value, rows: [{ ...value.rows[0], kind,
+      codex: [{ ...presence('first'), mcpActions: { remove: no, check: no } }] }] }).success).toBe(false);
+  });
+  it('rejects guessed Codex connection Check and project/local Add', () => {
+    const value = mcp('codex');
+    expect(capabilitySnapshot.safeParse({ ...value, rows: [{ ...value.rows[0], codex: [{ ...value.rows[0]?.codex?.[0], mcpActions: { remove: yes, check: yes } }] }] }).success).toBe(false);
+    for (const scope of ['project', 'local']) expect(capabilitySnapshot.safeParse({ ...value, columns: { ...value.columns,
+      codex: { ...value.columns.codex, mcpAdd: { user: yes, project: no, local: no, [scope]: yes } } } }).success).toBe(false);
+  });
+  it('does not carry raw identity or error strings through action support', () => {
+    const value = mcp();
+    for (const action of [{ allowed: true, reason: 'unverified' }, { allowed: false, reason: null },
+      { allowed: false, reason: 'FIXTURE_SECRET' }, { ...yes, nativeName: 'FIXTURE_SECRET' }, { ...no, message: 'FIXTURE_SECRET' }])
+      expect(capabilitySnapshot.safeParse({ ...value, rows: [{ ...value.rows[0], claude: [{ ...value.rows[0]?.claude?.[0], mcpActions: { remove: action, check: no } }] }] }).success).toBe(false);
+  });
+});

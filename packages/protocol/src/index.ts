@@ -70,3 +70,8 @@ export { capabilityProvider, capabilityScope, capabilityDiagnostic, capabilityPr
 export type { CapabilityProvider, CapabilityScope, CapabilityDiagnostic, CapabilityPresence, CapabilityRow, CapabilityColumn, CapabilitySnapshot } from './capability-snapshot.js';
 
 export type { RoleList, RoleSummary, SessionRole } from '@parley/core';
+
+export { capabilityMcpInput, capabilityMcpWriteScope, capabilityMcpAdd, capabilityMcpTarget, capabilityActionResult } from './capability-actions.js';
+export type { CapabilityMcpInput, CapabilityMcpAdd, CapabilityMcpTarget, CapabilityActionResult } from './capability-actions.js';
+export { capabilityActionReason, capabilityActionAvailability, capabilityMcpActions, capabilityMcpAddAvailability } from './capability-snapshot.js';
+export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMcpActions, CapabilityMcpAddAvailability } from './capability-snapshot.js';

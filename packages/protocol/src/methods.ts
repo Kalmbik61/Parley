@@ -9,6 +9,8 @@ import type {
   WorktreeDiff,
 } from '@parley/core';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
+import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
+import type { CapabilityActionResult } from './capability-actions.js';
 import { feedDecision } from './feed.js';
 import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
@@ -94,6 +96,9 @@ export const METHODS = {
   // провайдера у человека и в проекте — хост только читает их папки.
   'capabilities.get': z.object({ projectPath: z.string().min(1) }).strict(),
   'capabilities.refresh': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.mcp.add': capabilityMcpAdd,
+  'capabilities.mcp.remove': capabilityMcpTarget,
+  'capabilities.mcp.check': capabilityMcpTarget,
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
@@ -247,6 +252,9 @@ export interface Results {
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;
   'capabilities.refresh': CapabilitySnapshot;
+  'capabilities.mcp.add': CapabilityActionResult;
+  'capabilities.mcp.remove': CapabilityActionResult;
+  'capabilities.mcp.check': CapabilityActionResult;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };

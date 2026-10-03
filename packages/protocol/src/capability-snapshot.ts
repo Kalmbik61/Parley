@@ -10,6 +10,17 @@ export const capabilityDiagnostic = z.object({
   line: z.number().int().nonnegative().optional(),
   column: z.number().int().nonnegative().optional(),
 }).strict();
+export const capabilityActionReason = z.enum(['unverified', 'stale', 'builtin', 'managed', 'ambiguous',
+  'not-installed', 'unsupported-scope', 'unsupported-transport', 'unsupported-fields', 'unsupported-context', 'native-only']);
+export const capabilityActionAvailability = z.discriminatedUnion('allowed', [
+  z.object({ allowed: z.literal(true), reason: z.null() }).strict(),
+  z.object({ allowed: z.literal(false), reason: capabilityActionReason }).strict(),
+]);
+export const capabilityMcpActions = z.object({ remove: capabilityActionAvailability, check: capabilityActionAvailability }).strict();
+export const capabilityMcpAddAvailability = z.object({
+  user: capabilityActionAvailability, project: capabilityActionAvailability, local: capabilityActionAvailability,
+}).strict();
+
 export const capabilityPresence = z.object({
   id: z.string().min(1),
   scope: capabilityScope.nullable(),
@@ -26,6 +37,7 @@ export const capabilityPresence = z.object({
     'disable-model-invocation', 'plugin-disabled', 'shadowed', 'availability-unverified', 'invalid-metadata',
     'load-tool-unavailable']).nullable(),
   sharedFrom: capabilityProvider.optional(),
+  mcpActions: capabilityMcpActions.optional(),
 }).strict();
 export const capabilityRow = z.object({
   id: z.string().min(1),
@@ -38,6 +50,16 @@ export const capabilityRow = z.object({
 }).strict().superRefine((row, context) => {
   for (const provider of ['claude', 'codex'] as const) {
     for (const [index, presence] of row[provider].entries()) {
+      if (row.kind !== 'mcp' && presence.mcpActions !== undefined)
+        context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Only MCP has MCP actions' });
+      if (presence.mcpActions?.remove.allowed && !['user', 'project', 'local'].includes(presence.scope ?? ''))
+        context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Removal requires human source scope' });
+      if (provider === 'codex' && presence.mcpActions?.remove.allowed && presence.scope !== 'user')
+        context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Codex removal requires user scope' });
+      if (provider === 'codex' && presence.mcpActions?.check.allowed)
+        context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Codex connection Check is unavailable' });
+      if (presence.mcpActions?.check.allowed && !['user', 'project', 'local'].includes(presence.scope ?? ''))
+        context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Check requires confirmed identity' });
       if (row.kind !== 'skill' && presence.documentPath !== null)
         context.addIssue({ code: 'custom', path: [provider, index, 'documentPath'], message: 'Only skill document locators are permitted' });
       if (row.kind !== 'skill' && (presence.modelAvailable !== null || presence.unavailableReason !== null))
@@ -49,6 +71,7 @@ export const capabilityRow = z.object({
 });
 export const capabilityColumn = z.object({
   phase: z.enum(['loading', 'ready', 'partial', 'error', 'unavailable']),
+  mcpAdd: capabilityMcpAddAvailability.optional(),
   diagnostics: z.array(capabilityDiagnostic),
 }).strict();
 export const capabilitySnapshot = z.object({
@@ -56,7 +79,10 @@ export const capabilitySnapshot = z.object({
   revision: z.number().int().nonnegative(),
   columns: z.object({ claude: capabilityColumn, codex: capabilityColumn }).strict(),
   rows: z.array(capabilityRow),
-}).strict();
+}).strict().superRefine((snapshot, context) => {
+  for (const scope of ['project', 'local'] as const) if (snapshot.columns.codex.mcpAdd?.[scope].allowed)
+    context.addIssue({ code: 'custom', path: ['columns', 'codex', 'mcpAdd', scope], message: 'Codex mutations require user scope' });
+});
 
 export type CapabilityProvider = z.infer<typeof capabilityProvider>;
 export type CapabilityScope = z.infer<typeof capabilityScope>;
@@ -65,3 +91,8 @@ export type CapabilityPresence = z.infer<typeof capabilityPresence>;
 export type CapabilityRow = z.infer<typeof capabilityRow>;
 export type CapabilityColumn = z.infer<typeof capabilityColumn>;
 export type CapabilitySnapshot = z.infer<typeof capabilitySnapshot>;
+
+export type CapabilityActionReason = z.infer<typeof capabilityActionReason>;
+export type CapabilityActionAvailability = z.infer<typeof capabilityActionAvailability>;
+export type CapabilityMcpActions = z.infer<typeof capabilityMcpActions>;
+export type CapabilityMcpAddAvailability = z.infer<typeof capabilityMcpAddAvailability>;
