@@ -3,7 +3,8 @@
 > Интеграционная сверка: 2026-10-03. [Единый план
 > реализации](../plans/2026-10-03-parley-unified-implementation-plan.md), этап 2. Общий порядок
 > слоя, доставка и размер argv согласованы с ролями, рецептами, памятью и навигатором. Порядок и
-> общие контракты — в плане; проверки CLI этапа 0 пока не выполнены.
+> общие контракты — в плане; P00–P04 приняты по [контракту разведки](../research/2026-10-03-parley-cli/contracts.md).
+> [Журнал выполнения](../plans/2026-10-03-parley-execution.md) отделяет evidence от остающихся live gates; реализация не завершена.
 
 Дата: 2026-10-02. Статус: согласовано в диалоге по разделам (слой сессии, файл,
 сбои и проверка). Основание: разбор `.parley/` и запуска провайдеров
@@ -106,12 +107,27 @@
 `developer_instructions=`. Отдельные пределы блоков сохраняются. Если итог не
 помещается, запуск возвращает `session-layer-too-large` с размерами блоков до
 создания процесса: человек сокращает правила, роль, плейбук или бриф. Удалять
-инструкции молча нельзя. Общий размер argv и окружения проверяется на целевых
-платформах на этапе 0; 96 КиБ не является обещанием для любого окружения.
+инструкции молча нельзя. Это overflow **итогового** аргумента после documented marked preprocessing отдельных блоков (§5.2, роли §5.2, рецепты §6.3), не отказ от их обрезки с marker/warning. 96 КиБ — product ceiling, не обещание ОС.
 
-Непустой выключающий список Codex для навигатора проверяется отдельно: если его
-аргумент не помещается, сохраняется родной список, а `find_skill` работает поверх него.
-Проверка выполняется в одном месте для запуска, быстрого старта и `resume`.
+Host непосредственно перед `pty.start`, после merge `agentEnv(process.env)`,
+`plan.env` и `PARLEY_HOOK_TOKEN`, проверяет final executable/argv/env:
+
+```text
+stringBytes = sum(utf8Bytes(s) + 1 NUL for s in [executable, ...argv])
+            + sum(utf8Bytes(key + "=" + finalValue) + 1 NUL)
+estimatedBytes = stringBytes + pointerSize * (argc + envc + 2) + 32768 reserve
+require estimatedBytes <= runtime ARG_MAX
+```
+
+NUL запрещён; runtime limits bounded/injectable. На Linux каждую строку argv/env
+с NUL проверять против `32 * pageSize`; ARG_MAX зависит от stack limit. Нет limits
+→ безопасная pre-spawn ошибка; E2BIG очищается без raw argv/env. Aggregate env/other
+args overflow — отдельная spawn-budget ошибка; hook token unregister при guard
+failure. Core-only tests не доказывают окончательный env guard. macOS synthetic
+probe принят, Linux/long paths/custom env/providers остаются gates P32 по
+[контракту §6](../research/2026-10-03-parley-cli/contracts.md#6-p09-utf-8-argv-и-окончательное-окружение).
+
+Непустой generated suppression Codex candidate (production off) проверяется отдельно: overflow убирает **весь** generated список, сохраняя human User/SessionFlags и native list; final args/env пересобираются и проверяются вновь. Если overflow остаётся, отказ до spawn. Проверка общая для launch/quick/auto/resume. Host log получает безопасные warnings каждой попытки; user notices PARLEY.md — once host/project, `provider-override-gap` — once host global. Обычная custom подмена без placeholder сохраняет warning+launch; только обязательная недоставимая роль/permissions даёт отказ.
 
 ### 3.4 Когда агент видит изменения
 
@@ -198,8 +214,7 @@ Comments like this one and empty sections are not sent to agents.
    блоков кода заголовками не считаются.
 3. Подряд идущие пустые строки схлопываются в одну; края обрезаются.
 4. Ничего не осталось — части PARLEY.md в слое нет. Нетронутый шаблон даёт пустоту.
-5. Больше 32 КБ (32 768 байт UTF-8) — текст обрезается по последнему переводу строки
-   до предела, последней строкой идёт `[PARLEY.md is cut at 32 KB by Parley]`.
+5. Больше 32 КБ — текст обрезается по последнему переводу строки с учётом места для конечной строки `[PARLEY.md is cut at 32 KB by Parley]`; весь обработанный блок **вместе с marker** ≤32 768 байт UTF-8. Безопасный warning `parley-md-truncated` обязателен; итоговую сборку слоя повторно не обрезать.
 
 Импорты `@path` не раскрываются, frontmatter особо не обрабатывается: это обычный
 текст.
@@ -259,7 +274,7 @@ Comments like this one and empty sections are not sent to agents.
 |---|---|
 | PARLEY.md не читается: нет прав, на его месте папка, битая ссылка | Сессия идёт без части PARLEY.md. Хост — `host.log` и уведомление `parley-md-unreadable` один раз за жизнь хоста на проект; CLI — строка в `warnings` плана запуска |
 | PARLEY.md длиннее 32 КБ | Обрезка (5.2); хост — уведомление `parley-md-truncated` один раз за жизнь хоста на проект; CLI — строка в `warnings` |
-| Подмена `codex` в `providers.json` без `{developerInstructions}` | Слоя Parley и моста у Codex нет. Хост пишет в `host.log` и один раз за жизнь хоста показывает уведомление `provider-override-gap`: правила Parley и PARLEY.md до Codex не дойдут, пока подмена не обновлена. Саму подмену Parley не трогает |
+| Подмена `codex` в `providers.json` без `{developerInstructions}` | Обычная custom сессия запускается без слоя/моста с warning в host.log каждой попытки и `provider-override-gap` notice once host global; подмена не меняется. Недоставимая обязательная роль/permissions — отказ по спеке ролей §5.7 |
 | Свой `project_doc_fallback_filenames` в `~/.codex/config.toml` | В сессиях Parley его заменяет флаг моста. Модуль моста не читает личный конфиг; общий каталог может читать настройки ролей и скиллов только для чтения. Пишется в README |
 | Claude Code старше 2.1.277 | AGENTS.md сам не читает: в проекте только с AGENTS.md такой Claude правил проекта не увидит. Пишется в README |
 | `CLAUDE.local.md` рядом с AGENTS.md без CLAUDE.md | Claude по умолчанию считает его своим файлом и AGENTS.md не читает — так устроен Claude Code. Пишется в README |
@@ -284,8 +299,7 @@ Comments like this one and empty sections are not sent to agents.
   английские тексты (`english-text.test.ts`).
 
 **host:** создание перед запуском во всех режимах; сбой не останавливает запуск;
-уведомления — по одному за жизнь хоста на проект; `provider-override-gap` при подмене
-`codex` без `{developerInstructions}` и молчание при подмене, где она есть.
+warnings — в host.log каждой попытки; PARLEY.md notices — один раз host/project, `provider-override-gap` — один раз host global без повторов по проекту/provider. Plain custom Codex без placeholder запускается с предупреждением; обязательная недоставимая роль/permissions даёт отказ. Final env/hook token guard и token cleanup проверяются host-тестом; Linux runtime отдельно gate.
 
 **окно:** пункт Open/Create в `SectionMenu` по наличию файла; e2e по образцу
 `agent-skills.spec.ts`: Create → файл на диске → вкладка редактора.

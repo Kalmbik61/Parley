@@ -6,9 +6,9 @@
 
 **Architecture:** Core читает нативные источники и собирает один слой сессии; host управляет состоянием, снимками и доставкой событий; desktop показывает одну панель проекта и существующие комнаты. Навигатор и Capabilities используют общий каталог скиллов, но применяют разные фильтры и держат разные снимки. Оба CLI продолжают загружать выбранный скилл своим способом.
 
-**Tech Stack:** TypeScript, Node.js ≥20, pnpm 9, Vitest; Electron/React и Playwright для desktop; существующий MCP SDK. Версии YAML/TOML-разборщиков фиксируются после проверки этапа 0.
+**Tech Stack:** TypeScript, Node.js ≥20, pnpm 9, Vitest; Electron/React и Playwright для desktop; существующий MCP SDK. Полноценные parsers: `yaml` **2.9.1** (ISC), `smol-toml` **1.9.0** (BSD-3-Clause), точные pins без caret.
 
-Дата: 2026-10-03. Статус: документация сверена; workflow реализации запущен в отдельном worktree. P00 принят; проверки CLI P01–P03 выполняются. Актуальные результаты — в [журнале выполнения](2026-10-03-parley-execution.md). Новые согласующие ограничения описаны ниже и внесены в исходные спеки. Принятие прежних дизайнов человеком не означает, что новые проверки уже пройдены.
+Дата: 2026-10-03. Статус: документация сверена; workflow реализации запущен в отдельном worktree. P00–P04 независимо приняты; P05 и P09 выполняются, реализация не завершена. Evidence и ограничения — в [принятом контракте P04](../research/2026-10-03-parley-cli/contracts.md). Актуальные результаты — в [журнале выполнения](2026-10-03-parley-execution.md). Новые согласующие ограничения описаны ниже и внесены в исходные спеки. Принятие прежних дизайнов человеком не означает, что новые проверки уже пройдены.
 
 План относится к ветке `docs/parley-md`. В момент сверки её база — `fecaea3`, текущий `master` — `72a8736`; исходники ветки старше реализации подсказок chat-view в `master`. До начала кода нужно согласовать рабочую базу с актуальным `master`, сохранив документацию и чужие изменения. Для реализации создана отдельная ветка `codex/parley-upgrade` от `master 72a8736`; согласованная документация перенесена snapshot-коммитом `1acc937`. Ветка `docs/parley-md` сохранена.
 
@@ -52,14 +52,14 @@ interface NativeSkill {
   provider: 'claude' | 'codex';
   name: string; // имя загрузки CLI, включая префикс плагина
   description: string;
-  source: 'user' | 'project' | 'plugin' | 'claude.ai';
-  path: string; // абсолютный путь SKILL.md или файла нативной команды Claude
+  source: 'user' | 'project' | 'plugin' | 'claude.ai' | 'system' | 'admin' | 'extra';
+  path: string; // canonical полный document path; identity = provider + canonical path
   modelAvailable: boolean;
   unavailableReason: string | null;
 }
 ```
 
-Точный набор источников Codex, включая возможные плагины, закрывается этапом 0. Типы панели получают только разрешённые безопасные поля; сырой конфиг MCP не пересылается.
+Identity — `(provider, realpath(document))`, где document — полный SKILL.md или Claude command .md. Symlink aliases одного файла дедуплицируются; разные canonical файлы Codex с одинаковым именем сохраняются. Unknown availability даёт `modelAvailable=false` / `availability-unverified`; фильтр применяется до ranking. Человеческие Codex rules — native User и SessionFlags в исходном порядке (не project skills.config); policy и human rules вычисляются до Parley suppression с отдельным provenance. Source-backed system/admin/extra/plugin roots не означают проверенную доступность; неполный/unreadable root — partial, не успешный пустой каталог. Типы панели получают только whitelist безопасных полей; сырой конфиг MCP не пересылается.
 
 ### Слой и настройки запуска
 
@@ -77,7 +77,11 @@ systemGuidance (≤14 строк)
 
 `find_skill` добавляет условную подсказку в существующую строку `read_guide`. Списки описаний, тела скиллов и подробности памяти в слой не входят. Все расширения guidance проверяются одним тестом в комбинациях флагов и режимов.
 
-Лимиты: PARLEY.md, роль и плейбук — по 32 768 байт UTF-8, блок фактов памяти — 12 288 байт. Кроме них проверяется окончательный аргумент после экранирования: максимум Parley 98 304 байта, включая ключ Codex. Переполнение обязательного слоя — `session-layer-too-large` до spawn, с размерами блоков; никаких молчаливых потерь правил. Слишком длинный необязательный список выключения скиллов сохраняет родной список. Общий argv/env проверяется на целевых ОС этапом 0.
+Лимиты: обработанные PARLEY.md, роль и плейбук — каждый ≤32 768 байт UTF-8 **включая конечную marker строку**, с documented обрезкой по последней строке и безопасным warning; native permissions/model/effort не усекаются. Память — 12 288 байт: builder при overflow возвращает безопасную числовую ошибку, P29 caller выбирает complete facts в бюджет, без marked truncation памяти. Окончательный сериализованный обязательный аргумент после preprocessing/escaping — ≤98 304 байт, включая ключ Codex; только его переполнение даёт `session-layer-too-large` до spawn, не повторную обрезку сборки.
+
+Host проверяет final argv/env непосредственно перед `pty.start`, после `agentEnv(process.env)`, `plan.env` и `PARLEY_HOOK_TOKEN`: сумма UTF-8 байт executable/каждого argv/env `key=value` с NUL + `pointerSize * (argc + envc + 2)` + reserve 32 768 должна укладываться в runtime ARG_MAX. NUL запрещён; Linux требует отдельного bound каждой строки `32 * pageSize` с NUL. Runtime limits bounded/injectable, не переносить macOS ARG_MAX на Linux; недоступные limits дают безопасную ошибку, E2BIG очищается без raw argv/env. Core-only check не доказывает final env guard. Guard failure unregister hook token.
+
+Overflow необязательного generated suppression убирает его **целиком**, сохраняет human flags и полный native list; args/env пересобираются и проверяются вновь. Если overflow остаётся, возвращается отдельная безопасная spawn-budget ошибка. Host log получает warning на каждой попытке; notices PARLEY.md — один раз host/project, `provider-override-gap` — один раз host global. Обычная custom Codex подмена без placeholder даёт warning и запуск без слоя/моста; отказ применяется только к недоставимой обязательной роли/permissions. macOS synthetic argv/env evidence принято; Linux, long paths/custom env/provider overrides и live lifecycle остаются [gates P32](../research/2026-10-03-parley-cli/contracts.md#10-оставшиеся-gates-и-сдача).
 
 `skillNavigator` читается один раз на запуск. Значение используется для флагов, подсказки и явно передаётся дочернему MCP через его окружение; сервер не решает независимо по более новому глобальному конфигу. При включении файл настроек Claude — `settings/<session-id>.json` внутри каталога работы; обычные хуки и statusLine сохраняются. При выключении навигатора остаётся прежний путь настроек и поведение запуска.
 
@@ -151,12 +155,12 @@ systemGuidance (≤14 строк)
 
 1. Сверить `git status`, рабочие ветки и merge-base; подготовить реализацию на актуальной базе chat-view без потери этой документации. Не переносить старую версию кода поверх новой.
 2. Во временных проектах и пользовательских тестовых конфигах проверить таблицу ниже. Записать версии CLI, argv, ожидаемое/полученное поведение и обезличенные транскрипты. Не запускать регистрацию серверов или изменение глобальных настроек ради этой проверки.
-3. Выбрать YAML/TOML-библиотеки для полноценного frontmatter и TOML многострочных строк; кандидаты — `yaml` и `smol-toml`. Проверить API, версии, лицензии и зависимости; зафиксировать в core только после проверки. Собственный частичный парсер не расширять дальше.
+3. Приняты точные pins `yaml@2.9.1` / `smol-toml@1.9.0`, лицензии и API Node 20 smoke по [P04](../research/2026-10-03-parley-cli/contracts.md#5-p05-полноценные-parsers-и-пределы); фиксация в core/lockfile — P05. Собственный частичный parser не расширять.
 4. Вписать результаты в исходные спеки. Неподтверждённое сокращение списка оставлять выключенным для соответствующего CLI; базовый поиск/слой не блокируется чужим провайдером.
 
 | Проверка | Положительное доказательство | Если не подтверждено |
 |---|---|---|
-| Claude budget: `skillListingBudgetFraction: 0` / env budget=1 | список имён, включая plugin/synced, с прежней возможностью загрузки | полный список, навигатор поверх него |
+| Claude budget: env budget=1 candidate; fraction=0 invalid | P01 подтвердил имена небандлённых скиллов при env1; schema отвергает fraction0 | production full list до resolver parity, role/lifecycle P32 gates |
 | Выключение jev только в сессии | нет вставок jev; сохраняются хуки Parley, statusLine, конец хода и будильник | не гасить все функциональные хуки; диагностика и полный список |
 | Skill/`find_skill` у главной нативной роли и субагента Claude | разрешённые инструменты доступны; урезанный tools обработан | не сокращать список у роли без проверенного пути загрузки |
 | Источники Claude, commands и приоритеты/включённость плагинов | совпадение с родным `skill_listing.names`, скрытия отражены отдельно | уточнить общий resolver до сокращения списка |
@@ -165,6 +169,8 @@ systemGuidance (≤14 строк)
 | Codex слой, мост, роль, read-only при launch/resume | `debug prompt-input` и сессия показывают доставку; MCP/report работает | соответствующий способ доставки не считать готовым |
 | Capabilities команды/JSON и local MCP в worktree | формы list/available/details/check/actions и scope подтверждены | соответствующая часть панели отмечена недоступной, без догадок |
 | Размер полного слоя/argv/env на macOS и Linux | проверены UTF-8, экранирование, длинные пути и окружение | ошибка до spawn и корректировка бюджета |
+
+Принятая матрица evidence/fallback для каждой строки — [P04 §8](../research/2026-10-03-parley-cli/contracts.md#8-все-строки-этапа-0-evidence--fallback). Offline/source evidence не заменяет живые проверки.
 
 MCP sampling для v1 не нужен; ответ о нём можно записать отдельно, он не задерживает код. Настройка `/jev-skill-suggestion:setup restore` принадлежит человеку и не выполняется автоматическим запуском Parley.
 
@@ -178,14 +184,14 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 **Изменить:** `packages/core/package.json`, `pnpm-lock.yaml`, `packages/core/src/index.ts`; после актуализации базы — `packages/core/src/capabilities/{scan,frontmatter}.ts` и их тесты.
 
 1. Зафиксировать временными папками поиск по CLI/cwd, настройки разных уровней, disabled/user-only/policy, коллизии, симлинки, циклы, битый файл и пределы обхода. Полное многострочное YAML-описание обязано пережить разбор, не только его первая строка.
-2. Реализовать общий resolver с инъекцией корней для тестов. Для SKILL.md предел 64 КиБ; нечитаемое пропускается, тело не попадает в результат поиска. CLI-настройки разбираются общим TOML/YAML-кодом по результатам этапа 0.
+2. Реализовать общий resolver с инъекцией корней. Предел **всего** SKILL.md — 65 536 байт inclusive; bounded max+1 read, strict UTF-8, frontmatter valid/missing/invalid, только начальный YAML mapping без body. Shared `yaml@2.9.1` parseDocument проверяет errors/unique keys и bounded aliases; `smol-toml@1.9.0` parse/stringify поддерживает multiline, таблицы/arrays; mapping/schema boolean/string fields без coercion. Исключения очищаются до code/position без source excerpts. Роли/recipes/settings используют эти же parsers с собственными input ceilings. Claude commands включены; synced требует account/manifest/config. Codex config-folder/deprecated/user/project/system/admin/plugin/extra roots и native User/SessionFlags order — по P04; непроверенные source/availability остаются unavailable, unreadable root partial.
 3. Перевести чтение скиллов для существующих подсказок chat-view на resolver. Сохранить сигнатуру `capabilities.list`, подсказки команд/агентов и их ограничения; не превращать их в новый протокол панели.
-4. Реализовать BM25: имя ×3, tokenizer/стоп-слова/окончания по спеке. Фиксировать порядок первых трёх, tie-break по имени, нулевой результат и детерминированность.
+4. Реализовать BM25: имя ×3, tokenizer/стоп-слова/окончания по спеке. Фиксировать порядок первых трёх, tie-break по native имени и canonical document path (побайтно), нулевой результат и детерминированность.
 
 Показательная проверка: один скрытый скилл существует в каталоге с причиной, виден в данных панели и отсутствует в поиске; проектный скилл worktree находится для участника, но не подменяет каталог ведущего.
 
 **Проверка:** `pnpm --filter @parley/core exec vitest run src/skills src/capabilities`.
-**Приёмка:** один обход источников обслуживает обе функции; текущие подсказки chat-view не регрессируют; фикстуры дают полный description и точную причину скрытия.
+**Приёмка:** один обход источников обслуживает обе функции; текущие подсказки chat-view не регрессируют; fixtures проверяют whole-file boundary, strict UTF-8, missing/invalid header, multiline description, duplicate keys, bounded aliases, boolean/string schema и safe code/position diagnostics. NativeSkill canonical path остаётся внутренним: прежний chat-view `CapabilitySkill.path` — папка SKILL.md либо файл command; старый source enum не расширяется молча. Unknown availability исключается из ranking; полного native list это не сокращает.
 
 <a id="step-2"></a>
 
@@ -193,11 +199,12 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 
 **Создать:** `packages/core/src/work/{session-layer,parley-md}.ts`, соответствующие тесты.
 **Изменить:** `packages/core/src/{providers,providers.test,index}.ts`, `packages/core/src/work/{launch,launch.test,guidance,guidance.test}.ts`, `packages/host/src/sessions/{sessions-service,sessions-service.test}.ts`, `packages/desktop/src/renderer/sidebar/SectionMenu.tsx`, `packages/desktop/src/main/ipc.ts`, `packages/desktop/src/preload/index.ts`.
+**Дополнительное владение P09:** `packages/protocol/src/types.ts` — только NoticeKind additions для layer warnings в существующем wire DTO; новый notice DTO не вводится. Фактическое desktop принятие — P10.
 **Создать UI-проверку:** `packages/desktop/e2e/parley-md.spec.ts` по образцу существующего `agent-skills.spec.ts`.
 
 1. Проверить обработку комментариев вне fenced code, пустых вложенных разделов, UTF-8-предела с меткой; нетронутый шаблон даёт пустую часть. Проверить порядок полного слоя, тихий бриф и отсутствие ролей/памяти до появления соответствующих модулей.
-2. Добавить сборщик с необязательными блоками и общей проверкой сериализованных аргументов; встроенные правила сохраняются. Передавать Codex `developer_instructions` и fallback CLAUDE.md по спекам; argv — массив, без shell.
-3. Добавить launch/resume/new/autoLaunch и предупреждения подмены Codex без канала слоя. Отдельно проверить строки с кавычками, обратным слэшем, переводами строк и не-ASCII.
+2. Добавить сборщик с marked block preprocessing и проверкой final serialized args; host aggregate guard после final env/hook token — общий контракт выше и P04 §6. Передавать Codex `developer_instructions` и fallback CLAUDE.md по спекам; argv — массив, без shell. P09 последовательно владеет sessions-service/test и необходимым core export; P10 получает их позднее.
+3. Добавить launch/resume/new/autoLaunch и предупреждения plain custom Codex без канала слоя с сохранением запуска; недоставимая обязательная роль/permissions — отказ. Проверить кавычки, backslash, newline, non-ASCII, final env и hook-token cleanup; dedup notices не подавляет host log каждой попытки.
 4. Реализовать шаблон, эксклюзивное создание и receipt в stateDir. Удалённый файл не восстанавливается автоматически; явный Create работает; ошибка создания не мешает запуску.
 5. Подключить Open/Create в меню проекта и вкладку редактора; проверить полную доставку через `codex debug prompt-input` и живую сессию Claude.
 
@@ -212,7 +219,7 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 **Изменить:** `packages/core/src/work/{agents,types,map,launch,session-layer}.ts`, `packages/core/src/{providers,index}.ts`, `packages/core/src/mcp/{tools,server.test}.ts`, `packages/core/src/work/guide.ts`, `packages/protocol/src/{types,methods}.ts`, `packages/host/src/methods/sessions.ts`, `packages/host/src/sessions/sessions-service.ts`, `packages/desktop/src/renderer/components/dialogs/NewSessionOrRoomDialog.tsx`, `packages/desktop/src/renderer/components/rooms/ParticipantStrip.tsx`.
 
 1. Проверить миграцию `agent` в `role`, каталог восьми ролей, нативные коллизии, priority «явное → роль → provider», отсутствующий файл и пустой текст. Модельные id сверить с актуальным `provider-models.ts`, не дублировать независимую таблицу.
-2. Подключить общие YAML/TOML-парсеры; текст нативного Claude отдаёт CLI, Codex — блоком слоя. Умолчания роли не писать как явный выбор в карту.
+2. Подключить shared pinned YAML/TOML parsers; Codex auto-discovered agents/**/*.toml требует name и непустой developer_instructions, description после native layer merge, без filename fallback. Declared config_file name-hint вне v1; source-backed recursive roots/late same-name winner не заменяют live enforcement gate. Claude text отдаёт CLI, Codex main fields — args и блоком слоя, native main role flag отсутствует. Умолчания роли не писать как явный выбор в карту.
 3. Добавить подстановки ограничений при launch/resume. Создание роли без канала текста или обещанного read-only отвергать до записи успешной сессии; Claude Bash ограничен инструкцией, это явно описать в README.
 4. Добавить `list_roles`, `spawn_session(role)` и `get_map.role`; сохранить legacy `agent`, но сочетание `agent` и `role` отклонять.
 5. Подключить выбор, чип и lock в UI; проверить MCP/report у ролей с ограничениями. В роли planner план сдаётся через Parley, запрет записи файлов не превращает его в исполнителя.
@@ -230,7 +237,7 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 1. Сначала проверить схему, `READS`, отсутствие инструмента при выключении, свои/чужие/закрытые `for`, blank query, limit 1–10 и отсутствие подходящего скилла. Чужая работа — ошибка; удалённый cwd — пустой результат с причиной.
 2. Подключить cached catalog/search к серверу. Claude индексируется лениво; Codex — при старте для имён в описании. Названия и полные descriptions возвращаются с родным способом загрузки.
 3. Зафиксировать конфиг/env-snapshot на launch и передачу в MCP. `agentSkills=false, skillNavigator=true` работает; выключение навигатора удаляет только его поведение. Два одновременных запуска с разными snapshot не портят settings друг друга.
-4. Включить только подтвердившиеся механизмы budget/jev/Codex overrides, с сохранением человеческих выключений и хуков. Если список имён/выключений не помещается или CLI неподдержан, оставить полный список, корректное описание и поиск.
+4. Production сохраняет оба полных native списка до resolver parity и positive live P32 gates. Claude fraction0 invalid; env1 только candidate, bundled exception сохраняется. Jev candidate — точный обнаруженный `jev-skill-suggestion@skills-dir` в session enabledPlugins=false, без выключения функциональных хуков/statusLine/report/end-turn/wake и без setup restore. Codex budget/include_instructions и canonical-file/name suppression — candidate off; human User/SessionFlags/policy/provenance неизменны. Partial/unsupported/oversized → omit весь generated suppression, полный список и поиск, не launch retry с invalid flags.
 5. Объединить guidance с ролями/планами/памятью: `find_skill — skills by task, if needed`; в lead guide — `for` и выбор до предложения плана. Добавить английский переключатель рядом с agentSkills, значение по умолчанию false.
 
 Пример контрактов инструмента:
@@ -258,7 +265,7 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 1. Проверить безопасный снимок, отдельную загрузку колонок, hidden reason, separate copies и builtin parley. Отдельный fixture-secret не должен появиться в сериализованном ответе, логируемой ошибке или событии.
 2. Добавить `capabilities.get/refresh` и событие панели, сохранив `capabilities.list` подсказок. Скиллы брать только из общего resolver; команды native MCP/plugin — из подтверждённых форм этапа 0.
 3. Сделать каркас единой панели проекта и просмотр; Backlog/Decisions/Memory подключаются позднее как её вкладки. Refresh не обещает изменения уже запущенной сессии.
-4. Добавить native MCP add/remove, JSON-форму, очередь действий и check; затем plugin available/details/install/uninstall/enable/disable/marketplace. `execFile`, массив argv, raw config/output в UI не отправлять.
+4. Использовать [provider-specific actions P04 §7](../research/2026-10-03-parley-cli/contracts.md#7-provider-actions-и-безопасные-scopes): Claude plugin install/uninstall/enable/disable/update с user/project/local scope; details installed-only, pre-install inventory/cost unknown. Codex plugin add/remove без scope; details/toggle/update/check unavailable. Claude MCP ordinary snapshot из файлов, explicit Check text; local identity canonical main, .mcp.json session cwd. Codex MCP list/get JSON — metadata/auth, не connection check; add/remove user-only, unsupported JSON fields unavailable. Marketplace actions и rollback только по подтверждённым формам. `execFile`, argv; whitelist DTO/redaction **включая success stdout**, raw config/output в UI не отправлять.
 5. Добавить «дать второму/забрать» через проверенные симлинки и receipt: занятая папка — отказ, чужая ссылка не удаляется, builtin защищён. Скрытый или несовместимый скилл не становится автоматически доступным модели.
 
 **Проверка:** `pnpm --filter @parley/host exec vitest run src/capabilities src/methods/capabilities.test.ts`; protocol и тесты новой панели; native действия в отдельном тестовом проекте.

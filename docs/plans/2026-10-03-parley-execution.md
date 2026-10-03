@@ -92,3 +92,7 @@ P04 accepted после fix `e4e61cc`. P05 и P09 реализуются пар�
 P05: exact dependencies установлены (`yaml 2.9.1`, `smol-toml 1.9.0`), pnpm exit 0; целевые P09 tests больше не ждут install. P09 дополнительно получил только NoticeKind union в protocol/types.ts для существующего host notice канала; wire DTO/event contract сохранён, UI/e2e acceptance остаётся P10.
 
 P05 implementation ready: bounded strict UTF-8 readers и общие full YAML/TOML parsers; 30 целевых тестов passed, ESLint/isolated tsc passed. Передано /root/p00_review; общий core build пока не является результатом P05, ожидает завершения P09 patch.
+
+P05 code review needs rework: один Important finding — FIFO SKILL.md блокирует open до stat. Исправление общего reader и regression test назначены автору; P06/P07 не открыты.
+
+P04 docs-integration (unified plan + пять спек) передана /root/p01_review. P09 сообщил 18 processor/guard tests passed; общий целевой core batch и host-патч ещё выполняются, задача не принята.

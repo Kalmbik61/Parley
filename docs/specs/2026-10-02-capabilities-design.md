@@ -3,12 +3,12 @@
 > Интеграционная сверка: 2026-10-03. [Единый план
 > реализации](../plans/2026-10-03-parley-unified-implementation-plan.md), этапы 1, 5. Источники
 > скиллов общие с навигатором; панель показывает и недоступные модели записи с причиной, поиск
-> возвращает только доступные. Порядок и общие контракты — в плане; проверки CLI этапа 0 пока не
-> выполнены.
+> возвращает только доступные. Порядок и общие контракты — в плане; P00–P04 приняты по [контракту разведки](../research/2026-10-03-parley-cli/contracts.md).
+> [Журнал выполнения](../plans/2026-10-03-parley-execution.md) отделяет evidence от остающихся live gates; реализация не завершена.
 
 Дата: 2026-10-02. Статус: направление и четыре раздела дизайна приняты человеком в разговоре
 2026-10-02 (вариант B, объём «просмотр + установка», панель проекта, скиллы «показ + дать второму
-агенту»). Единый план составлен; открытые вопросы CLI остаются воротами этапа 0.
+агенту»). Единый план составлен; P01–P04 приняты, неподдержанные действия unavailable, remote/policy/live gates остаются P32.
 Основание:
 - разбор Hermes Agent и OpenClaw (раздел 1.2);
 - живые CLI на машине разработки: Claude Code 2.1.287, Codex 0.156.1 (раздел 4);
@@ -166,14 +166,14 @@ interface CapabilityRow {
 
 | Что | Откуда | Заметки |
 |---|---|---|
-| Плагины | `claude plugin list --json` | 0,4 с; есть `scope`, `enabled`, `projectEnabled`, `mcpServers` плагина |
-| Каталог | `claude plugin list --available --json` | формат и скорость проверяет кусок 0 |
-| Состав плагина | `claude plugin details <id>` | состав и примерная стоимость в токенах |
-| MCP user/local | `~/.claude.json`: `mcpServers`, `projects[<путь>].mcpServers` | только чтение, предел размера файла 32 МБ |
-| MCP project | `<проект>/.mcp.json` | одобрен ли сервер — `projects[<путь>].enabledMcpjsonServers` / `disabledMcpjsonServers` |
-| Скиллы | общий модуль `skills/`: пользовательские, проектные, включённые плагины, synced | полное YAML-описание, источник, доступность модели с причиной, предел 64 КБ; правила навигатора, 3.2 |
+| Плагины | `claude plugin list --json` | array; scope/enabled/projectEnabled; projectEnabled не общий effective enabled, mcpServers optional/schema ещё не подтверждена |
+| Каталог | `claude plugin list --available --json` | object installed/available, observed local ~0,1–0,2 с; remote discovery/network не проверены |
+| Состав плагина | `claude plugin details <id>` | installed-only text, нет --json; available-only inventory/cost unknown; local --plugin-dir отдельный inspected path |
+| MCP user/local | isolated/native config `.claude.json`: user mcpServers, local projects[realpath(mainCheckout)].mcpServers | read-only ≤32 МБ; worktree sharing observed; unresolved identity partial/unknown |
+| MCP project | `<session cwd checkout>/.mcp.json` | approval/disabled поля native project record; full trust workflow не подтверждён, unknown не enabled |
+| Скиллы | shared resolver: user/project/commands/plugins, synced account/manifest/config | canonical document identity, full multiline YAML description, весь SKILL.md ≤65 536 байт; unknown availability false; навигатор §3.2 |
 
-MCP читается из файлов, а не через `claude mcp list`: команда запускает каждый сервер.
+Ordinary MCP snapshot читается из файлов, не через `claude mcp list/get`: команды запускают/подключают approved серверы; unapproved pending, disabled может отсутствовать. Local MCP из основной копии виден в worktree: native storage canonical mainCheckout, даже если stdout пишет cwd worktree. Identity из bounded native/Git queries+realpath, не строки stdout или догадки dirname(.git); cwd/shared projectPath не меняются.
 `~/.claude.json` — внутренний файл Claude Code. Разбор терпимый: если поле не нашлось или формат
 другой, строки MCP Claude получают `unknown`, а `check` по-прежнему работает.
 
@@ -181,19 +181,16 @@ MCP читается из файлов, а не через `claude mcp list`: к
 
 | Что | Откуда | Заметки |
 |---|---|---|
-| MCP | `codex mcp list --json` | 6,6 с на машине разработки; есть `enabled`, `auth_status`; **секреты в ответе как есть** |
-| Плагины, каталог | `codex plugin list` | как отличить установленное от доступного — кусок 0 |
-| Скиллы | общий модуль `skills/`: `.agents/skills` от cwd сессии до корня, пользовательские корни | точные корни и приоритеты подтверждаются на этапе 0 вместе с навигатором |
+| MCP | `codex mcp list --json` / `mcp get <name> --json` | array/object; config/auth metadata, **не health-check**, secrets raw; auth_status не Connected |
+| Плагины, каталог | `codex plugin list --json` / `--available --json` | object installed/available; explicit installed/enabled/source/policy fields; remote variants unverified |
+| Скиллы | shared resolver: native config-folder/deprecated/user/project/system/admin/plugin/extra roots | canonical full-file identity; same-name файлы сохраняются; User/SessionFlags rules (не project) и policy; unknown roots unavailable до parity |
 
 ### 4.4 Состояние MCP
 
 - По умолчанию берётся то, что известно без запуска серверов: включён ли сервер, одобрен ли
-  (`pending-approval`), нужен ли вход (`needs-auth` из `auth_status` Codex).
-- Кнопка «Check» запускает `refresh { check: true }`. У Claude это `claude mcp list` (каждый
-  сервер поднимается, несколько секунд). Из ответа берётся только состояние по имени сервера:
-  `ok`/`failed`/`needs-auth`. Сырой вывод в окно не идёт никогда: команда печатает командную
-  строку сервера вместе с аргументами. Если строку сервера разобрать не удалось, остаётся прежнее
-  значение и пометка «couldn't read status».
+  (`pending-approval`), auth metadata Codex. Неизвестный auth_status — unknown, bearer_token/unsupported не доказывают Connected.
+- Explicit «Check» у Claude — `claude mcp list`/targeted `mcp get <name>` text: whitelist connected/pending/disabled/failed/unknown, exit 0 не означает здоровье всех серверов. Disabled/отсутствующий output сверяется с snapshot, не failed. Raw launch command/env/headers/Issue в UI не идёт. Unknown text → прежний safe snapshot и diagnostic.
+- Codex connection Check **unavailable**: list/get не запускают MCP (marker probe), auth_status не health. Native `/mcp` — recovery для connection/auth; не выдумывать mcp check или собственный запуск сервера.
 
 ### 4.5 Снимок
 
@@ -243,7 +240,7 @@ Refresh панели обновляет её снимок, индекс уже �
 - **`env`, заголовки:** только имена, без значений: `env: FIGMA_API_KEY`. Имена переменных из
   `env_vars`, `bearer_token_env_var`, `env_http_headers` Codex — тоже только имена.
 
-**Вывод CLI.** stderr действия перед показом проходит вырезание. Убирается всё, что хост видел в
+**Вывод CLI.** Любой stdout/stderr, **включая успешные mutations**, перед показом проходит вырезание; headers/env могут быть открыты даже в success output. Raw text/argv/config и parser exceptions с source excerpts в logs/protocol не идут. Safe code/position и whitelist DTO вместо raw вывода. stderr действия перед показом проходит вырезание. Убирается всё, что хост видел в
 сыром конфиге, кроме самой команды: аргументы, значения `env` и заголовков, пути и query URL. И
 всё, что человек ввёл в форму: аргументы, значения `env` и заголовков, URL. Сырой вывод «Check»
 не показывается вовсе (раздел 4.4).
@@ -261,29 +258,25 @@ Refresh панели обновляет её снимок, индекс уже �
 - Поля: имя; вид (stdio: команда и аргументы; http: URL); `env`; заголовки. Галочки «Claude» и
   «Codex».
 - Вставка JSON из README разбирает стандартный блок `{"mcpServers": {...}}` (или один сервер без
-  обёртки) и заполняет форму. Разбор только в окне, хост получает поля формы.
-- Уровень у Claude: user (по умолчанию), project (`.mcp.json`, в git), local. По умолчанию user,
-  а не local, как у CLI: local привязан к пути проекта в `~/.claude.json`, и сессии Parley в
-  worktree его могут не увидеть. Кусок 0 это проверяет; если подтвердится, рядом с local
-  пометка «not visible in worktree sessions».
+  обёртки) и заполняет форму. Окно разбирает ввод, host повторно валидирует schema/поля/transport/provider и whitelist-supported argv; unsupported поля не теряются молча.
+- Уровень Claude: UI user по умолчанию, project (`.mcp.json` session checkout), local. CLI default local, поэтому scope всегда явный. Local mainCheckout виден из worktree в 2.1.287; unresolved/atypical identity partial, не утверждение невидимости.
 - У Codex только пользовательский уровень, так пишет `codex mcp add`.
 - Команды: `claude mcp add [--transport http] --scope <s> <name> [-e K=V …] [--header …] -- <cmd> <args…>`
   или `<url>`; `codex mcp add <name> [--env K=V …] -- <cmd> <args…>` или `--url <url>`. Точный
-  набор флагов проверяет тест построения команд.
+  набор флагов — [матрица P04 §7](../research/2026-10-03-parley-cli/contracts.md#7-provider-actions-и-безопасные-scopes). Claude JSON: mcp add-json --scope <s> <name> <oneServerObject>; Codex add-json/SSE нет, strict convert только supported stdio/HTTP fields, unsupported headers/fields unavailable, не теряются. Codex HTTP bearer-token-env-var принимает имя переменной, не value; project/local mutations unavailable.
 
 ### 6.2 MCP: удалить
 
-С подтверждением: `claude mcp remove --scope <s> <name>`, `codex mcp remove <name>`. MCP из
-плагина отдельно не удаляется: в строке ссылка на плагин.
+С подтверждением: `claude mcp remove --scope <s> <name>`, `codex mcp remove <name>` user/global. Scope всегда явный у Claude, project/local mutation unavailable у Codex; plugin/system/managed MCP отдельно не удаляется. Общая product validation имени `[A-Za-z0-9_-]+` намеренно уже Codex grammar. В строке plugin MCP ссылка на плагин.
 
 ### 6.3 Плагины
 
 - Каталог подключённых маркетплейсов с поиском по имени и описанию.
-- Перед установкой окно показывает состав и примерную стоимость в токенах (`claude plugin details`).
-  У Codex — то, что отдаёт его CLI.
-- Установить (уровень user по умолчанию, или project), удалить, включить, выключить.
-- «Add marketplace»: одно поле `owner/repo` и пометка, что сторонние маркетплейсы никто не
-  проверяет.
+- Claude details доступен installed id: pre-install available-only inventory/cost **unknown**; local `--plugin-dir` — отдельный подтверждённый inspected path. Codex details нет: только list fields, стоимость unknown.
+- Claude install/uninstall/enable/disable/update: `plugin <action> <id> --scope user|project|local --json`. Exact scope/id, exit+outcome validation. Uninstall может удалить persistent data; явно описать это, reinstall не обещает восстановление.
+- Codex install/uninstall — `plugin add/remove <id> --json`, без scope. CLI enable/disable/update/check/details **unavailable**; --enable/--disable — feature flags, не plugins; listing -c toggle не доказал action. Recovery native UI/config, не guessed CLI и не прямой config writer.
+- Command-source/headersHelper install/update branch только help: без auto -y; если точная shownCommand/hash approval не поддержана интерфейсом, path unavailable/native UI.
+- «Add marketplace»: Claude `plugin marketplace add <source> --scope <s> --json`, Codex `plugin marketplace add <source> --json`; local path observed, remote/OAuth/policy unverified. Rollback remove только вновь добавленный source, не existing человеческие marketplaces. Codex marketplace upgrade — Git snapshot, не plugin update. После действия refresh/needs-restart при непроверенном live применении; timeout/error сохраняет предыдущий safe snapshot. Сторонние sources никто не проверяет.
 
 ### 6.4 Скилл: дать второму агенту
 
@@ -363,10 +356,13 @@ N sessions running in this project — restart them to pick this up». N хос�
 
 ---
 
-## 10. Открытые вопросы (кусок 0)
+## 10. Принятая разведка и оставшиеся gates
 
-1. Видят ли сессии в worktree MCP уровня local основной копии проекта?
-2. Где пользовательская папка скиллов Codex: `~/.agents/skills`, `~/.codex/skills` или обе?
-3. Как `codex plugin list` отличает установленное от доступного, есть ли `--json`?
-4. Формат, размер и скорость `claude plugin list --available --json`. Ходит ли он в сеть?
-5. Как `claude mcp list` печатает состояния, и стабилен ли этот текст для разбора.
+[Матрица P03/P04](../research/2026-10-03-parley-cli/contracts.md#7-provider-actions-и-безопасные-scopes)
+закрыла реальные argv/JSON shapes, installed/available, canonical-main local MCP,
+поддержанные scopes и explicit Check границы. Full native skill catalog остаётся
+production baseline; whole-file SKILL.md ceiling 65 536 байт, shared pinned parsers,
+canonical identity и unknown fail closed — контракт resolver из навигатора §3.2.
+Remote discovery performance, managed denial/OAuth/remote install, plugin MCP schema,
+полная source parity и live restart/enforcement остаются [gates P32](../research/2026-10-03-parley-cli/contracts.md#10-оставшиеся-gates-и-сдача).
+Unsupported path — unavailable/native recovery, не guessed command.

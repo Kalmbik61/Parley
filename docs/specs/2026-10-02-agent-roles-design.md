@@ -3,7 +3,8 @@
 > Интеграционная сверка: 2026-10-03. [Единый план
 > реализации](../plans/2026-10-03-parley-unified-implementation-plan.md), этап 3. Роль
 > ограничивает доступные действия; навигатор подбирает скилл внутри этих ограничений и своего CLI.
-> Порядок и общие контракты — в плане; проверки CLI этапа 0 пока не выполнены.
+> Порядок и общие контракты — в плане; P00–P04 приняты по [контракту разведки](../research/2026-10-03-parley-cli/contracts.md).
+> [Журнал выполнения](../plans/2026-10-03-parley-execution.md) отделяет evidence от остающихся live gates; реализация не завершена.
 
 Дата: 2026-10-02. Статус: согласовано в диалоге по разделам (каталог, запуск, окно и
 инструменты, сбои и проверка). Основание: разбор роли сессии в Parley
@@ -119,18 +120,23 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
 
 ### 4.2 Codex
 
-- Папки — те же, что читает сам Codex: `<проект>/.codex/agents/*.toml`, затем
-  `~/.codex/agents/*.toml`. При одинаковом имени побеждает проектная, как у Codex.
-  Имя — `codex:<name из файла или имя файла>`.
-- Из файла берутся `description`, `developer_instructions`, `model`,
-  `model_reasoning_effort`, `sandbox_mode`. Остальные ключи пропускаются.
-- Файл не разбирается или имя не проходит `^[\w.-]+$` — роль в список не попадает,
-  причина пишется в `host.log`.
-- Таблицы `[agents.<имя>]` с `config_file` из `~/.codex/config.toml` — позже, через
-  снимок спеки Capabilities.
-- Разбор TOML — небольшой зависимостью core без своих зависимостей (например,
-  `smol-toml`); выбор и лицензия — в плане. Своя разборка не годится: в
-  `developer_instructions` многострочные строки `"""`.
+- Auto-discovered roles из `agents/**/*.toml` native config layers (user/project)
+  source-backed; recursive roots и поздний same-name winner следуют native order.
+  `name` обязателен, непустой `developer_instructions` обязателен, `description`
+  обязателен **после native layer merge** и может наследоваться. Filename fallback нет.
+  Имя в Parley — `codex:<name>`; недопустимый/неизвестный native name исключается.
+- Из merged роли берутся `description`, `developer_instructions`, `model`,
+  `model_reasoning_effort`, `sandbox_mode`; неизвестные поля не расширяют права.
+- Shared `smol-toml@1.9.0` parse/stringify (BSD-3-Clause), `yaml@2.9.1`
+  parseDocument (ISC) для Claude frontmatter: полноценные multiline/arrays,
+  mapping/schema validation без coercion, bounded inputs/aliases; diagnostics
+  только code/position, не source excerpts. Полный bounded TOML разбирается **до**
+  marked preprocessing текста роли; permissions/model/effort не усекаются.
+- Declared `[agents.<имя>]` с `config_file` и name-hint — иной путь, пока вне v1;
+  нельзя переносить этот hint на auto-discovered TOML.
+- Native main-session role flag нет: Parley передаёт main fields через args и слой.
+  Offline prompt/config evidence не доказывает live sandbox/report/resume;
+  недоставимая обязательная роль/permissions fail safely по §5.7 и gates P32.
 
 ## 5. Запуск
 
@@ -160,8 +166,7 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
 
 Блок роли начинается строкой `Your role in this workspace: <name> (<источник>:<имя>).`,
 дальше — текст встроенной роли или `developer_instructions` нативной роли Codex. У
-нативной роли Claude блока нет: её промпт применяет сам Claude. Текст роли длиннее 32 КБ
-обрезается по строке со строкой-меткой, как PARLEY.md.
+нативной роли Claude блока нет: её промпт применяет сам Claude. Обработанный блок роли ≤32 768 байт UTF-8 **включая конечную marker строку**: длинный текст обрезается по последней строке с явной меткой и безопасным warning, как PARLEY.md. Permissions/model/effort остаются нетронутыми. Итоговый сериализованный аргумент после preprocessing/escaping не обрезается; overflow — ошибка до spawn по PARLEY.md §3.3.
 
 ### 5.3 Флаги по видам роли
 
@@ -262,9 +267,9 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
 | Случай | Поведение |
 |---|---|
 | Роль с тем же именем в разных источниках (`builtin:architect` и `codex:architect` от oh-my-codex) | Разные роли: имя всегда с источником |
-| Одно имя в проектной и пользовательской папке Codex | Побеждает проектная |
+| Одно имя в native layers Codex | Поздняя одноимённая роль выигрывает по native merge order; description может наследоваться |
 | Битый TOML или недопустимое имя нативной роли | Роли нет в списке, причина — в `host.log`; у существующей сессии — `role-missing` и запуск на умолчаниях |
-| Текст роли длиннее 32 КБ | Обрезка по строке со строкой-меткой |
+| Текст роли длиннее 32 КБ | Marked line preprocessing с warning; ≤32 768 байт UTF-8 включая marker, permissions/model/effort не усекаются |
 | Подмена провайдера без подстановок роли | Нет канала текста роли или подстановки «только чтения» — роль не создаётся (5.7); нет подстановок модели и усилия — действует подмена |
 | Агент Claude с урезанным `tools` без `mcp__parley__*` | Прежнее предупреждение `spawn_session` остаётся |
 | Роль у встроенной записи GLM | Нет: у неё нет ни канала слоя, ни флагов. Подмена `glm` на шаблонах Claude принимает встроенные роли без «только чтения»; модель по уровню для неё не подбирается (у GLM свои модели), нативные роли Claude ей в v1 не предлагаются |
@@ -345,10 +350,7 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
   вставка дописана.
 
 **Codex 0.156.1** (исходники `rust-v0.156.1`, крейт `codex-rs/agent-roles`):
-- `load_agent_roles` собирает роли из `<папка слоя конфига>/agents/*.toml` каждого слоя
-  (пользовательский `~/.codex`, проектный `.codex`) и из таблиц `[agents.<имя>]` с
-  `config_file`; файл роли — `description` и наложение конфига
-  (`developer_instructions`, `model`, `model_reasoning_effort` и др.).
+- Уточнение принятой P02/P04 разведки: auto-discovered `agents/**/*.toml` требует `name` и непустые `developer_instructions`; description валиден после merge, поздняя роль выигрывает. Declared config_file/name-hint — отдельный, неподдержанный в v1 путь, не filename fallback (§4.2).
 - Роли служат встроенному инструменту субагентов Codex; запустить главную сессию «как
   роль» Codex не умеет — поля роли Parley передаёт сам через `-m` и `-c`.
 

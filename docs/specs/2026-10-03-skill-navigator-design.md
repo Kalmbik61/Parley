@@ -3,14 +3,13 @@
 > Интеграционная сверка: 2026-10-03. [Единый план
 > реализации](../plans/2026-10-03-parley-unified-implementation-plan.md), этапы 1, 4. Общий модуль
 > источников используется навигатором и Capabilities; сокращение списка включается только после
-> проверки конкретного CLI. Порядок и общие контракты — в плане; проверки CLI этапа 0 пока не
-> выполнены.
+> проверки конкретного CLI. Порядок и общие контракты — в плане; P00–P04 приняты по [контракту разведки](../research/2026-10-03-parley-cli/contracts.md).
+> [Журнал выполнения](../plans/2026-10-03-parley-execution.md) отделяет evidence от остающихся live gates; реализация не завершена.
 
 Дата: 2026-10-03. Статус: направление и четыре раздела дизайна приняты человеком в разговоре
 2026-10-02…03 (свой навигатор вместо мода jev, в списке только имена, только свои скиллы,
 локальный поиск по словам, выбирает сам агент, в комнате — ведущий). Единый план
-составлен по согласованным спекам; неподтверждённые механизмы CLI остаются воротами
-этапа 0 до их реализации.
+составлен по согласованным спекам; принятая разведка отделяет подтверждённые формы от production candidate off и живых gates P32.
 Основание:
 - разбор мода `jev-skill-suggestion` и замер по транскриптам машины разработки (раздел 1.2);
 - код Claude Code 2.1.287: бюджет списка скиллов (раздел 2.1);
@@ -61,8 +60,7 @@
 Роутер — сама модель сессии. Человек пишет на любом языке, модель его понимает и решает, какой
 скилл нужен. Parley даёт ей две вещи:
 
-1. **Короткий список.** В сессиях Parley агент видит только имена скиллов: у Claude — в родном
-   списке, у Codex — в описании `find_skill` (раздел 2).
+1. **Короткий список — кандидат.** Целевой режим оставляет имена в родном списке Claude и описании `find_skill` Codex. Production сохраняет оба полных native списка до resolver parity и live gates P32 (раздел 2).
 2. **Справочник.** Инструмент `find_skill` MCP-сервера `parley` по запросу отдаёт описания
    кандидатов, модель выбирает и загружает скилл родным способом своего CLI.
 
@@ -73,7 +71,7 @@
 - поиск локальный, по словам; без сети, без расхода лимита, без хука на каждый промпт;
 - своего формата и каталога скиллов нет, источник — родные `SKILL.md`, как в спеке Capabilities
   (`docs/specs/2026-10-02-capabilities-design.md`);
-- в сессиях Parley мод jev выключен;
+- session-only выключение jev — candidate с обнаруженным точным id и сохранением Parley hooks; до live gates полного сокращения нет;
 - правила CLI не обходим: спрятанный человеком скилл навигатор не показывает;
 - переключатель в настройках Parley, по умолчанию выключен до живой проверки (раздел 8).
 
@@ -92,43 +90,44 @@
 
 ## 2. Что видит агент
 
-### 2.1 Claude: список из имён
+### 2.1 Claude: кандидат списка из имён
 
-В Claude Code 2.1.287 у списка скиллов есть бюджет в знаках:
-- бюджет = `SLASH_COMMAND_TOOL_CHAR_BUDGET`, если переменная задана, иначе
-  `окно контекста × 4 × skillListingBudgetFraction` (по умолчанию 0,01);
-- если список не влезает, Claude Code оставляет описания только тем, кто влез по приоритету, у
-  остальных — одно имя (`- name`); встроенные скиллы и скиллы в режиме `name-only` не трогаются;
-- `skillListingBudgetFraction: 0` даёт бюджет в 1 знак (`Math.max(1, …)`), и тогда у всех
-  невстроенных скиллов остаются одни имена — у плагинных и claude.ai тоже. Режим `name-only` в
-  `skillOverrides` на них не действует, поэтому нужен именно бюджет;
-- `skillListingMaxDescChars` (по умолчанию 1536) для этого не годится: при 0 один путь отрисовки
-  режет описание до пустого, а другой (`slice(0, r - 1) + "…"`) оставляет его почти целым.
+В Claude Code 2.1.287 бюджет descriptions задаётся `SLASH_COMMAND_TOOL_CHAR_BUDGET`
+либо `окно контекста × 4 × skillListingBudgetFraction` (default 0,01).
+`skillListingBudgetFraction: 0` **invalid** в schema (`>0 && <=1`); observed CLI
+с exit 0 оставил descriptions, поэтому этот вариант не передаётся.
+`SLASH_COMMAND_TOOL_CHAR_BUDGET=1` — observed candidate: имена небандлённых скиллов
+сохраняются, их descriptions убираются; bundled/name-only exceptions остаются.
+Это не полный список длиной один знак и не гарантия размером ≤3000 знаков.
 
-Parley задаёт бюджет только своим сессиям: настройкой в файле настроек работы или переменной в
-окружении агента. Что работает и с какой записью, решает кусок 0. Ожидаемый размер списка —
-не больше 3 тыс. знаков (на машине разработки около 2,8 тыс.). Субагенты работают в том же
-процессе и получают тот же список.
+Production сохраняет полный native список. Env1 возможен только после complete
+resolver parity, native main/subagent loader и реальных lifecycle gates P32.
+Budget/jev candidate действует только в session env/settings, не в глобальном
+конфиге; человеческие hidden rules и hooks/statusLine сохраняются.
+`skillListingMaxDescChars=0` не заменяет доказанный candidate.
 
-Встроенные скиллы Claude Code (если человек их не выключил) сохраняют описания. Их немного.
+### 2.2 Codex: budget и suppression — кандидаты, production off
 
-### 2.2 Codex: родной список выключен, имена — в описании инструмента
+В Codex 0.156.1 offline подтверждены `skills.max_context_tokens` и
+`skills.include_instructions=false`; второй путь version-pinned/source-backed.
+Budget=1 убирает advertised rows, это не режим «только имена». Оба кандидата off:
+production сохраняет полный native список до resolver parity и live P32 gates.
+`find_skill` работает поверх него и не обещает сокращения.
 
-Бюджета списка у Codex нет. Родные скиллы выключаются при запуске флагами
-`-c skills.config=[{path=…, enabled=false}, …]` — по записи на каждый найденный скилл (раздел 3.2).
-Это целевой режим после положительной проверки этапа 0, а не уже проверенное
-поведение всех источников. Выключающие записи объединяются с эффективными
-человеческими `skills.config` без потери записей; переполнение сериализованного
-аргумента сохраняет родной список. Имена агент видит в описании `find_skill`: MCP-сервер Parley поднимается на каждую сессию и знает
-её провайдера, поэтому строит описание при старте.
+Suppression candidate `-c skills.config=[{path=…, enabled=false}, …]` использует
+canonical **полный SKILL.md**, не каталог. Человеческие native rules применяются
+только из User и SessionFlags (не project skills.config), low→high с сохранением
+порядка: последующие name/path selectors могут отменять предыдущие. name=false
+скрывает все одноимённые документы; path=false — ровно файл. Directory selector
+принимается parser, но документ не выключает. Разные canonical файлы с одинаковым
+name сохраняются; symlink aliases одного файла дедуплицируются.
 
-Если `-c` для этого не годится (кусок 0), у Codex остаётся родной список, он и так не больше 2 %
-контекста. `find_skill` работает поверх него.
-
-Записи, которые ставит сам Parley, индекс не считает выключенными человеком: человеческие записи
-он читает из эффективных пользовательских и проектных слоёв конфигурации
-(только чтение). Сначала строится доступный человеку каталог, потом — временные
-выключающие записи Parley; повторного сканирования этих записей как человеческих нет.
+Human rules/policy вычисляются до Parley suppression; generated provenance
+хранится отдельно, не становится human-disabled и не активирует hidden файл.
+Нельзя generic-merge project TOML как native skills rules. Invalid override
+ломает startup: не отправлять его с расчётом на retry. Partial/oversized/unknown
+→ omit весь generated suppression, сохранить human flags и полный native список;
+итоговый argv/env повторно проверяется по PARLEY.md §3.3.
 
 ### 2.3 Когда агент зовёт `find_skill`
 
@@ -170,7 +169,7 @@ Parley задаёт бюджет только своим сессиям: нас�
 `limit` скиллов. У каждого скилла:
 - `name` — как его зовёт CLI (у плагина с префиксом: `superpowers:brainstorming`);
 - `description` — полное описание из заголовка `SKILL.md`;
-- `source` — `user`, `project`, `plugin`, `claude.ai` у Claude; `user`, `project` у Codex;
+- `source` — `user`, `project`, `plugin`, `claude.ai`, `system`, `admin`, `extra` по подтверждённому resolver; source union не обещает discovery/availability непроверенного root;
 - `load` — как загрузить: у Claude — инструмент Skill с этим именем, у Codex — прочитать `SKILL.md`
   по абсолютному пути.
 
@@ -183,26 +182,40 @@ words». Пустой `query`, сессия не из этой работы — 
 Индекс собирается из родных мест провайдера и живёт в процессе MCP-сервера до конца сессии. Для
 Claude — при первом вызове, для Codex — при старте (нужны имена для описания инструмента). Индекс
 для `for` строится лениво, отдельно на пару «провайдер, папка сессии», с учётом
-эффективных настроек этого контекста. Проектные источники и выключения берутся из
-рабочей папки участника (включая worktree); не из папки ведущего. Для закрытой
+native настроек этого контекста. Проектные источники берутся из рабочей папки участника (включая worktree), не ведущего; human выключения — из допустимых native layers CLI (Codex User/SessionFlags, не project skills.config). Для закрытой
 сессии используются текущие файлы и настройки, а не исторический список скиллов.
 Если её worktree удалён, возвращается явный пустой результат с причиной; поиск
 не подменяется каталогом основной копии проекта.
 
-Источники Claude:
-- `~/.claude/skills/*/SKILL.md` — свои;
-- `<папка сессии>/.claude/skills/*/SKILL.md` — проекта; у сессии в worktree — её копия;
-- скиллы включённых плагинов — по пути установки из `~/.claude/plugins/installed_plugins.json`;
-- `~/.claude/skills/synced/<аккаунт>/*/SKILL.md` — скиллы claude.ai (в списке с префиксом
-  `anthropic-skills:`).
+Источники Claude: `$CLAUDE_CONFIG_DIR/skills` (default `~/.claude/skills`),
+`.claude/skills` session cwd и `.claude/commands/**/*.md` с native nested names.
+Простое native skill name берётся из directory, не декоративного YAML name;
+observed user/project collision выигрывает user, losing record — shadowed.
+Plugin installPath/namespace, effective включённость и hidden rules учитываются
+отдельно; installed_plugins.json/cache glob не доказывают effective availability.
+Reserved synced требует native account/manifest/config и syncClaudeAiSkills veto,
+не произвольный filesystem glob. Ancestor/enterprise/plugin/synced priority matrix
+остаётся partial; неизвестный источник не рекламируется как доступный.
 
-Источники Codex: `~/.agents/skills`, `~/.codex/skills`, `.agents/skills` от папки сессии до корня
-репозитория. Обход — по правилам загрузчика Codex: глубина 6, не больше 2000 каталогов на корень.
+Источники Codex по pinned source: config folders `.codex/skills`, `.agents/skills`
+cwd→native project root (native markers, не только .git), deprecated
+`$CODEX_HOME/skills`, `$HOME/.agents/skills`, bundled `.system`, admin/system-config,
+plugin и extra roots. Source-backed не означает observed parity: непроверенные
+roots дают `availability-unverified`, не попадают в автоматический поиск.
+Native bounds: depth 6, ≤2000 directories и ≤20000 entries на root; user/repo/admin
+symlinks допустимы, system symlinks ignored; boundary live gates остаются.
 
-Из `SKILL.md` читается только заголовок: `name`, `description`, `disable-model-invocation`. Файл
-больше 64 КБ пропускается. Что не читается — пропускается без ошибки; нечитаемый корень тоже.
-Состав индекса сверяется с родным списком Claude в куске 0: туда же входят ли команды
-`.claude/commands/*.md` и как считается включённость плагинов на разных уровнях.
+Весь SKILL.md ≤65 536 байт inclusive: bounded max+1 read и strict UTF-8 decode,
+затем только начальный YAML mapping frontmatter между самостоятельными `---`
+строками (BOM/CRLF допустимы). Missing header отличается от invalid незакрытого/
+битого header; body не возвращается и не индексируется. Shared `yaml@2.9.1`
+parseDocument с errors/uniqueKeys и maxAliasCount=100 сохраняет full multiline
+описание; `smol-toml@1.9.0` полноценно разбирает settings/policy, multiline и arrays.
+Mapping/schema boolean/string fields без coercion; ошибки — только safe code/position,
+без исходных строк. Missing/nonstring description при известном native name даёт
+invalid-metadata unavailable record; неизвестный native name — diagnostic.
+Unreadable root/broken link/limit — partial diagnostic, не успешный пустой источник;
+unknown policy/availability fail closed, полный native список сохраняется.
 
 Код чтения скиллов — общий модуль `packages/core/src/skills/`, используемый
 навигатором и панелью Capabilities. Сканер подсказок chat-view, уже имеющийся в
@@ -214,15 +227,14 @@ Claude — при первом вызове, для Codex — при старт�
 Общий результат содержит источник, путь, полное описание и доступность модели
 с причиной. Панель показывает установленное, в том числе скрытое; `find_skill`
 применяет фильтр 2.4. Refresh панели не меняет уже построенный индекс сессии.
-Коллизии имён и порядок источников следуют подтверждённому загрузчику CLI;
-симлинки не создают дубликаты и циклы, скрытие учитывается до ранжирования.
+Identity — `(provider, realpath(полного документа))`, не basename/name/папка. Codex same-name файлы сохраняются; symlink aliases одного файла дедуплицируются. При неизвестной policy/availability `modelAvailable=false`, причина `availability-unverified`; фильтр до ranking. Native discovery/merge order выбирает запись canonical path, не BM25.
 
 ### 3.3 Поиск
 
 BM25 по словам имени и описания. Имя весит втрое больше описания. Слова — в нижнем регистре,
 разбиение по небуквенным знакам, имя ещё и по `-`, `_`, `:`. Английские стоп-слова выбрасываются,
 окончания `-s`, `-es`, `-ing`, `-ed` срезаются. Возвращаются скиллы с ненулевым весом, при равенстве —
-по имени. Результат детерминирован.
+по native имени, затем canonical document path, фиксированным побайтным сравнением. Результат детерминирован.
 
 Запрос на другом языке просто ничего не найдёт: модель сформулирует его заново, подсказка об
 этом — в описании инструмента. Человеку подстраиваться не нужно.
@@ -245,23 +257,20 @@ parts, name a skill for each part if one fits: find_skill with for: <session id>
 
 ## 5. Соседи
 
-- **Мод jev.** При включённом навигаторе он в сессиях Parley выключен: не прячет список и ничего не
-  вставляет. Выключается файлом настроек работы. Первый кандидат — `enabledPlugins` со значением
-  `false` для `jev-skill-suggestion@skills-dir`. Запасной — `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` в
-  `env` этого файла: он гасит в сессиях Parley все моды с функциональными хуками.
-  Этот запасной путь допустим только после проверки сохранности хуков Parley
-  (конец хода, report, пробуждение, statusLine); иначе остаются полный список
-  и диагностическое предупреждение, без глобального выключения хуков. Выбор — кусок 0.
-  У кого мода нет, тому запись ничего не меняет.
+- **Мод jev.** Точный observed id — `jev-skill-suggestion@skills-dir`;
+  session `enabledPlugins[id]=false` сохраняет command hooks. Обнаруживать installation
+  source/id, не угадывать id для inline или другой установки. Candidate зависит от
+  P32: statusLine, настоящие Parley report/end-turn/notify/wake. Не применять
+  `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0`, disableAllHooks/safe-mode/bare или setup restore
+  как fallback. Unknown id/failed gate → no suppression, полный список и diagnostic.
+
 - **Скиллы, спрятанные модом jev.** Его настройка переводит скиллы в `user-invocable-only`. Модель
   такой скилл загрузить не может, поэтому навигатор его не показывает (раздел 2.4). На машине
   разработки таких 78, включая gstack. Совет человеку — в день выпуска навигатора выполнить
   `/jev-skill-suggestion:setup restore`: скиллы вернутся модели везде, мод в обычных сессиях
   продолжит работать как прежде. Это личная настройка человека, Parley её не трогает.
-- **Субагенты Claude.** Тот же процесс: тот же список из имён и сам `find_skill`, если в определении
-  агента не урезан список инструментов (кусок 0).
-- **Скилл `parley`.** Его описание тоже сократится до имени. Не страшно: системная вставка и так
-  ведёт к `read_guide`.
+- **Субагенты Claude.** Synthetic native-loader evidence принято, но tools/permissions и реальный Parley lifecycle проверяются отдельно. Без доказанного Skill/find_skill path список не сокращается.
+- **Скилл `parley`.** В candidate режиме description может сократиться; guidance ведёт к `read_guide`, но это не заменяет role-specific live loader gate.
 - **Запущенные сессии.** Переключатель действует на новые и возобновлённые сессии: бюджет,
   выключение jev и `-c` задаются при запуске.
 
@@ -298,11 +307,10 @@ Claude, подсказку в слое и окружение дочернего 
 
 - Будущая версия Claude Code перестала понимать запись бюджета — список снова полный. `find_skill`
   работает, теряется только экономия. Ловит проверка размера списка (раздел 8).
-- Codex отверг `-c skills.config` — сессия не должна падать. Если кусок 0 покажет, что неверная
-  запись роняет запуск, записи ставятся только в проверенном виде, иначе — не ставятся.
+- Codex invalid skills.config observed ломает startup: только проверенный candidate после gates, иначе generated override отсутствует; не рассчитывать на повторный launch.
 - jev не выключился — он прячет и список имён, и вставляет свой выбор. Ловит та же проверка
   размера списка: в транскрипте видны вставки мода.
-- Индекс пуст (ничего не прочиталось) — `find_skill` отвечает пустым списком, сессия работает.
+- Индекс пуст — `find_skill` отвечает пустым списком, сессия работает; unreadable/partial/unknown даёт причину, не доказанное отсутствие скиллов.
 
 ---
 
@@ -314,8 +322,7 @@ Claude, подсказку в слое и окружение дочернего 
   пустой результат.
 - **Инструмент:** схема, `for` (свой, чужой провайдер, не из этой работы, закрытая сессия),
   `limit`, описание с именами у Codex.
-- **Запуск:** бюджет и выключение jev в файле настроек работы и записи `-c` у Codex — только при
-  включённом навигаторе, при запуске и при возобновлении.
+- **Запуск:** production full native list; budget/jev/Codex suppression отсутствуют до positive P32 gates. Candidate tests проверяют exact id, valid selectors/provenance, off/partial/overflow fallback, hook preservation и final argv/env; включённый navigator сам по себе suppression не разрешает.
 - **Настройки:** `skillNavigator` из файла и из окружения, переключатель в окне;
   один snapshot запуска для argv/guidance/MCP, независимость от agentSkills,
   отдельный settings включённой сессии и сохранность всех хуков Parley.
@@ -323,7 +330,7 @@ Claude, подсказку в слое и окружение дочернего 
   индекс MCP; role limits сохраняются; scope/снимок плана несут подсказку скилла.
 - **Сверка на машине разработки:** имена индекса Claude совпадают с родным списком — полем
   `names` вложения `skill_listing` в транскрипте — за вычетом спрятанных.
-- **Размер:** вложение `skill_listing` в транскрипте Claude-сессии Parley — не больше 3000 знаков.
+- **Размер:** измерить skill_listing candidate на текущей контрольной машине, записав состав каталога; ориентир прежнего набора ≤3000 знаков не универсальный bound. До resolver/live gates production full list.
 - **Живая проверка:** около 15 реальных промптов человека, включая те, где jev промахнулся, и те, где
   скилл не нужен. Правильный ответ — скилл или «не нужен» — размечает человек. Прогон на Claude и
   Codex, с навигатором и без. Цель — агент берёт верный скилл или обходится без него не реже, чем с
@@ -336,9 +343,8 @@ Claude, подсказку в слое и окружение дочернего 
 0. **Разведка.** Ответы на вопросы раздела 10 вписываются в эту спеку до начала кода.
 1. **Модуль `skills/`:** источники, заголовок, поиск, кеш, тесты.
 2. **`find_skill`** в MCP-сервере: вход и выход, `for`, описание, тесты.
-3. **Claude:** бюджет и выключение jev в файле настроек работы, полфразы во вставке, фраза в
-   гиде `lead`, настройка `skillNavigator` и переключатель.
-4. **Codex:** записи `-c skills.config`, имена в описании инструмента.
+3. **Claude:** navigator/guidance/settings snapshot и переключатель; env1/exact-id jev candidate production off до P32.
+4. **Codex:** navigator metadata; canonical-file suppression/budget candidates production off до P32.
 5. **Проверка:** сверка, размер, живая проверка; решение о включении по умолчанию.
 
 Очередь зафиксирована в едином плане: этап 0 — проверка CLI, этап 1 — общий
@@ -348,20 +354,12 @@ Claude, подсказку в слое и окружение дочернего 
 
 ---
 
-## 10. Открытые вопросы (кусок 0)
+## 10. Принятая разведка и оставшиеся gates
 
-1. Claude: что даёт одни имена у плагинных скиллов и скиллов claude.ai —
-   `skillListingBudgetFraction: 0` в `--settings` или `SLASH_COMMAND_TOOL_CHAR_BUDGET=1`? Какой
-   текст получается (нет ли приписки об обрезке)? Действует ли на субагентов? Переменная главнее
-   настройки: если она уже задана у человека, Parley задаёт её сам.
-2. Codex: выключают ли `-c skills.config=[…]` пользовательские скиллы (`~/.agents/skills`,
-   `~/.codex/skills`)? Что будет при неверной записи? Прочтёт ли модель выключенный `SKILL.md` по
-   пути? Где пользовательская папка — тот же вопрос 2 спеки Capabilities. Есть ли скиллы у
-   плагинов Codex и где они лежат?
-3. Как выключить jev только в сессиях Parley: `enabledPlugins` в `--settings` или
-   `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` в `env` того же файла?
-4. Видят ли субагенты Claude (Agent, Workflow) `mcp__parley__find_skill`?
-5. Состав родного списка Claude: команды `.claude/commands`, включённость плагинов по уровням —
-   для сверки индекса.
-6. Чтобы закрыть вопрос: поддерживают ли Claude Code и Codex MCP sampling? В строках бинарников
-   поддержки не видно. Для первой версии не нужно.
+P01–P04 приняты: [контракт и evidence/fallback](../research/2026-10-03-parley-cli/contracts.md#8-все-строки-этапа-0-evidence--fallback).
+Fraction0 invalid, env1 candidate; Codex budget существует, suppression off;
+commands/native User+SessionFlags/canonical file identity входят в resolver.
+Synced/account/managed/plugin/admin/extra parity, live чтение Parley-disabled файла
+при сохранении human disables, role-specific main/subagent tools, реальный
+Parley lifecycle и Linux final-env guard остаются [P32 gates](../research/2026-10-03-parley-cli/contracts.md#10-оставшиеся-gates-и-сдача).
+MCP sampling вне v1 и не задерживает реализацию. До gates — full list и unavailable/unknown.
