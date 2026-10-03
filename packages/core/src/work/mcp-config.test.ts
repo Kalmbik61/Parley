@@ -347,3 +347,18 @@ describe('writeMcpConfig', () => {
     expect(written.mcpServers[MCP_SERVER_NAME]?.env['HARNAS_CHANNEL']).toBe('1');
   });
 });
+
+describe('immutable navigator snapshot', () => {
+  it.each([false, true])('carries explicit %s and the launch revision through both native MCP formats', skillNavigator => {
+    const nativeContextRevision = '12345678-1234-1234-1234-123456789abc';
+    const snapshot = { ...params, skillNavigator, nativeContextRevision, env: { PARLEY_SKILL_NAVIGATOR: skillNavigator ? '0' : '1', PARLEY_NATIVE_CONTEXT_REVISION: 'STALE' } };
+    const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+    const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+    for (const env of [json, table.env]) {
+      expect(env.PARLEY_SKILL_NAVIGATOR).toBe(skillNavigator ? '1' : '0');
+      expect(env.HARNAS_SKILL_NAVIGATOR).toBe(skillNavigator ? '1' : '0');
+      expect(env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(nativeContextRevision);
+      expect(env.HARNAS_NATIVE_CONTEXT_REVISION).toBe(nativeContextRevision);
+    }
+  });
+});

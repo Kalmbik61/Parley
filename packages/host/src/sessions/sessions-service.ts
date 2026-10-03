@@ -379,7 +379,7 @@ export function createSessionsService(
           pid: handle.pid,
           startedAtProcess: await processStartedAt(handle.pid),
           launchedBy: 'host',
-        });
+        }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
       })();
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));

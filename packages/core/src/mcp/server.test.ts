@@ -184,6 +184,7 @@ describe('contextFromEnv', () => {
       workDir: workPaths(project, workId).dir,
       sessionId: 's-01',
       channel: false,
+      skillNavigator: false,
     });
   });
 

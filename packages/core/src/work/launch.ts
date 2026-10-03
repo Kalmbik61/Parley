@@ -11,6 +11,11 @@ import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { homedir } from 'node:os';
+import { realpath } from 'node:fs/promises';
+import { loadConfig } from '../config.js';
+import { findRunnerBinary } from './find-binary.js';
+import { writeNativeContext, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
@@ -22,7 +27,7 @@ import {
   type ProviderEntry,
   type RunnerSubstitutions,
 } from '../providers.js';
-import { prepareSessionRole, sessionRole, roleId, assertRoleDelivery } from './agents.js';
+import { prepareSessionRole, sessionRole, roleId, assertRoleDelivery, projectSkillRunnerContext } from './agents.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
@@ -186,6 +191,10 @@ async function plan(
   mode: LaunchMode,
   options: LaunchOptions = {},
 ): Promise<LaunchPlan> {
+  // Immutable for this launch and its MCP child, including resume.
+  const { config: launchConfig } = await loadConfig();
+  const skillNavigator = launchConfig.skillNavigator;
+  const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
   const paths = workPaths(projectPath, workId);
   const cwd = session.worktree?.path ?? projectPath;
@@ -231,6 +240,8 @@ async function plan(
   const params = {
     workDir: paths.dir,
     sessionId: session.id,
+    skillNavigator,
+    nativeContextRevision,
     env: process.env,
     ...(channel ? { channel } : {}),
   };
@@ -239,7 +250,7 @@ async function plan(
   // значением `-c`, и лишний файл ему незачем.
   const file =
     entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel)
+      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, { skillNavigator, nativeContextRevision })
       : null;
   const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
 
@@ -335,6 +346,23 @@ async function plan(
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
+  if (skillNavigator) {
+    // Only the actual chosen template/environment enters the LOCAL descriptor.
+    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
+    let descriptor: NativeContextDescriptor | null = null;
+    try {
+      const homeDir = await realpath(process.env.HOME ?? homedir());
+      const roots: NativeContextDescriptor['roots'] = { homeDir };
+      if (process.env.CODEX_HOME) roots.codexHome = await realpath(path.resolve(cwd, process.env.CODEX_HOME));
+      if (process.env.CLAUDE_CONFIG_DIR) roots.claudeConfigDir = await realpath(path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR));
+      const nativeCommand = entry.id === 'codex' && projection.verified ? await findRunnerBinary(entry.runner.command, process.env) : undefined;
+      descriptor = { version: 1, revision: nativeContextRevision, provider: session.provider, cwd: await realpath(cwd),
+        verified: projection.verified && nativeCommand !== undefined, ...(nativeCommand ? { command: nativeCommand } : {}),
+        configArgs: projection.configArgs, roots };
+    } catch { /* Unreadable roots/binary do not invent a native context. */ }
+    const written = descriptor !== null && await writeNativeContext(projectPath, workId, session.id, descriptor);
+    if (!written || !descriptor?.verified) warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
+  }
   warnings.push(...diagnostics.map((warning) => warning.message));
   return {
     command,
@@ -345,7 +373,7 @@ async function plan(
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
-    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }),
+    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision }),
     providerSessionId,
     warnings,
     diagnostics,
@@ -544,6 +572,7 @@ export async function startSession(
   sessionId: string,
   providerSessionId: string | null,
   started?: StartedProcess,
+  nativeContextRevision?: string,
 ): Promise<void> {
   await updateMap(projectPath, workId, (map) => {
     const current = map.sessions.find((candidate) => candidate.id === sessionId);
@@ -558,6 +587,8 @@ export async function startSession(
     session.startedAtProcess = started.startedAtProcess;
     session.launchedBy = started.launchedBy;
   });
+  // A descriptor failure closes availability only; it never breaks the established launch.
+  if (started !== undefined) await stampNativeContext(projectPath, workId, sessionId, started, nativeContextRevision).catch(() => {});
 }
 
 /**

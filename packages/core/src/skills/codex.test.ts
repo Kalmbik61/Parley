@@ -409,3 +409,44 @@ describe('native plugin and policy boundaries', () => {
     expect(JSON.stringify(result)).not.toContain('SYNTHETIC_SECRET');
   });
 });
+
+describe('bound native inventory intersection', () => {
+  it('authorizes only an exact local source/path/name/cwd and preserves no-evidence behavior', async () => {
+    const base = path.join(cwd, '.codex/skills');
+    const accepted = await skill(base, 'one', 'same');
+    const sibling = await skill(base, 'two', 'same');
+    const options = { cwd, homeDir, roots: [{ path: base, source: 'project' as const }], configLayers: [] };
+    expect((await discoverCodexSkills(options)).skills.every(item => !item.modelAvailable)).toBe(true);
+    const evidence = { cwd: await realpath(cwd), verified: true, skills: [{ path: accepted, name: 'same', source: 'project' as const, enabled: true }] };
+    const result = await discoverCodexSkills({ ...options, nativeEvidence: evidence });
+    expect(result.skills.find(item => item.path === accepted)?.modelAvailable).toBe(true);
+    expect(result.skills.find(item => item.path === sibling)?.modelAvailable).toBe(false);
+    for (const changed of [
+      { ...evidence, cwd: homeDir }, { ...evidence, verified: false },
+      { ...evidence, skills: [{ ...evidence.skills[0]!, name: 'wrong' }] },
+      { ...evidence, skills: [{ ...evidence.skills[0]!, path: `${accepted}.wrong` }] },
+      { ...evidence, skills: [{ ...evidence.skills[0]!, source: 'user' as const }] },
+    ]) expect((await discoverCodexSkills({ ...options, nativeEvidence: changed })).skills.every(item => !item.modelAvailable)).toBe(true);
+  });
+  it('requires native enabled AND human policy AND implicit invocation', async () => {
+    const base = path.join(homeDir, '.agents/skills');
+    const document = await skill(base, 'review');
+    const evidence = { cwd: await realpath(cwd), verified: true, skills: [{ path: document, name: 'review', source: 'user' as const, enabled: true }] };
+    const options = { ...injected(base), nativeEvidence: evidence };
+    expect((await discoverCodexSkills(options)).skills[0]?.modelAvailable).toBe(true);
+    expect((await discoverCodexSkills({ ...options, nativeEvidence: { ...evidence, skills: [{ ...evidence.skills[0]!, enabled: false }] } })).skills[0]?.unavailableReason).toBe('human-disabled');
+    expect((await discoverCodexSkills({ ...options, configLayers: [{ source: 'SessionFlags', provenance: 'human', data: { skills: { config: [{ name: 'review', enabled: false }] } } }] })).skills[0]?.unavailableReason).toBe('human-disabled');
+    await put(path.join(base, 'review/agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: false\n');
+    expect((await discoverCodexSkills(options)).skills[0]?.unavailableReason).toBe('implicit-invocation-disabled');
+  });
+  it('does not promote plugin/extra/admin roots or invent verified evidence for other siblings', async () => {
+    const base = path.join(root, 'other');
+    const document = await skill(base, 'review');
+    const nativeEvidence = { cwd: await realpath(cwd), verified: true, skills: [{ path: document, name: 'review', source: 'user' as const, enabled: true }] };
+    for (const source of ['plugin', 'extra', 'admin'] as const)
+      expect((await discoverCodexSkills({ ...injected(base, source), nativeEvidence })).skills[0]?.modelAvailable).toBe(false);
+    // An ordinary verified User root remains compatible when no native snapshot was requested.
+    expect((await discoverCodexSkills(injected(base))).skills[0]?.modelAvailable).toBe(true);
+    expect((await discoverCodexSkills({ ...injected(base), nativeEvidence: { ...nativeEvidence, skills: [] } })).skills[0]?.modelAvailable).toBe(false);
+  });
+});

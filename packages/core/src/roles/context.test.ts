@@ -50,3 +50,19 @@ describe('native Codex role context', () => {
     expect(called).toBe(false);
   });
 });
+
+describe('shared native transport', () => {
+  it('adds exactly one bounded skills/list read when requested, with actual cwd and forceReload', async () => {
+    const { readCodexNativeContext } = await import('./context.js');
+    const code = String.raw`let input='',seen=[];process.stdin.on('data',chunk=>{input+=chunk;let i;while((i=input.indexOf('\n'))>=0){let r=JSON.parse(input.slice(0,i));input=input.slice(i+1);seen.push([r.method,r.params]);if(!r.id)continue;let result=r.method==='skills/list'?{seen}:{};process.stdout.write(JSON.stringify({id:r.id,result})+'\n')}});`;
+    const result = await readCodexNativeContext({ cwd: '/tmp', start: (_command, args, cwd) => {
+      expect(args).toEqual(['app-server', '--stdio']); expect(cwd).toBe('/tmp');
+      return spawn(process.execPath, ['-e', code], { stdio: 'pipe' });
+    } }, true);
+    expect(result?.skills).toEqual({ seen: [
+      ['initialize', { clientInfo: { name: 'parley_roles', version: '1' }, capabilities: { experimentalApi: true } }],
+      ['initialized', undefined], ['config/read', { cwd: '/tmp', includeLayers: true }],
+      ['configRequirements/read', {}], ['skills/list', { cwds: ['/tmp'], forceReload: true }],
+    ].map(([method, params]) => [method, params ?? null]) });
+  });
+});

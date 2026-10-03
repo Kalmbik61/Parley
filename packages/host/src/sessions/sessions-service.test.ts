@@ -1610,3 +1610,26 @@ describe('removed role warning delivery', () => {
     } finally { await service.stopAll(); }
   });
 });
+
+describe('participant native context launch binding', () => {
+  it('forwards the actual LaunchPlan revision into the successful PID/start stamp', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1'); setEnv('PARLEY_CODEX_BIN', STUB);
+    const work = await createWork(project, { title: 'Bound native context', goal: '' });
+    const argsFile = await tempArgsFile(); setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    let ref: SessionRef | undefined;
+    try {
+      ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'codex', label: 'Context', task: 'Review', parent: null });
+      const args = await readArgs(argsFile);
+      const value = JSON.parse(await readFile(path.join(project, '.parley/local/native-context', work.work.id, `${ref.sessionId}.json`), 'utf8'));
+      const session = (await readMap(project, work.work.id)).sessions.find(item => item.id === ref!.sessionId)!;
+      expect(value.process).toEqual({ pid: session.pid, startedAtProcess: session.startedAtProcess });
+      expect(value.process.pid).toBeGreaterThan(0); expect(value.process.startedAtProcess).toBeTypeOf('string');
+      expect(args.argv.find(arg => arg.startsWith('mcp_servers.parley='))).toContain(`PARLEY_NATIVE_CONTEXT_REVISION=${JSON.stringify(value.revision)}`);
+      expect(value.configArgs).toEqual([]);
+    } finally {
+      if (ref) await service.stop(ref);
+      await rm(path.dirname(argsFile), { recursive: true, force: true });
+    }
+  });
+});

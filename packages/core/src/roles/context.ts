@@ -90,18 +90,20 @@ export function projectCodexRoleContext(configResult: unknown, requirementsResul
   return { layers, diagnostics: [], verified: true };
 }
 
+/** Internal raw responses stay inside the context adapter; never logs or shared DTOs. */
+export interface CodexNativeContext { config: unknown; requirements: unknown; skills?: unknown }
 /** Native config read only: no thread/model turn, shell, raw output logs or manual trust merge. */
-export async function readCodexRoleContext(options: CodexContextOptions): Promise<CodexRoleContext> {
-  if (options.profile !== undefined || !path.isAbsolute(options.cwd)) return failed();
+export async function readCodexNativeContext(options: CodexContextOptions, includeSkills = false): Promise<CodexNativeContext | null> {
+  if (options.profile !== undefined || !path.isAbsolute(options.cwd)) return null;
   const timeoutMs = options.timeoutMs ?? 8000;
   const maxBytes = options.maxBytes ?? 4194304;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 8000 ||
-    !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 4194304) return failed();
+    !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 4194304) return null;
   let child: ChildProcessWithoutNullStreams;
   try {
     child = (options.start ?? startServer)(options.command ?? 'codex', [...(options.configArgs ?? []), 'app-server', '--stdio'],
       options.cwd, agentEnv(options.env ?? process.env));
-  } catch { return failed(); }
+  } catch { return null; }
   let buffer = Buffer.alloc(0);
   let bytes = 0;
   const responses = new Map<number, { resolve: (value: unknown) => void; reject: () => void }>();
@@ -151,8 +153,9 @@ export async function readCodexRoleContext(options: CodexContextOptions): Promis
     child.stdin.write('{"method":"initialized"}\n');
     const config = await request(2, 'config/read', { cwd: options.cwd, includeLayers: true });
     const requirements = await request(3, 'configRequirements/read', {});
-    return projectCodexRoleContext(config, requirements);
-  } catch { return failed(); }
+    const skills = includeSkills ? await request(4, 'skills/list', { cwds: [options.cwd], forceReload: true }) : undefined;
+    return { config, requirements, ...(includeSkills ? { skills } : {}) };
+  } catch { return null; }
   finally {
     clearTimeout(timer);
     abort();
@@ -167,4 +170,10 @@ export async function readCodexRoleContext(options: CodexContextOptions): Promis
     child.stdout.destroy();
     child.stderr.destroy();
   }
+}
+
+/** Preserve the role projection and its stricter declared-role gate. */
+export async function readCodexRoleContext(options: CodexContextOptions): Promise<CodexRoleContext> {
+  const context = await readCodexNativeContext(options);
+  return context === null ? failed() : projectCodexRoleContext(context.config, context.requirements);
 }

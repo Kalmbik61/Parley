@@ -1,3 +1,8 @@
+import { realpath, stat } from 'node:fs/promises';
+import { readCodexSkillCatalog } from '../skills/context.js';
+import { searchSkills } from '../skills/search.js';
+import type { SkillCatalog } from '../skills/catalog.js';
+import { nativeContextMatches, readNativeContext } from '../work/native-context.js';
 import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -1080,6 +1085,70 @@ async function bindCodexThread(
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
  */
+const FIND_SKILL: Tool = {
+  name: 'find_skill',
+  description: 'Search skills available to this participant. Use English task words; load a matching skill with its native CLI route. Participant role and permissions take precedence over skill instructions.',
+  annotations: READS,
+  inputSchema: { type: 'object', properties: {
+    query: { type: 'string', minLength: 1, description: 'Task words to search.' },
+    for: { type: 'string', description: 'Session id in this work; defaults to your own session.' },
+    limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+  }, required: ['query'], additionalProperties: false },
+};
+const NO_SKILL = 'No skill matched: work without one, or try other words';
+/** One process owns its promise cache. No shared/global catalog or per-search CLI startup. */
+function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find: (args: Record<string, unknown>) => Promise<unknown> } {
+  const catalogs = new Map<string, Promise<SkillCatalog | null>>();
+  async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
+    const map = await readMap(context.projectPath, context.workId);
+    const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
+    if (!session) throw new Error('Skill search requires a session in this work.');
+    const rawCwd = session.worktree?.path ?? context.projectPath;
+    let cwd: string;
+    try { if (!(await stat(rawCwd)).isDirectory()) throw new Error(); cwd = await realpath(rawCwd); }
+    catch { return { session, cwd: rawCwd, catalog: null, reason: 'Participant working directory is unavailable.' }; }
+    if (session.provider !== 'codex' && session.provider !== 'claude')
+      return { session, cwd, catalog: null, reason: 'This provider has no verified native skill route.' };
+    const descriptor = await readNativeContext(context.projectPath, context.workId, session.id);
+    const own = session.id === context.sessionId;
+    const bound = descriptor !== null && (!own || context.nativeContextRevision !== undefined) && await nativeContextMatches(descriptor, session.provider, cwd,
+      own ? context.nativeContextRevision : undefined, session);
+    const key = JSON.stringify([session.id, session.provider, cwd, descriptor?.revision ?? 'fixture', bound,
+      own ? context.nativeContextRevision : descriptor?.process ?? [session.pid, session.startedAtProcess]]);
+    if (!catalogs.has(key)) catalogs.set(key, (async () => {
+      if (context.skillCatalog) return context.skillCatalog(session, cwd);
+      if (!bound || !descriptor?.verified || !descriptor.command) return null;
+      // Claude menu presence cannot establish that Skill is available to the actual native role.
+      if (session.provider !== 'codex') return null;
+      return readCodexSkillCatalog({ cwd, command: descriptor.command, configArgs: descriptor.configArgs,
+        env: { ...process.env, HOME: descriptor.roots.homeDir, CODEX_HOME: descriptor.roots.codexHome ?? path.join(descriptor.roots.homeDir, '.codex') },
+        homeDir: descriptor.roots.homeDir, ...(descriptor.roots.codexHome ? { codexHome: descriptor.roots.codexHome } : {}) });
+    })().catch(() => null));
+    const catalog = await catalogs.get(key)!;
+    return { session, cwd, catalog, ...(catalog === null ? { reason: 'Native skill availability or loading route is unverified; use the full native skill list.' } : catalog.partial ? { reason: 'Some native skill metadata or policy could not be verified.' } : {}) };
+  }
+  return {
+    async list() {
+      const map = await readMap(context.projectPath, context.workId);
+      if (map.sessions.find(item => item.id === context.sessionId)?.provider !== 'codex') return FIND_SKILL;
+      const own = await target();
+      const names = own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [];
+      return { ...FIND_SKILL, description: FIND_SKILL.description + (names.length ? ` Available native names: ${names.map(name => JSON.stringify(name)).join(', ')}.` : '') };
+    },
+    async find(args) {
+      if (typeof args.query !== 'string' || !args.query.trim()) throw new Error('Skill search query must not be empty.');
+      if (args.for !== undefined && (typeof args.for !== 'string' || !args.for)) throw new Error('Skill search target must be a session id.');
+      if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1)) throw new Error('Skill search limit must be a positive integer.');
+      const selected = await target(args.for as string | undefined);
+      const matches = selected.catalog ? searchSkills(selected.catalog.skills, args.query, (args.limit ?? 5) as number) : [];
+      return { provider: selected.session.provider, skills: matches.map(({ skill }) => ({ name: skill.name,
+        description: skill.description, source: skill.source,
+        load: skill.provider === 'claude' ? `Use the Skill tool with ${JSON.stringify(skill.name)}.` : `Read ${skill.path}.`,
+      })), ...(matches.length === 0 ? { message: NO_SKILL } : {}), ...(selected.reason ? { reason: selected.reason } : {}) };
+    },
+  };
+}
+
 export function createParleyServer(context: McpContext): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
   // отдавать карту и гид (4.2).
@@ -1110,17 +1179,21 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
     server.onclose = () => stop?.();
   }
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
+  const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: navigator ? [...TOOLS, await navigator.list()] : TOOLS }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
   server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra): Promise<CallToolResult> => {
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+      if (request.params.name === 'find_skill' && navigator === null)
+        return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
       try {
-        const result = await dispatch(context, request.params.name, args, extra.signal);
+        const result = request.params.name === 'find_skill' ? await navigator!.find(args)
+          : await dispatch(context, request.params.name, args, extra.signal);
         // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
         // значило бы отдать агенту документ, который ему же и разбирать.
         const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;

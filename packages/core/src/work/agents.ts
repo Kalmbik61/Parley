@@ -1,3 +1,4 @@
+import { projectNativeSkillConfigArgs } from './native-context.js';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { discoverClaudeRoles } from '../roles/claude.js';
@@ -59,6 +60,35 @@ function nativeConfigArgs(entry: ProviderEntry): { args: string[]; unsupported: 
   if (JSON.stringify(projections[0]) !== JSON.stringify(projections[1])) return { args: [], unsupported: true };
   return { args: projections[0]!, unsupported: false };
 }
+/** Selected launch/resume template only; no fresh registry lookup or secret argument snapshot. */
+export function projectSkillRunnerContext(entry: ProviderEntry, template: readonly string[]): { verified: boolean; configArgs: string[] } {
+  if (entry.id !== 'codex') return { verified: false, configArgs: [] };
+  const configArgs: string[] = [];
+  const knownGenerated = new Set(['tui.terminal_title', 'tui.notifications', 'tui.notification_method',
+    'tui.notification_condition', 'project_doc_fallback_filenames']);
+  const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
+  for (let i = 0; i < template.length; i++) {
+    const item = template[i]!;
+    if (item === '--no-daemon' || item === '{prompt}') continue;
+    if (i === 0 && item === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
+    if (item === '--model' && template[i + 1] === '{model}') { i++; continue; }
+    if (item === '-a' && template[i + 1] === 'on-request') { i++; continue; }
+    let value: string | undefined;
+    if (item === '-c' || item === '--config') value = template[++i];
+    else if (item.startsWith('--config=')) value = item.slice('--config='.length);
+    else if (item.startsWith('-c') && item.length > 2) value = item.slice(2);
+    else return { verified: false, configArgs: [] };
+    if (value === undefined) return { verified: false, configArgs: [] };
+    if (generated.has(value)) continue;
+    const key = value.slice(0, value.indexOf('=')).trim();
+    if (knownGenerated.has(key)) continue;
+    if (key !== 'skills.config' && key !== 'project_root_markers') return { verified: false, configArgs: [] };
+    configArgs.push('-c', value);
+  }
+  const projected = projectNativeSkillConfigArgs(configArgs);
+  return projected === null ? { verified: false, configArgs: [] } : { verified: true, configArgs: projected };
+}
+
 export interface SessionRoleCatalogOptions {
   codex?: boolean;
   homeDir?: string;

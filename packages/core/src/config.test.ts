@@ -32,6 +32,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: true,
       agentSkills: true,
+      skillNavigator: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -66,6 +67,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: false,
       agentSkills: true,
+      skillNavigator: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -85,6 +87,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       autoLaunch: true,
       agentSkills: true,
+      skillNavigator: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -336,12 +339,13 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['resumeRate', 'RESUME_RATE', '3', 3],
     ['autoLaunch', 'AUTO_LAUNCH', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
+    ['skillNavigator', 'SKILL_NAVIGATOR', 'yes', true],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
   ] as const;
 
-  it('ключи таблицы ENV_NAMES — те же девять настроек', () => {
+  it('ключи таблицы ENV_NAMES — соответствуют всем настройкам', () => {
     expect(Object.fromEntries(SETTINGS.map(([key, name]) => [key, name]))).toEqual(ENV_NAMES);
   });
 
@@ -490,5 +494,21 @@ describe('saveConfig', () => {
     await saveConfig({ autoLaunch: true }, file());
 
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ autoLaunch: true });
+  });
+});
+
+describe('skillNavigator setting', () => {
+  it('defaults false and has an independent file/env switch', async () => {
+    expect(DEFAULT_CONFIG.skillNavigator).toBe(false);
+    await write({ agentSkills: false, skillNavigator: true });
+    expect((await loadConfig(file(), {})).config).toMatchObject({ agentSkills: false, skillNavigator: true });
+    expect((await loadConfig(file(), { PARLEY_SKILL_NAVIGATOR: '0' })).config.skillNavigator).toBe(false);
+    expect((await loadConfig(file(), { HARNAS_SKILL_NAVIGATOR: '1' })).config.skillNavigator).toBe(true);
+    expect(parseSetting('skillNavigator', 'true')).toEqual({ value: true });
+  });
+  it('invalid input reports a safe setting error and keeps the default', async () => {
+    await write({ skillNavigator: 'invalid' });
+    const value = await loadConfig(file(), {});
+    expect(value.config.skillNavigator).toBe(false); expect(value.warning).toContain('skillNavigator');
   });
 });

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agentDirs, assertAgent, listAgents, prepareSessionRole, sessionRoleCatalog, assertRoleDelivery } from './agents.js';
+import { agentDirs, assertAgent, listAgents, prepareSessionRole, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext } from './agents.js';
 import { PROVIDERS } from '../providers.js';
 import { buildRoleCatalog, resolveRoleChoice } from '../roles/catalog.js';
 let project = '', claudeHome = '';
@@ -151,5 +151,24 @@ describe('native Claude common layer position', () => {
   it('keeps the native body exclusively on --agent when the common append layer is absent', async () => {
     const entry = { ...PROVIDERS.claude, runner: { ...PROVIDERS.claude.runner, args: ['--agent', '{agent}', '{prompt}'], resumeArgs: ['--resume', '{providerSessionId}', '--agent', '{agent}', '{prompt}'] } };
     await expect(prepareSessionRole(project, entry, { roleId: 'claude:exact', provider: 'claude' }, catalog)).resolves.toMatchObject({ nativeAgent: 'exact', roleText: '' });
+  });
+});
+
+
+describe('chosen native runner context projection', () => {
+  it('supports actual default start/resume templates without reading a fresh registry', () => {
+    for (const template of [PROVIDERS.codex.runner.args!, PROVIDERS.codex.runner.resumeArgs!])
+      expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true, configArgs: [] });
+  });
+  it('canonicalizes literal human skills.config and inline config options, excluding comments', () => {
+    const template = ['--config=skills.config=[{name="review",enabled=false}] # SECRET', '-cproject_root_markers=[".git"]', '{prompt}'];
+    expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true,
+      configArgs: ['-c', 'skills.config=[{name="review",enabled=false}]', '-c', 'project_root_markers=[".git"]'] });
+  });
+  it('rejects profiles, cwd, unknown policy and malformed selectors without returning raw config', () => {
+    for (const template of [['--profile', 'SECRET'], ['-C', '/tmp'], ['-c', 'secret="SECRET"'],
+      ['-c', 'skills.config=[{name="review",enabled=false,secret="SECRET"}]'], ['--', '{prompt}']])
+      expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: false, configArgs: [] });
+    expect(projectSkillRunnerContext(PROVIDERS.claude, PROVIDERS.claude.runner.args!)).toEqual({ verified: false, configArgs: [] });
   });
 });

@@ -27,9 +27,16 @@ export interface CodexConfigLayer {
   /** Missing native default config is known-empty; explicit snapshots are required. */
   optional?: boolean;
 }
+export interface CodexNativeSkillEvidence {
+  /** Bound actual participant cwd; inventory paths/names are native canonical identities. */
+  cwd: string;
+  verified: boolean;
+  skills: readonly { path: string; name: string; source: 'user' | 'project'; enabled: boolean }[];
+}
 export interface CodexDiscoveryOptions {
   cwd: string;
   homeDir?: string;
+  nativeEvidence?: CodexNativeSkillEvidence;
   codexHome?: string;
   /** Overrides native root discovery, allowing fully isolated fixtures. */
   roots?: CodexSkillRoot[];
@@ -99,6 +106,21 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
   try { if (!(await stat(cwd)).isDirectory()) throw new Error(); }
   catch { report('project', cwd, { code: 'unreadable' }); return result; }
 
+  // Evidence authorizes individual local documents, never a root or a same-name sibling.
+  let evidenceKnown = false;
+  const nativeIdentities = new Map<string, boolean>();
+  if (options.nativeEvidence?.verified === true) {
+    try { evidenceKnown = await realpath(options.nativeEvidence.cwd) === await realpath(cwd); }
+    catch { /* A removed/foreign context provides no availability proof. */ }
+  }
+  if (evidenceKnown) {
+    for (const item of options.nativeEvidence!.skills) {
+      const key = JSON.stringify([item.path, item.name, item.source]);
+      const previous = nativeIdentities.get(key);
+      if (previous !== undefined && previous !== item.enabled) { evidenceKnown = false; break; }
+      nativeIdentities.set(key, item.enabled);
+    }
+  }
   const layers: Array<{ layer: CodexConfigLayer; data: Record<string, unknown> }> = [];
   const rules: Rule[] = [];
   let humanPolicyKnown = true;
@@ -229,8 +251,13 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
     const description = typeof parsed.data.description === 'string' && parsed.data.description.trim() ? parsed.data.description : '';
     let reason: SkillUnavailableReason | null = null;
     if (!description) { reason = 'invalid-metadata'; report(root.source, canonical, { code: 'invalid-policy' }); }
-    else if (!root.verified || (root.source === 'plugin' && !root.namespace) || !humanPolicyKnown) reason = 'availability-unverified';
-    else if (root.enabled === false) reason = root.source === 'plugin' ? 'plugin-disabled' : 'human-disabled';
+    const native = evidenceKnown && !root.namespace && (root.source === 'user' || root.source === 'project')
+      ? nativeIdentities.get(JSON.stringify([canonical, name, root.source]))
+      : undefined;
+    const verified = options.nativeEvidence === undefined ? root.verified === true : native !== undefined;
+    if (reason === null && (!verified || (root.source === 'plugin' && !root.namespace) || !humanPolicyKnown)) reason = 'availability-unverified';
+    if (reason === null && (root.enabled === false || native === false))
+      reason = root.source === 'plugin' ? 'plugin-disabled' : 'human-disabled';
     let enabled = true;
     for (const rule of rules) if ((rule.selector === 'name' && rule.value === name) || (rule.selector === 'path' && rule.value === canonical)) enabled = rule.enabled;
     if (reason === null && !enabled) reason = 'human-disabled';

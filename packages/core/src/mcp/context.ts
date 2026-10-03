@@ -1,3 +1,5 @@
+import type { SkillCatalog } from '../skills/catalog.js';
+import type { WorkSession } from '../work/types.js';
 import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
@@ -12,6 +14,11 @@ export interface McpContext {
   projectPath: string;
   /** Internal fixture inventory adapter; never environment or protocol input. */
   roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
+  /** Immutable launch environment snapshot. Absence is safely disabled for legacy sessions. */
+  skillNavigator?: boolean;
+  nativeContextRevision?: string;
+  /** Internal isolated adapter fixture; never protocol/environment input. */
+  skillCatalog?: (session: WorkSession, cwd: string) => Promise<SkillCatalog | null>;
   workId: string;
   /** `<проект>/.parley/works/<work-id>/` (или прежний `.harnas`) — то, что пришло в `PARLEY_WORK_DIR`. */
   workDir: string;
@@ -68,5 +75,7 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     // Переменную пишет сам харнесс ровно со значением `1`: чужое значение —
     // не наша настройка, и звонок остаётся выключенным.
     channel: envValue(env, 'CHANNEL') === '1',
+    skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
+    ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
   };
 }

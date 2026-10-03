@@ -1,3 +1,4 @@
+import { readNativeContext } from './native-context.js';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -144,6 +145,10 @@ const sessionEnv = (workDir: string, sessionId: string): Record<string, string> 
   PARLEY_SESSION_ID: sessionId,
   HARNAS_WORK_DIR: workDir,
   HARNAS_SESSION_ID: sessionId,
+  PARLEY_SKILL_NAVIGATOR: '0',
+  HARNAS_SKILL_NAVIGATOR: '0',
+  PARLEY_NATIVE_CONTEXT_REVISION: expect.any(String),
+  HARNAS_NATIVE_CONTEXT_REVISION: expect.any(String),
 });
 
 describe('метки быстрой сессии и автозаголовок', () => {
@@ -1226,5 +1231,44 @@ describe('fresh role defaults versus persisted explicit CLI clears', () => {
     const stored = await sessionOf(work.id, sessionId);
     expect(Object.hasOwn(stored, 'model')).toBe(clear);
     expect(Object.hasOwn(stored, 'effort')).toBe(clear);
+  });
+});
+
+describe('immutable skill navigator launch snapshot', () => {
+  it('binds exact actual Codex launch and resume env revisions independently of agentSkills', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1'); setEnv('PARLEY_AGENT_SKILLS', '0');
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    const launch = await planLaunch(project, workId, session);
+    const first = await readNativeContext(project, workId, sessionId);
+    expect(first).toMatchObject({ provider: 'codex', verified: true, revision: launch.env.PARLEY_NATIVE_CONTEXT_REVISION });
+    expect(first?.process).toBeUndefined();
+    expect(launch.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    const launchMcp = parseTomlAssignment(launch.args.find(arg => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
+    expect(launchMcp.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    expect(launchMcp.env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(first?.revision);
+    await startSession(project, workId, sessionId, 'native-thread', { pid: 42, startedAtProcess: 'start-1', launchedBy: 'cli' }, first?.revision);
+    expect((await readNativeContext(project, workId, sessionId))?.process).toEqual({ pid: 42, startedAtProcess: 'start-1' });
+    // A subsequent global setting change cannot alter the already-built MCP configuration.
+    process.env.PARLEY_SKILL_NAVIGATOR = '0';
+    const resume = await planResume(project, workId, await sessionOf(workId, sessionId));
+    expect(resume.env.PARLEY_SKILL_NAVIGATOR).toBe('0');
+    const resumeMcp = parseTomlAssignment(resume.args.find(arg => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
+    expect(resumeMcp.env.PARLEY_SKILL_NAVIGATOR).toBe('0');
+    expect(launchMcp.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    expect(resume.env.PARLEY_NATIVE_CONTEXT_REVISION).not.toBe(first?.revision);
+    expect(launch.args.some(arg => arg.startsWith('skills.config='))).toBe(false);
+    expect(resume.args.some(arg => arg.startsWith('skills.config='))).toBe(false);
+  });
+  it('Claude unknown Skill route retains full native settings and explicit snapshot, with a safe warning', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    const mcp = JSON.parse(await readFile(path.join(workPaths(project, workId).mcp, `${sessionId}.json`), 'utf8'));
+    expect(mcp.mcpServers.parley.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    expect(mcp.mcpServers.parley.env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(plan.env.PARLEY_NATIVE_CONTEXT_REVISION);
+    expect((await readNativeContext(project, workId, sessionId))?.verified).toBe(false);
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
   });
 });
