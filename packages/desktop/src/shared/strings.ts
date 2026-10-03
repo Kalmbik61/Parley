@@ -51,6 +51,7 @@ export const S = {
     add: 'Add MCP server', remove: 'Remove…', check: 'Check', confirmRemove: 'Remove server', cancel: 'Cancel',
     removePrompt: 'Remove this server from its native configuration?', connected: 'Connected',
     appliesToNew: 'Applies to new sessions. Restart running sessions to pick up changes.',
+    runningSessions: (n: number) => `Applies to new sessions. ${n} ${n === 1 ? 'session is' : 'sessions are'} running in this project — restart affected sessions to pick up changes.`,
     nativeRecovery: 'Use /mcp in a native Codex session to check the connection or authenticate.',
     name: 'Server name', transport: 'Transport', stdio: 'Standard input/output', http: 'HTTP', json: 'JSON from README',
     command: 'Command', args: 'Arguments (one per line)', env: 'Environment (JSON object)', url: 'URL',
