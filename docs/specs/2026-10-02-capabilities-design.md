@@ -137,7 +137,7 @@ type Status = 'ok' | 'off' | 'needs-auth' | 'pending-approval' | 'failed' | 'unk
 
 interface Presence {
   id: string;             // provider + canonical native identity; не только name
-  scope: Scope;
+  scope: Scope | null;    // null: native scope не подтверждён
   source: string | null;   // id плагина, маркетплейс, путь скилла от проекта или от ~
   enabled: boolean | null; // null: effective policy не подтверждена
   status: Status;
@@ -157,7 +157,7 @@ interface CapabilityRow {
 }
 ```
 
-- Одноимённые скилл или MCP у обоих агентов — одна строка с двумя колонками. Presence arrays сохраняют все canonical native identities: Codex same-name файлы не схлопываются и не получают выдуманный winner. Пустой массив означает отсутствие в готовой колонке; loading/error хранятся отдельно от rows. Unknown enabled policy — null/status unknown, не guessed true. Native system/admin/extra/claude.ai scope сохраняется без приведения к user. Если у скиллов две
+- Одноимённые скилл или MCP у обоих агентов — одна строка с двумя колонками. Presence arrays сохраняют все canonical native identities: Codex same-name файлы не схлопываются и не получают выдуманный winner. Пустой массив означает отсутствие в готовой колонке; loading/error хранятся отдельно от rows. Unknown enabled policy — null/status unknown, не guessed true. Отсутствующий native scope (например, Codex plugin list) — null, не guessed user. Native system/admin/extra/claude.ai scope сохраняется без приведения к user. Если у скиллов две
   независимые canonical файлы/папки (не подтверждённый симлинк), в строке пометка «separate copies», и «дать второму» недоступно.
 - Плагины не сливаются: у агентов разные форматы. Строка плагина держит только одного агента и
   раскрывается в его скиллы и MCP.

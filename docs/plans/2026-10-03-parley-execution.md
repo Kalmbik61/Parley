@@ -154,3 +154,5 @@ P08 path fix snapshot 0caf683 (+35/−2, только scan/test) передан 
 ## Приёмка P08 и выдача P15
 
 P08 fix accepted /root/p01_claude_probe: original relative config regression, numeric BM25 и canonical alias/parent-root/containment/missing-context probes green; 15 scanner fixtures/lint/strict types/diff passed. P15 назначен тому же агенту как исполнителю нового независимого домена; P12 author другой. Protocol P15 DTO-first sole writer, затем root unlock P12.
+
+P12 source preflight уточнил exact AgentsToml tuning whitelist и lossy requirements projection. Поддержан только обязательный requirements:null response; любой non-null, даже all-null fields, context-unverified. Evidence передано author и записано в research/codex.md. P15 scope|null согласован для native sources без подтверждённого scope; spec обновлена.
