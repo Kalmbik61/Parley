@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P17, P20/P22/P39 accepted (21/40); P18/P21/P23 running.
+- Текущая фаза: P00–P17, P20/P21/P22/P39 accepted (22/40); P18/P23/P29 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -41,7 +41,7 @@
 | P18 | Добавить native действия плагинов | running | /root/p01_claude_probe; DTO/backend-first, sharedperprovider MCP/plugin scheduler; native2.1.288 unknown |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
-| P21 | Подключить бэклог к MCP, host и панели | running | /root/p02_codex_probe; P20accepted; новые host/UI/DTO modules, sharedpoints locked |
+| P21 | Подключить бэклог к MCP, host и панели | done | fb2784f; /root/p01_review accepted after4-file UIrework;38SHA/blob +registry,162MCP/build/types0 |
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
 | P23 | Подключить инструменты планов и будильник | running | /root/p01_review; P22accepted; TMPdomain/DTO/effects first afterpartialP21review; MCPheldP21 |
 | P24 | Показать план и итог в комнате | pending | — |
@@ -49,7 +49,7 @@
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
 | P27 | Реализовать журнал принятых версий и историю | pending | — |
 | P28 | Подключить Decisions и Share history | pending | — |
-| P29 | Реализовать память проекта и её слой | pending | — |
+| P29 | Реализовать память проекта и её слой | running | /root/p02_codex_probe; P20/P09accepted; TMPdomain/layer/source-provenance first, P21fix priority |
 | P30 | Реализовать search_history по записям проекта | pending | — |
 | P31 | Подключить память, поиск и UI | pending | — |
 | P32 | Провести сквозную проверку и сравнение навигатора | pending | — |
@@ -234,3 +234,7 @@ P39 exact6 source assets applied from SHA8ebe0071…96c2: author76core/17host/st
 P39 accepted50a878f после narrow temporary-ownership fix: foreign LICENSE.tmp сохранён, handle закрывается при stat/write failure, cleanup только собственного inode. Independent original probe/11affected/3resource-failure GREEN; точные6SHA и core/host builds0. 20accepted из40; native model loading и economic gates остаются в P32/P38. P22 final11 bundle c98a354…8d1a applied with exact hashes, independent review /root/p01_claude_probe; P21 foundation awaiting root registry integration, lifecycle/backlog closure закреплены за P23.
 
 P22 acceptedcec588d: managed168 and independent168+4meaningful probes GREEN, strict/lint0, exact11hashes. P21 foundation05703f…f158 applied +rootregistry; coherent core/protocol/hostbuild0 and registry2tests/lint0. Partial independent P21review found alias-first watcher retained removed client path; narrow fix assigned author with canonical internal context, preserving requested notification identity. Take followup uses canonical room liveness (sleeping/pending live; closed/deleted denied). P18 resumed backend/DTO-first, P23 accepteddep dispatched with persisted occurrence-level delivery/retry proofs; protocol/sharedregistry serialized by root, MCPheld P21.21accepted из40; finalgates pending.
+
+P21 full next24+fix4 applied with exacthashes; source38 freeze2146c4…534a. Root managed MCP162/162, coherent core/protocol/hostbuild0, desktoptypecheck0. Independentfoundation26checks/originalaliasprobe GREEN; fullGUI/MCP/IPCpeerreview /root/p01_review pending. P29 domain/lastlayer dispatched TMP-only /root/p02_codex_probe; ordinaryrememberpending, onHumanRequest explicitlyclaimedagentrequest (not humanattestation), hash/version-boundUndo, truthfulsourceclaims and12KiBUTF8completefacts. P18newcatalogaggregateUTF8cap requested beforeDTOapply; currentsharedsourcefreeze preserved.
+
+P21 acceptedfb2784f: canonical watcher/liveness и narrow UI epoch/semanticTake fixes прошли независимые original probes; foundation26, GUI/dialog/IPC21, finalaffected17 GREEN, exact38SHA/blobd15e1022…edf2c +rootregistry. Root server162 и coherentbuild0, latestdesktoptypecheck0.22accepted из40. P23MCP/guide/guidance unlock послеP21; P18boundedDTO6 SHA874fcaf…cb0e applied +protocolbuild0, backend/policy closure продолжается. P29 memory NoticeKind2/strings2 consumer-only grant открыт, source shared-domain lock исправлен; provenance/on-requestclaim/Undo/12KiB сохраняются.

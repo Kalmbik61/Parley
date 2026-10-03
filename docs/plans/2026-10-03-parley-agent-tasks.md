@@ -84,7 +84,7 @@
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | /root/p01_claude_probe | running |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
-| [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | running |
+| [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | done |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | running |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
@@ -92,7 +92,7 @@
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
 | [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | не назначен | pending |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
-| [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | не назначен | pending |
+| [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | /root/p02_codex_probe | running |
 | [P30 — Реализовать search_history по записям проекта](#p30) | 10 | P27, P29, P22 | не назначен | pending |
 | [P31 — Подключить память, поиск и UI](#p31) | 10 | P30, P28 | не назначен | pending |
 | [P32 — Провести сквозную проверку и сравнение навигатора](#p32) | 11 | P14, P17, P18, P19, P24, P26, P31, P38, P39 | не назначен | pending |
@@ -845,9 +845,9 @@
 
 ### P21: Подключить бэклог к MCP, host и панели
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P21), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент gpt-6.1-sol/high после snapshot.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (P21), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high; accepted после narrow fixes.
 
 **Зависимости:** P20. **Источник:** [этап 6 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-6).
 
@@ -874,6 +874,8 @@
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
 **Начальный phased grant root:** NEW host/methods/backlog.ts/test, NEW BacklogPanel.tsx/test и NEW protocol/backlog.ts/test; P20 accepted4391680/corebuild0. Shared MCP/tools/guide/guidance/ProjectPanel/strings/protocol methods/events/index остаются locked до frozen P14/P17 acceptance и отдельного согласования DTO. Host registry root-only. P22 map/types не входят в P21. Real shared writes против текущего project запрещены в проверках, все domain fixtures только temp projects.
+
+**Evidence:** fb2784f; exact38SHA/blob manifestd15e1022…edf2c +rootregistry,39sourcefiles. Root MCP162/162, core/protocol/hostbuild0, desktoptypecheck0; author domain/DTO/host/UI/IPC/auth scoped checks/lint/types GREEN. Независимый /root/p01_review: foundation26 и GUI/dialog/IPC21, original alias probe +late-subscribe/semantic-Take probes RED→GREEN, affected17GREEN; no Critical/Important. Same-target Retry не создаёт вторую комнату; изменённый источник сохраняется и даёт conflict. Native visual/OS editor gates остаются P32.
 
 <a id="p22"></a>
 
@@ -1109,7 +1111,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; TMP-only domain/layer grant; P21 findings interrupt. **Проверяющий:** другой агент, профиль `code-reviewer`.
 
 **Зависимости:** P20, P09. **Источник:** [этап 10 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-10).
 
