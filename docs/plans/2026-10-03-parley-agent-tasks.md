@@ -65,7 +65,7 @@
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
-| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | running |
+| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | review |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p03_capabilities_probe (P07) | review |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
@@ -271,7 +271,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p00_review (новое назначение P06), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p00_review (новое назначение P06), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -290,7 +290,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед ревью:** 32/32 targeted fixtures passed; scoped ESLint и isolated strict tsc passed; owned diff только claude.ts/test. Native evidence cwd-bound, unknown state unavailable, bodies не возвращаются. Независимый reviewer: /root/p00_review.
 
 <a id="p07"></a>
 

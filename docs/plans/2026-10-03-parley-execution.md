@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P06/P10 выполняются; P07 передан на независимое review.
+- Текущая фаза: P00–P05 и P09 accepted; P06/P07 переданы на независимое review; P10 выполняется.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -26,7 +26,7 @@
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
-| P06 | Реализовать источники скиллов Claude | running | /root/p01_claude_probe; gpt-6.1-sol/high; base c2ccbbd; reviewer /root/p00_review |
+| P06 | Реализовать источники скиллов Claude | review | 32 fixtures / scoped ESLint / strict tsc passed; reviewer /root/p00_review |
 | P07 | Реализовать источники скиллов Codex | review | 30 fixtures / scoped tsc passed; reviewer /root/p01_review |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
@@ -110,3 +110,5 @@ P10 выданы минимальные integration points: core exports, еди
 P10 transaction clarification approved: reserve receipt before wx creation; failed initial receipt means no file, creation failure rolls back only owned reservation, failed final update retains receipt. Spec согласована; поведенческая приёмка этого пути ещё ожидает P10 tests/review. Второй marker не добавляется.
 
 P07 готов: 30/30 fixtures и scoped tsc passed, owned diff только codex.ts/test. P06 — 32 fixtures green, final scoped checks ещё выполняются. P10 общий core/protocol/host/desktop build exit 0 на compile-ready source snapshots; fake-bridge.ts выдан только как обязательный typed consumer. Это ещё не acceptance P06/P07/P10.
+
+P06 snapshot готов: 32/32 fixtures, scoped ESLint/strict production tsc passed. Verified source/native context API описан caller-facing; unknown availability closed. Только claude.ts/test, без shared mutations. P07 snapshot `a0c8f2c` проверяет /root/p01_review.
