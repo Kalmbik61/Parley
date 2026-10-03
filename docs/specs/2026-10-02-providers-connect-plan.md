@@ -1,325 +1,226 @@
-# Подключение провайдеров и GLM на подписке Z.ai — план
+# Подключение провайдеров и GLM на подписке Z.ai — проверенный план
 
-> **Для исполнителей.** Нужен навык superpowers:subagent-driven-development (рекомендуется) или superpowers:executing-plans. Шаги отмечаются чекбоксами (`- [ ]`).
+**Обновлено:** 2026-10-03. **Статус:** реализация запущена 2026-10-03 через GPT-6.1 Sol / high. Этапы 0 и 1 завершены; прогресс — в ledger SDD.
+**Рабочая папка:** существующий worktree `.claude/worktrees/providers-connect`, ветка `feat/providers-connect`.
+**Основа проверки:** HEAD `518ebaa`; относительно `master 72a8736` изменены только дизайн и прежний план. Переносить реализацию в другие worktree для этой задачи не требуется.
+**Дизайн:** [2026-10-02-providers-connect-design.md](2026-10-02-providers-connect-design.md). Продуктовый объём сохраняется; технические противоречия ниже необходимо устранить в дизайне на этапе 0.
 
-**Цель.** Строка статуса всегда показывает Claude, Codex и GLM: подключённый провайдер ярким, неподключённый — приглушённым. Клик открывает карточку провайдера с инструкцией или подключением. GLM — это официальный `claude` на адресе подписки Z.ai, ключ к которому пользователь вставляет сам.
+## Требования и границы
 
-**Устройство.**
-- Ключ Z.ai лежит в `secrets.json` дома Parley (`0600`), читает и пишет его только модуль `core/secrets.ts`.
-- Запись `glm` реестра запускает `claude` со своим файлом `--settings` (адрес и модели) и с идентификатором секрета.
-- Хост при запуске кладёт ключ в `ANTHROPIC_AUTH_TOKEN` процесса и отказывает, если ключа нет.
-- Окно получает из `providers.list` только `needs`, `keyHint` и `family`, а ключ отправляет новыми методами `providers.setKey` и `providers.clearKey`.
-- Всё, что в 0.4.0 (вид Chat, лента, подсказки ввода) включено по id `'claude'`, переходит на признак `family: 'claude'`, который есть у Claude и GLM.
+По разделам 2–6 дизайна:
 
-**Стек.** TypeScript, pnpm-монорепо (core, protocol, host, desktop), Electron 44, React, zustand, zod, vitest, Playwright.
+- Claude, Codex и GLM всегда видны в строке статуса в этом порядке. Доступный провайдер яркий, недоступный приглушён; клик открывает карточку.
+- Claude и Codex получают инструкции установки и входа. Parley не устанавливает CLI и не входит в аккаунты.
+- GLM использует официальный `claude`, endpoint подписки `https://api.z.ai/api/anthropic`, сохранённый ключ Z.ai и модели GLM. Карточка сообщает о необходимости активной GLM Coding Plan.
+- GLM получает Chat, хуки, MCP, подсказки, транскрипты, метрики и возобновление через семейство Claude Code.
+- Ключ хранится в `secrets.json` дома Parley с правами `0600`. Окно получает только маску; ключ не попадает в проект, планы запуска, argv, логи и уведомления.
+- Протокол расширяется добавлениями, версия остаётся 1; новое окно сохраняет работу со старым хостом.
+- В рамках этой работы: macOS, существующий реестр, один секрет Z.ai. Вне рамок: ZCode, Codex через Z.ai, шифрование, запрос квоты и проверка ключа через сеть.
 
-**Спека:** `docs/specs/2026-10-02-providers-connect-design.md`. Читать вместе с планом; при расхождении права спека.
+Комментарии, тесты и документы проекта — по-русски; тексты окна, README и инструкции для агентов — по-английски, как в исходном плане.
 
-## Общие ограничения
+Автоматические тесты используют временные дома и заглушки. Не читать реальные credentials Claude/Codex, не писать в их каталоги, не запускать скрытые агенты, не отвечать автоматически на запросы CLI и не использовать YOLO-флаги. Исходный дизайн не разрешает записывать ключ в дополнительный settings-файл или менять общий `~/.claude`; такие варианты требуют явного изменения дизайна.
 
-- Комментарии, тесты, спеки и TODOS — по-русски. Тексты окна, README и тексты для агентов — по-английски.
-- Не читать `~/.claude/.credentials.json`, `~/.codex/auth.json` и связку ключей. Не писать в `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.agents` — ни в коде, ни в тестах.
-- Хуки — только через `--settings`. Никаких скрытых запусков агентов, автоответов на их диалоги и YOLO-флагов.
-- Настоящие `claude`, `codex` и Z.ai в тестах не участвуют. Тесты живут во временном доме (`PARLEY_HOME`) и никогда не трогают настоящий `~/.parley/secrets.json`.
-- Протокол — только добавления, `PROTOCOL_VERSION` остаётся 1. Новые поля ответа необязательны.
-- Ключ не попадает в карту, бриф, конфиг MCP, файлы `--settings`, `LaunchPlan`, журналы, уведомления, тексты ошибок, а в окно — дальше подсказки `••••` и четырёх последних знаков.
-- Окно и хост в сеть не ходят: ключ запросом не проверяется.
-- Коммиты — с явными путями и строкой `Co-Authored-By` модели исполнителя. Без `git stash`.
-- Тяжёлые прогоны (полные тесты, E2E) — через `heavy.sh` основной папки, по одному.
+## Результат проверки документации
 
-## Самые вероятные поломки
+| Положение дизайна | Результат и действие |
+| --- | --- |
+| Coding Plan через Claude Code, указанный endpoint и API-ключ | Подтверждено [инструкцией Z.ai](https://docs.z.ai/devpack/tool/claude). [FAQ](https://docs.z.ai/devpack/faq) подтверждает отсутствие списания с баланса после исчерпания подписочной квоты для подписчиков. Поведение без подписки не считать доказанным. |
+| `glm-5.3[1m]`, `glm-5.3-flash[1m]`, контекст 1M | Подтверждены [официальным примером](https://docs.z.ai/devpack/tool/claude) и [инструкцией моделей](https://docs.z.ai/devpack/latest-model). GLM-5.3 по умолчанию — выбор продукта: страница также содержит вариант с Flash для всех алиасов. |
+| `--settings` гарантирует endpoint, модель и ключ | Гарантия слишком сильная. Managed settings выше `--settings`; отсутствующие поля нижних уровней сохраняются. `ANTHROPIC_MODEL` выше `settings.model`. См. [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence). |
+| Z.ai token, поставленный хостом последним в process.env, нельзя заменить | Не подтверждено: `settings.env` обычно переписывает process environment. Унаследованный из пользовательских settings `ANTHROPIC_AUTH_TOKEN` может заменить токен хоста. См. [env precedence](https://code.claude.com/docs/en/env-vars#precedence). Этап 0 разрешил блокер через host-managed режим. |
+| Наличие token однозначно выбирает нужного провайдера | Cloud selectors, managed policy и Claude apps gateway требуют отдельной проверки. См. [authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence). Нельзя ограничиваться заменой одного токена. |
+| Очистка credentials из окружения дочерних процессов — неизвестная возможность | Этап 0 подтвердил узкую очистку host-managed режима; широкая очистка пользователя сохраняется. GLM использует `PARLEY_HOOK_CAPABILITY`, потому что широкая очистка удаляет старое имя `PARLEY_HOOK_TOKEN`. См. [env reference](https://code.claude.com/docs/en/env-vars). |
+| `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT=0` гарантированно возвращает полный промпт | В актуальном английском env reference переменной нет. [Issue #63291](https://github.com/anthropics/claude-code/issues/63291) не задаёт поддерживаемый контракт. Не переносить в код как обязательную настройку без проверки конкретной версии. |
+| Первый запуск не должен спрашивать подтверждения | Z.ai [допускает подтверждение ключа и доверия папке](https://docs.z.ai/devpack/tool/claude). Критерий заменить: вопросы видны в Terminal, пользователь может ответить; недоступного ожидания в Chat нет. |
+| `/logout` выходит из аккаунта «everywhere» | Сузить предупреждение до других Claude Code-сессий с тем же локальным configuration/credential store. Выход на всех устройствах не подтверждён. См. [authentication](https://code.claude.com/docs/en/authentication). |
 
-1. **Ключ, вставленный с пробелом или переводом строки по краям** (так бывает при копировании). Он сохраняется обрезанным; пробел внутри — отказ с понятным текстом. Тест — задача 1.
-2. **У человека в окружении или в `~/.claude/settings.json` уже есть `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` или закреплённая модель Claude.** GLM-сессия всё равно идёт на Z.ai с сохранённым ключом и моделью GLM, а обычные сессии Claude Parley не трогает. Тест — задача 4: `ANTHROPIC_AUTH_TOKEN` процесса GLM перекрывает унаследованный, у Claude его нет.
-3. **Ключ удалён, а спящие GLM-сессии остались.** Будильник и `resume` отказывают с уведомлением `launch-failed` и не запускают процесс с адресом Z.ai без ключа. Тест — задача 4.
-4. **Новое окно со старым хостом.** Полей `needs` и `keyHint` нет, а методов `providers.setKey` и `providers.clearKey` хост не знает. Окно выводит «подключён» из `available`, строка статуса предлагает перезапуск хоста, карточка GLM показывает «Restart host» вместо поля. Тесты — задача 5.
-5. **Узкое окно 800×500 с длинными версиями и лимитами в трёх сегментах.** Строка статуса не вылезает за край, поповер карточки помещается в окно. Проверка глазами и E2E — задачи 5 и 8.
+Этап 0 подтвердил `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` статическим анализом официального CLI 2.1.287: auth/provider env закрепляется хостом, общий конфиг сохраняется, credentials удаляются из окружения дочерних процессов. GLM требует минимум 2.1.287; provider env передаётся процессу, settings содержит модель/хуки. Для GLM введён `PARLEY_HOOK_CAPABILITY`, совместимый с широкой очисткой окружения. Подробный контракт внесён в разделы 4.2–4.3 дизайна. Реальные CLI/API-сессии остаются ручной приёмкой.
 
----
+## Результат проверки кода
 
-### Задача 1: хранилище ключа (core)
+Ссылки ниже относятся к исходникам HEAD `518ebaa`; номера строк — ориентиры до начала реализации.
 
-**Файлы:**
-- создать: `packages/core/src/secrets.ts`, `packages/core/src/secrets.test.ts`;
-- изменить: `packages/core/src/index.ts` (экспорт).
+| Участок | Фактическое состояние и следствие |
+| --- | --- |
+| [providers.ts:26,64,246](../../packages/core/src/providers.ts) | Нет метаданных settings/secret/family; GLM запускает `glm`. Нужны встроенные метаданные и переход на `claude`. |
+| [providers.ts:451,594](../../packages/core/src/providers.ts) | `agentEnv` удаляет только метки родительской сессии; override собирает новый runner. Изоляцию авторизации реализовать отдельно для GLM, новые метаданные не принимать из пользовательского JSON. |
+| [settings-file.ts:156,189](../../packages/core/src/work/settings-file.ts), [launch.ts:194,237](../../packages/core/src/work/launch.ts) | Генерируется общий settings-файл; проверка транскрипта только для `claude`. Нужны settings GLM без секрета и общий предикат семейства. |
+| [sessions-service.ts:193,268,294,403](../../packages/host/src/sessions/sessions-service.ts) | Хуки ленты ограничены id Claude; env собирается перед PTY. Проверку ключа и допустимого runner выполнить до записи новой сессии и повторить на каждом запуске. |
+| [mcp/tools.ts:475,553](../../packages/core/src/mcp/tools.ts), [cli.ts:159](../../packages/core/src/cli.ts) | Доступность проверяется по CLI. Согласовать `get_map`, `spawn_session`, CLI и хост; отказ без ключа не должен оставлять запись. |
+| [metrics.ts:46](../../packages/core/src/work/metrics.ts), [summary.ts:94,248](../../packages/core/src/work/summary.ts) | Адаптеры транскрипта выбираются по id. Меняется чтение GLM-транскрипта; GLM как отдельный one-shot summarizer в объём не входит. |
+| [feed-service.ts:473,591](../../packages/host/src/feed/feed-service.ts), [capabilities.ts:20](../../packages/host/src/methods/capabilities.ts) | Сев ленты и скан подсказок только для Claude. Перевести на семейство. |
+| [protocol/methods.ts:197](../../packages/protocol/src/methods.ts), [host/providers.ts:16](../../packages/host/src/methods/providers.ts) | Нет методов ключа и новых полей состояния. Добавить схемы, обработчики и событие. Версия CLI уже берётся по runner.command. |
+| [store/providers.ts:52](../../packages/desktop/src/renderer/store/providers.ts) | Один запрос при init, подписка только на лимиты. Добавить reload/changed и защиту от ответов предыдущего запроса/подключения. |
+| [NewSessionOrRoomDialog.tsx:197,446](../../packages/desktop/src/renderer/components/dialogs/NewSessionOrRoomDialog.tsx) | У диалога собственный снимок списка при открытии; кнопка недоступного провайдера disabled. Одного обновления общего стора недостаточно. |
+| [feed-view.ts:40,50,123,135](../../packages/desktop/src/renderer/lib/feed-view.ts) | Проверяется id и глобальная версия Claude. Передавать семейство и версию записи провайдера конкретной сессии. Сохранить третье состояние загрузки. |
+| [StatusBar.tsx:133](../../packages/desktop/src/renderer/shell/StatusBar.tsx), [desktop/capabilities.ts:54](../../packages/desktop/src/renderer/lib/capabilities.ts) | GLM без CLI скрыт; неподключённые показывают not found. Уже есть механизм обнаружения старого хоста и запроса перезапуска. |
+| [server.ts:185](../../packages/host/src/server.ts), [frame-scan.ts:19,60](../../packages/core/test/frame-scan.ts) | Общий RPC не пишет параметры в журнал, но журналирует сообщения неожиданных ошибок. Тестировать полный путь setKey, включая ошибки; добавить узкие исключения в страж. |
+| [package.json](../../package.json), [core/package.json](../../packages/core/package.json), [host/package.json](../../packages/host/package.json) | `typecheck` есть в корне и desktop, но нет в core/host/protocol. Для этих пакетов проверка TS — их build. Команды старого плана скорректированы. |
 
-**Что даёт:**
-- `export type SecretId = 'zai';`
-- `export const SECRET_NAMES: Readonly<Record<SecretId, string>> = { zai: 'Z.ai' };`
-- `export function secretsFile(): string` — `path.join(parleyHome(), 'secrets.json')`.
-- `export class SecretFormatError extends Error`.
-- `export function normalizeSecret(raw: string): string` — обрезает пробелы по краям и бросает `SecretFormatError` с текстом:
-  - пусто — `the key is empty`;
-  - длиннее 512 знаков — `the key is longer than 512 characters`;
-  - пробел или управляющий символ внутри (`/[\s\u0000-\u001f\u007f]/`) — `the key must not contain spaces or control characters`.
-- `export function secretHint(key: string): string` — `'••••' + key.slice(-4)`.
-- `export async function readSecret(id: SecretId): Promise<string | null>` — нет файла, нет поля или файл не разбирается — `null`.
-- `export async function hasSecret(id: SecretId): Promise<boolean>`.
-- `export async function writeSecret(id: SecretId, raw: string): Promise<string>`:
-  - нормализует ключ;
-  - кладёт его в `{ [id]: { key } }`, остальные поля файла сохраняет;
-  - пишет атомарно: временный файл рядом с `mode: 0o600`, `chmod 0o600`, затем `rename`;
-  - заводит дом, если его нет;
-  - возвращает подсказку.
-- `export async function clearSecret(id: SecretId): Promise<void>` — убирает поле; если файл остался пустым, удаляет его.
+## Порядок реализации
 
-**Шаги:**
-- [ ] Написать тесты (временный `PARLEY_HOME`):
-  - права `0600` после записи и после перезаписи;
-  - `'  zai-key-1234\n'` сохраняется как `zai-key-1234`, подсказка — `••••1234`;
-  - отказы: пусто, 513 знаков, `'a b'`, `'a\tb'`;
-  - `clearSecret` удаляет файл, если других полей нет, и сохраняет чужое поле `{"other":{"key":"x"}}`;
-  - битый JSON: `readSecret` даёт `null`, а `writeSecret` перезаписывает файл;
-  - `secretsFile()` следует за `PARLEY_HOME`.
-- [ ] Запустить и увидеть падение. Реализовать. Запустить `pnpm --filter @parley/core test -- secrets` — зелёный.
-- [ ] Коммит `feat(core): хранилище ключа провайдера secrets.json (0600)`.
+Последовательность: **0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8**. По умолчанию работать в существующем worktree, без обязательных дополнительных веток, моделей ревью или отдельных агентов.
 
-### Задача 2: запись `glm` и её файл настроек (core)
+### Этап 0. Подтвердить контракт авторизации и обновить дизайн
 
-**Файлы:**
-- изменить: `packages/core/src/provider-models.ts`, `packages/core/src/providers.ts`, `packages/core/src/work/settings-file.ts`, `packages/core/src/work/launch.ts`, `packages/core/src/work/metrics.ts`, `packages/core/src/work/summary.ts`, `packages/core/src/index.ts`;
-- тесты: `providers.test.ts`, `work/settings-file.test.ts`, `work/launch.test.ts`, `work/metrics.test.ts`, `work/summary.test.ts`.
+**Результат:** конкретный способ безопасного запуска и список поддерживаемых условий вместо предположений разделов 4.2–4.3 дизайна.
 
-**Что берёт:** `SecretId` из задачи 1.
+- [ ] Зафиксировать проверяемую версию Claude Code и правила приоритетов: process.env, user/project settings, `--settings`, managed settings.
+- [ ] Проверить конфликтные `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, cloud selectors и gateway/helper. Не читать настоящие credentials; использовать отдельный диагностический стенд с фиктивными значениями.
+- [ ] Для каждого сценария подтвердить: GLM выбирает Z.ai и заданную модель либо явно отказывает до отправки учётных данных. Простая заглушка runner не доказывает внутренние приоритеты Claude Code.
+- [ ] Проверить кандидат `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` на конкретной версии. Не включать неизвестную переменную с расчётом на то, что CLI её поддержит.
+- [ ] Проверить `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`: секрет остаётся у Claude Code, не наследуется Bash/MCP/командными хуками, а токен HTTP-хуков Parley продолжает работать.
+- [ ] Уточнить override: `glm.command !== 'claude'` не получает секрет и не запускается с встроенной конфигурацией Z.ai. Запуск явно отказывает до записи карты; не обещать штатную поддержку такого переопределения.
+- [ ] Уточнить первый запуск: вопросы доступны в Terminal без автоответов; учесть версию и переход к Chat.
+- [ ] Обновить дизайн: убрать неподтверждённую гарантию полного промпта, сузить текст /logout, указать способ изоляции авторизации, проверенную версию и ограничения.
 
-**Что даёт:**
-- `GLM_MODELS: readonly ModelOption[] = [{ id: 'glm-5.3[1m]', label: 'GLM-5.3' }, { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash' }]`. Комментарий: источник — `docs.z.ai/devpack/tool/claude`, сверено 2026-10-02.
-- `RunnerConfig` получает необязательные поля:
-  - `settingsEnv?: Readonly<Record<string, string>>`;
-  - `settingsModel?: string`;
-  - `secret?: SecretId`.
-- `ProviderEntry` получает `family?: 'claude'` — запускается Claude Code (спека 4.1).
-- Новые поля — только у встроенных записей. `applyOverride` берёт их из базы и никогда из `providers.json`; `checkShape` их по-прежнему не знает.
-- `PROVIDERS.claude.family = 'claude'`.
-- `PROVIDERS.glm`:
-  - `label` — `'GLM'`, `mark` — `'GL'`, `hasHistory` — `false`;
-  - `linkBy: 'session-id'`, `family: 'claude'`, `models: GLM_MODELS`;
-  - `runner.command: 'claude'`;
-  - `args` и `resumeArgs` — шаблоны Claude без пары `'--dangerously-load-development-channels', '{channel}'`: вынести шаблоны Claude в константы и снять пару функцией;
-  - `mcpConfig: 'json-file'`;
-  - `settingsModel: 'glm-5.3[1m]'`;
-  - `settingsEnv` — восемь пар из спеки 4.2 дословно, строками;
-  - `secret: 'zai'`.
-- `export function isClaudeCode(provider: string): boolean` — `family === 'claude'` у встроенной записи с таким id, без чтения `providers.json`.
-- `settings-file.ts` (в 0.4.0 у `workSettings` и `writeWorkSettings` уже есть `WorkSettingsOptions` с `hookUrl` и `hookEvents`):
-  - `WorkSettingsOptions` получает `provider?: ProviderEntry`;
-  - если у записи есть `settingsEnv`, `workSettings` добавляет к прежнему содержимому (командные хуки, HTTP-хуки ленты при `hookUrl`, `statusLine`) `model: entry.runner.settingsModel` и `env: { ...entry.runner.settingsEnv }`;
-  - `writeWorkSettings` пишет такой файл в `settings-<id>.json` рядом с `settings.json` (каталог `events/` заводит так же) и возвращает его путь. Без `provider` или без `settingsEnv` — побайтно как в 0.4.0.
-- `launch.ts`:
-  - проверка транскрипта перед `--resume` берёт `!isClaudeCode(session.provider) || await claudeConversationExists(…)`;
-  - `subs.settingsFile = await writeWorkSettings(projectPath, workId, { ...(hookUrl), provider: entry })` — `hookUrl` из `LaunchOptions`, как в 0.4.0.
-- `metrics.ts#adapterFor` и `summary.ts#transcriptSource` вместо `provider === 'claude'` спрашивают `isClaudeCode(provider)`.
+**Условие перехода:** выбранный механизм сохраняет все принятые границы хранения и доставки ключа. Если этого достичь нельзя, сначала пересмотреть конфликтующие требования дизайна; не выдавать передачу token в process.env за доказанную изоляцию.
 
-**Шаги:**
-- [ ] Обновить тесты, которые закрепляют старый `glm`: `providers.test.ts` (команда `glm`, «ни MCP, ни возобновления»). Тест `packages/host/src/methods/providers.test.ts:97` («без моделей и версии») — в задаче 4.
-- [ ] Новые тесты:
-  - запись `glm`: команда `claude`, в шаблонах нет флага канала, `secret`, модели, `family`;
-  - `startCommand(glm, …)` даёт `--session-id`, `--mcp-config`, `--settings`, `--append-system-prompt` и бриф;
-  - переопределение `{"glm":{"models":[…]}}` сохраняет `secret`, `settingsEnv` и `family`, а `{"glm":{"secret":"x","settingsEnv":{},"family":"x"}}` их не меняет;
-  - `isClaudeCode`: `claude` и `glm` — да, `codex` и свой провайдер — нет;
-  - `settings-glm.json` без `hookUrl` и с ним: те же хуки (с `hookUrl` — и HTTP-хуки ленты) и `statusLine`, ровно восемь пар `env`, `model`, нет `ANTHROPIC_AUTH_TOKEN`; у Claude по-прежнему `settings.json`;
-  - `resume` GLM без транскрипта запускается заново с тем же id, как у Claude;
-  - метрики и резюме для `glm` читают лог Claude по `providerSessionId`.
-- [ ] Сверить по документации Claude Code (`code.claude.com/docs/en/env-vars`), есть ли переменная, которая убирает учётные переменные из окружения дочерних процессов агента (Bash, хуки, MCP) — это риск из спеки, раздел 12.
-  - Есть — она становится девятой парой `settingsEnv`, тест ждёт девять пар, README её упоминает.
-  - Нет — в TODOS запись со ссылкой на спеку.
-- [ ] Реализовать. Прогнать `pnpm --filter @parley/core test` и `typecheck` — зелёные.
-- [ ] Коммит `feat(core): glm — claude на адресе подписки Z.ai со своим --settings`.
+### Этап 1. Хранилище ключа в core
 
-### Задача 3: отказы без ключа в core и признак готовности
+**Файлы:** новые `packages/core/src/secrets.ts`, `secrets.test.ts`; экспорт в [index.ts](../../packages/core/src/index.ts). Основание — раздел 5 дизайна.
 
-**Файлы:**
-- изменить: `packages/core/src/providers.ts`, `packages/core/src/work/launch.ts` (тип `LaunchPlan`), `packages/core/src/cli.ts`, `packages/core/src/mcp/tools.ts`, `packages/core/src/index.ts`;
-- тесты: `providers.test.ts`, `work/launch.test.ts`, `cli.test.ts`, `mcp/tools.test.ts`.
+- [ ] Реализовать read/write/clear, нормализацию и keyHint; достаточно одного SecretId `zai`.
+- [ ] Следовать `PARLEY_HOME`; запись через временный файл с `0600` и rename, включая замену старого файла. Каталог целиком не chmod.
+- [ ] Trim по краям; пустой ключ, >512 символов, внутренние пробелы/управляющие символы — ошибка без значения ключа.
+- [ ] Удаление убирает только Z.ai; при пустом объекте файл удаляется. Повреждённый файл не даёт пригодного ключа.
+- [ ] Проверить права после первой/повторной записи, отсутствие временных файлов после успеха, нормализацию, ошибки, сохранение посторонних полей и удаление во временном доме.
 
-**Что даёт:**
-- `export async function providerNeeds(entry: ProviderEntry, env = process.env): Promise<'cli' | 'key' | null>`:
-  - команды нет в `PATH` (с учётом оверрайда) — `'cli'`;
-  - есть `runner.secret`, но ключа нет — `'key'`;
-  - иначе — `null`.
-- `export function notConnectedMessage(entry: ProviderEntry): string` — `` `${entry.label} is not connected: add a ${SECRET_NAMES[secret]} key (status bar → ${entry.label})` ``.
-- `LaunchPlan.secret?: SecretId`:
-  - ставится, только если у записи есть `runner.secret` и `runner.command === 'claude'`;
-  - значения ключа в плане нет никогда.
-- `cli.ts`, `work session new`: запись с `runner.secret` — ошибка `` `provider ${provider} starts only from the Parley window: its key is added by the Parley host` ``.
-- `mcp/tools.ts`:
-  - `get_map` показывает `available: (await providerNeeds(entry)) === null`;
-  - `spawn_session`: `'cli'` — прежний текст, `'key'` — `notConnectedMessage(entry)`. Записи в карте нет.
+**Готово:** сохранение/чтение/замена/удаление проходят целевые тесты; наружу для UI отдаётся только hint.
 
-**Шаги:**
-- [ ] Тесты:
-  - `providerNeeds` во всех трёх состояниях (временный дом, `PARLEY_CLAUDE_BIN` на временный исполняемый файл или `''`);
-  - `LaunchPlan.secret` есть у `glm` и нет у Claude, Codex и `{"glm":{"command":"my-glm"}}`;
-  - `JSON.stringify(plan)` не содержит записанный тестовый ключ;
-  - CLI отказывает для `glm`;
-  - `spawn_session` без ключа отказывает, карта не меняется.
-- [ ] Реализовать, прогнать тесты core, закоммитить `feat(core): GLM без ключа не запускается — CLI, spawn_session, признак needs`.
+### Этап 2. Реестр GLM, settings и семейство Claude Code
 
-### Задача 4: протокол и хост
+**Файлы:** [providers.ts](../../packages/core/src/providers.ts), [provider-models.ts](../../packages/core/src/provider-models.ts), [settings-file.ts](../../packages/core/src/work/settings-file.ts), [launch.ts](../../packages/core/src/work/launch.ts), [metrics.ts](../../packages/core/src/work/metrics.ts), [summary.ts](../../packages/core/src/work/summary.ts), их существующие тесты и экспорты.
 
-**Файлы:**
-- изменить: `packages/protocol/src/methods.ts`, `packages/protocol/src/events.ts`, `packages/host/src/methods/providers.ts`, `packages/host/src/methods/index.ts`, `packages/host/src/sessions/sessions-service.ts`, `packages/host/src/feed/feed-service.ts`, `packages/host/src/methods/capabilities.ts`;
-- тесты: `packages/protocol/src/methods.test.ts` (схемы), `packages/host/src/methods/providers.test.ts`, `packages/host/src/sessions/sessions-service.test.ts`, тесты `feed-service` и `capabilities`.
+- [ ] Добавить встроенные `family: 'claude'`, метаданные несекретных settings и идентификатор секрета. Пользовательский JSON не может задавать эти поля; обычные разрешённые overrides сохраняют встроенные метаданные.
+- [ ] GLM: `command: 'claude'`, MCP json-file, linkBy session-id, модели из подтверждённого списка, шаблоны запуска/возобновления Claude без development channels.
+- [ ] Общие шаблоны выделять только при необходимости; не добавлять универсальную систему управления сторонними провайдерами.
+- [ ] Генерировать `settings-glm.json` с прежними hooks/statusLine и model, без ключа и provider env. Endpoint/алиасы передаются хостом в process env по результату этапа 0; GLM HTTP-хуки используют CAPABILITY.
+- [ ] Ввести `isClaudeCode` для встроенного семейства и заменить нужные условия в resume, метриках и чтении транскрипта. Сохранить текущий default summarizer.
+- [ ] Канал, schema CLI, значки и названия оставить специфичными для провайдера.
+- [ ] Проверить GLM args/settings, неизменность обычного settings Claude, HTTP-hooks, семейство после overrides, resume с отсутствующим транскриптом, метрики и чтение реплик GLM.
 
-**Что даёт:**
-- **Протокол, параметры:**
-  - `'providers.setKey': z.object({ provider: z.string().min(1).max(64), key: z.string().min(1).max(4096) })`;
-  - `'providers.clearKey': z.object({ provider: z.string().min(1).max(64) })`.
-- **Протокол, ответы:**
-  - `'providers.setKey': { keyHint: string }`;
-  - `'providers.clearKey': { ok: true }`;
-  - элемент `providers.list` получает `needs?: 'cli' | 'key' | null`, `keyHint?: string | null` и `family?: 'claude' | null`.
-- **Событие** `'providers.changed': Record<string, never>`.
-- **`providers.list`:**
-  - `needs` — из `providerNeeds`;
-  - `available` — `needs === null`;
-  - `keyHint` — только у записей с `secret`, `secretHint` сохранённого ключа или `null`;
-  - `family` — `entry.family ?? null`.
-- **Вид Chat для семейства Claude Code** (литералы 0.4.0 → `isClaudeCode`, спека 4.1):
-  - `sessions-service.ts#feedHookUrl` — адрес приёмника для любой сессии семейства. Версия для порога — по `entry.runner.command` (у GLM это `claude`), как и сейчас;
-  - `feed/feed-service.ts#seed` и `#seedAside` — журнал сессии через `activity.logFile` для семейства;
-  - `methods/capabilities.ts` — скан `scanClaudeCapabilities` для семейства, у прочих пустые списки, как сейчас.
-- **`providers.setKey` и `providers.clearKey`:**
-  - неизвестный провайдер или провайдер без `secret` — `HostError('bad_request', …)`;
-  - `SecretFormatError` — `bad_request` с его текстом;
-  - после записи хост рассылает `providers.changed`.
-- **`sessions-service.ts`:**
-  - `create()` до записи в карту: у записи есть `secret`, а ключа нет — `HostError('bad_request', notConnectedMessage(entry))`.
-  - `launch()` после плана: если `plan.secret` задан, хост читает ключ.
-    - Ключа нет — уведомление `launch-failed` с `notConnectedMessage` и отказ, процесс не стартует.
-    - Ключ есть — `env.ANTHROPIC_AUTH_TOKEN = key` поверх `{ ...agentEnv(process.env), ...plan.env }`, там же, где 0.4.0 кладёт `PARLEY_HOOK_TOKEN`.
+**Готово:** core строит правильный несекретный план GLM и читает его транскрипт тем же адаптером, что Claude.
 
-**Шаги:**
-- [ ] Обновить `providers.test.ts:97` хоста: у `glm` теперь есть модели и версия `claude`.
-- [ ] Тесты хоста:
-  - `providers.list`: нет `claude` — `needs: 'cli'`; нет ключа — `'key'`, `keyHint: null`; всё есть — `null` и `••••1234`; у Claude и Codex `keyHint` нет;
-  - `setKey` и `clearKey` с событием и отказами;
-  - `create` GLM без ключа — `bad_request`, карта не изменилась;
-  - окружение `pty.start`: у GLM есть `ANTHROPIC_AUTH_TOKEN` (и он перекрывает унаследованный из `process.env`), у Claude нет;
-  - тестового ключа нет ни в уведомлении, ни в ошибке, ни в файле лога хоста (`createLog`, `log.ts`) после `setKey`, запуска и отказа;
-  - будильник или `resume` GLM после `clearKey` — `launch-failed`, `pty.start` не вызван;
-  - GLM-сессия на `claude` не ниже 2.1.286 получает `hookUrl` и `PARLEY_HOOK_TOKEN`, Codex — нет;
-  - лента GLM-сессии сеется из журнала;
-  - `capabilities.list` с `provider: 'glm'` возвращает скан, с `codex` — пустые списки;
-  - `providers.list` отдаёт `family`: `'claude'` у `claude` и `glm`, `null` у `codex`.
-- [ ] Реализовать, прогнать тесты protocol и host, закоммитить `feat(host): providers.setKey/clearKey, needs, family и ключ Z.ai в окружение GLM-сессии`.
+### Этап 3. Единая готовность и безопасный запуск
 
-### Задача 5: строка статуса и карточка провайдера (окно)
+**Файлы:** [providers.ts](../../packages/core/src/providers.ts), [launch.ts](../../packages/core/src/work/launch.ts), [cli.ts](../../packages/core/src/cli.ts), [mcp/tools.ts](../../packages/core/src/mcp/tools.ts), [sessions-service.ts](../../packages/host/src/sessions/sessions-service.ts), существующие тесты.
 
-**Файлы:**
-- создать: `packages/desktop/src/renderer/shell/ProviderCard.tsx`, `ProviderCard.test.tsx`, `packages/desktop/src/renderer/lib/provider-install.ts`;
-- изменить: `packages/desktop/src/renderer/store/providers.ts`, `shell/StatusBar.tsx`, `StatusBar.test.tsx`, `lib/capabilities.ts`, `lib/feed-view.ts` и его тест, `shared/strings.ts`.
+- [ ] Согласовать проверку CLI и наличия ключа в host, get_map и spawn_session. `needs` — cli/key/null для штатной конфигурации; несовместимый runner даёт отдельный понятный отказ.
+- [ ] В `sessions.create` проверить ключ/runner до создания работы или сессии и worktree. Повторить проверку на launch/resume/wake/resumeInterrupted до запуска процесса.
+- [ ] Перед PTY перечитать текущий ключ и применить подтверждённый на этапе 0 механизм авторизации поверх plan/env только для GLM.
+- [ ] В LaunchPlan можно передавать идентификатор секрета; plaintext не включать в сериализуемую структуру.
+- [ ] Core CLI для GLM отказывает до записи карты: этот путь не доставляет секрет через хост.
+- [ ] GLM без ключа не запускается и после его удаления. Живую сессию удаление ключа автоматически не останавливает; следующие запуски отказывают.
+- [ ] Проверить create во всех существующих ветках, spawn_session, wake/resume, отсутствие новой записи при отказе, ошибку launch-failed и отсутствие plaintext в планах/карте/логах.
+- [ ] Запустить рядом Claude/Codex через заглушки: сохранённый ключ Z.ai им не добавляется. Различать эту проверку и унаследованные вручную переменные пользователя.
 
-**Что даёт:**
-- **Стор.** У `ProviderInfo` с 0.4.0 уже есть `models` и `loaded`. Добавляются поля:
-  - `needs: 'cli' | 'key' | null` — от старого хоста: `available ? null : 'cli'`;
-  - `keyHint: string | null`;
-  - `family: 'claude' | null` — от старого хоста: `id === 'claude' ? 'claude' : null`.
-- **Вид Chat** (`lib/feed-view.ts`, спека 4.1):
-  - `feedAvailable` и `feedAvailability` вместо `provider !== 'claude'` спрашивают семейство провайдера сессии из стора;
-  - пока список не загружен (`loaded` ложно), ответ для любого провайдера, кроме известного не-Claude, — `null` («неизвестно»);
-  - `claudeVersion` превращается в версию записи провайдера сессии (у GLM это та же версия `claude`).
+**Готово:** все пути запуска используют одну политику; отказ без ключа и при неподдерживаемом runner не оставляет новый процесс.
 
-  `init` подписывается на `providers.changed` и перечитывает список; поздние ответы отбрасываются, как сейчас. Новый `reload(): Promise<void>` нужен для «Check again».
-- **`REQUIRED_METHODS`** пополняется `'providers.setKey'` и `'providers.clearKey'`.
-- **`provider-install.ts`.** Команды и ссылки установки Claude Code и Codex. Перед записью сверить с официальной документацией на дату работы; в комментарии — ссылка и дата сверки.
-- **`StatusBar.tsx`:**
-  - `CORE_PROVIDERS` — `claude`, `codex`, `glm`;
-  - сегмент — кнопка-триггер поповера `renderer/ui/popover.tsx`;
-  - неподключённый — `opacity-40` (подобрать по контрасту в обеих темах), без версии, лимитов и «not found»;
-  - `aria-label` — `` `${name} — connected` `` или `` `${name} — not connected. Click to connect` ``;
-  - порядок сжатия сегментов прежний.
-- **`ProviderCard.tsx`** — содержимое по спеке 3.2:
-  - установка с кнопкой «Copy» (`navigator.clipboard`);
-  - строки про вход и PATH, кнопка «Check again»;
-  - у GLM: поле `type="password"` с `autoComplete="off"`, «Save», «Replace», «Remove», «Get a key» через `bridge.openExternal`, предупреждение про `/logout`, ошибки под полем;
-  - хост без `providers.setKey` — «Restart host» открывает существующий диалог перезапуска;
-  - после «Save» поле очищается, ключ не хранится ни в сторе, ни в состоянии после ответа.
-- **`strings.ts`:**
-  - тексты карточки и `aria-label` — новая секция `providerCard`;
-  - `statusBar.providerNotFound` и `providerNotFoundTitle` удалить: они больше не используются.
+### Этап 4. Протокол, методы хоста и Chat для GLM
 
-**Шаги:**
-- [ ] Тесты:
-  - `StatusBar`: три сегмента при пустом PATH; приглушение по `available`; нет «not found»; клик открывает карточку;
-  - `ProviderCard`: варианты Claude — нет CLI / подключён; варианты GLM — нет `claude` / нет ключа / есть ключ / старый хост;
-  - «Save» вызывает `providers.setKey` и очищает поле; ошибка хоста показывается; «Remove» вызывает `clearKey`;
-  - стор: событие `providers.changed` перечитывает список; ответ старого хоста без `needs` и `family` разбирается;
-  - `feed-view`: у GLM-сессии Chat доступен с `family: 'claude'` и версией не ниже 2.1.286; у Codex — нет; у старого хоста без `family` Chat есть только у `claude`.
-- [ ] Реализовать.
-- [ ] Посмотреть глазами в окне 800×500 (тёмная и светлая темы) с длинной версией, лимитами и открытой карточкой.
-- [ ] Коммит `feat(desktop): провайдеры в строке статуса — ярко/тускло и карточка подключения`.
+**Файлы:** [protocol/methods.ts](../../packages/protocol/src/methods.ts), [protocol/events.ts](../../packages/protocol/src/events.ts), [host/providers.ts](../../packages/host/src/methods/providers.ts), [methods/index.ts](../../packages/host/src/methods/index.ts), [sessions-service.ts](../../packages/host/src/sessions/sessions-service.ts), [feed-service.ts](../../packages/host/src/feed/feed-service.ts), [capabilities.ts](../../packages/host/src/methods/capabilities.ts), их тесты.
 
-### Задача 6: пилюля провайдера в диалоге новой сессии
+- [ ] Добавить необязательные `needs`, `keyHint`, `family` в providers.list; available GLM требует CLI и ключа.
+- [ ] Добавить providers.setKey/clearKey, схемы и ответы по разделу 6 дизайна; зарегистрировать обработчики и событие providers.changed после успешной мутации.
+- [ ] Неизвестный provider, provider без секрета, неверный ключ — bad_request без отражения ключа. Ошибки файловой системы не должны включать содержимое файла.
+- [ ] Для одного ответа list строить needs и hint из согласованного снимка ключа; не читать его независимо несколько раз.
+- [ ] Передавать family и версию runner.command; GLM не получает лимиты claude.ai.
+- [ ] feedHookUrl, seed/seedAside и capabilities сканировать по семейству. Токен Z.ai не входит в allowedEnvVars HTTP-хуков.
+- [ ] Проверить матрицу CLI/ключ, set/replace/clear, события для двух клиентов, ошибочный provider, отсутствие ключа в журнале полного RPC и Chat-сценарии GLM.
 
-**Файлы:** изменить `packages/desktop/src/renderer/components/dialogs/NewSessionOrRoomDialog.tsx` и его тест.
+**Готово:** новые методы объявлены в hello.methods, события обновляют все окна, GLM получает нужные feed/capabilities.
 
-**Что даёт:**
-- **Пилюля неподключённого провайдера:**
-  - `aria-disabled="true"` вместо `disabled`, приглушённая;
-  - клик открывает поповер с `ProviderCard` у пилюли и не меняет выбор;
-  - `rowLocked` по-прежнему блокирует.
-- **После подключения.** Диалог перечитывает `providers.list` по `providers.changed`, и пилюля становится выбираемой.
-- **У GLM** список моделей приходит из `providers.list` сам.
+### Этап 5. Стор провайдеров, строка статуса и карточка
 
-**Шаги:**
-- [ ] Тесты:
-  - клик по тусклой GLM открывает карточку, выбор остаётся прежним;
-  - после события GLM выбирается;
-  - модели GLM видны в выпадающем списке.
-- [ ] Реализовать, коммит `feat(desktop): тусклая пилюля провайдера открывает его карточку`.
+**Файлы:** [store/providers.ts](../../packages/desktop/src/renderer/store/providers.ts), [desktop/capabilities.ts](../../packages/desktop/src/renderer/lib/capabilities.ts), [feed-view.ts](../../packages/desktop/src/renderer/lib/feed-view.ts), [StatusBar.tsx](../../packages/desktop/src/renderer/shell/StatusBar.tsx), [popover.tsx](../../packages/desktop/src/renderer/ui/popover.tsx), [shared/strings.ts](../../packages/desktop/src/shared/strings.ts); новые ProviderCard/provider-install в подходящей существующей папке, тесты.
 
-### Задача 7: README, CHANGELOG и страж рамки
+- [ ] Стор хранит новые поля, имеет reload, подписан на changed; запросы отменяются логически по поколению запроса/подключения. Старый ответ не возвращает ключ в состояние «подключён» после Remove.
+- [ ] feedAvailable/feedAvailability получают family и версию конкретной записи. Пока список грузится, для GLM не фиксировать преждевременное false. Без family у старого хоста только id claude сохраняет Chat.
+- [ ] Claude/Codex/GLM показываются всегда и по порядку; свои провайдеры — найденные. Недоступные сегменты без версии/лимитов/not found.
+- [ ] Сегменты — кнопки поповера, доступны с клавиатуры, с title/aria-label. Проверить обе темы и минимальную ширину 800×500.
+- [ ] Одна ProviderCard используется и в строке статуса, и в диалоге. Claude/Codex: Copy, официальные ссылки, инструкция входа, PATH/restart приложения и Check again.
+- [ ] GLM: подписка, отсутствие CLI/ключа, password field, Save/Replace/Remove/Get a key, hint и уточнённое предупреждение /logout. Ключ существует только в локальном состоянии ввода и очищается после успешного сохранения/закрытия карточки.
+- [ ] Новый хост без методов ключа: показать Restart host через существующий механизм; не пытаться звать неизвестный метод.
+- [ ] Проверить состояний карточки, ошибки сохранения, очистку поля, событие changed, гонку двух reload и ответы старого хоста.
 
-**Файлы:** `README.md`, `CHANGELOG.md`, `packages/core/test/frame-scan.ts`; проверяет `packages/core/test/frame-check.test.ts`.
+Команды установки сверены 2026-10-03: [Claude Code](https://code.claude.com/docs/en/setup) — `curl -fsSL https://claude.ai/install.sh | bash`; [Codex](https://learn.chatgpt.com/docs/codex/cli) — `curl -fsSL https://chatgpt.com/codex/install.sh | sh`. Parley только показывает/копирует команды. Вход: [Claude /login](https://code.claude.com/docs/en/authentication), [codex login](https://learn.chatgpt.com/docs/developer-commands?surface=cli#codex-login).
 
-**Что даёт:**
-- **README:**
-  - «Legal boundary» — формулировка из спеки 7 дословно;
-  - таблица «Providers» — строка GLM: `as Claude Code (~/.claude/projects)` и `claude on Z.ai's GLM Coding Plan endpoint`;
-  - абзац о строке статуса — ярко или тускло, карточка вместо «not found»;
-  - новый раздел «GLM (Z.ai)»: подписка, ключ, где он хранится, модели, что не работает (лимиты, канал, картинки у GLM-5.3), предупреждение про `/logout`, совет Z.ai о параллельности.
-- **CHANGELOG** — `## Unreleased` над разделом `0.4.0`, с двумя пунктами Added. Номер версии ставится при выпуске — следующий после 0.4.0.
-- **README про вид Chat** — требование «Chat view (optional) needs Claude Code 2.1.286 or newer…» и раздел «Chat view»: GLM-сессии тоже открываются в чате.
-- **Страж:**
-  - правило `адрес Z.ai` (`/api\.z\.ai/`) с исключением строки константы в `providers.ts`;
-  - правило `хранилище секретов` (`/secrets\.json/`) с исключением строки в `secrets.ts`;
-  - правило `ключ в окружение` (`/ANTHROPIC_AUTH_TOKEN/`) с исключением строки в `sessions-service.ts`;
-  - каждое исключение — с `reason` и ссылкой на спеку.
+**Готово:** пользователь видит состояние и может сохранить/заменить/удалить ключ без перезапуска окна; совместимость и доступность Chat покрыты тестами.
 
-**Шаги:**
-- [ ] Обновить README и CHANGELOG.
-- [ ] Добавить правила и исключения. `frame-check.test.ts` зелёный, а намеренно вставленный во временный файл `api.z.ai` ловится.
-- [ ] Коммит `docs: GLM на подписке Z.ai и подключение провайдеров; страж рамки`.
+### Этап 6. Подключение из диалога новой сессии
 
-### Задача 8: E2E
+**Файлы:** [NewSessionOrRoomDialog.tsx](../../packages/desktop/src/renderer/components/dialogs/NewSessionOrRoomDialog.tsx), его тесты.
 
-**Файлы:** создать `packages/desktop/e2e/providers-connect.spec.ts` и `packages/desktop/e2e/stub-glm-agent.mjs`.
+- [ ] Недоступная пилюля открывает ту же ProviderCard и не меняет выбор. rowLocked продолжает блокировать действия.
+- [ ] Учесть локальный providers-снимок диалога: подписать на changed/reload с отпиской и защитой от старых ответов либо использовать уже существующий общий стор без потери per-open loading/error semantics.
+- [ ] После сохранения ключа в открытом диалоге GLM становится выбираемым; модели/effort приходят из протокола.
+- [ ] После удаления ключа выбранный GLM не запускается: UI сообщает недоступность, host всё равно повторяет проверку.
+- [ ] Проверить сохранение прежнего выбора при клике по недоступному, обновление без закрытия диалога и модели GLM.
 
-**Заглушка.** Печатает строку `ARGS:` с аргументами, строку `AUTH:set` или `AUTH:unset` (только наличие `ANTHROPIC_AUTH_TOKEN`) и строку `BASE_URL:` со значением `env.ANTHROPIC_BASE_URL` из файла `--settings`. Значение ключа не печатает никогда.
+**Готово:** ключ можно добавить прямо при создании сессии; диалог и статусная строка согласованы.
 
-**Сценарий** (временный `PARLEY_HOME`, `PARLEY_CLAUDE_BIN` на заглушку, `PARLEY_CODEX_BIN=''`):
-1. Claude яркий, Codex и GLM тусклые.
-2. Клик по GLM открывает карточку с полем. Ввести тестовый ключ `test-glm-key-1234` и сохранить: GLM яркий, в карточке `••••1234`, у `secrets.json` во временном доме права `0600`.
-3. GLM-сессия из диалога: в терминале `AUTH:set`, `BASE_URL:https://api.z.ai/api/anthropic`, `--settings …settings-glm.json`, нет флага канала.
-4. Вкладка GLM-сессии показывает переключатель Chat | Terminal. Для этого заглушке нужны HTTP-хуки ленты: взять приём из `chat-hooks.spec.ts`, где заглушка шлёт события на адрес из файла `--settings`.
-5. «Remove»: GLM тусклый. Новая GLM-сессия — ошибка с текстом «GLM is not connected».
-6. Окно 800×500: строка статуса и карточка в пределах окна.
+### Этап 7. README, CHANGELOG и страж рамки
 
-**Шаги:**
-- [ ] Написать и прогнать через `heavy.sh` (`pnpm --filter @parley/desktop e2e -- providers-connect`).
-- [ ] Коммит `test(e2e): подключение GLM через строку статуса`.
+**Файлы:** [README.md](../../README.md), [CHANGELOG.md](../../CHANGELOG.md), [frame-scan.ts](../../packages/core/test/frame-scan.ts), [frame-check.test.ts](../../packages/core/test/frame-check.test.ts); при необходимости TODOS с конкретными оставшимися ограничениями.
 
----
+- [ ] Legal boundary сузить под добровольно введённый Z.ai key. Обновить Providers, Models, строку статуса, требования и раздел Chat view; добавить GLM Coding Plan, хранение, отсутствие квоты/канала и ограничение картинок.
+- [ ] Описать фактические ограничения авторизации и проверенную версию из этапа 0, очистку credentials в дочерних процессах и корректное предупреждение /logout.
+- [ ] CHANGELOG: Unreleased над 0.4.0; номер выпуска и упаковку отложить до отдельной задачи релиза.
+- [ ] Страж: endpoint только в встроенной записи, путь secrets только в модуле хранилища, token-переменная только в месте сборки GLM env. Исключения узкие, с причиной; учитывать реальные строки реализации этапа 0.
+- [ ] Проверить, что разрешённые использования проходят, а такая же строка в постороннем исходнике ловится.
 
-## Порядок и полосы
+**Готово:** документация совпадает с реализованным поведением; страж допускает только необходимые исключения.
 
-- **A1 — задачи 1–2 (core).** **A2 — задачи 3–4 (core, protocol, host),** после A1.
-- **B — задачи 5–6 (окно),** после A2: нужны типы протокола.
-- **C — задачи 7–8,** после B.
+### Этап 8. E2E и живая приёмка
 
-Каждая полоса работает в своём worktree от `feat/providers-connect` и вливается в неё. Контролёр сам читает диф каждой полосы. После C — полный прогон проверок (`build`, `typecheck`, `lint`, юнит-тесты, E2E) и финальное ревью ветки на Opus.
+**Файлы:** новые `packages/desktop/e2e/providers-connect.spec.ts`, `stub-glm-agent.mjs`. Базироваться на [chat-hooks.spec.ts:270](../../packages/desktop/e2e/chat-hooks.spec.ts) и [playwright.config.ts:24](../../packages/desktop/playwright.config.ts).
 
-## Живая проверка
+- [ ] Временный PARLEY_HOME, тестовый проект, PARLEY_CLAUDE_BIN на заглушку, Codex отсутствует.
+- [ ] Claude доступен, Codex/GLM приглушены → Save тестового ключа → GLM доступен, hint и права 0600 правильные.
+- [ ] GLM-сессия получает settings-glm.json, token присутствует, канала нет. Заглушка печатает только наличие token и несекретные аргументы.
+- [ ] Chat доступен по family/версии; заглушка посылает feed hooks, показывает ответ и запрос разрешения. Меню модели содержит GLM; обычная Claude-сессия получает свой settings и не получает сохранённый Z.ai key.
+- [ ] Replace влияет на следующий запуск; Remove обновляет строку и открытый диалог, новые/resume GLM отказывают.
+- [ ] В 800×500 поповер/строка помещаются; проверить клавиатуру и обе темы.
+- [ ] Живая приёмка с реальной подпиской — отдельно, явно пользователем: endpoint/auth/model в /status, MCP-комната, состояние хуков, permissions/Chat, Flash с картинкой, соседний Claude, первый запуск.
+- [ ] Старую пользовательскую запись glm и claude-glm сначала выявить как возможное перекрытие; не удалять пользовательские файлы автоматически.
 
-Делает пользователь, на собранной ветке, по спеке, раздел 9. До неё убрать стенд автора: запись `glm` из `~/.parley/providers.json` и `~/.local/bin/claude-glm`.
+**Готово:** E2E проходит на заглушках; живая проверка имеет отдельную запись результата. Заглушки не доказывают совместимость реальных API, приоритеты авторизации или первый onboarding.
+
+## Критерии приёмки
+
+| Проверяемый результат | Доказательство |
+| --- | --- |
+| Три встроенных провайдера всегда видны, клик/клавиатура открывают карточку | StatusBar/ProviderCard tests + E2E |
+| GLM считается готовым при CLI и ключе; ключ не проверяется сетью | Host matrix + UI states |
+| Ключ пишется атомарно и остаётся 0600 после Replace; Remove корректен | Core secrets tests |
+| В проекте, LaunchPlan, argv, логах, ошибках и остальных сессиях нет сохранённого ключа | Core/host тесты с уникальным sentinel-key + frame check |
+| Конфликтные настройки не переключают GLM на чужую авторизацию | Доказательство этапа 0 на проверенной версии + регрессионные проверки подтверждённого механизма |
+| Credentials не наследуются subprocess, а MCP/feed hooks работают | Диагностика этапа 0 + живая приёмка |
+| Нет ключа/runner неподдерживаемый: новая карта/сессия не создаётся, процесс не стартует | Host create + core spawn/CLI tests |
+| Remove блокирует wake/resume/новый запуск; Replace используется следующим процессом | Host lifecycle tests + E2E |
+| GLM получает Chat, feed, capabilities, модели, resume и метрики | Core/host/desktop tests + E2E |
+| Старый хост не ломает окно; GLM key editing требует Restart host | Desktop compatibility tests |
+| Save/Remove отражаются в нескольких окнах и уже открытом диалоге; старый ответ не откатывает состояние | Store/dialog tests, host two-client events |
+| Первый запуск допускает вопросы, доступные пользователю в Terminal | Живая приёмка, без автоответов |
+
+## Проверки и команды
+
+Команды выполняются из worktree. Во время этой задачи планирования тесты приложения не запускались.
+
+1. При реализации каждого этапа сначала выполнить целевые тесты соответствующих файлов. Для новых путей отказа и защиты ключа нужны регрессионные проверки; тесты не должны только повторять константы реализации.
+2. Пакеты core/protocol/host проверяются TypeScript-компиляцией через `pnpm --filter @parley/core build`, `pnpm --filter @parley/protocol build`, `pnpm --filter @parley/host build` в порядке зависимостей. `pnpm --filter @parley/core typecheck` не использовать: такого скрипта нет.
+3. Итоговый прогон один раз после интеграции: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test`.
+4. E2E после сборки: `pnpm --filter @parley/desktop e2e -- providers-connect.spec.ts`; существующий `chat-hooks.spec.ts` также прогнать как регрессию общего пути Chat.
+5. Полные unit/E2E прогоны выполнять по одному через существующий замок основной папки: `/Users/kalmbik61/Desktop/MY/my_harnas/.superpowers/parley-rename/heavy.sh <команда>`. Скрипт сохраняет текущую рабочую папку (строки 6–8). Длительные команды запускать в фоне с журналом, отслеживать завершение; не запускать параллельные тяжёлые прогоны.
+6. Проверить дифф, наличие plaintext sentinel в нежелательных артефактах и совпадение README с итоговой реализацией. Расширять прогон только при изменении кода или конкретном непокрытом риске.
+
+## Риски и конкретные меры
+
+- **Приоритеты авторизации:** обязательный этап 0; отсутствие подтверждённого механизма — причина пересмотра дизайна перед запуском, а не отложенная проверка после всей реализации.
+- **Managed policy/gateway:** зафиксировать поддерживаемые условия и явный отказ при неподдерживаемой конфигурации. Не обещать обход политик организации.
+- **Изменение поведения Claude Code:** записать проверенную версию и повторять живую проверку после существенных обновлений; не полагаться на недокументированный env без проверки.
+- **Общий локальный Claude store:** предупреждение /logout в карточке/README; подтвердить соседний Claude при приёмке.
+- **Расхождение окон и диалога:** changed + reload и поколения запросов, тест гонки Save/Remove и открытого диалога.
+- **Внешний сервис и квоты:** обязательная активная подписка, ошибки авторизации/лимита видимы в терминале; E2E без настоящего сервиса не заменяет живую приёмку.
