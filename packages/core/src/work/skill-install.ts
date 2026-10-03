@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
   appendFile,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   readlink,
@@ -21,6 +23,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { LEGACY_SKILL_NAME, SKILL_NAME } from '../names.js';
 import { SKILL_MD } from './skill.js';
+import { MINIMAL_DEVELOPMENT_NAME, MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 import { ensureStateDir, stateDir } from './state-dir.js';
 
 const run = promisify(execFile);
@@ -49,13 +52,17 @@ const run = promisify(execFile);
  * Функция быстрая и идемпотентная: повторный вызов читает учёт и пару файлов и ничего не пишет.
  */
 
-const SKILL_DIR = ['.agents', 'skills', SKILL_NAME] as const;
-const ALIAS_DIR = ['.claude', 'skills', SKILL_NAME] as const;
 /** Те же места под прежним именем скилла: так прежняя установка лежит на диске и записана в учёте. */
 const LEGACY_SKILL_DIR = ['.agents', 'skills', LEGACY_SKILL_NAME] as const;
 const LEGACY_ALIAS_DIR = ['.claude', 'skills', LEGACY_SKILL_NAME] as const;
-/** Куда ведёт симлинк, если считать от каталога `.claude/skills`. */
-const ALIAS_TARGET = path.join('..', '..', ...SKILL_DIR);
+/** Two fixed assets share the existing ownership and native alias delivery. */
+interface BuiltinSkill { name: string; files: Readonly<Record<string, string>> }
+const BUILTIN_SKILLS: readonly BuiltinSkill[] = [
+  { name: SKILL_NAME, files: { 'SKILL.md': SKILL_MD } },
+  { name: MINIMAL_DEVELOPMENT_NAME, files: { 'SKILL.md': MINIMAL_DEVELOPMENT_SKILL_MD, LICENSE: MINIMAL_DEVELOPMENT_LICENSE } },
+];
+const skillDir = (skill: BuiltinSkill): readonly string[] => ['.agents', 'skills', skill.name];
+const aliasDir = (skill: BuiltinSkill): readonly string[] => ['.claude', 'skills', skill.name];
 const SKILL_FILE = 'SKILL.md';
 /** Finder кладёт его в любую папку, которую человек открывал: правкой навыка это не считается. */
 const FINDER_FILE = '.DS_Store';
@@ -79,7 +86,7 @@ const isLegacyKey = (target: string): boolean =>
  * Что записано в учёте про свой путь. `dir` и `copy` держат хеш `SKILL.md`, который харнесс положил: по
  * нему видно, правил ли файл человек. `symlink` — куда ссылка вела при установке.
  */
-type ReceiptEntry = { kind: 'dir' | 'copy'; sha256: string } | { kind: 'symlink'; target: string };
+type ReceiptEntry = { kind: 'dir' | 'copy'; sha256: string; files?: { LICENSE: string } } | { kind: 'symlink'; target: string };
 
 interface Receipt {
   version: 1;
@@ -126,7 +133,9 @@ const isEntry = (value: unknown): value is ReceiptEntry =>
   isRecord(value) &&
   (value['kind'] === 'symlink'
     ? typeof value['target'] === 'string'
-    : (value['kind'] === 'dir' || value['kind'] === 'copy') && typeof value['sha256'] === 'string');
+    : (value['kind'] === 'dir' || value['kind'] === 'copy') && typeof value['sha256'] === 'string' &&
+      (value['files'] === undefined || (isRecord(value['files']) && Object.keys(value['files']).length === 1 &&
+        typeof value['files']['LICENSE'] === 'string' && /^[a-f0-9]{64}$/.test(value['files']['LICENSE']))));
 
 const sha256 = (content: string | Buffer): string =>
   createHash('sha256').update(content).digest('hex');
@@ -152,16 +161,22 @@ async function readOrNull(file: string): Promise<Buffer | null> {
   }
 }
 
-/**
- * Временный файл и `rename`: агент, стартующий в этот миг, читает либо старый файл, либо новый целиком.
- * Временный файл создаётся эксклюзивно (`wx`) после удаления прежнего с этим именем: остаток прерванной
- * записи или подложенная в чужом репозитории ссылка уходит сама, и запись не идёт туда, куда она вела.
- */
+/** Atomic replacement uses only a fresh temporary file owned by this invocation. */
 async function writeAtomic(file: string, text: string): Promise<void> {
-  const temp = `${file}.tmp`;
-  await rm(temp, { force: true });
-  await writeFile(temp, text, { encoding: 'utf8', flag: 'wx' });
-  await rename(temp, file);
+  const temp = `${file}.${randomUUID()}.tmp`;
+  const handle = await open(temp, 'wx', 0o600);
+  let owned: { dev: number; ino: number } | undefined;
+  try {
+    owned = await handle.stat();
+    await handle.writeFile(text, 'utf8');
+    await handle.close();
+    await rename(temp, file);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    const current = await lstat(temp).catch(() => null);
+    if (owned && current?.dev === owned.dev && current.ino === owned.ino) await unlink(temp);
+    throw error;
+  }
 }
 
 /**
@@ -254,6 +269,30 @@ function skip(pass: Pass, target: string, reason: SkillSkipReason): void {
   pass.result.skipped.push({ path: target, reason });
 }
 
+/** A skill leaf cannot block on a FIFO or read through a symlink; edited large files stay untouched. */
+async function readAsset(file: string): Promise<Buffer | null | false> {
+  let handle;
+  try { handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) {
+    if (errorCode(error) === 'ENOENT') return null;
+    if (errorCode(error) === 'ELOOP' || errorCode(error) === 'ENOTDIR') return false;
+    throw error;
+  }
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > 65_536) return false;
+    const bytes = Buffer.alloc(65_537); let length = 0;
+    while (length < bytes.length) {
+      const read = await handle.read(bytes, length, bytes.length - length, length);
+      if (read.bytesRead === 0) break;
+      length += read.bytesRead;
+    }
+    const after = await handle.stat();
+    if (length > 65_536 || before.size !== length || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) return false;
+    return bytes.subarray(0, length);
+  } finally { await handle.close(); }
+}
+
 /**
  * Папка с `SKILL.md` — канонная копия или запасная копия для Claude Code. `true` — папка своя и в
  * порядке (или приведена в порядок); `false` — чужая, правленная или небезопасная, её не тронули.
@@ -263,55 +302,37 @@ async function ensureCopy(
   root: string,
   segments: readonly string[],
   kind: 'dir' | 'copy',
+  skill: BuiltinSkill,
 ): Promise<boolean> {
   const dir = path.join(root, ...segments);
-  const file = path.join(dir, SKILL_FILE);
-  const wanted = sha256(SKILL_MD);
-  if (!(await parentsAreSafe(root, segments))) {
-    skip(pass, dir, 'unsafe');
-    return false;
-  }
-
+  const wanted: Extract<ReceiptEntry, { kind: 'dir' | 'copy' }> = { kind, sha256: sha256(skill.files[SKILL_FILE]!),
+    ...(skill.files['LICENSE'] === undefined ? {} : { files: { LICENSE: sha256(skill.files['LICENSE']) } }) };
+  if (!(await parentsAreSafe(root, segments))) { skip(pass, dir, 'unsafe'); return false; }
   const info = await lstatOrNull(dir);
   if (info === null) {
-    await claim(pass, dir, { kind, sha256: wanted });
+    await claim(pass, dir, wanted);
     await mkdir(dir, { recursive: true });
-    await writeAtomic(file, SKILL_MD);
+    for (const [name, text] of Object.entries(skill.files)) await writeAtomic(path.join(dir, name), text);
     pass.result.written.push(dir);
     return true;
   }
-
   const entry = pass.receipt.entries[dir];
-  if (entry === undefined) {
-    skip(pass, dir, 'foreign');
-    return false;
+  if (entry === undefined) { skip(pass, dir, 'foreign'); return false; }
+  if (entry.kind === 'symlink' || entry.kind !== kind || !info.isDirectory()) { skip(pass, dir, 'edited'); return false; }
+  const changed: [string, string][] = [];
+  for (const [name, text] of Object.entries(skill.files)) {
+    const current = await readAsset(path.join(dir, name));
+    const recorded = name === SKILL_FILE ? entry.sha256 : entry.files?.LICENSE;
+    if (current === false || (current !== null && (recorded === undefined || sha256(current) !== recorded && sha256(current) !== sha256(text)))) {
+      skip(pass, dir, 'edited'); return false;
+    }
+    if (current === null || sha256(current) !== sha256(text)) changed.push([name, text]);
   }
-  // В учёте, но это уже не наша папка (заменена файлом или ссылкой) или запись про другой вид пути.
-  if (entry.kind === 'symlink' || entry.kind !== kind || !info.isDirectory()) {
-    skip(pass, dir, 'edited');
-    return false;
-  }
-
-  const current = await readOrNull(file);
-  if (current === null) {
-    // Папка наша, файла в ней нет: человек его убрал или прервалась запись — возвращаем.
-    await writeAtomic(file, SKILL_MD);
-    record(pass, dir, { kind, sha256: wanted });
-    pass.result.written.push(dir);
-    return true;
-  }
-  // Свой файл — тот, что харнесс положил по учёту, и тот, что положил бы сейчас: второй бывает, когда
-  // обновление успело записать файл, а учёт нет.
-  const seen = sha256(current);
-  if (seen !== entry.sha256 && seen !== wanted) {
-    skip(pass, dir, 'edited');
-    return false;
-  }
-  if (seen !== wanted) {
-    await writeAtomic(file, SKILL_MD);
-    pass.result.written.push(dir);
-  }
-  if (entry.sha256 !== wanted) record(pass, dir, { kind, sha256: wanted });
+  // Adding a missing license to an older receipt claims only that new asset before writing it.
+  if (wanted.files && !entry.files) await claim(pass, dir, { ...entry, files: wanted.files });
+  for (const [name, text] of changed) await writeAtomic(path.join(dir, name), text);
+  if (changed.length > 0) pass.result.written.push(dir);
+  if (entry.sha256 !== wanted.sha256 || entry.files?.LICENSE !== wanted.files?.LICENSE) record(pass, dir, wanted);
   return true;
 }
 
@@ -319,25 +340,27 @@ async function ensureCopy(
  * Путь для Claude Code: относительный симлинк на канонную копию, а если ссылку положить нельзя, — копия.
  * Зовётся, только когда канонная копия своя: иначе ссылка вела бы на чужой навык.
  */
-async function ensureAlias(pass: Pass, root: string): Promise<void> {
-  const link = path.join(root, ...ALIAS_DIR);
-  if (!(await parentsAreSafe(root, ALIAS_DIR))) {
+async function ensureAlias(pass: Pass, root: string, skill: BuiltinSkill): Promise<void> {
+  const segments = aliasDir(skill);
+  const target = path.join('..', '..', ...skillDir(skill));
+  const link = path.join(root, ...segments);
+  if (!(await parentsAreSafe(root, segments))) {
     skip(pass, link, 'unsafe');
     return;
   }
 
   const info = await lstatOrNull(link);
   if (info === null) {
-    await claim(pass, link, { kind: 'symlink', target: ALIAS_TARGET });
+    await claim(pass, link, { kind: 'symlink', target });
     await mkdir(path.dirname(link), { recursive: true });
     try {
-      await pass.symlink(ALIAS_TARGET, link);
+      await pass.symlink(target, link);
       pass.result.written.push(link);
     } catch {
       // Файловая система или права ссылок не дают: тот же навык, но копией — она тоже в учёте. Записи про
       // ссылку, которой нет, в учёте не остаётся: путь свободен, и копия встанет на него как новая.
       delete pass.receipt.entries[link];
-      await ensureCopy(pass, root, ALIAS_DIR, 'copy');
+      await ensureCopy(pass, root, segments, 'copy', skill);
     }
     return;
   }
@@ -352,12 +375,13 @@ async function ensureAlias(pass: Pass, root: string): Promise<void> {
     if (!intact) skip(pass, link, 'edited');
     return;
   }
-  await ensureCopy(pass, root, ALIAS_DIR, 'copy');
+  await ensureCopy(pass, root, segments, 'copy', skill);
 }
 
 /** Один корень: канонная копия и, если она своя, путь для Claude Code. */
 async function installInRoot(pass: Pass, root: string): Promise<void> {
-  if (await ensureCopy(pass, root, SKILL_DIR, 'dir')) await ensureAlias(pass, root);
+  for (const skill of BUILTIN_SKILLS)
+    if (await ensureCopy(pass, root, skillDir(skill), 'dir', skill)) await ensureAlias(pass, root, skill);
 }
 
 /**
@@ -569,7 +593,7 @@ async function forgetLegacyExclude(commonDir: string, prefix: string): Promise<v
 async function hideFromGit(projectPath: string, roots: string[], pass: Pass): Promise<void> {
   const { receipt } = pass;
   const oursIn = (root: string): (readonly string[])[] =>
-    [SKILL_DIR, ALIAS_DIR].filter(
+    BUILTIN_SKILLS.flatMap(skill => [skillDir(skill), aliasDir(skill)]).filter(
       (segments) => receipt.entries[path.join(root, ...segments)] !== undefined,
     );
   const hide = roots.some((root) => oursIn(root).length > 0);

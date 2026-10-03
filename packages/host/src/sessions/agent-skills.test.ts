@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -132,7 +132,7 @@ describe('установщик скилла: что не тронуто', () => 
       {
         kind: 'skill-foreign',
         ref: null,
-        text: `Parley skill was not installed: the path already exists and was not created by Parley — left as is: ${skipped[0]?.path}`,
+        text: `Agent skill was not installed: the path already exists and was not created by Parley — left as is: ${skipped[0]?.path}`,
         at: expect.any(String),
       },
     ]);
@@ -160,7 +160,7 @@ describe('установщик скилла: что не тронуто', () => 
 
     expect(notices()).toMatchObject([
       {
-        text: `Parley skill was not installed: a symlink or a file stands in place of a directory on the way to the path: ${PROJECT}/.claude/skills/parley`,
+        text: `Agent skill was not installed: a symlink or a file stands in place of a directory on the way to the path: ${PROJECT}/.claude/skills/parley`,
       },
     ]);
   });
@@ -173,7 +173,7 @@ describe('установщик скилла: что не тронуто', () => 
     await createSkillInstaller(fakeHost(), install)(REF, null);
 
     expect(logs.filter((item) => item.level === 'warn')).toHaveLength(1);
-    expect(logs[0]?.msg).toBe('Parley skill was not updated: the file was edited by hand — left as is');
+    expect(logs[0]?.msg).toBe('Agent skill was not updated: the file was edited by hand — left as is');
     expect(notices()).toEqual([]);
   });
 
@@ -197,7 +197,7 @@ describe('установщик скилла: что не тронуто', () => 
     expect(logs).toEqual([
       {
         level: 'info',
-        msg: expect.stringContaining('установлен'),
+        msg: 'Agent skills installed or updated',
         data: { ref: REF, paths: [`${PROJECT}/.agents/skills/parley`] },
       },
     ]);
@@ -223,7 +223,7 @@ describe('установщик скилла: прежняя установка �
 
     await createSkillInstaller(fakeHost(), install)(REF, null);
 
-    expect(logs.map((item) => item.msg)).toEqual(['скилл parley установлен или обновлён']);
+    expect(logs.map((item) => item.msg)).toEqual(['Agent skills installed or updated']);
   });
 });
 
@@ -239,4 +239,33 @@ describe('установщик скилла: сбой не останавлив�
     expect(logs[0]).toMatchObject({ level: 'error', data: { error: 'Error: диск полон' } });
     expect(notices()).toEqual([]);
   });
+});
+
+import { installAgentSkill as installNativeAssets } from '../../../core/src/work/skill-install.js';
+
+it('the existing start/resume installer delivers both builtins to project/worktree and is idempotent', async () => {
+  const project = path.join(home, 'project'); const worktree = path.join(home, 'worktree');
+  await Promise.all([mkdir(project), mkdir(worktree)]);
+  const installer = createSkillInstaller(fakeHost(), installNativeAssets);
+  const ref = { ...REF, projectPath: project };
+  await installer(ref, worktree);
+  for (const root of [project, worktree]) {
+    expect(await readdir(path.join(root, '.agents/skills'))).toEqual(['minimal-development', 'parley']);
+    expect(await readFile(path.join(root, '.claude/skills/minimal-development/LICENSE'), 'utf8')).toContain('Copyright (c) 2026 DietrichGebert');
+  }
+  const body = path.join(worktree, '.agents/skills/minimal-development/SKILL.md');
+  const modified = (await stat(body)).mtimeMs;
+  await installer({ ...ref, sessionId: 's-02' }, worktree);
+  expect((await stat(body)).mtimeMs).toBe(modified);
+  expect(logs.filter(item => item.level === 'info')).toHaveLength(1);
+});
+
+it.each(['config', 'environment'])('disabled native delivery (%s) writes neither builtin nor receipts in either root', async source => {
+  const project = path.join(home, 'off-project'); const worktree = path.join(home, 'off-worktree');
+  await Promise.all([mkdir(project), mkdir(worktree)]);
+  if (source === 'config') await saveConfig({ agentSkills: false });
+  else process.env['PARLEY_AGENT_SKILLS'] = '0';
+  await createSkillInstaller(fakeHost(), installNativeAssets)({ ...REF, projectPath: project }, worktree);
+  expect(await readdir(project)).toEqual([]); expect(await readdir(worktree)).toEqual([]);
+  expect(logs).toEqual([]); expect(broadcasts).toEqual([]);
 });
