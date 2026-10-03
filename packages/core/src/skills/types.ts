@@ -1,6 +1,8 @@
 /** Internal catalog contract; raw metadata and skill bodies never enter the wire DTO. */
 export interface NativeSkill {
   provider: 'claude' | 'codex';
+  /** Native discovery origin, never inferred from the canonical filename. */
+  documentKind: 'skill' | 'command';
   /** Exact native load name, including its namespace. */
   name: string;
   /** Full valid description; empty only for an invalid metadata record. */

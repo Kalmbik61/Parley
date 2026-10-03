@@ -39,6 +39,19 @@ async function skill(
 }
 
 describe('Claude native skill discovery', () => {
+  it('preserves discovery kind independently of canonical filename and decorative YAML name', async () => {
+    const target = await put(path.join(root, 'external/document.md'), '---\nname: display-only\ndescription: Review code\n---\n');
+    const directory = path.join(cwd, '.claude/skills/review');
+    await mkdir(directory, { recursive: true });
+    await symlink(target, path.join(directory, 'SKILL.md'));
+    const command = await put(path.join(cwd, '.claude/commands/SKILL.md'), '---\ndescription: Command file\n---\n');
+    const awaitTarget = await realpath(target);
+    const awaitCommand = await realpath(command);
+    const result = await discoverClaudeSkills(options());
+    expect(result.skills.find(skill => skill.path === awaitTarget)).toMatchObject({ documentKind: 'skill', name: 'review' });
+    expect(result.skills.find(skill => skill.path === awaitCommand)).toMatchObject({ documentKind: 'command', name: 'SKILL' });
+  });
+
   it.each([
     ['user', 'skill', 'SYNCED'],
     ['project', 'skill', 'synced'],
@@ -118,6 +131,7 @@ describe('Claude native skill discovery', () => {
       skills: [
         {
           provider: 'claude',
+          documentKind: 'skill',
           name: 'native',
           description: 'first line\nlast line\n',
           source: 'user',

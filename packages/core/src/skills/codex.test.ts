@@ -28,6 +28,14 @@ function injected(base: string, source: 'user' | 'project' | 'system' | 'admin' 
 }
 
 describe('Codex native discovery', () => {
+  it('projects skill origin even when SKILL.md resolves to another canonical filename', async () => {
+    const base = path.join(root, 'injected');
+    const target = await put(path.join(root, 'document.md'), '---\nname: review\ndescription: Review code\n---\n');
+    await mkdir(path.join(base, 'review'), { recursive: true });
+    await symlink(target, path.join(base, 'review/SKILL.md'));
+    expect((await discoverCodexSkills(injected(base))).skills[0]).toMatchObject({ documentKind: 'skill', path: target });
+  });
+
   it('discovers injected home, legacy and root-to-cwd sources without collapsing same names', async () => {
     await put(path.join(cwd, '.native-root'), '');
     const nested = path.join(cwd, 'nested'); await mkdir(nested);

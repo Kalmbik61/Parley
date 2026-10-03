@@ -376,6 +376,7 @@ export async function discoverClaudeSkills(
       kind: root.kind,
       skill: {
         provider: 'claude',
+        documentKind: root.kind,
         name,
         description,
         source: root.source,

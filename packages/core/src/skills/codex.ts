@@ -255,7 +255,7 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
         }
       }
     } catch { report(root.source, policyFile, { code: 'invalid-policy' }); if (reason !== 'invalid-metadata') reason = 'availability-unverified'; }
-    result.skills.push({ provider: 'codex', name, description, source: root.source, path: canonical, modelAvailable: reason === null, unavailableReason: reason });
+    result.skills.push({ provider: 'codex', documentKind: 'skill', name, description, source: root.source, path: canonical, modelAvailable: reason === null, unavailableReason: reason });
   }
 
   for (const root of roots.slice(0, limits.maxRoots)) {

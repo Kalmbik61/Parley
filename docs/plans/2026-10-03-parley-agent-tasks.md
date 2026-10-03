@@ -67,7 +67,7 @@
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06 fixes) | done |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | done |
-| [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | running |
+| [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | review |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | review |
@@ -337,7 +337,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P08), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P11), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p02_codex_probe (новое назначение P08), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (новое независимое назначение P08), gpt-6.1-sol/high.
 
 **Зависимости:** P06, P07. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -365,7 +365,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед ревью:** 14 owned files; core 158 / host capabilities 3 / protocol wire 2 / desktop consumers 22 tests passed; scoped lint/strict types/diff check, coordinated core→protocol→host builds, desktop typecheck passed. Full native inventory и manual wire adapter разделены; kind из origin; live gates не объявлены.
 
 **Integration уточнение:** source-aware documentKind обязателен для legacy path, manual chat inventory и modelAvailable search filter разделены; не угадывать command по basename. Общие index/types/source outputs выданы этому единственному писателю после accepted P06/P07.
 

@@ -334,6 +334,11 @@ export type {
 } from './capabilities/types.js';
 export { claudeCommands } from './capabilities/claude-commands.js';
 export { parseFrontmatter } from './capabilities/frontmatter.js';
+export { resolveSkillCatalog } from './skills/catalog.js';
+export type { SkillCatalog, SkillCatalogDiagnostic, SkillCatalogOptions } from './skills/catalog.js';
+export { searchSkills } from './skills/search.js';
+export type { SkillSearchMatch } from './skills/search.js';
+export type { NativeSkill, SkillUnavailableReason } from './skills/types.js';
 export { scanClaudeCapabilities } from './capabilities/scan.js';
 export type { ScanOptions } from './capabilities/scan.js';
 export {

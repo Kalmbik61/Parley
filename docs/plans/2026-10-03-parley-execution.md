@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09/P10 accepted; P08 final consumer checks; P11 fixes в review.
+- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09/P10 accepted; P08/P11 fixes в review.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -28,7 +28,7 @@
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
 | P06 | Реализовать источники скиллов Claude | done | 4792cb1/7c91a36; reviewer /root/p01_review accepted, 25 targeted + direct probes |
 | P07 | Реализовать источники скиллов Codex | done | a0c8f2c/e15a367; reviewer /root/p01_review accepted, 7 targeted + direct probe |
-| P08 | Собрать каталог, BM25 и перевести chat-view на него | running | /root/p02_codex_probe; gpt-6.1-sol/high; dependencies accepted; reviewer /root/p01_review |
+| P08 | Собрать каталог, BM25 и перевести chat-view на него | review | core158/host3/wire2/desktop22; builds/lint/types passed; reviewer /root/p01_claude_probe |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | review | 47 tests/lint/strict types passed after native identity/Unicode fixes; reviewer recheck queued |
@@ -132,3 +132,5 @@ P10 ENOSPC snapshot `72b3edb` проверяет /root/p01_claude_probe, P11 `83
 P10 final accepted /root/p01_claude_probe, 19 core tests independently repeated; ENOSPC policy/test и original race fixes закрыты. P11 independent review /root/p01_review выявил два Important native mismatches. Approved source amendment: Claude required metadata identity/no filename fallback/ambiguous same-root unavailable; Codex Rust Unicode edge trim без extra filesystem-name policy. Spec/unified/contracts согласованы; author исправляет readers/tests. P12 effective-config reader obligation остаётся explicit.
 
 P11 fixes готовы: только4readers/tests, 43role+4English/lint/strict types passed, 15regressions RED→GREEN. P08 final targeted158/lint/types passed; согласованная core→protocol→host build exit0. P08 consumer/wire/desktop checks ещё выполняются, broad release gates не принимаются. /root/p01_review выполняет read-only P12 effective native context preflight, затем P11 recheck.
+
+P08 готов:14owned files, 158 core /3host /2wire /22desktop consumers, lint/strict types/diff/builds/desktop typecheck passed. Native correction user skill precedence и installed plugin source evidence сохранили wire shapes; actual command SKILL.md locator tested. Независимый reviewer /root/p01_claude_probe читает только новые P08 changes; исходный автор P08 другой. P11 fix snapshot `4c2fb30` ожидает отдельный /root/p01_review recheck после native context preflight.

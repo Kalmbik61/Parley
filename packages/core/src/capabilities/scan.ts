@@ -4,9 +4,13 @@
  * заводит, показывает то, что уже лежит у человека и в проекте для самого CLI. Отсутствие папки — не
  * ошибка, битый файл пропускается.
  */
+import { constants } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
+import { TextDecoder } from 'node:util';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
+import { resolveSkillCatalog } from '../skills/catalog.js';
+import type { ClaudeDiscoveryOptions } from '../skills/claude.js';
 import { claudeCommands } from './claude-commands.js';
 import { FRONTMATTER_BYTES, parseFrontmatter } from './frontmatter.js';
 import type { Capabilities, CapabilityAgent, CapabilitySkill, CapabilitySource } from './types.js';
@@ -20,16 +24,28 @@ export interface ScanOptions {
   /** Папка пользователя (хост передаёт `homedir()`). */
   home: string;
   projectPath: string;
+  configDir?: string;
+  settings?: ClaudeDiscoveryOptions['settings'];
+  /** Explicit reusable session evidence, never inferred from installed files. */
+  nativeEvidence?: ClaudeDiscoveryOptions['nativeEvidence'];
 }
 
 /** Первые 4 КБ файла или `null`, если не читается. */
 async function readHead(file: string): Promise<string | null> {
   try {
-    const handle = await open(file, 'r');
+    const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
+      if (!(await handle.stat()).isFile()) return null;
       const buffer = Buffer.alloc(FRONTMATTER_BYTES);
-      const { bytesRead } = await handle.read(buffer, 0, FRONTMATTER_BYTES, 0);
-      return buffer.subarray(0, bytesRead).toString('utf8');
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+      return new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length), {
+        stream: length === FRONTMATTER_BYTES,
+      });
     } finally {
       await handle.close();
     }
@@ -74,48 +90,6 @@ interface Budget {
 
 type Prefixed = (name: string) => string;
 
-async function scanSkills(
-  root: string,
-  source: CapabilitySource,
-  prefix: Prefixed,
-  budget: Budget,
-  out: CapabilitySkill[],
-): Promise<void> {
-  const strict = source === 'plugin';
-  for (const entry of await entries(root)) {
-    if (budget.left <= 0) return;
-    if (!(await isDir(root, entry, strict))) continue;
-    const dir = path.join(root, entry.name);
-    const head = await readHead(path.join(dir, 'SKILL.md'));
-    if (head === null) continue;
-    const meta = parseFrontmatter(head);
-    out.push({ name: prefix(meta.name ?? entry.name), description: meta.description, source, path: dir });
-    budget.left -= 1;
-  }
-}
-
-async function scanCommands(
-  root: string,
-  source: CapabilitySource,
-  budget: Budget,
-  out: CapabilitySkill[],
-  parents: string[] = [],
-): Promise<void> {
-  for (const entry of await entries(root)) {
-    if (budget.left <= 0) return;
-    const full = path.join(root, entry.name);
-    if (await isMarkdownFile(root, entry, false)) {
-      const head = await readHead(full);
-      if (head === null) continue;
-      const name = [...parents, entry.name.slice(0, -'.md'.length)].join(':');
-      out.push({ name, description: parseFrontmatter(head).description, source, path: full });
-      budget.left -= 1;
-    } else if (parents.length < MAX_COMMAND_DEPTH && (await isDir(root, entry, false))) {
-      await scanCommands(full, source, budget, out, [...parents, entry.name]);
-    }
-  }
-}
-
 async function scanAgents(
   root: string,
   source: CapabilitySource,
@@ -142,8 +116,8 @@ async function scanAgents(
 }
 
 /** Папки версий установленных плагинов: `<cache>/<маркетплейс>/<плагин>/<версия>` с именем плагина. */
-async function pluginRoots(home: string): Promise<Array<{ plugin: string; dir: string }>> {
-  const cache = path.join(home, '.claude', 'plugins', 'cache');
+async function pluginRoots(configDir: string): Promise<Array<{ plugin: string; dir: string }>> {
+  const cache = path.join(configDir, 'plugins', 'cache');
   const found: Array<{ plugin: string; dir: string }> = [];
   for (const market of await entries(cache)) {
     if (!(await isDir(cache, market, true))) continue;
@@ -177,26 +151,52 @@ function dedupe<T extends { name: string; source: CapabilitySource }>(items: T[]
 
 export async function scanClaudeCapabilities(options: ScanOptions): Promise<Capabilities> {
   const { home, projectPath } = options;
-  const budget: Budget = { left: MAX_ENTRIES };
+  const catalog = await resolveSkillCatalog({
+    provider: 'claude',
+    cwd: projectPath,
+    homeDir: home,
+    ...(options.configDir !== undefined ? { configDir: options.configDir } : {}),
+    ...(options.settings !== undefined ? { settings: options.settings } : {}),
+    ...(options.nativeEvidence !== undefined ? { nativeEvidence: options.nativeEvidence } : {}),
+    limits: { maxCommandDepth: MAX_COMMAND_DEPTH },
+  });
+  // Manual slash suggestions retain hidden/unknown inventory; model search has its own filter.
+  // New native source labels cannot be represented by the unchanged legacy wire enum.
   const skills: CapabilitySkill[] = [];
+  for (const skill of catalog.skills) {
+    const source = skill.source;
+    if (source !== 'user' && source !== 'project' && source !== 'plugin') continue;
+    if (skill.unavailableReason === 'shadowed') continue;
+    skills.push({
+      name: skill.name,
+      description: skill.description || null,
+      source,
+      path: skill.documentKind === 'skill' ? path.dirname(skill.path) : skill.path,
+    });
+  }
+  const inventory = dedupe(skills);
+  const manualSkills: CapabilitySkill[] = [];
+  const budget: Budget = { left: MAX_ENTRIES };
+  const appendSkills = (source: CapabilitySource): void => {
+    for (const skill of inventory) {
+      if (skill.source !== source || budget.left <= 0) continue;
+      manualSkills.push(skill);
+      budget.left -= 1;
+    }
+  };
   const agents: CapabilityAgent[] = [];
   const plain: Prefixed = (name) => name;
-  const userClaude = path.join(home, '.claude');
+  const userClaude = options.configDir ?? path.join(home, '.claude');
   const projectClaude = path.join(projectPath, '.claude');
-
-  // Порядок — приоритет при пределе: проект, человек, плагины.
-  await scanSkills(path.join(projectClaude, 'skills'), 'project', plain, budget, skills);
-  await scanSkills(path.join(projectPath, '.agents', 'skills'), 'project', plain, budget, skills);
-  await scanCommands(path.join(projectClaude, 'commands'), 'project', budget, skills);
+  // Keep the existing agent sources, priority, plugin safety and combined output budget.
+  appendSkills('project');
   await scanAgents(path.join(projectClaude, 'agents'), 'project', plain, budget, agents);
-  await scanSkills(path.join(userClaude, 'skills'), 'user', plain, budget, skills);
-  await scanCommands(path.join(userClaude, 'commands'), 'user', budget, skills);
+  appendSkills('user');
   await scanAgents(path.join(userClaude, 'agents'), 'user', plain, budget, agents);
-  for (const { plugin, dir } of await pluginRoots(home)) {
+  appendSkills('plugin');
+  for (const { plugin, dir } of await pluginRoots(userClaude)) {
     const prefix: Prefixed = (name) => `${plugin}:${name}`;
-    await scanSkills(path.join(dir, 'skills'), 'plugin', prefix, budget, skills);
     await scanAgents(path.join(dir, 'agents'), 'plugin', prefix, budget, agents);
   }
-
-  return { commands: [...claudeCommands()], skills: dedupe(skills), agents: dedupe(agents) };
+  return { commands: [...claudeCommands()], skills: dedupe(manualSkills), agents: dedupe(agents) };
 }
