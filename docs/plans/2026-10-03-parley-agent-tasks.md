@@ -81,8 +81,8 @@
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe | done |
-| [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | /root/p01_claude_probe | running |
-| [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
+| [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | /root/p01_claude_probe | done |
+| [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | /root/p02_codex_probe | running |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | done |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
@@ -750,9 +750,9 @@
 
 ### P18: Добавить native действия плагинов
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p02_codex_probe, gpt-6.1-sol/high; accepted.
 
 **Зависимости:** P17. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -773,7 +773,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** backend/DTO24 c917f45, UI9 a4abc3f. Independent DTO scope/provider и pretty multiline JSON failures исправлены до приёмки; 126 backend cases, scoped types/lint0, root registry8/hostbuild0. UI frozen9 f1c6299e…6054a45, author136 и independent22 checks GREEN; exact9SHA, root desktop web noEmit0. Один existing bridge/host connection, opaque IDs, explicit scopes/local marketplace, composition unknown остаётся null; uninstall требует data-loss confirmation, подсказка new sessions сохраняется Refresh. Native live/unsupported platform и model adoption gates остаются P32, реальных изменений native конфигов не выполнялось.
 
 <a id="p19"></a>
 
@@ -781,7 +781,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
 
 **Зависимости:** P18. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -803,6 +803,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Начальный grant root:** TMP-only NEW share-skill.ts/test; общие snapshot/actions/protocol/UI закрыты до минимального DTO/private binding proposal. Registry/staging/commits root-only; только temporary native folders/fixtures, P18/P21 сохраняются.
 
 <a id="p20"></a>
 

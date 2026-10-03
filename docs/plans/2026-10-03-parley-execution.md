@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P17, P20/P21/P22/P29/P39 accepted (23/40); P18/P23 running.
+- Текущая фаза: P00–P18, P20/P21/P22/P29/P39 accepted (24/40); P19/P23 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -38,8 +38,8 @@
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native действия MCP | done | f447ccd +0c0d1f9, /root/p01_review accepted; original/related probes GREEN,43affected/lint/SHA4/hostbuild0; live/P32 pending |
-| P18 | Добавить native действия плагинов | running | /root/p01_claude_probe; DTO/backend-first, sharedperprovider MCP/plugin scheduler; native2.1.288 unknown |
-| P19 | Добавить передачу скилла второму CLI | pending | — |
+| P18 | Добавить native действия плагинов | done | c917f45 backend/DTO, a4abc3f UI; independent /root/p02_codex_probe accepted; native live gate P32 |
+| P19 | Добавить передачу скилла второму CLI | running | /root/p02_codex_probe; TMP foundation first, shared integration locked |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | done | fb2784f; /root/p01_review accepted after4-file UIrework;38SHA/blob +registry,162MCP/build/types0 |
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
@@ -252,3 +252,5 @@ P23 first helper milestone independently accepted /root/p02_codex_probe: exact17
 P29 independent needs rework: UTF16 lone surrogate принимается как fact/details/why/refs, затем UTF8 silently replaces text. Root pure probe и independent9RED подтвердили; author p02 исправляет только6memory/layer files, до reservation/Markdown writes. Other original79 +independent5+freshlaunch2 GREEN,16SHA seal. P18 prettyJSON2RED исправляет author p01. Acceptance remains22/40. Последний недельный остаток59% (usedPercent41); пользовательский порог пока не достигнут.
 
 P29 independently accepted /root/p01_claude_probe: original9 Unicode failures GREEN +valid emoji,54affected/probes final GREEN; sixafterSHA exact, validators refuse input before local/Markdown writes. Root staged only reviewed P29 domain13+consumer3+fix6 through exact staged hashes, commit127367e; P23 shared additions остались unstaged.23accepted из40. P18 prettyJSONfix2 469c2ae…3b1322 accepted /root/p02_codex_probe original4GREEN/SHA2, hostbuild0; P18UI TMP phase opened with one bridge prop preserving P21backlog. Последний недельный остаток55% (usedPercent45).
+
+P18 full independently accepted: UI9 f1c6299e…6054a45 exact hashes, author136/peer22 GREEN, root desktop web noEmit0; c917f45+a4abc3f source checkpoints. P19 TMP foundation dispatched after acceptance. P23 integration14 f93cc387…5933b applied; independent peer isolated Cyrillic Free decision character/byte regression, narrow correction pending. Root host wiring3 b8d07d87…ff404a singleton/start/stop/safe notice +7 worksReady gates; hostbuild0 and18 host scoped checks GREEN, independent lifecycle review ongoing.24/40accepted. Недельный лимит: остаток52% (used48), порог30% остатка не достигнут.
