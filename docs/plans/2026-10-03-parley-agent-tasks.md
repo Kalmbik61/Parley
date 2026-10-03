@@ -69,8 +69,8 @@
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | done |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
-| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | review |
-| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | running |
+| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | running |
+| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | review |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
@@ -413,7 +413,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review (retained-reservation fix готов). **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после source reviews), gpt-6.1-sol/high.
+**Статус:** running (ENOSPC fixture/policy rework). **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после source reviews), gpt-6.1-sol/high.
 
 **Зависимости:** P09. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -453,13 +453,15 @@
 
 **Evidence fixes перед recheck:** 18/18 core fixtures, scoped ESLint/strict tsc/diff check passed; cleanup unlink удалён, conservative retry и explicit Create проверены. Два новых tests были RED.
 
+**Повторный review:** исходная cleanup race закрыта; Important/P2 — spec обещала retry при body write error после успешного receipt open. Policy уточнена: retry только до reservation, после exclusive open occupied receipt сохраняется. ENOSPC fixture assigned автору.
+
 <a id="p11"></a>
 
 ### P11: Реализовать каталог ролей и умолчания
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p02_codex_probe (после P10), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
 
 **Зависимости:** P05, P09. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -481,7 +483,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед ревью:** 9 owned roles files; 30 role +4 English guard tests passed; scoped ESLint/isolated strict tsc всех файлов passed. Native context inputs и explicit/null/default/missing semantics описаны; shared launch/map/UI остаются P12.
 
 <a id="p12"></a>
 
