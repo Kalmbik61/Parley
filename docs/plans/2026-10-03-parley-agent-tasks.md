@@ -72,7 +72,7 @@
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | done |
-| [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
+| [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | running |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | running |
@@ -556,7 +556,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P13), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P08, P12. **Источник:** [этап 4 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-4).
 
@@ -581,6 +581,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнительные grants root:** skills/context.ts/test (+required index exports), roles/context.ts/test shared bounded RPC transport preserving role projection, work/agents.ts/test chosen-entry config projection, work/launch.ts/test и work/mcp-config.ts/test single navigator snapshot/env, mcp/context.test.ts/server.test.ts. При необходимости work/native-context.ts/test — bounded0600 local-only participant descriptor, whitelisted roots/settings paths/human policy projection; no raw config/secret args/model defaults в map/shared/output/log. Не дублировать scanner. Unknown settings/profile/role/toolroute даёт explicit unavailable; Codex native path+name/enablement пересекается с accepted resolver policy; Claude menu не доказывает Skill tool. Protocol/UI/host registry вне grants, P16 writer независим.
 
 <a id="p14"></a>
 

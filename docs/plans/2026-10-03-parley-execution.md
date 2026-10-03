@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P12 и P15 accepted; P16 running, P13 read-only подготовка.
+- Текущая фаза: P00–P12 и P15 accepted; P13/P16 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -33,7 +33,7 @@
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
-| P13 | Реализовать find_skill и настройку MCP | pending | — |
+| P13 | Реализовать find_skill и настройку MCP | running | /root/p02_codex_probe; P12/P08 accepted; core-only transport/context/cache/config grants |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | running | /root/p01_claude_probe; P15/P10 accepted; shared strings unlocked after fd3654e |
@@ -176,3 +176,5 @@ P15 full review needs rework: два Important — encoded credential fragment �
 P15 fixes accepted independently, aggregate d4278ce/20cf256/eef8425; P16 dispatched with sole writer grants. P12 CLI runner environment restored without integrity bypass,22/22 passed. P12 independent Important delivery pairing reproduced with positional sandbox; author fixes conservative supported template grammar on both start/resume. Plain custom compatibility and Claude-like GLM builtin text channel retained.
 
 P12 snapshot fd3654e accepted independently /root/p01_review;44 regressions/9probes and exact39files matched, rootcorebuild0. P13 prerequisites accepted, author preparing narrow nativecontext/cache/singleflagsnapshot integration; writes await concrete grants. P16sharedstrings unlocked solewriter aftersnapshot. Native runtime gates P32 remain explicit.
+
+P13 implementation dispatched after P12acceptance, no protocol/UI mutations. Bound local participant context, human policy provenance, Promise cache, single launch/MCP flag snapshot; неизвестный Claude Tool route остаётся unavailable. P17 read-only preflight требует private selector registry для presence IDs и global per-provider queue; actualactions gatedP16acceptance, no new native calls.
