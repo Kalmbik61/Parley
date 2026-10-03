@@ -72,3 +72,9 @@ export const CODEX_MODELS: readonly ModelOption[] = [
   { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
 ];
+
+/** Official Z.ai Claude Code integration (2026-10-03): https://docs.z.ai/devpack/tool/claude. */
+export const GLM_MODELS: readonly ModelOption[] = [
+  { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)' },
+  { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)' },
+];

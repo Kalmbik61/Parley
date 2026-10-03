@@ -140,7 +140,7 @@ describe('транскрипт сессии', () => {
 
   it('провайдер без истории и пропавший лог дают null, а не пустой транскрипт', async () => {
     await claudeLog(ID, [claudeSay('user', 'привет')]);
-    expect(await readTranscript('glm', ID, { claudeRoot, codexRoot })).toBeNull();
+    expect(await readTranscript('custom', ID, { claudeRoot, codexRoot })).toBeNull();
     expect(await readTranscript('claude', 'нет-такого', { claudeRoot, codexRoot })).toBeNull();
   });
 
@@ -227,12 +227,16 @@ describe('дозаказ резюме', () => {
     expect(args[1]).toContain('прогони e2e');
   });
 
-  it('для GLM дозаказ недоступен: истории у него нет', async () => {
+  it('GLM transcript is summarized by the existing Claude summarizer', async () => {
+    await claudeLog(ID, [claudeSay('user', 'GLM question'), claudeSay('assistant', 'GLM reply')]);
+    expect(await readTranscript('glm', ID, { claudeRoot, codexRoot })).toBe(
+      'human: GLM question\nagent: GLM reply',
+    );
     const { workId, sessionId } = await exited('glm');
-    await expect(
-      requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot }),
-    ).rejects.toThrow(/session history/i);
-    expect((await readMap(project, workId)).sessions[0]?.summary).toBeNull();
+    await requestAutoSummary(project, workId, sessionId, { claudeRoot, codexRoot });
+    const args = JSON.parse(await readFile(promptFile, 'utf8')) as string[];
+    expect(args[0]).toBe('-p');
+    expect(args[1]).toContain('GLM reply');
   });
 
   it('без id у провайдера дозаказывать не из чего', async () => {

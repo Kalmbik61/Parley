@@ -8,6 +8,7 @@ import {
   commandInPath,
   commandBinary,
   loadProviders,
+  isClaudeCode,
   modelChoiceError,
   printCommand,
   providersFile,
@@ -57,12 +58,12 @@ describe('реестр провайдеров', () => {
     });
   });
 
-  it('GLM запускается без аргументов: истории у него нет', () => {
+  it('GLM resumes through official Claude Code', () => {
     expect(resumeCommand(PROVIDERS.glm, { providerSessionId: 'что-угодно' })).toEqual({
-      command: 'glm',
-      args: [],
+      command: 'claude',
+      args: ['--resume', 'что-угодно'],
     });
-    expect(PROVIDERS.glm.hasHistory).toBe(false);
+    expect(PROVIDERS.glm.hasHistory).toBe(true);
   });
 
   it('без id запускается чистая сессия', () => {
@@ -76,7 +77,7 @@ describe('реестр провайдеров', () => {
       providersWithHistory()
         .map((p) => p.id)
         .sort(),
-    ).toEqual(['claude', 'codex']);
+    ).toEqual(['claude', 'codex', 'glm']);
   });
 
   it('у каждого провайдера есть подпись и команда', () => {
@@ -159,13 +160,16 @@ describe('подстановка аргументов запуска', () => {
 
   it('провайдеру без такой возможности вставка не достаётся', () => {
     const guidance = 'You are inside Parley.';
-    // У codex и glm подстановки `{systemPrompt}` в шаблоне нет — она отбрасывается
+    // У Codex нет подстановки системного промпта; GLM использует Claude Code.
     // молча, как `{settingsFile}`: своих механизмов системного промпта мы не трогаем.
     expect(startCommand(PROVIDERS.codex, { systemPrompt: guidance, prompt: 'бриф' }).args).toEqual([
       ...CODEX_STATIC_ARGS,
       'бриф',
     ]);
-    expect(startCommand(PROVIDERS.glm, { systemPrompt: guidance }).args).toEqual([]);
+    expect(startCommand(PROVIDERS.glm, { systemPrompt: guidance }).args).toEqual([
+      '--append-system-prompt',
+      guidance,
+    ]);
   });
 
   it('claude с channel получает пару флага канала и при запуске, и при возобновлении', () => {
@@ -263,10 +267,15 @@ describe('подстановка аргументов запуска', () => {
     expect(PROVIDERS.codex.runner.args).not.toContain('{sessionUuid}');
   });
 
-  it('GLM остаётся runner-only: ни MCP, ни возобновления', () => {
-    expect(PROVIDERS.glm.runner.mcpConfig).toBeUndefined();
-    expect(PROVIDERS.glm.runner.resumeArgs).toBeUndefined();
-    expect(startCommand(PROVIDERS.glm, { prompt: 'бриф' })).toEqual({ command: 'glm', args: [] });
+  it('GLM uses Claude MCP and has no development channel', () => {
+    expect(PROVIDERS.glm.runner.mcpConfig).toBe('json-file');
+    expect(PROVIDERS.glm.linkBy).toBe('session-id');
+    expect(PROVIDERS.glm.runner.args).not.toContain('{channel}');
+    expect(PROVIDERS.glm.runner.resumeArgs).not.toContain('{channel}');
+    expect(startCommand(PROVIDERS.glm, { prompt: 'бриф' })).toEqual({
+      command: 'claude',
+      args: ['бриф'],
+    });
   });
 });
 
@@ -364,10 +373,10 @@ describe('модель и усилие новой сессии (дизайн к�
     ).toEqual(['resume', 'uuid-1', '-c', 'mcp_servers.parley={}', ...CODEX_TUI_ARGS]);
   });
 
-  it('glm флагов не знает: выбор молча отбрасывается', () => {
+  it('GLM accepts model and effort', () => {
     expect(startCommand(PROVIDERS.glm, { model: 'x', effort: 'high' })).toEqual({
-      command: 'glm',
-      args: [],
+      command: 'claude',
+      args: ['--model', 'x', '--effort', 'high'],
     });
   });
 
@@ -391,18 +400,18 @@ describe('модель и усилие новой сессии (дизайн к�
     ]);
   });
 
-  it('поддержка решается шаблоном запуска: claude и codex умеют оба флага, glm — ни одного', () => {
-    for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+  it('поддержка решается шаблоном запуска: встроенные провайдеры принимают модель и усилие', () => {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
       expect(supportsModel(entry)).toBe(true);
       expect(supportsEffort(entry)).toBe(true);
     }
-    expect(supportsModel(PROVIDERS.glm)).toBe(false);
-    expect(supportsEffort(PROVIDERS.glm)).toBe(false);
+    expect(supportsModel(PROVIDERS.glm)).toBe(true);
+    expect(supportsEffort(PROVIDERS.glm)).toBe(true);
   });
 
   describe('modelChoiceError: выбор модели против записи реестра', () => {
     it('каждое значение встроенных списков годится', () => {
-      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
         for (const { id } of selectableModels(entry) ?? []) {
           expect(modelChoiceError(entry, id), `${entry.id}: ${id}`).toBeNull();
         }
@@ -424,12 +433,11 @@ describe('модель и усилие новой сессии (дизайн к�
       for (const model of ['-opus', '--model', 'op us', 'op\tus', 'x'.repeat(201)]) {
         expect(modelChoiceError(PROVIDERS.glm, model), JSON.stringify(model)).not.toBeNull();
       }
-      expect(modelChoiceError(PROVIDERS.glm, 'x'.repeat(200))).toBeNull();
+      expect(modelChoiceError({ ...PROVIDERS.glm, models: null }, 'x'.repeat(200))).toBeNull();
     });
 
     it('провайдер без списка: любое слово годится, дальше решает шаблон запуска', () => {
-      expect(PROVIDERS.glm.models ?? null).toBeNull();
-      expect(modelChoiceError(PROVIDERS.glm, 'что-угодно')).toBeNull();
+      expect(modelChoiceError({ ...PROVIDERS.glm, models: null }, 'что-угодно')).toBeNull();
       // Список у провайдера, чей шаблон модель не принимает, окну не отдаётся — значит, и не проверяется.
       const plain: ProviderEntry = {
         ...PROVIDERS.claude,
@@ -461,10 +469,13 @@ describe('модель и усилие новой сессии (дизайн к�
       { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
     ];
 
-    it('у claude и codex списки непустые и совпадают с таблицей отчёта; у glm списка нет', () => {
+    it('встроенные списки моделей совпадают с подтверждёнными таблицами', () => {
       expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
       expect(selectableModels(PROVIDERS.codex)).toEqual(CODEX);
-      expect(selectableModels(PROVIDERS.glm)).toBeNull();
+      expect(selectableModels(PROVIDERS.glm)).toEqual([
+        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)' },
+        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)' },
+      ]);
     });
 
     /** Список провайдера; его отсутствие — провал теста, а не пустой обход, который прошёл бы впустую. */
@@ -476,7 +487,7 @@ describe('модель и усилие новой сессии (дизайн к�
 
     it('«по умолчанию» — не запись списка, а отсутствие выбора: значения default там нет', () => {
       // `default` у Claude Code — «сбросить выбор», документация сама говорит, что это не модель.
-      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
         const ids = listOf(entry).map((model) => model.id);
         expect(ids).not.toContain('default');
         expect(ids).not.toContain('');
@@ -484,7 +495,7 @@ describe('модель и усилие новой сессии (дизайн к�
     });
 
     it('id — одно слово без дефиса впереди (иначе CLI принял бы его за флаг), id и подписи не повторяются', () => {
-      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
         const list = listOf(entry);
         for (const model of list) {
           expect(model.id).toMatch(/^[^\s-]\S*$/);
@@ -496,7 +507,7 @@ describe('модель и усилие новой сессии (дизайн к�
     });
 
     it('каждое значение списка доезжает до команды парой --model <id>', () => {
-      for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
         for (const model of listOf(entry)) {
           const { args } = startCommand(entry, { model: model.id, prompt: 'бриф' });
           expect(args[args.indexOf('--model') + 1]).toBe(model.id);
@@ -592,7 +603,7 @@ describe('режим одного ответа', () => {
 
   it('провайдер без режима одного ответа отдаёт пустые аргументы', () => {
     expect(printCommand(PROVIDERS.glm, { prompt: 'сожми' })).toEqual({
-      command: 'glm',
+      command: 'claude',
       args: [],
     });
   });
@@ -665,6 +676,31 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
     expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
+
+  it('allowed overrides retain trusted GLM metadata', async () => {
+    await write({ glm: { badge: 'My GLM', command: '/opt/wrapper', args: ['{model}'] } });
+    const entry = (await loadProviders())['glm']!;
+    expect(isClaudeCode(entry)).toBe(true);
+    expect(isClaudeCode('glm')).toBe(true);
+    expect(isClaudeCode('unknown')).toBe(false);
+    expect(entry.runner).toMatchObject({
+      secret: 'zai',
+      settingsModel: 'glm-5.3[1m]',
+      minVersion: '2.1.287',
+    });
+    expect(entry.runner.env).toMatchObject({
+      ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+    });
+    expect(entry.runner.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+  });
+
+  it.each(['family', 'env', 'settingsModel', 'secret', 'minVersion', 'runner'])(
+    'JSON cannot define trusted %s metadata',
+    async (field) => {
+      await write({ custom: { badge: 'Custom', command: 'custom', [field]: 'invented' } });
+      await expect(loadProviders()).rejects.toThrow(/unexpected entry shape/);
+    },
+  );
 
   it('merge по id: меняется только указанное поле', async () => {
     await write({ claude: { command: '/opt/claude/bin/claude' } });

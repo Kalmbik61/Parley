@@ -16,6 +16,7 @@ import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
+  isClaudeCode,
   resumeCommand,
   startCommand,
   type EffortLevel,
@@ -50,7 +51,8 @@ export interface LaunchOptions {
   /**
    * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
    * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
-   * запуске: `resumeArgs` их не содержат — Claude Code возвращает модель сам, а выбор из диалога
+   * запуске у Claude/Codex; GLM resume явно берёт настроенную модель, поскольку tier aliases
+   * подавляют восстановление модели CLI. Выбор Chat /model отдельно не сохраняется. Выбор из диалога
    * в карте не хранится. Перекрывают выбор, записанный в сессию `spawn_session`ом
    * (`WorkSession.model`, `.effort`): его хост подставляет сам, когда поднимает `pending`.
    */
@@ -191,7 +193,7 @@ async function plan(
   const resuming =
     mode === 'resume' &&
     session.providerSessionId !== null &&
-    (session.provider !== 'claude' || (await claudeConversationExists(session.providerSessionId)));
+    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
   // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
@@ -234,11 +236,13 @@ async function plan(
   // агента читать нечего.
   if (session.agent !== null) subs.agent = session.agent;
   if (template.includes('{settingsFile}')) {
-    subs.settingsFile = await writeWorkSettings(
-      projectPath,
-      workId,
-      options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {},
-    );
+    subs.settingsFile = await writeWorkSettings(projectPath, workId, {
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
+      ...(entry.runner.settingsModel === undefined
+        ? {}
+        : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
+    });
   }
   // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
   // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
@@ -257,6 +261,10 @@ async function plan(
     // с сообщения пользователя, контекста родителя в нём нет.
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
     subs.systemPrompt = brief === null ? guidance : `${guidance}\n\n${brief}`;
+  }
+
+  if (entry.runner.settingsModel !== undefined) {
+    subs.model = options.model ?? session.model ?? entry.runner.settingsModel;
   }
 
   if (resuming) {
@@ -292,7 +300,7 @@ async function plan(
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
-    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }),
+    env: { ...entry.runner.env, ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }) },
     providerSessionId,
     warnings,
   };

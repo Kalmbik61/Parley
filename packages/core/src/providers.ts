@@ -1,7 +1,8 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_MODELS, CODEX_MODELS, type ModelOption } from './provider-models.js';
+import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, type ModelOption } from './provider-models.js';
+import type { SecretId } from './secrets.js';
 import type { Provider } from './session-index.js';
 import { overrideValue } from './work/find-binary.js';
 import { parleyHome } from './work/store.js';
@@ -23,7 +24,17 @@ export type McpConfigKind = 'json-file' | 'codex-override';
  */
 export type SessionLink = 'session-id' | 'cwd+time';
 
+export type ProviderFamily = 'claude';
+
 export interface RunnerConfig {
+  /** Trusted built-in nonsensitive process environment; never settings.env or a key. */
+  env?: Readonly<Record<string, string>>;
+  /** Initial settings model; GLM resume keeps this or the persisted WorkSession.model. */
+  settingsModel?: string;
+  /** Host retrieves this secret only immediately before launch. */
+  secret?: SecretId;
+  /** Minimum verified CLI version; host checks it before launch side effects. */
+  minVersion?: string;
   /**
    * Имя бинаря в PATH. Запускается только то, что уже стоит у пользователя,
    * и только немодифицированным — юридическая граница проекта.
@@ -44,7 +55,7 @@ export interface RunnerConfig {
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{model}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -63,6 +74,8 @@ export interface RunnerConfig {
 /** Запись реестра. Набор id открыт: `providers.json` добавляет свои CLI. */
 export interface ProviderEntry {
   id: WorkProvider;
+  /** Trusted built-in transcript/CLI family; providers.json cannot define it. */
+  family?: ProviderFamily;
   /** Короткая подпись для бейджа провайдера в списке. */
   label: string;
   /** Двухсимвольный маркер для узкой колонки: первой буквы не хватает — Claude и Codex совпали бы. */
@@ -73,7 +86,7 @@ export interface ProviderEntry {
   runner: RunnerConfig;
   /**
    * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
-   * У встроенных `claude` и `codex` список взят из открытой документации (`provider-models.ts`), у
+   * У встроенных `claude`, `codex` и `glm` список взят из открытой документации (`provider-models.ts`), у
    * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
    * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
    * списке не хранится: это отсутствие выбора, без флага.
@@ -141,6 +154,7 @@ const CODEX_PARLEY_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request'
 export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   claude: {
     id: 'claude',
+    family: 'claude',
     label: 'Claude',
     mark: 'Cl',
     hasHistory: true,
@@ -247,11 +261,72 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
     id: 'glm',
     label: 'GLM',
     mark: 'GL',
-    hasHistory: false,
-    linkBy: 'cwd+time',
-    runner: { command: 'glm' },
+    family: 'claude',
+    hasHistory: true,
+    linkBy: 'session-id',
+    models: GLM_MODELS,
+    runner: {
+      command: 'claude',
+      secret: 'zai',
+      minVersion: '2.1.287',
+      settingsModel: 'glm-5.3[1m]',
+      // These must reach the process: host-managed Claude filters provider env from settings.
+      env: {
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+        ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3[1m]',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        API_TIMEOUT_MS: '3000000',
+      },
+      args: [
+        '--session-id',
+        '{sessionUuid}',
+        '--mcp-config',
+        '{mcpConfig}',
+        '--settings',
+        '{settingsFile}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '--model',
+        '{model}',
+        '--effort',
+        '{effort}',
+        '--agent',
+        '{agent}',
+        '{prompt}',
+      ],
+      // Tier aliases suppress native restoration. Explicitly keep the configured launch model.
+      resumeArgs: [
+        '--resume',
+        '{providerSessionId}',
+        '--mcp-config',
+        '{mcpConfig}',
+        '--settings',
+        '{settingsFile}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '--model',
+        '{model}',
+        '--agent',
+        '{agent}',
+        '{prompt}',
+      ],
+      mcpConfig: 'json-file',
+    },
   },
 };
+
+/** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
+export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
+  return typeof entry === 'string'
+    ? Object.values(PROVIDERS).some(
+        (provider) => provider.id === entry && provider.family === 'claude',
+      )
+    : entry.family === 'claude';
+}
 
 /** Провайдеры, чьи сессии попадают в список. */
 export function providersWithHistory(): ProviderInfo[] {
@@ -561,6 +636,9 @@ const isModelList = (value: unknown): value is ModelOption[] =>
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
+    ['family', 'env', 'settingsModel', 'secret', 'minVersion', 'runner'].some(
+      (name) => name in patch,
+    ) ||
     (patch['badge'] !== undefined && typeof patch['badge'] !== 'string') ||
     (patch['mark'] !== undefined && typeof patch['mark'] !== 'string') ||
     (patch['hasHistory'] !== undefined && typeof patch['hasHistory'] !== 'boolean') ||
@@ -591,7 +669,11 @@ function applyOverride(
     throw new Error(`provider ${id} in ${file}: a new provider needs badge and command`);
   }
 
-  const runner: RunnerConfig = { command };
+  const runner: RunnerConfig = {
+    ...base?.runner,
+    command,
+    ...(base?.runner.env === undefined ? {} : { env: { ...base.runner.env } }),
+  };
   const args = patch.args ?? base?.runner.args;
   const resumeArgs = patch.resumeArgs ?? base?.runner.resumeArgs;
   const printArgs = patch.printArgs ?? base?.runner.printArgs;
@@ -608,6 +690,7 @@ function applyOverride(
       : patch.models.map((model) => ({ id: model.id, label: model.label }));
   return {
     id,
+    ...(base?.family === undefined ? {} : { family: base.family }),
     label,
     mark: patch.mark ?? base?.mark ?? label.slice(0, 2),
     hasHistory: patch.hasHistory ?? base?.hasHistory ?? false,
@@ -629,7 +712,13 @@ export async function loadProviders(
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
       entry.id,
-      { ...entry, runner: { ...entry.runner } } as ProviderEntry,
+      {
+        ...entry,
+        runner: {
+          ...entry.runner,
+          ...(entry.runner.env === undefined ? {} : { env: { ...entry.runner.env } }),
+        },
+      } as ProviderEntry,
     ]),
   );
 
