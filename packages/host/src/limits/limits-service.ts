@@ -1,10 +1,11 @@
 /**
  * Лимиты подписок в хосте (спека комнат Organic, 3.5): последнее значение на провайдера и событие
  * `providers.limitsChanged`, когда оно изменилось. Данные — только те, что отдают сами CLI:
- * - Claude Code (и любой провайдер, чей запуск несёт `--settings` работы) — файлы
+ * - Claude Code (и другие провайдеры, кроме GLM, чей запуск несёт `--settings` работы) — файлы
  *   `limits/<сессия>.json` в каталогах работ, которые пишет скрипт строки статуса. Провайдер файла —
- *   провайдер сессии по карте работы, а не имя файла или его свежесть: файл сессии GLM не может
- *   стать лимитами Claude. Файлы провайдера сводятся по окнам (`mergeLimits`), а не «берётся самый
+ *   провайдер сессии по карте работы, а не имя файла или его свежесть. GLM не получает лимиты
+ *   claude.ai: строка статуса Claude Code не сообщает лимиты Z.ai. Файлы провайдера сводятся
+ *   по окнам (`mergeLimits`), а не «берётся самый
  *   свежий по `at`»: простаивающая сессия со свежим `at` и прежними числами не должна перебить
  *   числа той, что работала;
  * - Codex — хвост самого свежего rollout-лога (`readCodexLimits`).
@@ -125,7 +126,7 @@ export function createLimitsService(
       const files = await readWorkLimits(workPaths(entry.projectPath, entry.map.work.id).dir);
       for (const [sessionId, limits] of files) {
         const provider = providers.get(sessionId);
-        if (provider !== undefined) consider(provider, limits);
+        if (provider !== undefined && provider !== 'glm') consider(provider, limits);
       }
     }
     const codex = await readCodexLimits(options.codexRoot).catch(() => null);

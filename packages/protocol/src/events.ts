@@ -16,6 +16,8 @@ export interface Events {
   'pty.exit': { ref: SessionRef; exitCode: number; signal: number | null };
   'host.notice': HostNotice;
   'wake.changed': { paused: boolean };
+  /** A saved provider key changed; every window refreshes providers.list. */
+  'providers.changed': { provider: string };
   /**
    * Лимиты подписки провайдера изменились (спека комнат Organic, 3.5): одно событие на
    * провайдера; `null` — данных больше нет или окна сбросились.

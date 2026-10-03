@@ -15,7 +15,7 @@ import { createFeedHandlers } from './feed.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
-import { createProvidersList } from './providers.js';
+import { createProvidersList, providersClearKey, providersSetKey } from './providers.js';
 import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
@@ -104,6 +104,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'providers.list': createProvidersList(deps.providerVersions, deps.limits) as AnyHandler,
+    'providers.setKey': providersSetKey as AnyHandler,
+    'providers.clearKey': providersClearKey as AnyHandler,
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,

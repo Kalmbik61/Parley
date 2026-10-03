@@ -219,10 +219,10 @@ describe('Claude: файлы строки статуса', () => {
     expect(limits.get('claude')?.week?.usedPercent).toBe(45);
   });
 
-  it('файл сессии GLM не становится лимитами Claude: провайдер — по сессии из карты работы', async () => {
+  it('GLM statusline quotas are ignored in snapshots and change events', async () => {
     const a = await work(projectA, ['claude', 'glm']);
     await putLimits(projectA, a.map, a.ids[0]!, T0 - 120_000, 58, 41);
-    // Файл GLM свежее — и Claude он не достаётся, лимиты GLM остаются его собственными.
+    // GLM runs Claude Code, but its statusline cannot report Z.ai subscription limits.
     await putLimits(projectA, a.map, a.ids[1]!, T0 - 10_000, 3, null);
     const { limits } = service([{ project: projectA, map: a.map }]);
 
@@ -230,7 +230,13 @@ describe('Claude: файлы строки статуса', () => {
 
     expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(58);
     expect(limits.get('claude')?.week?.usedPercent).toBe(41);
-    expect(limits.get('glm')?.fiveHour?.usedPercent).toBe(3);
+    expect(limits.get('glm')).toBeNull();
+    expect(limitsEvents().map((event) => event.id)).toEqual(['claude']);
+    broadcasts = [];
+    await putLimits(projectA, a.map, a.ids[1]!, T0, 9, 2);
+    await limits.refresh();
+    expect(limits.get('glm')).toBeNull();
+    expect(limitsEvents()).toEqual([]);
   });
 
   it('файл сессии, которой нет в карте (удалена), не считается; провайдер без файлов — null', async () => {

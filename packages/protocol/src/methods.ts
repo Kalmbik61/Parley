@@ -30,6 +30,9 @@ export const METHODS = {
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
+  // Key normalization belongs to core: trim edges before checking the length or whitespace.
+  'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
+  'providers.clearKey': z.object({ provider: z.string() }),
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
@@ -199,6 +202,12 @@ export interface Results {
       id: string;
       label: string;
       available: boolean;
+      /** Missing CLI/version, missing saved key, or ready; optional for older hosts. */
+      needs?: 'cli' | 'key' | null;
+      /** Only a masked hint is returned for providers that use a saved key. */
+      keyHint?: string | null;
+      /** Trusted built-in CLI family; older hosts omit this field. */
+      family?: 'claude' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
@@ -222,6 +231,8 @@ export interface Results {
       limits?: ProviderLimits | null;
     }>;
   };
+  'providers.setKey': { keyHint: string };
+  'providers.clearKey': { ok: true };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };
