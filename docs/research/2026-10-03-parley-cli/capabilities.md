@@ -471,3 +471,11 @@ mutation probes, отрицательные unsupported/validation probes, workt
 и no-launch marker checks. Сессии Parley/LLM launch, remote install, OAuth login,
 политика managed denial, Windows/Linux и применение изменений в уже запущенных
 сессиях **не проверялись**. Stage/commit, shared code и статус очереди не менялись.
+
+## P17 Claude action proof — 2026-10-03
+
+Ownership конфигурации, полнота policy и health MCP проверяются отдельно. Native 2.1.287 Add guard проверяет policy до scope write; get_settings не universal policy proof. Source locators и ограничения закреплены в [P17 amendment](contracts.md#p17-action-proof-amendment--2026-10-03).
+
+Artifact source: [официальный installer](https://claude.ai/install.sh) указывает [manifest 2.1.287](https://downloads.claude.ai/claude-code-releases/2.1.287/manifest.json). Root прочитал оба public artifacts без выполнения installer; darwin-arm64 checksum `6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea`, size 227827120 совпали с independently inspected installed native bytes. Manifest commit `3c446a1b98aceb99a6cdee0f84a8bea42f4a8937`, build 2026-10-01. Local codesign --verify сообщил invalid signature; совпадение publisher HTTPS manifest доказывает byte identity опубликованного artifact, а не исправность platform signature. Other platform runtime gates не закрыты одним manifest.
+
+Default positive action proof привязывается к принятому version/platform/digest, actual canonical path и fresh bounded hash; machine absolute path не записывается в repo. Другой/custom binary или изменившийся fingerprint — unavailable. Synthetic adapter evidence не объявляет реальную policy/health доказанной; raw config/output не сохраняется.
