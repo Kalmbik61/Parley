@@ -303,3 +303,9 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(isActionAvailable('wake.toggle', new Set(['wake.pause', 'wake.resume']))).toBe(true);
   });
 });
+
+it('capabilities palette action needs both safe snapshot methods, without an accelerator', () => {
+ expect(isActionAvailable('project.capabilities', new Set(['capabilities.get']))).toBe(false);
+ expect(isActionAvailable('project.capabilities', new Set(['capabilities.get', 'capabilities.refresh']))).toBe(true);
+ expect(isActionAvailable('project.capabilities', new Set())).toBe(false);
+});

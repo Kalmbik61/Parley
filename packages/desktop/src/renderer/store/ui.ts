@@ -77,6 +77,10 @@ export interface UiState {
   /** `null` — состояние будильника ещё не пришло с хоста. */
   wakePaused: boolean | null;
   dialogs: DialogsState;
+  /** Selected project panel, only in window memory. */
+  projectPanel: string | null;
+  openProjectPanel(projectPath: string): void;
+  closeProjectPanel(): void;
   /**
    * Сессии, чей терминал сейчас виден (активная вкладка своей группы,
    * `@parley/protocol#refKey`) — уведомления считают видимой именно такую
@@ -193,6 +197,9 @@ export const useUiStore = create<UiState>((set, get) => {
     documentVisible: typeof document === 'undefined' ? true : document.visibilityState === 'visible',
     wakePaused: null,
     dialogs: CLOSED_DIALOGS,
+    projectPanel: null,
+    openProjectPanel: (projectPath) => set({ projectPanel: projectPath }),
+    closeProjectPanel: () => set({ projectPanel: null }),
     visibleSessionRefs: {},
     composerDrafts: {},
     ui: DEFAULT_UI,

@@ -15,6 +15,38 @@
 import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
+  projectPanel: {
+    title: 'Project', capabilities: 'Capabilities', refresh: 'Refresh',
+    appliesToNew: 'Refresh updates this panel. Running sessions keep their current settings.',
+    parleyDescription: 'Team rules for agents in this project.', parleyLoading: 'Checking PARLEY.md…',
+    parleyFailed: 'PARLEY.md could not be opened. Check the project and try again.',
+    parleyMissing: 'PARLEY.md is missing. Use Create to add it.',
+    unavailable: 'This host does not support the capabilities panel. Restart or update the host and try again.',
+    disconnected: 'Reconnect to the host to load capabilities.', restartHost: 'Restart host…',
+    loadFailed: 'Capabilities could not be loaded. Try Refresh.',
+    loading: 'Loading…', partial: 'Partial snapshot', ready: 'Ready', error: 'Could not load',
+    notFound: 'Not found', notConfirmed: 'Not confirmed', empty: 'No capabilities found.',
+    unknownScope: 'Unknown scope', unknownPolicy: 'Policy unknown', enabled: 'Enabled', disabled: 'Disabled',
+    available: 'Available to the model', hidden: 'Unavailable to the model', installed: 'Installed',
+    notInstalled: 'Not installed', builtin: 'Built-in · managed by Parley', separateCopies: 'Separate copies',
+    shared: (provider: string): string => `Shared from ${provider}`,
+    kinds: { skill: 'Skills', mcp: 'MCP servers', plugin: 'Plugins' },
+    scopes: { user: 'User', project: 'Project', local: 'Local', plugin: 'Plugin', builtin: 'Built-in',
+      system: 'System', admin: 'Admin', extra: 'Extra', 'claude.ai': 'Claude.ai' },
+    statuses: { ok: 'Available', off: 'Off', 'needs-auth': 'Needs authentication',
+      'pending-approval': 'Pending approval', failed: 'Failed', unknown: 'Unknown' },
+    reasons: { 'human-disabled': 'Disabled in native settings', 'user-invocable-only': 'Available by explicit invocation only',
+      'implicit-invocation-disabled': 'Implicit invocation is disabled', 'disable-model-invocation': 'Model invocation is disabled',
+      'plugin-disabled': 'The source plugin is disabled', shadowed: 'Hidden by native precedence',
+      'availability-unverified': 'Native availability is not verified', 'invalid-metadata': 'Invalid native metadata',
+      'load-tool-unavailable': 'The native load tool is unavailable' },
+    diagnostics: { 'missing-context': 'Project context is unavailable', 'context-unverified': 'Native policy or scope is not verified',
+      unavailable: 'A native CLI or source is unavailable', unreadable: 'A native source could not be read',
+      'invalid-config': 'A native configuration could not be read safely', 'invalid-output': 'A native response could not be read safely',
+      timeout: 'A native query timed out', 'output-limit': 'The snapshot exceeded a safety limit',
+      'resolver-partial': 'The native skill inventory is partial', 'identity-unverified': 'The native project identity is not verified',
+      'receipt-unverified': 'Parley ownership could not be verified' },
+  },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
@@ -927,6 +959,7 @@ export const S = {
 
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
+    capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
     goToFile: 'Go to file',
     findInFiles: 'Find in files',

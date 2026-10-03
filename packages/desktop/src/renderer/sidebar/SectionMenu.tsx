@@ -85,6 +85,8 @@ export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {sectionKey !== 'pinned' && <DropdownMenuItem onSelect={() => useUiStore.getState().openProjectPanel(sectionKey)}
+          data-section-action="capabilities">{S.actions.capabilities}</DropdownMenuItem>}
         {sectionKey !== 'pinned' && <DropdownMenuItem disabled={exists === null}
           onSelect={() => { void openParley(); }} data-section-action="parley-md">
           {exists === false ? S.sidebar.createParleyMd : S.sidebar.openParleyMd}

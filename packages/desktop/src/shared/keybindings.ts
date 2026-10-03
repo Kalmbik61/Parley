@@ -10,7 +10,7 @@ import { S } from './strings.js';
 export type MenuName = 'app' | 'edit' | 'view' | 'workspace' | 'tab' | 'terminal';
 export type ActionId =
   | 'palette.open' | 'files.quickOpen' | 'files.search'
-  | 'work.new' | 'session.new' | 'room.new'
+  | 'work.new' | 'session.new' | 'room.new' | 'project.capabilities'
   | 'work.goto.1' | 'work.goto.2' | 'work.goto.3' | 'work.goto.4' | 'work.goto.5'
   | 'work.goto.6' | 'work.goto.7' | 'work.goto.8' | 'work.goto.9'
   | 'work.prev' | 'work.next' | 'works.showArchived'
@@ -51,6 +51,7 @@ function paletteOnly(id: ActionId, title: string, keywords: string[]): ActionDef
 
 /** Таблица спеки 9.6 целиком. Порядок — порядок пунктов в меню (6.1b). */
 export const ACTIONS: readonly ActionDef[] = [
+  paletteOnly('project.capabilities', S.actions.capabilities, ['project', 'skills', 'mcp', 'plugins']),
   { id: 'settings.open', title: S.actions.settings, keywords: ['preferences', 'options'], keys: 'CmdOrCtrl+,', menu: 'app', when: 'always', inPalette: true },
 
   { id: 'find', title: S.actions.find, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },

@@ -160,6 +160,7 @@ beforeEach(() => {
   // ⌘⇧F (7.4) оставляет «Файлы» в режиме поиска — поле поиска не должно доставаться следующим тестам.
   useFilesStore.setState({ modeByWork: {}, focusSearch: null });
   useUiStore.setState({
+    projectPanel: null,
     windowFocused: true,
     wakePaused: null,
     dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
@@ -2259,4 +2260,19 @@ describe('AppShell — страница в окне (тесты 1 и 3 куск�
     act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/x', openerWebContentsId: 99 }));
     expect(useLayoutStore.getState().layouts[key]).toBe(before);
   });
+});
+
+it('project capabilities opens one shared panel through the project state and closes with Escape', async () => {
+ bridge.setHandler('capabilities.get', ({ projectPath }) => ({ projectPath, revision: 1,
+  columns: { claude: { phase: 'ready', diagnostics: [] }, codex: { phase: 'ready', diagnostics: [] } }, rows: [] }));
+ bridge.setHandler('capabilities.refresh', ({ projectPath }) => ({ projectPath, revision: 2,
+  columns: { claude: { phase: 'ready', diagnostics: [] }, codex: { phase: 'ready', diagnostics: [] } }, rows: [] }));
+ useHostStore.setState({ status: { ...STATUS, methods: [...STATUS.methods, 'capabilities.get', 'capabilities.refresh'] } });
+ await renderShell([work('w-01', '2026-01-01', 'Project', [])]);
+ await act(async () => { useUiStore.getState().openProjectPanel('/tmp/project'); });
+ const dialog = await screen.findByRole('dialog'); expect(screen.getAllByRole('dialog')).toHaveLength(1);
+ expect(within(dialog).getByRole('tab', { name: 'Capabilities' })).toBeTruthy();
+ expect(within(dialog).queryByRole('tab', { name: 'Memory' })).toBeNull();
+ fireEvent.keyDown(dialog, { key: 'Escape' }); await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+ expect(useUiStore.getState().projectPanel).toBeNull();
 });

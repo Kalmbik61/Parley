@@ -345,3 +345,13 @@ describe('useUiStore — windowFocused при фокусе в странице (
     expect(useUiStore.getState().windowFocused).toBe(true);
   });
 });
+
+ it('project panel opens for the chosen project and closes without persisting UI settings', () => {
+  const bridge = createFakeBridge(); useUiStore.getState().init(bridge);
+  const save = vi.spyOn(bridge.app, 'saveUi');
+  useUiStore.getState().openProjectPanel('/tmp/other project');
+  expect(useUiStore.getState().projectPanel).toBe('/tmp/other project');
+  useUiStore.getState().closeProjectPanel();
+  expect(useUiStore.getState().projectPanel).toBeNull();
+  expect(save).not.toHaveBeenCalled();
+ });
