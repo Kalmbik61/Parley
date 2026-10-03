@@ -278,6 +278,7 @@ export const S = {
       submitSession: 'Start session',
       submitRoom: 'Create room',
       selectWorkRequired: 'No workspace selected',
+      providerUnavailable: (name: string): string => `${name} is unavailable. Connect it or choose another agent.`,
       /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
       agentStarted: (tag: string): string => `${tag} started`,
     },

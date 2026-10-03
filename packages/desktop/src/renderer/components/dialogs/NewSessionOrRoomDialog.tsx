@@ -49,27 +49,31 @@
  * к фону диалога 2.69:1, ниже порога 3:1 для признака состояния.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
+import type { Result } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { cn } from '../../lib/cn.js';
-import { defaultProvider, type ProviderOption } from '../../lib/default-provider.js';
+import { defaultProvider } from '../../lib/default-provider.js';
 import { openWhenListed } from '../../lib/open-when-listed.js';
 import { sessionTag, workTitleText } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useUiStore } from '../../store/ui.js';
+import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
 import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { AgentIcon } from '../AgentIcon.js';
+import { ProviderCard } from '../providers/ProviderCard.js';
 import { radioGroupKeyDown } from './radio-keys.js';
 
 export interface NewSessionOrRoomDialogProps {
@@ -83,6 +87,7 @@ export interface NewSessionOrRoomDialogProps {
 }
 
 type Effort = 'low' | 'medium' | 'high';
+type ProviderOption = Result<'providers.list'>['providers'][number];
 
 const EFFORTS: readonly { value: Effort; label: string }[] = [
   { value: 'low', label: S.dialogs.newSession.effortLow },
@@ -140,9 +145,21 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const entries = useWorksStore((state) => state.entries);
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const lastProvider = useUiStore((state) => state.ui.lastProvider);
+  const connections = useHostStore((state) => state.connections);
+  const priorConnections = useRef(connections);
 
   /** `null` — `providers.list` этого открытия ещё не ответил. */
   const [providers, setProviders] = useState<ProviderOption[] | null>(null);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState<string | null>(null);
+  const [providerCard, setProviderCard] = useState<{ row: number; provider: string } | null>(null);
+  /** Синхронная свежесть снимка нужна и между последовательными запусками агентов комнаты. */
+  const providersRef = useRef<ProviderOption[] | null>(null);
+  const providersReady = useRef(false);
+  const refreshRef = useRef<(() => Promise<void>) | null>(null);
+  const reloadProviders = useCallback(async (): Promise<void> => {
+    await refreshRef.current?.();
+  }, []);
   /**
    * Работа диалога, заданная при открытии (меню карточки — её работа) или выбранная человеком; `null` — активная. Ключ,
    * а не проп: закрываясь, диалог сбрасывает `work` в сторе, и работа в поле не должна прыгать на время его исчезновения.
@@ -192,26 +209,61 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
     setResults({});
     setError(null);
     setBusy(false);
+    setProviderCard(null);
   }, [open, room, work]);
 
   useEffect(() => {
     if (!open) return;
     let stale = false;
+    let generation = 0;
+    providersRef.current = null;
+    providersReady.current = false;
     setProviders(null);
-    bridge
-      .call('providers.list', {})
-      .then((result) => {
-        if (!stale) setProviders(result.providers);
-      })
-      .catch((err: unknown) => {
-        if (stale) return;
+    setProvidersError(null);
+    const refresh = async (): Promise<void> => {
+      if (stale) return;
+      const current = ++generation;
+      // Сохраняем и неявный выбор: удаление ключа не должно тихо заменить выбранный GLM на Claude.
+      const prior = providersRef.current;
+      if (prior !== null) {
+        const chosen = defaultProvider(prior, useUiStore.getState().ui.lastProvider);
+        setAgents((rows) => rows.map((row) => row.provider === null ? { ...row, provider: chosen } : row));
+      }
+      providersReady.current = false;
+      setProvidersLoading(true);
+      try {
+        const result = await bridge.call('providers.list', {});
+        if (stale || current !== generation) return;
+        providersRef.current = result.providers;
+        providersReady.current = true;
+        setProviders(result.providers);
+        setProvidersError(null);
+      } catch (err: unknown) {
+        if (stale || current !== generation) return;
         console.warn('[parley] providers.list', err);
-        setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
-      });
+        setProvidersError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+      } finally {
+        if (!stale && current === generation) setProvidersLoading(false);
+      }
+    };
+    refreshRef.current = refresh;
+    // Событие несёт только id, поэтому доступность выясняем заново, а не угадываем действие с ключом.
+    const offChanged = bridge.on('providers.changed', () => { void refresh(); });
+    void refresh();
     return () => {
       stale = true;
+      providersReady.current = false;
+      refreshRef.current = null;
+      offChanged();
     };
   }, [open, bridge]);
+
+  useEffect(() => {
+    if (priorConnections.current === connections) return;
+    priorConnections.current = connections;
+    // Перезапуск хоста не закрывает форму: новый ответ заменяет снимок и отменяет ответы прежнего хоста.
+    void reloadProviders();
+  }, [connections, reloadProviders]);
 
   // Работа диалога: выбор человека или та, для которой открыли, иначе активная, иначе первая из активных (не активной,
   // `done` и архивной работе новая сессия не нужна — в списке их нет).
@@ -250,6 +302,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const multi = agents.length >= 2;
   const lead = agents.some((row) => row.key === leadKey) ? leadKey : (agents[0]?.key ?? 1);
   const started = (row: AgentRow): boolean => results[row.key]?.status === 'started';
+  const unavailable = providers === null ? undefined : agents.find((row) => !started(row) && infoOf(row)?.available !== true);
+  const unavailableInfo = unavailable === undefined ? undefined : infoOf(unavailable);
+  const availabilityError = unavailable === undefined ? null : S.dialogs.newSession.providerUnavailable(
+    unavailableInfo === undefined ? providerIdOf(unavailable) ?? S.dialogs.newSession.agentsField : providerName(unavailableInfo.id, unavailableInfo.label),
+  );
   const anyStarted = agents.some(started);
   /** После первой попытки кнопка называется «Retry»: повторяются только не запущенные. */
   const retrying = Object.keys(results).length > 0;
@@ -272,12 +329,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   const submit = async (): Promise<void> => {
     // Второй клик по «Retry» или «Create room» приходит уже на выключенную кнопку: `busy` включается до него.
-    if (busy) return;
+    if (busy || !providersReady.current) return;
     if (selected === null) {
       setError(S.dialogs.newSession.selectWorkRequired);
       return;
     }
     if (providers === null) return;
+    if (availabilityError !== null) return;
     const launch = { cancelled: false };
     launchRef.current = launch;
     setBusy(true);
@@ -290,9 +348,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       for (const row of agents) {
         if (done[row.key]?.status === 'started') continue;
         const providerId = providerIdOf(row);
-        const info = providers.find((provider) => provider.id === providerId);
+        const info = providersRef.current?.find((provider) => provider.id === providerId);
         if (providerId === null) {
           setError(S.dialogs.newWork.agentRequired);
+          return;
+        }
+        // Пока предыдущая сессия стартовала, ключ могли убрать в другой карточке или окне.
+        if (!providersReady.current || info?.available !== true) {
           return;
         }
         // «По умолчанию» становится явным выбором: `lastProvider` сменится, когда запустятся все, и строка не должна
@@ -436,25 +498,56 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                         {(providers ?? []).map((provider) => {
                           const on = provider.id === chosenId;
                           return (
-                            <button
+                            <Popover
                               key={provider.id}
-                              type="button"
-                              role="radio"
-                              aria-checked={on}
-                              tabIndex={on ? 0 : -1}
-                              title={providerName(provider.id, provider.label)}
-                              disabled={!provider.available || rowLocked}
-                              onClick={() => {
-                                if (!on) updateAgent(row.key, { provider: provider.id, model: null });
+                              open={providerCard?.row === row.key && providerCard.provider === provider.id}
+                              onOpenChange={(cardOpen) => {
+                                if (!cardOpen) setProviderCard(null);
+                                else if (!rowLocked && (!provider.available || on)) setProviderCard({ row: row.key, provider: provider.id });
                               }}
-                              className={cn(PILL, on ? 'border-ring bg-neutral-100 font-semibold' : 'border-border hover:bg-foreground/7')}
                             >
-                              {/* Буква значка провайдера без бренда (`GLM` → «G») не должна попадать в имя кнопки. */}
-                              <span aria-hidden="true" className="inline-flex">
-                                <AgentIcon provider={provider.id} size={14} />
-                              </span>
-                              {provider.label}
-                            </button>
+                              <PopoverTrigger asChild>
+                                <button
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={on}
+                                  tabIndex={on ? 0 : -1}
+                                  title={providerName(provider.id, provider.label)}
+                                  disabled={rowLocked}
+                                  onClick={() => {
+                                    if (provider.available && !on) {
+                                      updateAgent(row.key, { provider: provider.id, model: null });
+                                      setError(null);
+                                    }
+                                  }}
+                                  className={cn(
+                                    PILL,
+                                    on ? 'border-ring bg-neutral-100 font-semibold' : 'border-border hover:bg-foreground/7',
+                                    !provider.available && 'opacity-45',
+                                  )}
+                                >
+                                  {/* Буква значка провайдера без бренда (`GLM` → «G») не должна попадать в имя кнопки. */}
+                                  <span aria-hidden="true" className="inline-flex">
+                                    <AgentIcon provider={provider.id} size={14} />
+                                  </span>
+                                  {provider.label}
+                                </button>
+                              </PopoverTrigger>
+                              <PopoverContent
+                                aria-label={providerName(provider.id, provider.label)}
+                                align="start"
+                                className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto"
+                              >
+                                <ProviderCard
+                                  provider={provider}
+                                  onReload={reloadProviders}
+                                  onRestartHost={() => {
+                                    setProviderCard(null);
+                                    useUiStore.getState().confirmRestartHost();
+                                  }}
+                                />
+                              </PopoverContent>
+                            </Popover>
                           );
                         })}
                       </div>
@@ -537,9 +630,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         <DialogFooter className="items-center">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs">
             {/* Ошибка диалога — в подвале: он не прокручивается, а тело с пятью агентами в окне 800×500 уходит за край. */}
-            {error !== null ? (
+            {error !== null || providersError !== null || availabilityError !== null ? (
               <p role="alert" className="break-words text-destructive">
-                {error}
+                {error ?? providersError ?? availabilityError}
               </p>
             ) : null}
             <span className="truncate text-neutral-700" title={summary}>
@@ -551,7 +644,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
               {S.common.cancel}
             </Button>
           </DialogClose>
-          <Button type="button" disabled={busy || providers === null || selected === null} onClick={() => void submit()}>
+          <Button type="button" disabled={busy || providers === null || providersLoading || providersError !== null || availabilityError !== null || selected === null} onClick={() => void submit()}>
             {retrying ? S.common.retry : multi ? text.submitRoom : text.submitSession}
           </Button>
         </DialogFooter>
