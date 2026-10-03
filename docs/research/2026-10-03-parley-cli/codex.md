@@ -234,3 +234,24 @@ Pinned upstream source (read from official OpenAI repository tag `rust-v0.156.1`
 Observed installed binary is authoritative for tested flags; pinned source adds contracts not directly observable in debug. Official current docs can differ from version-pinned source; mismatches are recorded above. P02 closes bounded research with explicit fallback/gates, not release acceptance.
 
 Проверка сдачи: 15 целевых assertions по сохранённым JSON fixtures прошли; `git diff --no-index --check /dev/null codex.md` прошёл. Файл не staged/committed; ведущий интегрирует после независимого review.
+
+## 8. P12: фактический контекст конфигурации без model turn
+
+Дополнительная read-only разведка /root/p01_review, gpt-6.1-sol/high, Codex 0.156.1. Изолированные HOME/CODEX_HOME и вложенный git project; четыре bounded stdio subprocess probes. Ни model/thread, ни daemon, MCP/OAuth не запускались; процессы завершались SIGTERM с двухсекундным SIGKILL fallback. Raw stdout/config не сохранялись в product/logs.
+
+Поддержанный обмен: `codex app-server --stdio`; JSONL `initialize` с clientInfo и experimentalApi, notification `initialized`, request `config/read` с `{cwd, includeLayers:true}`, затем `configRequirements/read` с `{}`. Ответ `layers` упорядочен high→low. Для role loader его нужно развернуть и пропустить слои с disabledReason. `layer.config` содержит исходную parsed таблицу `agents`; effective `response.config` в fixtures её не содержал, поэтому отсутствие declared roles нельзя выводить из effective DTO. Проверять agents нужно во всех активных слоях, включая SessionFlags без config folder.
+
+Native config_folder: System/User — parent поля file; Project — dotCodexFolder; остальные sources не дают папку. Четыре случая:
+
+| Fixture | Результат |
+|---|---|
+| Nested project, untrusted | Оба Project слоя возвращены, disabled; User/System active |
+| Nested project, trusted | Оба Project слоя active; порядок nested→root→user→system |
+| Trusted плюс `-c agents.max_threads=3` | SessionFlags первый high-priority слой; parsed agents сохранена |
+| `--profile blue app-server` | CLI отвергает profile для app-server; read API не имеет profile parameter |
+
+Обычные controls max_threads не являются declared role; named entries таблицы agents требуют отдельной unsupported-config диагностики до role selection. Named-profile runner пока context-unverified: не делать guessed manual merge. configRequirements/read вернул none только в этих synthetic fixtures; nonempty managed/MDM/cloud constraints не проверены. Не превращать это в утверждение поддержки всех requirements. В production передавать только whitelist projection (folder/order/disabled/hasDeclaredRoles/version/constraints), raw config/stdout не логировать и не возвращать в DTO.
+
+Evidence: `/private/tmp/parley-p12-context-_znxl0q4/probe.py` и safe-summary.json. Переносимый повтор: создать temporary HOME/CODEX_HOME, git project/sub, user config с analytics=false/plugins=false и projects.<canonical-main>.trust_level, по одному .codex/config.toml с agents.max_threads в root/sub; выполнить обмен выше с bounded cleanup. Profile failure должен оставаться failure, а не пустым успешным каталогом.
+
+Pinned primary sources: [config layer state/order/folders](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/config/src/state.rs), [config read service](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/app-server/src/config_manager_service.rs), [protocol/config](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/app-server-protocol/src/protocol/v2/config.rs). Это evidence для P12 adapter; P11 review и P32 live gates принимаются отдельно.
