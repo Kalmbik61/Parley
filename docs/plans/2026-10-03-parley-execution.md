@@ -106,3 +106,5 @@ P09 build/targeted verification: core/protocol/host builds, 225 core tests, 52 h
 P09 snapshot `c2ccbbd` accepted /root/p03_review: нет оставшихся findings; независимо подтверждены TOML control roundtrip/encoded ceiling, 38 noticeText tests и oversized custom Claude pre-spawn. P06/P07/P10 запущены с базы c2ccbbd; disjoint ownership skills/claude, skills/codex и PARLEY host/desktop соответственно. P10 общий export/wire/registry получает только после явного назначения ведущим.
 
 P10 выданы минимальные integration points: core exports, единственный NoticeKind, bridge typed IPC, English labels/mapping, App created-notice Open action и IPC allowlist tests. Host registry/wire methods не расширяются; остальные workers не пишут эти файлы.
+
+P10 transaction clarification approved: reserve receipt before wx creation; failed initial receipt means no file, creation failure rolls back only owned reservation, failed final update retains receipt. Spec согласована; поведенческая приёмка этого пути ещё ожидает P10 tests/review. Второй marker не добавляется.
