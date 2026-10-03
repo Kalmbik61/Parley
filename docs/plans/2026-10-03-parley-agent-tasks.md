@@ -62,7 +62,7 @@
 | [P00 — Подготовить актуальную рабочую базу](#p00) | 0 | — | /root/p00_prepare_base | done |
 | [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | done |
 | [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | review |
-| [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | review |
+| [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | не назначен | pending |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
@@ -182,9 +182,9 @@
 
 ### P03: Проверить команды Capabilities и scopes
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p03_capabilities_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p03_review, gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p03_capabilities_probe, gpt-6.1-sol/high; профиль `researcher`. **Проверяющий:** /root/p03_review, gpt-6.1-sol/high.
 
 **Зависимости:** P00. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
@@ -203,7 +203,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence после выполнения:** `5debed1`; /root/p03_review — accepted, замечаний нет. Независимо сверены CLI help/версии, JSON fixtures, canonical main local MCP и безопасные Codex add/list/get/remove без запуска сервера. Remote/OAuth/managed policy и native Parley остаются P32 gates. [Evidence](../research/2026-10-03-parley-cli/capabilities.md).
 
 <a id="p04"></a>
 

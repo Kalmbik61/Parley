@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P01 accepted; P02/P03 независимый review.
+- Текущая фаза: P00 принят; P01/P03 accepted; P02 независимый review.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -23,7 +23,7 @@
 | P00 | Подготовить актуальную рабочую базу | done | agent /root/p00_prepare_base; model gpt-6.1-sol/high; commit 9aedc3e; review accepted by /root/p00_review |
 | P01 | Проверить Claude: источники, budget, jev и инструменты | done | agent /root/p01_claude_probe; gpt-6.1-sol/high; commit 09eda36; review accepted by /root/p01_review; native full-list fallback |
 | P02 | Проверить Codex: скиллы, слой, роли и resume | review | agent /root/p02_codex_probe; gpt-6.1-sol/high; evidence codex.md; reviewer /root/p00_review |
-| P03 | Проверить команды Capabilities и scopes | review | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; evidence capabilities.md; reviewer /root/p03_review |
+| P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | pending | — |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | pending | — |
 | P06 | Реализовать источники скиллов Claude | pending | — |
