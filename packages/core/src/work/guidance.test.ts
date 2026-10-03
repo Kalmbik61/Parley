@@ -555,3 +555,13 @@ it('backlog hints share the guide line across full guidance combinations', () =>
   }
   expect(GUIDE).toContain('backlog_list(filter?, text?)'); expect(GUIDE).toContain('backlog_suggest(kind, title, details?, why)');
 });
+
+it('plan hints preserve the fourteen-line bound with either navigator snapshot', () => {
+  for (const skillNavigator of [false, true]) {
+    const text = systemGuidance(mapOf('All features', 'A task'), 's-03', { skillNavigator });
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+    expect(text).toContain('plan_update/plan_submit/plan_verify');
+    expect(text).toContain('read_guide(topic: plans)');
+    expect(text.includes('find_skill')).toBe(skillNavigator);
+  }
+});

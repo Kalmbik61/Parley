@@ -592,3 +592,40 @@ it("flushes a real temp Markdown file only after captured map completion, withou
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("owned obsolete verification is hidden immediately when an unsatisfied owner closes, before persistence reconciliation", () => {
+  const map = fixture();
+  submitPlanItem(
+    map,
+    map.plans![0]!.id,
+    0,
+    1,
+    "s-02",
+    { text: "Measured", artifacts: [] },
+    AT,
+  );
+  reservePlanEffects(map, 20, AT);
+  const proof = map.planEffects!.find((row) => row.kind === "verify")!;
+  const message = map.messages.find((row) => row.id === proof.messageId)!;
+  expect(resumablePlanLetter(map, message, proof.target)).toBe(true);
+  transitionSession(map, "s-02", "closed", { at: AT });
+  expect(proof.status).toBe("sent");
+  expect(resumablePlanLetter(map, message, proof.target)).toBe(false);
+  expect(cancelledPlanLetter(map, message)).toBe(true);
+  expect(
+    unreadFor(map, proof.target).some((row) => row.id === message.id),
+  ).toBe(false);
+});
+it("closed work never reserves or resumes a plan assignment, but retains captured export intents", () => {
+  const map = fixture();
+  reservePlanEffects(map, 1, AT);
+  map.work.status = "archived";
+  const before = map.messages.length;
+  const captured = JSON.stringify(map.planExports);
+  const proof = map.planEffects!.find((row) => row.status === "sent")!;
+  const message = map.messages.find((row) => row.id === proof.messageId)!;
+  expect(resumablePlanLetter(map, message, proof.target)).toBe(false);
+  reservePlanEffects(map, 20, AT);
+  expect(map.messages).toHaveLength(before);
+  expect(JSON.stringify(map.planExports)).toBe(captured);
+});

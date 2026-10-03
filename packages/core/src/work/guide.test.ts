@@ -128,3 +128,9 @@ describe('optional navigator guide', () => {
     expect(guide(true)).not.toMatch(/[А-Яа-яЁё]/);
   });
 });
+
+it('the unconditional plans topic never names a disabled skill tool; enabled full guide retains its conditional navigator hint', () => {
+  expect(guideTopic('plans', false)).not.toContain('find_skill');
+  expect(guide(false)).not.toContain('find_skill');
+  expect(guide(true)).toContain('find_skill');
+});

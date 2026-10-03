@@ -5,7 +5,6 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
@@ -47,7 +46,7 @@ let workId = '';
 let savedPath: string | undefined;
 
 /** Всё, что пришлось поднять для одного клиента: закрываем в afterEach. */
-const opened: { client: Client; server: Server }[] = [];
+const opened: { client: Client; server: ReturnType<typeof createParleyServer> }[] = [];
 
 interface Call {
   isError: boolean;
@@ -228,11 +227,16 @@ describe('список инструментов', () => {
       'create_room',
       'get_map',
       'list_roles',
+      'plan_submit',
+      'plan_update',
+      'plan_verify',
+      'propose_completion',
       'propose_decision',
       'read_guide',
       'read_room',
       'report',
       'send_message',
+      'set_room_mode',
       'spawn_session',
       'wait_for',
     ]);
@@ -258,7 +262,7 @@ describe('список инструментов', () => {
     const propose = tools.find((tool) => tool.name === 'propose_decision');
 
     expect(propose?.inputSchema.required).toEqual(['room', 'text']);
-    expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'text']);
+    expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['kind', 'plan', 'planId', 'rev', 'room', 'text']);
     // Тон соседних описаний: только ведущий, решение ждёт человека, повтор заменяет, ответ — письмом.
     expect(propose?.description).toMatch(/lead only/i);
     expect(propose?.description).toMatch(/waits for the human's answer/);
@@ -1558,7 +1562,7 @@ describe('propose_decision', () => {
 
     const refused = await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/is closed/);
+    expect(refused.text).toMatch(/live launched caller/);
     expect(await rawMap()).toBe(before);
   });
 

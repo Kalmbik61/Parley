@@ -69,6 +69,7 @@ function effect(
 }
 function actionable(map: WorkMap, room: Room, target: string): boolean {
   return (
+    map.work.status === "active" &&
     !isRoomClosed(map, room) &&
     isMember(room, target) &&
     map.sessions.some((row) => row.id === target && row.lifecycle !== "closed")
@@ -82,6 +83,12 @@ function itemEffect(
 ): PlanEffect | null {
   const room = map.rooms.find((row) => row.id === plan.roomId);
   if (!room || !current(plan) || isRoomClosed(map, room)) return null;
+  if (
+    !planItemSatisfied(plan, item) &&
+    !actionable(map, room, item.owner) &&
+    item.status !== "blocked"
+  )
+    return null;
   const header = `Accepted plan ${plan.id}, revision ${plan.rev}, item ${item.id}: ${item.title}`;
   const assignment = `${header}\nScope:\n${item.scope}${plan.mode === "verified" ? `\nCriteria:\n${item.criteria.join("\n")}` : ""}`;
   let kind: PlanEffect["kind"];
@@ -386,7 +393,8 @@ export function resumablePlanLetter(
 export function cancelledPlanLetter(map: WorkMap, message: Message): boolean {
   return (map.planEffects ?? []).some(
     (value) =>
-      value.status === "cancelled" && planEffectOwnsLetter(value, message),
+      planEffectOwnsLetter(value, message) &&
+      (value.status === "cancelled" || !currentPlanEffect(map, value)),
   );
 }
 export function validatePlanEffects(map: WorkMap): void {

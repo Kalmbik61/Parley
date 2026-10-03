@@ -34,6 +34,40 @@ const TITLE = '# Parley: how to use it';
 
 const SECTIONS: readonly GuideSection[] = [
   {
+    topic: 'plans',
+    summary: 'accepted plans: exact revisions, owner evidence, independent verification and human completion',
+    text: `## Accepted plans
+
+Room mode is free, checklist or verified. Free keeps the existing conversation workflow.
+The live lead may raise it with set_room_mode(room, mode, reason); only the human lowers it.
+In checklist and verified, the live lead calls propose_decision(room, text, plan).
+The plan contains mode, goal, numbered items (title, owner, scope, after), optional
+backlog IDs, and in verified mode criteria and an independent verifier. For an
+amendment include the exact current plan id and rev. Do not start before human acceptance.
+The accepted plan in get_map is authoritative. Use its exact planId/rev for every action.
+Owners call plan_update(planId, rev, item, status, note?) to start or block work;
+blocked requires a reason. Work only within the accepted scope. If a skill is useful,
+load it through your native CLI when available; role and human rules still apply.
+Submit truthful evidence with plan_submit(planId, rev, item, evidence: {text, artifacts}); artifacts are paths, never fabricated verification.
+Checklist submission completes an item. In verified mode the independent verifier
+calls plan_verify(planId, rev, item, verdict: verified|returned, note). The owner
+cannot verify their own work. Without a named verifier the live lead may verify if
+independent. A returned item is reworked and submitted again. Closed/deleted owners
+block unsatisfied work; the human or lead proposes an amendment to reassign it.
+Once verified work is complete, the live lead collects outstanding findings into
+backlog suggestions and calls propose_completion(planId, rev, summary). Equivalent:
+propose_decision(room, text: summary, kind: completion, planId, rev). Only the human
+accepts completion. A return keeps evidence/history and asks for a corrected summary.
+Parley sends durable assignments within the existing message and wake limits.
+The host drains rate-held queues and performs auto-wake. Without the host, MCP reserves
+and flushes immediately; held assignments remain pending until a later plan mutation or
+host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
+exports and linked backlog closures are captured separately from the map transaction;
+a disk/conflict failure stays pending. Human Retry retries the original captured intent,
+never overwrites an edited/reopened backlog row or an immutable foreign snapshot.
+A revision conflict means refresh get_map and use the accepted current revision.`,
+  },
+  {
     topic: 'overview',
     summary: 'what a workspace, a session, the workspace map and the session tree are',
     text: `## Overview
@@ -181,7 +215,7 @@ decision. Who it is shows in \`get_map\` — the room's \`lead\` field (\`null\`
 of \`members\`"; if the lead is closed, the first live participant leads).
 
 The human sets a task for everyone in the room — the human's message (\`from: human\`)
-without \`@sNN\` mentions. If you are the lead:
+without \`@sNN\` mentions. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
 
 1. Collect the positions: each participant answers in the room with one message. Wait for
    them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
@@ -204,7 +238,7 @@ without \`@sNN\` mentions. If you are the lead:
    accepted, and the decision has already been sent to the room in your name as a
    \`kind: decision\` message. \`Returned for rework: <note>\` (without a note —
    \`Returned for rework.\`) means returned for rework.
-5. Accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
+5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
    part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. The
    participants' reports will come to you in the room; you hand in the result of the whole
    work with your own \`report\`.

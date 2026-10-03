@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession } from '../work/map.js';
@@ -48,6 +47,11 @@ const TABLE: Record<string, Hints> = {
   create_room: WRITE,
   add_to_room: WRITE,
   propose_decision: WRITE,
+  set_room_mode: WRITE,
+  plan_update: WRITE,
+  plan_submit: WRITE,
+  plan_verify: WRITE,
+  propose_completion: WRITE,
   spawn_session: WRITE,
   close_session: DESTROY,
 };
@@ -56,7 +60,7 @@ let home = '';
 let project = '';
 let binDir = '';
 let workId = '';
-const opened: { client: Client; server: Server }[] = [];
+const opened: { client: Client; server: ReturnType<typeof createParleyServer> }[] = [];
 
 async function connect(sessionId: string | null = 's-01'): Promise<Client> {
   const server = createParleyServer({

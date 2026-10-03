@@ -177,3 +177,16 @@ it("registered proposal resolution preserves legacy omission and rejects a parti
     }).success,
   ).toBe(true);
 });
+
+it("draft backlog accepts exactly the domain-supported thirty IDs and rejects thirty-one", () => {
+  const draft = {
+    mode: "checklist",
+    goal: "Bounded",
+    items: [{ id: 1, title: "Work", owner: "s-01", scope: "src" }],
+    backlog: Array.from({ length: 30 }, (_, i) => `b-${String(i + 1).padStart(3, "0")}`),
+  };
+  expect(planDraft.safeParse(draft).success).toBe(true);
+  expect(
+    planDraft.safeParse({ ...draft, backlog: [...draft.backlog, "b-031"] }).success,
+  ).toBe(false);
+});

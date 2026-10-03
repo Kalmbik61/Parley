@@ -31,6 +31,7 @@ import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
 import { createBacklogService } from './backlog/backlog-service.js';
+import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -164,6 +165,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   const worksService = createWorksService(handle.context);
+  const planEffects = createPlanEffectsService(worksService, {
+    onFailure: () => handle.context.broadcast('host.notice', {
+      kind: 'plan-effect-failed',
+      ref: null,
+      text: 'Plan delivery or export remains pending. Open the plan and retry after resolving the conflict.',
+      at: new Date().toISOString(),
+    }),
+  });
+  handle.context.onShutdown(async () => planEffects.stop());
   handle.context.onShutdown(() => worksService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
@@ -256,6 +266,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   const handlers = createHostHandlers({
     backlog: backlogService,
+    planEffects,
     worksReady,
     providerVersions,
     limits: limitsService,
@@ -342,6 +353,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     );
   }
   await activityService.start();
+  planEffects.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.

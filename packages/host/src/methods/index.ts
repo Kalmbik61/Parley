@@ -3,6 +3,7 @@ import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
@@ -18,7 +19,7 @@ import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
 import { createProvidersList } from './providers.js';
-import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
+import { createPlanHandlers, roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createRolesList } from './roles.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
@@ -37,6 +38,8 @@ export interface MethodDeps {
   feed?: FeedService;
   /** Live project backlog subscriptions; manual methods also work without this service. */
   backlog?: BacklogService;
+  /** One host authority for durable plan delivery and export retries. */
+  planEffects?: PlanEffectsService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
@@ -50,10 +53,17 @@ export interface MethodDeps {
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, rooms.*, mail.*, worktrees.*), host.*,
+ * карт с диска (works.create/delete/rename/setStatus, rooms.create/addMember/send, mail.*, worktrees.*), host.*,
  * providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
+  'rooms.resolveProposal',
+  'rooms.setMode',
+  'plans.update',
+  'plans.submit',
+  'plans.verify',
+  'plans.cancel',
+  'plans.retryEffects',
   'works.list',
   'sessions.create',
   'sessions.resume',
@@ -103,6 +113,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     ...createBacklogHandlers(deps.backlog),
+    ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
@@ -130,7 +141,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'wake.state': wake.wakeState as AnyHandler,
     'rooms.create': roomsCreate as AnyHandler,
     'rooms.addMember': roomsAddMember as AnyHandler,
-    'rooms.resolveProposal': roomsResolveProposal as AnyHandler,
+    'rooms.resolveProposal': (async (params, request) => {
+      const result = await roomsResolveProposal(params, request);
+      // The decision is committed. Delivery failure retains pending effects and its safe notice.
+      await deps.planEffects?.flush(params.projectPath, params.workId).catch(() => undefined);
+      return result;
+    }) as typeof roomsResolveProposal as AnyHandler,
     'rooms.send': roomsSend as AnyHandler,
     'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
     'worktrees.diff': worktrees.worktreesDiff as AnyHandler,

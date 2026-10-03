@@ -59,7 +59,7 @@ export const planDraft = z
           .regex(/^b-\d{3,}$/)
           .max(128),
       )
-      .max(1000)
+      .max(30)
       .optional(),
   })
   .refine((value) => (value.id === undefined) === (value.rev === undefined))

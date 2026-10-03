@@ -30,6 +30,7 @@ function fakeDeps(worksReady: Promise<void>): { deps: MethodDeps; touched: () =>
     sessions: service(),
     wake: { ...(service() as object), enterDelayMs: 0 },
     worktrees: service(),
+    planEffects: service(),
     worksReady,
   } as unknown as MethodDeps;
   return { deps, touched: () => calls };
@@ -39,9 +40,16 @@ const request = { client: {} } as unknown as RequestInfo;
 const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 
 describe('методы на старте хоста ждут первого чтения работ (lane-r4, п. 4)', () => {
-  it('перечень: works.list, sessions.*, pty.attach/detach/send, feed.* и activity.seen', () => {
+  it('перечень: plans.*, rooms.resolveProposal/setMode, works.list, sessions.*, pty.*, feed.* и activity.seen', () => {
     expect([...WORKS_GATED_METHODS].sort()).toEqual(
       [
+        'rooms.resolveProposal',
+        'rooms.setMode',
+        'plans.update',
+        'plans.submit',
+        'plans.verify',
+        'plans.cancel',
+        'plans.retryEffects',
         'works.list',
         'sessions.create',
         'sessions.resume',
@@ -72,6 +80,8 @@ describe('методы на старте хоста ждут первого чт
     });
     const { deps, touched } = fakeDeps(ready);
     const handlers = createHostHandlers(deps);
+    for (const name of ['rooms.setMode', 'plans.update', 'plans.submit', 'plans.verify', 'plans.cancel', 'plans.retryEffects'] as const)
+      expect(handlers.methods[name]).toBeDefined();
     const baseline = touched();
     const params = { ref, refs: [ref], text: 'x', cols: 80, rows: 24, projectPath: '/p', workId: 'w-1' } as never;
 

@@ -17,6 +17,11 @@ import {
   addRoom,
   addRoomOriginMessage,
   HUMAN,
+  DEFAULT_CONFIG,
+  loadConfig,
+  capturePlanNotice,
+  reservePlanEffects,
+  PlanConflictError,
   isMember,
   joinNotice,
   leaveOtherRooms,
@@ -53,7 +58,7 @@ function assertDeliverable(map: WorkMap, sessionId: string): void {
  */
 function asHostError(error: unknown): unknown {
   if (error instanceof RoomRuleError) return bad(error.message);
-  if (error instanceof ProposalConflictError) return new HostError('conflict', error.message);
+  if (error instanceof ProposalConflictError || error instanceof PlanConflictError) return new HostError('conflict', error.message);
   return error;
 }
 
@@ -159,12 +164,17 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
  * (`accept`) или письма ведущему (`return`).
  */
 export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string> {
-  const { projectPath, workId, roomId, proposalId, action, note, rev } = input;
+  const { projectPath, workId, roomId, proposalId, action, note, rev, planId, planRev } = input;
+  const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
   await updateMap(projectPath, workId, (map) => {
     try {
-      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev }).messageId;
+      const completion = map.rooms.find(row => row.id === roomId)?.proposal;
+      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
+      if (action === 'return' && completion?.kind === 'completion')
+        capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
+      reservePlanEffects(map, rate);
     } catch (error) {
       throw asHostError(error);
     }

@@ -22,6 +22,8 @@ import {
   openEvents,
   sessionTag,
   SYSTEM,
+  PARLEY,
+  resumablePlanLetter,
   unreadFor,
   updateMap,
   workPaths,
@@ -239,10 +241,12 @@ export function createWakeService(
   }
 
   /** Письма, непрочитанные сейчас, считаются уже указанными: будить ими некого. */
-  function markUnreadPointed(ref: SessionRef, state: AttemptState): void {
+  function markUnreadPointed(ref: SessionRef, state: AttemptState, allowPlanRestart = false): void {
     const entry = works.entry(ref.projectPath, ref.workId);
     if (entry === undefined) return;
-    for (const message of unreadFor(entry.map, ref.sessionId)) state.pointed.add(message.id);
+    for (const message of unreadFor(entry.map, ref.sessionId)) {
+      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId)) state.pointed.add(message.id);
+    }
   }
 
   /**
@@ -256,7 +260,7 @@ export function createWakeService(
     knownWorks.add(wk);
     for (const session of entry.map.sessions) {
       const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-      if (pty.get(ref) === undefined) markUnreadPointed(ref, stateFor(refKey(ref)));
+      if (pty.get(ref) === undefined) markUnreadPointed(ref, stateFor(refKey(ref)), true);
     }
   }
 
@@ -296,6 +300,7 @@ export function createWakeService(
         // Человек узнаёт из уведомления, системе писать незачем, себе — тоже.
         senders.delete(HUMAN);
         senders.delete(SYSTEM);
+        senders.delete(PARLEY);
         senders.delete(ref.sessionId);
         for (const sender of senders) {
           if (!map.sessions.some((session) => session.id === sender)) continue;

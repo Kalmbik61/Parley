@@ -34,7 +34,8 @@ import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
-import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
+import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
+import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { SharedStateError, inspectSharedIgnore, readMap, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
@@ -252,6 +253,7 @@ const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openW
 const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const TOOLS: Tool[] = [
+  ...PLAN_TOOLS,
   {
     name: 'backlog_list', annotations: READS,
     description: 'Read this project backlog before suggesting work outside your task. Reads never create files or assign IDs.',
@@ -460,12 +462,17 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
+        plan: PLAN_DRAFT_SCHEMA,
+        kind: { type: 'string', enum: ['decision', 'completion'] },
+        planId: { type: 'string', pattern: '^pl-[0-9]+$', maxLength: 128 },
+        rev: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         text: {
           type: 'string',
           description: `The whole decision, up to ${PROPOSAL_TEXT_MAX} characters: what we do and which part each takes; name participants with @s02 mentions.`,
         },
       },
       required: ['room', 'text'],
+      additionalProperties: false,
     },
   },
   {
@@ -942,20 +949,10 @@ async function readRoom(
 
 async function proposeDecision(
   context: McpContext,
-  sessionId: string,
+  _sessionId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const roomId = stringArg(args, 'room');
-  const text = stringArg(args, 'text');
-
-  let proposed = { proposalId: '', rev: 0 };
-  await updateMap(context.projectPath, context.workId, (current) => {
-    // Правила решения — ведущий, живая комната, длина текста — держит `setProposal`, здесь их не
-    // повторяем. Его `RoomRuleError` уходит агенту текстом ошибки, как у соседних инструментов, а
-    // исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
-    proposed = setProposal(current, roomId, sessionId, text);
-  });
-  return proposed;
+  return planTool(context, 'propose_decision', args);
 }
 
 /**
@@ -1071,6 +1068,7 @@ async function dispatch(
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
   if (name === 'read_guide') return readGuide(context, args);
 
+  if (isPlanTool(name)) return planTool(context, name, args);
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
 
