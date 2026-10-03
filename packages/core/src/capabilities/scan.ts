@@ -5,7 +5,7 @@
  * ошибка, битый файл пропускается.
  */
 import { constants } from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { TextDecoder } from 'node:util';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
@@ -160,6 +160,9 @@ export async function scanClaudeCapabilities(options: ScanOptions): Promise<Capa
     ...(options.nativeEvidence !== undefined ? { nativeEvidence: options.nativeEvidence } : {}),
     limits: { maxCommandDepth: MAX_COMMAND_DEPTH },
   });
+  const cwd = await realpath(projectPath).catch(() => null);
+  if (cwd === null || catalog.diagnostics.some(item => item.code === 'missing-context'))
+    return { commands: [...claudeCommands()], skills: [], agents: [] };
   // Manual slash suggestions retain hidden/unknown inventory; model search has its own filter.
   // New native source labels cannot be represented by the unchanged legacy wire enum.
   const skills: CapabilitySkill[] = [];
@@ -186,7 +189,7 @@ export async function scanClaudeCapabilities(options: ScanOptions): Promise<Capa
   };
   const agents: CapabilityAgent[] = [];
   const plain: Prefixed = (name) => name;
-  const userClaude = options.configDir ?? path.join(home, '.claude');
+  const userClaude = path.resolve(cwd, options.configDir ?? path.join(home, '.claude'));
   const projectClaude = path.join(projectPath, '.claude');
   // Keep the existing agent sources, priority, plugin safety and combined output budget.
   appendSkills('project');

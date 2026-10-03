@@ -77,6 +77,36 @@ describe('scanClaudeCapabilities', () => {
     expect(caps.agents.map(agent => agent.name)).toEqual(['helper']);
   });
 
+  it('resolves relative config roots from canonical participant cwd for skills, agents and plugin-agent containment', async () => {
+    const configDir = path.join(project, 'session-config');
+    await put(path.join(configDir, 'skills/review/SKILL.md'), '---\ndescription: Review code\n---\n');
+    await put(path.join(configDir, 'agents/helper.md'), '---\nname: helper\ndescription: Helps\n---\n');
+    const plugin = path.join(configDir, 'plugins/cache/market/tools/1');
+    await put(path.join(plugin, 'agents/critic.md'), '---\nname: critic\ndescription: Critic\n---\n');
+    const outside = path.join(root, 'outside.md');
+    await put(outside, '---\nname: escape\ndescription: Outside plugin\n---\n');
+    await symlink(outside, path.join(plugin, 'agents/escape.md'));
+    const aliases = path.join(root, 'aliases');
+    await mkdir(aliases);
+    const alias = path.join(aliases, 'participant');
+    await symlink(project, alias);
+    // A lexical alias-parent root is a different source and must never substitute for cwd's root.
+    await put(path.join(aliases, 'project/session-config/agents/decoy.md'), '---\nname: decoy\ndescription: Wrong root\n---\n');
+    const canonicalConfig = await realpath(configDir);
+    for (const participant of [project, alias]) {
+      for (const configDir of ['session-config', '../project/session-config']) {
+        const absolute = await scanClaudeCapabilities({ home, projectPath: participant, configDir: canonicalConfig });
+        const relative = await scanClaudeCapabilities({ home, projectPath: participant, configDir });
+        expect(relative).toEqual(absolute);
+        expect(relative.skills.map(skill => skill.name)).toEqual(['review']);
+        expect(relative.agents).toEqual([
+          { name: 'helper', description: 'Helps', source: 'user', path: path.join(canonicalConfig, 'agents/helper.md') },
+          { name: 'tools:critic', description: 'Critic', source: 'plugin', path: path.join(canonicalConfig, 'plugins/cache/market/tools/1/agents/critic.md') },
+        ]);
+      }
+    }
+  });
+
   it('keeps legacy command nesting at four directories and the agent 4096-byte head bound', async () => {
     await put(path.join(project, '.claude/commands/a/b/c/d/keep.md'), '---\ndescription: Kept\n---\n');
     await put(path.join(project, '.claude/commands/a/b/c/d/e/deep.md'), '---\ndescription: Too deep\n---\n');
