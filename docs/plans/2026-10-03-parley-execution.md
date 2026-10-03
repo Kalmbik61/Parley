@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P06/P10 в review; P07 needs rework; P11 выполняется.
+- Текущая фаза: P00–P05 и P09 accepted; P06 needs rework; P07 fixes/P10 в review; P11 active, автор временно исправляет P06.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -26,8 +26,8 @@
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
-| P06 | Реализовать источники скиллов Claude | review | 32 fixtures / scoped ESLint / strict tsc passed; reviewer /root/p01_review after P07 |
-| P07 | Реализовать источники скиллов Codex | running | a0c8f2c needs rework: whitespace human selector / lint; fixes /root/p02_codex_probe |
+| P06 | Реализовать источники скиллов Claude | running | 4792cb1 needs rework: native reserved names; fixes исходный author /root/p01_claude_probe |
+| P07 | Реализовать источники скиллов Codex | review | 37 tests/lint/strict tsc passed after native whitespace/selector fixes; reviewer recheck queued |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | review | 15 core / 57 host / 149 desktop / 4 Electron e2e; reviewer /root/p01_review queued |
@@ -116,3 +116,5 @@ P06 snapshot готов: 32/32 fixtures, scoped ESLint/strict production tsc pas
 P06 snapshot `4792cb1` сохранён. Выдача /root/p00_review отклонена платформой: `agent thread limit reached`; /root/p01_review проверит P06 после P07, независимость от автора сохранена. Свободный существующий исполнитель /root/p01_claude_probe получил P11 (P05/P09 accepted), только roles modules/tests без shared mutations.
 
 P07 review /root/p01_review needs rework: native whitespace collapse перед human name selectors не реализовано, две no-control-regex lint errors. Fix выдан доступному независимому от reviewer исполнителю /root/p02_codex_probe, только codex.ts/test. P10 готов: 16 owned files, core 15 / host 57 / desktop 149 / Electron e2e 4 passed, builds/typecheck/lint passed; промежуточный watcher timeout с successful isolated/full reruns. Receipt TOCTOU disclosed для review, отдельный lock не добавлен.
+
+P10 snapshot `733ab7d` проверяет /root/p01_review. P06 review needs rework: local reserved account names неправомерно доступны; исходный author исправляет source-aware guard до возврата к P11. P07 bounded fixes готовы: 37 tests + scoped lint/types/diff check; native source подтвердил SKILL whitespace collapse и human selector edge trim без internal collapse. Отдельный snapshot/recheck, не acceptance.

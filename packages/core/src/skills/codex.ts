@@ -56,6 +56,10 @@ export interface CodexDiscoveryResult {
 const NATIVE_LIMITS = { maxDepth: 6, maxDirectories: 2000, maxEntries: 20000, maxAncestors: 128, maxRoots: 256 };
 const CONFIG_MAX_BYTES = 65536;
 type Rule = { selector: 'name' | 'path'; value: string; enabled: boolean; layer: CodexConfigLayer };
+// Rust str::split_whitespace/trim use Unicode White_Space: unlike JS \s, this includes
+// NEXT LINE (U+0085) and excludes BOM (U+FEFF). Config selectors trim only their edges.
+const normalizeNativeWhitespace = (value: string): string => value.split(/\p{White_Space}+/u).filter(Boolean).join(' ');
+const trimNativeWhitespace = (value: string): string => value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
 function mapping(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -137,12 +141,12 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
       const hasName = mapping(entry) && entry.name !== undefined;
       const hasPath = mapping(entry) && entry.path !== undefined;
       if (!mapping(entry) || hasName === hasPath || typeof entry.enabled !== 'boolean' ||
-        (hasName && (typeof entry.name !== 'string' || !entry.name.trim())) ||
+        (hasName && (typeof entry.name !== 'string' || !trimNativeWhitespace(entry.name))) ||
         (hasPath && (typeof entry.path !== 'string' || !path.isAbsolute(entry.path)))) {
         report(source, configPath, { code: 'invalid-policy' }); humanPolicyKnown = false; continue;
       }
       const selector = hasName ? 'name' : 'path';
-      let value = hasName ? (entry.name as string).trim() : path.normalize(entry.path as string);
+      let value = hasName ? trimNativeWhitespace(entry.name as string) : path.normalize(entry.path as string);
       if (selector === 'path') { try { value = await realpath(value); } catch { /* Native keeps unresolved absolute selectors. */ } }
       const previous = rules.findIndex(rule => rule.selector === selector && rule.value === value);
       if (previous >= 0) rules.splice(previous, 1);
@@ -211,13 +215,15 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
       report(root.source, canonical, parsed.status === 'invalid' ? parsed.diagnostic : { code: 'invalid-yaml' });
       return;
     }
-    const fallback = path.basename(path.dirname(canonical)).trim().replace(/\s+/g, ' ') || 'skill';
+    const fallback = normalizeNativeWhitespace(path.basename(path.dirname(canonical))) || 'skill';
     const rawName = Object.hasOwn(parsed.data, 'name') ? parsed.data.name : fallback;
-    if (typeof rawName !== 'string' || !rawName.trim() || [...rawName.trim()].length > 64 || /[\r\n\u0000]/.test(rawName)) {
+    const normalizedName = typeof rawName === 'string' ? normalizeNativeWhitespace(rawName) : '';
+    if (typeof rawName !== 'string' || !normalizedName || [...normalizedName].length > 64 || rawName.includes('\0')) {
       report(root.source, canonical, { code: 'invalid-name' }); return;
     }
-    const name = root.namespace ? `${root.namespace}:${rawName.trim()}` : rawName.trim();
-    if (root.namespace && (!root.namespace.trim() || [...name].length > 129 || /[\r\n\u0000]/.test(root.namespace))) {
+    const name = root.namespace ? `${root.namespace}:${normalizedName}` : normalizedName;
+    if (root.namespace && (!trimNativeWhitespace(root.namespace) || [...name].length > 129 ||
+      root.namespace.includes('\0') || root.namespace.includes('\r') || root.namespace.includes('\n'))) {
       report(root.source, canonical, { code: 'invalid-name' }); return;
     }
     const description = typeof parsed.data.description === 'string' && parsed.data.description.trim() ? parsed.data.description : '';

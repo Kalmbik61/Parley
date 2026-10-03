@@ -65,8 +65,8 @@
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
-| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | review |
-| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | running |
+| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06 fixes) | running |
+| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | review |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | review |
@@ -271,7 +271,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (последовательно после P07), gpt-6.1-sol/high.
+**Статус:** running (review needs rework). **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (последовательно после P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -292,13 +292,15 @@
 
 **Evidence перед ревью:** 32/32 targeted fixtures passed; scoped ESLint и isolated strict tsc passed; owned diff только claude.ts/test. Native evidence cwd-bound, unknown state unavailable, bodies не возвращаются. Независимый reviewer: /root/p01_review после P07 (лимит platform threads).
 
+**Замечание review:** Important/P2 — native reserved `synced` case-insensitive во всех local scopes и account namespace `anthropic-skills` не отфильтрованы. Source-aware fix assigned автору; genuine verified synced/plugin exceptions сохраняются.
+
 <a id="p07"></a>
 
 ### P07: Реализовать источники скиллов Codex
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running (review needs rework). **Исполнитель:** /root/p03_capabilities_probe (исходный P07); fixes — /root/p02_codex_probe, gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
+**Статус:** review (fixes готовы). **Исполнитель:** /root/p03_capabilities_probe (исходный P07); fixes — /root/p02_codex_probe, gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -320,6 +322,8 @@
 **Evidence перед ревью:** 30/30 isolated fixtures passed; scoped `tsc --noEmit` passed; автор изменил только codex.ts/test. Safe unknown roots/product policy unavailable; native live checks не объявлены. Независимый reviewer: /root/p01_review.
 
 **Замечания review:** Important — native whitespace normalization до name-selector matching (human disable теряется) и две ошибки ESLint `no-control-regex`. Fix ownership: только codex.ts/test, отдельный snapshot/recheck.
+
+**Evidence fixes перед recheck:** 37/37 tests, scoped ESLint/strict tsc/diff check passed. Native Unicode White_Space collapse для SKILL, edge trim только для human selectors; 7 новых fixtures, 5 были RED. Только codex.ts/test.
 
 <a id="p08"></a>
 

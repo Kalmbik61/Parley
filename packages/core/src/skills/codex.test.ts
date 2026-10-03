@@ -127,6 +127,59 @@ describe('Codex native discovery', () => {
 });
 
 describe('ordered human configuration and policy', () => {
+  it.each(['    ', '\t\r\n', '\u0085\u00a0\u2009\u3000', '\u00a0'.repeat(80)])(
+    'normalizes native whitespace before length and human disable matching (%j)', async (separator) => {
+      const base = path.join(root, 'skills');
+      const name = `review${separator}docs`;
+      await skill(base, 'review', JSON.stringify(name));
+      const result = await discoverCodexSkills({ ...injected(base), configLayers: [
+        { source: 'User', data: { skills: { config: [{ name: 'review docs', enabled: false }] } } },
+      ] });
+      expect(result.skills[0]).toMatchObject({ name: 'review docs', modelAvailable: false, unavailableReason: 'human-disabled' });
+      expect(result.partial).toBe(false);
+    },
+  );
+
+  it('trims native selector edge whitespace without collapsing selector internal whitespace', async () => {
+    const base = path.join(root, 'skills');
+    await skill(base, 'review', JSON.stringify('review    docs'));
+    let result = await discoverCodexSkills({ ...injected(base), configLayers: [
+      { source: 'User', data: { skills: { config: [{ name: '\u0085review docs\u3000', enabled: false }] } } },
+    ] });
+    expect(result.skills[0]).toMatchObject({ name: 'review docs', modelAvailable: false, unavailableReason: 'human-disabled' });
+    result = await discoverCodexSkills({ ...injected(base), configLayers: [
+      { source: 'User', data: { skills: { config: [{ name: 'review    docs', enabled: false }] } } },
+    ] });
+    expect(result.skills[0]).toMatchObject({ name: 'review docs', modelAvailable: true });
+    await skill(base, 'review', JSON.stringify('\ufeffreview docs\ufeff'));
+    result = await discoverCodexSkills({ ...injected(base), configLayers: [
+      { source: 'User', data: { skills: { config: [{ name: '\ufeffreview docs\ufeff', enabled: false }] } } },
+    ] });
+    expect(result.skills[0]).toMatchObject({ name: '\ufeffreview docs\ufeff', modelAvailable: false, unavailableReason: 'human-disabled' });
+  });
+
+  it('retains BOM as a native name scalar while collapsing Unicode whitespace in the absent-name fallback', async () => {
+    const base = path.join(root, 'skills');
+    const name = '\ufeffreview\ufeffdocs\ufeff';
+    await skill(base, 'explicit', JSON.stringify(name));
+    await put(path.join(base, 'review\u0085docs', 'SKILL.md'), '---\ndescription: fallback\n---\n');
+    const result = await discoverCodexSkills(injected(base));
+    expect(result.skills.map(s => s.name)).toEqual(expect.arrayContaining([name, 'review docs']));
+    expect(result.skills.every(s => s.modelAvailable)).toBe(true);
+  });
+
+  it('rejects NUL names and namespaces without accepting a partial native name', async () => {
+    const base = path.join(root, 'skills');
+    await skill(base, 'nul', JSON.stringify('review\0docs'));
+    let result = await discoverCodexSkills(injected(base));
+    expect(result.skills).toEqual([]);
+    expect(result.diagnostics.some(d => d.code === 'invalid-name')).toBe(true);
+    await skill(base, 'valid', 'review');
+    result = await discoverCodexSkills({ ...injected(base), roots: [{ path: base, source: 'plugin', namespace: 'fixture\0', verified: true }] });
+    expect(result.skills).toEqual([]);
+    expect(result.diagnostics.some(d => d.code === 'invalid-name')).toBe(true);
+  });
+
   it('applies User and human SessionFlags in order, ignoring Project and Parley suppression', async () => {
     const base = path.join(root, 'skills'); const first = await skill(base, 'one', 'same'); const second = await skill(base, 'two', 'same');
     const result = await discoverCodexSkills({ ...injected(base), configLayers: [
