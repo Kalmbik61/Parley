@@ -81,12 +81,12 @@
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe | done |
-| [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
+| [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | /root/p01_claude_probe | running |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | running |
-| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | review |
-| [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | не назначен | pending |
+| [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
+| [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | running |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
 | [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | не назначен | pending |
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
@@ -752,7 +752,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
 
 **Зависимости:** P17. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -879,9 +879,9 @@
 
 ### P22: Реализовать режимы, планы, ревизии и снимки
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant core plans/snapshots/types/map/rooms/proposals/targetedtests +coreindex narrowexports; deps accepted.
+**Статус:** done. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент; grant core plans/snapshots/types/map/rooms/proposals/targetedtests +coreindex narrowexports; deps accepted.
 
 **Зависимости:** P20, P12. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -908,13 +908,15 @@
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
+**Evidence:** cec588d; exact11-file SHA c98a354…8d1a, managed168fixtures/strict/lint0; independent /root/p01_claude_probe168+4behavior probes GREEN, all11SHA exact, no Critical/Important. Core/protocol/host coherent build0. Lifecycle/flush/backlog closure далее обязательны в P23.
+
 <a id="p23"></a>
 
 ### P23: Подключить инструменты планов и будильник
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
 
 **Зависимости:** P22. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 

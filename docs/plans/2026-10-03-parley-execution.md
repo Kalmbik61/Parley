@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P17, P20/P39 accepted (20/40); P21 running; P22 review.
+- Текущая фаза: P00–P17, P20/P22/P39 accepted (21/40); P18/P21/P23 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -38,12 +38,12 @@
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native действия MCP | done | f447ccd +0c0d1f9, /root/p01_review accepted; original/related probes GREEN,43affected/lint/SHA4/hostbuild0; live/P32 pending |
-| P18 | Добавить native действия плагинов | pending | — |
+| P18 | Добавить native действия плагинов | running | /root/p01_claude_probe; DTO/backend-first, sharedperprovider MCP/plugin scheduler; native2.1.288 unknown |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | running | /root/p02_codex_probe; P20accepted; новые host/UI/DTO modules, sharedpoints locked |
-| P22 | Реализовать режимы, планы, ревизии и снимки | review | author /root/p01_review; exact11-file bundle c98a354…8d1a applied; peer /root/p01_claude_probe |
-| P23 | Подключить инструменты планов и будильник | pending | — |
+| P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
+| P23 | Подключить инструменты планов и будильник | running | /root/p01_review; P22accepted; TMPdomain/DTO/effects first afterpartialP21review; MCPheldP21 |
 | P24 | Показать план и итог в комнате | pending | — |
 | P25 | Реализовать рецепты и плейбук ведущего | pending | — |
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
@@ -232,3 +232,5 @@ P17 accepted0c0d1f9 после точного4-file health fix: original loss-of
 P39 exact6 source assets applied from SHA8ebe0071…96c2: author76core/17host/strict types/lint0; peerreview /root/p01_review assigned, acceptance pending. Current source frozen. P21 prepareTake(empty patch) preserves human bytes +actual stableID, read-only inspectSharedIgnore extension granted for agent-first warning delivery. Manual host API uses actual shared-token authentication; MCP only list/suggest, no fabricated human attestation or new authentication architecture. P22 promotion exception clarified in source; ordinary amendments still invalidate prior results.
 
 P39 accepted50a878f после narrow temporary-ownership fix: foreign LICENSE.tmp сохранён, handle закрывается при stat/write failure, cleanup только собственного inode. Independent original probe/11affected/3resource-failure GREEN; точные6SHA и core/host builds0. 20accepted из40; native model loading и economic gates остаются в P32/P38. P22 final11 bundle c98a354…8d1a applied with exact hashes, independent review /root/p01_claude_probe; P21 foundation awaiting root registry integration, lifecycle/backlog closure закреплены за P23.
+
+P22 acceptedcec588d: managed168 and independent168+4meaningful probes GREEN, strict/lint0, exact11hashes. P21 foundation05703f…f158 applied +rootregistry; coherent core/protocol/hostbuild0 and registry2tests/lint0. Partial independent P21review found alias-first watcher retained removed client path; narrow fix assigned author with canonical internal context, preserving requested notification identity. Take followup uses canonical room liveness (sleeping/pending live; closed/deleted denied). P18 resumed backend/DTO-first, P23 accepteddep dispatched with persisted occurrence-level delivery/retry proofs; protocol/sharedregistry serialized by root, MCPheld P21.21accepted из40; finalgates pending.
