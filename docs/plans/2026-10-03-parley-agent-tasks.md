@@ -63,7 +63,7 @@
 | [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | done |
 | [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | done |
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
-| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | running |
+| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | review |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | не назначен | pending |
@@ -211,7 +211,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p00_prepare_base (новое назначение P04), gpt-6.1-sol/high; профиль `architect`. **Проверяющий:** другой агент, профиль `verifier`.
+**Статус:** review. **Исполнитель:** /root/p00_prepare_base (новое назначение P04), gpt-6.1-sol/high; профиль `architect`. **Проверяющий:** /root/p01_review (новое назначение P04), gpt-6.1-sol/high.
 
 **Зависимости:** P01, P02, P03. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 

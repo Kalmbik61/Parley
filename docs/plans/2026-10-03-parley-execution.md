@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P00–P03 accepted; P04 running, закрытие контрактов.
+- Текущая фаза: P00 принят; P00–P03 accepted; P04 review, согласование контрактов со спеками.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -24,7 +24,7 @@
 | P01 | Проверить Claude: источники, budget, jev и инструменты | done | agent /root/p01_claude_probe; gpt-6.1-sol/high; commit 09eda36; review accepted by /root/p01_review; native full-list fallback |
 | P02 | Проверить Codex: скиллы, слой, роли и resume | done | agent /root/p02_codex_probe; gpt-6.1-sol/high; commit ce3efc1; review accepted by /root/p00_review; native live gates remain |
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
-| P04 | Закрыть контракты разведки и выбор парсеров | running | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high |
+| P04 | Закрыть контракты разведки и выбор парсеров | review | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; candidate 8a71358; reviewer /root/p01_review |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | pending | — |
 | P06 | Реализовать источники скиллов Claude | pending | — |
 | P07 | Реализовать источники скиллов Codex | pending | — |
@@ -71,3 +71,16 @@
 - Read-only P05: общий YAML/TOML mapping parser, whole-file SKILL.md 65 536-byte limit, boolean availability с явной reason; старый capabilities parser мигрирует в P08.
 - Read-only P09: один layer builder для systemPrompt/developerInstructions/quiet; окончательный env известен только в host. Для complete guard выданы P09 host sessions-service.ts/test и единственный необходимый core export; P10 получает их последовательно.
 - P04 проверяет pins `yaml 2.9.1` / `smol-toml 1.9.0`; выбор вступает в силу после независимого review.
+
+## Незакрытые release gates (не блокируют базовую реализацию)
+
+| Область | Фактический статус | Безопасный путь до приёмки |
+|---|---|---|
+| Claude listing reduction | loader/roles проверены synthetic transport; account/synced/policy и host lifecycle неполны | native full list, navigator default false |
+| Codex listing reduction | offline config подтверждён; live turn failed | native full list; не добавлять временные disables/include_instructions |
+| Native runtime | debug не доказывает model read, enforcement, resume, report | P32 smoke на configured supported CLI model |
+| Hook lifecycle | synthetic command hooks подтверждены; statusLine/report/wake не приняты | сохранить функциональные hooks; не выключать их все |
+| Linux argv/env | macOS Node probes пройдены; Linux runtime отсутствует | pre-spawn guards; Linux проверка остаётся P32 |
+| Remote/managed Capabilities | изолированные local fixtures пройдены, remote/OAuth/managed unverified | unsupported actions unavailable, structured safe fields only |
+
+P04 review: root передал на независимую проверку три расхождения формулировок: PARLEY.md marked preprocessing truncation, custom runner override-gap warning, once-per-host/project notices. До уточнения контрактов P05/P09 остаются pending.
