@@ -586,7 +586,7 @@
 
 **Single-pass evidence grant:** skills/codex.ts/test — узкий internal nativeEvidence по bound cwd/canonical path/native name/known local source, без blanket root promotion. No-evidence/traversal/namespace/policy прежние; native enabled пересекается с human/manual-only правилами. Per-document повторные обходы с искусственными root boundaries не используются.
 
-**Shared transport export grant:** core/index.ts экспорт readCodexNativeContext/CodexNativeContext/CodexContextOptions для P17 source proof; роли сохраняют прежний wrapper/projection. Stamp после успешного updateMap находится в уже granted launch.ts:startSession, no new map fields.
+**Shared transport export grant:** core/index.ts экспорт readCodexNativeContext/CodexNativeContext/CodexContextOptions для P17 source proof; роли сохраняют прежний wrapper/projection. Stamp после успешного updateMap находится в уже granted launch.ts:startSession, no new map fields. Narrow host/sessions/sessions-service.ts/test grant: передать revision именно фактического LaunchPlan в optional startSession argument. Legacy caller без revision не подтверждает чужой контекст; закрытая сессия с pid=null сохраняет привязку по прежнему startedAtProcess. Не менять P12 permissions/defaults/notices.
 
 <a id="p14"></a>
 
@@ -728,7 +728,7 @@
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
-**Дополнительные grants root:** DTO-first protocol/capability-actions.ts/test, methods/index и safe action-availability snapshot schema/test; types только required alias, events unchanged. После freeze root snapshot/build/precheck. Host actions/native-targets +tests, snapshot/claude/codex/readers/methods seams+tests; singleton private native identity/context/fingerprint registry и global per-provider queue. Registry root-only. UI ProjectPanel/CapabilitiesPanel/tests, McpForm.tsx/test, shared strings solewriter P17. Positive Codex User-only source proof из native layers/winner необходим; unknown/project/managed unavailable, path guess не доказательство. Shared Codex RPC reuse после P13 stable export/build, core transport пишет только P13. No raw selector/config/output/error/argv в DTO/log, no real human config actions в tests.
+**Дополнительные grants root:** DTO-first protocol/capability-actions.ts/test, methods/index и safe action-availability snapshot schema/test; types только required alias, events unchanged. После freeze root snapshot/build/precheck. Host actions/native-targets +tests, snapshot/claude/codex/readers/methods seams+tests; singleton private native identity/context/fingerprint registry и global per-provider queue. Registry root-only. UI ProjectPanel/CapabilitiesPanel/tests, McpForm.tsx/test, shared strings solewriter P17. Positive Codex User-only source proof из native layers/winner необходим; unknown/project/managed unavailable, path guess не доказательство. Shared Codex RPC reuse после P13 stable export/build, core transport пишет только P13. DTO snapshot 6ba002b frozen/accepted precheck; protocol и coherent core build exit 0, host/UI unlock выдан. Это не полная приёмка P17. No raw selector/config/output/error/argv в DTO/log, no real human config actions в tests.
 
 <a id="p18"></a>
 

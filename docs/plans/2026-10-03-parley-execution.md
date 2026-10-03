@@ -182,3 +182,5 @@ P13 implementation dispatched after P12acceptance, no protocol/UI mutations. Bou
 P16 snapshot b7589f7 передан independentreview; автор готовит P17 только read-only до acceptance. P13 получил narrow single-pass nativeEvidence Codex reader grant вместо повторных per-document root scans; source/policy boundaries сохранены.
 
 P16accepted /root/p01_review;165 independent checks and17frozenfiles matched. P17 dispatched DTO-first; later host/UI with private selector/source proof/global queue. P13foundation exact4patch rootapplied SHA/absence matched, fixtures proceed; participant stamp is existing launch.ts:startSession after updateMap. New shared readCodexNativeContext export coordinated for P17, transport has one writer.
+
+P17 DTO milestone 6ba002b accepted precheck /root/p01_review: 43 targeted tests и 31 independent probes, scoped lint/diff и 6 SHA совпадают. Protocol build и stable core transport build exit 0; author перешёл к host/UI. P13 получил узкий host caller grant для передачи actual LaunchPlan revision в startSession, без новых полей map и изменений P12. Descriptor/integration готовятся единым проверяемым patch, full acceptance обеих задач впереди.
