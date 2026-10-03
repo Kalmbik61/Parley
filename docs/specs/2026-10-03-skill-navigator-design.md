@@ -364,3 +364,7 @@ Synced/account/managed/plugin/admin/extra parity, live чтение Parley-disab
 при сохранении human disables, role-specific main/subagent tools, реальный
 Parley lifecycle и Linux final-env guard остаются [P32 gates](../research/2026-10-03-parley-cli/contracts.md#10-оставшиеся-gates-и-сдача).
 MCP sampling вне v1 и не задерживает реализацию. До gates — full list и unavailable/unknown.
+
+## Дополнение P13: evidence нативного контекста
+
+[Read-only preflight](../research/2026-10-03-parley-cli/availability.md) подтвердил Codex0.156.1 skills/list и Claude2.1.287 init-only control get_settings/get_skills_dialog. Codex enabled не учитывает allow_implicit_invocation:false: native canonical inventory всегда пересекается с общим policy resolver по path+name. Claude menu advertised не доказывает наличие Skill tool; policy snapshot и actual load route — разные gates. Context должен совпадать с provider/cwd/settings участника, human disables сохраняются, unknown/plugin/managed/role paths не повышаются автоматически. Эти API дают путь интеграции без нового scanner; список остаётся полным до P32.

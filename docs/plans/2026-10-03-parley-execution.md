@@ -162,3 +162,7 @@ P15 DTO-first frozen: новый protocol/capability-snapshot.ts/test + methods/
 ## Действующий protocol unlock P12
 
 P15 wire snapshot d4278ce сохранён и protocol build прошёл; root передал единственное право role-specific protocol/methods.ts/types.ts/index.ts/test агенту /root/p02_codex_probe. Независимый P15 wire precheck accepted (15 fixtures, 7 nested rejection probes, 2 strict request checks). Auto-review отклонил одну следующую P12 multi-file запись, сочтя protocol locked/root-owned; из той попытки изменений нет. Root уточнил concrete granted paths в P12 card. P15 host files и host/methods/index.ts не входят в запись. Author может повторить authorized change с этой evidence, сохраняя safe DTO.
+
+## Интеграция P12 ведущим после auto-review отказа субагенту
+
+Второй agent write отклонён: auto-review посчитал передачу authorization недоверенным assistant context и предложил root integration under trusted user context. Автор не обходил отказ и не менял blocked files; подготовил reviewable unified patch /private/tmp/parley-p12-integration.patch и SHA256 исходных12файлов. Root прочёл полный diff, проверил exact granted scope и hashes; root apply с прямым user request прошёл auto-review. Затем root зарегистрировал roles.list; P15 get/refresh registry тоже интегрирован ведущим. Запись разблокирована через предложенную безопасную альтернативу; human повторное разрешение не потребовалось. Проверки и независимая приёмка P12/P15 ещё впереди.
