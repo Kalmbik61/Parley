@@ -945,6 +945,8 @@
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
+**Текущий grant:** TMP core plan-effects/DTO/lifecycle + trusted letters filter; MCP/guide открыты после P21. Узкое расширение plan-snapshots допускает internal intent filter, чтобы immutable/semantic conflict одного captured payload не блокировал новые валидные exports. Transient IO retries ограничены; idle work не создаёт timer/map writes. Explicit plans.retryEffects повторяет только captured intents, без blind rebase. NoticeKind plan-effect-failed добавляется после P29 consumer через root.
+
 <a id="p24"></a>
 
 ### P24: Показать план и итог в комнате
@@ -1111,7 +1113,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; TMP-only domain/layer grant; P21 findings interrupt. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen domain13 + consumer3 applied. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high, после P18 backend freeze.
 
 **Зависимости:** P20, P09. **Источник:** [этап 10 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-10).
 
@@ -1398,6 +1400,8 @@
 **Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
 
 **Внутренний навык:** фиксировать hash minimal-development и сравнивать его off/on отдельной осью при одинаковых navigator/cache/provider/model/effort; не переносить внешние проценты экономии.
+
+**Контроль оси навыка:** off/on подтверждается фактической native availability/body-loading evidence в изолированной benchmark fixture, а не одним installer flag. Уже существующие project-native assets могут оставаться видимыми CLI при выключенном installer; реальные человеческие навыки не удаляются ради сравнения. Отсутствие наблюдения о загрузке или cache write остаётся unknown, не нулём.
 
 <a id="p39"></a>
 
