@@ -1220,6 +1220,11 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
+  'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
+  'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
+  'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
+  'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
+  'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
 };
 
 /**

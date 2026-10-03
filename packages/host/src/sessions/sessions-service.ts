@@ -37,6 +37,9 @@ import {
   planResume,
   plannedWorktree,
   processStartedAt,
+  querySpawnLimits,
+  validateSpawnBudget,
+  SpawnBudgetError,
   readMap,
   sessionTag,
   startSession,
@@ -46,6 +49,8 @@ import {
   workPaths,
   writeBrief,
   type EffortLevel,
+  type LaunchPlan,
+  type SpawnLimits,
   type WorkEntry,
 } from '@parley/core';
 import { refKey } from '@parley/protocol';
@@ -118,6 +123,8 @@ export interface SessionsService {
 export interface SessionsFeedOptions {
   hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
   providerVersions?: ProviderVersions;
+  /** Injectable native limit query; production queries the runtime before spawn. */
+  spawnLimits?: () => Promise<SpawnLimits | null>;
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -131,6 +138,25 @@ export function createSessionsService(
   feed: SessionsFeedOptions = {},
 ): SessionsService {
   const { hooks, providerVersions } = feed;
+  const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
+  const warned = new Set<string>();
+
+  function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
+    const diagnostics = plan.diagnostics ?? [];
+    for (const message of plan.warnings) {
+      if (!diagnostics.some((warning) => warning.message === message)) {
+        host.log.warn('session launch warning', { ref, message });
+      }
+    }
+    for (const warning of diagnostics) {
+      host.log.warn('session layer warning', { ref, code: warning.code, message: warning.message });
+      const key = warning.code === 'provider-override-gap'
+        ? warning.code : `${ref.projectPath}\0${warning.code}`;
+      if (warned.has(key)) continue;
+      warned.add(key);
+      host.broadcast('host.notice', { kind: warning.code, ref, text: warning.message, at: new Date().toISOString() });
+    }
+  }
 
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
@@ -274,6 +300,7 @@ export function createSessionsService(
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       });
+      deliverWarnings(ref, plan);
 
       let command: string;
       try {
@@ -301,6 +328,8 @@ export function createSessionsService(
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
       try {
+        // The hook token and inherited host environment are now final. No PTY starts on guard failure.
+        validateSpawnBudget(command, plan.args, env, await spawnLimits());
         handle = pty.start(ref, {
           command,
           args: plan.args,
@@ -310,7 +339,13 @@ export function createSessionsService(
         });
       } catch (error) {
         if (hookUrl !== undefined) hooks?.unregister(ref);
-        throw error;
+        const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
+          ? new SpawnBudgetError('spawn-budget-too-large') : error;
+        if (safe instanceof SpawnBudgetError) {
+          host.log.warn('session spawn budget rejected', { ref, code: safe.code, ...safe.details });
+          throw new HostError('bad_request', safe.message, { code: safe.code, ...safe.details });
+        }
+        throw safe;
       }
       const started = (async () => {
         await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {

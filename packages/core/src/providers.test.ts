@@ -29,6 +29,8 @@ import { overrideValue, overrideVariable } from './work/find-binary.js';
  */
 const CODEX_TUI_ARGS = [
   '-c',
+  'project_doc_fallback_filenames=["CLAUDE.md"]',
+  '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
   '-c',
   'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -902,6 +904,8 @@ describe('codex: запуск и возобновление (спека комн
         '-c',
         subs.mcpConfig,
         '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
+        '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
         'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -934,6 +938,8 @@ describe('codex: запуск и возобновление (спека комн
         '019ce3d5-584a-7be2-922e-b8185a8d7c19',
         '-c',
         subs.mcpConfig,
+        '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
         '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
@@ -1068,5 +1074,25 @@ describe('codex: запуск и возобновление (спека комн
       'notify=["a"]',
     ]);
     expect(PROVIDERS.claude.runner.args).not.toContain('{notify}');
+  });
+});
+
+describe('Codex developer layer channel', () => {
+  it('the whole assignment is one argument on launch and resume and parses as TOML', () => {
+    const text = 'quote " \\\nЖ🙂';
+    const assignment = `developer_instructions=${JSON.stringify(text)}`;
+    for (const args of [startCommand(PROVIDERS.codex, { developerInstructions: assignment }).args,
+      resumeCommand(PROVIDERS.codex, { providerSessionId: 'id', developerInstructions: assignment }).args]) {
+      const at = args.indexOf(assignment);
+      expect(at).toBeGreaterThan(0);
+      expect(args[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(assignment)).toEqual({ key: ['developer_instructions'], value: text });
+      expect(args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
+    }
+  });
+
+  it('an absent developer assignment drops its introducing -c, never another supplied flag', () => {
+    expect(substituteArgs(['-c', '{developerInstructions}', '-c', '{notify}'], { notify: 'notify=[]' }))
+      .toEqual(['-c', 'notify=[]']);
   });
 });

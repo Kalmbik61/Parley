@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createPendingSession,
@@ -115,6 +115,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const key of extraEnv) delete process.env[key];
   extraEnv = [];
   await Promise.all(worksServices.map((service) => service.stop()));
@@ -332,6 +333,8 @@ describe('create(): модель и усилие из диалога (дизай
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
       'mcp_servers.parley',
+      'developer_instructions',
+      'project_doc_fallback_filenames',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -1382,5 +1385,102 @@ describe('модель и усилие из карты: сессия, завед
     expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
 
     await service.stop(ref);
+  });
+});
+
+describe('session layer warnings and final spawn budget', () => {
+  const roomy = async () => ({ argMax: 1048576, pointerSize: 8 });
+  const makeRef = async (projectPath = project, provider = 'claude'): Promise<SessionRef> => {
+    const work = await createWork(projectPath, { title: 'Layer budget', goal: '' });
+    const sessionId = await createPendingSession(projectPath, work.work.id, { provider, label: 'fixture', task: 'Use fixtures' });
+    return { projectPath, workId: work.work.id, sessionId };
+  };
+
+  it('checks the final registered hook token and inherited env, refuses before PTY and unregisters', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    setEnv('P09_PRIVATE_ENV', 'private-environment-value'.repeat(3000));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start');
+    const unregister = vi.fn();
+    const token = 'private-hook-token'.repeat(3000);
+    const registered = vi.fn(() => token);
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), {
+      hooks: { url: () => 'http://127.0.0.1:4321/hooks', register: registered, unregister },
+      providerVersions: { ready: Promise.resolve(), get: () => '999.0.0' },
+      spawnLimits: async () => { expect(registered).toHaveBeenCalledTimes(1); return { argMax: 50000, pointerSize: 8 }; },
+    });
+    const ref = await makeRef();
+    await expect(service.launch(ref, 'launch')).rejects.toThrow('spawn-budget-too-large');
+    expect(start).not.toHaveBeenCalled();
+    expect(unregister).toHaveBeenCalledWith(ref);
+    expect(JSON.stringify(broadcasts)).not.toContain('private-hook-token');
+    expect(JSON.stringify(broadcasts)).not.toContain('private-environment-value');
+    await service.stopAll();
+  });
+
+  it('an unknown native limit fails before PTY, without claiming a guessed budget', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: async () => null });
+    await expect(service.launch(await makeRef(), 'launch')).rejects.toThrow('spawn-budget-unavailable');
+    expect(start).not.toHaveBeenCalled();
+    await service.stopAll();
+  });
+
+  it('native E2BIG never forwards the native error text or final environment', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('PRIVATE_NATIVE_COMMAND_AND_ENV'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const error = await service.launch(await makeRef(), 'launch').catch((caught: unknown) => caught);
+    expect(String(error)).toContain('spawn-budget-too-large');
+    expect(String(error)).not.toContain('PRIVATE_NATIVE_COMMAND_AND_ENV');
+    expect(JSON.stringify(broadcasts)).not.toContain('PRIVATE_NATIVE_COMMAND_AND_ENV');
+    await service.stopAll();
+  });
+
+  it('logs each PARLEY warning attempt but notices once per host/project/code', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    await mkdir(path.join(project, 'PARLEY.md'));
+    const host = fakeHost();
+    const warn = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const ref = await makeRef();
+    for (let i = 0; i < 2; i += 1) await service.launch(ref, 'launch').catch(() => {});
+    expect(warn.mock.calls.filter((call) => JSON.stringify(call).includes('parley-md-unreadable'))).toHaveLength(2);
+    expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-unreadable')).toHaveLength(1);
+    const otherProject = await mkdtemp(path.join(tmpdir(), 'parley-layer-other-'));
+    try {
+      await mkdir(path.join(otherProject, 'PARLEY.md'));
+      await service.launch(await makeRef(otherProject), 'launch').catch(() => {});
+      expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-unreadable')).toHaveLength(2);
+    } finally { await rm(otherProject, { recursive: true, force: true }); }
+    await service.stopAll();
+  });
+
+  it('override gap notices are global for this host, not repeated per project', async () => {
+    const home = path.join(project, 'home');
+    setEnv('PARLEY_HOME', home);
+    await mkdir(home);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['{prompt}'] } }));
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const host = fakeHost();
+    const warn = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const otherProject = await mkdtemp(path.join(tmpdir(), 'parley-layer-other-'));
+    try {
+      for (const dir of [project, otherProject]) await service.launch(await makeRef(dir, 'codex'), 'launch').catch(() => {});
+      expect(warn.mock.calls.filter((call) => JSON.stringify(call).includes('provider-override-gap'))).toHaveLength(2);
+      expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'provider-override-gap')).toHaveLength(1);
+    } finally { await rm(otherProject, { recursive: true, force: true }); }
+    await service.stopAll();
   });
 });

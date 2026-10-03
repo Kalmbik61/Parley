@@ -68,7 +68,7 @@
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | не назначен | pending |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
-| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | running |
+| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | review |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | не назначен | pending |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | не назначен | pending |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
@@ -359,7 +359,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P09), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** review. **Исполнитель:** /root/p02_codex_probe (новое назначение P09), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p03_review (новое назначение P09), gpt-6.1-sol/high.
 
 **Зависимости:** P04. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -379,6 +379,7 @@
 - `packages/host/src/sessions/sessions-service.ts` — окончательный env guard и доставка warning до spawn
 - `packages/host/src/sessions/sessions-service.test.ts` — поведенческие проверки этих точек
 - `packages/protocol/src/types.ts` — только расширение NoticeKind для доставляемых предупреждений слоя
+- `packages/desktop/src/shared/strings.ts` и `strings.test.ts` — только обязательный consumer mapping новых NoticeKind и существующие проверки
 
 **Уточняющий источник:** [принятый P04 контракт](../research/2026-10-03-parley-cli/contracts.md).
 

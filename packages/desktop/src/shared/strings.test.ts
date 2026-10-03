@@ -15,7 +15,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
   'internal',
 ];
 
-/** Все одиннадцать видов `NoticeKind` (`packages/protocol/src/types.ts`). */
+/** Все виды `NoticeKind` (`packages/protocol/src/types.ts`). */
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
@@ -28,6 +28,11 @@ const NOTICE_KINDS: NoticeKind[] = [
   'trust-wait',
   'startup-wait',
   'skill-foreign',
+  'parley-md-unreadable',
+  'parley-md-truncated',
+  'provider-override-gap',
+  'role-truncated',
+  'recipe-playbook-truncated',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */

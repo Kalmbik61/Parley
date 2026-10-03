@@ -105,6 +105,10 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
   '{mcpConfig}',
   '-c',
+  '{developerInstructions}',
+  '-c',
+  'project_doc_fallback_filenames=["CLAUDE.md"]',
+  '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
   '-c',
   'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -277,6 +281,8 @@ export interface RunnerSubstitutions {
   settingsFile?: string;
   /** Системная вставка гида (`work/guidance.ts`): кто ты и чем пользоваться. */
   systemPrompt?: string;
+  /** Whole TOML assignment: developer_instructions=<JSON serialized layer>. */
+  developerInstructions?: string;
   prompt?: string;
   providerSessionId?: string;
   /** Канал звонка: `server:parley` при включённом push, иначе подстановки нет. */
@@ -295,7 +301,7 @@ export interface RunnerSubstitutions {
 }
 
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):

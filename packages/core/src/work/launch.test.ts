@@ -1064,3 +1064,95 @@ describe('привязка к логу провайдера без внешне�
     ).toBeNull();
   });
 });
+
+describe('common session layer delivery', () => {
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+
+  it('Codex carries project rules in launch/new/resume and keeps the resume pointer last', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await writeFile(path.join(project, 'PARLEY.md'), '# Team\n<!-- template -->\nUse fixtures.');
+    const session = await sessionOf(workId, sessionId);
+    for (const plan of [await planLaunch(project, workId, session), await planNew(project, workId, session),
+      await planResume(project, workId, { ...session, providerSessionId: 'codex-thread' }, { prompt: 'INBOX POINTER' })]) {
+      const layer = codexLayer(plan.args);
+      expect(layer).toContain(`your session is ${sessionId}`);
+      expect(layer).toContain('Team rules of this project (PARLEY.md):\n# Team\n\nUse fixtures.');
+      expect(layer).not.toContain('template');
+      expect(layer).not.toContain('прогнать e2e');
+      expect(plan.args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
+      if (plan.args[0] === 'resume') expect(plan.args.at(-1)).toBe('INBOX POINTER');
+    }
+  });
+
+  it('quiet Codex gets the existing brief as context, never as a first prompt', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'QUIET PARENT CONTEXT'; });
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    child.provider = 'codex';
+    for (const plan of [await planLaunch(project, workId, child),
+      await planResume(project, workId, { ...child, providerSessionId: 'codex-thread' })]) {
+      expect(codexLayer(plan.args)).toContain('QUIET PARENT CONTEXT');
+      expect(plan.args.filter((arg) => arg.includes('QUIET PARENT CONTEXT'))).toHaveLength(1);
+      expect(plan.args.at(-1)).not.toContain('QUIET PARENT CONTEXT');
+    }
+  });
+
+  it('uses main-project PARLEY.md with the native bridge condition from worktree cwd', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const cwd = path.join(project, 'branch');
+    await mkdir(cwd);
+    await writeFile(path.join(project, 'PARLEY.md'), 'MAIN SHARED RULES');
+    await writeFile(path.join(cwd, 'PARLEY.md'), 'BRANCH RULES IGNORED');
+    await writeFile(path.join(cwd, 'CLAUDE.md'), 'native rules');
+    const session = await sessionOf(workId, sessionId);
+    session.worktree = { path: cwd, branch: 'codex/test', base: 'main', createdAt: null };
+    const bridged = await planLaunch(project, workId, session);
+    expect(bridged.cwd).toBe(cwd);
+    expect(codexLayer(bridged.args)).toContain('MAIN SHARED RULES');
+    expect(codexLayer(bridged.args)).not.toContain('BRANCH RULES IGNORED');
+    expect(codexLayer(bridged.args)).toContain('Project instructions here were written for Claude Code');
+    await writeFile(path.join(cwd, 'AGENTS.override.md'), 'native override');
+    expect(codexLayer((await planLaunch(project, workId, session)).args)).not.toContain('Project instructions here were written for Claude Code');
+  });
+
+  it('custom Codex without a channel warns and launches without rewriting its arrays', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['CUSTOM', '{prompt}'], resumeArgs: ['AGAIN', '{providerSessionId}', '{prompt}'] } }));
+    const session = await sessionOf(workId, sessionId);
+    const launch = await planLaunch(project, workId, session);
+    expect(launch.args[0]).toBe('CUSTOM');
+    expect(launch.args).toHaveLength(2);
+    expect(launch.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap']);
+    const resume = await planResume(project, workId, { ...session, providerSessionId: 'id' }, { prompt: 'POINTER' });
+    expect(resume.args).toEqual(['AGAIN', 'id', 'POINTER']);
+    expect(resume.warnings).toHaveLength(1);
+    await expect(planLaunch(project, workId, session, { layer: { role: 'MANDATORY ROLE' } }))
+      .rejects.toThrow('role-delivery-unavailable');
+  });
+
+  it('a custom GLM system channel receives the same layer while built-in GLM stays plain', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = { ...await sessionOf(workId, sessionId), provider: 'glm' };
+    expect((await planLaunch(project, workId, session)).args).toEqual([]);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { args: ['--append-system-prompt', '{systemPrompt}', '{prompt}'] } }));
+    await writeFile(path.join(project, 'PARLEY.md'), 'CUSTOM GLM RULES');
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.args[1]).toContain('CUSTOM GLM RULES');
+  });
+
+  it('preprocesses all bounded blocks, but refuses an escaped full mandatory layer overflow', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(project, 'PARLEY.md'), 'first\n' + 'x'.repeat(40000));
+    const trimmed = await planLaunch(project, workId, session, { layer: { role: 'first\n' + 'x'.repeat(40000), playbook: 'first\n' + 'x'.repeat(40000), isLead: true } });
+    expect(trimmed.diagnostics?.map((warning) => warning.code)).toEqual(['parley-md-truncated', 'role-truncated', 'recipe-playbook-truncated']);
+    await writeFile(path.join(project, 'PARLEY.md'), '\u0001'.repeat(17000));
+    await expect(planLaunch(project, workId, session)).rejects.toThrow('session-layer-too-large');
+    await expect(planNew(project, workId, session)).rejects.toThrow('session-layer-too-large');
+    await expect(planResume(project, workId, { ...session, providerSessionId: 'id' })).rejects.toThrow('session-layer-too-large');
+  });
+});

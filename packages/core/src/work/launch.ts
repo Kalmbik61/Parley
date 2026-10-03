@@ -25,6 +25,8 @@ import {
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
+import { readParleyMd, type LayerWarning } from './parley-md.js';
+import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
@@ -61,6 +63,8 @@ export interface LaunchOptions {
    * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
    */
   hookUrl?: string;
+  /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
+  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -77,6 +81,8 @@ export interface LaunchPlan {
   providerSessionId: string | null;
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
+  /** Safe warning codes for host logging and deduplicated notices. */
+  diagnostics?: LayerWarning[];
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -178,6 +184,7 @@ async function plan(
 ): Promise<LaunchPlan> {
   const entry = await entryOf(session.provider);
   const paths = workPaths(projectPath, workId);
+  const cwd = session.worktree?.path ?? projectPath;
 
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
   // промпт, а не первым сообщением, и агент ждёт запроса пользователя
@@ -201,6 +208,7 @@ async function plan(
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
   // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
   const warnings: string[] = [];
+  const diagnostics: LayerWarning[] = [];
   const channel = options.channel === true && template.includes('{channel}');
   // Молчим про чужих провайдеров: push — возможность Claude Code, у codex и GLM
   // `{channel}` в шаблоне нет и быть не должно.
@@ -248,15 +256,43 @@ async function plan(
     await mkdir(paths.events, { recursive: true });
     subs.notify = codexNotifyOverride();
   }
-  // Системная вставка гида идёт во всех трёх режимах, включая `resume`:
-  // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
-  // при каждом запуске (план от 2026-09-06, раздел A).
-  if (template.includes('{systemPrompt}')) {
-    const guidance = systemGuidance(await readMap(projectPath, workId), session.id);
-    // Бриф тихой сессии идёт этим же путём и при `resume`: транскрипт начинается
-    // с сообщения пользователя, контекста родителя в нём нет.
+  const hasSystemLayer = template.includes('{systemPrompt}');
+  const hasDeveloperLayer = template.includes('{developerInstructions}');
+  const nativeClaudeRole = entry.id === 'claude' && options.layer?.nativeClaudeRole === true;
+  if (options.layer?.role?.trim()) {
+    const deliverable = nativeClaudeRole
+      ? session.agent !== null && template.includes('{agent}')
+      : hasSystemLayer || hasDeveloperLayer;
+    if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
+  }
+  if (entry.id === 'codex' && !hasDeveloperLayer) {
+    diagnostics.push({
+      code: 'provider-override-gap',
+      message: 'Custom Codex runner has no {developerInstructions}; add this placeholder to deliver the Parley session layer through Codex.',
+    });
+  }
+  // One current layer for launch/new/resume; only its provider channel differs.
+  let blockBytes;
+  if (hasSystemLayer || hasDeveloperLayer) {
+    const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
-    subs.systemPrompt = brief === null ? guidance : `${guidance}\n\n${brief}`;
+    const parley = await readParleyMd(projectPath);
+    diagnostics.push(...parley.warnings);
+    const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
+      ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
+      : '';
+    const layer = buildSessionLayer({
+      ...options.layer,
+      nativeClaudeRole,
+      guidance: systemGuidance(map, session.id),
+      bridge,
+      ...(brief === null ? {} : { brief }),
+      parleyMd: parley.text,
+    });
+    blockBytes = layer.blockBytes;
+    diagnostics.push(...layer.warnings);
+    if (hasSystemLayer) subs.systemPrompt = layer.text;
+    if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
   }
 
   if (resuming) {
@@ -283,19 +319,31 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  validateLayerArguments(args, blockBytes, subs.systemPrompt);
+  warnings.push(...diagnostics.map((warning) => warning.message));
   return {
     command,
     args,
     // Сессия в своём worktree живёт там во всех режимах, включая `resume`:
     // `claude --resume` ищет транскрипт по каталогу, а не по id (спецификация 8.1).
-    cwd: session.worktree !== null ? session.worktree.path : projectPath,
+    cwd,
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
     env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }),
     providerSessionId,
     warnings,
+    diagnostics,
   };
+}
+
+async function codexBridgeApplies(cwd: string): Promise<boolean> {
+  const isFile = async (name: string): Promise<boolean> => {
+    try { return (await stat(path.join(cwd, name))).isFile(); }
+    catch { return false; }
+  };
+  const [claude, agents, override] = await Promise.all(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'].map(isFile));
+  return claude === true && agents === false && override === false;
 }
 
 /** Запуск `pending` сессии: бриф стартовым промптом (дизайн 4.3). */

@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P00–P03 accepted; P04 accepted после fix; P05 accepted; P09 build/host tests running; P06/P07 ждут общей build-точки.
+- Текущая фаза: P00 принят; P00–P03 accepted; P04 accepted после fix; P05 accepted; P09 review после consumer/DEL fixes; P06/P07 pending.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -29,7 +29,7 @@
 | P06 | Реализовать источники скиллов Claude | pending | — |
 | P07 | Реализовать источники скиллов Codex | pending | — |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
-| P09 | Собрать слой сессии и доставку Codex | running | /root/p02_codex_probe reassigned P09; gpt-6.1-sol/high; approved P04 e4e61cc |
+| P09 | Собрать слой сессии и доставку Codex | review | /root/p02_codex_probe reassigned P09; gpt-6.1-sol/high; 225 core / 52 host passed; reviewer /root/p03_review; consumer/DEL fixes ready |
 | P10 | Подключить создание PARLEY.md и Open/Create | pending | — |
 | P11 | Реализовать каталог ролей и умолчания | pending | — |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
@@ -100,3 +100,5 @@ P04 docs-integration (unified plan + пять спек) передана /root/p
 P05 принят повторным review после FIFO fix `eb24192`: 31/31 независимо повторены, замечаний нет. P09 core targeted batch — 5 файлов/220 tests passed; dependency build и целевые host tests запускает его автор, root не повторяет их без новой причины. P06/P07 откроются после текущей общей build-точки. P04 docs review потребовал две targeted поправки (plugin skillOverrides exception и запрет arbitrary CLI excerpts), автор исправляет.
 
 P04 docs-integration accepted /root/p01_review после fix `1c8282d` к `081f3ea`: оба Important закрыты, 35 links/anchors корректны, whitespace clean. Unified plan и пять спек теперь содержат approved research contracts; остальные две спеки сохраняют ранее согласованные rev/state/privacy контракты.
+
+P09 build/targeted verification: core/protocol/host builds, 225 core tests, 52 host tests, scoped lint passed. Root desktop typecheck нашёл TS2739 NoticeKind mapping; исправлены пять detail strings и существующий strings test consumer. Reviewer подтвердил DEL raw TOML ошибку: исправлено escaping + настоящий TOML roundtrip/escaped byte boundary. После fixes: desktop typecheck passed, 72 strings tests и 11 session-layer tests passed. Snapshot передан reviewer; native UI/real CLI/Linux execution не объявлены принятыми.

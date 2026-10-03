@@ -217,6 +217,8 @@ export {
   UNTITLED_WORK,
 } from './work/launch.js';
 export type { LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
+export { querySpawnLimits, validateSpawnBudget, SpawnBudgetError } from './work/session-layer.js';
+export type { SpawnLimits } from './work/session-layer.js';
 export {
   BinaryNotFoundError,
   findBinary,

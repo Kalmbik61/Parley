@@ -16,7 +16,7 @@ import type { WorkMap } from './types.js';
  */
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
-/** Системная вставка для сессии `sessionId` работы `map`. */
+/** Built-in guidance shared by the Claude and Codex layer channels; optional blocks stay outside it. */
 export function systemGuidance(map: WorkMap, sessionId: string): string {
   const lines = [
     `You are inside Parley: workspace ${map.work.id} — ${oneLine(map.work.title)}, your session is ${sessionId}; coordination goes through the tools of the parley MCP server.`,
