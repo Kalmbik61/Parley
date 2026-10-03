@@ -228,6 +228,7 @@ unknown policy/availability fail closed, полный native список сох
 с причиной. Панель показывает установленное, в том числе скрытое; `find_skill`
 применяет фильтр 2.4. Refresh панели не меняет уже построенный индекс сессии.
 Identity — `(provider, realpath(полного документа))`, не basename/name/папка. Codex same-name файлы сохраняются; symlink aliases одного файла дедуплицируются. При неизвестной policy/availability `modelAvailable=false`, причина `availability-unverified`; фильтр до ranking. Native discovery/merge order выбирает запись canonical path, не BM25.
+Внутренний `documentKind: 'skill' | 'command'` берётся из native discovery source. Canonical basename не определяет kind: command тоже может называться SKILL.md. Legacy capabilities.list использует kind для прежнего path (папка скилла / файл команды); wire поля и source enum остаются прежними. Ручные chat подсказки не применяют автоматический modelAvailable search filter ко всему inventory.
 
 ### 3.3 Поиск
 

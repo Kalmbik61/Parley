@@ -25,6 +25,7 @@ interface NativeSkill {
   description: string; // полное валидное описание; пусто только у invalid metadata record
   source: 'user' | 'project' | 'plugin' | 'claude.ai' | 'system' | 'admin' | 'extra';
   path: string; // абсолютный canonical путь всего документа SKILL.md / Claude command .md
+  documentKind: 'skill' | 'command'; // internal origin; never infer from canonical basename
   modelAvailable: boolean;
   unavailableReason: string | null;
 }

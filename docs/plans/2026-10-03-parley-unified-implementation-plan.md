@@ -54,6 +54,7 @@ interface NativeSkill {
   description: string;
   source: 'user' | 'project' | 'plugin' | 'claude.ai' | 'system' | 'admin' | 'extra';
   path: string; // canonical полный document path; identity = provider + canonical path
+  documentKind: 'skill' | 'command'; // internal origin; never infer from canonical basename
   modelAvailable: boolean;
   unavailableReason: string | null;
 }
