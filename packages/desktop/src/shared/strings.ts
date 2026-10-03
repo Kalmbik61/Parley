@@ -91,6 +91,10 @@ export const S = {
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
     sectionMenu: 'Section options',
+    openParleyMd: 'Open PARLEY.md',
+    createParleyMd: 'Create PARLEY.md',
+    parleyMdCreated: 'Parley added PARLEY.md — team rules for your agents',
+    parleyMdOpen: 'Open',
     /** `aria-label` кнопки `#`/`#N` карточки — меню комнат работы (спека 6.3). */
     roomsMenu: 'Rooms',
     /** `aria-label` поля переименования на месте (спека 6.4). */
@@ -1031,6 +1035,7 @@ export const S = {
       deleteWorkspace: 'delete workspace',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',
+      createParleyMd: 'create PARLEY.md',
       revealInFinder: 'reveal in Finder',
       saveScreenshot: 'save screenshot',
       toggleAutoWake: 'toggle auto-wake',
@@ -1220,6 +1225,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
+  'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
   'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
   'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",

@@ -611,6 +611,7 @@ export function createFakeBridge(): FakeBridge {
       titlebarDoubleClick: () => {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);
       },
+      parleyMd: async () => ({ exists: true, created: false }),
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });
         if (revealWorkError !== null) throw revealWorkError;

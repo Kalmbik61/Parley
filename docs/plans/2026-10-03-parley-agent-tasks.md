@@ -66,10 +66,10 @@
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | review |
-| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p03_capabilities_probe (P07) | review |
+| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | running |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
-| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | running |
+| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | review |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | running |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
@@ -298,7 +298,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p03_capabilities_probe (новое назначение P07), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
+**Статус:** running (review needs rework). **Исполнитель:** /root/p03_capabilities_probe (исходный P07); fixes — /root/p02_codex_probe, gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -318,6 +318,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence перед ревью:** 30/30 isolated fixtures passed; scoped `tsc --noEmit` passed; автор изменил только codex.ts/test. Safe unknown roots/product policy unavailable; native live checks не объявлены. Независимый reviewer: /root/p01_review.
+
+**Замечания review:** Important — native whitespace normalization до name-selector matching (human disable теряется) и две ошибки ESLint `no-control-regex`. Fix ownership: только codex.ts/test, отдельный snapshot/recheck.
 
 <a id="p08"></a>
 
@@ -401,7 +403,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p03_review (новое назначение P10), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после source reviews), gpt-6.1-sol/high.
 
 **Зависимости:** P09. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -435,7 +437,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед ревью:** 15 core PARLEY / 57 host / 149 desktop IPC+strings tests, desktop typecheck, dependency builds и scoped lint passed; 4 isolated Electron e2e passed. Один intermediate watcher timeout; isolated и full reruns passed. Portable receipt stat/read→unlink TOCTOU оставлен явным ограничением для review.
 
 <a id="p11"></a>
 

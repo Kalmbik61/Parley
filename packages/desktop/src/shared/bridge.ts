@@ -144,6 +144,8 @@ export interface ParleyBridge {
      * папку проекта; незнакомая работа — отказ с кодом `not_found`.
      */
     revealWork(projectPath: string, workId: string): Promise<void>;
+    /** Main-only status/exclusive creation in a known project's root. */
+    parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное
      * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.

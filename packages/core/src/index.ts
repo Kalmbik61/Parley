@@ -385,3 +385,5 @@ export type {
   WorksIndex,
   WorktreeInfo,
 } from './work/types.js';
+
+export { createParleyMd, ensureParleyMd } from './work/parley-md.js';

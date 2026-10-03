@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -748,6 +748,7 @@ describe('autoLaunch: сервис', () => {
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === oldNoParentId)?.lifecycle).toBe('pending');
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
 
     await sessions.stop({ projectPath: project, workId: work.work.id, sessionId: spawnedId });
   });
@@ -832,7 +833,7 @@ describe('запуск без бинаря', () => {
       }),
     ).rejects.toThrow();
 
-    const notice = broadcasts.find((b) => b.event === 'host.notice');
+    const notice = broadcasts.find((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'launch-failed');
     expect(notice).toBeDefined();
     expect(notice?.data).toMatchObject({
       kind: 'launch-failed',
@@ -1326,6 +1327,8 @@ describe('скилл parley при запуске сессии (кусок 10 п
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
     expect(existsSync(path.join(project, '.parley', 'skills-receipt.json'))).toBe(false);
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
+    expect(JSON.parse(await readFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'utf8')).created).toBe(true);
 
     await service.stop(ref);
   });
@@ -1353,7 +1356,7 @@ describe('скилл parley при запуске сессии (кусок 10 п
 
     expect(await readFile(skillIn(project), 'utf8')).toBe('скилл команды\n');
     expect(existsSync(aliasIn(project))).toBe(false);
-    const notices = broadcasts.filter((item) => item.event === 'host.notice');
+    const notices = broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'skill-foreign');
     expect(notices).toHaveLength(1);
     expect(notices[0]?.data).toMatchObject({ kind: 'skill-foreign', ref: null });
 
@@ -1482,5 +1485,66 @@ describe('session layer warnings and final spawn budget', () => {
       expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'provider-override-gap')).toHaveLength(1);
     } finally { await rm(otherProject, { recursive: true, force: true }); }
     await service.stopAll();
+  });
+});
+
+describe('PARLEY.md before every host launch', () => {
+  it.each(['launch', 'new', 'resume'] as const)('accounts once before %s; deletion is preserved on another attempt', async (mode) => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => {
+      expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
+      throw Object.assign(new Error('fixture'), { code: 'E2BIG' });
+    });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    await expect(sessions.launch(ref, mode)).rejects.toThrow('spawn-budget-too-large');
+    expect(start).toHaveBeenCalledOnce();
+    expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-created')).toHaveLength(1);
+    await rm(path.join(project, 'PARLEY.md'));
+    start.mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    await expect(sessions.launch(ref, mode)).rejects.toThrow('spawn-budget-too-large');
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an initial receipt permission failure leaves PARLEY.md absent and still reaches PTY', async () => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    const host = fakeHost();
+    const warning = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    await chmod(path.join(project, '.parley'), 0o500);
+    try {
+      await expect(sessions.launch(ref, 'new')).rejects.toThrow('spawn-budget-too-large');
+      expect(start).toHaveBeenCalledOnce();
+      expect(warning.mock.calls.some(([message]) => message.includes('could not create PARLEY.md'))).toBe(true);
+      expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+    } finally { await chmod(path.join(project, '.parley'), 0o700); }
+  });
+
+  it('broken accounting logs once per host/project and never prevents a PTY launch attempt', async () => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    await mkdir(path.join(project, '.parley', 'parley-md-receipt.json'));
+    const host = fakeHost();
+    const warning = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(sessions.launch(ref, 'new')).rejects.toThrow('spawn-budget-too-large');
+    }
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(warning.mock.calls.filter(([message]) => message.includes('accounting'))).toHaveLength(1);
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
   });
 });

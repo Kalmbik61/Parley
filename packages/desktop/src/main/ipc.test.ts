@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1163,5 +1163,49 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     expect(sent).toHaveLength(3);
     windowEvents.emit('closed');
     expect(statusListeners.size).toBe(0);
+  });
+});
+
+describe('app:parley-md project boundary', () => {
+  let project: string;
+  let roots: RootsRegistry;
+  let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-md-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+
+  it('status is read-only; explicit Create is idempotent and preserves occupied content', async () => {
+    const { ipcMain, connection } = setup({ roots });
+    vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:parley-md', project, false)).toEqual({ exists: false, created: false });
+    expect(await readdir(project)).toEqual([]);
+    expect(await ipcMain.invoke('app:parley-md', project, true)).toEqual({ exists: true, created: true });
+    await writeFile(path.join(project, 'PARLEY.md'), 'HUMAN RULES');
+    expect(await ipcMain.invoke('app:parley-md', project, true)).toEqual({ exists: true, created: false });
+    expect(await readFile(path.join(project, 'PARLEY.md'), 'utf8')).toBe('HUMAN RULES');
+  });
+
+  it('rejects bad arguments and unknown projects before filesystem creation', async () => {
+    const { ipcMain, connection } = setup({ roots });
+    vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const args of [[project, 'true'], [project + '\0', true], [42, true], ['/not-a-known-project', true]]) {
+      await expect(ipcMain.invoke('app:parley-md', ...args)).rejects.toThrow();
+    }
+    expect(await readdir(project)).toEqual([]);
+  });
+
+  it('refuses accounting through a state directory symlink outside the project', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'parley-md-outside-'));
+    try {
+      await symlink(outside, path.join(project, '.parley'));
+      const { ipcMain, connection } = setup({ roots });
+      vi.mocked(connection.call).mockResolvedValue(snapshot);
+      await expect(ipcMain.invoke('app:parley-md', project, true)).rejects.toThrow();
+      expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(project)).toEqual(['.parley']);
+    } finally { await rm(outside, { recursive: true, force: true }); }
   });
 });

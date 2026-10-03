@@ -1,3 +1,6 @@
+import { lstat } from 'node:fs/promises';
+import path from 'node:path';
+import { createParleyMd } from '@parley/core';
 import { METHODS, NOTIFICATIONS } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
@@ -12,7 +15,7 @@ import { LayoutTooLargeError } from './layout-store.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
 import { isNotesFile } from '../shared/notes-types.js';
-import { isSessionId } from '../shared/work-keys.js';
+import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
@@ -495,6 +498,23 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (answer !== 'close' && answer !== 'cancel') return;
     answerClose(event.sender, answer);
   });
+
+  ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
+    if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
+      throw new HostError('bad_request', 'invalid PARLEY.md request');
+    }
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find((item) => item.projectPath === projectPath);
+    if (entry === undefined) throw new HostError('not_found', 'project not found');
+    // Use the same canonical project boundary as the file editor, never a worktree or arbitrary path.
+    await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const result = create ? await createParleyMd(projectPath) : { created: false };
+    if ('receiptError' in result && result.receiptError) console.warn('[parley] PARLEY.md accounting could not be completed; automatic recreation is suppressed');
+    let exists = false;
+    try { await lstat(path.join(projectPath, 'PARLEY.md')); exists = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    return { exists, created: result.created };
+  }));
 
   ipcMain.handle(
     'app:reveal-work',

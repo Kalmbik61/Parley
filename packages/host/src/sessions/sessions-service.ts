@@ -20,6 +20,7 @@ import {
   createNewSession,
   createPendingSession,
   createWorktree,
+  ensureParleyMd,
   deleteSession,
   DirtyWorktreeError,
   discardWorktree,
@@ -140,6 +141,7 @@ export function createSessionsService(
   const { hooks, providerVersions } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
+  const creationWarnings = new Set<string>();
 
   function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
     const diagnostics = plan.diagnostics ?? [];
@@ -290,6 +292,22 @@ export function createSessionsService(
       // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не
       // останавливает — `installSkill` его не бросает.
       await installSkill(ref, session.worktree?.path ?? null);
+      try {
+        const result = await ensureParleyMd(ref.projectPath);
+        if (result.receiptError && !creationWarnings.has(ref.projectPath)) {
+          creationWarnings.add(ref.projectPath);
+          host.log.warn('PARLEY.md accounting could not be completed; automatic recreation is suppressed', { projectPath: ref.projectPath });
+        }
+        if (result.created) host.broadcast('host.notice', {
+          kind: 'parley-md-created', ref,
+          text: 'Parley added PARLEY.md — team rules for your agents', at: new Date().toISOString(),
+        });
+      } catch {
+        if (!creationWarnings.has(ref.projectPath)) {
+          creationWarnings.add(ref.projectPath);
+          host.log.warn('Parley could not create PARLEY.md; this session still starts', { projectPath: ref.projectPath });
+        }
+      }
 
       const hookUrl = await feedHookUrl(session.provider);
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;

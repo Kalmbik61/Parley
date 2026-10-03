@@ -106,6 +106,7 @@ export type NoticeKind =
   | 'map-corrupt'
   | 'hooks-missing'
   | 'launch-failed'
+  | 'parley-md-created'
   | 'parley-md-unreadable'
   | 'parley-md-truncated'
   | 'provider-override-gap'

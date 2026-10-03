@@ -28,6 +28,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'trust-wait',
   'startup-wait',
   'skill-foreign',
+  'parley-md-created',
   'parley-md-unreadable',
   'parley-md-truncated',
   'provider-override-gap',

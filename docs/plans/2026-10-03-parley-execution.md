@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P06/P07 в последовательном независимом review; P10/P11 выполняются.
+- Текущая фаза: P00–P05 и P09 accepted; P06/P10 в review; P07 needs rework; P11 выполняется.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -27,10 +27,10 @@
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
 | P06 | Реализовать источники скиллов Claude | review | 32 fixtures / scoped ESLint / strict tsc passed; reviewer /root/p01_review after P07 |
-| P07 | Реализовать источники скиллов Codex | review | 30 fixtures / scoped tsc passed; reviewer /root/p01_review |
+| P07 | Реализовать источники скиллов Codex | running | a0c8f2c needs rework: whitespace human selector / lint; fixes /root/p02_codex_probe |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
-| P10 | Подключить создание PARLEY.md и Open/Create | running | /root/p02_codex_probe; gpt-6.1-sol/high; base c2ccbbd; reviewer /root/p03_review |
+| P10 | Подключить создание PARLEY.md и Open/Create | review | 15 core / 57 host / 149 desktop / 4 Electron e2e; reviewer /root/p01_review queued |
 | P11 | Реализовать каталог ролей и умолчания | running | /root/p01_claude_probe; gpt-6.1-sol/high; base 4792cb1; reviewer /root/p02_codex_probe after P10 |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
@@ -114,3 +114,5 @@ P07 готов: 30/30 fixtures и scoped tsc passed, owned diff только cod
 P06 snapshot готов: 32/32 fixtures, scoped ESLint/strict production tsc passed. Verified source/native context API описан caller-facing; unknown availability closed. Только claude.ts/test, без shared mutations. P07 snapshot `a0c8f2c` проверяет /root/p01_review.
 
 P06 snapshot `4792cb1` сохранён. Выдача /root/p00_review отклонена платформой: `agent thread limit reached`; /root/p01_review проверит P06 после P07, независимость от автора сохранена. Свободный существующий исполнитель /root/p01_claude_probe получил P11 (P05/P09 accepted), только roles modules/tests без shared mutations.
+
+P07 review /root/p01_review needs rework: native whitespace collapse перед human name selectors не реализовано, две no-control-regex lint errors. Fix выдан доступному независимому от reviewer исполнителю /root/p02_codex_probe, только codex.ts/test. P10 готов: 16 owned files, core 15 / host 57 / desktop 149 / Electron e2e 4 passed, builds/typecheck/lint passed; промежуточный watcher timeout с successful isolated/full reruns. Receipt TOCTOU disclosed для review, отдельный lock не добавлен.

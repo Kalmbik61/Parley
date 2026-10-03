@@ -1,16 +1,32 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PARLEY_MD_MARKER, processParleyMd, readParleyMd } from './parley-md.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  createParleyMd,
+  ensureParleyMd,
+  PARLEY_MD_MARKER,
+  processParleyMd,
+  readParleyMd,
+} from './parley-md.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename), writeFile: vi.fn(actual.writeFile) };
+});
 
 let project: string;
 beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'parley-md-'));
 });
 afterEach(async () => {
+  vi.mocked(rename).mockReset();
+  vi.mocked(writeFile).mockReset();
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(rename).mockImplementation(actual.rename);
+  vi.mocked(writeFile).mockImplementation(actual.writeFile);
   await rm(project, { recursive: true, force: true });
 });
 
@@ -79,5 +95,76 @@ describe('PARLEY.md read', () => {
     expect((await readParleyMd(project)).text).toBe('One rule');
     await rm(path.join(project, 'rules.md'));
     expect((await readParleyMd(project)).warnings[0]?.code).toBe('parley-md-unreadable');
+  });
+});
+
+describe('PARLEY.md creation receipt', () => {
+  it('creates the empty-cost template once and records it in the legacy state directory', async () => {
+    await mkdir(path.join(project, '.harnas'));
+    expect((await ensureParleyMd(project)).created).toBe(true);
+    expect((await readParleyMd(project)).text).toBe('');
+    expect(
+      JSON.parse(await readFile(path.join(project, '.harnas', 'parley-md-receipt.json'), 'utf8')),
+    ).toMatchObject({ version: 1, created: true });
+    await rm(path.join(project, 'PARLEY.md'));
+    expect((await ensureParleyMd(project)).created).toBe(false);
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await createParleyMd(project)).created).toBe(true);
+  });
+
+  it('never overwrites an occupied path, including a broken link or directory', async () => {
+    await writeFile(path.join(project, 'PARLEY.md'), 'HUMAN RULES');
+    expect((await ensureParleyMd(project)).created).toBe(false);
+    expect((await createParleyMd(project)).created).toBe(false);
+    expect(await readFile(path.join(project, 'PARLEY.md'), 'utf8')).toBe('HUMAN RULES');
+    await rm(path.join(project, 'PARLEY.md'));
+    await symlink('missing', path.join(project, 'PARLEY.md'));
+    expect((await createParleyMd(project)).created).toBe(false);
+    expect((await lstat(path.join(project, 'PARLEY.md'))).isSymbolicLink()).toBe(true);
+    await rm(path.join(project, 'PARLEY.md'));
+    await mkdir(path.join(project, 'PARLEY.md'));
+    expect((await createParleyMd(project)).created).toBe(false);
+  });
+
+  it('concurrent automatic requests create exactly one file', async () => {
+    const results = await Promise.all(Array.from({ length: 8 }, () => ensureParleyMd(project)));
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect((await readParleyMd(project)).text).toBe('');
+  });
+
+  it('failed initial accounting creates nothing, while malformed accounting suppresses automatic creation', async () => {
+    await writeFile(path.join(project, '.parley'), 'occupied');
+    await expect(ensureParleyMd(project)).rejects.toThrow();
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await rm(path.join(project, '.parley'));
+    await mkdir(path.join(project, '.parley'));
+    await writeFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'broken');
+    expect(await ensureParleyMd(project)).toMatchObject({ created: false, receiptError: true });
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('a final receipt update failure retains the reservation after successful creation', async () => {
+    vi.mocked(rename).mockRejectedValueOnce(new Error('receipt update failed'));
+    expect(await ensureParleyMd(project)).toMatchObject({ created: true, receiptError: true });
+    await rm(path.join(project, 'PARLEY.md'));
+    expect((await ensureParleyMd(project)).created).toBe(false);
+  });
+
+  it('failed file creation cannot remove a receipt replaced by concurrent explicit Create', async () => {
+    await mkdir(path.join(project, '.parley'));
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(writeFile).mockImplementationOnce(async () => {
+      // The automatic reservation exists; the explicit request replaces it while this write waits.
+      vi.mocked(writeFile).mockImplementation(actual.writeFile);
+      await createParleyMd(project);
+      await rm(path.join(project, 'PARLEY.md'));
+      throw new Error('automatic write failed');
+    });
+    await expect(ensureParleyMd(project)).rejects.toThrow('automatic write failed');
+    expect(
+      JSON.parse(await readFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'utf8'))
+        .created,
+    ).toBe(true);
+    expect((await ensureParleyMd(project)).created).toBe(false);
   });
 });
