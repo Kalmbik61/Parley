@@ -1113,7 +1113,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen domain13 + consumer3 applied. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high, после P18 backend freeze.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen domain13 + consumer3 applied; Unicode validation rework6. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; original Unicode9 RED, остальные scoped/probes GREEN.
 
 **Зависимости:** P20, P09. **Источник:** [этап 10 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-10).
 

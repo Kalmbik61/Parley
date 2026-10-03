@@ -341,7 +341,7 @@ MCP sampling для v1 не нужен; ответ о нём можно запи
 **Создать:** `packages/core/src/work/{project-memory,memory-suggestions,history-search}.ts` с тестами; `packages/host/src/methods/{memory,history}.ts`; desktop `project/MemoryPanel.tsx` и `project/ProjectSearch.tsx` с тестами.
 **Изменить:** `packages/core/src/work/{session-layer,guide,guidance,state-dir}.ts`, MCP tools, protocol types/methods/events, `packages/host/src/methods/index.ts` и панель проекта.
 
-1. Проверить сохранение Markdown, ids, dedup, lock/mtime/conflict, remember suggested/onHumanRequest и Undo. Прямую просьбу человека отражать отдельной пометкой; обычное предложение всегда ждёт приёма.
+1. Проверить сохранение Markdown, ids, dedup, lock/mtime/conflict, remember suggested/onHumanRequest и Undo. Прямую просьбу человека отражать отдельной пометкой claimed request; обычное предложение всегда ждёт приёма. Undo связан с исходной операцией и hash вставленной строки: человеческая правка сохраняется с конфликтом, missing идемпотентен.
 2. Реализовать memory_read и последний блок слоя: только факты с id, без details, ограничение 12 КиБ и метка. Проверить полный состав слоя и предел guidance вместе с навигатором, ролью и рецептом.
 3. Добавить search_history по семи scope из спеки: all words в одной записи, rank по первой строке/новизне, excerpts, limit 1–30, файлы/строки/id. В каталоги скиллов и родную память CLI не ходить.
 4. Добавить Memory/Suggested/Undo, поиск и открытие результата на нужной строке/комнате/сессии; расширить только сгенерированный gitignore.
