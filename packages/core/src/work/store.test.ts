@@ -22,6 +22,8 @@ import {
   WorkNotFoundError,
   workPaths,
   worksIndexPath,
+  inspectSharedIgnore,
+  prepareSharedIgnore,
   readSharedFile,
   sharedProjectPaths,
   withSharedProjectLock,
@@ -679,5 +681,38 @@ describe('deleteSessionFiles', () => {
 
     expect(await exists(path.join(limits, 's-01.json'))).toBe(false);
     expect(await exists(path.join(limits, 's-02.json'))).toBe(true);
+  });
+});
+
+
+describe('read-only shared ignore diagnostics', () => {
+  it('does not create a state directory or ignore file on an untouched GET', async () => {
+    const paths = await sharedProjectPaths(project);
+    expect(await inspectSharedIgnore(paths)).toEqual([]);
+    await expect(stat(paths.dir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('preserves custom/BOM/CRLF bytes and diagnoses an existing missing ignore file', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+    expect(await inspectSharedIgnore(paths)).toEqual([{ code: 'parley-gitignore-custom' }]);
+    const file = path.join(paths.dir, '.gitignore');
+    for (const text of ['custom\n', '\uFEFF*\n', '*\r\n']) {
+      await writeFile(file, text); expect(await inspectSharedIgnore(paths)).toContainEqual({ code: 'parley-gitignore-custom' });
+      expect(await readFile(file, 'utf8')).toBe(text);
+    }
+  });
+  it('does not migrate the old generated signature during inspection, and write preparation still migrates it', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+    const file = path.join(paths.dir, '.gitignore'); await writeFile(file, '*\n');
+    expect(await inspectSharedIgnore(paths)).toEqual([]); expect(await readFile(file, 'utf8')).toBe('*\n');
+    expect(await prepareSharedIgnore(paths)).toEqual([]);
+    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n');
+  });
+  it('reuses the accepted bounded native ignore query without root ignore writes', async () => {
+    const paths = await sharedProjectPaths(project);
+    const calls: readonly string[][] = [];
+    const options = { readGit: async (args: readonly string[]) => { (calls as string[][]).push([...args]); return { code: 0, stdout: '.parley/backlog.md\n', stderr: '' }; } };
+    expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: project, mainRoot: project, checkoutRoot: project } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
+    expect(calls[0]).toContain('check-ignore'); expect(calls[0]).toContain('core.fsmonitor=false');
+    await expect(stat(path.join(project, '.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

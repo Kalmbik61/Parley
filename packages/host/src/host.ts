@@ -30,6 +30,7 @@ import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
+import { createBacklogService } from './backlog/backlog-service.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -250,7 +251,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const limitsService = createLimitsService(handle.context, worksService, options.limits);
   handle.context.onShutdown(async () => limitsService.stop());
 
+  const backlogService = createBacklogService();
+  handle.context.onShutdown(async () => backlogService.close());
+
   const handlers = createHostHandlers({
+    backlog: backlogService,
     worksReady,
     providerVersions,
     limits: limitsService,
@@ -280,6 +285,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      backlogService.removeClient(client.id);
     },
   });
 

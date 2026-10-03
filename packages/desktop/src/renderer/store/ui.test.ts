@@ -355,3 +355,13 @@ describe('useUiStore — windowFocused при фокусе в странице (
   expect(useUiStore.getState().projectPanel).toBeNull();
   expect(save).not.toHaveBeenCalled();
  });
+
+
+it('prepared backlog completion context is ephemeral and clears on plain open/close', () => {
+  const context = { projectPath: '/tmp/p', id: 'b-001', version: 'v1', task: 'Title\nDetails' };
+  const before = useUiStore.getState().ui;
+  useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-01' }, { room: true, backlog: context });
+  expect(useUiStore.getState().dialogs.newSession.backlog).toEqual(context); expect(useUiStore.getState().ui).toBe(before);
+  useUiStore.getState().closeNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
+  useUiStore.getState().openNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
+});

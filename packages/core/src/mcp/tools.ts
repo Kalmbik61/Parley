@@ -30,14 +30,18 @@ import { writeBrief } from '../work/brief.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { readBacklog } from '../work/backlog.js';
+import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
+import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
-import { readMap, updateMap, workPaths } from '../work/store.js';
+import { SharedStateError, inspectSharedIgnore, readMap, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
 import {
   MESSAGE_KINDS,
+  SYSTEM,
   type Artifact,
   type Message,
   type Room,
@@ -248,6 +252,22 @@ const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openW
 const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const TOOLS: Tool[] = [
+  {
+    name: 'backlog_list', annotations: READS,
+    description: 'Read this project backlog before suggesting work outside your task. Reads never create files or assign IDs.',
+    inputSchema: { type: 'object', properties: {
+      filter: { type: 'string', enum: ['open', 'taken', 'done', 'all'], default: 'open' },
+      text: { type: 'string', maxLength: 4096 },
+    }, additionalProperties: false },
+  },
+  {
+    name: 'backlog_suggest', annotations: WRITES,
+    description: 'Propose one worthwhile finding outside your task with a reason. The project rule decides whether to add it or ask the human. Cannot edit, close, or remove existing items.',
+    inputSchema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['bug', 'debt', 'idea'] }, title: { type: 'string', minLength: 1, maxLength: 4096 },
+      details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
+    }, required: ['kind', 'title', 'why'], additionalProperties: false },
+  },
   {
     name: 'get_map',
     annotations: READS,
@@ -978,12 +998,69 @@ async function closeSession(
 const NO_SESSION =
   'no session is set (PARLEY_SESSION_ID is empty): only get_map and read_guide are available. Create a session through Parley or `parley-core work session new` — then the other tools work.';
 
+/** Only the immutable launched caller supplies project/work/session identity; tool arguments cannot redirect it. */
+async function backlogTool(context: McpContext, name: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const allowed = name === 'backlog_list' ? ['filter', 'text'] : ['kind', 'title', 'details', 'why'];
+    if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('backlog-invalid');
+    const sessionId = context.sessionId;
+    if (sessionId === null) throw new Error('Backlog tools require a known launched session.');
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(row => row.id === sessionId);
+    if (!caller || map.work.id !== context.workId) throw new Error('Backlog tools require a known launched session.');
+    if (name === 'backlog_list') {
+      const filter = args.filter ?? 'open'; const text = args.text ?? '';
+      if (!['open', 'taken', 'done', 'all'].includes(String(filter)) || typeof filter !== 'string' ||
+        typeof text !== 'string' || text.length > 4096 || text.includes('\0')) throw new SharedStateError('backlog-invalid');
+      const document = await readBacklog(context.projectPath);
+      const needle = text.toLowerCase();
+      const items = document.items.filter(row => (filter === 'all' || (filter === 'done' ? row.checked :
+        filter === 'taken' ? !row.checked && row.taken !== undefined : !row.checked)) &&
+        (!needle || `${row.title}\n${row.details}\n${row.section ?? ''}`.toLowerCase().includes(needle)));
+      const pending = await listBacklogSuggestions(context.projectPath);
+      const paths = await sharedProjectPaths(context.projectPath);
+      const result = { version: document.version, items, suggestions: pending.map(row => ({ id: row.id, kind: row.kind,
+        title: row.title, details: row.details, why: row.why, workId: row.workId, sessionId: row.sessionId })),
+        rule: (await readProjectPreferences(context.projectPath)).backlogRule, diagnostics: await inspectSharedIgnore(paths) };
+      if (items.length > 10_000 || pending.length > 10_000 || Buffer.byteLength(JSON.stringify(result), 'utf8') > 4 * 1024 * 1024)
+        throw new Error('The backlog snapshot is too large.');
+      return result;
+    }
+    if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to suggest backlog work.');
+    if (!['bug', 'debt', 'idea'].includes(String(args.kind)) || typeof args.kind !== 'string' ||
+        typeof args.title !== 'string' || typeof args.why !== 'string' ||
+        (args.details !== undefined && typeof args.details !== 'string')) throw new SharedStateError('suggestions-invalid');
+    const result = await suggestBacklog(context.projectPath, { kind: args.kind as 'bug' | 'debt' | 'idea', title: args.title,
+      why: args.why, ...(typeof args.details === 'string' ? { details: args.details } : {}), workId: context.workId, sessionId });
+    let feedUnavailable = false;
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+      try {
+        await updateMap(context.projectPath, context.workId, current => {
+          const label = sessionId.replace(/^s-/, 'S');
+          const text = `${label} ${result.status === 'added' ? 'added to' : 'suggested for'} the backlog: ${args.title as string}`;
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+        });
+      } catch { feedUnavailable = true; }
+    }
+    return { message: `${result.status === 'added' ? 'added' : result.status === 'pending' ? 'suggested' : 'already in backlog'}: ${result.id}`,
+      diagnostics: result.diagnostics, ...(feedUnavailable ? { feedUnavailable: true } : {}) };
+  } catch (error) {
+    if (error instanceof SharedStateError) throw new Error(`Backlog operation failed (${error.code}).`);
+    // Never return parser/filesystem/raw-input errors through the generic MCP error handler.
+    const safe = error instanceof Error && ['Backlog tools require a known launched session.',
+      'A live launched session is required to suggest backlog work.', 'The backlog snapshot is too large.'].includes(error.message);
+    throw new Error(safe ? (error as Error).message : 'Backlog operation could not be completed.');
+  }
+}
+
 async function dispatch(
   context: McpContext,
   name: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'get_map') return getMap(context);
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);

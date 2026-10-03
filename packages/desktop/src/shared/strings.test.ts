@@ -248,3 +248,10 @@ describe('noticeText', () => {
     expect(noticeText(hostNotice('map-corrupt'))).not.toMatch(CYRILLIC);
   });
 });
+
+
+it('backlog labels and safe warnings are English and do not interpolate raw errors', () => {
+  const labels = [S.backlog.title, S.backlog.failed, S.backlog.liveUnavailable, S.backlog.markFailed, ...Object.values(S.backlog.ignore)];
+  for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }
+  expect(S.backlog.suggested(3)).toBe('Suggested (3)'); expect(S.backlog.itemTaken('w-01/r-01')).toBe('Taken: w-01/r-01');
+});

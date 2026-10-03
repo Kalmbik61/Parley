@@ -735,6 +735,20 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         bridge={bridge}
         work={newSession.work}
         room={newSession.room}
+        backlog={newSession.backlog ?? null}
+        onCreated={async target => {
+          const context = newSession.backlog;
+          if (!context) return;
+          // Retry keeps the created target and rereads the current row/version; it never creates another room.
+          const snapshot = await bridge.call('backlog.get', { projectPath: context.projectPath });
+          const item = snapshot.items.find(row => row.id === context.id);
+          const taken = `${target.workId}/${'roomId' in target ? target.roomId : target.sessionId}`;
+          if (!item || item.checked || [item.title, item.details].filter(Boolean).join('\n\n') !== context.task ||
+              (item.taken !== undefined && item.taken !== taken)) throw new Error('The backlog item changed.');
+          // An unchanged same-target marker may have committed before its reply was lost.
+          if (item.taken === taken) return;
+          await bridge.call('backlog.take', { projectPath: context.projectPath, id: context.id, version: snapshot.version, target });
+        }}
         onOpenChange={(open) => {
           if (!open) closeNewSessionDialog();
         }}

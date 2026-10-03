@@ -544,3 +544,14 @@ describe('optional skill navigator guidance', () => {
     expect(enabled.replace(' find_skill — skills by task, if needed.', '')).toBe(baseline);
   });
 });
+
+
+it('backlog hints share the guide line across full guidance combinations', () => {
+  for (const goal of ['', 'Goal with\nline']) for (const enabled of [false, true]) {
+    const text = systemGuidance(mapOf('Title', goal), 's-03', { skillNavigator: enabled });
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+    expect(text).toContain('check backlog_list'); expect(text).toContain('backlog_suggest one worthwhile finding with a reason');
+    expect(text).toContain('do not expand the task');
+  }
+  expect(GUIDE).toContain('backlog_list(filter?, text?)'); expect(GUIDE).toContain('backlog_suggest(kind, title, details?, why)');
+});

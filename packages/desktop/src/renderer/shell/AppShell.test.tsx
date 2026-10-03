@@ -2276,3 +2276,73 @@ it('project capabilities opens one shared panel through the project state and cl
  fireEvent.keyDown(dialog, { key: 'Escape' }); await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
  expect(useUiStore.getState().projectPanel).toBeNull();
 });
+
+
+it.each([false, true])('prepared backlog Retry keeps the same target and fresh task (marker already applied: %s)', async alreadyApplied => {
+  const entry = work('w-01', '2026-01-01', 'Prepared backlog', []);
+  useWorksStore.setState({ entries: [entry], branches: {}, loading: false, error: null });
+  bridge.setHandler('providers.list', () => ({ providers: [{ id: 'claude', label: 'Claude', available: true, models: null, effort: false }] }));
+  bridge.setHandler('roles.list', () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('worktrees.available', () => ({ available: false }));
+  let next = 1;
+  bridge.setHandler('sessions.create', params => ({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${next++}` } }));
+  bridge.setHandler('rooms.create', () => ({ roomId: 'r-01' }));
+  let reads = 0; let marks = 0;
+  bridge.setHandler('backlog.get', () => ({ projectPath: entry.projectPath, sharedProjectPath: entry.projectPath,
+    version: `fresh-${++reads}`, file: { relativePath: '.parley/backlog.md', exists: true }, items: [{ id: 'b-001', title: 'Human row', details: '', checked: false, section: null, ...(alreadyApplied && marks > 0 ? { taken: 'w-01/r-01' } : {}) }], suggestions: [], rule: 'problems', diagnostics: [] }));
+  bridge.setHandler('backlog.take', () => { if (++marks === 1) throw new Error('PRIVATE_MARK_FAILURE'); return {} as never; });
+  render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />); await flush();
+  act(() => useUiStore.getState().openNewSessionDialog({ projectPath: entry.projectPath, workId: 'w-01' }, {
+    room: true, backlog: { projectPath: entry.projectPath, id: 'b-001', version: 'prepared-old', task: 'Human row' } }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Create room' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Create room' }));
+  await screen.findByText('The target was created, but the backlog could not be marked. Retry keeps the same target.');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(useUiStore.getState().dialogs.newSession.open).toBe(false));
+  expect(bridge.calls.filter(row => row.method === 'rooms.create')).toHaveLength(1);
+  expect(bridge.calls.filter(row => row.method === 'sessions.create')).toHaveLength(2);
+  expect(bridge.calls.filter(row => row.method === 'backlog.take').map(row => row.params)).toEqual([
+    { projectPath: entry.projectPath, id: 'b-001', version: 'fresh-1', target: { projectPath: entry.projectPath, workId: 'w-01', roomId: 'r-01' } },
+    ...(alreadyApplied ? [] : [{ projectPath: entry.projectPath, id: 'b-001', version: 'fresh-2', target: { projectPath: entry.projectPath, workId: 'w-01', roomId: 'r-01' } }]),
+  ]);
+  expect(document.body.textContent).not.toContain('PRIVATE_MARK_FAILURE');
+});
+
+
+it.each(['before marker', 'after marker lost reply'])('prepared backlog refuses human task amendments %s and Retry preserves the created target', async when => {
+  const entry = work('w-01', '2026-01-01', 'Prepared backlog', []);
+  useWorksStore.setState({ entries: [entry], branches: {}, loading: false, error: null });
+  bridge.setHandler('providers.list', () => ({ providers: [{ id: 'claude', label: 'Claude', available: true, models: null, effort: false }] }));
+  bridge.setHandler('roles.list', () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('worktrees.available', () => ({ available: false }));
+  let next = 1;
+  bridge.setHandler('sessions.create', params => ({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${next++}` } }));
+  let finishRoom!: (value: { roomId: string }) => void;
+  const room = new Promise<{ roomId: string }>(resolve => { finishRoom = resolve; });
+  bridge.setHandler('rooms.create', () => room);
+  let title = 'Fix typo'; let details = 'Original details'; let taken: string | undefined;
+  bridge.setHandler('backlog.get', () => ({ projectPath: entry.projectPath, sharedProjectPath: entry.projectPath,
+    version: 'human-current', file: { relativePath: '.parley/backlog.md', exists: true },
+    items: [{ id: 'b-001', title, details, checked: false, section: null, ...(taken ? { taken } : {}) }], suggestions: [], rule: 'problems', diagnostics: [] }));
+  bridge.setHandler('backlog.take', () => {
+    if (when === 'after marker lost reply') { taken = 'w-01/r-01'; title = 'Delete production data'; details = 'Human amendment'; }
+    throw new Error('PRIVATE_MARK_FAILURE');
+  });
+  render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />); await flush();
+  act(() => useUiStore.getState().openNewSessionDialog({ projectPath: entry.projectPath, workId: 'w-01' }, {
+    room: true, backlog: { projectPath: entry.projectPath, id: 'b-001', version: 'prepared-old', task: 'Fix typo\n\nOriginal details' } }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Create room' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Create room' }));
+  await waitFor(() => expect(bridge.calls.filter(row => row.method === 'rooms.create')).toHaveLength(1));
+  if (when === 'before marker') { title = 'Delete production data'; details = 'Human amendment'; }
+  await act(async () => finishRoom({ roomId: 'r-01' }));
+  await screen.findByText('The target was created, but the backlog could not be marked. Retry keeps the same target.');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await flush();
+  expect(bridge.calls.filter(row => row.method === 'rooms.create')).toHaveLength(1);
+  expect(bridge.calls.filter(row => row.method === 'sessions.create')).toHaveLength(2);
+  expect(bridge.calls.filter(row => row.method === 'backlog.take')).toHaveLength(when === 'before marker' ? 0 : 1);
+  expect(useUiStore.getState().dialogs.newSession.open).toBe(true);
+  expect(title).toBe('Delete production data'); expect(details).toBe('Human amendment');
+  expect(taken).toBe(when === 'before marker' ? undefined : 'w-01/r-01');
+  expect(document.body.textContent).not.toContain('PRIVATE_MARK_FAILURE');
+});

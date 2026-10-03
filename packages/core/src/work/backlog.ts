@@ -294,8 +294,11 @@ export async function ensureBacklogIdsInTransaction(tx: BacklogTransaction, opti
   throw new SharedStateError('backlog-conflict');
 }
 
-async function changeBacklog(projectPath: string, id: string, patch: BacklogPatch | null, options: SharedWriteOptions): Promise<BacklogWriteResult> {
-  if (!validId(id)) fail();
+async function changeBacklog(projectPath: string, locator: string | number, patch: BacklogPatch | null, options: SharedWriteOptions): Promise<BacklogWriteResult> {
+  // A positional handwritten locator is meaningful only in the exact human-observed Markdown snapshot.
+  if (typeof locator === 'string' ? !validId(locator) :
+      !Number.isSafeInteger(locator) || locator < 0 || locator >= 10_000 ||
+      typeof options.expectedVersion !== 'string' || options.expectedVersion.length === 0) fail();
   if (patch) {
     if (patch.title !== undefined) validateBacklogInput({ title: patch.title });
     if (patch.details !== undefined && (patch.details.length > 65_536 || patch.details.includes('\0'))) fail();
@@ -308,11 +311,15 @@ async function changeBacklog(projectPath: string, id: string, patch: BacklogPatc
     for (let attempt = 0; attempt < 3; attempt++) {
       const before = await readSharedFile(tx.paths.backlog);
       if (options.expectedVersion !== undefined && before.version !== options.expectedVersion) throw new SharedStateError('backlog-conflict');
+      const original = parseItems(before.text);
+      const index = typeof locator === 'number' ? locator : original.findIndex(row => row.id === locator);
+      if (!original[index]) fail();
       let source = allocateMissing(before.text, tx.state);
-      const item = parseItems(source).find(row => row.id === id);
-      if (!item) fail();
+      const item = parseItems(source)[index];
+      if (!item?.id) fail();
+      const id = item.id;
       if (patch === null) source = source.slice(0, item.start) + source.slice(item.end);
-      else {
+      else if (Object.keys(patch).length > 0) {
         const updated = { ...item, ...patch };
         let tokens = [...item.tokens];
         for (const key of ['taken', 'done'] as const) if (patch[key] !== undefined) {
@@ -339,7 +346,7 @@ async function changeBacklog(projectPath: string, id: string, patch: BacklogPatc
     throw new SharedStateError('backlog-conflict');
   });
 }
-export const updateBacklogItem = (projectPath: string, id: string, patch: BacklogPatch, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, patch, options);
-export const removeBacklogItem = (projectPath: string, id: string, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, null, options);
-export const takeBacklogItem = (projectPath: string, id: string, taken: string, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, { taken }, options);
+export const updateBacklogItem = (projectPath: string, id: string | number, patch: BacklogPatch, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, patch, options);
+export const removeBacklogItem = (projectPath: string, id: string | number, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, null, options);
+export const takeBacklogItem = (projectPath: string, id: string | number, taken: string, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, { taken }, options);
 export const completeBacklogItem = (projectPath: string, id: string, done: string, options: SharedWriteOptions = {}): Promise<BacklogWriteResult> => changeBacklog(projectPath, id, { checked: true, done }, options);

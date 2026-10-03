@@ -965,3 +965,53 @@ describe('source-qualified role choices and explicit defaults', () => {
     expect(Object.hasOwn(callsOf('sessions.create')[0]!, 'effort')).toBe(false);
   });
 });
+
+
+describe('prepared backlog completion context', () => {
+  const context = { projectPath: PROJECT, id: 'b-001', version: 'v1', task: 'Backlog title\n\nBacklog details' };
+  async function prepared(room = true, onCreated = vi.fn().mockResolvedValue(undefined)) {
+    const onOpenChange = vi.fn();
+    render(<NewSessionOrRoomDialog open bridge={bridge} work={{ projectPath: PROJECT, workId: 'w-01' }} room={room}
+      backlog={context} onCreated={onCreated} onOpenChange={onOpenChange} />);
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1)); await act(async () => {});
+    return { onCreated, onOpenChange };
+  }
+  it('prefills the task without changing plain creation choices and calls marking only after a room exists', async () => {
+    const onCreated = vi.fn(async () => { expect(callsOf('rooms.create')).toHaveLength(1); });
+    const { onOpenChange } = await prepared(true, onCreated);
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe(context.task);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    for (const call of callsOf('sessions.create')) { expect(call.task).toBe(context.task); expect(call).not.toHaveProperty('model'); expect(call).not.toHaveProperty('effort'); }
+  });
+  it('room marker failure preserves the created target; Retry never creates a second room or session', async () => {
+    const onCreated = vi.fn().mockRejectedValueOnce(new Error('PRIVATE_MARK_ERROR')).mockResolvedValue(undefined);
+    const { onOpenChange } = await prepared(true, onCreated); fireEvent.click(button('Create room'));
+    await screen.findByText(S.backlog.markFailed); expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.queryByText('PRIVATE_MARK_ERROR')).toBeNull();
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')).toHaveLength(1); expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(onCreated.mock.calls).toEqual([[{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }], [{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }]]);
+  });
+  it('a room creation failure leaves the stable prepared item unmarked; retry creates only the missing room', async () => {
+    bridge.setHandler('rooms.create', () => { throw new Error('Room failed'); });
+    const { onCreated } = await prepared(); fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1)); await act(async () => {});
+    expect(onCreated).not.toHaveBeenCalled();
+    bridge.setHandler('rooms.create', () => ({ roomId: 'r-02' })); fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ projectPath: PROJECT, workId: 'w-01', roomId: 'r-02' }));
+    expect(callsOf('sessions.create')).toHaveLength(2); expect(callsOf('rooms.create')).toHaveLength(2);
+  });
+  it('single-session Take preserves its target through marker Retry and does not offer a foreign project', async () => {
+    const onCreated = vi.fn().mockRejectedValueOnce(new Error('marker')).mockResolvedValue(undefined);
+    const { onOpenChange } = await prepared(false, onCreated); fireEvent.click(button('Start session'));
+    await screen.findByText(S.backlog.markFailed); fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(1); expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(onCreated.mock.calls[0]).toEqual([{ projectPath: PROJECT, workId: 'w-01', sessionId: 's-01' }]);
+    expect(callsOf('sessions.create')[0]!.projectPath).toBe(PROJECT);
+  });
+});

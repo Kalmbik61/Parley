@@ -1209,3 +1209,58 @@ describe('app:parley-md project boundary', () => {
     } finally { await rm(outside, { recursive: true, force: true }); }
   });
 });
+
+
+describe('app:open-backlog fixed project file boundary', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  it('opens only the regular canonical backlog file of a known project without creating state on missing files', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow(); expect(await readdir(project)).toEqual([]);
+    await mkdir(path.join(project, '.parley')); const file = path.join(project, '.parley', 'backlog.md'); await writeFile(file, 'Human backlog');
+    expect(await ipcMain.invoke('app:open-backlog', project)).toEqual({ opened: true }); expect(openPath).toHaveBeenCalledWith(file);
+    expect(await readFile(file, 'utf8')).toBe('Human backlog');
+  });
+  it('rejects arbitrary paths, unsafe argument forms, directories, and symlink targets before editor delivery', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0']) await expect(ipcMain.invoke('app:open-backlog', value)).rejects.toThrow();
+    await mkdir(path.join(project, '.parley', 'backlog.md'), { recursive: true }); await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'backlog.md'), { recursive: true });
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await symlink(outside, path.join(project, '.parley', 'backlog.md')); await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('returns a fixed safe error when the editor is unavailable', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await mkdir(path.join(project, '.parley')); await writeFile(path.join(project, '.parley', 'backlog.md'), 'Task');
+    openPath.mockResolvedValue('/private editor error');
+    const error = await Promise.resolve(ipcMain.invoke('app:open-backlog', project)).catch((value: unknown) => value);
+    expect(String(error)).not.toContain('/private editor error');
+  });
+});
+
+
+it('OpenBacklog resolves a known linked participant project to its corresponding main backlog file', async () => {
+  const run = (await import('node:util')).promisify((await import('node:child_process')).execFile);
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-linked-ipc-')));
+  const main = path.join(root, 'main'), participant = path.join(root, 'participant');
+  await mkdir(main);
+  try {
+    await run('git', ['init', '-b', 'main', main]);
+    await run('git', ['-C', main, 'config', 'user.name', 'Fixture']); await run('git', ['-C', main, 'config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await run('git', ['-C', main, 'add', 'README.md']); await run('git', ['-C', main, 'commit', '-m', 'fixture']);
+    await run('git', ['-C', main, 'worktree', 'add', '-b', 'participant', participant]);
+    await mkdir(path.join(main, '.parley')); await writeFile(path.join(main, '.parley', 'backlog.md'), 'Shared main backlog');
+    const snapshot = { entries: [{ projectPath: participant, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    const roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:open-backlog', participant)).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledWith(path.join(main, '.parley', 'backlog.md'));
+    await expect(readFile(path.join(participant, '.parley', 'backlog.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

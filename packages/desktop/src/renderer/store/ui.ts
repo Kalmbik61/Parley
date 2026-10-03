@@ -19,6 +19,9 @@ export interface DialogWork {
   workId: string;
 }
 
+/** Ephemeral prepared backlog context. The shared row already has a stable ID before creation. */
+export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
+
 export interface DialogsState {
   /**
    * `projectPath` — проект «+» заголовка группы (кусок 3.5): форма откроется с ним; `null` — ⌘N.
@@ -31,7 +34,7 @@ export interface DialogsState {
    * `null` — активная работа (⌘T). `room` — «New room» (меню карточки, палитра): диалог открывается сразу с двумя
    * агентами, то есть комнатой.
    */
-  newSession: { open: boolean; work: DialogWork | null; room: boolean };
+  newSession: { open: boolean; work: DialogWork | null; room: boolean; backlog?: BacklogTakeContext };
   settings: boolean;
   /**
    * Диалог «New room» из двух сессий (1.6): сессию `dragged` бросили на сессию `target` той же работы; `null` — диалог
@@ -135,7 +138,7 @@ export interface UiState {
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
   /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
-  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean }) => void;
+  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean; backlog?: BacklogTakeContext }) => void;
   closeNewSessionDialog: () => void;
   openSettingsDialog: () => void;
   closeSettingsDialog: () => void;
@@ -247,7 +250,7 @@ export const useUiStore = create<UiState>((set, get) => {
       set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null, title: '' } } })),
     openNewSessionDialog: (work, options) =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true } },
+        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true, ...(options?.backlog ? { backlog: options.backlog } : {}) } },
       })),
     closeNewSessionDialog: () =>
       set((state) => ({

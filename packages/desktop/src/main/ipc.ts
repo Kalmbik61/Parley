@@ -1,6 +1,6 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { createParleyMd } from '@parley/core';
+import { createParleyMd, sharedProjectPaths } from '@parley/core';
 import { METHODS, NOTIFICATIONS } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
@@ -498,6 +498,25 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (answer !== 'close' && answer !== 'cancel') return;
     answerClose(event.sender, answer);
   });
+
+  ipcMain.handle('app:open-backlog', withIpcError(async (_event, projectPath: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768)
+      throw new HostError('bad_request', 'Invalid backlog request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      // This fixed file is authorized through the proven shared project context, not an arbitrary path API.
+      const paths = await sharedProjectPaths(projectPath);
+      const info = await lstat(paths.backlog);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(paths.backlog) !== paths.backlog)
+        throw new HostError('bad_request', 'The backlog file is unavailable.');
+      const result = await openPath(paths.backlog);
+      if (result) throw new HostError('internal', 'The backlog file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The backlog file could not be opened.'); }
+  }));
 
   ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
     if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {

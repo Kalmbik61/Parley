@@ -6,6 +6,9 @@ import { S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { openParleyEditor } from '../../sidebar/SectionMenu.js';
 import { useHostStore } from '../../store/host.js';
+import { useWorksStore } from '../../store/works.js';
+import { RoleChip } from '../../lib/role-summary.js';
+import { BacklogPanel } from './BacklogPanel.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/dialog.js';
@@ -25,6 +28,10 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   const connection = useHostStore(state => state.connections);
   const methods = hostMethods(status);
   const supported = methods.has('capabilities.get') && methods.has('capabilities.refresh');
+  const entries = useWorksStore(state => state.entries);
+  const [pendingSuggestions, setPendingSuggestions] = useState(0);
+  const backlogSupported = ['backlog.get', 'backlog.subscribe', 'backlog.unsubscribe', 'backlog.prepareTake', 'backlog.take'].every(method => methods.has(method));
+  const backlogWork = entries.find(entry => entry.projectPath === projectPath && entry.map.work.status === 'active');
   const [snapshot, setSnapshot] = useState<CapabilitySnapshot | null>(null);
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -174,7 +181,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           </Button>
         </section>
         <Tabs defaultValue="capabilities">
-          <TabsList aria-label={S.projectPanel.title}><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger></TabsList>
+          <TabsList aria-label={S.projectPanel.title}><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger></TabsList>
           <TabsContent value="capabilities" className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-xs text-muted-foreground">{S.projectPanel.appliesToNew}</p>
@@ -200,6 +207,21 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                 } } : {})} />
               {actionAttempted || formOpen ? <p className="text-xs text-muted-foreground">{runningSessions === null ? S.mcpActions.appliesToNew : S.mcpActions.runningSessions(runningSessions)}</p> : null}
             </>}
+          </TabsContent>
+          <TabsContent value="backlog" forceMount className="data-[state=inactive]:hidden space-y-3">
+            <BacklogPanel bridge={bridge} projectPath={projectPath} supported={backlogSupported} connection={connection}
+              canTake={backlogWork !== undefined} onCount={setPendingSuggestions}
+              onOpenFile={async project => { await bridge.app.openBacklog(project); }}
+              onTake={(project, item, version) => {
+                if (!backlogWork || item.id === null) throw new Error('An active workspace is required.');
+                onOpenChange(false);
+                useUiStore.getState().openNewSessionDialog({ projectPath: project, workId: backlogWork.map.work.id }, {
+                  room: true, backlog: { projectPath: project, id: item.id, version,
+                    task: [item.title, item.details].filter(Boolean).join('\n\n') } });
+              }} renderAuthor={suggestion => suggestion.author ? <span>{suggestion.author.label} <RoleChip
+                role={suggestion.author.role} sessionRef={{ projectPath: suggestion.author.projectPath,
+                  workId: suggestion.author.workId, sessionId: suggestion.author.sessionId }} bridge={bridge} revision={suggestion.author.revision} /></span>
+                : `${suggestion.workId}/${suggestion.sessionId}`} />
           </TabsContent>
         </Tabs>
       </div>

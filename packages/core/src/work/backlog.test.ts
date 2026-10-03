@@ -190,3 +190,59 @@ describe('lossless project backlog', () => {
     expect(await readFile(file, 'utf8')).toBe('# Backlog\nHuman\n');
   });
 });
+
+describe('version-bound handwritten item actions', () => {
+  it('selects the original row and assigns IDs inside the same edit transaction', async () => {
+    const original = '# Backlog\r\n## Bugs\r\n- [ ] First\r\n  Detail\r\n- [ ] Second\r\nForeign tail';
+    await seed(original);
+    const before = await readBacklog(project);
+    const result = await updateBacklogItem(project, 1, { title: 'Chosen', checked: true, done: '2026-10-04' }, { expectedVersion: before.version });
+    expect(result.id).toBe('b-002');
+    expect(result.document.items).toMatchObject([{ id: 'b-001', title: 'First', checked: false }, { id: 'b-002', title: 'Chosen', checked: true, done: '2026-10-04' }]);
+    expect(result.document.source).toContain('Foreign tail');
+    expect(result.document.source).toContain('\r\n');
+  });
+  it('refuses an index without an exact version and stale/reordered rows without modifying Markdown', async () => {
+    const file = await seed('# Backlog\n- [ ] First\n- [ ] Second\n');
+    const before = await readBacklog(project);
+    await expect(updateBacklogItem(project, 0, { title: 'No proof' })).rejects.toMatchObject({ code: 'backlog-invalid' });
+    const reordered = '# Backlog\n- [ ] Second\n- [ ] First\n'; await writeFile(file, reordered);
+    await expect(updateBacklogItem(project, 0, { title: 'Wrong row' }, { expectedVersion: before.version })).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(file, 'utf8')).toBe(reordered);
+  });
+  it('takes/removes a handwritten item by its confirmed position without reusing allocated IDs', async () => {
+    await seed('# Backlog\n- [ ] First\n- [ ] Second\n');
+    const before = await readBacklog(project);
+    const taken = await takeBacklogItem(project, 1, 'w-01/r-01', { expectedVersion: before.version });
+    expect(taken.document.items[1]).toMatchObject({ id: 'b-002', taken: 'w-01/r-01' });
+    await seed('# Backlog\n- [ ] New handwritten\n');
+    const fresh = await readBacklog(project);
+    expect((await removeBacklogItem(project, 0, { expectedVersion: fresh.version })).id).toBe('b-003');
+    expect((await addBacklogItem(project, { title: 'Next' })).id).toBe('b-004');
+  });
+  it('rejects invalid/out-of-range indexes and an external editor change during indexed commit', async () => {
+    const file = await seed('# Backlog\n- [ ] First\n'); const before = await readBacklog(project);
+    for (const index of [-1, 0.5, 1, Number.NaN]) await expect(updateBacklogItem(project, index, { checked: true }, { expectedVersion: before.version })).rejects.toMatchObject({ code: 'backlog-invalid' });
+    await expect(updateBacklogItem(project, 0, { checked: true }, { expectedVersion: before.version,
+      beforeCommit: async () => { await writeFile(file, '# Backlog\n- [ ] Human replacement\n'); } })).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(file, 'utf8')).toContain('Human replacement');
+  });
+});
+
+describe('prepare handwritten take without rewriting human content', () => {
+  it('empty patch preserves a long identified title and foreign metadata/spacing byte for byte', async () => {
+    const source = `\uFEFF# Backlog\r\n- [ ] ${'x'.repeat(4097)}  <!-- b-007   · custom: kept  spacing -->\r\n  Details\r\nForeign`;
+    await seed(source); const before = await readBacklog(project);
+    const prepared = await updateBacklogItem(project, 'b-007', {}, { expectedVersion: before.version });
+    expect(prepared.id).toBe('b-007'); expect(prepared.document.source).toBe(source);
+  });
+  it('empty patch allocates a long handwritten title and refuses a concurrent external edit', async () => {
+    const file = await seed(`# Backlog\n- [ ] ${'x'.repeat(4097)}\nForeign`);
+    const before = await readBacklog(project);
+    const prepared = await updateBacklogItem(project, 0, {}, { expectedVersion: before.version });
+    expect(prepared.id).toBe('b-001'); expect(prepared.document.items[0]!.title).toHaveLength(4097);
+    await expect(updateBacklogItem(project, prepared.id, {}, { expectedVersion: prepared.document.version,
+      beforeCommit: async () => { await writeFile(file, '# Backlog\n- [ ] Human replacement\n'); } })).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(file, 'utf8')).toContain('Human replacement');
+  });
+});

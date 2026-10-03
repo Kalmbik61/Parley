@@ -75,3 +75,6 @@ export { capabilityMcpInput, capabilityMcpWriteScope, capabilityMcpAdd, capabili
 export type { CapabilityMcpInput, CapabilityMcpAdd, CapabilityMcpTarget, CapabilityActionResult } from './capability-actions.js';
 export { capabilityActionReason, capabilityActionAvailability, capabilityMcpActions, capabilityMcpAddAvailability } from './capability-snapshot.js';
 export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMcpActions, CapabilityMcpAddAvailability } from './capability-snapshot.js';
+
+export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';
+export type { BacklogAuthor, BacklogChanged, BacklogDiagnostic, BacklogErrorCode, BacklogMethodName, BacklogMethodParams, BacklogMethodResults, BacklogRule, BacklogSnapshot } from './backlog.js';

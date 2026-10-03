@@ -25,6 +25,9 @@ import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
+import { addBacklogItem, readBacklog } from '../work/backlog.js';
+import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
+import { setBacklogRule } from '../work/project-preferences.js';
 import { planLaunch } from '../work/launch.js';
 import { buildRoleCatalog } from '../roles/catalog.js';
 import type { RoleCatalog } from '../roles/types.js';
@@ -212,12 +215,14 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно двенадцать инструментов спецификации', async () => {
+  it('набор инструментов включает только согласованные MCP routes', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'add_to_room',
+      'backlog_list',
+      'backlog_suggest',
       'check_inbox',
       'close_session',
       'create_room',
@@ -2666,5 +2671,64 @@ describe('role defaults and explicit CLI clears through MCP', () => {
       expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
       expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
     }
+  });
+});
+
+
+describe('trusted caller backlog MCP tools', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  it('reads without writes and cannot redirect project/work/session through tool parameters', async () => {
+    const client = await connect('s-01');
+    const before = await readMapFile();
+    const listed = await callOk(client, 'backlog_list');
+    expect(listed.items).toEqual([]); expect(listed.rule).toBe('problems');
+    expect(await readMapFile()).toEqual(before);
+    expect(await readFile(path.join(project, '.parley', 'backlog.md')).catch(() => null)).toBeNull();
+    for (const name of ['backlog_list', 'backlog_suggest']) {
+      const response = await call(client, name, { projectPath: '/private/secret', workId: 'w-99', sessionId: 's-99', kind: 'bug', title: 'Spoof', why: 'Reason' });
+      expect(response.isError).toBe(true); expect(response.text).not.toContain('/private/secret');
+    }
+    expect(await readBacklog(project)).toMatchObject({ items: [] });
+  });
+  it('applies project rules, binds the author, deduplicates only open/pending titles, and adds one room feed notice', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Backlog room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const added = await callOk(client, 'backlog_suggest', { kind: 'bug', title: 'Observed regression', details: 'Reproduction', why: 'Evidence' });
+    expect(added.message).toBe('added: b-001');
+    expect((await readBacklog(project)).items[0]).toMatchObject({ by: 's-01', title: 'Observed regression' });
+    const duplicate = await callOk(client, 'backlog_suggest', { kind: 'bug', title: 'OBSERVED REGRESSION', why: 'Again' });
+    expect(duplicate.message).toBe('already in backlog: b-001');
+    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('added to the backlog'));
+    expect(notices).toHaveLength(1); expect(notices[0]).toMatchObject({ from: 'system', text: 'S01 added to the backlog: Observed regression' });
+    const proposed = await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'New feature', why: 'Useful later' });
+    expect(proposed.message).toBe('suggested: sg-02');
+    expect((await listBacklogSuggestions(project))[0]).toMatchObject({ workId, sessionId: 's-01', title: 'New feature' });
+    expect((await readBacklog(project)).items).toHaveLength(1);
+    await setBacklogRule(project, 'ask');
+    expect((await callOk(client, 'backlog_suggest', { kind: 'debt', title: 'Missing test', why: 'Observed' })).message).toBe('suggested: sg-03');
+    await setBacklogRule(project, 'everything');
+    expect((await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'Later feature', why: 'Useful' })).message).toBe('added: b-002');
+  });
+  it('supports bounded status/text reads while exposing no manual mutation tool', async () => {
+    await addBacklogItem(project, { title: 'Human item', details: 'Needle detail' });
+    const client = await connect('s-01');
+    expect((await callOk(client, 'backlog_list', { filter: 'open', text: 'needle' })).items).toHaveLength(1);
+    expect((await callOk(client, 'backlog_list', { filter: 'done' })).items).toEqual([]);
+    const names = (await client.listTools()).tools.map(row => row.name);
+    expect(names.filter(name => name.startsWith('backlog'))).toEqual(['backlog_list', 'backlog_suggest']);
+    for (const args of [{ filter: 'private' }, { text: 'x'.repeat(4097) }, { text: '\0' }, { taken: 'w-01/r-01' }])
+      expect((await call(client, 'backlog_list', args)).isError).toBe(true);
+    expect((await readBacklog(project)).items[0]).toMatchObject({ checked: false });
+  });
+  it('unknown/closed callers and malformed local data fail with safe fixed errors', async () => {
+    const unknown = await connect('s-99');
+    const failed = await call(unknown, 'backlog_suggest', { kind: 'bug', title: 'No author', why: 'Reason' });
+    expect(failed.isError).toBe(true); expect((await readBacklog(project)).items).toEqual([]);
+    await updateMap(project, workId, map => { map.sessions.find(row => row.id === 's-01')!.lifecycle = 'closed'; });
+    const closed = await connect('s-01'); expect((await call(closed, 'backlog_suggest', { kind: 'bug', title: 'Closed', why: 'Reason' })).isError).toBe(true);
+    const noSession = await connect(null); expect((await call(noSession, 'backlog_list')).isError).toBe(true);
+    await writeFile(path.join(project, '.parley', 'preferences.json'), 'secret native parser input');
+    const response = await call(closed, 'backlog_list'); expect(response.isError).toBe(true); expect(response.text).not.toContain('secret');
+    expect(response.text).toContain('preferences-invalid');
   });
 });

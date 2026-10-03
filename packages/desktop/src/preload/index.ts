@@ -207,6 +207,7 @@ const bridge = {
     titlebarDoubleClick: () => {
       ipcRenderer.send('app:titlebar-double-click');
     },
+    openBacklog: (projectPath: string) => ipcRenderer.invoke('app:open-backlog', projectPath),
     parleyMd: (projectPath: string, create: boolean) =>
       ipcRenderer.invoke('app:parley-md', projectPath, create) as Promise<{ exists: boolean; created: boolean }>,
     revealWork: (projectPath: string, workId: string) =>

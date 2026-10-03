@@ -52,7 +52,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
-import type { RoleSummary } from '@parley/protocol';
+import type { BacklogMethodParams, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
@@ -62,10 +62,12 @@ import { defaultProvider, type ProviderOption } from '../../lib/default-provider
 import { openWhenListed } from '../../lib/open-when-listed.js';
 import { sessionTag, workTitleText } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
+import type { BacklogTakeContext } from '../../store/ui.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Textarea } from '../../ui/textarea.js';
 import { Input } from '../../ui/input.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
@@ -80,6 +82,8 @@ export interface NewSessionOrRoomDialogProps {
   work: { projectPath: string; workId: string } | null;
   /** «New room»: диалог открывается сразу с двумя агентами. */
   room: boolean;
+  backlog?: BacklogTakeContext | null;
+  onCreated?(target: BacklogMethodParams<'backlog.take'>['target']): Promise<void>;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -141,7 +145,7 @@ const ITEM_CLIP = '[&>span:last-child]:min-w-0 [&>span:last-child]:truncate';
 const PILL =
   'inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-full border pl-2.5 pr-3 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-[.45]';
 
-export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
+export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = null, onCreated, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const lastProvider = useUiStore((state) => state.ui.lastProvider);
@@ -155,6 +159,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
    */
   const [workChoice, setWorkChoice] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [task, setTask] = useState('');
+  const [createdTarget, setCreatedTarget] = useState<BacklogMethodParams<'backlog.take'>['target'] | null>(null);
   const [agents, setAgents] = useState<AgentRow[]>(() => initialRows(room));
   const [leadKey, setLeadKey] = useState(1);
   const [worktree, setWorktree] = useState(false);
@@ -182,7 +188,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   // открытого): форма начинается заново, и запуск прежней, если он ещё идёт, больше не нужен.
   useEffect(() => {
     if (launchRef.current !== null) launchRef.current.cancelled = true;
-  }, [open, room, work]);
+  }, [open, room, work, backlog]);
 
   // Каждое открытие — с чистой формой и составом по умолчанию: один агент, а «New room» — два. Сброс — до отрисовки
   // (`useLayoutEffect`): в `useEffect` он шёл после неё, и диалог успевал показаться с названием и агентами прошлого открытия.
@@ -192,13 +198,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
     setAgents(rows);
     nextKey.current = rows.length + 1;
     setLeadKey(1);
-    setName('');
+    setName(''); setTask(backlog?.task ?? ''); setCreatedTarget(null);
     setWorkChoice(work === null ? null : workKey(work.projectPath, work.workId));
     setWorktree(false);
     setResults({});
     setError(null);
     setBusy(false);
-  }, [open, room, work]);
+  }, [open, room, work, backlog]);
 
   useEffect(() => {
     if (!open) return;
@@ -221,7 +227,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   // Работа диалога: выбор человека или та, для которой открыли, иначе активная, иначе первая из активных (не активной,
   // `done` и архивной работе новая сессия не нужна — в списке их нет).
-  const activeWorks = entries.filter((entry) => entry.map.work.status === 'active');
+  const activeWorks = entries.filter((entry) => entry.map.work.status === 'active' && (!backlog || entry.projectPath === backlog.projectPath));
   const has = (key: string | null): key is string => key !== null && activeWorks.some((entry) => keyOf(entry) === key);
   const firstKey = activeWorks[0] === undefined ? null : keyOf(activeWorks[0]);
   const selectedKey = has(workChoice) ? workChoice : has(activeWorkKey) ? activeWorkKey : firstKey;
@@ -271,7 +277,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   /** После первой попытки кнопка называется «Retry»: повторяются только не запущенные. */
   const retrying = Object.keys(results).length > 0;
   /** Общие поля и состав заперты, как только хоть одна сессия запущена: она уже принадлежит этой работе. */
-  const groupLocked = busy || anyStarted;
+  const groupLocked = busy || anyStarted || createdTarget !== null;
 
   const updateAgent = (key: number, patch: Partial<Omit<AgentRow, 'key'>>): void =>
     setAgents((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -290,6 +296,14 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const submit = async (): Promise<void> => {
     // Второй клик по «Retry» или «Create room» приходит уже на выключенную кнопку: `busy` включается до него.
     if (busy) return;
+    if (createdTarget !== null) {
+      setBusy(true); setError(null);
+      const retry = { cancelled: false }; launchRef.current = retry;
+      try { await onCreated?.(createdTarget); if (!retry.cancelled) finish(); }
+      catch { if (!retry.cancelled) setError(S.backlog.markFailed); }
+      finally { if (launchRef.current === retry) launchRef.current = null; if (!retry.cancelled) setBusy(false); }
+      return;
+    }
     if (selected === null) {
       setError(S.dialogs.newSession.selectWorkRequired);
       return;
@@ -321,7 +335,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             provider: providerId,
             // Одиночная сессия несёт название из поля; агенты комнаты — пустой ярлык, строка покажет `S05`.
             label: multi ? '' : name.trim(),
-            task: '',
+            task: backlog ? task : '',
             parent: null,
             worktree,
             // Модель и усилие — только когда контрол на экране: провайдер без списка или флага их не получает.
@@ -331,7 +345,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
-          console.warn('[parley] sessions.create', err);
+          if (!backlog) console.warn('[parley] sessions.create', err);
           done[row.key] = { status: 'failed', message: errorText(decodeIpcError(err).code, S.errors.actions.createSession) };
           allStarted = false;
         }
@@ -351,6 +365,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       });
       if (!multi) {
         openWhenListed(target.projectPath, target.workId, { kind: 'session', sessionId: sessionIds[0] ?? '' }, pendingRef.current);
+        if (backlog) {
+          const created = { ...target, sessionId: sessionIds[0] ?? '' }; setCreatedTarget(created);
+          try { await onCreated?.(created); } catch { if (!launch.cancelled) setError(S.backlog.markFailed); return; }
+          if (launch.cancelled) return;
+        }
         finish();
         return;
       }
@@ -366,9 +385,14 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         });
         if (launch.cancelled) return;
         openWhenListed(target.projectPath, target.workId, { kind: 'room', roomId }, pendingRef.current);
+        if (backlog) {
+          const created = { ...target, roomId }; setCreatedTarget(created);
+          try { await onCreated?.(created); } catch { if (!launch.cancelled) setError(S.backlog.markFailed); return; }
+          if (launch.cancelled) return;
+        }
         finish();
       } catch (err) {
-        console.warn('[parley] rooms.create', err);
+        if (!backlog) console.warn('[parley] rooms.create', err);
         if (launch.cancelled) return;
         setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
       }
@@ -421,6 +445,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             </label>
           </div>
 
+          {backlog && <label>{S.backlog.task}<Textarea aria-label={S.backlog.task} value={task} disabled={groupLocked}
+            onChange={event => setTask(event.target.value)} /></label>}
           <div className="flex min-w-0 flex-col gap-1">
             <span>{text.agentsField}</span>
             <div className="flex min-w-0 flex-col gap-2">

@@ -76,6 +76,14 @@ explicit consent — for example, the words "wrap up".`,
 artifacts, messages, plus the list of registry providers with a mark telling whether the
 command is in PATH. Call it first: session and room ids come from here.
 
+\`backlog_list(filter?, text?)\` — read this project's backlog; filter is open (default),
+taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.
+\`backlog_suggest(kind, title, details?, why)\` — one finding outside your task: bug, debt or
+idea, with a reason. Check backlog_list first; do not expand your task. The project rule
+answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID. These tools
+cannot edit, remove or close existing items. Before completion, collect worthwhile loose
+ends as suggestions. A project with its own TODOS.md specifies its policy in PARLEY.md.
+
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
 A summary is two or three sentences to the point: neighbouring sessions will read it in their

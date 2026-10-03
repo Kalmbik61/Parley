@@ -1,4 +1,5 @@
 import type { MethodName, NotificationName } from '@parley/protocol';
+import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
@@ -10,6 +11,7 @@ import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
+import { createBacklogHandlers } from './backlog.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
 import { hostInfo, hostShutdown } from './host.js';
@@ -33,6 +35,8 @@ export interface MethodDeps {
   worktrees: WorktreesService;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
+  /** Live project backlog subscriptions; manual methods also work without this service. */
+  backlog?: BacklogService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
@@ -98,6 +102,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const capabilities = createCapabilitiesHandlers();
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
+    ...createBacklogHandlers(deps.backlog),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,

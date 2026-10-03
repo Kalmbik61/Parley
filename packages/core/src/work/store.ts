@@ -571,14 +571,25 @@ async function releaseSharedLock(handle: FileHandle, file: string, identity: { d
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
-/** Called under the project lock only on the first shared write, never during ordinary runtime reads. */
+/** Read-only diagnostics: never creates state or migrates an existing ignore file. */
+export async function inspectSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
+  const previous = await readSharedFile(path.join(paths.dir, '.gitignore'));
+  const diagnostics: SharedDiagnostic[] = [];
+  let exists = true;
+  if (previous.version === MISSING_SHARED_VERSION) {
+    try { await lstat(paths.dir); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') exists = false; else throw error; }
+  }
+  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== '*\n')
+    diagnostics.push({ code: 'parley-gitignore-custom' });
+  if (await sharedPathIgnored(paths.context, paths.backlog, options)) diagnostics.push({ code: 'parley-dir-ignored' });
+  return diagnostics;
+}
+/** Called under the project lock on shared writes; only the exact generated legacy ignore is migrated. */
 export async function prepareSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
   const file = path.join(paths.dir, '.gitignore');
-  const diagnostics: SharedDiagnostic[] = [];
   const previous = await readSharedFile(file);
   if (previous.text === '*\n' && previous.version !== MISSING_SHARED_VERSION)
     await writeSharedFile(file, SHARED_STATE_IGNORE, previous, 0o644);
-  else if (previous.text !== SHARED_STATE_IGNORE) diagnostics.push({ code: 'parley-gitignore-custom' });
-  if (await sharedPathIgnored(paths.context, paths.backlog, options)) diagnostics.push({ code: 'parley-dir-ignored' });
-  return diagnostics;
+  return inspectSharedIgnore(paths, options);
 }
