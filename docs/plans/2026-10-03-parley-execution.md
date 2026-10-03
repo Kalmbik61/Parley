@@ -98,3 +98,5 @@ P05 code review needs rework: один Important finding — FIFO SKILL.md бл�
 P04 docs-integration (unified plan + пять спек) передана /root/p01_review. P09 сообщил 18 processor/guard tests passed; общий целевой core batch и host-патч ещё выполняются, задача не принята.
 
 P05 принят повторным review после FIFO fix `eb24192`: 31/31 независимо повторены, замечаний нет. P09 core targeted batch — 5 файлов/220 tests passed; dependency build и целевые host tests запускает его автор, root не повторяет их без новой причины. P06/P07 откроются после текущей общей build-точки. P04 docs review потребовал две targeted поправки (plugin skillOverrides exception и запрет arbitrary CLI excerpts), автор исправляет.
+
+P04 docs-integration accepted /root/p01_review после fix `1c8282d` к `081f3ea`: оба Important закрыты, 35 links/anchors корректны, whitespace clean. Unified plan и пять спек теперь содержат approved research contracts; остальные две спеки сохраняют ранее согласованные rev/state/privacy контракты.
