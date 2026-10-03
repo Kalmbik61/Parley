@@ -1,11 +1,6 @@
 import path from 'node:path';
 import { readTomlDocument } from '../skills/frontmatter.js';
-import {
-  compareRoleText,
-  ROLE_DOCUMENT_MAX_BYTES,
-  roleTraversal,
-  validRoleName,
-} from './claude.js';
+import { compareRoleText, ROLE_DOCUMENT_MAX_BYTES, roleTraversal } from './claude.js';
 import type { CodexRole, RoleCatalog, RoleDiscoveryLimits, SandboxMode } from './types.js';
 
 export interface CodexRoleLayer {
@@ -37,6 +32,10 @@ const allowed = new Set([
   'nickname_candidates',
 ]);
 const sandboxes: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
+
+// Rust str::trim uses Unicode White_Space: includes NEL, excludes FEFF; no internal collapse.
+const trimNative = (value: string): string =>
+  value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
 
 export async function discoverCodexRoles(options: CodexRoleOptions): Promise<RoleCatalog> {
   const result: RoleCatalog = { roles: [], diagnostics: [], partial: false };
@@ -77,24 +76,27 @@ export async function discoverCodexRoles(options: CodexRoleOptions): Promise<Rol
         continue;
       }
       const data = parsed.data;
-      const name = typeof data.name === 'string' ? data.name.trim() : '';
-      if (!validRoleName(name)) {
+      const name = typeof data.name === 'string' ? trimNative(data.name) : '';
+      if (name === '') {
         traversal.report({ code: 'invalid-name', path: canonical });
         continue;
       }
       const invalid = (): void => traversal.report({ code: 'invalid-policy', path: canonical });
-      if (typeof data.developer_instructions !== 'string' || !data.developer_instructions.trim()) {
+      if (
+        typeof data.developer_instructions !== 'string' ||
+        !trimNative(data.developer_instructions)
+      ) {
         invalid();
         continue;
       }
       if (
         data.description !== undefined &&
-        (typeof data.description !== 'string' || !data.description.trim())
+        (typeof data.description !== 'string' || !trimNative(data.description))
       ) {
         invalid();
         continue;
       }
-      if (data.model !== undefined && (typeof data.model !== 'string' || !data.model.trim())) {
+      if (data.model !== undefined && (typeof data.model !== 'string' || !trimNative(data.model))) {
         invalid();
         continue;
       }
@@ -121,11 +123,13 @@ export async function discoverCodexRoles(options: CodexRoleOptions): Promise<Rol
           !data.nickname_candidates.length ||
           data.nickname_candidates.some(
             (value) =>
-              typeof value !== 'string' || !value.trim() || !/^[A-Za-z0-9 _-]+$/.test(value),
+              typeof value !== 'string' ||
+              !trimNative(value) ||
+              !/^[A-Za-z0-9 _-]+$/.test(trimNative(value)),
           ) ||
           new Set(
             data.nickname_candidates.map((value) =>
-              typeof value === 'string' ? value.trim() : '',
+              typeof value === 'string' ? trimNative(value) : '',
             ),
           ).size !== data.nickname_candidates.length)
       ) {
@@ -146,7 +150,7 @@ export async function discoverCodexRoles(options: CodexRoleOptions): Promise<Rol
         id: `codex:${name}`,
         source: 'codex',
         name,
-        description: typeof data.description === 'string' ? data.description.trim() : null,
+        description: typeof data.description === 'string' ? trimNative(data.description) : null,
         provider: 'codex',
         readOnly: sandboxMode === 'read-only',
         path: canonical,

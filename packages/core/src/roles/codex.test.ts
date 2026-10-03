@@ -116,12 +116,45 @@ describe('Codex native roles', () => {
       'home/.codex/agents/no-description.toml',
       'name="missing"\ndeveloper_instructions="Text"',
     );
-    await file('home/.codex/agents/invalid-name.toml', role('../escape', 'Text'));
+    await file('home/.codex/agents/invalid-name.toml', role('\u0085', 'Text'));
     await file('home/.codex/agents/empty.toml', role('empty', ' '));
     const result = await discoverCodexRoles(options());
     expect(result.roles).toEqual([]);
     expect(result.partial).toBe(true);
   });
+  it('uses Rust White_Space edge trim without collapsing internal native identity or description', async () => {
+    await file(
+      'home/.codex/agents/whitespace.toml',
+      `name="\u0085 architect \u0085team\u0085"\ndescription="\u0085 Design \u0085details\u0085"\ndeveloper_instructions="Text"`,
+    );
+    const result = await discoverCodexRoles(options());
+    expect(result.roles.map((role) => [role.id, role.name, role.description])).toEqual([
+      ['codex:architect \u0085team', 'architect \u0085team', 'Design \u0085details'],
+    ]);
+    expect(result.partial).toBe(false);
+  });
+
+  it('rejects U+0085-only developer instructions as native whitespace', async () => {
+    await file('home/.codex/agents/nel.toml', role('blank', '\u0085'));
+    const result = await discoverCodexRoles(options());
+    expect(result.roles).toEqual([]);
+    expect(result.diagnostics.some((item) => item.code === 'invalid-policy')).toBe(true);
+  });
+
+  it('preserves FEFF in native names and instructions; native names never become file lookup paths', async () => {
+    const feff = await file('home/.codex/agents/feff.toml', role('\ufeffarchitect', '\ufeff'));
+    const unusual = await file('home/.codex/agents/plain.toml', role('../escape', 'Text'));
+    const result = await discoverCodexRoles(options());
+    expect(
+      result.roles.map((role) => [role.id, role.source === 'codex' ? role.path : null]),
+    ).toEqual([
+      ['codex:../escape', await realpath(unusual)],
+      ['codex:\ufeffarchitect', await realpath(feff)],
+    ]);
+    const preserved = result.roles.find((role) => role.id === 'codex:\ufeffarchitect');
+    expect(preserved?.source === 'codex' && preserved.prompt).toBe('\ufeff');
+  });
+
   it('rejects malformed policy and unsupported config without weakening permissions or leaking parser text', async () => {
     await file('home/.codex/agents/bad.toml', role('bad', 'SECRET_BODY', 'sandbox_mode=false'));
     await file(

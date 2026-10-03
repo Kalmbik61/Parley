@@ -7,7 +7,12 @@ import type { ClaudeRole, RoleCatalog, RoleDiagnostic, RoleDiscoveryLimits } fro
 export const ROLE_DOCUMENT_MAX_BYTES = 1048576;
 export const compareRoleText = (a: string, b: string): number =>
   Buffer.compare(Buffer.from(a), Buffer.from(b));
-export const validRoleName = (name: string): boolean => /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name);
+// Claude's Vjn validates the metadata string without trimming or filename fallback.
+const validClaudeRoleName = (name: unknown): name is string =>
+  typeof name === 'string' &&
+  name !== '' &&
+  !name.startsWith('-') &&
+  !name.normalize('NFKC').includes(':');
 export interface ClaudeRoleOptions {
   cwd: string;
   homeDir: string;
@@ -157,38 +162,48 @@ export async function discoverClaudeRoles(options: ClaudeRoleOptions): Promise<R
     options.configDir ?? path.join(options.homeDir, '.claude'),
   );
   const roles = new Map<string, ClaudeRole>();
+  const claimed = new Set<string>();
   for (const root of [path.join(options.cwd, '.claude/agents'), path.join(configDir, 'agents')]) {
-    for (const { file, canonical } of await traversal.files(root, '.md', false)) {
-      const name = path.basename(file, '.md');
-      if (!validRoleName(name)) {
-        traversal.report({ code: 'invalid-name', path: file });
-        continue;
-      }
-      // Native project agent shadows the user agent; its body is never copied into Parley.
-      if (roles.has(name)) continue;
+    const inRoot = new Map<string, ClaudeRole | null>();
+    for (const { canonical } of await traversal.files(root, '.md', true)) {
       const parsed = await readMarkdownFrontmatter(canonical, ROLE_DOCUMENT_MAX_BYTES);
       if (parsed.status === 'invalid') {
         traversal.report({ ...parsed.diagnostic, path: canonical });
         continue;
       }
-      if (
-        parsed.status === 'missing' ||
-        typeof parsed.data.description !== 'string' ||
-        !parsed.data.description.trim()
-      ) {
+      if (parsed.status === 'missing') continue;
+      const name = parsed.data.name;
+      if (!validClaudeRoleName(name)) {
+        // No name is native documentation beside agents; invalid supplied names are diagnostics.
+        if (name !== undefined) traversal.report({ code: 'invalid-name', path: canonical });
+        continue;
+      }
+      if (typeof parsed.data.description !== 'string' || parsed.data.description === '') {
         traversal.report({ code: 'invalid-policy', path: canonical });
         continue;
       }
-      roles.set(name, {
+      if (inRoot.has(name)) {
+        // Native read-order within a source tree is unspecified: never invent a lexical winner.
+        inRoot.set(name, null);
+        traversal.report({ code: 'duplicate-role', path: canonical });
+        continue;
+      }
+      inRoot.set(name, {
         id: `claude:${name}`,
         source: 'claude',
         name,
-        description: parsed.data.description,
+        description: parsed.data.description.replaceAll('\\n', '\n'),
         provider: 'claude',
         readOnly: false,
         path: canonical,
         nativeAgent: name,
       });
+    }
+    for (const [name, role] of inRoot) {
+      // Ambiguous project identities also shadow user fallback; permissions are not guessed.
+      if (claimed.has(name)) continue;
+      claimed.add(name);
+      if (role) roles.set(name, role);
     }
   }
   result.roles = [...roles.values()].sort((a, b) => compareRoleText(a.id, b.id));

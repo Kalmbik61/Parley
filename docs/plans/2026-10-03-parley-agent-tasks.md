@@ -70,7 +70,7 @@
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | running |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
-| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | running |
+| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | review |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
@@ -469,7 +469,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running (review needs rework). **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
+**Статус:** review (native reader fixes готовы). **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
 
 **Зависимости:** P05, P09. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -494,6 +494,8 @@
 **Evidence перед ревью:** 9 owned roles files; 30 role +4 English guard tests passed; scoped ESLint/isolated strict tsc всех файлов passed. Native context inputs и explicit/null/default/missing semantics описаны; shared launch/map/UI остаются P12.
 
 **Замечания review:** Important/P1 — Claude identity должна быть metadata.name, missing name недоступен; Important/P2 — Codex JS trim не совпадает с Rust Unicode whitespace. Source-backed fix/spec amendment согласованы; только owned readers/tests, recheck независимый. P12 требует настоящего effective native config context, не guessed trust.
+
+**Evidence fixes перед recheck:** четыре reader/test files +147/−42; 43 role +4 English guard tests, scoped lint/strict types/diff check passed. 15 regressions RED→GREEN. Native Claude metadata identity/ambiguity и Codex Rust whitespace/data name semantics исправлены; shared files unchanged.
 
 <a id="p12"></a>
 
