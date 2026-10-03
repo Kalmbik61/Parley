@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P01–P03 running, независимые проверки CLI.
+- Текущая фаза: P00 принят; P01 review; P02–P03 running, независимые проверки CLI.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -21,7 +21,7 @@
 | ID | Задача | Статус | Evidence |
 |---|---|---|---|
 | P00 | Подготовить актуальную рабочую базу | done | agent /root/p00_prepare_base; model gpt-6.1-sol/high; commit 9aedc3e; review accepted by /root/p00_review |
-| P01 | Проверить Claude: источники, budget, jev и инструменты | running | agent /root/p01_claude_probe; gpt-6.1-sol/high; base 9aedc3e |
+| P01 | Проверить Claude: источники, budget, jev и инструменты | review | agent /root/p01_claude_probe; gpt-6.1-sol/high; evidence claude.md; reviewer /root/p01_review |
 | P02 | Проверить Codex: скиллы, слой, роли и resume | running | agent /root/p02_codex_probe; gpt-6.1-sol/high; base 9aedc3e |
 | P03 | Проверить команды Capabilities и scopes | running | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; base 9aedc3e |
 | P04 | Закрыть контракты разведки и выбор парсеров | pending | — |
@@ -54,3 +54,10 @@
 | P31 | Подключить память, поиск и UI | pending | — |
 | P32 | Провести сквозную проверку и сравнение навигатора | pending | — |
 | P33 | Обновить документацию по фактическому результату | pending | — |
+
+## Текущая разведка — ещё до независимой приёмки
+
+- P01: Claude 2.1.287; settings schema отклоняет `skillListingBudgetFraction: 0`; env budget=1 требует проверки. До подтверждения — полный нативный список.
+- P02: Codex 0.156.1; `debug prompt-input` подтверждает `developer_instructions`, CLAUDE fallback и read-only; `--no-daemon` принят текущим CLI. Нативные дубликаты имён скиллов сохраняются. Это не evidence живого launch/resume/MCP.
+- P03: Claude plugin details только для установленного/plugin-dir, text output; Codex plugin add/remove и list, без enable/disable/update/details. Codex MCP list не health-check. Local MCP Claude привязан к canonical main checkout и виден в worktree.
+- Итоговые доказательства и запасные пути будут приняты отдельным review P01–P03, затем закреплены в P04. Неподтверждённые флаги не разрешены для реализации.
