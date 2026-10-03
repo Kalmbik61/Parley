@@ -135,3 +135,16 @@ for root in ['/Users/kalmbik61/Desktop/MY/my_harnas',
 ## Граница приёмки
 
 P00 подготовлена к независимой приёмке: актуальные исходники сохранены, девять документов доступны, checkout/ветка/точные SHA и исходные изменения зафиксированы. Живые CLI launch/resume, budget/jev, scopes и действия Capabilities ещё не проверены в P00; это отдельные P01/P02/P03. Выбор YAML/TOML — P04. Тесты приложения не запускались для этой документальной проверки; побайтное равенство кода подтверждает отсутствие изменения поведения в P00, но не заявляет исправность исходного приложения.
+
+
+## P04: закрытый контракт разведки для реализации
+
+2026-10-03; входной HEAD `28b9187e19766304bd785c8885576c9857d2babb`. P01/P02/P03 приняты независимо ведущим. Новый [contracts.md](2026-10-03-parley-cli/contracts.md) фиксирует NativeSkill provider+canonical document identity, source/system/admin/extra, boolean availability с explicit unverified reason; native priority/rules/policy, production full-list fallback обоих CLI, provider-specific actions/scopes и точные предложения правок спек/плана для интеграции root. Предыдущие P00 snapshot/hash checks оставлены неизменными и относятся к стартовому commit.
+
+Parser pins проверены по official tagged upstream и registry: **yaml 2.9.1 / ISC / Node >=14.6** и **smol-toml 1.9.0 / BSD-3-Clause / Node >=18**, оба без runtime dependencies. Official tarballs распакованы только в `/tmp` после SHA-512 integrity verification, без install/правок repo. На installed Node 20.15.1 прошли 12 isolated API cases полного multiline parsing, duplicate/invalid rejection, bounded YAML aliases, TOML options и escaping roundtrip. Product dependency edits и P05 tests ещё не выполнены.
+
+Минимальная synthetic Node-проба macOS arm64/Node25.8.0 подтвердила 98304-byte serialized arg, точные UTF-8/escaped bytes, cumulative argv+env fit и E2BIG при overflow; getconf ARG_MAX=1048576. Контракт требует host guard после окончательного env merge и hook token, а не только core per-arg check. Linux execution/long native paths/custom providers остаются явными P32 gates; не заявлены выполненными.
+
+Решения: весь SKILL.md ограничен 65536 bytes; body не идёт в metadata. Claude fraction0 invalid, env1 candidate gated, exact jev module id с сохранением hooks/statusLine. Codex selectors — полный SKILL.md, User/SessionFlags-only rules, duplicates по canonical path; include_instructions/budget candidate gated; native role TOML требует name. Codex plugin mutations add/remove, остальные toggles/details/update unavailable; Claude details installed-only; local MCP identity canonical main. Raw parser/CLI error и **success** output также не передаются с секретами.
+
+P04 сдаётся на независимое ревью. Контракт пригоден для следующих реализаций при указанных fallback; это не live release acceptance и не включение сокращения списков.
