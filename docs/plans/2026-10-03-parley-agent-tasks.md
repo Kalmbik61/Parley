@@ -415,6 +415,12 @@
 - `packages/desktop/src/main/ipc.ts`
 - `packages/desktop/src/preload/index.ts`
 - `packages/desktop/e2e/parley-md.spec.ts`
+- `packages/core/src/index.ts` — только exports ensure/create PARLEY helpers
+- `packages/protocol/src/types.ts` — только NoticeKind `parley-md-created`
+- `packages/desktop/src/shared/bridge.ts` — только typed PARLEY status/create IPC
+- `packages/desktop/src/shared/strings.ts` и `strings.test.ts` — необходимые English labels и NoticeKind consumer
+- `packages/desktop/src/renderer/App.tsx` — только созданное уведомление с Open в существующем редакторе
+- `packages/desktop/src/main/ipc.test.ts` — allowlist/channel validation этих IPC
 
 **Работа:** Добавить эксклюзивное создание шаблона, receipt в stateDir и проверку перед всеми режимами запуска. Удалённый файл не возвращать автоматически; явный Create работает. Подключить меню проекта, вкладку редактора и адресные уведомления.
 
