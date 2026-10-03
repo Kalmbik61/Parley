@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P07 и P09/P10 accepted; P08 path fix в работе; P11 accepted.
+- Текущая фаза: P00–P11 accepted; P12/P15 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -28,14 +28,14 @@
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
 | P06 | Реализовать источники скиллов Claude | done | 4792cb1/7c91a36; reviewer /root/p01_review accepted, 25 targeted + direct probes |
 | P07 | Реализовать источники скиллов Codex | done | a0c8f2c/e15a367; reviewer /root/p01_review accepted, 7 targeted + direct probe |
-| P08 | Собрать каталог, BM25 и перевести chat-view на него | review | core158/host3/wire2/desktop22; builds/lint/types passed; reviewer /root/p01_claude_probe |
+| P08 | Собрать каталог, BM25 и перевести chat-view на него | done | d5f3251/0caf683; independent42 +3 probes +15scan; reviewer /root/p01_claude_probe accepted |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | running | /root/p02_codex_probe; P11/P10 accepted; owned core first, protocol serialized with P15 |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
-| P15 | Реализовать безопасный снимок Capabilities | pending | — |
+| P15 | Реализовать безопасный снимок Capabilities | running | /root/p01_claude_probe; DTO-first protocol sole writer, then owned host modules |
 | P16 | Создать единую панель проекта и вкладку Capabilities | pending | — |
 | P17 | Добавить native MCP add/remove/check | pending | — |
 | P18 | Добавить native действия плагинов | pending | — |
@@ -150,3 +150,7 @@ Root согласовал с P15 preflight presence arrays вместо singular
 ## Выдача P12 и P08 recheck
 
 P08 path fix snapshot 0caf683 (+35/−2, только scan/test) передан /root/p01_claude_probe для повторения независимого RED fixture. P12 dependencies P11/P10 accepted, назначен /root/p02_codex_probe на owned core/host/UI и минимальные согласованные grants. Protocol temporarily locked под предстоящий P15 DTO-first этап; registry root. Новые human permission features не вводятся.
+
+## Приёмка P08 и выдача P15
+
+P08 fix accepted /root/p01_claude_probe: original relative config regression, numeric BM25 и canonical alias/parent-root/containment/missing-context probes green; 15 scanner fixtures/lint/strict types/diff passed. P15 назначен тому же агенту как исполнителю нового независимого домена; P12 author другой. Protocol P15 DTO-first sole writer, затем root unlock P12.

@@ -67,7 +67,7 @@
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06 fixes) | done |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | done |
-| [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | review |
+| [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | done |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
@@ -335,9 +335,9 @@
 
 ### P08: Собрать каталог, BM25 и перевести chat-view на него
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p02_codex_probe (новое назначение P08), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (новое независимое назначение P08), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (новое назначение P08), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (новое независимое назначение P08), gpt-6.1-sol/high.
 
 **Зависимости:** P06, P07. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -368,6 +368,8 @@
 **Evidence перед ревью:** 14 owned files; core 158 / host capabilities 3 / protocol wire 2 / desktop consumers 22 tests passed; scoped lint/strict types/diff check, coordinated core→protocol→host builds, desktop typecheck passed. Full native inventory и manual wire adapter разделены; kind из origin; live gates не объявлены.
 
 **Integration уточнение:** source-aware documentKind обязателен для legacy path, manual chat inventory и modelAvailable search filter разделены; не угадывать command по basename. Общие index/types/source outputs выданы этому единственному писателю после accepted P06/P07.
+
+**Независимая приёмка:** /root/p01_claude_probe accepted d5f3251 +0caf683 после relative configDir correction. 42 targeted tests, numeric BM25 probe, затем 3 independent regressions/probes +15 scanner fixtures; lint/strict types/diff passed. Canonical alias-parent/containment/missing-context verified; current host caller context limitation перенесена на P13/P15, не объявлена выполненной здесь.
 
 <a id="p09"></a>
 
@@ -612,7 +614,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P15), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12 source question), gpt-6.1-sol/high.
 
 **Зависимости:** P08, P03. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -637,6 +639,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Согласованные grants:** новый protocol/capability-snapshot.ts и targeted tests; protocol methods/events/index только DTO/get/refresh/changed интеграция первым коротким этапом, затем freeze/unlock P12 через root. Host methods/index registry root, factory/service binding вернуть ведущему. Memory-only service с independent loading/ready/partial/error/unavailable columns и generation/revision; one service instance per host, existing broadcast. No available catalog/details/check/action calls до следующих cards. Native scope/identity arrays и unknown enabled — amendment capabilities §4.1.
 
 <a id="p16"></a>
 
