@@ -142,15 +142,33 @@ describe('App — провайдеры строки статуса (Organic, 1.1
     expect(screen.getByText('2.2.0')).toBeTruthy();
   });
 
-  it('отказ providers.list — окно живёт, сегментов провайдеров нет', async () => {
-    bridge.setHandler('providers.list', () => {
+  it('отказ providers.list — окно живёт, три кнопки подключения приглушены и без выдуманных данных', async () => {
+    const handler = vi.fn(() => {
       throw new Error('нет метода');
     });
+    bridge.setHandler('providers.list', handler);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    render(<App />);
+    const { container } = render(<App />);
     await settle();
-    expect(screen.queryByText('Claude Code')).toBeNull();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    expect(useProvidersStore.getState().providers).toEqual([]);
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>('button[data-provider-segment]')];
+    expect(buttons.map((button) => button.dataset.providerSegment)).toEqual(['claude', 'codex', 'glm']);
+    for (const [index, name] of ['Claude Code', 'Codex', 'GLM'].entries()) {
+      const button = screen.getByRole('button', { name: `${name} — not connected. Click to connect` });
+      expect(button).toBe(buttons[index]);
+      expect(button.className).toContain('opacity-50');
+      expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'));
+      expect(button.getAttribute('type')).toBe('button');
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      expect(button.querySelector('.font-mono')).toBeNull();
+      expect(button.querySelector('[data-limits]')).toBeNull();
+      expect(button.textContent).not.toContain('not found');
+    }
     expect(screen.getByText('Host 0.0.0-test')).toBeTruthy();
+    fireEvent.click(buttons[0]!);
+    expect(screen.getByRole('dialog', { name: 'Claude Code' })).toBeTruthy();
   });
 });
 
