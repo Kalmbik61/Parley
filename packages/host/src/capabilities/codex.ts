@@ -1,3 +1,4 @@
+import { readNativePluginInventory } from './native-plugin-inventory.js';
 import { allow, codexUserMcpProof, contextFingerprint, deniedAdd, deny, fingerprint, validMcpName, readBinaryIdentity, sameBinaryIdentity } from './native-targets.js';
 import type { NativeMcpTarget } from './native-targets.js';
 import { readCodexNativeContext, resolveSkillCatalog } from '@parley/core';
@@ -74,7 +75,20 @@ export async function readCodexSnapshot(context: SnapshotContext, options: Snaps
   }
   const validList = mcp.status === 'valid' && Array.isArray(mcp.data) && names.length === mcp.data.length;
   if (!validList || new Set(names).size !== names.length) targets.splice(0);
-  return { entries, diagnostics, phase: diagnostics.length ? 'partial' : 'ready', native: {
+  const pluginsNative = await (options.readPluginInventory ?? readNativePluginInventory)(context, 'codex', { ...options, pluginRedactionSecrets: secrets, codexPluginContext: { context: nativeContext, binaryIdentity: stableBinary ? identity : null } });
+  if (pluginsNative.partial && !diagnostics.some(item => item.source === 'plugins' && item.code === 'context-unverified')) diagnostics.push({ code: 'context-unverified', source: 'plugins' });
+  if (pluginsNative.catalog.allowed) {
+    for (let index = entries.length - 1; index >= 0; index--) if (entries[index]!.kind === 'plugin') entries.splice(index, 1);
+    for (const target of pluginsNative.targets.filter(target => target.kind === 'installed')) {
+      const summary = target.summary;
+      entries.push({ kind: 'plugin', name: summary.pluginId, rowId: rowIdentity('plugin', target.nativeId, 'codex'), presence: {
+        id: target.id, scope: target.scope, source: summary.pluginId, documentPath: null, description: summary.description,
+        installed: true, enabled: summary.enabled, status: summary.enabled === false ? 'off' : 'unknown', summary: null,
+        modelAvailable: null, unavailableReason: null,
+      } });
+    }
+  }
+  return { entries, diagnostics, pluginsNative, phase: diagnostics.length ? 'partial' : 'ready', native: {
     contextFingerprint: contextFingerprint(context, 'codex'), signature: fingerprint({ mcp, proof: proof?.signature, binaryIdentity: stableBinary ? identity : null }), names, targets,
     ...(stableBinary && identity ? { executionBinary: identity.canonicalPath, binaryIdentity: identity } : {}),
     add: proof?.add && validList && new Set(names).size === names.length ? { user: allow(), project: deny('unsupported-scope'), local: deny('unsupported-scope') } : deniedAdd(context.binaries.codex ? 'unverified' : 'not-installed'),

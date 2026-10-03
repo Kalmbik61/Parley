@@ -78,3 +78,12 @@ export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMc
 
 export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';
 export type { BacklogAuthor, BacklogChanged, BacklogDiagnostic, BacklogErrorCode, BacklogMethodName, BacklogMethodParams, BacklogMethodResults, BacklogRule, BacklogSnapshot } from './backlog.js';
+
+export { capabilityPluginActions } from './capability-snapshot.js';
+export type { CapabilityPluginActions } from './capability-snapshot.js';
+export { CAPABILITY_PLUGIN_RESPONSE_BYTES, capabilityPluginCatalogRequest, capabilityPluginDetailsRequest, capabilityPluginInstallRequest, capabilityPluginTargetRequest,
+  capabilityPluginUninstallRequest, capabilityPluginMarketplaceRequest, capabilityPluginComposition, capabilityPluginSummary,
+  capabilityPluginCatalogResponse, capabilityPluginDetailsResponse, capabilityPluginResult, capabilityPluginMethodSchemas } from './capability-plugin-actions.js';
+export type { CapabilityPluginCatalogRequest, CapabilityPluginDetailsRequest, CapabilityPluginInstallRequest, CapabilityPluginTargetRequest,
+  CapabilityPluginUninstallRequest, CapabilityPluginMarketplaceRequest, CapabilityPluginSummary, CapabilityPluginResult,
+  CapabilityPluginCatalogResponse, CapabilityPluginDetailsResponse, CapabilityPluginMethodResults } from './capability-plugin-actions.js';

@@ -94,3 +94,29 @@ describe('MCP action availability wire', () => {
       expect(capabilitySnapshot.safeParse({ ...value, rows: [{ ...value.rows[0], claude: [{ ...value.rows[0]?.claude?.[0], mcpActions: { remove: action, check: no } }] }] }).success).toBe(false);
   });
 });
+
+describe('plugin action projection', () => {
+  const yes = { allowed: true, reason: null };
+  const no = { allowed: false, reason: 'unverified' };
+  const plugin = (provider: 'claude' | 'codex', scope: string | null, actions = { uninstall: yes, enable: no, disable: no, details: no }) => ({
+    projectPath: '/project', revision: 1, columns: { claude: { phase: 'ready', diagnostics: [] }, codex: { phase: 'ready', diagnostics: [] } },
+    rows: [{ id: 'opaque', kind: 'plugin', name: 'fixture@market', description: null, separateCopies: false,
+      claude: provider === 'claude' ? [{ ...presence('opaque'), scope, documentPath: null, modelAvailable: null, unavailableReason: null, pluginActions: actions }] : [],
+      codex: provider === 'codex' ? [{ ...presence('opaque'), scope, documentPath: null, modelAvailable: null, unavailableReason: null, pluginActions: actions }] : [] }],
+  });
+  it('admits positively owned human sources and retains denied unknown sources', () => {
+    for (const scope of ['user', 'project', 'local']) expect(capabilitySnapshot.safeParse(plugin('claude', scope)).success).toBe(true);
+    expect(capabilitySnapshot.safeParse(plugin('codex', 'user')).success).toBe(true);
+    expect(capabilitySnapshot.safeParse(plugin('claude', null, { uninstall: no, enable: no, disable: no, details: no })).success).toBe(true);
+  });
+  it('rejects privileged/unknown targets and Codex unsupported native actions', () => {
+    for (const scope of ['builtin', 'admin', 'system', 'claude.ai', null]) expect(capabilitySnapshot.safeParse(plugin('claude', scope)).success).toBe(false);
+    for (const scope of ['project', 'local']) expect(capabilitySnapshot.safeParse(plugin('codex', scope)).success).toBe(false);
+    for (const kind of ['enable', 'disable', 'details']) expect(capabilitySnapshot.safeParse(plugin('codex', 'user', { uninstall: yes, enable: no, disable: no, details: no, [kind]: yes })).success).toBe(false);
+  });
+  it('keeps raw selector/output fields outside nested action support', () => {
+    const value = plugin('claude', 'user');
+    value.rows[0]!.claude[0]!.pluginActions.uninstall = { ...yes, nativeId: 'SECRET_FIXTURE' } as typeof yes;
+    expect(capabilitySnapshot.safeParse(value).success).toBe(false);
+  });
+});

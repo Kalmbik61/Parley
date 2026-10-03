@@ -147,6 +147,13 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'capabilities.mcp.add': capabilities.capabilitiesMcpAdd as AnyHandler,
     'capabilities.mcp.remove': capabilities.capabilitiesMcpRemove as AnyHandler,
     'capabilities.mcp.check': capabilities.capabilitiesMcpCheck as AnyHandler,
+    'capabilities.plugins.available': capabilities.capabilitiesPluginsAvailable as AnyHandler,
+    'capabilities.plugins.details': capabilities.capabilitiesPluginsDetails as AnyHandler,
+    'capabilities.plugins.install': capabilities.capabilitiesPluginsInstall as AnyHandler,
+    'capabilities.plugins.uninstall': capabilities.capabilitiesPluginsUninstall as AnyHandler,
+    'capabilities.plugins.enable': capabilities.capabilitiesPluginsEnable as AnyHandler,
+    'capabilities.plugins.disable': capabilities.capabilitiesPluginsDisable as AnyHandler,
+    'capabilities.plugins.addMarketplace': capabilities.capabilitiesPluginsAddMarketplace as AnyHandler,
   };
   if (deps.feed !== undefined) {
     const feed = createFeedHandlers({ feed: deps.feed });

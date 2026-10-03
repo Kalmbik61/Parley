@@ -102,3 +102,18 @@ it('all action RPCs share the snapshot singleton and its one shutdown queue with
  expect(execute).toHaveBeenCalledTimes(1); expect(broadcast).toHaveBeenCalledTimes(broadcastsBeforeShutdown);
  expect(JSON.stringify([broadcast.mock.calls, log])).not.toContain('SECRET'); expect(log.error).not.toHaveBeenCalled(); expect(log.warn).not.toHaveBeenCalled();
 });
+
+it('plugin RPCs use the same snapshot binding and deny unknown selectors without raw logs or a second shutdown registration', async () => {
+ const onShutdown=vi.fn(),broadcast=vi.fn();const log={info:vi.fn(),warn:vi.fn(),error:vi.fn()};const host={onShutdown,broadcast,log} as unknown as HostContext;const request={host} as RequestInfo;
+ const context: SnapshotContext={projectPath:'/fixture/project',homeDir:'/fixture/home',binaries:{claude:null,codex:null}};
+ const handlers=createCapabilitiesHandlers({context:async()=>context,readers:{claude:async()=>({entries:[],diagnostics:[],phase:'ready'}),codex:async()=>({entries:[],diagnostics:[],phase:'ready'})}});
+ await handlers.capabilitiesGet({projectPath:context.projectPath},request);await vi.waitFor(()=>expect(handlers.service.get(context.projectPath).columns.codex.phase).toBe('ready'));
+ const params={projectPath:context.projectPath,provider:'claude' as const,revision:handlers.service.get(context.projectPath).revision};
+ expect((await handlers.capabilitiesPluginsAvailable(params,request)).reason).toBe('unverified');
+ expect((await handlers.capabilitiesPluginsDetails({...params,target:{kind:'installed',presenceId:'unknown'}},request)).entry).toBeNull();
+ for(const action of [handlers.capabilitiesPluginsEnable,handlers.capabilitiesPluginsDisable])expect((await action({...params,presenceId:'unknown'},request)).code).toBe('unverified');
+ expect((await handlers.capabilitiesPluginsInstall({...params,catalogId:'unknown',scope:'user'},request)).code).toBe('unverified');
+ expect((await handlers.capabilitiesPluginsUninstall({...params,presenceId:'unknown',confirmDataLoss:true},request)).code).toBe('unverified');
+ expect((await handlers.capabilitiesPluginsAddMarketplace({...params,scope:'user',source:{kind:'local',path:'/PRIVATE_INPUT'}},request)).code).toBe('unverified');
+ expect(onShutdown).toHaveBeenCalledOnce();expect(JSON.stringify([broadcast.mock.calls,log])).not.toContain('PRIVATE_INPUT');await onShutdown.mock.calls[0]![0]();
+});

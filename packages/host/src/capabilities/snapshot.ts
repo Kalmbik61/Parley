@@ -1,3 +1,5 @@
+import { readNativePluginInventory } from './native-plugin-inventory.js';
+import type { NativePluginInventory, NativePluginTarget } from './native-plugin-inventory.js';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -8,9 +10,9 @@ import { TextDecoder } from 'node:util';
 import { commandBinary, loadProviders, stateDir, readCodexNativeContext } from '@parley/core';
 import type { SkillCatalogOptions } from '@parley/core';
 import { capabilityPresence, capabilitySnapshot } from '@parley/protocol';
-import type { CapabilityActionReason, CapabilityMcpTarget, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
+import type { CapabilityActionReason, CapabilityMcpTarget, CapabilityPluginCatalogRequest, CapabilityPluginTargetRequest, CapabilityPluginDetailsRequest, CapabilityPluginInstallRequest, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
 import { contextFingerprint, deny, fingerprint, readBinaryIdentity, sameBinaryIdentity, verifiedClaudeActionBinary } from './native-targets.js';
-import type { NativeMcpInventory, NativeMcpTarget } from './native-targets.js';
+import type { NativeMcpInventory, NativeMcpTarget, NativeBinaryIdentity } from './native-targets.js';
 import { readClaudeSnapshot } from './claude.js';
 import { readCodexSnapshot } from './codex.js';
 import { rowIdentity, object, readJsonFile, readNativeJson, safeText } from './redact.js';
@@ -35,8 +37,8 @@ export interface SnapshotContext {
   };
   codex?: CodexOptions;
 }
-export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase']; native?: NativeMcpInventory }
-export interface SnapshotReaderOptions { readNative?: NativeJsonReader; readCodexContext?: typeof readCodexNativeContext; readBinaryIdentity?: typeof readBinaryIdentity }
+export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase']; native?: NativeMcpInventory; pluginsNative?: NativePluginInventory }
+export interface SnapshotReaderOptions { pluginRedactionSecrets?: readonly string[]; readNative?: NativeJsonReader; readCodexContext?: typeof readCodexNativeContext; readBinaryIdentity?: typeof readBinaryIdentity; readPluginInventory?: typeof readNativePluginInventory; codexPluginContext?: { context: Awaited<ReturnType<typeof readCodexNativeContext>>; binaryIdentity: NativeBinaryIdentity | null } }
 export type ProviderSnapshotReader = (context: SnapshotContext, options: SnapshotReaderOptions) => Promise<ProviderSnapshotResult>;
 
 /** Bounded native Git output only; no repository/config output or raw errors are logged. */
@@ -192,10 +194,14 @@ async function markSharedLinks(context: SnapshotContext, columns: Partial<Record
 export type PreparedMcpAction = { ok: false; code: CapabilityActionReason | 'context-changed' | 'shutdown' } | {
   ok: true; context: SnapshotContext; inventory: NativeMcpInventory; target?: NativeMcpTarget; checkProof: string | null; isCurrent(): boolean;
 };
+export type PreparedPluginAction = { ok: false; code: CapabilityActionReason | 'context-changed' | 'shutdown' } | {
+  ok: true; context: SnapshotContext; inventory: NativePluginInventory; target?: NativePluginTarget; isCurrent(): boolean;
+};
 export interface SafeCapabilitiesService {
   get(projectPath: string): CapabilitySnapshot;
   refresh(projectPath: string): CapabilitySnapshot;
   prepareMcpAction(params: CapabilityMcpTarget | { projectPath: string; provider: CapabilityProvider; revision: number }): Promise<PreparedMcpAction>;
+  preparePluginAction(params: CapabilityPluginCatalogRequest | CapabilityPluginTargetRequest | CapabilityPluginDetailsRequest | CapabilityPluginInstallRequest): Promise<PreparedPluginAction>;
   recordMcpCheck(projectPath: string, provider: CapabilityProvider, target: NativeMcpTarget, status: CapabilityPresence['status'], proof: string | null): boolean;
   dispose(): void;
 }
@@ -214,7 +220,7 @@ function mcpCheckProof(inventory: NativeMcpInventory | undefined, target: Native
 }
 
 export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions = {}): SafeCapabilitiesService {
-  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
+  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; pluginInventories: Partial<Record<CapabilityProvider, NativePluginInventory>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
   const cache = new Map<string, Cached>();
   let disposed = false;
   const copy = (value: CapabilitySnapshot): CapabilitySnapshot => structuredClone(value);
@@ -226,7 +232,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     const key = path.resolve(projectPath);
     const previous = cache.get(key);
     const generation = (previous?.generation ?? 0) + 1;
-    const value: Cached = { generation, entries: {}, inventories: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
+    const value: Cached = { generation, entries: {}, inventories: {}, pluginInventories: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
       columns: { claude: { phase: 'loading', diagnostics: [] }, codex: { phase: 'loading', diagnostics: [] } }, rows: [] } };
     cache.set(key, value);
     const finish = async (provider: CapabilityProvider, result: ProviderSnapshotResult, context?: SnapshotContext): Promise<void> => {
@@ -251,6 +257,8 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
             safe.status = health.status; healthKeys.add(key);
           }
         }
+        const pluginTarget = result.pluginsNative?.targets.find(target => target.id === p.id && target.kind === 'installed');
+        if (entry.kind === 'plugin') safe.pluginActions = pluginTarget ? { uninstall: pluginTarget.actions.uninstall, enable: pluginTarget.actions.enable, disable: pluginTarget.actions.disable, details: pluginTarget.actions.details } : { uninstall: deny(), enable: deny(), disable: deny(), details: deny('native-only') };
         const parsed = capabilityPresence.safeParse(safe);
         if (!parsed.success || !safeText(entry.name)) { diagnostics.push({ code: 'invalid-output' }); continue; }
         entries.push({ kind: entry.kind, name: safeText(entry.name)!, ...(entry.rowId && /^[a-f0-9]{64}$/.test(entry.rowId) ? { rowId: entry.rowId } : {}), presence: parsed.data });
@@ -271,21 +279,23 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
       if (result.native) current.inventories[provider] = { ...result.native,
         names: context ? [...new Set([...result.native.names, 'parley'])] : [...result.native.names],
         targets: result.native.targets.filter(target => bounded.some(entry => entry.kind === 'mcp' && entry.presence.id === target.id)) };
+      if (result.pluginsNative) current.pluginInventories[provider] = { ...result.pluginsNative, targets: result.pluginsNative.targets.filter(target => target.kind === 'available' || bounded.some(entry => entry.kind === 'plugin' && entry.presence.id === target.id)) };
       if (context) await markSharedLinks(context, current.entries);
       if (active(key, generation) !== current) return;
       current.snapshot.columns[provider] = { phase: diagnostics.length && result.phase === 'ready' ? 'partial' : result.phase, diagnostics,
-        ...(result.native ? { mcpAdd: result.native.add } : {}) };
+        ...(result.native ? { mcpAdd: result.native.add } : {}),
+        ...(result.pluginsNative ? { pluginCatalog: result.pluginsNative.catalog, pluginMarketplaceAdd: result.pluginsNative.marketplaceAdd } : {}) };
       current.snapshot.rows = mergeSnapshotRows(current.entries);
       current.snapshot.revision += 1;
       try { current.snapshot = capabilitySnapshot.parse(current.snapshot); }
-      catch { delete current.inventories[provider]; current.entries[provider] = []; current.snapshot.rows = mergeSnapshotRows(current.entries);
+      catch { delete current.pluginInventories[provider]; delete current.inventories[provider]; current.entries[provider] = []; current.snapshot.rows = mergeSnapshotRows(current.entries);
         current.snapshot.columns[provider] = { phase: 'error', diagnostics: [{ code: 'invalid-output' }] }; }
       emit(key, current);
     };
     void (options.context ?? defaultSnapshotContext)(key).then(context => {
       for (const provider of ['claude', 'codex'] as const) {
         const reader = options.readers?.[provider] ?? (provider === 'claude' ? readClaudeSnapshot : readCodexSnapshot);
-        void reader(context, { readNative: options.readNative ?? readNativeJson, readCodexContext: options.readCodexContext ?? readCodexNativeContext, readBinaryIdentity: options.readBinaryIdentity ?? readBinaryIdentity }).then(async result => {
+        void reader(context, { readNative: options.readNative ?? readNativeJson, readCodexContext: options.readCodexContext ?? readCodexNativeContext, readBinaryIdentity: options.readBinaryIdentity ?? readBinaryIdentity, readPluginInventory: options.readPluginInventory ?? readNativePluginInventory }).then(async result => {
           result.diagnostics.push(...await builtinSkills(context, result.entries));
           await finish(provider, result, context);
         }).catch(() => finish(provider, { entries: [], diagnostics: [{ code: 'invalid-output' }], phase: 'error' }, context));
@@ -326,6 +336,36 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         if (oldTarget && (!target || target.name !== oldTarget.name || target.scope !== oldTarget.scope || target.fingerprint !== oldTarget.fingerprint)) return { ok: false, code: 'context-changed' };
         return { ok: true, context: fresh.executionBinary ? { ...context, binaries: { ...context.binaries, [params.provider]: fresh.executionBinary } } : context, inventory: { ...fresh, names: [...new Set([...fresh.names, ...previous.names.filter(name => name === 'parley')])] }, ...(target ? { target } : {}), checkProof: mcpCheckProof(fresh, target),
           isCurrent: () => !disposed && cache.get(key) === current && current.snapshot.revision === params.revision };
+      } catch { return { ok: false, code: 'unverified' }; }
+    },
+    async preparePluginAction(params) {
+      if (disposed) return { ok: false, code: 'shutdown' };
+      const key = path.resolve(params.projectPath); const current = cache.get(key);
+      if (!current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+      const previous = current.pluginInventories[params.provider];
+      if (!previous) return { ok: false, code: 'unverified' };
+      const selector = 'target' in params ? params.target.kind === 'installed' ? params.target.presenceId : params.target.catalogId
+        : 'presenceId' in params ? params.presenceId : 'catalogId' in params ? params.catalogId : undefined;
+      const oldTarget = selector ? previous.targets.find(target => target.id === selector) : undefined;
+      if (selector && !oldTarget) return { ok: false, code: 'unverified' };
+      try {
+        const context = await (options.context ?? defaultSnapshotContext)(key);
+        if (contextFingerprint(context, params.provider) !== previous.contextFingerprint) return { ok: false, code: 'context-changed' };
+        const fresh = await (options.readPluginInventory ?? readNativePluginInventory)(context, params.provider, options);
+        if (disposed) return { ok: false, code: 'shutdown' };
+        if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+        if (fresh.provider !== params.provider || fresh.contextFingerprint !== previous.contextFingerprint || fresh.signature !== previous.signature) return { ok: false, code: 'context-changed' };
+        const target = oldTarget ? fresh.targets.find(value => value.id === oldTarget.id) : undefined;
+        if (oldTarget && (!target || target.nativeId !== oldTarget.nativeId || target.scope !== oldTarget.scope || target.fingerprint !== oldTarget.fingerprint || target.sourceFingerprint !== oldTarget.sourceFingerprint)) return { ok: false, code: 'context-changed' };
+        if (fresh.executionBinary) {
+          const identity = params.provider === 'claude' ? await verifiedClaudeActionBinary(context, options.readBinaryIdentity ?? readBinaryIdentity)
+            : await (options.readBinaryIdentity ?? readBinaryIdentity)(fresh.executionBinary, context);
+          if (!sameBinaryIdentity(identity, fresh.binaryIdentity)) return { ok: false, code: 'context-changed' };
+          if (disposed) return { ok: false, code: 'shutdown' };
+          if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+        }
+        return { ok: true, context: fresh.executionBinary ? { ...context, binaries: { ...context.binaries, [params.provider]: fresh.executionBinary } } : context,
+          inventory: fresh, ...(target ? { target } : {}), isCurrent: () => !disposed && cache.get(key) === current && current.snapshot.revision === params.revision };
       } catch { return { ok: false, code: 'unverified' }; }
     },
     recordMcpCheck(projectPath, provider, target, status, proof) {

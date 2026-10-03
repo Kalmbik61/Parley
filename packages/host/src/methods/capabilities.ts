@@ -1,3 +1,5 @@
+import { createProviderScheduler } from '../capabilities/scheduler.js';
+import { createCapabilitiesPluginActions } from '../capabilities/plugin-actions.js';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { scanClaudeCapabilities } from '@parley/core';
@@ -28,7 +30,7 @@ import type { SafeCapabilitiesOptions } from '../capabilities/snapshot.js';
 import type { HostContext } from '../context.js';
 import { createCapabilitiesMcpActions } from '../capabilities/actions.js';
 import type { McpExecutor } from '../capabilities/actions.js';
-export interface CapabilitiesHandlersOptions extends SafeCapabilitiesOptions { executeMcp?: McpExecutor }
+export interface CapabilitiesHandlersOptions extends SafeCapabilitiesOptions { executeMcp?: McpExecutor; executePlugin?: McpExecutor }
 
 /** Create once per host; root registers these handlers alongside legacy list. */
 export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions = {}) {
@@ -39,9 +41,11 @@ export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions 
       options.changed?.(projectPath, snapshot);
     },
   });
-  const actions = createCapabilitiesMcpActions(service, options.executeMcp);
+  const scheduler = createProviderScheduler();
+  const actions = createCapabilitiesMcpActions(service, options.executeMcp, scheduler);
+  const plugins = createCapabilitiesPluginActions(service, options.executePlugin, scheduler);
   const bind = (context: HostContext): void => {
-    if (!host) { host = context; host.onShutdown(async () => { actions.dispose(); service.dispose(); }); }
+    if (!host) { host = context; host.onShutdown(async () => { scheduler.dispose(); actions.dispose(); plugins.dispose(); service.dispose(); }); }
   };
   const handler = (refresh: boolean): Handler<'capabilities.get'> => async (params, request) => {
     if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', 'projectPath must be an absolute path');
@@ -51,5 +55,12 @@ export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions 
   const capabilitiesMcpAdd: Handler<'capabilities.mcp.add'> = async (params, request) => { bind(request.host); return actions.add(params); };
   const capabilitiesMcpRemove: Handler<'capabilities.mcp.remove'> = async (params, request) => { bind(request.host); return actions.remove(params); };
   const capabilitiesMcpCheck: Handler<'capabilities.mcp.check'> = async (params, request) => { bind(request.host); return actions.check(params); };
-  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), capabilitiesMcpAdd, capabilitiesMcpRemove, capabilitiesMcpCheck, service };
+  const capabilitiesPluginsAvailable: Handler<'capabilities.plugins.available'> = async (params, request) => { bind(request.host); return plugins.available(params); };
+  const capabilitiesPluginsDetails: Handler<'capabilities.plugins.details'> = async (params, request) => { bind(request.host); return plugins.details(params); };
+  const capabilitiesPluginsInstall: Handler<'capabilities.plugins.install'> = async (params, request) => { bind(request.host); return plugins.install(params); };
+  const capabilitiesPluginsUninstall: Handler<'capabilities.plugins.uninstall'> = async (params, request) => { bind(request.host); return plugins.uninstall(params); };
+  const capabilitiesPluginsEnable: Handler<'capabilities.plugins.enable'> = async (params, request) => { bind(request.host); return plugins.enable(params); };
+  const capabilitiesPluginsDisable: Handler<'capabilities.plugins.disable'> = async (params, request) => { bind(request.host); return plugins.disable(params); };
+  const capabilitiesPluginsAddMarketplace: Handler<'capabilities.plugins.addMarketplace'> = async (params, request) => { bind(request.host); return plugins.addMarketplace(params); };
+  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), capabilitiesMcpAdd, capabilitiesMcpRemove, capabilitiesMcpCheck, capabilitiesPluginsAvailable, capabilitiesPluginsDetails, capabilitiesPluginsInstall, capabilitiesPluginsUninstall, capabilitiesPluginsEnable, capabilitiesPluginsDisable, capabilitiesPluginsAddMarketplace, service };
 }

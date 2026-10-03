@@ -20,7 +20,7 @@ describe('Codex safe snapshot', () => {
     { name: 'stdio', enabled: false, auth_status: 'unsupported', transport: { command: 'node', args: ['FIXTURE_SECRET'], env: { KEY: 'FIXTURE_SECRET' } } },
    ] : { installed: [{ pluginId: 'tool@market', enabled: true, installed: true, marketplaceName: 'market', description: 'Contains FIXTURE_SECRET' }], available: [{ pluginId: 'not-installed' }] } };
   } });
-  expect(calls).toEqual([['mcp', 'list', '--json'], ['plugin', 'list', '--json']]);
+  expect(calls).toEqual([['mcp', 'list', '--json'], ['plugin', 'list', '--json'], ['plugin', 'list', '--available', '--json'], ['plugin', 'marketplace', 'list', '--json']]);
   expect(result.entries.map(entry => [entry.name, entry.presence.status, entry.presence.scope])).toEqual([['http', 'unknown', null], ['stdio', 'off', null], ['tool@market', 'unknown', null]]);
   expect(JSON.stringify(result)).not.toContain('FIXTURE_SECRET');
  });

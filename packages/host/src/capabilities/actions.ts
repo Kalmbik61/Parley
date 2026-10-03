@@ -1,3 +1,5 @@
+import { createProviderScheduler } from './scheduler.js';
+import type { ProviderScheduler } from './scheduler.js';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
@@ -57,26 +59,20 @@ export function parseClaudeMcpCheck(stdout: Buffer | undefined, target: NativeMc
   return null;
 }
 
-interface Job { run(signal: AbortSignal): Promise<CapabilityActionResult>; resolve(result: CapabilityActionResult): void; controller: AbortController }
 export interface CapabilitiesMcpActions {
   add(params: CapabilityMcpAdd): Promise<CapabilityActionResult>;
   remove(params: CapabilityMcpTarget): Promise<CapabilityActionResult>;
   check(params: CapabilityMcpTarget): Promise<CapabilityActionResult>;
   dispose(): void;
 }
-export function createCapabilitiesMcpActions(service: SafeCapabilitiesService, executor: McpExecutor = executeMcp): CapabilitiesMcpActions {
-  const queues: Record<CapabilityProvider, Job[]> = { claude: [], codex: [] };
-  const active: Partial<Record<CapabilityProvider, Job>> = {}; let disposed = false;
+export function createCapabilitiesMcpActions(service: SafeCapabilitiesService, executor: McpExecutor = executeMcp, sharedScheduler?: ProviderScheduler): CapabilitiesMcpActions {
+  const scheduler = sharedScheduler ?? createProviderScheduler();
+  let disposed = false;
   const shutdown = (): CapabilityActionResult => ({ outcome: 'cancelled', code: 'shutdown' });
-  const pump = (provider: CapabilityProvider): void => {
-    if (disposed || active[provider]) return;
-    const job = queues[provider].shift(); if (!job) return; active[provider] = job;
-    void job.run(job.controller.signal).catch((): CapabilityActionResult => ({ outcome: 'failed', code: 'cli-error' }))
-      .then(result => job.resolve(disposed ? shutdown() : result)).finally(() => { delete active[provider]; pump(provider); });
-  };
-  const enqueue = (provider: CapabilityProvider, run: Job['run']): Promise<CapabilityActionResult> => {
+  const enqueue = (provider: CapabilityProvider, run: (signal: AbortSignal) => Promise<CapabilityActionResult>): Promise<CapabilityActionResult> => {
     if (disposed) return Promise.resolve(shutdown());
-    return new Promise(resolve => { queues[provider].push({ run, resolve, controller: new AbortController() }); pump(provider); });
+    return scheduler.run(provider, async signal => disposed ? shutdown() : run(signal))
+      .catch(() => disposed ? shutdown() : { outcome: 'failed', code: 'cli-error' });
   };
   const action = (kind: 'add' | 'remove' | 'check', params: CapabilityMcpAdd | CapabilityMcpTarget): Promise<CapabilityActionResult> => {
     const parsed = (kind === 'add' ? capabilityMcpAdd : capabilityMcpTarget).safeParse(params);
@@ -115,10 +111,7 @@ export function createCapabilitiesMcpActions(service: SafeCapabilitiesService, e
   return { add: params => action('add', params), remove: params => action('remove', params), check: params => action('check', params),
     dispose() {
       if (disposed) return; disposed = true;
-      for (const provider of ['claude', 'codex'] as const) {
-        for (const job of queues[provider].splice(0)) { job.controller.abort(); job.resolve(shutdown()); }
-        const job = active[provider]; if (job) { job.controller.abort(); job.resolve(shutdown()); }
-      }
+      if (!sharedScheduler) scheduler.dispose();
     },
   };
 }

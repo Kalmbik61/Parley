@@ -19,7 +19,7 @@ const prepared = (provider: 'claude' | 'codex' = 'claude') => ({ ok: true as con
  contextFingerprint: 'context', signature: 'signature', names: ['native-example'], targets: [target(provider)], add: { user: allow(), project: provider === 'claude' ? allow() : deny('unsupported-scope'), local: provider === 'claude' ? allow() : deny('unsupported-scope') },
 }, checkProof: 'captured-check-proof', isCurrent: () => true });
 function service() {
- return { get: vi.fn(), refresh: vi.fn(), recordMcpCheck: vi.fn(() => true), dispose: vi.fn(), prepareMcpAction: vi.fn<SafeCapabilitiesService['prepareMcpAction']>(async params => prepared(params.provider)) } satisfies SafeCapabilitiesService;
+ return { get: vi.fn(), refresh: vi.fn(), recordMcpCheck: vi.fn(() => true), dispose: vi.fn(), preparePluginAction: vi.fn<SafeCapabilitiesService['preparePluginAction']>(async () => ({ ok: false, code: 'unverified' })), prepareMcpAction: vi.fn<SafeCapabilitiesService['prepareMcpAction']>(async params => prepared(params.provider)) } satisfies SafeCapabilitiesService;
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 

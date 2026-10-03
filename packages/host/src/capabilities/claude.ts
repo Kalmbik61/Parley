@@ -1,3 +1,4 @@
+import { readNativePluginInventory } from './native-plugin-inventory.js';
 import path from 'node:path';
 import { allow, contextFingerprint, deniedAdd, deny, fingerprint, validMcpName, verifiedClaudeActionBinary, claudeDestinationsBound, claudeStorageIdentity } from './native-targets.js';
 import type { NativeMcpTarget } from './native-targets.js';
@@ -106,7 +107,20 @@ export async function readClaudeSnapshot(context: SnapshotContext, options: Snap
     else if (names.filter(name => name === target.name).length !== 1) target.check = deny('ambiguous');
   }
   const verified = completeMcpNames && actionBinary && boundDestinations && storage !== null && main !== null && user.status !== 'invalid' && project.status !== 'invalid' && (user.status === 'missing' || userData !== null) && (project.status === 'missing' || projectData !== null);
-  return { entries, diagnostics, phase: diagnostics.length ? 'partial' : 'ready', native: {
+  const pluginsNative = await (options.readPluginInventory ?? readNativePluginInventory)(context, 'claude', { ...options, pluginRedactionSecrets: secrets });
+  if (pluginsNative.partial && !diagnostics.some(item => item.source === 'plugins' && item.code === 'context-unverified')) diagnostics.push({ code: 'context-unverified', source: 'plugins' });
+  if (pluginsNative.catalog.allowed) {
+    for (let index = entries.length - 1; index >= 0; index--) if (entries[index]!.kind === 'plugin') entries.splice(index, 1);
+    for (const target of pluginsNative.targets.filter(target => target.kind === 'installed')) {
+      const summary = target.summary;
+      entries.push({ kind: 'plugin', name: summary.pluginId, rowId: rowIdentity('plugin', target.nativeId, 'claude'), presence: {
+        id: target.id, scope: target.scope, source: summary.pluginId, documentPath: null, description: summary.description,
+        installed: true, enabled: summary.enabled, status: summary.enabled === false ? 'off' : 'unknown', summary: null,
+        modelAvailable: null, unavailableReason: null,
+      } });
+    }
+  }
+  return { entries, diagnostics, pluginsNative, phase: diagnostics.length ? 'partial' : 'ready', native: {
     contextFingerprint: contextFingerprint(context, 'claude'), signature: fingerprint({ user, project, main, policy: config.mcpPolicy, winners: config.mcpWinningTargets, actionBinary, storage }),
     names, targets, ...(actionBinary ? { executionBinary: actionBinary.canonicalPath } : {}), add: verified ? { user: allow(), project: allow(), local: allow() } : deniedAdd(context.binaries.claude ? 'unverified' : 'not-installed'),
   } };

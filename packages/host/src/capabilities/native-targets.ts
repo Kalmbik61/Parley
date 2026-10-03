@@ -34,7 +34,7 @@ export const contextFingerprint = (context: SnapshotContext, provider: Capabilit
 export const validMcpName = (name: string): boolean => /^[A-Za-z0-9_-]{1,128}$/.test(name);
 
 /** Native active layers prove provenance; no handwritten TOML/trust/precedence resolver. */
-export async function codexUserMcpProof(context: SnapshotContext, native: CodexNativeContext | null): Promise<{ names: Set<string>; add: boolean; signature: string } | null> {
+export async function codexUserConfigProof(context: SnapshotContext, native: CodexNativeContext | null, section: 'mcp_servers' | 'plugins'): Promise<{ names: Set<string>; foreignNames: Set<string>; add: boolean; signature: string } | null> {
   const config = object(native?.config); const requirements = object(native?.requirements);
   if (!context.binaries.codex || !config || !Array.isArray(config.layers) || config.layers.length > 128 ||
     !requirements || !Object.hasOwn(requirements, 'requirements') || requirements.requirements !== null) return null;
@@ -60,17 +60,18 @@ export async function codexUserMcpProof(context: SnapshotContext, native: CodexN
       try { if (await canonicalFileLocation(name.file) !== expected) return null; } catch { return null; }
       if (++userLayers !== 1) return null;
     }
-    const servers = object(data.mcp_servers);
-    if (Object.hasOwn(data, 'mcp_servers') && !servers) return null;
+    const servers = object(data[section]);
+    if (Object.hasOwn(data, section) && !servers) return null;
     for (const [server, value] of Object.entries(servers ?? {})) {
       if (!object(value)) return null;
       (type === 'user' ? users : foreign).add(server);
     }
   }
   for (const name of foreign) users.delete(name);
-  return { names: users, add: userLayers === 1, signature: fingerprint({ layers: config.layers, requirements: native?.requirements, userFile: expected }) };
+  return { names: users, foreignNames: foreign, add: userLayers === 1, signature: fingerprint({ layers: config.layers, requirements: native?.requirements, userFile: expected }) };
 }
 
+export const codexUserMcpProof = (context: SnapshotContext, native: CodexNativeContext | null) => codexUserConfigProof(context, native, 'mcp_servers');
 
 export interface NativeBinaryIdentity { canonicalPath: string; sha256: string; size: number }
 export const sameBinaryIdentity = (a: NativeBinaryIdentity | null | undefined, b: NativeBinaryIdentity | null | undefined): boolean =>

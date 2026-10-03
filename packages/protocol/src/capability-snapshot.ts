@@ -16,6 +16,7 @@ export const capabilityActionAvailability = z.discriminatedUnion('allowed', [
   z.object({ allowed: z.literal(true), reason: z.null() }).strict(),
   z.object({ allowed: z.literal(false), reason: capabilityActionReason }).strict(),
 ]);
+export const capabilityPluginActions = z.object({ uninstall: capabilityActionAvailability, enable: capabilityActionAvailability, disable: capabilityActionAvailability, details: capabilityActionAvailability }).strict();
 export const capabilityMcpActions = z.object({ remove: capabilityActionAvailability, check: capabilityActionAvailability }).strict();
 export const capabilityMcpAddAvailability = z.object({
   user: capabilityActionAvailability, project: capabilityActionAvailability, local: capabilityActionAvailability,
@@ -38,6 +39,7 @@ export const capabilityPresence = z.object({
     'load-tool-unavailable']).nullable(),
   sharedFrom: capabilityProvider.optional(),
   mcpActions: capabilityMcpActions.optional(),
+  pluginActions: capabilityPluginActions.optional(),
 }).strict();
 export const capabilityRow = z.object({
   id: z.string().min(1),
@@ -50,6 +52,12 @@ export const capabilityRow = z.object({
 }).strict().superRefine((row, context) => {
   for (const provider of ['claude', 'codex'] as const) {
     for (const [index, presence] of row[provider].entries()) {
+      if (row.kind !== 'plugin' && presence.pluginActions !== undefined)
+        context.addIssue({ code: 'custom', path: [provider, index, 'pluginActions'], message: 'Only plugins have plugin actions' });
+      if (presence.pluginActions && ['uninstall', 'enable', 'disable'].some(action => presence.pluginActions![action as 'uninstall' | 'enable' | 'disable'].allowed) && !['user', 'project', 'local'].includes(presence.scope ?? ''))
+        context.addIssue({ code: 'custom', path: [provider, index, 'pluginActions'], message: 'Plugin mutation requires human source scope' });
+      if (provider === 'codex' && presence.pluginActions && (presence.pluginActions.enable.allowed || presence.pluginActions.disable.allowed || presence.pluginActions.details.allowed || presence.pluginActions.uninstall.allowed && presence.scope !== 'user'))
+        context.addIssue({ code: 'custom', path: [provider, index, 'pluginActions'], message: 'Codex plugin actions require native-supported user operations' });
       if (row.kind !== 'mcp' && presence.mcpActions !== undefined)
         context.addIssue({ code: 'custom', path: [provider, index, 'mcpActions'], message: 'Only MCP has MCP actions' });
       if (presence.mcpActions?.remove.allowed && !['user', 'project', 'local'].includes(presence.scope ?? ''))
@@ -72,6 +80,8 @@ export const capabilityRow = z.object({
 export const capabilityColumn = z.object({
   phase: z.enum(['loading', 'ready', 'partial', 'error', 'unavailable']),
   mcpAdd: capabilityMcpAddAvailability.optional(),
+  pluginCatalog: capabilityActionAvailability.optional(),
+  pluginMarketplaceAdd: capabilityMcpAddAvailability.optional(),
   diagnostics: z.array(capabilityDiagnostic),
 }).strict();
 export const capabilitySnapshot = z.object({
@@ -80,7 +90,7 @@ export const capabilitySnapshot = z.object({
   columns: z.object({ claude: capabilityColumn, codex: capabilityColumn }).strict(),
   rows: z.array(capabilityRow),
 }).strict().superRefine((snapshot, context) => {
-  for (const scope of ['project', 'local'] as const) if (snapshot.columns.codex.mcpAdd?.[scope].allowed)
+  for (const scope of ['project', 'local'] as const) if ((snapshot.columns.codex.mcpAdd?.[scope].allowed || snapshot.columns.codex.pluginMarketplaceAdd?.[scope].allowed))
     context.addIssue({ code: 'custom', path: ['columns', 'codex', 'mcpAdd', scope], message: 'Codex mutations require user scope' });
 });
 
@@ -96,3 +106,5 @@ export type CapabilityActionReason = z.infer<typeof capabilityActionReason>;
 export type CapabilityActionAvailability = z.infer<typeof capabilityActionAvailability>;
 export type CapabilityMcpActions = z.infer<typeof capabilityMcpActions>;
 export type CapabilityMcpAddAvailability = z.infer<typeof capabilityMcpAddAvailability>;
+
+export type CapabilityPluginActions = z.infer<typeof capabilityPluginActions>;

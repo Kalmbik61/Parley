@@ -290,3 +290,50 @@ it('retains effective Check health after an unchanged proof refresh while Check 
   expect((await checking).status).toBe('ok'); await fixture.loaded(); expect(fixture.status()).toBe('ok');
  } finally { complete(); actions.dispose(); fixture.service.dispose(); }
 });
+
+import type { NativePluginInventory } from './native-plugin-inventory.js';
+async function pluginServiceFixture() {
+ const executable = path.join(root, 'codex-plugin'); await writeFile(executable, 'native fixture'); await chmod(executable, 0o700);
+ context.binaries.codex = executable; const identity = (await readBinaryIdentity(executable, context))!;
+ const actions = { install: deny(), uninstall: allow(), enable: deny('native-only'), disable: deny('native-only'), details: deny('native-only') };
+ const inventory: NativePluginInventory = { provider: 'codex', contextFingerprint: contextFingerprint(context, 'codex'), signature: 'source-proof', executionBinary: executable, binaryIdentity: identity,
+ targets: [{ id: 'opaque-plugin', kind: 'installed', nativeId: 'PRIVATE_SELECTOR@market', scope: 'user', fingerprint: 'target-proof', sourceFingerprint: null, actions,
+ summary: { id: 'opaque-plugin', kind: 'installed', provider: 'codex', name: 'safe', pluginId: 'safe@market', description: null, version: null, scope: 'user', enabled: null,
+ composition: { skills: null, agents: null, mcp: null, hooks: null, tokenEstimate: null }, actions } }], marketplaceNames: [], installScopes: { user: allow(), project: deny(), local: deny() }, marketplaceAdd: { user: allow(), project: deny(), local: deny() }, catalog: allow(), partial: false };
+ const readPluginInventory = vi.fn(async () => structuredClone(inventory));
+ const reader = async (): Promise<ProviderSnapshotResult> => ({ entries: [{ kind: 'plugin', name: 'safe', presence: { id: 'opaque-plugin', scope: 'user', source: null, documentPath: null, description: null, installed: true, enabled: null, status: 'unknown', summary: null, modelAvailable: null, unavailableReason: null } }], phase: 'ready', diagnostics: [], pluginsNative: structuredClone(inventory) });
+ const service = createSafeCapabilitiesService({ context: async () => context, readPluginInventory, readers: { claude: async () => ready(), codex: reader } });
+ service.get(root); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).toBe('ready'));
+ return { service, inventory, executable, readPluginInventory, params: { projectPath: root, provider: 'codex' as const, presenceId: 'opaque-plugin', revision: service.get(root).revision } };
+}
+it('revalidates private plugin identity without publishing its selector, config or byte proof', async () => {
+ const fixture = await pluginServiceFixture();
+ try {
+  expect((await fixture.service.preparePluginAction(fixture.params)).ok).toBe(true);
+  const snapshot = JSON.stringify(fixture.service.get(root));
+  expect(snapshot).not.toContain('PRIVATE_SELECTOR'); expect(snapshot).not.toContain('source-proof'); expect(snapshot).not.toContain(fixture.executable);
+  fixture.inventory.signature = 'changed-winning-layer';
+  expect(await fixture.service.preparePluginAction(fixture.params)).toEqual({ ok: false, code: 'context-changed' });
+ } finally { fixture.service.dispose(); }
+});
+it('rejects a plugin target when captured bytes, main context or ownership change', async () => {
+ const fixture = await pluginServiceFixture();
+ try {
+  await writeFile(fixture.executable, 'replacement bytes');
+  expect(await fixture.service.preparePluginAction(fixture.params)).toEqual({ ok: false, code: 'context-changed' });
+  await writeFile(fixture.executable, 'native fixture');
+  fixture.inventory.targets[0]!.scope = null;
+  expect(await fixture.service.preparePluginAction(fixture.params)).toEqual({ ok: false, code: 'context-changed' });
+  fixture.inventory.targets[0]!.scope = 'user';context.env = { HOME: '/different-context' };
+  expect(await fixture.service.preparePluginAction(fixture.params)).toEqual({ ok: false, code: 'context-changed' });
+ } finally { fixture.service.dispose(); }
+});
+it('does not dispatch captured plugin work if Refresh finishes during fresh provenance inspection', async () => {
+ const fixture = await pluginServiceFixture(); const gate = deferred<NativePluginInventory>(); fixture.readPluginInventory.mockImplementationOnce(() => gate.promise);
+ try {
+  const preparing = fixture.service.preparePluginAction(fixture.params);
+  await vi.waitFor(() => expect(fixture.readPluginInventory).toHaveBeenCalledOnce());
+  fixture.service.refresh(root); await vi.waitFor(() => expect(fixture.service.get(root).columns.codex.phase).toBe('ready'));
+  gate.resolve(fixture.inventory); expect(await preparing).toEqual({ ok: false, code: 'stale' });
+ } finally { fixture.service.dispose(); }
+});

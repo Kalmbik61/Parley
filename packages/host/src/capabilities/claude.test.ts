@@ -28,7 +28,7 @@ describe('Claude safe snapshot', () => {
     const result = await readClaudeSnapshot(context, { readNative: async (binary, args) => {
       expect(binary).toBe('/fixture/claude'); (calls as string[][]).push([...args]); return plugins();
     } });
-    expect(calls).toEqual([['plugin', 'list', '--json']]);
+    expect(calls).toEqual([['plugin', 'list', '--json'], ['plugin', 'list', '--available', '--json'], ['plugin', 'marketplace', 'list', '--json']]);
     expect(result.entries.map(entry => [entry.name, entry.presence.scope])).toEqual([['user', 'user'], ['local', 'local'], ['project', 'project']]);
     expect(result.entries.every(entry => entry.presence.enabled === null && entry.presence.status === 'unknown')).toBe(true);
     expect(JSON.stringify(result)).not.toContain('FIXTURE_SECRET');
