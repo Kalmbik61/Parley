@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09 accepted; P08 выполняется; P10/P11 в review.
+- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09/P10 accepted; P08 выполняется; P11 needs rework.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -30,8 +30,8 @@
 | P07 | Реализовать источники скиллов Codex | done | a0c8f2c/e15a367; reviewer /root/p01_review accepted, 7 targeted + direct probe |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | running | /root/p02_codex_probe; gpt-6.1-sol/high; dependencies accepted; reviewer /root/p01_review |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
-| P10 | Подключить создание PARLEY.md и Open/Create | review | ENOSPC fixture/policy: 19 core/lint/types passed; final recheck /root/p01_claude_probe |
-| P11 | Реализовать каталог ролей и умолчания | review | 30 role /4 English guards, lint/strict types passed; reviewer /root/p01_review |
+| P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
+| P11 | Реализовать каталог ролей и умолчания | running | 83ac8fc needs rework: native Claude metadata identity + Codex Rust whitespace; original author fixes |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
@@ -128,3 +128,5 @@ P10 repeat review: actual cleanup race закрыта; дополнительн�
 P11 snapshot `83ac8fc` проверяет /root/p01_review. P10 ENOSPC test ready: real wx open with injected write failure; 19 core tests/lint/strict types passed, production unchanged. Final recheck передан независимому /root/p01_claude_probe; исходная race уже закрыта review /root/p01_review.
 
 P10 ENOSPC snapshot `72b3edb` проверяет /root/p01_claude_probe, P11 `83ac8fc` — /root/p01_review. P08 получает approved minimal documentKind internal contract + sole writer source output/types/index; human chat inventory adapter сохраняет wire, automatic search фильтрует modelAvailable. План/nav spec/contracts согласованы; source discovery behavior не расширяется.
+
+P10 final accepted /root/p01_claude_probe, 19 core tests independently repeated; ENOSPC policy/test и original race fixes закрыты. P11 independent review /root/p01_review выявил два Important native mismatches. Approved source amendment: Claude required metadata identity/no filename fallback/ambiguous same-root unavailable; Codex Rust Unicode edge trim без extra filesystem-name policy. Spec/unified/contracts согласованы; author исправляет readers/tests. P12 effective-config reader obligation остаётся explicit.

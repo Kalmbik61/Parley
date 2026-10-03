@@ -69,8 +69,8 @@
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p02_codex_probe (P07 fixes) | done |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | /root/p02_codex_probe (P08) | running |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
-| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | review |
-| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11) | review |
+| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
+| [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | running |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
@@ -415,9 +415,9 @@
 
 ### P10: Подключить создание PARLEY.md и Open/Create
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review (ENOSPC fixture/policy готова). **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (ENOSPC final recheck; исходный review /root/p01_review), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe (ENOSPC final recheck; исходный review /root/p01_review), gpt-6.1-sol/high.
 
 **Зависимости:** P09. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -461,13 +461,15 @@
 
 **Evidence final recheck:** 19 core fixtures, scoped lint/strict types passed; реальный wx open + injected ENOSPC write, handle close/empty receipt/auto suppression/explicit recovery подтверждены. Production behavior не менялся после e20d5b7.
 
+**Независимая final приёмка:** /root/p01_claude_probe accepted `72b3edb`; 19/19 core tests повторены, actual wx/close/body error и explicit recovery подтверждены. Production совпал с e20d5b7; исходный scope ранее проверен /root/p01_review. Native live gates остаются P32.
+
 <a id="p11"></a>
 
 ### P11: Реализовать каталог ролей и умолчания
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
+**Статус:** running (review needs rework). **Исполнитель:** /root/p01_claude_probe (новое назначение P11), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P11), gpt-6.1-sol/high.
 
 **Зависимости:** P05, P09. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -490,6 +492,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence перед ревью:** 9 owned roles files; 30 role +4 English guard tests passed; scoped ESLint/isolated strict tsc всех файлов passed. Native context inputs и explicit/null/default/missing semantics описаны; shared launch/map/UI остаются P12.
+
+**Замечания review:** Important/P1 — Claude identity должна быть metadata.name, missing name недоступен; Important/P2 — Codex JS trim не совпадает с Rust Unicode whitespace. Source-backed fix/spec amendment согласованы; только owned readers/tests, recheck независимый. P12 требует настоящего effective native config context, не guessed trust.
 
 <a id="p12"></a>
 

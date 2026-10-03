@@ -70,7 +70,7 @@ Pinned boundary evidence Codex: depth 6, ≤2000 directories и ≤20000 entries
 | Codex skills.config | Offline full-path/name selectors работают; invalid config срывает startup | Production suppression off. Только валидированный provenance-aware candidate; oversized/partial resolver → omit generated override |
 | Codex include_instructions=false | Offline удаляет весь skills block; source-pinned, не подтверждён stable public reference | Candidate off; не гарантирует разрешённое чтение выбранного документа |
 | Codex max_context_tokens=1 | Offline нет advertised rows; budget действительно есть | Candidate off; не режим «только имена» |
-| Native Claude role/subagent | Whitelist Skill/MCP positive synthetic native loader transport | У роли без доказанного Skill/find_skill path полный список; не добавлять отсутствующие инструменты по label |
+| Native Claude role/subagent | Whitelist Skill/MCP positive synthetic native loader transport; P11 pinned loader+official docs: required metadata name is native agentType, filename may differ, missing name skipped | Без filename fallback; ambiguous same-root identity unavailable. У роли без доказанного Skill/find_skill path полный список; ancestor/managed/CLI/plugin parity и P12 lookup adaptation остаются gates |
 | Native Codex role | Auto-discovered agents/**/*.toml: обязательные `name`, непустые developer_instructions, description после layer merge. Поздняя одноимённая роль выигрывает, metadata может наследоваться | Без filename fallback. Declared config_file name-hint — другой путь, пока вне v1. Нет main-session role flag: main fields доставляются через native args+layer |
 | Read-only / resume | P02 offline prompt/config positive; live HTTP 400, MCP/report/resume не состоялись | Не объявлять enforcement; роль без обеспечиваемой доставки/ограничений не запускать. Проверенный native CLI supported model выбирается отдельно от фиксированной модели агентов workflow |
 
@@ -281,3 +281,7 @@ const results=[run('arg96KiB',[fits],baseEnv),run('utf8-escaping',[unicode],base
 console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,os:os.release(),argMax,results},null,2));
 if(results[0].status!==0||!results[0].bytesPreserved||results[1].status!==0||!results[1].bytesPreserved||results[2].status!==0||results[3].error!=='E2BIG')process.exitCode=1;
 ```
+
+## P11 source amendment — 2026-10-03
+
+Claude local role identity — exact required frontmatter name (metadata-only name/description), not filename. Pinned 2.1.287 Vjn/T6 и [official frontmatter contract](https://code.claude.com/docs/en/sub-agents#frontmatter-reference) подтверждают lookup. Same-root duplicates имеют native read-order ambiguity: no invented lexical winner. Codex role scalar normalization — Rust Unicode White_Space edge trim, no internal collapse; FEFF retained, name never used as filesystem path. Existing filename-only assertAgent must be adapted in P12. Native effective layer/trust/requirements reader remains required for Codex role selection; raw user+cwd TOML alone is not evidence of a complete stack.

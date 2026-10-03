@@ -111,11 +111,21 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
 
 ### 4.1 Claude
 
-- Папки — как сейчас: `.claude/agents/*.md` проекта, затем `~/.claude/agents/*.md`
-  (`agentDirs`, `listAgents`, `assertAgent`). Имя — `claude:<имя файла без .md>`.
-- Для списка окно и `list_roles` читают из файла только frontmatter `description`.
-  Остальное содержимое Parley не читает: промпт, инструменты и модель применяет сам
-  Claude Code по `--agent`.
+- Поддержанные local roots: `.claude/agents/` session cwd и
+  `$CLAUDE_CONFIG_DIR/agents` (по умолчанию `~/.claude/agents`). Native identity —
+  обязательный frontmatter `name`, а не filename: `audit.md` с `name: decorative`
+  даёт `claude:decorative` и `--agent decorative`. Нет filename fallback.
+- Читаются только `name` и `description` через общий bounded YAML reader. Missing,
+  nonstring или native-invalid name/description исключают запись с safe diagnostic;
+  prompt, model и tools применяет Claude Code, Parley их не копирует.
+- Native project выше user. Неоднозначные одинаковые metadata names в одном root
+  нельзя разрешить произвольной lexical сортировкой: такие identities недоступны,
+  partial diagnostic запрещает fallback к user той же identity.
+- Эти правила подтверждены pinned loader Claude 2.1.287 и
+  [официальным frontmatter contract](https://code.claude.com/docs/en/sub-agents#frontmatter-reference).
+  Current docs также описывают ancestor/managed/CLI/plugin scopes; их полная parity
+  остаётся отдельным gate. Старый filename-based `assertAgent` адаптируется в P12;
+  он не определяет новый native identity.
 - Агенты из плагинов (`plugin:agent`) — позже, через снимок спеки Capabilities.
 
 ### 4.2 Codex
@@ -124,7 +134,11 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
   source-backed; recursive roots и поздний same-name winner следуют native order.
   `name` обязателен, непустой `developer_instructions` обязателен, `description`
   обязателен **после native layer merge** и может наследоваться. Filename fallback нет.
-  Имя в Parley — `codex:<name>`; недопустимый/неизвестный native name исключается.
+  Имя в Parley — `codex:<name>`; native scalars используют Rust Unicode White_Space
+  edge trim без internal collapse. U+0085-only instructions пусты; U+FEFF не является
+  whitespace и сохраняется. Name — данные, не filesystem path; имя файла не строится
+  из name, canonical document path хранится отдельно. Дополнительный ASCII/path name
+  policy не выдаётся за native validation.
 - Из merged роли берутся `description`, `developer_instructions`, `model`,
   `model_reasoning_effort`, `sandbox_mode`; неизвестные поля не расширяют права.
 - Shared `smol-toml@1.9.0` parse/stringify (BSD-3-Clause), `yaml@2.9.1`
