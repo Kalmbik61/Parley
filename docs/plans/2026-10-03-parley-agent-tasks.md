@@ -63,12 +63,12 @@
 | [P01 — Проверить Claude: источники, budget, jev и инструменты](#p01) | 0 | P00 | /root/p01_claude_probe | done |
 | [P02 — Проверить Codex: скиллы, слой, роли и resume](#p02) | 0 | P00 | /root/p02_codex_probe | done |
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
-| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | review |
-| [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | не назначен | pending |
+| [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
+| [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | running |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
 | [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | не назначен | pending |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
-| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | не назначен | pending |
+| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | running |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | не назначен | pending |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | не назначен | pending |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
@@ -209,9 +209,9 @@
 
 ### P04: Закрыть контракты разведки и выбор парсеров
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p00_prepare_base (новое назначение P04), gpt-6.1-sol/high; профиль `architect`. **Проверяющий:** /root/p01_review (новое назначение P04), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p00_prepare_base (новое назначение P04), gpt-6.1-sol/high; профиль `architect`. **Проверяющий:** /root/p01_review (новое назначение P04), gpt-6.1-sol/high.
 
 **Зависимости:** P01, P02, P03. **Источник:** [этап 0 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-0).
 
@@ -231,7 +231,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence после выполнения:** `8a71358` + fix `e4e61cc`; /root/p01_review — accepted после исправления двух Important и одного Minor finding. Pins/API independently checked на Node20; P00 prefix preserved; scripts durable. [Принятые контракты](../research/2026-10-03-parley-cli/contracts.md) уточняют устаревшие native CLI примеры спек. Перенос этих уточнений в спеки назначен отдельному агенту под контролем root.
 
 <a id="p05"></a>
 
@@ -239,7 +239,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P05), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
 
 **Зависимости:** P04. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -250,6 +250,8 @@
 - `packages/core/src/skills/frontmatter.test.ts`
 - `packages/core/package.json`
 - `pnpm-lock.yaml`
+
+**Уточняющий источник:** [принятый P04 контракт](../research/2026-10-03-parley-cli/contracts.md).
 
 **Работа:** Ввести утверждённый внутренний контракт и общие полноценные парсеры. Поддержать многострочные descriptions, кавычки, disable-model-invocation и Codex policy/config. Зависимости добавить в версиях из P04. Тела SKILL.md не включать в метаданные; соблюдать предел 64 КиБ.
 
@@ -357,7 +359,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P09), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
 
 **Зависимости:** P04. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -376,6 +378,8 @@
 - `packages/core/src/index.ts` — только export проверки аргументов/окружения
 - `packages/host/src/sessions/sessions-service.ts` — окончательный env guard и доставка warning до spawn
 - `packages/host/src/sessions/sessions-service.test.ts` — поведенческие проверки этих точек
+
+**Уточняющий источник:** [принятый P04 контракт](../research/2026-10-03-parley-cli/contracts.md).
 
 **Работа:** Добавить обработку PARLEY.md и один сборщик слоя с необязательными блоками роли/рецепта/памяти. Передать Codex developer_instructions и CLAUDE.md fallback. Сохранить тихий бриф, launch/new/resume; проверить окончательный argv после экранирования и предупреждение override-gap. Полный argv/env проверять в host после слияния inherited env и hook token, до pty.start; host обязан обработать warnings. P10 получает эти host-файлы позже, после принятия P09.
 
