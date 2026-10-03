@@ -71,7 +71,7 @@
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10 fixes) | done |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
-| [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | running |
+| [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | done |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
@@ -505,9 +505,9 @@
 
 ### P12: Подключить роли к запуску, MCP и диалогу
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P12), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (следующее назначение), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (новое назначение P12), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (следующее назначение), gpt-6.1-sol/high.
 
 **Зависимости:** P11, P10. **Источник:** [этап 3 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-3).
 
@@ -547,6 +547,8 @@
 **UI helper grant:** desktop/renderer/lib/role-summary.ts и целевой test — current roles.list lookup по participant ref/cwd/provider для SessionRow/ParticipantStrip/TerminalBody. Computed permissions/defaults не сохраняются; readOnly не выводится из имени. ChatToolbar использует existing works store; ChatView вне области.
 
 **P12 pre-review evidence:** CLI22/22 с process-only pinned Corepack env; protocol42, MCP+agents189, host69, desktop239, launch74/guidance53, scoped lint/desktop+host types passed. Independent core157/host69/UI54/protocol42 passed. Один Important: includes-only template проверка не доказывает native flag/value позицию обязательного канала. Автор исправляет agents.ts +regressions до snapshot/recheck; P12 не принят.
+
+**Независимая приёмка:** /root/p01_review accepted 14e0d13..fd3654e; Important flag/value proof исправлен.44 targeted regressions +9 direct probes, scoped lint/diff check passed; all39snapshotfiles matched. Author fix agents66/launch74/MCP158=298 и root final corebuild0. Предыдущие host69/UI54/protocol42 independently green. Native live load/report/notify/resume/enforcement и manual UI остаются gates P32.
 
 <a id="p13"></a>
 
@@ -684,6 +686,8 @@
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
 **Дополнительные grants root:** transient store/ui.ts, shared/keybindings.ts, renderer/keys/handler.ts и targeted tests; AppShell/SectionMenu/palette tests. Один ProjectPanel на existing Dialog/Tabs, RightSidebar production не требуется менять. Shared strings sole writer после root P12 snapshot; до unlock новые owned modules и подготовка labels artifact. PARLEY Open/Create переиспользует P10 route, no implicit Create.
+
+**Shared strings unlock:** после P12 snapshot fd3654e shared/strings.ts разрешён sole writer /root/p01_claude_probe P16; preserve S.roles/all existing groups, добавить только projectPanel labels.
 
 <a id="p17"></a>
 

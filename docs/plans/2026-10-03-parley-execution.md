@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P11 и P15 accepted; P12 rework, P16 running.
+- Текущая фаза: P00–P12 и P15 accepted; P16 running, P13 read-only подготовка.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -32,11 +32,11 @@
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
 | P10 | Подключить создание PARLEY.md и Open/Create | done | 733ab7d/e20d5b7/72b3edb; independent final recheck accepted, 19 core repeated |
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
-| P12 | Подключить роли к запуску, MCP и диалогу | running | /root/p02_codex_probe; P11/P10 accepted; owned core first, protocol serialized with P15 |
+| P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
-| P16 | Создать единую панель проекта и вкладку Capabilities | running | /root/p01_claude_probe; P15/P10 accepted; shared strings pending P12 snapshot |
+| P16 | Создать единую панель проекта и вкладку Capabilities | running | /root/p01_claude_probe; P15/P10 accepted; shared strings unlocked after fd3654e |
 | P17 | Добавить native MCP add/remove/check | pending | — |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
@@ -174,3 +174,5 @@ Root применил проверенные по exact scope и SHA256 patches 
 P15 full review needs rework: два Important — encoded credential fragment и ambient GIT_DIR cross-project scope. Исправляет исходный author в redact/snapshot +tests; /root/p01_review проверяет замороженный P12 параллельно. P12 consumer results: protocol42, MCP+agents189, host69, desktop239; CLI suite пока runner-environment Corepack error до исполнения product. Integrity bypass не используется, production source не меняется из-за среды.
 
 P15 fixes accepted independently, aggregate d4278ce/20cf256/eef8425; P16 dispatched with sole writer grants. P12 CLI runner environment restored without integrity bypass,22/22 passed. P12 independent Important delivery pairing reproduced with positional sandbox; author fixes conservative supported template grammar on both start/resume. Plain custom compatibility and Claude-like GLM builtin text channel retained.
+
+P12 snapshot fd3654e accepted independently /root/p01_review;44 regressions/9probes and exact39files matched, rootcorebuild0. P13 prerequisites accepted, author preparing narrow nativecontext/cache/singleflagsnapshot integration; writes await concrete grants. P16sharedstrings unlocked solewriter aftersnapshot. Native runtime gates P32 remain explicit.
