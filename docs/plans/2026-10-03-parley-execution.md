@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P11 accepted; P12/P15 running.
+- Текущая фаза: P00–P11 и P15 accepted; P12 rework, P16 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -35,8 +35,8 @@
 | P12 | Подключить роли к запуску, MCP и диалогу | running | /root/p02_codex_probe; P11/P10 accepted; owned core first, protocol serialized with P15 |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
-| P15 | Реализовать безопасный снимок Capabilities | running | /root/p01_claude_probe; DTO-first protocol sole writer, then owned host modules |
-| P16 | Создать единую панель проекта и вкладку Capabilities | pending | — |
+| P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
+| P16 | Создать единую панель проекта и вкладку Capabilities | running | /root/p01_claude_probe; P15/P10 accepted; shared strings pending P12 snapshot |
 | P17 | Добавить native MCP add/remove/check | pending | — |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
@@ -166,3 +166,11 @@ P15 wire snapshot d4278ce сохранён и protocol build прошёл; root 
 ## Интеграция P12 ведущим после auto-review отказа субагенту
 
 Второй agent write отклонён: auto-review посчитал передачу authorization недоверенным assistant context и предложил root integration under trusted user context. Автор не обходил отказ и не менял blocked files; подготовил reviewable unified patch /private/tmp/parley-p12-integration.patch и SHA256 исходных12файлов. Root прочёл полный diff, проверил exact granted scope и hashes; root apply с прямым user request прошёл auto-review. Затем root зарегистрировал roles.list; P15 get/refresh registry тоже интегрирован ведущим. Запись разблокирована через предложенную безопасную альтернативу; human повторное разрешение не потребовалось. Проверки и независимая приёмка P12/P15 ещё впереди.
+
+## P12 финальные уточнения и P15 full review
+
+Root применил проверенные по exact scope и SHA256 patches P12: inline security overrides/read-only revision refresh, empty-string legacy omission с exact-null clearing, native unsupported-config отказ до existing fallback. Core production заморожен, новая core build exit 0; потребительские проверки выполняет автор. P15 host snapshot 20cf256 сохранён отдельно от P12 registry additions; wire d4278ce. 30 host/96 protocol tests и scoped types/lint passed, полная независимая проверка /root/p01_review запущена. /root/p01_claude_probe делает P16 read-only preflight до acceptance.
+
+P15 full review needs rework: два Important — encoded credential fragment и ambient GIT_DIR cross-project scope. Исправляет исходный author в redact/snapshot +tests; /root/p01_review проверяет замороженный P12 параллельно. P12 consumer results: protocol42, MCP+agents189, host69, desktop239; CLI suite пока runner-environment Corepack error до исполнения product. Integrity bypass не используется, production source не меняется из-за среды.
+
+P15 fixes accepted independently, aggregate d4278ce/20cf256/eef8425; P16 dispatched with sole writer grants. P12 CLI runner environment restored without integrity bypass,22/22 passed. P12 independent Important delivery pairing reproduced with positional sandbox; author fixes conservative supported template grammar on both start/resume. Plain custom compatibility and Claude-like GLM builtin text channel retained.

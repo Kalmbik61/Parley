@@ -74,8 +74,8 @@
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | running |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
-| [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | running |
-| [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | не назначен | pending |
+| [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
+| [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | running |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | не назначен | pending |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
@@ -546,6 +546,8 @@
 
 **UI helper grant:** desktop/renderer/lib/role-summary.ts и целевой test — current roles.list lookup по participant ref/cwd/provider для SessionRow/ParticipantStrip/TerminalBody. Computed permissions/defaults не сохраняются; readOnly не выводится из имени. ChatToolbar использует existing works store; ChatView вне области.
 
+**P12 pre-review evidence:** CLI22/22 с process-only pinned Corepack env; protocol42, MCP+agents189, host69, desktop239, launch74/guidance53, scoped lint/desktop+host types passed. Independent core157/host69/UI54/protocol42 passed. Один Important: includes-only template проверка не доказывает native flag/value позицию обязательного канала. Автор исправляет agents.ts +regressions до snapshot/recheck; P12 не принят.
+
 <a id="p13"></a>
 
 ### P13: Реализовать find_skill и настройку MCP
@@ -616,9 +618,9 @@
 
 ### P15: Реализовать безопасный снимок Capabilities
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P15), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12 source question), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe (новое назначение P15), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12 source question), gpt-6.1-sol/high.
 
 **Зависимости:** P08, P03. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -642,9 +644,13 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед review:** wire d4278ce + host 20cf256 (11 файлов включая только P15 bindings registry). Исполнитель: host 30/30, protocol 96/96, owned ESLint/strict TypeScript включая tests/diff check passed. Bounded readers, safe projection, independent columns и stale-generation fixtures green. Полная независимая проверка /root/p01_review выполняется; P16 пока read-only.
 
 **Согласованные grants:** новый protocol/capability-snapshot.ts и targeted tests; protocol methods/events/index только DTO/get/refresh/changed интеграция первым коротким этапом, затем freeze/unlock P12 через root. Host methods/index registry root, factory/service binding вернуть ведущему. Memory-only service с independent loading/ready/partial/error/unavailable columns и generation/revision; one service instance per host, existing broadcast. No available catalog/details/check/action calls до следующих cards. Native scope/identity arrays и unknown enabled — amendment capabilities §4.1.
+
+**Замечания full review:** Important: percent-encoded URL credential fragments leak across fields; ambient Git repository-location env redirects main-checkout scope. Автор получил redact/snapshot modules/tests для RED→GREEN fixes, до их независимой приёмки P16 не открыт.
+
+**Независимая приёмка fixes:** /root/p01_review accepted d4278ce +20cf256 +eef8425; оба Important закрыты. Четыре targeted regressions, direct URL/Git probes, scoped ESLint/diff check passed; frozen SHA matched. Full author P15 suite33/33 и strict test types passed. Live lifecycle/model gate остаётся P32.
 
 <a id="p16"></a>
 
@@ -652,7 +658,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (P16), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12), gpt-6.1-sol/high.
 
 **Зависимости:** P15, P10. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -676,6 +682,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнительные grants root:** transient store/ui.ts, shared/keybindings.ts, renderer/keys/handler.ts и targeted tests; AppShell/SectionMenu/palette tests. Один ProjectPanel на existing Dialog/Tabs, RightSidebar production не требуется менять. Shared strings sole writer после root P12 snapshot; до unlock новые owned modules и подготовка labels artifact. PARLEY Open/Create переиспользует P10 route, no implicit Create.
 
 <a id="p17"></a>
 

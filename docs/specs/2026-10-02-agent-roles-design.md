@@ -243,6 +243,8 @@ Claude Code (code.claude.com/docs/en/sub-agents, …/cli-reference), исход�
   через MCP-сервер, хуки и `notify`, а не через запись агента в файлы. У Codex это
   проверяется живьём.
 
+Проверка обязательного канала доказывает поддержанную пару native option/value в обоих templates start/resume, а не только наличие placeholder. Positional `{sandbox}`, option terminator `--`, поглощённый/дублированный обязательный канал и неподтверждённая grammar не дают обещанной доставки: отказ до записи новой сессии и на каждой попытке запуска. Claude-like подмена GLM с доказанным текстовым каналом сохраняет встроенные роли без read-only; plain custom без роли сохраняет fallback.
+
 ## 6. Окно
 
 **Диалог «New session or room».** У каждой строки агента — выбор роли:
