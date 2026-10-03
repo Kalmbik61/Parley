@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P17, P20/P21/P22/P39 accepted (22/40); P18/P23/P29 running.
+- Текущая фаза: P00–P17, P20/P21/P22/P29/P39 accepted (23/40); P18/P23 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -49,7 +49,7 @@
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
 | P27 | Реализовать журнал принятых версий и историю | pending | — |
 | P28 | Подключить Decisions и Share history | pending | — |
-| P29 | Реализовать память проекта и её слой | running | /root/p02_codex_probe; P20/P09accepted; TMPdomain/layer/source-provenance first, P21fix priority |
+| P29 | Реализовать память проекта и её слой | done | 127367e; /root/p01_claude_probe accepted; original Unicode9 GREEN,54affected/probes,16exact staged SHA,corebuild0 |
 | P30 | Реализовать search_history по записям проекта | pending | — |
 | P31 | Подключить память, поиск и UI | pending | — |
 | P32 | Провести сквозную проверку и сравнение навигатора | pending | — |
@@ -250,3 +250,5 @@ P18 backend17 3af084bd…2dd80 applied; root зарегистрировал7 plu
 P23 first helper milestone independently accepted /root/p02_codex_probe: exact17SHA,46existing+4meaningful probes GREEN, no Critical/Important; full MCP/wake wiring и общая P23 приёмка ещё pending. P12 roles §5.7 сохраняет MCP coordination/report для read-only native ролей: plan_update/submit/verify используют trusted actor/rev guards, без нового mutable role-catalog permission resolver. Coherent core/protocol/hostbuild0 после P23+P18 DTO fix.
 
 P29 independent needs rework: UTF16 lone surrogate принимается как fact/details/why/refs, затем UTF8 silently replaces text. Root pure probe и independent9RED подтвердили; author p02 исправляет только6memory/layer files, до reservation/Markdown writes. Other original79 +independent5+freshlaunch2 GREEN,16SHA seal. P18 prettyJSON2RED исправляет author p01. Acceptance remains22/40. Последний недельный остаток59% (usedPercent41); пользовательский порог пока не достигнут.
+
+P29 independently accepted /root/p01_claude_probe: original9 Unicode failures GREEN +valid emoji,54affected/probes final GREEN; sixafterSHA exact, validators refuse input before local/Markdown writes. Root staged only reviewed P29 domain13+consumer3+fix6 through exact staged hashes, commit127367e; P23 shared additions остались unstaged.23accepted из40. P18 prettyJSONfix2 469c2ae…3b1322 accepted /root/p02_codex_probe original4GREEN/SHA2, hostbuild0; P18UI TMP phase opened with one bridge prop preserving P21backlog. Последний недельный остаток55% (usedPercent45).

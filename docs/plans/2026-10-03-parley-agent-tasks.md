@@ -92,7 +92,7 @@
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
 | [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | не назначен | pending |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
-| [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | /root/p02_codex_probe | running |
+| [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | /root/p02_codex_probe | done |
 | [P30 — Реализовать search_history по записям проекта](#p30) | 10 | P27, P29, P22 | не назначен | pending |
 | [P31 — Подключить память, поиск и UI](#p31) | 10 | P30, P28 | не назначен | pending |
 | [P32 — Провести сквозную проверку и сравнение навигатора](#p32) | 11 | P14, P17, P18, P19, P24, P26, P31, P38, P39 | не назначен | pending |
@@ -1111,9 +1111,9 @@
 
 ### P29: Реализовать память проекта и её слой
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen domain13 + consumer3 applied; Unicode validation rework6. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; original Unicode9 RED, остальные scoped/probes GREEN.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; accepted после original Unicode9 RED→GREEN и exact6 SHA recheck.
 
 **Зависимости:** P20, P09. **Источник:** [этап 10 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-10).
 
@@ -1139,6 +1139,8 @@
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
 **Дополнение аудита F03:** source/scope/taskRevision/evidence refs и superseded/current различаются; старый agent summary не становится human constraint. После compaction восстанавливаются текущие constraints/pending/refs в budget, не вся история; provenance не заменяется latest-write-wins.
+
+**Evidence:** commit127367e, только16 P29 source paths/parts, staged SHA проверены отдельно от P23 shared additions. Author216 relevant core/strings79/strict/lint; peer original79 +independent5+freshlaunch2, final54 checks GREEN; six-file Unicode fix b0821021…deb65f, no mutation before rejection. Root corebuild0, прежняя coherent core/protocol/host и desktoptypecheck0. MCP/UI памяти остаются P31, native/economic gates P32/P38.
 
 <a id="p30"></a>
 
