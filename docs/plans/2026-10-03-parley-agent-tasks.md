@@ -65,11 +65,11 @@
 | [P03 — Проверить команды Capabilities и scopes](#p03) | 0 | P00 | /root/p03_capabilities_probe | done |
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
-| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | не назначен | pending |
-| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | не назначен | pending |
+| [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | running |
+| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p03_capabilities_probe (P07) | running |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
-| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | review |
-| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | не назначен | pending |
+| [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
+| [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | running |
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | не назначен | pending |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | не назначен | pending |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | не назначен | pending |
@@ -263,7 +263,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** `5e95a38` + FIFO fix `eb24192`; /root/p00_review — accepted после исправления Important. Целевые tests независимо повторены: 31/31 passed, включая реальный POSIX FIFO всех трёх reader; Windows test skipped. ESLint/isolated tsc passed; общий build с P09 ещё выполняется, не включён в evidence этого принятия.
+**Evidence после выполнения:** `5e95a38` + FIFO fix `eb24192`; /root/p00_review — accepted после исправления Important. Целевые tests независимо повторены: 31/31 passed, включая реальный POSIX FIFO всех трёх reader; Windows test skipped. ESLint/isolated tsc passed; последующий общий core build с P09 также passed.
 
 <a id="p06"></a>
 
@@ -271,7 +271,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (новое назначение P06), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p00_review (новое назначение P06), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -298,7 +298,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p03_capabilities_probe (новое назначение P07), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -357,9 +357,9 @@
 
 ### P09: Собрать слой сессии и доставку Codex
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p02_codex_probe (новое назначение P09), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p03_review (новое назначение P09), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (новое назначение P09), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p03_review (новое назначение P09), gpt-6.1-sol/high.
 
 **Зависимости:** P04. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 
@@ -393,7 +393,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence после выполнения:** `c2ccbbd`; /root/p03_review — accepted, оставшихся findings нет. Core 225 / host 52 tests и builds passed; fixes: desktop typecheck, 72 strings / 11 session-layer tests passed. Reviewer независимо проверил TOML roundtrip/escaped ceiling (1 targeted), NoticeKind mapping (38 tests), oversized custom Claude до spawn и diff. Live UI/CLI/Linux acceptance остаётся P32.
 
 <a id="p10"></a>
 
@@ -401,7 +401,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (новое назначение P10), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p03_review (новое назначение P10), gpt-6.1-sol/high.
 
 **Зависимости:** P09. **Источник:** [этап 2 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-2).
 

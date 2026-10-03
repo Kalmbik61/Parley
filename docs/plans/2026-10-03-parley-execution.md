@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00 принят; P00–P03 accepted; P04 accepted после fix; P05 accepted; P09 review после consumer/DEL fixes; P06/P07 pending.
+- Текущая фаза: P00–P05 и P09 accepted; P06/P07/P10 выполняются параллельно в отдельных областях.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -26,11 +26,11 @@
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
-| P06 | Реализовать источники скиллов Claude | pending | — |
-| P07 | Реализовать источники скиллов Codex | pending | — |
+| P06 | Реализовать источники скиллов Claude | running | /root/p01_claude_probe; gpt-6.1-sol/high; base c2ccbbd; reviewer /root/p00_review |
+| P07 | Реализовать источники скиллов Codex | running | /root/p03_capabilities_probe; gpt-6.1-sol/high; base c2ccbbd; reviewer /root/p01_review |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
-| P09 | Собрать слой сессии и доставку Codex | review | /root/p02_codex_probe reassigned P09; gpt-6.1-sol/high; 225 core / 52 host passed; reviewer /root/p03_review; consumer/DEL fixes ready |
-| P10 | Подключить создание PARLEY.md и Open/Create | pending | — |
+| P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
+| P10 | Подключить создание PARLEY.md и Open/Create | running | /root/p02_codex_probe; gpt-6.1-sol/high; base c2ccbbd; reviewer /root/p03_review |
 | P11 | Реализовать каталог ролей и умолчания | pending | — |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
@@ -102,3 +102,5 @@ P05 принят повторным review после FIFO fix `eb24192`: 31/31 
 P04 docs-integration accepted /root/p01_review после fix `1c8282d` к `081f3ea`: оба Important закрыты, 35 links/anchors корректны, whitespace clean. Unified plan и пять спек теперь содержат approved research contracts; остальные две спеки сохраняют ранее согласованные rev/state/privacy контракты.
 
 P09 build/targeted verification: core/protocol/host builds, 225 core tests, 52 host tests, scoped lint passed. Root desktop typecheck нашёл TS2739 NoticeKind mapping; исправлены пять detail strings и существующий strings test consumer. Reviewer подтвердил DEL raw TOML ошибку: исправлено escaping + настоящий TOML roundtrip/escaped byte boundary. После fixes: desktop typecheck passed, 72 strings tests и 11 session-layer tests passed. Snapshot передан reviewer; native UI/real CLI/Linux execution не объявлены принятыми.
+
+P09 snapshot `c2ccbbd` accepted /root/p03_review: нет оставшихся findings; независимо подтверждены TOML control roundtrip/encoded ceiling, 38 noticeText tests и oversized custom Claude pre-spawn. P06/P07/P10 запущены с базы c2ccbbd; disjoint ownership skills/claude, skills/codex и PARLEY host/desktop соответственно. P10 общий export/wire/registry получает только после явного назначения ведущим.
