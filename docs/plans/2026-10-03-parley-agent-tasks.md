@@ -73,7 +73,7 @@
 | [P11 — Реализовать каталог ролей и умолчания](#p11) | 3 | P05, P09 | /root/p01_claude_probe (P11 fixes) | done |
 | [P12 — Подключить роли к запуску, MCP и диалогу](#p12) | 3 | P11, P10 | /root/p02_codex_probe (P12) | done |
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | done |
-| [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | running |
+| [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | review |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | running |
@@ -596,7 +596,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_review (P14 author), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент gpt-6.1-sol/high после snapshot.
+**Статус:** review. **Исполнитель:** /root/p01_review (P14 author), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen14-file snapshot baf9af9, author331 targeted checks/types/lint passed, independent acceptance pending.
 
 **Зависимости:** P13. **Источник:** [этап 4 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-4).
 

@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P13, P15/P16 accepted (16/34); P14/P17/P20 running.
+- Текущая фаза: P00–P13, P15/P16 accepted (16/34); P14 review; P17/P20 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -34,7 +34,7 @@
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
 | P13 | Реализовать find_skill и настройку MCP | done | f3394ae; independent341core/62host/8controls,25SHA/blob; /root/p01_review accepted |
-| P14 | Подключить навигатор к CLI и Settings | running | /root/p01_review author; P13accepted; per-session settings/guidance/UI grant, no suppression |
+| P14 | Подключить навигатор к CLI и Settings | review | baf9af9 exact14SHA; author331checks; independent /root/p02_codex_probe pending, no suppression |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native MCP add/remove/check | running | /root/p01_claude_probe; DTO-first wire grant; private selector/context/queue, registry root |
@@ -198,3 +198,14 @@ P13 snapshot f3394ae сохранён root: exact25SHA/gitBlob matched,927insert
 2026-10-04: пользователь восстановил лимиты; P17 author возобновлён с сохранённого состояния. P13 independent full review accepted f3394ae без Critical/Important:341core/62host/8isolatedcontrols,exact25SHA/blob/lint/diff. P20 dispatched core-only с сохранением выбранного nested project scope, versioned LOCAL sequence и idempotent partial recovery; host main-resolver delegation ждёт P17freeze. P14 remaining work готовит independent P13 reviewer read-only; strings ещё solewriter P17.
 
 P14 dispatched после acceptedP13: per-session settings, immutable guide/guidance flag и UI Settings; generic protocol/host field уже поддержан, нового wire production нет. Root сохранил P17 MCP strings exactonefile milestone7b1356e/lint0; S.settings solewriter передан P14, P17 sourcegroup freeze. P20 separate native-main-root/nested-shared-project interface согласован, temp production drafts; общий build ждёт coherent окно обоих core writers.
+
+
+## Продолжение после восстановления лимитов — 2026-10-04
+
+P14 frozen snapshot `baf9af9`: exact14 SHA/gitBlob matched; 301 core +26 Settings +4 host fixtures, scoped strict types/lint/diff passed. Независимая приёмка ещё впереди. Native Claude role без подтверждённых permissions не рекламирует find_skill; full native lists/suppression OFF сохранены.
+
+P17 завершил isolated native Claude project Add/Remove с exact audited publisher artifact: оба exit0, только private temp Git project/HOME/config, без модели и human config writes. Desktop137 и typecheck passed; final reader integrity/Codex binary identity fixes и полное независимое ревью ещё впереди. Это не P32 live-session gate.
+
+Root прочёл и применил P20 domain14 и lossless2 bundles: exact scope/before/after SHA совпали, diffcheck0. Автор проверяет полный actual-path batch; independent reviewer /root/p01_review проверяет races/lossless/context/recovery на temp fixtures. Preliminary race между двумя Markdown reads исследуется до принятия.
+
+P20 independent review needs rework: два Important, оба воспроизведены /root/p01_review на temp probes — stale preparedSource между двумя reads и LS/PS title round-trip. Автор исправляет до freeze; 71 domain +5 shared-storage targeted checks passed. Coherent core production build P14/P20 exit0; эта сборка не означает принятие P20.
