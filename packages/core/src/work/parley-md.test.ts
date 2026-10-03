@@ -14,7 +14,7 @@ import {
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename), writeFile: vi.fn(actual.writeFile) };
+  return { ...actual, rename: vi.fn(actual.rename), rm: vi.fn(actual.rm), writeFile: vi.fn(actual.writeFile) };
 });
 
 let project: string;
@@ -23,9 +23,11 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.mocked(rename).mockReset();
+  vi.mocked(rm).mockReset();
   vi.mocked(writeFile).mockReset();
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   vi.mocked(rename).mockImplementation(actual.rename);
+  vi.mocked(rm).mockImplementation(actual.rm);
   vi.mocked(writeFile).mockImplementation(actual.writeFile);
   await rm(project, { recursive: true, force: true });
 });
@@ -132,14 +134,57 @@ describe('PARLEY.md creation receipt', () => {
     expect((await readParleyMd(project)).text).toBe('');
   });
 
-  it('failed initial accounting creates nothing, while malformed accounting suppresses automatic creation', async () => {
+  it('failed initial accounting creates nothing and permits a later automatic attempt', async () => {
     await writeFile(path.join(project, '.parley'), 'occupied');
     await expect(ensureParleyMd(project)).rejects.toThrow();
     await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     await rm(path.join(project, '.parley'));
+    expect(await ensureParleyMd(project)).toEqual({ created: true });
+  });
+
+  it('malformed accounting suppresses automatic creation', async () => {
     await mkdir(path.join(project, '.parley'));
     await writeFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'broken');
     expect(await ensureParleyMd(project)).toMatchObject({ created: false, receiptError: true });
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('failed file creation retains its reservation; only explicit Create retries', async () => {
+    await mkdir(path.join(project, '.parley'));
+    vi.mocked(writeFile).mockRejectedValueOnce(new Error('file creation denied'));
+    await expect(ensureParleyMd(project)).rejects.toThrow('file creation denied');
+    expect(
+      JSON.parse(await readFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'utf8')),
+    ).toMatchObject({ version: 1, created: false });
+    expect(await ensureParleyMd(project)).toEqual({ created: false });
+    await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await createParleyMd(project)).toEqual({ created: true });
+    expect((await readParleyMd(project)).text).toBe('');
+  });
+
+  it('never unlinks a receipt after a failed write, even at the former final-check race boundary', async () => {
+    await mkdir(path.join(project, '.parley'));
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const receipt = path.join(project, '.parley', 'parley-md-receipt.json');
+    let interleaved = false;
+    const explicitCreateAndDelete = async (): Promise<void> => {
+      interleaved = true;
+      expect(await createParleyMd(project)).toEqual({ created: true });
+      expect(JSON.parse(await readFile(receipt, 'utf8')).created).toBe(true);
+      await actual.rm(path.join(project, 'PARLEY.md'));
+    };
+    vi.mocked(writeFile).mockRejectedValueOnce(new Error('automatic write failed'));
+    vi.mocked(rm).mockImplementation(async (target, options) => {
+      // Reproduce replacement after both old ownership/state checks, just before unlink.
+      if (target === receipt && !interleaved) await explicitCreateAndDelete();
+      return actual.rm(target, options);
+    });
+    await expect(ensureParleyMd(project)).rejects.toThrow('automatic write failed');
+    // Without the stale unlink branch, the explicit action runs after the failed attempt.
+    if (!interleaved) await explicitCreateAndDelete();
+    expect(vi.mocked(rm).mock.calls.some(([target]) => target === receipt)).toBe(false);
+    expect(JSON.parse(await readFile(receipt, 'utf8')).created).toBe(true);
+    expect(await ensureParleyMd(project)).toEqual({ created: false });
     await expect(lstat(path.join(project, 'PARLEY.md'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

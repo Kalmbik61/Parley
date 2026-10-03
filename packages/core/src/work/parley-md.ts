@@ -271,9 +271,8 @@ async function putParleyMd(projectPath: string, explicit: boolean): Promise<Parl
     created = true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-      if ((await stillOwns()) && (await readReceipt(receipt))?.created === false) {
-        await rm(receipt).catch(() => {});
-      }
+      // Retain the reservation: deleting it could race a newer explicit Create receipt.
+      // Automatic requests stop here; the human can retry with explicit Create.
       throw error;
     }
   }

@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P05 и P09 accepted; P06/P07 fixes в review; P10 needs rework; P11 resumes.
+- Текущая фаза: P00–P05 и P09 accepted; P00–P07 и P09 accepted; P10 fixes в review; P11 выполняется.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -26,11 +26,11 @@
 | P03 | Проверить команды Capabilities и scopes | done | agent /root/p03_capabilities_probe; gpt-6.1-sol/high; commit 5debed1; review accepted by /root/p03_review; unsupported actions unavailable |
 | P04 | Закрыть контракты разведки и выбор парсеров | done | /root/p00_prepare_base reassigned P04; gpt-6.1-sol/high; commits 8a71358/e4e61cc; reviewer /root/p01_review accepted |
 | P05 | Реализовать общие типы и YAML/TOML-разборщики | done | /root/p01_claude_probe reassigned P05; gpt-6.1-sol/high; commits 5e95a38/eb24192; reviewer /root/p00_review accepted; 31 tests passed |
-| P06 | Реализовать источники скиллов Claude | review | 46 tests/lint/strict tsc passed after reserved-name fix; reviewer recheck queued |
-| P07 | Реализовать источники скиллов Codex | review | 37 tests/lint/strict tsc passed after native whitespace/selector fixes; reviewer recheck queued |
+| P06 | Реализовать источники скиллов Claude | done | 4792cb1/7c91a36; reviewer /root/p01_review accepted, 25 targeted + direct probes |
+| P07 | Реализовать источники скиллов Codex | done | a0c8f2c/e15a367; reviewer /root/p01_review accepted, 7 targeted + direct probe |
 | P08 | Собрать каталог, BM25 и перевести chat-view на него | pending | — |
 | P09 | Собрать слой сессии и доставку Codex | done | c2ccbbd; reviewer /root/p03_review accepted; 225 core / 52 host, builds; targeted DEL/consumer fixes passed |
-| P10 | Подключить создание PARLEY.md и Open/Create | running | review Important race reproduced; conservative retained-reservation fix assigned |
+| P10 | Подключить создание PARLEY.md и Open/Create | review | retained-reservation fix: 18 core / lint / strict tsc passed; recheck queued |
 | P11 | Реализовать каталог ролей и умолчания | running | /root/p01_claude_probe; gpt-6.1-sol/high; base 4792cb1; reviewer /root/p02_codex_probe after P10 |
 | P12 | Подключить роли к запуску, MCP и диалогу | pending | — |
 | P13 | Реализовать find_skill и настройку MCP | pending | — |
@@ -120,3 +120,5 @@ P07 review /root/p01_review needs rework: native whitespace collapse перед 
 P10 snapshot `733ab7d` проверяет /root/p01_review. P06 review needs rework: local reserved account names неправомерно доступны; исходный author исправляет source-aware guard до возврата к P11. P07 bounded fixes готовы: 37 tests + scoped lint/types/diff check; native source подтвердил SKILL whitespace collapse и human selector edge trim без internal collapse. Отдельный snapshot/recheck, не acceptance.
 
 P06 fix готов: 46 fixtures/lint/strict tsc passed, source-aware reserved native names; snapshot/recheck queued. P10 review воспроизвёл реальную receipt cleanup race. Выбран minimal conservative fix без lock: сохранить reservation при ошибке файла, auto retry только при неудачной начальной записи receipt, явный Create остаётся. Spec уточнена, core helper/test fix выполняет исходный автор. P08 пока только read-only preflight; implementation ждёт P06/P07 accepted.
+
+P06 `7c91a36` и P07 `e15a367` accepted повторным /root/p01_review: исходные defects закрыты, targeted independent tests/probes + lint/diff и snapshot blobs сверены. P10 conservative fix готов: no receipt unlink после write failure; 18 tests/lint/strict types passed; новые race/failure tests RED→GREEN. Shared build не повторён без новой consumer mutation. P08 dependencies теперь приняты.
