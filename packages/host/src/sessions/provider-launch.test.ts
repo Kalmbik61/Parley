@@ -147,6 +147,16 @@ describe('GLM launch boundaries', () => {
     expect(launches.every((launch) => launch.env.ANTHROPIC_AUTH_TOKEN !== 'fake-zai-key')).toBe(true);
     expect(launches[0]!.env.PARLEY_HOOK_TOKEN).toBe(capability);
   });
+  it('preserves the inherited managed policy pointer and its original env-name casing', async () => {
+    await writeSecret('zai', 'fake-key');
+    Object.assign(process.env, {
+      CLAUDE_CODE_MANAGED_SETTINGS_PATH: '/fake-policy/managed-settings.json',
+      claude_code_managed_settings_path: '/fake-policy/lowercase-settings.json',
+    });
+    await service().create(input());
+    expect(launches[0]!.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH).toBe('/fake-policy/managed-settings.json');
+    expect(launches[0]!.env.claude_code_managed_settings_path).toBe('/fake-policy/lowercase-settings.json');
+  });
   it('key deletion during preparation still refuses before hook registration and PTY startup', async () => {
     await writeSecret('zai', 'fake-key');
     const sessions = service(() => {
