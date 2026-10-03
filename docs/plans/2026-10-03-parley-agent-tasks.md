@@ -66,7 +66,7 @@
 | [P04 — Закрыть контракты разведки и выбор парсеров](#p04) | 0 | P01, P02, P03 | /root/p00_prepare_base (P04) | done |
 | [P05 — Реализовать общие типы и YAML/TOML-разборщики](#p05) | 1 | P04 | /root/p01_claude_probe (P05) | done |
 | [P06 — Реализовать источники скиллов Claude](#p06) | 1 | P05 | /root/p01_claude_probe (P06) | running |
-| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p03_capabilities_probe (P07) | running |
+| [P07 — Реализовать источники скиллов Codex](#p07) | 1 | P05 | /root/p03_capabilities_probe (P07) | review |
 | [P08 — Собрать каталог, BM25 и перевести chat-view на него](#p08) | 1 | P06, P07 | не назначен | pending |
 | [P09 — Собрать слой сессии и доставку Codex](#p09) | 2 | P04 | /root/p02_codex_probe (P09) | done |
 | [P10 — Подключить создание PARLEY.md и Open/Create](#p10) | 2 | P09 | /root/p02_codex_probe (P10) | running |
@@ -298,7 +298,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p03_capabilities_probe (новое назначение P07), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p03_capabilities_probe (новое назначение P07), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (новое назначение P07), gpt-6.1-sol/high.
 
 **Зависимости:** P05. **Источник:** [этап 1 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-1).
 
@@ -317,7 +317,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence перед ревью:** 30/30 isolated fixtures passed; scoped `tsc --noEmit` passed; автор изменил только codex.ts/test. Safe unknown roots/product policy unavailable; native live checks не объявлены. Независимый reviewer: /root/p01_review.
 
 <a id="p08"></a>
 
@@ -421,6 +421,7 @@
 - `packages/desktop/src/shared/strings.ts` и `strings.test.ts` — необходимые English labels и NoticeKind consumer
 - `packages/desktop/src/renderer/App.tsx` — только созданное уведомление с Open в существующем редакторе
 - `packages/desktop/src/main/ipc.test.ts` — allowlist/channel validation этих IPC
+- `packages/desktop/src/renderer/test-utils/fake-bridge.ts` — обязательный app.parleyMd typed fixture consumer
 
 **Работа:** Добавить эксклюзивное создание шаблона, receipt в stateDir и проверку перед всеми режимами запуска. Удалённый файл не возвращать автоматически; явный Create работает. Подключить меню проекта, вкладку редактора и адресные уведомления.
 
