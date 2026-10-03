@@ -75,8 +75,8 @@
 | [P13 — Реализовать find_skill и настройку MCP](#p13) | 4 | P08, P12 | /root/p02_codex_probe (P13) | running |
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | не назначен | pending |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
-| [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | running |
-| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | не назначен | pending |
+| [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
+| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | running |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | не назначен | pending |
@@ -584,6 +584,10 @@
 
 **Дополнительные grants root:** skills/context.ts/test (+required index exports), roles/context.ts/test shared bounded RPC transport preserving role projection, work/agents.ts/test chosen-entry config projection, work/launch.ts/test и work/mcp-config.ts/test single navigator snapshot/env, mcp/context.test.ts/server.test.ts. При необходимости work/native-context.ts/test — bounded0600 local-only participant descriptor, whitelisted roots/settings paths/human policy projection; no raw config/secret args/model defaults в map/shared/output/log. Не дублировать scanner. Unknown settings/profile/role/toolroute даёт explicit unavailable; Codex native path+name/enablement пересекается с accepted resolver policy; Claude menu не доказывает Skill tool. Protocol/UI/host registry вне grants, P16 writer независим.
 
+**Single-pass evidence grant:** skills/codex.ts/test — узкий internal nativeEvidence по bound cwd/canonical path/native name/known local source, без blanket root promotion. No-evidence/traversal/namespace/policy прежние; native enabled пересекается с human/manual-only правилами. Per-document повторные обходы с искусственными root boundaries не используются.
+
+**Shared transport export grant:** core/index.ts экспорт readCodexNativeContext/CodexNativeContext/CodexContextOptions для P17 source proof; роли сохраняют прежний wrapper/projection. Stamp после успешного updateMap находится в уже granted launch.ts:startSession, no new map fields.
+
 <a id="p14"></a>
 
 ### P14: Подключить навигатор к CLI и Settings
@@ -660,9 +664,9 @@
 
 ### P16: Создать единую панель проекта и вкладку Capabilities
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe (P16), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12), gpt-6.1-sol/high.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe (P16), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review (после P12), gpt-6.1-sol/high.
 
 **Зависимости:** P15, P10. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -691,13 +695,17 @@
 
 **Shared strings unlock:** после P12 snapshot fd3654e shared/strings.ts разрешён sole writer /root/p01_claude_probe P16; preserve S.roles/all existing groups, добавить только projectPanel labels.
 
+**Evidence перед review:** snapshot b7589f7,17 desktop files frozen; card139 +additional169=308 passed; owned lint/types/diffcheck0. Late-failure/event regression RED→GREEN. /root/p01_review независимая проверка выполняется; native visual800x500 не заявлена, P32.
+
+**Независимая приёмка:** /root/p01_review accepted 60b4831..b7589f7;165 checks (panel/menu/palette, AppShell/transient state и два race probes), scoped lint/diffcheck passed,17 frozen SHA matched. Findings нет. Native visual800x500 отдельно P32.
+
 <a id="p17"></a>
 
 ### P17: Добавить native MCP add/remove/check
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe (P17), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P15, P16. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -719,6 +727,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Дополнительные grants root:** DTO-first protocol/capability-actions.ts/test, methods/index и safe action-availability snapshot schema/test; types только required alias, events unchanged. После freeze root snapshot/build/precheck. Host actions/native-targets +tests, snapshot/claude/codex/readers/methods seams+tests; singleton private native identity/context/fingerprint registry и global per-provider queue. Registry root-only. UI ProjectPanel/CapabilitiesPanel/tests, McpForm.tsx/test, shared strings solewriter P17. Positive Codex User-only source proof из native layers/winner необходим; unknown/project/managed unavailable, path guess не доказательство. Shared Codex RPC reuse после P13 stable export/build, core transport пишет только P13. No raw selector/config/output/error/argv в DTO/log, no real human config actions в tests.
 
 <a id="p18"></a>
 

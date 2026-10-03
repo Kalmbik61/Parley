@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P12 и P15 accepted; P13/P16 running.
+- Текущая фаза: P00–P12, P15/P16 accepted; P13/P17 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -36,8 +36,8 @@
 | P13 | Реализовать find_skill и настройку MCP | running | /root/p02_codex_probe; P12/P08 accepted; core-only transport/context/cache/config grants |
 | P14 | Подключить навигатор к CLI и Settings | pending | — |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
-| P16 | Создать единую панель проекта и вкладку Capabilities | running | /root/p01_claude_probe; P15/P10 accepted; shared strings unlocked after fd3654e |
-| P17 | Добавить native MCP add/remove/check | pending | — |
+| P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
+| P17 | Добавить native MCP add/remove/check | running | /root/p01_claude_probe; DTO-first wire grant; private selector/context/queue, registry root |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
 | P20 | Реализовать shared/local state и домен бэклога | pending | — |
@@ -178,3 +178,7 @@ P15 fixes accepted independently, aggregate d4278ce/20cf256/eef8425; P16 dispatc
 P12 snapshot fd3654e accepted independently /root/p01_review;44 regressions/9probes and exact39files matched, rootcorebuild0. P13 prerequisites accepted, author preparing narrow nativecontext/cache/singleflagsnapshot integration; writes await concrete grants. P16sharedstrings unlocked solewriter aftersnapshot. Native runtime gates P32 remain explicit.
 
 P13 implementation dispatched after P12acceptance, no protocol/UI mutations. Bound local participant context, human policy provenance, Promise cache, single launch/MCP flag snapshot; неизвестный Claude Tool route остаётся unavailable. P17 read-only preflight требует private selector registry для presence IDs и global per-provider queue; actualactions gatedP16acceptance, no new native calls.
+
+P16 snapshot b7589f7 передан independentreview; автор готовит P17 только read-only до acceptance. P13 получил narrow single-pass nativeEvidence Codex reader grant вместо повторных per-document root scans; source/policy boundaries сохранены.
+
+P16accepted /root/p01_review;165 independent checks and17frozenfiles matched. P17 dispatched DTO-first; later host/UI with private selector/source proof/global queue. P13foundation exact4patch rootapplied SHA/absence matched, fixtures proceed; participant stamp is existing launch.ts:startSession after updateMap. New shared readCodexNativeContext export coordinated for P17, transport has one writer.
