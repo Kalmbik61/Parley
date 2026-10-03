@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P13, P15/P16 accepted (16/34); P14 review; P17/P20 running.
+- Текущая фаза: P00–P13, P15/P16/P20 accepted (17/34); P14/P17 review; P21 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -34,14 +34,14 @@
 | P11 | Реализовать каталог ролей и умолчания | done | 83ac8fc/4c2fb30; independent 14 targeted +6 probes, reviewer /root/p01_review accepted |
 | P12 | Подключить роли к запуску, MCP и диалогу | done | fd3654e; Important fixed; independent44+9probes accepted, exact39files matched |
 | P13 | Реализовать find_skill и настройку MCP | done | f3394ae; independent341core/62host/8controls,25SHA/blob; /root/p01_review accepted |
-| P14 | Подключить навигатор к CLI и Settings | review | baf9af9 exact14SHA; author331checks; independent /root/p02_codex_probe pending, no suppression |
+| P14 | Подключить навигатор к CLI и Settings | review | baf9af9 exact14SHA; author331checks; independent /root/p01_claude_probe pending, no suppression |
 | P15 | Реализовать безопасный снимок Capabilities | done | d4278ce/20cf256/eef8425; independent fixes accepted; full33 tests/types/lint |
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
-| P17 | Добавить native MCP add/remove/check | running | /root/p01_claude_probe; DTO-first wire grant; private selector/context/queue, registry root |
+| P17 | Добавить native MCP add/remove/check | review | f447ccd +wire/strings milestones; exact18+registrySHA; independent /root/p01_review pending |
 | P18 | Добавить native действия плагинов | pending | — |
 | P19 | Добавить передачу скилла второму CLI | pending | — |
-| P20 | Реализовать shared/local state и домен бэклога | running | /root/p02_codex_probe; P16 accepted; nested main-project context/local envelope grants |
-| P21 | Подключить бэклог к MCP, host и панели | pending | — |
+| P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
+| P21 | Подключить бэклог к MCP, host и панели | running | /root/p02_codex_probe; P20accepted; новые host/UI/DTO modules, sharedpoints locked |
 | P22 | Реализовать режимы, планы, ревизии и снимки | pending | — |
 | P23 | Подключить инструменты планов и будильник | pending | — |
 | P24 | Показать план и итог в комнате | pending | — |
@@ -209,3 +209,7 @@ P17 завершил isolated native Claude project Add/Remove с exact audited 
 Root прочёл и применил P20 domain14 и lossless2 bundles: exact scope/before/after SHA совпали, diffcheck0. Автор проверяет полный actual-path batch; independent reviewer /root/p01_review проверяет races/lossless/context/recovery на temp fixtures. Preliminary race между двумя Markdown reads исследуется до принятия.
 
 P20 independent review needs rework: два Important, оба воспроизведены /root/p01_review на temp probes — stale preparedSource между двумя reads и LS/PS title round-trip. Автор исправляет до freeze; 71 domain +5 shared-storage targeted checks passed. Coherent core production build P14/P20 exit0; эта сборка не означает принятие P20.
+
+P20 accepted independently /root/p01_review после exact2-file fixes: оригинальные race/LS/PS probes GREEN, 28 affected fixtures passed; author full181/runtime checks/types/lint. Root snapshot4391680 exact14SHA/gitBlob. P17 frozen f447ccd exact18owned+rootregistry matched; hostbuild0. P14 reviewer переназначен /root/p01_claude_probe для параллельной независимой проверки.
+
+P21 dispatched /root/p02_codex_probe после P20 acceptance: первая фаза только новые host/BacklogPanel/protocol-backlog modules. P14/P17 shared points frozen под independent review; unlock/DTO surface согласует root отдельно.

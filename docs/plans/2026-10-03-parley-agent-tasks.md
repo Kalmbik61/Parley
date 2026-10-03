@@ -76,11 +76,11 @@
 | [P14 — Подключить навигатор к CLI и Settings](#p14) | 4 | P13 | /root/p01_review (P14 author) | review |
 | [P15 — Реализовать безопасный снимок Capabilities](#p15) | 5 | P08, P03 | /root/p01_claude_probe (P15) | done |
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
-| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | running |
+| [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe (P17) | review |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | не назначен | pending |
 | [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | не назначен | pending |
-| [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | running |
-| [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | не назначен | pending |
+| [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
+| [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | running |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | не назначен | pending |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | не назначен | pending |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | не назначен | pending |
@@ -596,7 +596,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** review. **Исполнитель:** /root/p01_review (P14 author), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p02_codex_probe, gpt-6.1-sol/high; frozen14-file snapshot baf9af9, author331 targeted checks/types/lint passed, independent acceptance pending.
+**Статус:** review. **Исполнитель:** /root/p01_review (P14 author), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high; frozen14-file snapshot baf9af9, author331 targeted checks/types/lint passed, independent acceptance pending.
 
 **Зависимости:** P13. **Источник:** [этап 4 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-4).
 
@@ -709,7 +709,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe (P17), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
+**Статус:** review. **Исполнитель:** /root/p01_claude_probe (P17), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P15, P16. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -733,6 +733,8 @@
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
 **Дополнительные grants root:** DTO-first protocol/capability-actions.ts/test, methods/index и safe action-availability snapshot schema/test; types только required alias, events unchanged. После freeze root snapshot/build/precheck. Host actions/native-targets +tests, snapshot/claude/codex/readers/methods seams+tests; singleton private native identity/context/fingerprint registry и global per-provider queue. Registry root-only. UI ProjectPanel/CapabilitiesPanel/tests, McpForm.tsx/test, shared strings solewriter P17. Positive Codex User-only source proof из native layers/winner необходим; unknown/project/managed unavailable, path guess не доказательство. Shared Codex RPC reuse после P13 stable export/build, core transport пишет только P13. DTO snapshot 6ba002b frozen/accepted precheck; protocol и coherent core build exit 0, host/UI unlock выдан. Это не полная приёмка P17. Private action-proof grant: SnapshotContext/readers/tests разделяют human ownership, policy completeness и health. Claude Add с source-backed native guard допускает submission в известный human scope; CLI проверяет policy до write. Remove только exact human ownership/fingerprint, Check только effective target+health. Binary identity/version revalidation обязательна, custom/unverified unavailable; get_settings не universal policy proof. См. P17 amendment контракта. No raw selector/config/output/error/argv в DTO/log, no real human config actions в tests.
+
+**Frozen snapshot:** f447ccd, exact18 owned SHA +rootregistry SHA; protocol6ba002b/strings7b1356e/9bf0cb8. Author69host/137desktop+final32 checks/types/lint passed, root hostbuild0; independent /root/p01_review pending. Default Claude Check unavailable без exactwinnerproof; Codex canonical same-byte binding не означает publisher approval.
 
 <a id="p18"></a>
 
@@ -796,9 +798,9 @@
 
 ### P20: Реализовать shared/local state и домен бэклога
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P20), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент gpt-6.1-sol/high после frozen snapshot.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe (P20), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high; accepted после двух Important fixes и независимых RED→GREEN probes.
 
 **Зависимости:** P16. **Источник:** [этап 6 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-6).
 
@@ -823,7 +825,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** snapshot 4391680, exact14 SHA/gitBlob; author181 checks/scoped lint/types; independent71 domain +5 storage, final28 affected fixtures и два original race/Unicode probes green. Portable CAS/двухфайловая transaction не заявляются.
 
 **Дополнительные grants root:** store.test.ts, project-preferences.test.ts, work/project-context.ts/test и core/index.ts только domain exports; migrate.ts/test только generated-ignore initialization/expectations. Host snapshot.ts/test для delegation main resolver пока locked под P17, выдаётся после coordinated freeze. Shared state сохраняет выбранную вложенную папку проекта относительно verified main checkout; отсутствующая corresponding folder/unknown identity не подменяется другой папкой. Native main-root helper сохраняет прежнюю семантику P15. Verified non-Git canonical directory допустим после bounded proof; failed/ambiguous Git context не даёт fallback.
 
@@ -835,7 +837,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p02_codex_probe (P21), gpt-6.1-sol/high; профиль `worker`. **Проверяющий:** другой агент gpt-6.1-sol/high после snapshot.
 
 **Зависимости:** P20. **Источник:** [этап 6 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-6).
 
@@ -860,6 +862,8 @@
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+
+**Начальный phased grant root:** NEW host/methods/backlog.ts/test, NEW BacklogPanel.tsx/test и NEW protocol/backlog.ts/test; P20 accepted4391680/corebuild0. Shared MCP/tools/guide/guidance/ProjectPanel/strings/protocol methods/events/index остаются locked до frozen P14/P17 acceptance и отдельного согласования DTO. Host registry root-only. P22 map/types не входят в P21. Real shared writes против текущего project запрещены в проверках, все domain fixtures только temp projects.
 
 <a id="p22"></a>
 
