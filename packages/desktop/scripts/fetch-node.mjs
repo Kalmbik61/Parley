@@ -24,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { Buffer } from 'node:buffer';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const run = promisify(execFile);
 
@@ -40,6 +41,12 @@ export const ARCHS = ['arm64', 'x64'];
 
 /** Скачивание целиком — архив около 45 МБ; зависший канал не должен держать сборку вечно. */
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const DOWNLOAD_ATTEMPTS = 3;
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ENETUNREACH',
+  'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_OUT_ROOT = path.join(desktopRoot, 'build', 'node');
@@ -78,10 +85,47 @@ export function parseArchs(args, current = process.arch) {
   return [...new Set(archs)];
 }
 
-async function download(url, fetchImpl) {
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+/** Undici may wrap connection errors in a cause/AggregateError; inspect only bounded code fields. */
+function networkCode(error) {
+  const pending = [error];
+  for (let inspected = 0; pending.length > 0 && inspected < 8; inspected++) {
+    const current = pending.shift();
+    if (current === null || typeof current !== 'object') continue;
+    if (TRANSIENT_NETWORK_CODES.has(current.code)) return current.code;
+    if (current.cause !== undefined) pending.push(current.cause);
+    if (Array.isArray(current.errors)) pending.push(...current.errors.slice(0, 4));
+  }
+  return null;
+}
+
+async function download(url, fetchImpl, stage, log, sleep) {
+  // Retries share the original deadline, rather than adding ten minutes per attempt.
+  const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    let failure;
+    let retry;
+    try {
+      const response = await fetchImpl(url, { signal });
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+      failure = `${stage} ${url}: HTTP ${response.status} (attempt ${attempt}/${DOWNLOAD_ATTEMPTS})`;
+      retry = response.status === 408 || response.status === 429 || response.status >= 500 && response.status <= 599;
+      // Release a failed response before opening the next request.
+      await response.body?.cancel().catch(() => {});
+    } catch (error) {
+      const code = networkCode(error);
+      failure = `${stage} ${url}: ${signal.aborted ? 'download timeout' : `network failure${code === null ? '' : ` (${code})`}`} (attempt ${attempt}/${DOWNLOAD_ATTEMPTS})`;
+      // A plain fetch failure can be transient. Unknown causes (including TLS failures) fail closed.
+      retry = !signal.aborted && (code !== null || error instanceof TypeError && error.message === 'fetch failed' && error.cause === undefined);
+    }
+    if (!retry || attempt === DOWNLOAD_ATTEMPTS) throw new Error(failure);
+    const waitMs = attempt * 1000;
+    log(`${failure}; retrying in ${waitMs} ms`);
+    try {
+      await sleep(waitMs, signal);
+    } catch {
+      throw new Error(`${stage} ${url}: ${signal.aborted ? 'download timeout' : 'retry wait failed'}`);
+    }
+  }
 }
 
 /**
@@ -113,6 +157,7 @@ export async function fetchNode({
   outRoot = DEFAULT_OUT_ROOT,
   fetchImpl = fetch,
   log = console.log,
+  sleep = (ms, signal) => delay(ms, undefined, { signal }),
 }) {
   const archDir = path.join(outRoot, `darwin-${arch}`);
   const binaryFile = path.join(archDir, 'bin', 'node');
@@ -125,13 +170,13 @@ export async function fetchNode({
 
   const name = tarballName(version, arch);
   const shasums = parseShasums(
-    (await download(`${baseUrl}/v${version}/SHASUMS256.txt`, fetchImpl)).toString('utf8'),
+    (await download(`${baseUrl}/v${version}/SHASUMS256.txt`, fetchImpl, 'checksums', log, sleep)).toString('utf8'),
   );
   const expected = shasums.get(name);
   if (expected === undefined) {
     throw new Error(`в SHASUMS256.txt версии v${version} нет строки для ${name}`);
   }
-  const tarball = await download(`${baseUrl}/v${version}/${name}`, fetchImpl);
+  const tarball = await download(`${baseUrl}/v${version}/${name}`, fetchImpl, 'archive', log, sleep);
   const actual = sha256(tarball);
   if (actual !== expected) {
     throw new Error(`${name}: sha256 ${actual} не совпал с SHASUMS256.txt (${expected})`);
