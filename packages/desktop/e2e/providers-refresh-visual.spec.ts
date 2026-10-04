@@ -14,6 +14,13 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 const shots = process.env.PARLEY_REFRESH_SHOTS ?? path.resolve(dirname, '../test-results/providers-refresh-visual');
 const refreshName = 'Refresh provider limits';
 
+interface RefreshMotion {
+  clickedAt: number | null;
+  endedAt: number | null;
+  busyTrace: Array<string | null>;
+  frames: Array<{ at: number; transform: string; dataReady: boolean }>;
+}
+
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(({ method, params }) =>
     (globalThis as unknown as { parley: { call: (method: string, params: unknown) => Promise<unknown> } }).parley.call(method, params),
@@ -102,6 +109,7 @@ test.describe('isolated native provider refresh and hover close', () => {
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
     const window = await app.firstWindow();
+    await window.emulateMedia({ reducedMotion: 'no-preference' });
     const errors: string[] = [];
     window.on('pageerror', (error) => errors.push(error.message));
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show());
@@ -133,16 +141,39 @@ test.describe('isolated native provider refresh and hover close', () => {
     await refresh.click();
     await expect(claude).toHaveText('34% 5h · 18% wk', { timeout: 5000 });
     await expect(codex).toHaveText('21% 5h', { timeout: 5000 });
+    await expect(refresh).toBeEnabled();
 
     await writeClaude(project, workId, backgroundId, 79, 62);
     await writeCodex(codexRoot, 87);
     await expect(claude).toHaveText('34% 5h · 18% wk');
     await expect(codex).toHaveText('21% 5h');
     await refresh.evaluate((el) => {
-      const trace: Array<string | null> = [];
-      (globalThis as unknown as { refreshBusyTrace: Array<string | null> }).refreshBusyTrace = trace;
+      const trace: RefreshMotion = { clickedAt: null, endedAt: null, busyTrace: [], frames: [] };
+      (globalThis as unknown as { refreshMotion: RefreshMotion }).refreshMotion = trace;
+      let frameId = 0;
+      let started = false;
+      el.addEventListener('click', () => { trace.clickedAt = performance.now(); }, { once: true, capture: true });
+      const sample = (): void => {
+        if (el.getAttribute('aria-busy') !== 'true') return;
+        const svg = el.querySelector('svg');
+        const limits = [...(el.parentElement?.querySelectorAll('[data-limits]') ?? [])].map((item) => item.textContent);
+        trace.frames.push({
+          at: performance.now(),
+          transform: svg === null ? 'missing' : getComputedStyle(svg).transform,
+          dataReady: limits.includes('79% 5h · 62% wk') && limits.includes('87% 5h'),
+        });
+        frameId = requestAnimationFrame(sample);
+      };
       const observer = new MutationObserver((mutations) => {
-        for (const mutation of mutations) trace.push(mutation.oldValue, el.getAttribute('aria-busy'));
+        for (const mutation of mutations) trace.busyTrace.push(mutation.oldValue, el.getAttribute('aria-busy'));
+        if (el.getAttribute('aria-busy') === 'true' && !started && trace.clickedAt !== null) {
+          started = true;
+          frameId = requestAnimationFrame(sample);
+        } else if (started && el.getAttribute('aria-busy') === 'false') {
+          trace.endedAt = performance.now();
+          cancelAnimationFrame(frameId);
+          observer.disconnect();
+        }
       });
       observer.observe(el, { attributes: true, attributeFilter: ['aria-busy'], attributeOldValue: true });
     });
@@ -151,9 +182,29 @@ test.describe('isolated native provider refresh and hover close', () => {
     await expect(claude).toHaveText('79% 5h · 62% wk', { timeout: 5000 });
     await expect(codex).toHaveText('87% 5h', { timeout: 5000 });
     expect(Date.now() - started).toBeLessThan(5000);
+    await expect(refresh).toHaveAttribute('aria-busy', 'true');
+    await refresh.screenshot({ path: path.join(shots, 'refresh-spinner-frame-1.png'), animations: 'allow' });
+    await window.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await refresh.screenshot({ path: path.join(shots, 'refresh-spinner-frame-2.png'), animations: 'allow' });
     await expect(refresh).toBeEnabled();
     await expect(refresh).toHaveAttribute('aria-busy', 'false');
-    expect(await window.evaluate(() => (globalThis as unknown as { refreshBusyTrace: Array<string | null> }).refreshBusyTrace)).toContain('true');
+    const motion = await window.evaluate(() => (globalThis as unknown as { refreshMotion: RefreshMotion }).refreshMotion);
+    expect(motion.busyTrace).toContain('true');
+    expect(motion.clickedAt).not.toBeNull();
+    expect(motion.endedAt).not.toBeNull();
+    // Allow 10 ms for renderer observation; the product feedback timer is 600 ms.
+    expect(motion.endedAt! - motion.clickedAt!).toBeGreaterThanOrEqual(590);
+    const afterData = motion.frames.filter((frame) => frame.dataReady);
+    expect(afterData.length).toBeGreaterThan(1);
+    expect(new Set(afterData.map((frame) => frame.transform)).size).toBeGreaterThan(1);
+    expect(afterData.every((frame) => frame.transform !== 'none' && frame.transform !== 'missing')).toBe(true);
+    await writeFile(path.join(shots, 'refresh-motion.json'), `${JSON.stringify({
+      feedbackMs: motion.endedAt! - motion.clickedAt!,
+      dataReadyMs: afterData[0]!.at - motion.clickedAt!,
+      frameCount: motion.frames.length,
+      distinctTransformsAfterData: new Set(afterData.map((frame) => frame.transform)).size,
+      frames: motion.frames.map((frame) => ({ ...frame, at: frame.at - motion.clickedAt! })),
+    }, null, 2)}\n`);
     await expect(window.locator('[data-provider-segment="glm"] [data-limits]')).toHaveCount(0);
 
     for (const theme of ['light', 'dark'] as const) {

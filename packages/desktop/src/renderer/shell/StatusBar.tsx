@@ -19,8 +19,8 @@
  * видит и `notice.text` хоста показать не может, даже случайно.
  */
 
-import { useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Hourglass, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
@@ -65,6 +65,9 @@ const SEGMENT_BUTTON = 'shrink-0 rounded-full px-2 py-0.5 text-foreground transi
 
 /** От скольки процентов лимит в любом окне считается на исходе: текст и полоска — `accent-700` (спека 3.5). */
 const LIMIT_WARNING_PERCENT = 80;
+
+/** Быстрый локальный ответ не должен закончить анимацию до первого заметного кадра. */
+const MIN_REFRESH_FEEDBACK_MS = 600;
 
 /** Целые проценты окна, округление вниз (решение контролёра куска 9b); окна нет — `null`. */
 const wholePercent = (limit: LimitWindow | null): number | null => (limit === null ? null : Math.floor(limit.usedPercent));
@@ -155,6 +158,22 @@ export function StatusBar({
   const snapshot = useProvidersStore((state) => state.providers);
   const refreshing = useProvidersStore((state) => state.refreshing);
   const refreshLimits = useProvidersStore((state) => state.refreshLimits);
+  const connections = useHostStore((state) => state.connections);
+  const [refreshFeedback, setRefreshFeedback] = useState(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshGeneration = useRef(0);
+  const refreshBusy = refreshing || refreshFeedback;
+  useEffect(() => {
+    ++refreshGeneration.current;
+    setRefreshFeedback(false);
+    return () => {
+      ++refreshGeneration.current;
+      if (refreshTimer.current !== null) {
+        clearTimeout(refreshTimer.current);
+        refreshTimer.current = null;
+      }
+    };
+  }, [connections, status.state]);
   const canRefresh = hostMethods(status).has('providers.refreshLimits') && snapshot.some((provider) => provider.available);
   const providers = [
     ...CORE_PROVIDERS.map((id): ProviderInfo => snapshot.find((provider) => provider.id === id) ??
@@ -169,16 +188,24 @@ export function StatusBar({
         type="button"
         title={S.statusBar.refreshLimits}
         aria-label={S.statusBar.refreshLimits}
-        aria-busy={refreshing}
-        disabled={!canRefresh || refreshing}
-        className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/8 disabled:opacity-50"
+        aria-busy={refreshBusy}
+        disabled={!canRefresh || refreshBusy}
+        className={cn('shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/8 disabled:opacity-50', refreshBusy && 'bg-foreground/8 ring-1 ring-foreground/25')}
         onClick={() => {
+          const generation = refreshGeneration.current;
+          setRefreshFeedback(true);
+          refreshTimer.current = setTimeout(() => {
+            refreshTimer.current = null;
+            setRefreshFeedback(false);
+          }, MIN_REFRESH_FEEDBACK_MS);
           void refreshLimits().catch((error: unknown) => {
-            toast(errorText(decodeIpcError(error).code, S.errors.actions.refreshProviderLimits));
+            if (generation === refreshGeneration.current)
+              toast(errorText(decodeIpcError(error).code, S.errors.actions.refreshProviderLimits));
           });
         }}
       >
-        <RefreshCw aria-hidden size={14} className={cn(refreshing && 'animate-spin')} />
+        <RefreshCw aria-hidden size={14} className={cn(refreshBusy && 'animate-spin motion-reduce:animate-none motion-reduce:hidden')} />
+        {refreshBusy ? <Hourglass aria-hidden size={14} className="hidden motion-reduce:block" /> : null}
       </button>
       {providers.map((provider) => (
         <ProviderSegment key={provider.id} provider={provider} onRestartHost={() => onRestartHostOpenChange(true)} />

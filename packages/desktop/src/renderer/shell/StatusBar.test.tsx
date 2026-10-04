@@ -29,7 +29,7 @@ import { useUiStore } from '../store/ui.js';
 import { StatusBar, type StatusBarProps } from './StatusBar.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
-afterEach(() => { cleanup(); vi.mocked(toast).mockClear(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.mocked(toast).mockClear(); });
 beforeEach(() => {
   useUiStore.getState().closeRestartHostDialog();
   useProvidersStore.setState({ providers: [], refreshing: false });
@@ -791,6 +791,7 @@ describe('StatusBar — ручное обновление лимитов', () =>
   });
 
   it('ручной клик вызывает обновление, показывает busy и блокирует повторный клик до нового снимка', async () => {
+    vi.useFakeTimers();
     const bridge = createFakeBridge();
     bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
     let resolve!: (value: { ok: true }) => void;
@@ -806,6 +807,7 @@ describe('StatusBar — ручное обновление лимитов', () =>
     fireEvent.click(button);
     expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
     await act(async () => { resolve({ ok: true }); await Promise.resolve(); });
+    act(() => { vi.advanceTimersByTime(600); });
     expect(button.disabled).toBe(false);
     expect(button.getAttribute('aria-busy')).toBe('false');
     expect(bridge.hostActions).toEqual([]);
@@ -824,6 +826,120 @@ describe('StatusBar — ручное обновление лимитов', () =>
     expect(vi.mocked(toast).mock.calls[0]?.[0]).toContain("Couldn't refresh provider limits");
     expect(vi.mocked(toast).mock.calls[0]?.[0]).not.toMatch(/secret-token|private/);
     expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+
+  it.each([false, true])('быстрый ответ оставляет видимый отклик на 600 ms без задержки данных/ошибки (%s)', async (fails) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    let percent = 42;
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude', limits: limitsOf({ fiveHour: limitWindow(percent) }) })] }));
+    bridge.setHandler('providers.refreshLimits', () => {
+      percent = 57;
+      if (fails) throw encodeIpcError({ code: 'internal', message: 'private text' });
+      return { ok: true };
+    });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.querySelector('.lucide-refresh-cw')?.classList.contains('animate-spin')).toBe(true);
+    await act(async () => { await Promise.resolve(); });
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(toast).toHaveBeenCalledTimes(fails ? 1 : 0);
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
+    act(() => { vi.advanceTimersByTime(599); });
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    expect(button.querySelector('.animate-spin')).toBeNull();
+    dispose();
+  });
+
+  it('долгий запрос продолжает вращение после минимального отклика до ответа хоста', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let resolve!: (value: { ok: true }) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((yes) => { resolve = yes; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(button.disabled).toBe(true);
+    expect(button.querySelector('.animate-spin')).toBeTruthy();
+    await act(async () => { resolve({ ok: true }); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    dispose();
+  });
+
+  it('при reduced motion вращение скрыто, а неподвижные песочные часы и фон показывают busy', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    bridge.setHandler('providers.refreshLimits', () => ({ ok: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' });
+    fireEvent.click(button);
+    expect(button.querySelector('.lucide-refresh-cw')?.classList.contains('motion-reduce:hidden')).toBe(true);
+    const still = button.querySelector('.lucide-hourglass');
+    expect(still?.classList.contains('hidden')).toBe(true);
+    expect(still?.classList.contains('motion-reduce:block')).toBe(true);
+    expect(still?.classList.contains('animate-spin')).toBe(false);
+    expect(button.classList.contains('bg-foreground/8')).toBe(true);
+    await act(async () => { await Promise.resolve(); });
+    dispose();
+  });
+
+  it('переподключение сбрасывает местный отклик, а размонтирование очищает таймер', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    bridge.setHandler('providers.refreshLimits', () => ({ ok: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    const view = renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    await act(async () => { await Promise.resolve(); });
+    expect(button.disabled).toBe(true);
+    act(() => { useHostStore.setState((state) => ({ connections: state.connections + 1 })); });
+    expect(button.disabled).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    fireEvent.click(button);
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.getTimerCount()).toBe(1);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    dispose();
+  });
+
+  it('поздняя ошибка размонтированной кнопки не показывает тост', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let reject!: (error: unknown) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((_yes, no) => { reject = no; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    const view = renderPlain({ status: connected });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' }));
+    view.unmount();
+    await act(async () => { reject(encodeIpcError({ code: 'internal', message: 'old error' })); });
+    expect(toast).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
     dispose();
   });
 
