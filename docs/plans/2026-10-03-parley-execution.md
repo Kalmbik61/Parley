@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P24, P27/P29/P39 accepted (28/40); P25/P36 running. P28 — подготовка интерфейсных контрактов, реализация pending.
+- Текущая фаза: workflow остановлен при30% недельного остатка по указанию человека. P00–P24, P27/P29/P39 accepted (28/40); P25/P36 pending для продолжения, P28 подготовлена без реализации.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -45,7 +45,7 @@
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
 | P23 | Подключить инструменты планов и будильник | done | 6a3635f helper + b511fda integration21; correction peer9/root lifecycle peer19, actual257GREEN |
 | P24 | Показать план и итог в комнате | done | 1d76601; peer /root/p01_review |
-| P25 | Реализовать рецепты и плейбук ведущего | running | /root/p01_review; TMP recipes foundation, shared seams locked |
+| P25 | Реализовать рецепты и плейбук ведущего | pending | /root/p01_review; TMP recipes foundation, shared seams locked |
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
 | P27 | Реализовать журнал принятых версий и историю | done | commit 37f7511; /root/p01_review; independent /root/p02_codex_probe accepted22/18GREEN; root lifecycle/types GREEN |
 | P28 | Подключить Decisions и Share history | pending | — |
@@ -56,7 +56,7 @@
 | P33 | Обновить документацию по фактическому результату | pending | — |
 | P34 | Ограничить bootstrap и повторение контекста | pending | audit-token track; dependencies P25, P29 |
 | P35 | Ввести компактные map/snapshots и страницы | pending | audit-token track; dependencies P27, P31 |
-| P36 | Исправить свежесть usage и cache ledger | running | /root/p01_claude_probe; TMP usage/cache/freshness foundation |
+| P36 | Исправить свежесть usage и cache ledger | pending | /root/p01_claude_probe; TMP usage/cache/freshness foundation |
 | P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
 | P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
 | P39 | Доставлять внутренний навык minimal-development | done | 50a878f; author /root/p01_claude_probe; independent /root/p01_review accepted; 84core/17host, ownership/failure probes, builds0 |
@@ -274,3 +274,11 @@ P27 accepted37f7511: exact22 staged afterSHA совпали с final peer manife
 
 
 Durable local checkpoint: `.parley/upgrade-checkpoints/20261004T001852Z` (ignored, directories0700/files0600,1303 bounded files/13.8MB, per-file SHA verified; no node_modules/dist/cache). Содержит P27 frozen/review/integration и P25/P36 active draft copies; черновики не означают acceptance. P25 foundation frozen7 NEW recipes modules/tests,24GREEN/types/lint0, independent /root/p02_codex_probe review running; full room/lead delivery ещё pending. P28 preparation546слов завершена без source writes; методы и UI ещё не реализованы. Остаток32% (used68); порог30% сохранён.
+
+
+P25 foundation acceptedfbdcf95: exact7 source stagedSHA; author24/type/lint0, independent5 meaningful GREEN/нет Critical/Important, rootactual24/corebuild0. Full task остаётся running до room snapshot/lead delivery/host consumers. P36 frozen milestone готовится (19 scoped paths); watcher environment limitation подтверждена unchanged sandboxRED против approved TMP run2GREEN, native tests не заявлены. Остаток31% (used69); новые задачи не выданы, stop30%.
+
+
+ОСТАНОВКА ПО КВОТЕ 2026-10-04: toolusedPercent70/week10080min =>30%remaining, порог достигнут. /root/p01_review interrupted; два остальных active agents уже completed, все агенты остановлены; новые задачи/проверки/реализация не запускались. Последние source commits37f7511(P27full),fbdcf95(P25foundation),28/40fullaccepted. Осталось12pending,0running. Final recovery `.parley/upgrade-checkpoints/20261004T002508Z` содержит337files/3.46MB с SHA, включаяP25frozen+peer5 иP36frozen21/separate5groups+partialpeer+P28preparation+workflowhelpers; предыдущий P27 archive —20261004T001852Z. Все ignored/0700directories/0600files, sourceTMPpaths в manifest восстанавливаются из сохранённых одноимённых папок перед resume.
+
+Следующее после возобновления: P36 finish bounded independentreview; confirmed source raw binding exposure innew LiveMetrics.usage requires narrow public projection, not generic legacy WorkMap rewrite. Interrupted peer review.log contains9GREEN/1RED; that specific regex falsely matches safe descendantsObserved and is not accepted defect evidence; actual public privacy probe is separateprivacy.log, no aggregate acceptance. Frozen21 NOT applied. P25 next room/Lead immutable snapshot integration proposal318words awaits serialized grants preserving optionalusage/indexseams; P28 interface preparation546words awaits implementation. Native/model/visual/economic gates P32/P38 remain open. Workflow stays stopped until human resume; no automatic wakeup.

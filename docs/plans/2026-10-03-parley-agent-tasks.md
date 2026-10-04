@@ -88,7 +88,7 @@
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | done |
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | /root/p01_claude_probe | done |
-| [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | /root/p01_review | running |
+| [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | /root/p01_review | pending |
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
 | [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | /root/p01_review | done |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
@@ -99,7 +99,7 @@
 | [P33 — Обновить документацию по фактическому результату](#p33) | 11 | P32 | не назначен | pending |
 | [P34 — Ограничить bootstrap и повторение контекста](#p34) | audit | P25, P29 | не назначен | pending |
 | [P35 — Ввести компактные map/snapshots и страницы](#p35) | audit | P27, P31 | не назначен | pending |
-| [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | /root/p01_claude_probe | running |
+| [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | /root/p01_claude_probe | pending |
 | [P37 — Ограничить launches/fanout и лишний старт](#p37) | audit | P23, P26 | не назначен | pending |
 | [P38 — Подготовить benchmark принятого результата](#p38) | audit | P34, P35, P36, P37, P14, P31, P39 | не назначен | pending |
 | [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | /root/p01_claude_probe | done |
@@ -988,7 +988,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
+**Статус:** pending. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
 
 **Зависимости:** P12, P24. **Источник:** [этап 8 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-8).
 
@@ -1017,6 +1017,10 @@
 **Evidence:** TMP foundation: new recipes modules/tests only; shared snapshot/delivery seams locked until explicit root grant.
 
 **Внутренний навык:** короткий lead playbook использует принцип minimal-development, не повторяя полное тело навыка и не ослабляя Verified/Checklist requirements. Native body доставляет P39 по demand.
+
+**Foundation evidence:** commitfbdcf95, семь NEW recipe modules/tests, exact frozen patch65a473b7…6bb0d8/manifest393728fe…67cf5; independent /root/p02_codex_probe5 meaningful GREEN, no Critical/Important. Root actual24GREEN/core build0, exact7 stagedSHA. Full P25 остаётся running: immutable Room.recipe, lead-only delivery/replacement, typed host/protocol/catalog/launch consumers ещё не интегрированы. Next scoped proposal сохранён в local recovery checkpoint; foundation не доказывает native availability.
+
+**Остановка по квоте:** при30% недельного остатка workflow остановлен по указанию человека; агент больше не выполняет работу. Выданные frozen материалы и частичное ревью сохранены в `.parley/upgrade-checkpoints/20261004T002508Z`; full task не принята. Для P25 acceptedfoundation commitfbdcf95 сохраняется; P36 не интегрирована, public usage native-ID projection требует проверки/исправления после возобновления.
 
 <a id="p26"></a>
 
@@ -1340,7 +1344,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
+**Статус:** pending. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
 
 **Зависимости:** P24. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
 
@@ -1361,6 +1365,8 @@
 
 
 **Evidence:** TMP usage foundation: existing index/activity pipeline, nullable source/epoch/freshness/cache metadata; shared DTO/export seams serial root integration.
+
+**Остановка по квоте:** при30% недельного остатка workflow остановлен по указанию человека; агент больше не выполняет работу. Выданные frozen материалы и частичное ревью сохранены в `.parley/upgrade-checkpoints/20261004T002508Z`; full task не принята. Для P25 acceptedfoundation commitfbdcf95 сохраняется; P36 не интегрирована, public usage native-ID projection требует проверки/исправления после возобновления.
 
 <a id="p37"></a>
 
