@@ -141,6 +141,20 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
   );
 }
 
+/** Причины квоты — только по точной паре; сырой ответ хоста не становится текстом тоста. */
+function refreshErrorText(error: unknown): string {
+  const { code, data } = decodeIpcError(error);
+  if (code === 'internal' && data?.provider === 'glm') {
+    switch (data.reason) {
+      case 'authentication': return S.statusBar.refreshErrors.authentication;
+      case 'unsupported_response': return S.statusBar.refreshErrors.unsupportedResponse;
+      case 'timeout': return S.statusBar.refreshErrors.timeout;
+      case 'unavailable': return S.statusBar.refreshErrors.unavailable;
+    }
+  }
+  return errorText(code, S.errors.actions.refreshProviderLimits);
+}
+
 export function StatusBar({
   status,
   noticeLine,
@@ -200,7 +214,7 @@ export function StatusBar({
           }, MIN_REFRESH_FEEDBACK_MS);
           void refreshLimits().catch((error: unknown) => {
             if (generation === refreshGeneration.current)
-              toast(errorText(decodeIpcError(error).code, S.errors.actions.refreshProviderLimits));
+              toast(refreshErrorText(error));
           });
         }}
       >

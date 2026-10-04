@@ -22,10 +22,16 @@ describe('Z.ai quota parsing', () => {
     payload([]), {}, null,
   ])('does not guess unsupported window meaning', (value) => {
     expect(() => zaiQuotaOf(value, AT)).toThrow(ZaiQuotaError);
+    expect(() => zaiQuotaOf(value, AT)).toThrow(expect.objectContaining({ reason: 'unsupported_response' }));
   });
 
-  it('rejects HTTP-success envelopes that report application authentication failure', () => {
-    expect(() => zaiQuotaOf({ success: false, code: 401, msg: 'upstream-secret' }, AT)).toThrow('GLM quota authentication failed');
+  it.each([401, '401'])('rejects HTTP-success envelopes with authentication code %s', (code) => {
+    expect(() => zaiQuotaOf({ success: false, code, msg: 'upstream-secret' }, AT)).toThrow('GLM quota authentication failed');
+    expect(() => zaiQuotaOf({ success: false, code, msg: 'upstream-secret' }, AT)).toThrow(expect.objectContaining({ reason: 'authentication' }));
+  });
+
+  it('classifies other application failures as unavailable', () => {
+    expect(() => zaiQuotaOf({ success: false, code: 500, msg: 'upstream-secret' }, AT)).toThrow(expect.objectContaining({ reason: 'unavailable', message: 'Unable to refresh GLM quota' }));
   });
 });
 
@@ -39,34 +45,49 @@ describe('bounded host transport', () => {
 
   it('never retries Bearer or exposes HTTP200 failure payloads', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response({ success: false, code: 401, msg: 'synthetic-key' }));
-    await expect(readZaiQuota('synthetic-key', { fetch })).rejects.toThrow('GLM quota authentication failed');
+    await expect(readZaiQuota('synthetic-key', { fetch })).rejects.toMatchObject({ reason: 'authentication', message: 'GLM quota authentication failed' });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    () => new Response('bad', { status: 401 }),
-    () => new Response('synthetic-key', { headers: { 'content-length': String(ZAI_QUOTA_MAX_BYTES + 1) } }),
-    () => new Response('x'.repeat(ZAI_QUOTA_MAX_BYTES + 1)),
-    () => new Response('invalid-json-synthetic-key'),
-  ])('rejects malformed and oversized responses with safe errors', async (makeResponse) => {
+    { makeResponse: () => new Response('bad', { status: 401 }), reason: 'authentication' },
+    { makeResponse: () => new Response('bad', { status: 503 }), reason: 'unavailable' },
+    { makeResponse: () => new Response('synthetic-key', { headers: { 'content-length': String(ZAI_QUOTA_MAX_BYTES + 1) } }), reason: 'unavailable' },
+    { makeResponse: () => new Response('x'.repeat(ZAI_QUOTA_MAX_BYTES + 1)), reason: 'unavailable' },
+    { makeResponse: () => new Response('invalid-json-synthetic-key'), reason: 'unsupported_response' },
+    { makeResponse: () => new Response(JSON.stringify(payload([]))), reason: 'unsupported_response' },
+  ])('rejects failed, malformed and oversized responses with safe reason $reason', async ({ makeResponse, reason }) => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(makeResponse());
     const error = await readZaiQuota('synthetic-key', { fetch }).catch((error: unknown) => error);
     expect(error).toBeInstanceOf(ZaiQuotaError);
+    expect(error).toMatchObject({ reason });
     expect(String(error)).not.toContain('synthetic-key');
   });
 
   it('sanitizes network exceptions containing credentials', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new Error('Authorization: synthetic-key'));
-    await expect(readZaiQuota('synthetic-key', { fetch })).rejects.toThrow('Unable to refresh GLM quota');
+    await expect(readZaiQuota('synthetic-key', { fetch })).rejects.toMatchObject({ reason: 'unavailable', message: 'Unable to refresh GLM quota' });
   });
 
   it('bounds the full request to 10 seconds even when the transport ignores abort', async () => {
     vi.useFakeTimers();
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(() => new Promise(() => {}));
-    const request = expect(readZaiQuota('synthetic-key', { fetch })).rejects.toThrow('Unable to refresh GLM quota');
+    const request = expect(readZaiQuota('synthetic-key', { fetch })).rejects.toMatchObject({ reason: 'timeout', message: 'Unable to refresh GLM quota' });
     await vi.advanceTimersByTimeAsync(ZAI_QUOTA_TIMEOUT_MS);
     await request;
     const options = fetch.mock.calls[0]?.[1];
     expect(options?.signal?.aborted).toBe(true);
+  });
+
+  it('retains timeout reason when abort interrupts body streaming', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_url, options) => new Response(new ReadableStream({
+      start(controller) {
+        options?.signal?.addEventListener('abort', () => controller.error(new Error('synthetic-key')));
+      },
+    })));
+    const request = expect(readZaiQuota('synthetic-key', { fetch })).rejects.toMatchObject({ reason: 'timeout' });
+    await vi.advanceTimersByTimeAsync(ZAI_QUOTA_TIMEOUT_MS);
+    await request;
   });
 });

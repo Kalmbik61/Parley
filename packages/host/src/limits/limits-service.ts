@@ -166,7 +166,7 @@ export function createLimitsService(
       if (current !== identity) {
         invalidateGlm();
         glmFingerprint = current;
-        throw new ZaiQuotaError('GLM key changed during quota refresh');
+        throw new ZaiQuotaError();
       }
       if (failure !== null) throw failure;
       const next = new Map(state);
@@ -230,7 +230,10 @@ export function createLimitsService(
     if (stopped) return Promise.resolve();
     if (includeGlm) {
       manualInFlight ??= Promise.allSettled([refresh(), refreshGlm()]).then((results) => {
-        if (results[1]?.status === 'rejected' && !stopped) throw new ZaiQuotaError();
+        const glm = results[1];
+        if (glm?.status === 'rejected' && !stopped) {
+          throw glm.reason instanceof ZaiQuotaError ? glm.reason : new ZaiQuotaError();
+        }
       }).finally(() => { manualInFlight = null; });
       return manualInFlight;
     }

@@ -170,6 +170,12 @@ export const S = {
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
     refreshLimits: 'Refresh provider limits',
+    refreshErrors: {
+      authentication: 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.',
+      unsupportedResponse: 'The current Z.ai quota response is not supported.',
+      timeout: 'The Z.ai quota request timed out. Try again.',
+      unavailable: 'Z.ai quota is temporarily unavailable. Try again.',
+    },
     providerTitle: (name: string, available: boolean): string =>
       `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',

@@ -16,6 +16,7 @@ import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createLimitsService, LIMITS_POLL_MS, limitsOptionsFromEnv } from './limits-service.js';
 import type { LimitsService, LimitsServiceOptions } from './limits-service.js';
+import { ZaiQuotaError } from './zai-quota.js';
 
 const T0 = Date.parse('2026-09-29T12:00:00.000Z');
 const sec = (ms: number): number => Math.floor(ms / 1000);
@@ -182,6 +183,25 @@ describe('manual GLM quota refresh', () => {
     expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(50);
     expect(limits.get('glm')?.fiveHour?.usedPercent).toBe(37);
   });
+
+  it.each(['authentication', 'unsupported_response', 'timeout', 'unavailable'] as const)(
+    'preserves safe %s reason through manual refresh without blocking CLI publication', async (reason) => {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(quota()).mockImplementationOnce(async () => {
+        if (reason === 'authentication') return new Response(JSON.stringify({ success: false, code: 401, msg: 'synthetic-key' }));
+        if (reason === 'unsupported_response') return new Response(JSON.stringify({ success: true, data: { limits: [] } }));
+        if (reason === 'timeout') throw new ZaiQuotaError('timeout');
+        throw new Error('Authorization synthetic-key /private/host/path');
+      });
+      const a = await work(projectA, ['claude']);
+      const { limits } = service([{ project: projectA, map: a.map }], { readGlmKey: async () => 'synthetic-key', fetch });
+      await limits.refresh(true);
+      const prior = limits.get('glm');
+      await putLimits(projectA, a.map, a.ids[0]!, T0, 61);
+      await expect(limits.refresh(true)).rejects.toMatchObject({ reason });
+      expect(limits.get('glm')).toEqual(prior);
+      expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(61);
+    },
+  );
 
   it.each([null, 'rotated-key'])('rejects late observations when the saved key changes to %s', async (replacement) => {
     let key: string | null = 'synthetic-key';

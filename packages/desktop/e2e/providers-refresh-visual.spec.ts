@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { encodeIpcError } from '../src/shared/ipc-error.js';
 
 // A separate native window and host. Only local fixture logs and the echo stub are used;
 // no GLM key is saved and no real agent, account configuration, or quota transport is used.
@@ -19,6 +20,23 @@ interface RefreshMotion {
   endedAt: number | null;
   busyTrace: Array<string | null>;
   frames: Array<{ at: number; transform: string; dataReady: boolean }>;
+}
+
+function fixtureEnv(home: string, codexRoot = path.join(home, 'codex-sessions')): Record<string, string> {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name, value]) =>
+    value !== undefined && !/^(ANTHROPIC_|CLAUDE_|CODEX_|OPENAI_|ZAI_|Z_AI_|GLM_|AWS_|AZURE_|GOOGLE_|GEMINI_|BEDROCK_|VERTEX_)/i.test(name) &&
+    !/(TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL)/i.test(name) && !/^(PARLEY|HARNAS)_.*_BIN$/i.test(name),
+  )) as Record<string, string>;
+  return Object.assign(env, {
+    HOME: path.join(home, 'user'), PARLEY_HOME: home, HARNAS_HOME: home,
+    XDG_CONFIG_HOME: path.join(home, 'user', '.config'),
+    PARLEY_CLAUDE_PROJECTS_DIR: path.join(home, 'claude-projects'),
+    PARLEY_CODEX_SESSIONS_DIR: codexRoot,
+    PARLEY_CLAUDE_BIN: stubAgent, PARLEY_CODEX_BIN: stubAgent,
+    PARLEY_GLM_BIN: path.join(home, 'absent-glm'),
+    PARLEY_TERMINAL_RENDERER: 'dom', PARLEY_LIMITS_POLL_MS: '3600000',
+    PARLEY_LOGIN_SHELL: 'skip', PARLEY_UPDATE_CHECK: 'off',
+  });
 }
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
@@ -92,20 +110,7 @@ test.describe('isolated native provider refresh and hover close', () => {
     test.setTimeout(120_000);
     const codexRoot = path.join(home, 'codex-sessions');
     await writeCodex(codexRoot, 21);
-    const env = Object.fromEntries(Object.entries(process.env).filter(([name, value]) =>
-      value !== undefined && !/^(ANTHROPIC_|CLAUDE_|CODEX_|OPENAI_|ZAI_|Z_AI_|GLM_|AWS_|AZURE_|GOOGLE_|GEMINI_|BEDROCK_|VERTEX_)/i.test(name) &&
-      !/(TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL)/i.test(name) && !/^(PARLEY|HARNAS)_.*_BIN$/i.test(name),
-    )) as Record<string, string>;
-    Object.assign(env, {
-      HOME: path.join(home, 'user'), PARLEY_HOME: home, HARNAS_HOME: home,
-      XDG_CONFIG_HOME: path.join(home, 'user', '.config'),
-      PARLEY_CLAUDE_PROJECTS_DIR: path.join(home, 'claude-projects'),
-      PARLEY_CODEX_SESSIONS_DIR: codexRoot,
-      PARLEY_CLAUDE_BIN: stubAgent, PARLEY_CODEX_BIN: stubAgent,
-      PARLEY_GLM_BIN: path.join(home, 'absent-glm'),
-      PARLEY_TERMINAL_RENDERER: 'dom', PARLEY_LIMITS_POLL_MS: '3600000',
-      PARLEY_LOGIN_SHELL: 'skip', PARLEY_UPDATE_CHECK: 'off',
-    });
+    const env = fixtureEnv(home, codexRoot);
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
     const window = await app.firstWindow();
@@ -246,6 +251,67 @@ test.describe('isolated native provider refresh and hover close', () => {
     await expect(active).toHaveAttribute('aria-selected', 'true');
     await expect(tabs).toHaveCount(1);
     await window.screenshot({ path: path.join(shots, 'refresh-background-closed.png'), animations: 'disabled' });
+    expect(errors).toEqual([]);
+  });
+
+  test('authentication refresh failure shows a safe Z.ai 401 toast, visible spinner, and allows retry', async () => {
+    const app = await electron.launch({ args: [mainEntry], env: fixtureEnv(home) });
+    running = app;
+    const window = await app.firstWindow();
+    const errors: string[] = [];
+    window.on('pageerror', (error) => errors.push(error.message));
+    await window.emulateMedia({ reducedMotion: 'no-preference' });
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.show());
+    await expect(window.getByTestId('landing')).toBeVisible();
+    await call(window, 'works.create', { projectPath: project, title: 'Safe refresh failure fixture', goal: '' });
+    await expect(window.getByTestId('app-shell')).toBeVisible();
+    await pickTheme(window, 'dark');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
+    const snapshot = await call<unknown>(window, 'providers.list', {});
+    const rawMarker = 'e2e-upstream-token /private/e2e-fixture-path';
+    const failure = encodeIpcError({ code: 'internal', message: rawMarker, data: {
+      provider: 'glm', reason: 'authentication', body: 'e2e-raw-body', cause: 'e2e-raw-cause',
+    } }).message;
+    // Public IPC APIs replace only this test process's host bridge. All expected
+    // RPCs are local fixture answers; unexpected RPCs fail instead of reaching a host.
+    await app.evaluate(({ ipcMain }, { snapshot, failure }) => {
+      const calls: string[] = [];
+      (globalThis as unknown as { refreshFailureCalls: string[] }).refreshFailureCalls = calls;
+      ipcMain.removeHandler('host:call');
+      ipcMain.handle('host:call', (_event, method: string) => {
+        calls.push(method);
+        if (method === 'providers.list') return snapshot;
+        if (method === 'providers.refreshLimits') throw new Error(failure);
+        throw new Error('Unexpected RPC in refresh error fixture');
+      });
+    }, { snapshot, failure });
+
+    const refresh = window.getByRole('button', { name: refreshName, exact: true });
+    const message = 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.';
+    const toast = window.locator('[data-sonner-toast]').filter({ hasText: message });
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+    await expect(toast).toBeVisible();
+    await expect(toast).toHaveText(message);
+    await expect(toast).toBeInViewport({ ratio: 1 });
+    await expect(refresh).toHaveAttribute('aria-busy', 'true');
+    const svg = refresh.locator('svg').first();
+    const before = await svg.evaluate((el) => getComputedStyle(el).transform);
+    await window.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const after = await svg.evaluate((el) => getComputedStyle(el).transform);
+    expect(after).not.toBe(before);
+    expect(after).not.toBe('none');
+    await window.screenshot({ path: path.join(shots, 'refresh-authentication-dark-800x500.png'), animations: 'allow' });
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).toHaveAttribute('aria-busy', 'false');
+    await refresh.click();
+    await expect(refresh).toHaveAttribute('aria-busy', 'true');
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).toHaveAttribute('aria-busy', 'false');
+    const calls = await app.evaluate(() => (globalThis as unknown as { refreshFailureCalls: string[] }).refreshFailureCalls);
+    expect(calls.filter((method) => method === 'providers.refreshLimits')).toHaveLength(2);
+    expect(calls.every((method) => method === 'providers.refreshLimits' || method === 'providers.list')).toBe(true);
+    await expect(window.locator('body')).not.toContainText(/Host error|e2e-upstream-token|e2e-fixture-path|e2e-raw-body|e2e-raw-cause|parley-error:/);
     expect(errors).toEqual([]);
   });
 });

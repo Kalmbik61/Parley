@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import { errorText, S } from '../../shared/strings.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
@@ -829,6 +829,63 @@ describe('StatusBar — ручное обновление лимитов', () =>
     dispose();
   });
 
+
+  it.each([
+    ['authentication', 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.'],
+    ['unsupported_response', 'The current Z.ai quota response is not supported.'],
+    ['timeout', 'The Z.ai quota request timed out. Try again.'],
+    ['unavailable', 'Z.ai quota is temporarily unavailable. Try again.'],
+  ])('точная причина GLM %s показывает фиксированную строку без сырого ответа', async (reason, expected) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    let percent = 42;
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude', limits: limitsOf({ fiveHour: limitWindow(percent) }) })] }));
+    bridge.setHandler('providers.refreshLimits', () => {
+      percent = 57;
+      throw encodeIpcError({ code: 'internal', message: 'raw-secret /private/path', data: {
+        provider: 'glm', reason, body: 'upstream-secret', cause: 'raw-cause',
+      } });
+    });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    await act(async () => { fireEvent.click(button); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expected);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(button.disabled).toBe(true);
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(button.disabled).toBe(false);
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+  it.each([
+    { code: 'internal', data: { provider: 'glm', reason: 'upstream-secret' } },
+    { code: 'internal', data: { provider: 'glm', reason: 'constructor' } },
+    { code: 'internal', data: { provider: 'glm', reason: { message: 'upstream-secret' } } },
+    { code: 'internal', data: { provider: 'other-secret', reason: 'authentication' } },
+    { code: 'internal', data: { reason: 'authentication' } },
+    { code: 'internal', data: { provider: 'glm' } },
+    { code: 'internal', data: { provider: 'glm', reason: 'AUTHENTICATION' } },
+    { code: 'bad_request', data: { provider: 'glm', reason: 'authentication' } },
+  ])('неизвестная пара или код использует прежний безопасный fallback, вариант %#', async ({ code, data }) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'glm' })] }));
+    bridge.setHandler('providers.refreshLimits', () => { throw encodeIpcError({
+      code, message: 'raw-secret /private/path', data: { ...data, body: 'upstream-secret' },
+    }); });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' })); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(errorText(code, S.errors.actions.refreshProviderLimits));
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).not.toMatch(/raw-secret|private|upstream-secret|other-secret/);
+    dispose();
+  });
 
   it.each([false, true])('быстрый ответ оставляет видимый отклик на 600 ms без задержки данных/ошибки (%s)', async (fails) => {
     vi.useFakeTimers();

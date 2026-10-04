@@ -13,6 +13,7 @@ import type { SecretId } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { LimitsService } from '../limits/limits-service.js';
+import { ZaiQuotaError } from '../limits/zai-quota.js';
 import type { ProviderVersions } from '../providers/versions.js';
 
 /**
@@ -121,8 +122,10 @@ export function createProvidersRefreshLimits(limits: LimitsService): Handler<'pr
   return async () => {
     try {
       await limits.refresh(true);
-    } catch {
-      throw new HostError('internal', 'Unable to refresh GLM quota');
+    } catch (error) {
+      throw new HostError('internal', 'Unable to refresh GLM quota', {
+        provider: 'glm', reason: error instanceof ZaiQuotaError ? error.reason : 'unavailable',
+      });
     }
     return { ok: true };
   };
