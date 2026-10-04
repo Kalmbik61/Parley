@@ -1,14 +1,17 @@
 /**
  * Лимиты подписок в хосте (спека комнат Organic, 3.5): последнее значение на провайдера и событие
- * `providers.limitsChanged`, когда оно изменилось. Данные — только те, что отдают сами CLI:
- * - Claude Code (и любой провайдер, чей запуск несёт `--settings` работы) — файлы
+ * `providers.limitsChanged`, когда оно изменилось. Источники:
+ * - Claude Code (и другие провайдеры, кроме GLM, чей запуск несёт `--settings` работы) — файлы
  *   `limits/<сессия>.json` в каталогах работ, которые пишет скрипт строки статуса. Провайдер файла —
- *   провайдер сессии по карте работы, а не имя файла или его свежесть: файл сессии GLM не может
- *   стать лимитами Claude. Файлы провайдера сводятся по окнам (`mergeLimits`), а не «берётся самый
+ *   провайдер сессии по карте работы, а не имя файла или его свежесть. GLM не получает лимиты
+ *   claude.ai: строка статуса Claude Code не сообщает лимиты Z.ai. Файлы провайдера сводятся
+ *   по окнам (`mergeLimits`), а не «берётся самый
  *   свежий по `at`»: простаивающая сессия со свежим `at` и прежними числами не должна перебить
  *   числа той, что работала;
  * - Codex — хвост самого свежего rollout-лога (`readCodexLimits`).
- * Учётные данные не читаются, к API никто не ходит.
+ * - GLM — только явный запрос обновления квоты с добровольно сохранённым ключом Z.ai.
+ * Старт и таймер перечитывают CLI, не ходят в сеть и сохраняют последнюю квоту GLM.
+ * Учётные данные Claude/Codex не читаются.
  *
  * Как хост узнаёт о новых данных — редкий опрос, раз в 30 секунд (`LIMITS_POLL_MS`), а не
  * наблюдение за каталогами. Файлов много: по каталогу `limits/` на каждую работу каждого проекта,
@@ -19,16 +22,19 @@
  * `intervalMs` — для E2E окна; в боевом хосте он не меняется.
  */
 
+import { createHash } from 'node:crypto';
 import {
   dropExpiredWindows,
   envValue,
   mergeLimits,
   readCodexLimits,
+  readSecret,
   readWorkLimits,
   workPaths,
   type LimitWindow,
   type ProviderLimits,
 } from '@parley/core';
+import { readZaiQuota, ZaiQuotaError } from './zai-quota.js';
 import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
 
@@ -44,6 +50,9 @@ export interface LimitsServiceOptions {
   now?: () => number;
   /** Таймер опроса — возвращает отмену; тесты подставляют свой, без настоящего ожидания. */
   schedule?: (tick: () => void, everyMs: number) => () => void;
+  /** Подмены тестов: реальные ключи и сеть не нужны. */
+  readGlmKey?: () => Promise<string | null>;
+  fetch?: typeof globalThis.fetch;
 }
 
 export interface LimitsService {
@@ -51,8 +60,10 @@ export interface LimitsService {
   start(): Promise<void>;
   /** Лимиты провайдера сейчас; окна с прошедшим сбросом уже сняты, `null` — данных нет. */
   get(providerId: string): ProviderLimits | null;
-  /** Перечитать сейчас; параллельные вызовы делят одно чтение. Не отказывает. */
-  refresh(): Promise<void>;
+  /** Перечитать CLI; includeGlm — явный запрос квоты. Параллельные запросы одного вида делят чтение. */
+  refresh(includeGlm?: boolean): Promise<void>;
+  /** Смена/удаление ключа немедленно снимает старую квоту и отменяет публикацию старого запроса. */
+  invalidateGlm(): void;
   stop(): void;
 }
 
@@ -92,7 +103,7 @@ const sameWindow = (a: LimitWindow | null, b: LimitWindow | null): boolean =>
 const sameLimits = (a: ProviderLimits | undefined, b: ProviderLimits | undefined): boolean =>
   a === undefined || b === undefined
     ? a === b
-    : a.at === b.at && sameWindow(a.fiveHour, b.fiveHour) && sameWindow(a.week, b.week);
+    : a.source === b.source && a.at === b.at && sameWindow(a.fiveHour, b.fiveHour) && sameWindow(a.week, b.week);
 
 export function createLimitsService(
   host: HostContext,
@@ -106,8 +117,68 @@ export function createLimitsService(
   /** Лимиты по провайдерам на момент последнего чтения, без окон с прошедшим сбросом. */
   let state = new Map<string, ProviderLimits>();
   let inFlight: Promise<void> | null = null;
+  let manualInFlight: Promise<void> | null = null;
   let cancelTimer: (() => void) | null = null;
   let stopped = false;
+  let glmFingerprint: string | null = null;
+  let glmGeneration = 0;
+  const readGlmKey = options.readGlmKey ?? (() => readSecret('zai'));
+  const fingerprint = (key: string | null): string | null => key === null ? null : createHash('sha256').update(key).digest('hex');
+
+  function publish(next: Map<string, ProviderLimits>): void {
+    if (stopped) return;
+    const previous = state;
+    state = next;
+    for (const id of new Set([...previous.keys(), ...next.keys()])) {
+      if (!sameLimits(previous.get(id), next.get(id))) host.broadcast('providers.limitsChanged', { id, limits: next.get(id) ?? null });
+    }
+  }
+
+  function invalidateGlm(): void {
+    ++glmGeneration;
+    glmFingerprint = null;
+    const next = new Map(state);
+    next.delete('glm');
+    publish(next);
+  }
+
+  async function refreshGlm(): Promise<void> {
+    try {
+      const key = await readGlmKey();
+      if (stopped) return;
+      const identity = fingerprint(key);
+      if (identity !== glmFingerprint) {
+        invalidateGlm();
+        glmFingerprint = identity;
+      }
+      if (key === null) return;
+      const generation = glmGeneration;
+      let quota: ProviderLimits | null = null;
+      let failure: ZaiQuotaError | null = null;
+      try {
+        quota = await readZaiQuota(key, { now, ...(options.fetch === undefined ? {} : { fetch: options.fetch }) });
+      } catch (error) {
+        failure = error instanceof ZaiQuotaError ? error : new ZaiQuotaError();
+      }
+      // A rotation/removal outside our RPC is also detected before publishing or retaining data.
+      const current = fingerprint(await readGlmKey());
+      if (stopped || generation !== glmGeneration) return;
+      if (current !== identity) {
+        invalidateGlm();
+        glmFingerprint = current;
+        throw new ZaiQuotaError();
+      }
+      if (failure !== null) throw failure;
+      const next = new Map(state);
+      const live = dropExpiredWindows(quota, now());
+      if (live === null) next.delete('glm');
+      else next.set('glm', live);
+      publish(next);
+    } catch (error) {
+      if (error instanceof ZaiQuotaError) throw error;
+      throw new ZaiQuotaError();
+    }
+  }
 
   /** Свод на провайдера — из файлов всех работ и из лога Codex; окна сводятся по отдельности. */
   async function collect(): Promise<Map<string, ProviderLimits>> {
@@ -125,7 +196,7 @@ export function createLimitsService(
       const files = await readWorkLimits(workPaths(entry.projectPath, entry.map.work.id).dir);
       for (const [sessionId, limits] of files) {
         const provider = providers.get(sessionId);
-        if (provider !== undefined) consider(provider, limits);
+        if (provider !== undefined && provider !== 'glm') consider(provider, limits);
       }
     }
     const codex = await readCodexLimits(options.codexRoot).catch(() => null);
@@ -142,26 +213,30 @@ export function createLimitsService(
   async function read(): Promise<void> {
     try {
       const raw = await collect();
-      if (stopped) return;
-      const at = now();
       const next = new Map<string, ProviderLimits>();
       for (const [id, limits] of raw) {
-        const live = dropExpiredWindows(limits, at);
+        const live = dropExpiredWindows(limits, now());
         if (live !== null) next.set(id, live);
       }
-      const previous = state;
-      state = next;
-      for (const id of new Set([...previous.keys(), ...next.keys()])) {
-        if (sameLimits(previous.get(id), next.get(id))) continue;
-        host.broadcast('providers.limitsChanged', { id, limits: next.get(id) ?? null });
-      }
-    } catch (error) {
-      host.log.warn('лимиты подписок не прочитаны', { error: String(error) });
+      const existingGlm = dropExpiredWindows(state.get('glm') ?? null, now());
+      if (existingGlm !== null) next.set('glm', existingGlm);
+      publish(next);
+    } catch {
+      host.log.warn('лимиты CLI не прочитаны');
     }
   }
 
-  function refresh(): Promise<void> {
+  function refresh(includeGlm = false): Promise<void> {
     if (stopped) return Promise.resolve();
+    if (includeGlm) {
+      manualInFlight ??= Promise.allSettled([refresh(), refreshGlm()]).then((results) => {
+        const glm = results[1];
+        if (glm?.status === 'rejected' && !stopped) {
+          throw glm.reason instanceof ZaiQuotaError ? glm.reason : new ZaiQuotaError();
+        }
+      }).finally(() => { manualInFlight = null; });
+      return manualInFlight;
+    }
     inFlight ??= read().finally(() => {
       inFlight = null;
     });
@@ -170,13 +245,14 @@ export function createLimitsService(
 
   return {
     async start() {
-      await refresh();
+      await refresh().catch(() => {});
       if (stopped) return;
-      cancelTimer = schedule(() => void refresh(), intervalMs);
+      cancelTimer = schedule(() => void refresh().catch(() => {}), intervalMs);
     },
     // Окно могло сброситься между опросами: отбрасываем и при ответе, а не только при чтении.
     get: (providerId) => dropExpiredWindows(state.get(providerId) ?? null, now()),
     refresh,
+    invalidateGlm,
     stop() {
       stopped = true;
       cancelTimer?.();

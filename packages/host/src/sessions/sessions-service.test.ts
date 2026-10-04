@@ -427,11 +427,8 @@ describe('create(): модель и усилие из диалога (дизай
     });
   });
 
-  it('провайдер без флагов (glm) выбор не получает: поле отбрасывается', async () => {
-    setEnv('PARLEY_GLM_BIN', STUB);
-    const argv = await launched('glm', { model: 'glm-4', effort: 'high' });
-
-    expect(argv.slice(2)).toEqual([]);
+  it('GLM rejects an unsupported model before launch', async () => {
+    await expect(launched('glm', { model: 'glm-4', effort: 'high' })).rejects.toThrow();
   });
 });
 
@@ -489,7 +486,7 @@ describe('launch(): лента вида «Chat» — адрес приёмник
 
   /** Версии CLI по команде; `ready` — свой промис, чтобы проверить, что запуск его ждёт. */
   function fakeVersions(versions: Record<string, string | null>, ready: Promise<void> = Promise.resolve()): ProviderVersions {
-    return { ready, get: (command) => versions[command] ?? null };
+    return { ready, get: (command) => versions[command] ?? null, fresh: async (command) => versions[command] ?? null };
   }
 
   interface Launched {

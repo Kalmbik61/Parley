@@ -4,6 +4,32 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **Provider connection cards.** Claude Code, Codex and GLM always appear in the status bar,
+  dimmed when disconnected. Click a segment, a disconnected provider or the selected provider
+  in New session or room for install or key guidance and "Check again". Key changes and host
+  reconnection refresh the dialog; creation waits for a connected provider. Older hosts offer
+  "Restart host" before key editing.
+- **GLM Coding Plan through Claude Code.** GLM uses the official `claude` CLI, version
+  2.1.287 or newer, with GLM-5.3 and GLM-5.3 Flash (1M context), transcripts, Chat view,
+  hooks, metrics and native resume. First-launch trust, onboarding and permission questions
+  remain in Terminal. GLM-5.3 is text-only; Flash accepts images. GLM has no Claude channel or quota
+  display. A Chat `/model` choice may reset on resume to the configured session model.
+- **Local Z.ai key management.** Save, replace or remove a voluntarily supplied key in the
+  GLM card. It stays in Parley's home with file mode `0600`; only a masked hint reaches the
+  window, and the key is added only to the final GLM process environment. Claude Code's
+  host-managed authorization avoids saved Claude sign-in and scrubs the Z.ai credentials
+  from subprocesses; user and administrator policies remain effective. Custom GLM commands
+  and incompatible authorization templates are refused. Avoid `/logout` in GLM because it
+  can change the shared local Claude Code sign-in.
+- **Boundary guard for GLM.** Exact exceptions permit only the built-in endpoint record,
+  the secret-store path and the final process-environment token assignment. The same strings
+  elsewhere remain violations. Parley still reads no agent credentials, writes no agent
+  configuration and makes no direct provider API requests.
+
 ## 0.4.0
 
 ### Added

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { indexCodexSession } from '../codex/index-session.js';
 import { defaultRoot, discoverSessions } from '../discover.js';
-import type { ProviderEntry } from '../providers.js';
+import { isClaudeCode, type ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { setResult, transitionSession } from './map.js';
 import type { TransitionOptions } from './map.js';
@@ -43,7 +43,7 @@ interface ProviderLog {
  * метрики для него честно отсутствуют.
  */
 function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
-  if (provider === 'claude') {
+  if (isClaudeCode(provider)) {
     const root = roots.claudeRoot ?? defaultRoot();
     return {
       list: async (): Promise<ProviderLog[]> =>

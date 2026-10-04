@@ -16,9 +16,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { toast } from 'sonner';
+import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import { errorText, S } from '../../shared/strings.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
@@ -26,10 +28,11 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';
 import { StatusBar, type StatusBarProps } from './StatusBar.js';
 
-afterEach(cleanup);
+vi.mock('sonner', () => ({ toast: vi.fn() }));
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.mocked(toast).mockClear(); });
 beforeEach(() => {
   useUiStore.getState().closeRestartHostDialog();
-  useProvidersStore.setState({ providers: [] });
+  useProvidersStore.setState({ providers: [], refreshing: false });
   useHostStore.setState({ appVersion: null });
 });
 
@@ -210,7 +213,16 @@ function renderPlain(props: Partial<StatusBarProps> = {}) {
 const segments = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('[data-provider-segment]')];
 
 describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
-  it('сегмент на провайдера с available: true, в порядке ответа хоста; недоступные не показываются', () => {
+  it.each([false, true])('основные кнопки в обеих темах открывают общую карточку; GLM лимитов не имеет (%s)', (dark) => {
+    useUiStore.setState({ dark });
+    useProvidersStore.setState({ providers: [provider({ id: 'glm', label: 'GLM', limits: { fiveHour: { usedPercent: 91, resetsAt: '2026-10-04T00:00:00Z' }, week: null, at: '2026-10-03T00:00:00Z' } })] });
+    const { container } = renderPlain();
+    expect(container.querySelector('[data-provider-segment="glm"] [data-limits]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'GLM — connected' }));
+    expect(screen.getByRole('dialog', { name: 'GLM' })).toBeTruthy();
+    expect(screen.getByText('Requires an active GLM Coding Plan.')).toBeTruthy();
+  });
+  it('Claude/Codex/GLM всегда в порядке продукта, за ними только найденные свои провайдеры', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'codex', label: 'Codex', version: '0.44.0' }),
@@ -219,10 +231,10 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
       ],
     });
     const { container } = renderPlain();
-    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['codex', 'claude']);
+    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex', 'glm']);
   });
 
-  it('Claude Code и Codex без CLI в PATH хоста — сегмент «not found» с подсказкой; прочие без CLI скрыты (0.2.0)', () => {
+  it('недоступные сегменты приглушены, без not found, версии и лимитов; доступны с клавиатуры', () => {
     useProvidersStore.setState({
       providers: [
         provider({ id: 'claude', label: 'Claude', version: '2.1.276' }),
@@ -234,13 +246,17 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual([
       'claude',
       'codex',
+      'glm',
     ]);
     const codex = segments(container)[1];
     // Версии и лимитов у ненайденного нет: версия из прошлой пробы о нынешнем CLI ничего не говорит.
-    expect(codex?.textContent).toBe(`Codex${S.statusBar.providerNotFound}`);
-    expect(screen.getByText(S.statusBar.providerNotFound).getAttribute('title')).toBe(
-      S.statusBar.providerNotFoundTitle('codex'),
-    );
+    expect(codex?.textContent).toBe('Codex');
+    expect(codex?.className).toContain('opacity-50');
+    const button = screen.getByRole('button', { name: 'Codex — not connected. Click to connect' });
+    expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'));
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(screen.queryByText('not found')).toBeNull();
   });
 
   it('значок 14, имя по handoff — «Claude Code» и «Codex», версия — моноширинным 11px neutral-700', () => {
@@ -257,11 +273,8 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
     expect(version.className).toContain('font-mono');
     expect(version.className).toContain('text-[11px]');
     expect(version.className).toContain('text-neutral-700');
-    // Сегмент — `display: contents`: значок, имя, версия и лимиты — элементы общей строки (порядок сжатия общий на всех
-    // провайдеров). Зазор строки 14 между сегментами; внутри сегмента 7 — имя и версия сдвинуты на −7.
-    expect(claude?.className).toBe('contents');
-    expect(version.className).toContain('-ml-[7px]');
-    expect(screen.getByText('Claude Code').className).toContain('-ml-[7px]');
+    expect(claude?.tagName).toBe('BUTTON');
+    expect(claude?.className).toContain('min-w-0');
   });
 
   it('версия null или нет поля (хост, переживший окно) — только значок и имя', () => {
@@ -274,13 +287,13 @@ describe('StatusBar — провайдеры слева (Organic, 1.1)', () => {
   it('прочий провайдер — метка хоста и буквенный значок, как прежде', () => {
     useProvidersStore.setState({ providers: [provider({ id: 'gemini', label: 'Gemini CLI', version: '1.2.3' })] });
     const { container } = renderPlain();
-    expect(segments(container)[0]?.textContent).toBe('GGemini CLI1.2.3');
-    expect(segments(container)[0]?.querySelector('img')).toBeNull();
+    expect(segments(container)[3]?.textContent).toBe('GGemini CLI1.2.3');
+    expect(segments(container)[3]?.querySelector('img')).toBeNull();
   });
 
-  it('провайдеров нет (метода нет, отказ) — сегментов нет, остальная строка на месте', () => {
+  it('пустой список старого хоста сохраняет три основные кнопки и остальную строку', () => {
     const { container } = renderPlain({ noticeLine: 'Что-то случилось' });
-    expect(segments(container)).toHaveLength(0);
+    expect(segments(container)).toHaveLength(3);
     expect(screen.getByText('Host 1.0.0')).toBeTruthy();
     expect(screen.getByText('Что-то случилось')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Auto-wake on' })).toBeTruthy();
@@ -406,7 +419,7 @@ describe('StatusBar — лимиты подписок: сегмент прова
     const block = limitsIn(container) as HTMLElement;
     // От версии до полоски 4 + 7 = 11: зазор строки 14 и −3 у блока. Внутри блока зазор 7 — по горизонтали: блок переносит
     // строки, и зазор между строками ему не нужен.
-    expect(block.className).toContain('-ml-[3px]');
+    expect(block.className).toContain('ml-1');
     expect(block.className).toContain('gap-x-[7px]');
     expect(block.className).not.toMatch(/\bgap-\[/);
     const track = block.firstElementChild as HTMLElement;
@@ -464,7 +477,7 @@ describe('StatusBar — лимиты подписок: сегмент прова
     });
     const { container } = renderPlain();
     expect(container.querySelector('[data-limits]')).toBeNull();
-    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGemini CLI1.2.3']);
+    expect(segments(container).map((el) => el.textContent)).toEqual(['Claude Code2.1.276', 'Codex0.44.0', 'GGLM', 'GGemini CLI1.2.3']);
   });
 
   it('проценты целые, округление вниз: 58.7 → 58 %, 41.99 → 41 %, 99.9 → 99 %, 0.4 → 0 %; полоска по тому же числу', () => {
@@ -632,13 +645,14 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
   const both = limitsOf({ fiveHour: limitWindow(58), week: limitWindow(41) });
   const long = { id: 'zeta', label: 'Extremely Long Provider Label For The Status Bar Layout Check', version: '123456789.987654321.123456789' };
 
-  it('сегмент провайдера — display: contents: его части сжимаются в общей строке, а не каждый сегмент целиком', () => {
+  it('сегмент — фокусируемая кнопка с ограничением ширины и сжимаемыми частями', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both }), provider({ id: 'codex', label: 'Codex' })] });
     const { container } = renderPlain();
-    const [zeta, codex] = segments(container) as HTMLElement[];
-    expect(zeta?.className).toBe('contents');
-    expect(codex?.className).toBe('contents');
-    // В DOM части — дети сегмента, а `display: contents` делает их элементами flex-строки: значок, имя, версия, блок лимитов.
+    const zeta = container.querySelector<HTMLElement>('[data-provider-segment="zeta"]')!;
+    const codex = container.querySelector<HTMLElement>('[data-provider-segment="codex"]')!;
+    expect(zeta?.tagName).toBe('BUTTON');
+    expect(zeta?.className).toContain('min-w-0');
+    expect(codex?.className).toContain('min-w-0');
     const bar = container.firstElementChild as HTMLElement;
     expect(zeta?.parentElement).toBe(bar);
     expect(zeta?.children).toHaveLength(4);
@@ -732,5 +746,266 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(notice.className).toContain('flex-1');
     expect(notice.className).toContain('text-right');
     expect(notice.nextElementSibling).toBe(screen.getByRole('button', { name: 'Auto-wake on' }).parentElement);
+  });
+});
+
+
+describe('StatusBar — ручное обновление лимитов', () => {
+  const connected: HostStatus = { state: 'connected', hostVersion: '1.0.0', methods: [...REQUIRED_METHODS, 'providers.refreshLimits'] };
+
+  it('кнопка обновления стоит самым первым элементом строки и доступна с клавиатуры', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    const { container } = renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' });
+    expect(container.firstElementChild?.firstElementChild).toBe(button);
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('title')).toBe('Refresh provider limits');
+  });
+
+  it.each<HostStatus>([
+    { state: 'connecting' },
+    { state: 'disconnected', reason: 'closed' },
+    { state: 'mismatch', hostVersion: '9.0.0', liveSessions: 0 },
+    { state: 'connected', hostVersion: '1.0.0', methods: null },
+    { state: 'connected', hostVersion: '1.0.0', methods: REQUIRED_METHODS.filter((method) => method !== 'providers.refreshLimits') },
+  ])('обновление отключено без доступного метода или связи ($state)', (status) => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    renderPlain({ status });
+    expect((screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('без подключённых провайдеров кнопка недоступна', () => {
+    renderPlain({ status: connected });
+    expect((screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('хосту той же версии без нового метода предлагает существующее подтверждение перезапуска', () => {
+    useHostStore.setState({ appVersion: '1.0.0' });
+    useProvidersStore.setState({ providers: [provider({ id: 'claude' })] });
+    const restart = vi.fn();
+    renderPlain({ status: { ...connected, methods: REQUIRED_METHODS.filter((method) => method !== 'providers.refreshLimits') }, onRestartHost: restart });
+    fireEvent.click(screen.getByRole('button', { name: S.statusBar.hostOutdated }));
+    expect(screen.getByRole('dialog', { name: S.statusBar.restartHostTitle })).toBeTruthy();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('ручной клик вызывает обновление, показывает busy и блокирует повторный клик до нового снимка', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let resolve!: (value: { ok: true }) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((yes) => { resolve = yes; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.querySelector('svg')?.classList.contains('animate-spin')).toBe(true);
+    fireEvent.click(button);
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
+    await act(async () => { resolve({ ok: true }); await Promise.resolve(); });
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+  it('отказ показывает тост только из кода ошибки, без текста хоста и без перезапуска', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'glm' })] }));
+    bridge.setHandler('providers.refreshLimits', () => { throw encodeIpcError({ code: 'internal', message: 'secret-token /private/path' }); });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' })); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).toContain("Couldn't refresh provider limits");
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).not.toMatch(/secret-token|private/);
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+
+  it.each([
+    ['authentication', 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.'],
+    ['unsupported_response', 'The current Z.ai quota response is not supported.'],
+    ['timeout', 'The Z.ai quota request timed out. Try again.'],
+    ['unavailable', 'Z.ai quota is temporarily unavailable. Try again.'],
+  ])('точная причина GLM %s показывает фиксированную строку без сырого ответа', async (reason, expected) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    let percent = 42;
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude', limits: limitsOf({ fiveHour: limitWindow(percent) }) })] }));
+    bridge.setHandler('providers.refreshLimits', () => {
+      percent = 57;
+      throw encodeIpcError({ code: 'internal', message: 'raw-secret /private/path', data: {
+        provider: 'glm', reason, body: 'upstream-secret', cause: 'raw-cause',
+      } });
+    });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    await act(async () => { fireEvent.click(button); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expected);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(button.disabled).toBe(true);
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(button.disabled).toBe(false);
+    expect(bridge.hostActions).toEqual([]);
+    dispose();
+  });
+
+  it.each([
+    { code: 'internal', data: { provider: 'glm', reason: 'upstream-secret' } },
+    { code: 'internal', data: { provider: 'glm', reason: 'constructor' } },
+    { code: 'internal', data: { provider: 'glm', reason: { message: 'upstream-secret' } } },
+    { code: 'internal', data: { provider: 'other-secret', reason: 'authentication' } },
+    { code: 'internal', data: { reason: 'authentication' } },
+    { code: 'internal', data: { provider: 'glm' } },
+    { code: 'internal', data: { provider: 'glm', reason: 'AUTHENTICATION' } },
+    { code: 'bad_request', data: { provider: 'glm', reason: 'authentication' } },
+  ])('неизвестная пара или код использует прежний безопасный fallback, вариант %#', async ({ code, data }) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'glm' })] }));
+    bridge.setHandler('providers.refreshLimits', () => { throw encodeIpcError({
+      code, message: 'raw-secret /private/path', data: { ...data, body: 'upstream-secret' },
+    }); });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' })); });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(errorText(code, S.errors.actions.refreshProviderLimits));
+    expect(vi.mocked(toast).mock.calls[0]?.[0]).not.toMatch(/raw-secret|private|upstream-secret|other-secret/);
+    dispose();
+  });
+
+  it.each([false, true])('быстрый ответ оставляет видимый отклик на 600 ms без задержки данных/ошибки (%s)', async (fails) => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    let percent = 42;
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude', limits: limitsOf({ fiveHour: limitWindow(percent) }) })] }));
+    bridge.setHandler('providers.refreshLimits', () => {
+      percent = 57;
+      if (fails) throw encodeIpcError({ code: 'internal', message: 'private text' });
+      return { ok: true };
+    });
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.querySelector('.lucide-refresh-cw')?.classList.contains('animate-spin')).toBe(true);
+    await act(async () => { await Promise.resolve(); });
+    expect(useProvidersStore.getState().refreshing).toBe(false);
+    expect(useProvidersStore.getState().providers[0]?.limits?.fiveHour?.usedPercent).toBe(57);
+    expect(toast).toHaveBeenCalledTimes(fails ? 1 : 0);
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(bridge.calls.filter(({ method }) => method === 'providers.refreshLimits')).toHaveLength(1);
+    act(() => { vi.advanceTimersByTime(599); });
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    expect(button.querySelector('.animate-spin')).toBeNull();
+    dispose();
+  });
+
+  it('долгий запрос продолжает вращение после минимального отклика до ответа хоста', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let resolve!: (value: { ok: true }) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((yes) => { resolve = yes; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(button.disabled).toBe(true);
+    expect(button.querySelector('.animate-spin')).toBeTruthy();
+    await act(async () => { resolve({ ok: true }); });
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+    dispose();
+  });
+
+  it('при reduced motion вращение скрыто, а неподвижные песочные часы и фон показывают busy', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    bridge.setHandler('providers.refreshLimits', () => ({ ok: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' });
+    fireEvent.click(button);
+    expect(button.querySelector('.lucide-refresh-cw')?.classList.contains('motion-reduce:hidden')).toBe(true);
+    const still = button.querySelector('.lucide-hourglass');
+    expect(still?.classList.contains('hidden')).toBe(true);
+    expect(still?.classList.contains('motion-reduce:block')).toBe(true);
+    expect(still?.classList.contains('animate-spin')).toBe(false);
+    expect(button.classList.contains('bg-foreground/8')).toBe(true);
+    await act(async () => { await Promise.resolve(); });
+    dispose();
+  });
+
+  it('переподключение сбрасывает местный отклик, а размонтирование очищает таймер', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    bridge.setHandler('providers.refreshLimits', () => ({ ok: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    const view = renderPlain({ status: connected });
+    const button = screen.getByRole('button', { name: 'Refresh provider limits' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    await act(async () => { await Promise.resolve(); });
+    expect(button.disabled).toBe(true);
+    act(() => { useHostStore.setState((state) => ({ connections: state.connections + 1 })); });
+    expect(button.disabled).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    fireEvent.click(button);
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.getTimerCount()).toBe(1);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    dispose();
+  });
+
+  it('поздняя ошибка размонтированной кнопки не показывает тост', async () => {
+    vi.useFakeTimers();
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => ({ providers: [provider({ id: 'claude' })] }));
+    let reject!: (error: unknown) => void;
+    bridge.setHandler('providers.refreshLimits', () => new Promise((_yes, no) => { reject = no; }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await act(async () => { await Promise.resolve(); });
+    const view = renderPlain({ status: connected });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh provider limits' }));
+    view.unmount();
+    await act(async () => { reject(encodeIpcError({ code: 'internal', message: 'old error' })); });
+    expect(toast).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    dispose();
+  });
+
+  it('показывает подтверждённые квоты Z.ai даже с неизвестным временем сброса', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'glm', limits: limitsOf({ source: 'zai', fiveHour: { usedPercent: 42.9, resetsAt: null } }) })] });
+    const { container } = renderPlain();
+    expect(limitsIn(container, 'glm')?.textContent).toBe('42% 5h');
+    expect(fillIn(container, 'glm').style.width).toBe('42%');
+    expect(limitsIn(container, 'glm')?.title).toMatch(/^Updated /);
+    expect(limitsIn(container, 'glm')?.title).not.toMatch(/Invalid|resets|1970/);
   });
 });

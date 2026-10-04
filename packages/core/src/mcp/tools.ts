@@ -13,7 +13,8 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
   EFFORT_LEVELS,
-  commandInPath,
+  providerReadiness,
+  providerReadinessError,
   loadProviders,
   modelChoiceError,
   selectableModels,
@@ -473,15 +474,17 @@ const TOOLS: Tool[] = [
 async function getMap(context: McpContext): Promise<unknown> {
   const registry = await loadProviders();
   const providers = await Promise.all(
-    Object.values(registry).map(async (entry) => ({
-      id: entry.id,
-      label: entry.label,
-      available: await commandInPath(entry.runner.command),
-      // Что провайдер принимает при запуске — те же поля, что у `providers.list` окна: без них агент не
-      // узнает, какую модель ему разрешено назвать в `spawn_session`.
-      models: selectableModels(entry),
-      effort: supportsEffort(entry),
-    })),
+    Object.values(registry).map(async (entry) => {
+      const readiness = await providerReadiness(entry);
+      return {
+        id: entry.id,
+        label: entry.label,
+        available: readiness.needs === null && readiness.error === null,
+        // Same launch controls as providers.list, so agents can choose supported models.
+        models: selectableModels(entry),
+        effort: supportsEffort(entry),
+      };
+    }),
   );
   return {
     sessionId: context.sessionId,
@@ -557,11 +560,8 @@ async function spawnSession(
       `unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`,
     );
   }
-  if (!(await commandInPath(entry.runner.command))) {
-    throw new Error(
-      `command ${entry.runner.command} is not in PATH — provider ${provider} is unavailable`,
-    );
-  }
+  const refusal = providerReadinessError(entry, await providerReadiness(entry));
+  if (refusal !== null) throw new Error(refusal);
 
   // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
   // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —

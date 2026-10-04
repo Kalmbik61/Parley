@@ -12,6 +12,7 @@
  * файле, а не в настройках человека.
  */
 
+import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
@@ -81,6 +82,7 @@ export interface StatusLineSetting {
 }
 
 export interface SettingsFile {
+  model?: string;
   hooks: Record<string, HookMatcher[]>;
   statusLine: StatusLineSetting;
 }
@@ -121,6 +123,11 @@ const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
 const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
 
 export interface WorkSettingsOptions {
+  /** GLM has its own settings file and broad-scrub-compatible HTTP capability name. */
+  provider?: 'claude' | 'glm';
+  /** Nonsecret launch model; provider routing belongs in process env. */
+  model?: string;
+  hookTokenEnv?: 'PARLEY_HOOK_TOKEN' | 'PARLEY_HOOK_CAPABILITY';
   /**
    * Адрес приёмника хуков хоста (`http://127.0.0.1:<порт>/hooks`). Нет — в файле только прежние
    * хуки и строка статуса, побайтно как до ленты.
@@ -130,15 +137,15 @@ export interface WorkSettingsOptions {
   hookEvents?: readonly string[];
 }
 
-function feedHook(url: string, event: string): HookHttp {
+function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
   const hook: HookHttp = {
     type: 'http',
     url,
     headers: {
-      Authorization: `Bearer $${HOOK_TOKEN_ENV}`,
+      Authorization: `Bearer $${tokenEnv}`,
       'X-Parley-Session': `$${SESSION_ID_ENV}`,
     },
-    allowedEnvVars: [HOOK_TOKEN_ENV, SESSION_ID_ENV],
+    allowedEnvVars: [tokenEnv, SESSION_ID_ENV],
   };
   const timeout = FEED_TIMEOUT_SEC[event];
   if (timeout !== undefined) hook.timeout = timeout;
@@ -154,6 +161,9 @@ function feedHook(url: string, event: string): HookHttp {
  * нему считается активность.
  */
 export function workSettings({
+  provider,
+  model,
+  hookTokenEnv = provider === 'glm' ? 'PARLEY_HOOK_CAPABILITY' : HOOK_TOKEN_ENV,
   hookUrl,
   hookEvents = FEED_HOOK_EVENTS,
 }: WorkSettingsOptions = {}): SettingsFile {
@@ -166,7 +176,7 @@ export function workSettings({
   }
   if (hookUrl !== undefined) {
     for (const event of hookEvents) {
-      const http = feedHook(hookUrl, event);
+      const http = feedHook(hookUrl, event, hookTokenEnv);
       const group = hooks[event]?.[0];
       if (group !== undefined) {
         group.hooks.push(http);
@@ -175,7 +185,11 @@ export function workSettings({
       }
     }
   }
-  return { hooks, statusLine: { type: 'command', command: statusLineCommand() } };
+  return {
+    hooks,
+    statusLine: { type: 'command', command: statusLineCommand() },
+    ...(model === undefined ? {} : { model }),
+  };
 }
 
 export function workSettingsJson(options: WorkSettingsOptions = {}): string {
@@ -194,6 +208,8 @@ export async function writeWorkSettings(
   const paths = workPaths(projectPath, workId);
   await ensureStateDir(projectPath);
   await mkdir(paths.events, { recursive: true });
-  await writeFile(paths.settings, workSettingsJson(options), 'utf8');
-  return paths.settings;
+  const file =
+    options.provider === 'glm' ? path.join(paths.dir, 'settings-glm.json') : paths.settings;
+  await writeFile(file, workSettingsJson(options), 'utf8');
+  return file;
 }

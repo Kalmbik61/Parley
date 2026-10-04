@@ -15,7 +15,7 @@ const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
 const mainScript = fileURLToPath(new URL('./main.ts', import.meta.url));
 
-const COMMANDS = ['claude', 'codex', 'glm'] as const;
+const COMMANDS = ['claude', 'codex'] as const;
 
 let homes: string[] = [];
 let dirs: string[] = [];
@@ -37,7 +37,8 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<boolean
 }
 
 /**
- * Поднимает `tsx main.ts` с заглушками вместо ВСЕХ трёх команд реестра: настоящие claude и
+ * Поднимает `tsx main.ts` с заглушками вместо обеих уникальных команд реестра (GLM тоже
+ * использует claude): настоящие claude и
  * codex здесь не запускаются никогда, даже с `--version`. Каждая заглушка при вызове дописывает
  * свои аргументы в `calls.txt` (`<команда>:<число аргументов>:<первый>`). Свежий исполняемый файл
  * система на macOS проверяет при первом запуске — секунды, дольше таймаута пробы, — поэтому
@@ -96,9 +97,9 @@ async function hostCalls(skipProbe: boolean, legacy = false): Promise<string[]> 
 }
 
 describe('main.ts: проба версий CLI на старте (дизайн комнат, 3.2)', () => {
-  it('по умолчанию хост зовёт у каждой команды реестра ровно `--version`, по одному разу', async () => {
+  it('по умолчанию хост зовёт `--version` по одному разу на уникальную команду: claude общий для Claude и GLM', async () => {
     const calls = await hostCalls(false);
-    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'glm:1:--version']);
+    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version']);
   }, 60_000);
 
   it('PARLEY_SKIP_VERSION_PROBE=1 — ни одна команда не запускается: так живут тесты и E2E', async () => {
@@ -107,7 +108,7 @@ describe('main.ts: проба версий CLI на старте (дизайн �
 
   it('прежние имена (R3): HARNAS_<КОМАНДА>_BIN подменяет бинарь, HARNAS_SKIP_VERSION_PROBE и HARNAS_HOME работают как запасные', async () => {
     const calls = await hostCalls(false, true);
-    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'glm:1:--version']);
+    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version']);
     expect(await hostCalls(true, true)).toEqual([]);
   }, 120_000);
 });

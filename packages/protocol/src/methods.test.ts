@@ -4,6 +4,25 @@ import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
 
+describe('provider key protocol additions', () => {
+  it('accepts key mutations and rejects non-string inputs', () => {
+    expect(METHODS['providers.setKey'].safeParse({ provider: 'glm', key: 'fake-key' }).success).toBe(true);
+    expect(METHODS['providers.setKey'].safeParse({ provider: 'glm', key: 42 }).success).toBe(false);
+    expect(METHODS['providers.clearKey'].safeParse({ provider: 'glm' }).success).toBe(true);
+    expect(METHODS['providers.clearKey'].safeParse({}).success).toBe(false);
+  });
+
+  it('keeps list additions optional and exposes only a hint in mutation results', () => {
+    type Provider = Result<'providers.list'>['providers'][number];
+    expectTypeOf<Provider['needs']>().toEqualTypeOf<'cli' | 'key' | null | undefined>();
+    expectTypeOf<Provider['keyHint']>().toEqualTypeOf<string | null | undefined>();
+    expectTypeOf<Provider['family']>().toEqualTypeOf<'claude' | null | undefined>();
+    expectTypeOf<Result<'providers.setKey'>>().toEqualTypeOf<{ keyHint: string }>();
+    expectTypeOf<Result<'providers.clearKey'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<EventData<'providers.changed'>>().toEqualTypeOf<{ provider: string }>();
+  });
+});
+
 describe('типы методов', () => {
   it('у Params<sessions.create> поле workId имеет тип string | null', () => {
     expectTypeOf<Params<'sessions.create'>['workId']>().toEqualTypeOf<string | null>();

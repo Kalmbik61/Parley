@@ -656,6 +656,36 @@ describe('сев из журнала', () => {
     return { finished: () => finished, read };
   }
 
+  it('GLM snapshot seeds the Claude Code transcript and its subagent feed', async () => {
+    const { root, session } = await history();
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(session);
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
+    expect(agent.items.length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(2);
+  });
+
+  it('GLM transcript discovered after subscription seeds and sends a delta', async () => {
+    const { root } = await history();
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [] });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    fakes.emitLog();
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+    expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(1);
+  });
+
   it('снимок без живых событий сеет из журнала один раз: вызовы и дифф на месте', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
