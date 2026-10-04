@@ -1,3 +1,4 @@
+import { captureDecisionJournal } from './decision-journal.js';
 /**
  * Решение ведущего, которое ждёт человека (дизайн комнат, 2.4 и 3.1): ведущий кладёт его
  * в слот `Room.proposal` (`setProposal`, его зовёт `propose_decision`), человек отвечает
@@ -160,9 +161,9 @@ export function resolveProposal(
     room = roomOf(map, roomId);
   }
   const lead = liveLead(map, room) ?? proposal.from;
-  room.proposal = null;
 
   if (action === 'return') {
+    room.proposal = null;
     const remark = (options.note ?? '').trim();
     const text = remark === '' ? `${RETURNED_LETTER}.` : `${RETURNED_LETTER}: ${remark}`;
     const letter = addMessage(map, { from: HUMAN, to: [proposal.kind === 'completion' ? HUMAN : lead], roomId, kind: 'note', text }, at);
@@ -178,6 +179,8 @@ export function resolveProposal(
     at,
   );
   decision.readBy[HUMAN] = at;
+  captureDecisionJournal(map, room, proposal, action, decision.id, options.note);
+  room.proposal = null;
   addSystemMessage(map, roomId, proposal.kind === 'completion' ? `Plan ${proposal.planId} completed` : ACCEPTED_LINE, at);
   addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text: proposal.kind === 'completion' ? 'Completion accepted.' : ACCEPTED_LETTER }, at);
   return { messageId: decision.id };

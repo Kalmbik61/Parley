@@ -6,6 +6,7 @@ import {
   summarizePlanEffects,
   updateMap,
   flushPlanEffects,
+  flushDecisionJournal,
 } from "@parley/core";
 import type { PlanEffectsSummary, WorkMap } from "@parley/core";
 import type { WorksService } from "../works/works-service.js";
@@ -14,6 +15,7 @@ export interface PlanEffectsServiceIO {
   readMap: typeof readMap;
   updateMap: typeof updateMap;
   flush: typeof flushPlanEffects;
+  flushJournal?: typeof flushDecisionJournal;
 }
 export interface PlanEffectsServiceOptions {
   io?: PlanEffectsServiceIO;
@@ -57,6 +59,7 @@ interface State {
     }
   >;
   backlogConflicts: Set<string>;
+  journalConflicts: Set<string>;
   retryConflicts: boolean;
   running?: Promise<PlanEffectsSummary>;
   timer?: ReturnType<typeof setTimeout>;
@@ -75,6 +78,7 @@ function sourceIdentity(map: WorkMap): string {
       row.proposal?.rev,
     ]),
     map.planExports?.map((row) => row.file),
+    map.decisionExports?.map((row) => row.file),
     map.planBacklogIntents?.map((row) => row.key),
     map.plans?.map((plan) => [
       plan.id,
@@ -97,7 +101,8 @@ const hasWork = (map: WorkMap): boolean =>
     map.plans?.length ||
     map.planEffects?.length ||
     map.planBacklogIntents?.length ||
-    map.planExports?.length
+    map.planExports?.length ||
+    map.decisionExports?.length
   );
 /** Coalesces lifecycle events; map reservations finish before any snapshot/backlog filesystem operation. */
 export function createPlanEffectsService(
@@ -105,6 +110,7 @@ export function createPlanEffectsService(
   options: PlanEffectsServiceOptions = {},
 ): PlanEffectsService {
   const io = options.io ?? { readMap, updateMap, flush: flushPlanEffects };
+  const flushJournal = io.flushJournal ?? flushDecisionJournal;
   const now = options.now ?? Date.now;
   const messageRate =
     options.messageRate ??
@@ -207,7 +213,10 @@ export function createPlanEffectsService(
           if (row.status === "conflict") state.backlogConflicts.add(row.key);
       }
       state.retryConflicts = false;
-      const pendingIO =
+      const pendingJournal = current.decisionExports?.some(
+        row => row.status === "pending" && !state.journalConflicts.has(row.file),
+      );
+      const pendingIO = pendingJournal ||
         current.planExports?.some(
           (row) =>
             row.status === "pending" && !state.snapshotConflicts.has(row.file),
@@ -267,7 +276,15 @@ export function createPlanEffectsService(
           );
           if (intent) state.backlogConflicts.add(intent.key);
         }
-        const transient =
+        // Snapshot publication precedes its accepted decision journal reference.
+        // Both complete after updateMap released its lock, through this one retry authority.
+        const journal = pendingJournal
+          ? await flushJournal(state.projectPath, state.workId, { excludedFiles: state.journalConflicts })
+          : { failed: [] };
+        for (const failure of journal.failed)
+          if (failure.code !== "journal-unavailable") state.journalConflicts.add(failure.file);
+        if (journal.failed.length) notify(state, "plan-effect-failed", journal.failed.length);
+        const transient = journal.failed.some(row => row.code === "journal-unavailable") ||
           flushed.snapshotFailures.some(
             (row) => row.code === "snapshot-write-failed",
           ) ||
@@ -341,6 +358,7 @@ export function createPlanEffectsService(
         snapshotConflicts: new Map(),
         snapshotFailures: new Map(),
         backlogConflicts: new Set(),
+        journalConflicts: new Set(),
         retryConflicts: false,
       };
       states.set(key, state);
@@ -351,6 +369,7 @@ export function createPlanEffectsService(
       state.snapshotConflicts.clear();
       state.snapshotFailures.clear();
       state.backlogConflicts.clear();
+      state.journalConflicts.clear();
       state.retryConflicts = true;
     }
     state.dirty = true;

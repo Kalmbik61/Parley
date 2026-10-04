@@ -332,3 +332,22 @@ it("excluded immutable intents preserve their file and captured state while a la
   expect(await readFile(path.join(snapshotDir(), original.file), "utf8")).toBe("Human file");
   expect((await readMap(project, workId)).planExports!.find(row => row.file === original.file)!.status).toBe("pending");
 });
+
+it('prepared ownership callback precedes publication and a failed callback cleans only its own source', async () => {
+  const { publishImmutableMarkdown } = await import('./shared-markdown.js');
+  const { createHash } = await import('node:crypto');
+  const dir = path.join(project, '.parley'); const parent = path.join(dir, 'decisions');
+  let prepared = false;
+  await expect(publishImmutableMarkdown(dir, parent, { file: 'own.md', content: 'Exact' }, {
+    onPrepared: async proof => {
+      prepared = true;
+      expect(proof.sha256).toBe(createHash('sha256').update('Exact').digest('hex'));
+      await expect(readFile(path.join(parent, 'own.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+      throw new Error('Synthetic reservation failure');
+    },
+  })).rejects.toThrow('Synthetic reservation failure');
+  expect(prepared).toBe(true);
+  expect((await readdir(dir)).filter(name => name.startsWith('.plan-'))).toEqual([]);
+  const proof = await publishImmutableMarkdown(dir, parent, { file: 'own.md', content: 'Exact' });
+  expect(proof.sha256).toBe(createHash('sha256').update('Exact').digest('hex'));
+});

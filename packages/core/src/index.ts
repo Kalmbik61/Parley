@@ -432,3 +432,8 @@ export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-lay
 export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
 export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
+
+export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError } from './work/decision-journal.js';
+export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult } from './work/decision-journal.js';
+export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, RoomHistoryError } from './work/room-history.js';
+export type { RoomHistoryResult, RoomHistoryCode } from './work/room-history.js';

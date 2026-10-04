@@ -6,6 +6,7 @@ import {
   reservePlanEffects,
   resolveProposal,
   setProposal,
+  flushDecisionJournal,
 } from "@parley/core";
 import type { WorkMap } from "@parley/core";
 import type { WorksService } from "../works/works-service.js";
@@ -76,6 +77,12 @@ function fixture(map = empty()) {
       },
     ),
     flush,
+    flushJournal: vi.fn<typeof flushDecisionJournal>(async () => {
+      expect(locked).toBe(false);
+      const pending = map.decisionExports?.filter(row => row.status === 'pending') ?? [];
+      for (const row of pending) row.status = 'written';
+      return { written: pending.map(row => row.file), failed: [], diagnostics: [] };
+    }),
   };
   const failure = vi.fn();
   const service = createPlanEffectsService(works, {
@@ -259,6 +266,7 @@ it("an idle current plan with no pending effects writes nothing and schedules no
   map.planExports!.forEach((row) => {
     row.status = "written";
   });
+  map.decisionExports?.forEach(row => { row.status = "written"; });
   const f = fixture(map);
   f.service.start();
   await f.service.flush("/project", "w-01");
@@ -311,4 +319,51 @@ it("a confirmed immutable conflict excludes only its intent and new captured fil
   expect(f.io.flush.mock.calls.at(-1)![2]!.excludedSnapshotFiles!.size).toBe(0);
   expect(result.conflictCount).toBe(1);
   f.service.stop();
+});
+
+
+it('accepted Free decision journals use the same post-map-lock authority and no plan reservation writes', async () => {
+  const map = planned(); delete map.plans; delete map.planExports;
+  const f = fixture(map);
+  await f.service.flush('/project', map.work.id);
+  expect(f.io.flushJournal).toHaveBeenCalledOnce();
+  expect(f.writes).toBe(0);
+  expect(map.decisionExports?.[0]?.status).toBe('written');
+  f.service.stop();
+});
+
+it('journal disk failure retains acceptance and uses bounded existing retries, with one safe notice', async () => {
+  vi.useFakeTimers(); const map = planned(); delete map.plans; delete map.planExports;
+  const f = fixture(map); const intent = map.decisionExports![0]!;
+  f.io.flushJournal.mockResolvedValue({ written: [], failed: [{file: intent.file, code: 'journal-unavailable'}], diagnostics: [] });
+  f.service.start(); await vi.advanceTimersByTimeAsync(1);
+  expect(f.io.flushJournal).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(5000 + 10000 + 20000);
+  expect(f.io.flushJournal).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(100000);
+  expect(f.io.flushJournal).toHaveBeenCalledTimes(4);
+  expect(intent.status).toBe('pending'); expect(map.rooms[0]?.proposal).toBeNull();
+  expect(f.failure).toHaveBeenCalledOnce();
+  expect(f.failure).toHaveBeenCalledWith({projectPath:'/project',workId:map.work.id,code:'plan-effect-failed',count:1});
+  f.service.stop();
+});
+
+it('semantic journal conflict is excluded per captured file while a new decision continues and manual Retry reuses originals', async () => {
+  const map = planned(); delete map.plans; delete map.planExports;
+  const f = fixture(map); const old = map.decisionExports![0]!;
+  f.io.flushJournal.mockResolvedValueOnce({ written: [], failed:[{file:old.file,code:'journal-conflict'}],diagnostics:[] });
+  await f.service.flush('/project',map.work.id);
+  // A meaningful new accepted event keeps the old captured bytes instead of rebasing them.
+  const next = {...old, file:old.file.replace('.md','-next.md'), messageId:'m-99'};
+  map.decisionExports!.push(next);
+  f.io.flushJournal.mockImplementation(async (_project,_work,options) => {
+    expect(options?.excludedFiles?.has(old.file)).toBe(true);
+    next.status='written';return {written:[next.file],failed:[],diagnostics:[]};
+  });
+  f.service.start(); await new Promise(resolve=>setTimeout(resolve,1));
+  expect(next.status).toBe('written'); expect(old.status).toBe('pending');
+  f.io.flushJournal.mockImplementation(async (_project,_work,options) => {
+    expect(options?.excludedFiles?.size).toBe(0);old.status='written';return {written:[old.file],failed:[],diagnostics:[]};
+  });
+  await f.service.flush('/project',map.work.id);expect(old.status).toBe('written');f.service.stop();
 });

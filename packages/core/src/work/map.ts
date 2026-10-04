@@ -1,3 +1,4 @@
+import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import type { EffortLevel } from '../providers.js';
@@ -363,6 +364,7 @@ export function parseMap(raw: string, file: string): WorkMap {
   map.plans ??= [];
   validatePlanStorage(map);
   validatePlanEffects(map);
+  validateDecisionJournalStorage(map);
   return map;
 }
 

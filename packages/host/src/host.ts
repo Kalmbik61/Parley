@@ -32,6 +32,7 @@ import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
+import { createHistoryService } from './rooms/history-service.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -173,7 +174,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       at: new Date().toISOString(),
     }),
   });
+  const history = createHistoryService(worksService, {
+    onFailure: ({ count }) => log.warn('history-write-failed', { count }),
+  });
   handle.context.onShutdown(async () => planEffects.stop());
+  handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
@@ -267,6 +272,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const handlers = createHostHandlers({
     backlog: backlogService,
     planEffects,
+    history,
     worksReady,
     providerVersions,
     limits: limitsService,
@@ -354,6 +360,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }
   await activityService.start();
   planEffects.start();
+  history.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.

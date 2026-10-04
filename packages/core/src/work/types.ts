@@ -1,3 +1,4 @@
+import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 
@@ -324,6 +325,8 @@ export interface WorkMap {
   rooms: Room[];
   plans?: RoomPlan[];
   planExports?: PlanExportIntent[];
+  /** Exact accepted decision payloads; local durable retry state, not a prompt layer. */
+  decisionExports?: DecisionJournalIntent[];
   planEffects?: PlanEffect[];
   planBacklogIntents?: PlanBacklogIntent[];
 }

@@ -4,6 +4,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
+import type { HistoryService } from '../rooms/history-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
@@ -25,7 +26,7 @@ import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, worksDelete, worksList, worksRename, worksSetStatus } from './works.js';
+import { worksCreate, createWorksDelete, worksList, worksRename, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -40,6 +41,8 @@ export interface MethodDeps {
   backlog?: BacklogService;
   /** One host authority for durable plan delivery and export retries. */
   planEffects?: PlanEffectsService;
+  /** Selected-checkout derivative history; shared publication stays explicit. */
+  history?: HistoryService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
@@ -118,7 +121,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
     'works.create': worksCreate as AnyHandler,
-    'works.delete': worksDelete as AnyHandler,
+    'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'providers.list': createProvidersList(deps.providerVersions, deps.limits) as AnyHandler,

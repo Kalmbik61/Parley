@@ -1,15 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
-import path from "node:path";
+import { ImmutableMarkdownError, publishImmutableMarkdown } from "./shared-markdown.js";
 import {
   prepareSharedIgnore,
   readMap,
-  readSharedFile,
   sharedProjectPaths,
   updateMap,
   withSharedProjectLock,
-  MISSING_SHARED_VERSION,
 } from "./store.js";
 import type { SharedDiagnostic, SharedWriteOptions } from "./store.js";
 import type { PlanExportIntent, PlanItem, RoomPlan, WorkMap } from "./types.js";
@@ -124,114 +119,6 @@ export function capturePlanSnapshot(
   return intent;
 }
 
-/** Exclusive publication of a fully written file: existing versions are compared, never replaced.
- * Directory checks bound redirects; portable check/link/unlink is not adversarial filesystem CAS.
- */
-async function publishSnapshot(
-  dir: string,
-  parent: string,
-  intent: PlanExportIntent,
-  options: SharedWriteOptions,
-): Promise<void> {
-  if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
-  const root = await lstat(dir);
-  if (!root.isDirectory() || (await realpath(dir)) !== dir)
-    throw new PlanSnapshotError("snapshot-write-failed");
-  try {
-    await mkdir(parent, { mode: 0o755 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const parentHandle = await open(
-    parent,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  const temporary = path.join(dir, `.plan-${randomUUID()}.tmp`);
-  let ownedTemporary: { ino: number; dev: number } | undefined;
-  const temporaryIsOwned = async (): Promise<boolean> => {
-    if (!ownedTemporary) return false;
-    try {
-      const current = await lstat(temporary);
-      return (
-        current.isFile() &&
-        current.ino === ownedTemporary.ino &&
-        current.dev === ownedTemporary.dev &&
-        (await readSharedFile(temporary)).text === intent.content
-      );
-    } catch {
-      return false;
-    }
-  };
-  try {
-    const identity = await parentHandle.stat();
-    const verify = async (): Promise<void> => {
-      const current = await lstat(parent);
-      const currentRoot = await lstat(dir);
-      if (
-        !identity.isDirectory() ||
-        !current.isDirectory() ||
-        identity.ino !== current.ino ||
-        identity.dev !== current.dev ||
-        !currentRoot.isDirectory() ||
-        root.ino !== currentRoot.ino ||
-        root.dev !== currentRoot.dev ||
-        (await realpath(parent)) !== parent
-      )
-        throw new PlanSnapshotError("snapshot-write-failed");
-    };
-    await verify();
-    const file = path.join(parent, intent.file);
-    const previous = await readSharedFile(file);
-    if (previous.version !== MISSING_SHARED_VERSION) {
-      if (previous.text !== intent.content)
-        throw new PlanSnapshotError("snapshot-conflict");
-      return;
-    }
-    const handle = await open(
-      temporary,
-      constants.O_WRONLY |
-        constants.O_CREAT |
-        constants.O_EXCL |
-        constants.O_NOFOLLOW,
-      0o644,
-    );
-    try {
-      ownedTemporary = await handle.stat();
-      await handle.writeFile(intent.content);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await options.beforeCommit?.(file, 0);
-    await verify();
-    if (!(await temporaryIsOwned()))
-      throw new PlanSnapshotError("snapshot-write-failed");
-    try {
-      await link(temporary, file);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if ((await readSharedFile(file)).text !== intent.content)
-        throw new PlanSnapshotError("snapshot-conflict");
-    }
-    await verify();
-    if ((await readSharedFile(file)).text !== intent.content)
-      throw new PlanSnapshotError("snapshot-conflict");
-  } finally {
-    try {
-      const current = await lstat(dir);
-      if (
-        current.isDirectory() &&
-        root.ino === current.ino &&
-        root.dev === current.dev &&
-        (await realpath(dir)) === dir &&
-        (await temporaryIsOwned())
-      )
-        await unlink(temporary).catch(() => undefined);
-    } finally {
-      await parentHandle.close();
-    }
-  }
-}
 export interface PlanSnapshotFlushResult {
   written: string[];
   failed: { file: string; code: PlanSnapshotError["code"] }[];
@@ -264,7 +151,14 @@ export async function flushPlanSnapshots(
           result.diagnostics.push(
             ...(await prepareSharedIgnore(paths, options)),
           );
-          await publishSnapshot(paths.dir, paths.plans, intent, options);
+          if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
+          try { await publishImmutableMarkdown(paths.dir, paths.plans, intent, options); }
+          catch (error) {
+            if (error instanceof ImmutableMarkdownError) throw new PlanSnapshotError(
+              error.code === "conflict" ? "snapshot-conflict" : error.code === "invalid" ? "snapshot-invalid" : "snapshot-write-failed",
+            );
+            throw error;
+          }
         },
         options,
       );

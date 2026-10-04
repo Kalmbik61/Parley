@@ -6,6 +6,7 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -17,7 +18,7 @@ import path from 'node:path';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
-import { PRE_MEMORY_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
+import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
@@ -466,7 +467,7 @@ export class SharedStateError extends Error {
 export interface SharedDiagnostic { code: 'parley-gitignore-custom' | 'parley-dir-ignored' }
 export interface SharedProjectPaths {
   context: Exclude<SharedProjectContext, { kind: 'unavailable' }>;
-  dir: string; backlog: string; plans: string; preferences: string; suggestions: string; memory: string; memorySuggestions: string; lock: string;
+  dir: string; backlog: string; plans: string; decisions: string; historyShared: string; preferences: string; suggestions: string; memory: string; memorySuggestions: string; lock: string;
 }
 export interface SharedWriteOptions extends ProjectContextOptions, WriteOptions {
   /** Optional optimistic version from a human editor; stale edits are refused rather than reapplied. */
@@ -485,7 +486,7 @@ export async function sharedProjectPaths(projectPath: string, options: ProjectCo
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  return { context, dir, backlog: path.join(dir, 'backlog.md'), plans: path.join(dir, 'plans'),
+  return { context, dir, backlog: path.join(dir, 'backlog.md'), plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'), historyShared: path.join(dir, 'history-shared'),
     preferences: path.join(dir, 'preferences.json'), suggestions: path.join(dir, 'backlog-suggestions.json'),
     memory: path.join(dir, 'memory.md'), memorySuggestions: path.join(dir, 'memory-suggestions.json'),
     lock: path.join(dir, 'backlog.lock') };
@@ -573,6 +574,24 @@ async function releaseSharedLock(handle: FileHandle, file: string, identity: { d
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
+/** Private history receipt lock: selected checkout only, without native main discovery. */
+export async function withLocalHistoryLock<T>(root: string, parent: string, body: () => Promise<T>, options: WriteOptions = {}): Promise<T> {
+  const verify = async (): Promise<void> => {
+    if (path.dirname(parent) !== root || path.basename(parent) !== 'history' ||
+        await realpath(root) !== root || await realpath(parent) !== parent ||
+        !(await lstat(root)).isDirectory() || !(await lstat(parent)).isDirectory())
+      throw new SharedStateError('shared-state-unsafe');
+  };
+  await verify();
+  const timeout = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+  if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
+  const file = path.join(parent, 'history.lock');
+  const handle = await acquireLock(file, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
+  let identity: { dev: number; ino: number } | undefined;
+  try { identity = await handle.stat(); await verify(); return await body(); }
+  finally { if (identity) await releaseSharedLock(handle, file, identity); else await handle.close(); }
+}
+
 /** Read-only diagnostics: never creates state or migrates an existing ignore file. */
 export async function inspectSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
   const previous = await readSharedFile(path.join(paths.dir, '.gitignore'));
@@ -582,7 +601,7 @@ export async function inspectSharedIgnore(paths: SharedProjectPaths, options: Pr
     try { await lstat(paths.dir); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') exists = false; else throw error; }
   }
-  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== '*\n')
+  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== PRE_JOURNAL_STATE_IGNORE && previous.text !== '*\n')
     diagnostics.push({ code: 'parley-gitignore-custom' });
   if (await sharedPathIgnored(paths.context, paths.backlog, options) || await sharedPathIgnored(paths.context, paths.memory, options)) diagnostics.push({ code: 'parley-dir-ignored' });
   return diagnostics;
@@ -591,7 +610,7 @@ export async function inspectSharedIgnore(paths: SharedProjectPaths, options: Pr
 export async function prepareSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
   const file = path.join(paths.dir, '.gitignore');
   const previous = await readSharedFile(file);
-  if ((previous.text === '*\n' || previous.text === PRE_MEMORY_STATE_IGNORE) && previous.version !== MISSING_SHARED_VERSION)
+  if ((previous.text === '*\n' || previous.text === PRE_MEMORY_STATE_IGNORE || previous.text === PRE_JOURNAL_STATE_IGNORE) && previous.version !== MISSING_SHARED_VERSION)
     await writeSharedFile(file, SHARED_STATE_IGNORE, previous, 0o644);
   return inspectSharedIgnore(paths, options);
 }
