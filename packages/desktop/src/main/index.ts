@@ -116,18 +116,25 @@ if (logDownloads && explicitHome) {
   app.setPath('downloads', path.join(parleyHome(), 'desktop', 'downloads'));
 }
 
-// Второй экземпляр не поднимает второй хост и не открывает второе окно —
-// фокусирует первое (см. план, «На что смотреть на ревью», пункт 1).
+// Второй экземпляр не поднимает второй хост: фокусирует живое окно или
+// пересоздаёт закрытое на macOS через уже готовую связь.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   let mainWindow: BrowserWindow | null = null;
+  let openMainWindow: (() => BrowserWindow) | null = null;
 
   const focusMainWindow = (): void => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+    if (mainWindow === null || mainWindow.isDestroyed()) {
+      // Пока асинхронный старт не закончен, первое окно создаст он сам.
+      mainWindow = openMainWindow?.() ?? null;
+    }
+    const window = mainWindow;
+    if (window === null) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
   };
 
   app.on('second-instance', focusMainWindow);
@@ -268,7 +275,10 @@ if (!gotLock) {
       // перезагрузкой, которую потом отменит вопрос о правках (fix-7.3 п. 4б), и сбросил бы счёт.
       window.webContents.on('did-navigate', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
-      window.on('closed', () => closeGuard.dispose());
+      window.on('closed', () => {
+        closeGuard.dispose();
+        if (mainWindow === window) mainWindow = null;
+      });
       // Фокус окна macOS (кусок 9.2b, спека 7.2): при фокусе в странице <webview> уход в другое
       // приложение DOM окна не показывает, а focus и blur WebContents при смене окон не приходят.
       const sendWindowFocus = (focused: boolean): void => {
@@ -322,6 +332,7 @@ if (!gotLock) {
     });
 
     mainWindow = openWindow();
+    openMainWindow = openWindow;
 
     // E2E (`PARLEY_NOTIFICATIONS=log`): уведомления — в журнал main, а не на экран
     // человека; тест читает и кликает их через `app.evaluate` (`globalThis.__parleyNotifications`).
@@ -333,17 +344,7 @@ if (!gotLock) {
     const notifier = createNotifier({
       create: (options): NotificationLike =>
         logNotifications ? createLoggedNotification(notificationLog, options) : new Notification(options),
-      focusWindow: () => {
-        const window = mainWindow;
-        // После закрытия окна ссылка не обнуляется, а macOS держит приложение и без окон.
-        if (window === null || window.isDestroyed()) {
-          mainWindow = openWindow();
-          return;
-        }
-        if (window.isMinimized()) window.restore();
-        window.show();
-        window.focus();
-      },
+      focusWindow: focusMainWindow,
       sendFocusTarget: (target) => {
         const window = mainWindow;
         if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
@@ -512,7 +513,7 @@ if (!gotLock) {
     // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = openWindow();
+        focusMainWindow();
       }
     });
   });
