@@ -1,3 +1,5 @@
+import { prepareSkillShare, skillShareAvailability, skillSharePolicyAllowed } from './share-skill.js';
+import type { SkillShareTarget } from './share-skill.js';
 import { readNativePluginInventory } from './native-plugin-inventory.js';
 import type { NativePluginInventory, NativePluginTarget } from './native-plugin-inventory.js';
 import { execFile } from 'node:child_process';
@@ -7,15 +9,15 @@ import { lstat, open, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
-import { commandBinary, loadProviders, stateDir, readCodexNativeContext } from '@parley/core';
-import type { SkillCatalogOptions } from '@parley/core';
+import { commandBinary, loadProviders, stateDir, readCodexNativeContext, resolveSkillCatalog } from '@parley/core';
+import type { SkillCatalogOptions, NativeSkill } from '@parley/core';
 import { capabilityPresence, capabilitySnapshot } from '@parley/protocol';
-import type { CapabilityActionReason, CapabilityMcpTarget, CapabilityPluginCatalogRequest, CapabilityPluginTargetRequest, CapabilityPluginDetailsRequest, CapabilityPluginInstallRequest, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
+import type { CapabilityActionReason, CapabilitySkillTarget, CapabilityMcpTarget, CapabilityPluginCatalogRequest, CapabilityPluginTargetRequest, CapabilityPluginDetailsRequest, CapabilityPluginInstallRequest, CapabilityColumn, CapabilityDiagnostic, CapabilityPresence, CapabilityProvider, CapabilityRow, CapabilitySnapshot } from '@parley/protocol';
 import { contextFingerprint, deny, fingerprint, readBinaryIdentity, sameBinaryIdentity, verifiedClaudeActionBinary } from './native-targets.js';
 import type { NativeMcpInventory, NativeMcpTarget, NativeBinaryIdentity } from './native-targets.js';
 import { readClaudeSnapshot } from './claude.js';
 import { readCodexSnapshot } from './codex.js';
-import { rowIdentity, object, readJsonFile, readNativeJson, safeText } from './redact.js';
+import { rowIdentity, object, skillSharingCatalogKnown, readJsonFile, readNativeJson, safeText } from './redact.js';
 import type { NativeJsonReader, SnapshotEntry } from './redact.js';
 
 type ClaudeOptions = Omit<Extract<SkillCatalogOptions, { provider: 'claude' }>, 'provider' | 'cwd' | 'homeDir'>;
@@ -37,7 +39,7 @@ export interface SnapshotContext {
   };
   codex?: CodexOptions;
 }
-export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase']; native?: NativeMcpInventory; pluginsNative?: NativePluginInventory }
+export interface ProviderSnapshotResult { entries: SnapshotEntry[]; diagnostics: CapabilityDiagnostic[]; phase: CapabilityColumn['phase']; /** Private catalog closure proof, including an empty receiver catalog. */ skillSharingContext?: boolean; native?: NativeMcpInventory; pluginsNative?: NativePluginInventory }
 export interface SnapshotReaderOptions { pluginRedactionSecrets?: readonly string[]; readNative?: NativeJsonReader; readCodexContext?: typeof readCodexNativeContext; readBinaryIdentity?: typeof readBinaryIdentity; readPluginInventory?: typeof readNativePluginInventory; codexPluginContext?: { context: Awaited<ReturnType<typeof readCodexNativeContext>>; binaryIdentity: NativeBinaryIdentity | null } }
 export type ProviderSnapshotReader = (context: SnapshotContext, options: SnapshotReaderOptions) => Promise<ProviderSnapshotResult>;
 
@@ -197,7 +199,9 @@ export type PreparedMcpAction = { ok: false; code: CapabilityActionReason | 'con
 export type PreparedPluginAction = { ok: false; code: CapabilityActionReason | 'context-changed' | 'shutdown' } | {
   ok: true; context: SnapshotContext; inventory: NativePluginInventory; target?: NativePluginTarget; isCurrent(): boolean;
 };
+export type PreparedSkillAction = { ok: false; code: 'stale' | 'shutdown' | 'unverified' | 'context-changed' | 'builtin' | 'ambiguous' } | { ok: true; target: SkillShareTarget; isCurrent(): boolean };
 export interface SafeCapabilitiesService {
+  prepareSkillAction(params: CapabilitySkillTarget, kind?: 'share' | 'unshare'): Promise<PreparedSkillAction>;
   get(projectPath: string): CapabilitySnapshot;
   refresh(projectPath: string): CapabilitySnapshot;
   prepareMcpAction(params: CapabilityMcpTarget | { projectPath: string; provider: CapabilityProvider; revision: number }): Promise<PreparedMcpAction>;
@@ -220,7 +224,7 @@ function mcpCheckProof(inventory: NativeMcpInventory | undefined, target: Native
 }
 
 export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions = {}): SafeCapabilitiesService {
-  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; pluginInventories: Partial<Record<CapabilityProvider, NativePluginInventory>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
+  interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; pluginInventories: Partial<Record<CapabilityProvider, NativePluginInventory>>; contexts: Partial<Record<CapabilityProvider, SnapshotContext>>; skillContexts: Partial<Record<CapabilityProvider, boolean>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
   const cache = new Map<string, Cached>();
   let disposed = false;
   const copy = (value: CapabilitySnapshot): CapabilitySnapshot => structuredClone(value);
@@ -232,11 +236,13 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     const key = path.resolve(projectPath);
     const previous = cache.get(key);
     const generation = (previous?.generation ?? 0) + 1;
-    const value: Cached = { generation, entries: {}, inventories: {}, pluginInventories: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
+    const value: Cached = { generation, entries: {}, inventories: {}, pluginInventories: {}, contexts: {}, skillContexts: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
       columns: { claude: { phase: 'loading', diagnostics: [] }, codex: { phase: 'loading', diagnostics: [] } }, rows: [] } };
     cache.set(key, value);
     const finish = async (provider: CapabilityProvider, result: ProviderSnapshotResult, context?: SnapshotContext): Promise<void> => {
       const current = active(key, generation); if (!current) return;
+      if (context) current.contexts[provider] = context;
+      current.skillContexts[provider] = result.skillSharingContext === true;
       const entries: SnapshotEntry[] = []; const diagnostics = [...result.diagnostics];
       const healthKeys = new Set<string>();
       for (const entry of result.entries) {
@@ -261,7 +267,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         if (entry.kind === 'plugin') safe.pluginActions = pluginTarget ? { uninstall: pluginTarget.actions.uninstall, enable: pluginTarget.actions.enable, disable: pluginTarget.actions.disable, details: pluginTarget.actions.details } : { uninstall: deny(), enable: deny(), disable: deny(), details: deny('native-only') };
         const parsed = capabilityPresence.safeParse(safe);
         if (!parsed.success || !safeText(entry.name)) { diagnostics.push({ code: 'invalid-output' }); continue; }
-        entries.push({ kind: entry.kind, name: safeText(entry.name)!, ...(entry.rowId && /^[a-f0-9]{64}$/.test(entry.rowId) ? { rowId: entry.rowId } : {}), presence: parsed.data });
+        entries.push({ ...(entry.kind === 'skill' && entry.nativeSkill?.provider === provider && entry.nativeSkill.path === safe.documentPath && entry.nativeSkill.name === entry.name ? { nativeSkill: { ...entry.nativeSkill }, skillSharingContext: entry.skillSharingContext === true } : {}), kind: entry.kind, name: safeText(entry.name)!, ...(entry.rowId && /^[a-f0-9]{64}$/.test(entry.rowId) ? { rowId: entry.rowId } : {}), presence: parsed.data });
       }
       if (context) entries.unshift({ kind: 'mcp', name: 'parley', rowId: rowIdentity('mcp', 'parley'), presence: {
         id: JSON.stringify([provider, 'mcp', 'builtin', 'parley']), scope: 'builtin', source: 'Parley launch',
@@ -286,6 +292,16 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
         ...(result.native ? { mcpAdd: result.native.add } : {}),
         ...(result.pluginsNative ? { pluginCatalog: result.pluginsNative.catalog, pluginMarketplaceAdd: result.pluginsNative.marketplaceAdd } : {}) };
       current.snapshot.rows = mergeSnapshotRows(current.entries);
+      for (const row of current.snapshot.rows.filter(row => row.kind === 'skill')) for (const source of ['claude', 'codex'] as const) for (const presence of row[source]) {
+        const privateEntry = current.entries[source]?.find(entry => entry.presence.id === presence.id);
+        const record = current.skillContexts.claude === true && current.skillContexts.codex === true && privateEntry?.skillSharingContext === true ? privateEntry.nativeSkill : undefined;
+        const sourceContext = current.contexts[source];
+        const prepared = record && sourceContext ? await prepareSkillShare(sourceContext, record, { builtin: presence.scope === 'builtin', separateCopies: row.separateCopies }, false, true) : null;
+        const availability = prepared?.ok ? await skillShareAvailability(prepared.target) : null;
+        const reason = !prepared || prepared.ok ? 'unverified' : prepared.code === 'builtin' ? 'builtin' : prepared.code === 'ambiguous' ? 'ambiguous' : prepared.code === 'unsupported-scope' ? 'unsupported-scope' : 'unverified';
+        presence.skillActions = { share: record && skillSharePolicyAllowed(record) && availability?.share ? { allowed: true, reason: null } : deny(reason), unshare: availability?.unshare ? { allowed: true, reason: null } : deny(reason) };
+      }
+      if (active(key, generation) !== current) return;
       current.snapshot.revision += 1;
       try { current.snapshot = capabilitySnapshot.parse(current.snapshot); }
       catch { delete current.pluginInventories[provider]; delete current.inventories[provider]; current.entries[provider] = []; current.snapshot.rows = mergeSnapshotRows(current.entries);
@@ -308,6 +324,37 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
   };
   return { get(projectPath) { const value = cache.get(path.resolve(projectPath)); return value ? copy(value.snapshot) : refresh(projectPath); },
     refresh,
+    async prepareSkillAction(params, kind = 'share') {
+      if (disposed) return { ok: false, code: 'shutdown' };
+      const key = path.resolve(params.projectPath), current = cache.get(key);
+      if (!current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+      const entry = current.entries[params.provider]?.find(row => row.kind === 'skill' && row.presence.id === params.presenceId);
+      const original = entry?.nativeSkill, previous = current.contexts[params.provider];
+      if (!original || !previous || entry?.skillSharingContext !== true || current.skillContexts.claude !== true || current.skillContexts.codex !== true) return { ok: false, code: 'unverified' };
+      try {
+        const context = await (options.context ?? defaultSnapshotContext)(key);
+        const contextIdentity = (value: SnapshotContext): string => fingerprint([contextFingerprint(value, 'claude'), contextFingerprint(value, 'codex')]);
+        if (contextIdentity(context) !== contextIdentity(previous)) return { ok: false, code: 'context-changed' };
+        const catalogs = await Promise.all([
+          resolveSkillCatalog({ provider: 'claude', cwd: context.projectPath, homeDir: context.homeDir, ...context.claude, limits: { ...context.claude?.limits, maxEntries: Math.min(context.claude?.limits?.maxEntries ?? 2000, 2000) } }),
+          resolveSkillCatalog({ provider: 'codex', cwd: context.projectPath, homeDir: context.homeDir, ...context.codex, limits: { ...context.codex?.limits, maxEntries: Math.min(context.codex?.limits?.maxEntries ?? 2000, 2000) } }),
+        ]);
+        if (disposed) return { ok: false, code: 'shutdown' };
+        if (cache.get(key) !== current || current.snapshot.revision !== params.revision) return { ok: false, code: 'stale' };
+        if (catalogs.some(catalog => !skillSharingCatalogKnown(catalog))) return { ok: false, code: 'unverified' };
+        const records = catalogs.flatMap(catalog => catalog.skills);
+        const matches = records.filter(record => record.provider === params.provider && record.path === original.path && record.name === original.name && record.documentKind === original.documentKind);
+        if (matches.length !== 1 || fingerprint(matches[0]) !== fingerprint(original)) return { ok: false, code: 'context-changed' };
+        const fresh: NativeSkill = matches[0]!;
+        if (new Set(records.filter(record => record.name === fresh.name).map(record => record.path)).size > 1) return { ok: false, code: 'ambiguous' };
+        const freshEntries = [{ ...entry!, nativeSkill: fresh, presence: { ...entry!.presence } }];
+        if ((await builtinSkills(context, freshEntries)).length) return { ok: false, code: 'unverified' };
+        if (freshEntries[0]!.presence.scope === 'builtin') return { ok: false, code: 'builtin' };
+        const prepared = await prepareSkillShare(context, fresh, { builtin: false, separateCopies: false }, kind === 'share', kind === 'unshare');
+        if (!prepared.ok) return { ok: false, code: 'unverified' };
+        return { ok: true, target: prepared.target, isCurrent: () => !disposed && cache.get(key) === current && current.snapshot.revision === params.revision };
+      } catch { return { ok: false, code: 'unverified' }; }
+    },
     async prepareMcpAction(params) {
       if (disposed) return { ok: false, code: 'shutdown' };
       const key = path.resolve(params.projectPath); const current = cache.get(key);

@@ -36,6 +36,22 @@ export const S = {
     retry: 'Retry pending deliveries', workspaceEffects: 'Workspace delivery status',
   },
   capabilities: {
+    skillShare: {
+      title: 'Skills', share: (provider: string) => `Share with ${provider}`, unshare: (provider: string) => `Unshare from ${provider}`,
+      queued: 'Waiting for the skill sharing action…', unsupportedHost: 'This host does not support skill sharing. Restart or update the host.',
+      cleanup: 'Unshare removes only the owned symlink. The original skill stays in place.',
+      projectHint: 'Project shares create symlinks in this checkout. Review Git status and commit them when appropriate.',
+      userHint: 'User shares use an absolute symlink to the original folder.',
+      appliesToNew: 'Sharing changes apply to new sessions. Restart affected sessions to pick up changes.',
+      codes: {
+        ok: 'Done', unverified: 'The skill ownership or policy could not be verified',
+        'unsupported-scope': 'Only ordinary user and project skills can be shared', builtin: 'Built-in skills cannot be shared',
+        ambiguous: 'Separate copies or an ambiguous skill identity prevent sharing', occupied: 'The native destination is already occupied',
+        'context-changed': 'The skill or its native context changed. Refresh and try again.',
+        'receipt-unverified': 'The owned symlink receipt could not be verified', 'symlink-error': 'A native symlink could not be created. No copy was made.',
+        'io-error': 'The skill sharing action could not be completed', stale: 'The inventory changed. Refresh and try again.', shutdown: 'The host is shutting down',
+      },
+    },
     plugins: {
       title: 'Plugins', available: 'Available plugins', search: 'Search name or description',
       loadCatalog: 'Browse available plugins', details: 'Details', install: 'Install', uninstall: 'Uninstall…',

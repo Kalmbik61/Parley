@@ -36,6 +36,13 @@ function fakeDeps(worksReady: Promise<void>): { deps: MethodDeps; touched: () =>
   return { deps, touched: () => calls };
 }
 
+it('registers both explicit native skill sharing actions', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  expect(handlers.methods['capabilities.skills.share']).toBeTypeOf('function');
+  expect(handlers.methods['capabilities.skills.unshare']).toBeTypeOf('function');
+});
+
 const request = { client: {} } as unknown as RequestInfo;
 const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 

@@ -5,7 +5,7 @@ import type { NativeMcpTarget } from './native-targets.js';
 import { realpath } from 'node:fs/promises';
 import { resolveSkillCatalog } from '@parley/core';
 import type { CapabilityDiagnostic, CapabilityPresence, CapabilityScope } from '@parley/protocol';
-import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, readJsonFile, readNativeJson, safeText, secretValues } from './redact.js';
+import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, skillSharingCatalogKnown, readJsonFile, readNativeJson, safeText, secretValues } from './redact.js';
 import type { SnapshotEntry } from './redact.js';
 import type { ProviderSnapshotResult, SnapshotContext, SnapshotReaderOptions } from './snapshot.js';
 
@@ -120,7 +120,7 @@ export async function readClaudeSnapshot(context: SnapshotContext, options: Snap
       } });
     }
   }
-  return { entries, diagnostics, pluginsNative, phase: diagnostics.length ? 'partial' : 'ready', native: {
+  return { entries, diagnostics, pluginsNative, skillSharingContext: skillSharingCatalogKnown(catalog), phase: diagnostics.length ? 'partial' : 'ready', native: {
     contextFingerprint: contextFingerprint(context, 'claude'), signature: fingerprint({ user, project, main, policy: config.mcpPolicy, winners: config.mcpWinningTargets, actionBinary, storage }),
     names, targets, ...(actionBinary ? { executionBinary: actionBinary.canonicalPath } : {}), add: verified ? { user: allow(), project: allow(), local: allow() } : deniedAdd(context.binaries.claude ? 'unverified' : 'not-installed'),
   } };

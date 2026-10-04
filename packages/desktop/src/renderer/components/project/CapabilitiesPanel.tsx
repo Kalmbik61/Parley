@@ -3,6 +3,7 @@ import { Lock } from 'lucide-react';
 import type { CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import { Button } from '../../ui/button.js';
 import type { ParleyBridge } from '../../../shared/bridge.js';
+import { SkillSharePanel } from './SkillSharePanel.js';
 import { PluginPanel } from './PluginPanel.js';
 import { S } from '../../../shared/strings.js';
 
@@ -72,6 +73,7 @@ export function CapabilitiesPanel({ snapshot, actions, bridge }: { snapshot: Cap
         })}
       </div>
       {(['skill', 'mcp', 'plugin'] as const).map(kind => {
+        if (kind === 'skill' && bridge && snapshot) return <SkillSharePanel key={kind} snapshot={snapshot} bridge={bridge} renderPresence={(presence, provider) => <Presence presence={presence} provider={provider} revision={snapshot.revision} onRemove={() => {}} />} />;
         if (kind === 'plugin' && bridge && snapshot) return null;
         const rows = snapshot?.rows.filter(row => row.kind === kind) ?? [];
         if (rows.length === 0) return null;

@@ -3,7 +3,7 @@ import { allow, codexUserMcpProof, contextFingerprint, deniedAdd, deny, fingerpr
 import type { NativeMcpTarget } from './native-targets.js';
 import { readCodexNativeContext, resolveSkillCatalog } from '@parley/core';
 import type { CapabilityDiagnostic } from '@parley/protocol';
-import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, readNativeJson, safeText, secretValues } from './redact.js';
+import { mcpSummary, nativeIdentity, rowIdentity, object, projectSkills, skillSharingCatalogKnown, readNativeJson, safeText, secretValues } from './redact.js';
 import type { SnapshotEntry } from './redact.js';
 import type { ProviderSnapshotResult, SnapshotContext, SnapshotReaderOptions } from './snapshot.js';
 
@@ -88,7 +88,7 @@ export async function readCodexSnapshot(context: SnapshotContext, options: Snaps
       } });
     }
   }
-  return { entries, diagnostics, pluginsNative, phase: diagnostics.length ? 'partial' : 'ready', native: {
+  return { entries, diagnostics, pluginsNative, skillSharingContext: skillSharingCatalogKnown(catalog), phase: diagnostics.length ? 'partial' : 'ready', native: {
     contextFingerprint: contextFingerprint(context, 'codex'), signature: fingerprint({ mcp, proof: proof?.signature, binaryIdentity: stableBinary ? identity : null }), names, targets,
     ...(stableBinary && identity ? { executionBinary: identity.canonicalPath, binaryIdentity: identity } : {}),
     add: proof?.add && validList && new Set(names).size === names.length ? { user: allow(), project: deny('unsupported-scope'), local: deny('unsupported-scope') } : deniedAdd(context.binaries.codex ? 'unverified' : 'not-installed'),

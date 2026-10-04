@@ -70,3 +70,9 @@ it('uses the parent bridge for plugins while preserving separate inventory metad
  const bridge=createFakeBridge();render(<CapabilitiesPanel snapshot={value} bridge={bridge} />);
  expect(screen.getByText('Native metadata')).toBeTruthy();expect(screen.getByLabelText('Built-in · managed by Parley')).toBeTruthy();expect(screen.getByText('Native plugin fixture')).toBeTruthy();expect(screen.getAllByRole('button').every(b=>b.hasAttribute('disabled'))).toBe(true);expect(bridge.calls).toHaveLength(0);
 });
+
+
+it('shared bridge adds manual skill controls while retaining native metadata and the existing plugin section',()=>{
+ const bridge=createFakeBridge();const value=snapshot();render(<CapabilitiesPanel snapshot={value} bridge={bridge} />);expect(bridge.calls).toHaveLength(0);
+ expect(screen.getAllByRole('button').some(button=>button.textContent==='Share with Claude')).toBe(true);expect(screen.getByRole('region',{name:'Plugins'})).toBeTruthy();
+});

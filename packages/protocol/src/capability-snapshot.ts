@@ -22,6 +22,7 @@ export const capabilityMcpAddAvailability = z.object({
   user: capabilityActionAvailability, project: capabilityActionAvailability, local: capabilityActionAvailability,
 }).strict();
 
+export const capabilitySkillActions = z.object({ share: capabilityActionAvailability, unshare: capabilityActionAvailability }).strict();
 export const capabilityPresence = z.object({
   id: z.string().min(1),
   scope: capabilityScope.nullable(),
@@ -40,6 +41,7 @@ export const capabilityPresence = z.object({
   sharedFrom: capabilityProvider.optional(),
   mcpActions: capabilityMcpActions.optional(),
   pluginActions: capabilityPluginActions.optional(),
+  skillActions: capabilitySkillActions.optional(),
 }).strict();
 export const capabilityRow = z.object({
   id: z.string().min(1),
@@ -52,6 +54,10 @@ export const capabilityRow = z.object({
 }).strict().superRefine((row, context) => {
   for (const provider of ['claude', 'codex'] as const) {
     for (const [index, presence] of row[provider].entries()) {
+      if (row.kind !== 'skill' && presence.skillActions !== undefined)
+        context.addIssue({ code: 'custom', path: [provider, index, 'skillActions'], message: 'Only skills have sharing actions' });
+      if (presence.skillActions && (presence.skillActions.share.allowed || presence.skillActions.unshare.allowed) && (!['user', 'project'].includes(presence.scope ?? '') || row.separateCopies))
+        context.addIssue({ code: 'custom', path: [provider, index, 'skillActions'], message: 'Sharing requires one human native source' });
       if (row.kind !== 'plugin' && presence.pluginActions !== undefined)
         context.addIssue({ code: 'custom', path: [provider, index, 'pluginActions'], message: 'Only plugins have plugin actions' });
       if (presence.pluginActions && ['uninstall', 'enable', 'disable'].some(action => presence.pluginActions![action as 'uninstall' | 'enable' | 'disable'].allowed) && !['user', 'project', 'local'].includes(presence.scope ?? ''))

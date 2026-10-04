@@ -273,6 +273,13 @@ it('plan UI labels distinguish verification from human-accepted Checklist comple
  expect(S.plans.freeCancels).toContain('cancels the active plan');
 });
 
+it('manual skill sharing labels and fixed codes are English and keep generic adoption/owned cleanup semantics',()=>{
+ const labels=S.capabilities.skillShare;expect(labels.share('Codex')).toBe('Share with Codex');expect(labels.unshare('Claude')).toBe('Unshare from Claude');
+ for(const value of Object.values(labels))if(typeof value==='string')expect(value).not.toMatch(CYRILLIC);
+ for(const value of Object.values(labels.codes))expect(value).not.toMatch(CYRILLIC);
+ expect(labels.projectHint).toContain('Git status');expect(labels.userHint).toContain('absolute symlink');expect(labels.cleanup).toContain('original skill stays');expect(labels.appliesToNew).not.toMatch(/\d+ sessions/);
+});
+
 it('describes closed-work plan controls without labeling pending delivery retry unavailable',()=>{
  expect(S.plans.workClosed).toBe('Reopen this workspace to change the plan.');
  expect(S.plans.retry).toBe('Retry pending deliveries');

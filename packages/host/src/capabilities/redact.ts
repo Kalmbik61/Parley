@@ -3,10 +3,10 @@ import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { TextDecoder } from 'node:util';
-import type { SkillCatalog } from '@parley/core';
+import type { SkillCatalog, NativeSkill } from '@parley/core';
 import type { CapabilityDiagnostic, CapabilityPresence, CapabilityRow } from '@parley/protocol';
 
-export interface SnapshotEntry { kind: CapabilityRow['kind']; name: string; rowId?: string; presence: CapabilityPresence }
+export interface SnapshotEntry { /** Private accepted resolver record; never projected into rows/DTOs. */ nativeSkill?: NativeSkill; skillSharingContext?: boolean; kind: CapabilityRow['kind']; name: string; rowId?: string; presence: CapabilityPresence }
 export const nativeIdentity = (...parts: unknown[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const rowIdentity = (kind: CapabilityRow['kind'], name: string, provider?: string): string => nativeIdentity(kind, name, kind === 'plugin' ? provider : null);
 export type JsonRead = { status: 'valid'; data: unknown } | { status: 'missing' } | { status: 'invalid'; code: CapabilityDiagnostic['code'] };
@@ -144,12 +144,15 @@ export function mcpSummary(value: unknown): string | null {
   return safeText(summary, secretValues({ ...data, args: [] }));
 }
 
+export function skillSharingCatalogKnown(catalog: SkillCatalog): boolean {
+  return (!catalog.partial || catalog.diagnostics.length > 0) && catalog.diagnostics.every(diagnostic => diagnostic.code === 'availability-unverified');
+}
 export function projectSkills(catalog: SkillCatalog): SnapshotEntry[] {
   return catalog.skills.map(skill => {
     const reason = skill.unavailableReason;
     const unknown = reason === 'availability-unverified' || reason === 'load-tool-unavailable' || reason === 'invalid-metadata';
     const disabled = reason === 'human-disabled' || reason === 'plugin-disabled' || reason === 'shadowed';
-    return { kind: 'skill', name: skill.name, rowId: rowIdentity('skill', skill.name), presence: {
+    return { nativeSkill: { ...skill }, skillSharingContext: skillSharingCatalogKnown(catalog), kind: 'skill', name: skill.name, rowId: rowIdentity('skill', skill.name), presence: {
       id: JSON.stringify([skill.provider, 'skill', skill.path]), scope: skill.source,
       source: skill.path, documentPath: skill.path, description: safeText(skill.description), installed: true,
       enabled: unknown ? null : !disabled, status: unknown ? 'unknown' : reason ? 'off' : 'ok',

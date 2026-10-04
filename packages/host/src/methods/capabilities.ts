@@ -1,3 +1,4 @@
+import { createCapabilitiesSkillActions } from '../capabilities/skill-actions.js';
 import { createProviderScheduler } from '../capabilities/scheduler.js';
 import { createCapabilitiesPluginActions } from '../capabilities/plugin-actions.js';
 import { homedir } from 'node:os';
@@ -44,8 +45,9 @@ export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions 
   const scheduler = createProviderScheduler();
   const actions = createCapabilitiesMcpActions(service, options.executeMcp, scheduler);
   const plugins = createCapabilitiesPluginActions(service, options.executePlugin, scheduler);
+  const skills = createCapabilitiesSkillActions(service, scheduler);
   const bind = (context: HostContext): void => {
-    if (!host) { host = context; host.onShutdown(async () => { scheduler.dispose(); actions.dispose(); plugins.dispose(); service.dispose(); }); }
+    if (!host) { host = context; host.onShutdown(async () => { scheduler.dispose(); actions.dispose(); plugins.dispose(); skills.dispose(); service.dispose(); }); }
   };
   const handler = (refresh: boolean): Handler<'capabilities.get'> => async (params, request) => {
     if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', 'projectPath must be an absolute path');
@@ -62,5 +64,7 @@ export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions 
   const capabilitiesPluginsEnable: Handler<'capabilities.plugins.enable'> = async (params, request) => { bind(request.host); return plugins.enable(params); };
   const capabilitiesPluginsDisable: Handler<'capabilities.plugins.disable'> = async (params, request) => { bind(request.host); return plugins.disable(params); };
   const capabilitiesPluginsAddMarketplace: Handler<'capabilities.plugins.addMarketplace'> = async (params, request) => { bind(request.host); return plugins.addMarketplace(params); };
-  return { capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), capabilitiesMcpAdd, capabilitiesMcpRemove, capabilitiesMcpCheck, capabilitiesPluginsAvailable, capabilitiesPluginsDetails, capabilitiesPluginsInstall, capabilitiesPluginsUninstall, capabilitiesPluginsEnable, capabilitiesPluginsDisable, capabilitiesPluginsAddMarketplace, service };
+  const capabilitiesSkillsShare: Handler<'capabilities.skills.share'> = async (params, request) => { bind(request.host); return skills.share(params); };
+  const capabilitiesSkillsUnshare: Handler<'capabilities.skills.unshare'> = async (params, request) => { bind(request.host); return skills.unshare(params); };
+  return { capabilitiesSkillsShare, capabilitiesSkillsUnshare, capabilitiesGet: handler(false), capabilitiesRefresh: handler(true), capabilitiesMcpAdd, capabilitiesMcpRemove, capabilitiesMcpCheck, capabilitiesPluginsAvailable, capabilitiesPluginsDetails, capabilitiesPluginsInstall, capabilitiesPluginsUninstall, capabilitiesPluginsEnable, capabilitiesPluginsDisable, capabilitiesPluginsAddMarketplace, service };
 }

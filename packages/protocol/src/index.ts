@@ -90,3 +90,7 @@ export type { CapabilityPluginCatalogRequest, CapabilityPluginDetailsRequest, Ca
 
 export { planMethodSchemas, planDraft, planEvidence, planActionResult, planEffectsSummary, roomMode } from './plan-actions.js';
 export type { PlanMethodName, PlanMethodParams, PlanMethodResults, PlanActionResult } from './plan-actions.js';
+
+export { capabilitySkillActions } from './capability-snapshot.js';
+export { capabilitySkillTarget, capabilitySkillResult, capabilitySkillMethodSchemas } from './capability-skill-actions.js';
+export type { CapabilitySkillTarget, CapabilitySkillResult, CapabilitySkillMethodResults } from './capability-skill-actions.js';

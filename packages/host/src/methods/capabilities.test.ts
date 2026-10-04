@@ -117,3 +117,16 @@ it('plugin RPCs use the same snapshot binding and deny unknown selectors without
  expect((await handlers.capabilitiesPluginsAddMarketplace({...params,scope:'user',source:{kind:'local',path:'/PRIVATE_INPUT'}},request)).code).toBe('unverified');
  expect(onShutdown).toHaveBeenCalledOnce();expect(JSON.stringify([broadcast.mock.calls,log])).not.toContain('PRIVATE_INPUT');await onShutdown.mock.calls[0]![0]();
 });
+
+
+it('skill manual RPC closures use current opaque service state and the existing single shutdown binding',async()=>{
+ const onShutdown=vi.fn(),broadcast=vi.fn(),log={info:vi.fn(),warn:vi.fn(),error:vi.fn()};const host={onShutdown,broadcast,log} as unknown as HostContext;const request={host} as RequestInfo;
+ const context:SnapshotContext={projectPath:'/fixture/project',homeDir:'/fixture/home',binaries:{claude:null,codex:null}};
+ const handlers=createCapabilitiesHandlers({context:async()=>context,readers:{claude:async()=>({entries:[],diagnostics:[],phase:'ready'}),codex:async()=>({entries:[],diagnostics:[],phase:'ready'})}});
+ await handlers.capabilitiesGet({projectPath:context.projectPath},request);await vi.waitFor(()=>expect(handlers.service.get(context.projectPath).columns.codex.phase).toBe('ready'));
+ const params={projectPath:context.projectPath,provider:'claude' as const,revision:handlers.service.get(context.projectPath).revision,presenceId:'unknown'};
+ expect(await handlers.capabilitiesSkillsShare(params,request)).toEqual({outcome:'denied',code:'unverified'});expect(await handlers.capabilitiesSkillsUnshare(params,request)).toEqual({outcome:'denied',code:'unverified'});
+ expect(await handlers.capabilitiesSkillsShare({...params,source:'/PRIVATE_INPUT'} as never,request)).toEqual({outcome:'denied',code:'unverified'});
+ expect(onShutdown).toHaveBeenCalledOnce();expect(log.warn).not.toHaveBeenCalled();expect(log.error).not.toHaveBeenCalled();expect(JSON.stringify(broadcast.mock.calls)).not.toContain('PRIVATE_INPUT');
+ await onShutdown.mock.calls[0]![0]();expect(await handlers.capabilitiesSkillsShare(params,request)).toEqual({outcome:'denied',code:'shutdown'});
+});

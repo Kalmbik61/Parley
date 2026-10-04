@@ -98,7 +98,7 @@ describe('MCP action availability wire', () => {
 describe('plugin action projection', () => {
   const yes = { allowed: true, reason: null };
   const no = { allowed: false, reason: 'unverified' };
-  const plugin = (provider: 'claude' | 'codex', scope: string | null, actions = { uninstall: yes, enable: no, disable: no, details: no }) => ({
+  const plugin = (provider: 'claude' | 'codex', scope: string | null, actions: Record<'uninstall' | 'enable' | 'disable' | 'details', { allowed: boolean; reason: string | null }> = { uninstall: yes, enable: no, disable: no, details: no }) => ({
     projectPath: '/project', revision: 1, columns: { claude: { phase: 'ready', diagnostics: [] }, codex: { phase: 'ready', diagnostics: [] } },
     rows: [{ id: 'opaque', kind: 'plugin', name: 'fixture@market', description: null, separateCopies: false,
       claude: provider === 'claude' ? [{ ...presence('opaque'), scope, documentPath: null, modelAvailable: null, unavailableReason: null, pluginActions: actions }] : [],
@@ -119,4 +119,21 @@ describe('plugin action projection', () => {
     value.rows[0]!.claude[0]!.pluginActions.uninstall = { ...yes, nativeId: 'SECRET_FIXTURE' } as typeof yes;
     expect(capabilitySnapshot.safeParse(value).success).toBe(false);
   });
+});
+
+
+describe('manual skill sharing projection', () => {
+ const yes={allowed:true,reason:null},no={allowed:false,reason:'unverified'};
+ const skill=(scope:string|null='project',separateCopies=false)=>{const value=snapshot();return{...value,rows:[{...value.rows[0],separateCopies,codex:[{...presence('owned'),scope,skillActions:{share:yes,unshare:no}}]}]};};
+ it('keeps optional manual actions separate from native availability and preserves old snapshots',()=>{
+  expect(capabilitySnapshot.safeParse(snapshot()).success).toBe(true);
+  const value=capabilitySnapshot.parse(skill());expect(value.rows[0]?.codex[0]?.modelAvailable).toBe(false);expect(value.rows[0]?.codex[0]?.skillActions?.share.allowed).toBe(true);
+  for(const scope of ['user','project'])expect(capabilitySnapshot.safeParse(skill(scope)).success).toBe(true);
+  for(const scope of ['builtin','system','admin','plugin','extra','local',null])expect(capabilitySnapshot.safeParse(skill(scope)).success).toBe(false);
+  expect(capabilitySnapshot.safeParse(skill('project',true)).success).toBe(false);
+ });
+ it('refuses callable actions on non-skills and raw receipt/native-proof fields',()=>{
+  const value=skill();for(const kind of ['mcp','plugin'])expect(capabilitySnapshot.safeParse({...value,rows:[{...value.rows[0],kind}]}).success).toBe(false);
+  for(const field of ['receipt','sourceIdentity','nativeSkill','contentHash'])expect(capabilitySnapshot.safeParse({...value,rows:[{...value.rows[0],codex:[{...value.rows[0]!.codex[0],[field]:'/secret'}]}]}).success).toBe(false);
+ });
 });

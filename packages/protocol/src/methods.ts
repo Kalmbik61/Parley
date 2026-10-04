@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
+import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
 import type {
   FeedCardState,
   FeedItem,
@@ -36,6 +38,7 @@ export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
   ...capabilityPluginMethodSchemas,
+  ...capabilitySkillMethodSchemas,
   ...backlogMethodSchemas,
   ...planMethodSchemas,
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
@@ -212,7 +215,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
