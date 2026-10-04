@@ -264,3 +264,16 @@ it('plugin strings distinguish unknown cost, data loss and native recovery witho
  expect(S.capabilities.plugins.appliesToNew).toContain('new sessions');expect(S.capabilities.plugins.codes['native-only']).not.toContain('/mcp');
  expect(S.capabilities.plugins.codexRecovery).toContain('native Codex plugin');
 });
+
+it('plan UI labels distinguish verification from human-accepted Checklist completion and captured exports',()=>{
+ expect(S.plans.basis(2)).toBe('Done in Checklist · human accepted revision 2');
+ expect(S.plans.progress('verified',1,3,1)).toBe('1/3 verified · 1 accepted from Checklist');
+ expect(S.plans.progress('checklist',2,3,0)).toBe('2/3 done');
+ expect(S.plans.snapshot('accepted',1,'pending')).toBe('accepted · revision 1 · pending');
+ expect(S.plans.freeCancels).toContain('cancels the active plan');
+});
+
+it('describes closed-work plan controls without labeling pending delivery retry unavailable',()=>{
+ expect(S.plans.workClosed).toBe('Reopen this workspace to change the plan.');
+ expect(S.plans.retry).toBe('Retry pending deliveries');
+});

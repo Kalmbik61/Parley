@@ -50,6 +50,8 @@ import type { ActivityEntry } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { SessionRow } from './SessionRow.js';
+import { planProgress } from '../components/rooms/PlanPanel.js';
+import type { RoomPlan } from '@parley/core';
 import type { CardRoomRow } from './sort.js';
 import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
@@ -61,6 +63,7 @@ export interface RoomRowProps {
   workId: string;
   bridge: ParleyBridge;
   row: CardRoomRow;
+  plan?: RoomPlan | null;
   /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
   unread: number;
   /** Среди них есть упоминание человека `@human` (`WorkAttention.roomMentions`). */
@@ -105,6 +108,7 @@ export function RoomRow({
   workId,
   bridge,
   row,
+  plan,
   unread,
   mentioned,
   activity,
@@ -205,6 +209,7 @@ export function RoomRow({
         {pending ? <AgentStateDot state="blocked" lifecycle="active" /> : <span className="inline-block size-3 shrink-0" />}
         <Hash className="size-[13px] shrink-0 text-work-sidebar-muted-foreground" aria-hidden="true" />
         <span className={cn('min-w-0 flex-1 truncate', bold ? 'font-bold' : 'font-normal')}>{title}</span>
+        {plan ? <span data-room-plan-progress="" className="shrink-0 text-[11px]" title={planProgress(plan)}>{planProgress(plan)}</span> : null}
         {word === '' ? null : <span className={cn('shrink-0 text-[11px]', pending ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>}
         <button
           type="button"

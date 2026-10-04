@@ -15,6 +15,26 @@
 import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
 
 export const S = {
+  plans: {
+    workClosed: 'Reopen this workspace to change the plan.',
+    title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
+    revision: (n: number) => 'Revision ' + n,
+    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
+    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.' },
+    reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
+    status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
+    itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
+    owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
+    basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
+    progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
+    markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
+    artifactHelp: 'References are plain text, one per line. They are not opened as files.',
+    cancelPlan: 'Cancel plan…', cancelWarning: 'Cancel this active plan? Its captured cancellation snapshot will be retained.', confirmCancel: 'Confirm cancellation',
+    oldHost: 'Update or restart the host to use plan actions.', changed: 'The plan changed. Review the current revision and try again.', failed: 'The plan action failed. Check the host and try again.', saved: 'The host accepted the action.',
+    pending: (queued: number, snapshots: number, backlog: number, conflicts: number) => queued + ' queued · ' + snapshots + ' pending snapshot · ' + backlog + ' pending backlog · ' + conflicts + ' conflict',
+    snapshot: (event: string, rev: number, status: string) => event + ' · revision ' + rev + ' · ' + status,
+    retry: 'Retry pending deliveries', workspaceEffects: 'Workspace delivery status',
+  },
   capabilities: {
     plugins: {
       title: 'Plugins', available: 'Available plugins', search: 'Search name or description',

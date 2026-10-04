@@ -806,3 +806,9 @@ describe('WorkCard — счётчик «для тебя»: письма и уп�
     });
   });
 });
+
+it('passes active room-plan progress through the real room row',()=>{
+ const entry=makeWork('w-01',{projectPath:'/tmp/proj',rooms:[makeRoom('r-01','Delivery')],sessions:[]});
+ entry.map.plans=[{id:'pl-01',roomId:'r-01',rev:1,mode:'checklist',status:'active',goal:'Ship',items:[{id:1,title:'One',owner:'s-01',scope:'x',after:[],criteria:[],verifier:null,status:'ready',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null}];
+ renderCard(entry);expect(screen.getByText('0/1 done')).toBeTruthy();
+});

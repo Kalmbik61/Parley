@@ -839,3 +839,12 @@ describe('buildRoomModel — карточка решения и пустая к�
     expect(build(entryOf({ messages: [message('m-1')] })).empty).toBe(false);
   });
 });
+
+it('projects native plan/proposal identities and treats Parley as coordination without losing unread', () => {
+ const entry=entryOf({messages:[message('m-01',{from:'parley',to:['human'],readBy:{},text:'Plan ready'})]});
+ entry.map.rooms[0]!.mode='verified';
+ const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:2,mode:'verified',status:'completing',goal:'Goal',items:[],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};
+ entry.map.plans=[plan]; entry.map.rooms[0]!.proposal={id:'p-01',rev:1,from:'s-01',at:'x',text:'Complete',kind:'completion',planId:'pl-01',planRev:2};
+ const model=build(entry); expect(model.mode).toBe('verified');expect(model.plan).toBe(plan);expect(model.proposal).toMatchObject({kind:'completion',planId:'pl-01',planRev:2});
+ expect(model.messages[0]).toMatchObject({from:'Parley',sender:{kind:'system',provider:null},unread:true,needsRead:true,to:'You'});
+});

@@ -25,7 +25,7 @@
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap } from '@parley/core';
+import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import {
@@ -45,6 +45,7 @@ import { replyExcerpt } from './excerpt.js';
 // Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
 const SYSTEM = 'system';
+const PARLEY = 'parley';
 
 export type SenderKind = 'human' | 'system' | 'agent';
 
@@ -143,6 +144,10 @@ export interface MessageModel {
 }
 
 export interface ProposalModel {
+  kind?: 'decision' | 'completion';
+  plan?: RoomPlan;
+  planId?: string;
+  planRev?: number;
   id: string;
   /** Версия текста: растёт, когда ведущий заменяет решение до ответа человека. */
   rev: number;
@@ -160,6 +165,8 @@ export interface DecisionItem {
 }
 
 export interface RoomModel {
+  mode: RoomMode;
+  plan: RoomPlan | null;
   title: string;
   subtitle: string;
   participants: ParticipantModel[];
@@ -181,7 +188,7 @@ export interface RoomModelInput {
 /** Подпись участника переписки: человек, система, сессия с номером и ярлыком, удалённая, чужой id как есть. */
 function labelOf(map: WorkMap, id: string): string {
   if (id === HUMAN) return S.participants.human;
-  if (id === SYSTEM) return S.participants.system;
+  if (id === SYSTEM || id === PARLEY) return S.participants.system;
   const session = map.sessions.find((candidate) => candidate.id === id);
   if (session !== undefined) return sessionRowLabel(id, session.label);
   return (map.work.deletedSessions ?? []).includes(id) ? `${sessionTag(id)} ${S.participants.deletedSuffix}` : id;
@@ -329,7 +336,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const deliveryOf = (message: Message): MessageModel['delivery'] => {
     const delivery: MessageModel['delivery'] = { picked: [], waiting: [] };
     for (const id of recipientsOf(message, map)) {
-      if (id === HUMAN || id === SYSTEM) continue;
+      if (id === HUMAN || id === SYSTEM || id === PARLEY) continue;
       const pickedAt = message.readBy[id];
       // Забравший остаётся в строке и после закрытия сессии: это запись о том, что было. Ждать же закрытую
       // незачем — она письмо уже не заберёт.
@@ -343,18 +350,18 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     .filter((message) => message.roomId === roomId)
     .sort((a, b) => a.at.localeCompare(b.at))
     .map((message) => {
-      const kind: SenderKind = message.from === HUMAN ? 'human' : message.from === SYSTEM ? 'system' : 'agent';
+      const kind: SenderKind = message.from === HUMAN ? 'human' : (message.from === SYSTEM || message.from === PARLEY) ? 'system' : 'agent';
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
         from: labelOf(map, message.from),
         lead: message.from === lead,
         // Системная строка: `to: [human]` — служебность хоста (`addSystemMessage`), не адресат для показа.
-        to: kind === 'system' ? null : message.to.length === 0 ? S.rooms.toAll : message.to.map((id) => labelOf(map, id)).join(', '),
+        to: message.from === SYSTEM ? null : message.to.length === 0 ? S.rooms.toAll : message.to.map((id) => labelOf(map, id)).join(', '),
         kind: message.kind,
         at: message.at,
         text: message.text,
-        unread: kind !== 'system' && isHumanUnread(message),
+        unread: message.from !== SYSTEM && isHumanUnread(message),
         needsRead: isHumanUnread(message),
         mentionsYou: isHumanMention(message),
         delivery: deliveryOf(message),
@@ -374,6 +381,9 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     waiting === null
       ? null
       : {
+          ...(waiting.kind ? {kind:waiting.kind} : {}),
+          ...(waiting.plan ? {plan:waiting.plan} : {}),
+          ...((waiting.plan?.id ?? waiting.planId) ? {planId:waiting.plan?.id ?? waiting.planId,planRev:waiting.plan?.rev ?? waiting.planRev} : {}),
           id: waiting.id,
           rev: waiting.rev,
           at: waiting.at,
@@ -383,6 +393,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
         };
 
   return {
+    mode: room.mode ?? 'free',
+    plan: (map.plans ?? []).find(plan => plan.roomId === roomId && (plan.status === 'active' || plan.status === 'completing')) ?? (map.plans ?? []).filter(plan => plan.roomId === roomId).at(-1) ?? null,
     title: room.title === '' ? S.rooms.fallbackTitle : room.title,
     subtitle,
     participants,

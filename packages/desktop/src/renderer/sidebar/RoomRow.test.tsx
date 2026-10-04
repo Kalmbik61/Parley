@@ -106,8 +106,8 @@ beforeEach(() => {
   useLayoutStore.setState({ activeWorkKey: null, layouts: {} });
   useProvidersStore.setState({
     providers: [
-      { id: 'claude', label: 'Claude', available: true, version: null },
-      { id: 'codex', label: 'OpenAI Codex', available: true, version: null },
+      { id: 'claude', label: 'Claude', available: true, version: null, limits: null },
+      { id: 'codex', label: 'OpenAI Codex', available: true, version: null, limits: null },
     ],
   });
 });
@@ -222,7 +222,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
   });
 
   it('неизвестный провайдер — метка хоста из providers.list, а без неё — сам id; значок — буква', () => {
-    useProvidersStore.setState({ providers: [{ id: 'gemini', label: 'Gemini CLI', available: true, version: null }] });
+    useProvidersStore.setState({ providers: [{ id: 'gemini', label: 'Gemini CLI', available: true, version: null, limits: null }] });
     const entry = fourAgents({ members: ['s-01', 's-02'] }, { sessions: [makeSession('s-01', 'a', { provider: 'gemini' }), makeSession('s-02', 'b', { provider: 'mystery' })] });
     renderRow(entry);
     expect(badges().map((badge) => badge.getAttribute('title'))).toEqual(['1 Gemini CLI agent', '1 mystery agent']);
@@ -658,4 +658,10 @@ describe('RoomRow — упоминание человека (Parley 0.3.0)', () 
     expect(header().textContent).not.toContain('@you');
     expect(header().textContent).not.toContain('2 new');
   });
+});
+
+it('shows done progress without changing the room title or decision/unread indicators',()=>{
+ const entry=makeWork('w-01',{projectPath:PROJECT,rooms:[room()],sessions:sessions('s-01')});
+ const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:1,mode:'checklist',status:'active',goal:'Ship',items:[{id:1,title:'One',owner:'s-01',scope:'x',after:[],criteria:[],verifier:null,status:'done',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};
+ renderRow(entry,{plan,unread:2}); expect(screen.getByText('1/1 done')).toBeTruthy();expect(screen.getByText('Возвраты')).toBeTruthy();expect(screen.getByText('2 new')).toBeTruthy();
 });

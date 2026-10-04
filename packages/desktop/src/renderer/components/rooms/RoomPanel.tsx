@@ -53,6 +53,9 @@ import { useNow } from '../../lib/use-now.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
+import { useHostStore } from '../../store/host.js';
+import { PlanPanel, RoomModeControl } from './PlanPanel.js';
+import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel } from './feed-model.js';
 import { RoomHeader } from './RoomHeader.js';
@@ -95,7 +98,14 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
-  const canResolve = useHostSupports('rooms.resolveProposal');
+  const canResolve = useHostSupports('rooms.resolveProposal') && entry.map.work.status === 'active';
+  const connection = useHostStore(state => state.connections);
+  const status = useHostStore(state => state.status.state);
+  const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
+  const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
+  const currentBridge = useRef(bridge); currentBridge.current = bridge;
+  const resolveMounted = useRef(true);
+  useEffect(() => { resolveMounted.current = true; return () => { resolveMounted.current = false; }; }, []);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Стоит ли лента у низа — по последнему `scroll`: после коммита живая строка уже сожмёт ленту, и по DOM
   // «был ли у низа» не определить, а мерить его при каждой отрисовке — перекладка на каждое событие.
@@ -307,7 +317,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   /** Ответ человека на решение. `true` — хост принял; `false` — отказ, причина уже показана тостом. */
   const handleResolve = async (action: 'accept' | 'return', note: string): Promise<boolean> => {
     const proposal = model.proposal;
-    if (proposal === null) return false;
+    if (proposal === null || !canResolve) return false;
+    const captured = resolveKey;
     try {
       await bridge.call('rooms.resolveProposal', {
         projectPath: entry.projectPath,
@@ -315,11 +326,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         roomId,
         proposalId: proposal.id,
         rev: proposal.rev,
+        ...(proposal.planId !== undefined && proposal.planRev !== undefined ? {planId:proposal.planId, planRev:proposal.planRev} : {}),
         action,
         ...(action === 'return' ? { note } : {}),
       });
-      return true;
+      return resolveMounted.current && captured === currentResolve.current && currentBridge.current === bridge;
     } catch (error) {
+      if (!resolveMounted.current || captured !== currentResolve.current || currentBridge.current !== bridge) return false;
       const { code } = decodeIpcError(error);
       // `conflict`: карточку успели принять, вернуть или заменить — она остаётся, кнопки снова доступны.
       toast(code === 'conflict' ? S.rooms.decisionChanged : errorText(code, S.rooms.resolveAction));
@@ -329,7 +342,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
-      <RoomHeader title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -338,6 +351,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           data-room-feed=""
           className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
         >
+          <PlanPanel key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>
           <Decisions
             decisions={model.decisions}
             labelOf={labelOf}
@@ -357,13 +371,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             />
           ))}
           {model.proposal === null ? null : (
-            <DecisionCard
+            <CompletionOrDecision
+              plan={model.plan}
+              entry={entry}
+              bridge={bridge}
               key={model.proposal.id}
               proposal={model.proposal}
               time={relativeTime(model.proposal.at, now)}
               labelOf={labelOf}
               onOpenExternal={onOpenExternal}
               canResolve={canResolve}
+              {...(entry.map.work.status !== 'active' ? {unavailableReason:S.plans.workClosed} : {})}
               onResolve={handleResolve}
               onLayout={keepAtBottom}
             />
@@ -401,4 +419,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
     </div>
   );
+}
+
+function CompletionOrDecision({ plan, entry, bridge, ...props }: import('./DecisionCard.js').DecisionCardProps & { plan: import('@parley/core').RoomPlan | null; entry: WorkEntry; bridge: ParleyBridge }): JSX.Element {
+  return props.proposal.kind === 'completion' ? <CompletionCard {...props} plan={plan} entry={entry} bridge={bridge}/> : <DecisionCard {...props} entry={entry} bridge={bridge}/>;
 }

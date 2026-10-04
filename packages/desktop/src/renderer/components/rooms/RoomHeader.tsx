@@ -5,17 +5,19 @@
  * тултипе: название в 120 знаков в невысоком окне иначе съело бы ленту.
  */
 
+import type { ReactNode } from 'react';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
 
 export interface RoomHeaderProps {
+  modeControl?: ReactNode;
   title: string;
   subtitle: string;
   participants: readonly ParticipantModel[];
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, participants, onOpenSession }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -29,6 +31,7 @@ export function RoomHeader({ title, subtitle, participants, onOpenSession }: Roo
           {subtitle}
         </span>
       </div>
+      {modeControl}
       <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
     </div>
   );
