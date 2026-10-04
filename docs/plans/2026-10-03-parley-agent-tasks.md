@@ -82,13 +82,13 @@
 | [P16 — Создать единую панель проекта и вкладку Capabilities](#p16) | 5 | P15, P10 | /root/p01_claude_probe (P16) | done |
 | [P17 — Добавить native MCP add/remove/check](#p17) | 5 | P15, P16 | /root/p01_claude_probe | done |
 | [P18 — Добавить native действия плагинов](#p18) | 5 | P17 | /root/p01_claude_probe | done |
-| [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | /root/p02_codex_probe | running |
+| [P19 — Добавить передачу скилла второму CLI](#p19) | 5 | P18 | /root/p02_codex_probe | done |
 | [P20 — Реализовать shared/local state и домен бэклога](#p20) | 6 | P16 | /root/p02_codex_probe (P20) | done |
 | [P21 — Подключить бэклог к MCP, host и панели](#p21) | 6 | P20 | /root/p02_codex_probe (P21) | done |
 | [P22 — Реализовать режимы, планы, ревизии и снимки](#p22) | 7 | P20, P12 | /root/p01_review | done |
 | [P23 — Подключить инструменты планов и будильник](#p23) | 7 | P22 | /root/p01_review | done |
-| [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | /root/p01_claude_probe | running |
-| [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | не назначен | pending |
+| [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | /root/p01_claude_probe | done |
+| [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | /root/p01_review | running |
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
 | [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | /root/p01_review | running |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
@@ -99,7 +99,7 @@
 | [P33 — Обновить документацию по фактическому результату](#p33) | 11 | P32 | не назначен | pending |
 | [P34 — Ограничить bootstrap и повторение контекста](#p34) | audit | P25, P29 | не назначен | pending |
 | [P35 — Ввести компактные map/snapshots и страницы](#p35) | audit | P27, P31 | не назначен | pending |
-| [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | не назначен | pending |
+| [P36 — Исправить свежесть usage и cache ledger](#p36) | audit | P24 | /root/p01_claude_probe | running |
 | [P37 — Ограничить launches/fanout и лишний старт](#p37) | audit | P23, P26 | не назначен | pending |
 | [P38 — Подготовить benchmark принятого результата](#p38) | audit | P34, P35, P36, P37, P14, P31, P39 | не назначен | pending |
 | [P39 — Доставлять внутренний навык minimal-development](#p39) | skill | P13, P14 | /root/p01_claude_probe | done |
@@ -779,9 +779,9 @@
 
 ### P19: Добавить передачу скилла второму CLI
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
+**Статус:** done. **Исполнитель:** /root/p02_codex_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p01_claude_probe, gpt-6.1-sol/high.
 
 **Зависимости:** P18. **Источник:** [этап 5 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-5).
 
@@ -802,7 +802,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** 42f8f37: exact24 staged source; peer ownership3 RED→GREEN,22 independent +UI10 GREEN; root host36/protocol26/UI119/types0.
 
 **Начальный grant root:** TMP-only NEW share-skill.ts/test; общие snapshot/actions/protocol/UI закрыты до минимального DTO/private binding proposal. Registry/staging/commits root-only; только temporary native folders/fixtures, P18/P21 сохраняются.
 
@@ -953,9 +953,9 @@
 
 ### P24: Показать план и итог в комнате
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
+**Статус:** done. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** /root/p01_review, gpt-6.1-sol/high.
 
 **Зависимости:** P23, P21. **Источник:** [этап 7 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-7).
 
@@ -978,7 +978,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** 1d76601: exact17 staged source; original2 RED→GREEN, peer10/final17SHA GREEN; root UI119/web types0. P32 visual/native gate remains pending.
 
 **Grant root:** TMP-only card6+tests, RoomPanel/RoomRow и ONE WorkCard progress prop seam; disjoint S.plans namespace serial root apply. Existing bridge/DTO, no protocol/runtime expansion. Managed writes/registry/staging/commits root-only.
 
@@ -988,7 +988,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; профиль `worker`. **Проверяющий:** другой агент, профиль `code-reviewer`.
+**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
 
 **Зависимости:** P12, P24. **Источник:** [этап 8 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-8).
 
@@ -1014,7 +1014,7 @@
 
 **Передача агенту:** используй шаблон выше с этим ID, выданным checkout/SHA и правами на общие файлы.
 
-**Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
+**Evidence:** TMP foundation: new recipes modules/tests only; shared snapshot/delivery seams locked until explicit root grant.
 
 **Внутренний навык:** короткий lead playbook использует принцип minimal-development, не повторяя полное тело навыка и не ослабляя Verified/Checklist requirements. Native body доставляет P39 по demand.
 
@@ -1338,7 +1338,7 @@
 
 - [ ] Принято ведущим после независимой проверки.
 
-**Статус:** pending. **Исполнитель:** не назначен; gpt-6.1-sol/high. **Проверяющий:** другой агент gpt-6.1-sol/high.
+**Статус:** running. **Исполнитель:** /root/p01_claude_probe, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle, gpt-6.1-sol/high.
 
 **Зависимости:** P24. **Источник:** [Дополнение аудита: экономия токенов](2026-10-04-parley-token-economy-audit.md).
 
@@ -1357,6 +1357,8 @@
 
 **Передача:** стандартный шаблон выше; один писатель общих точек, новый grant до записи, сохранить чужие правки. **Evidence:** заполняет root после frozen snapshot и независимой проверки.
 
+
+**Evidence:** TMP usage foundation: existing index/activity pipeline, nullable source/epoch/freshness/cache metadata; shared DTO/export seams serial root integration.
 
 <a id="p37"></a>
 

@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P18, P20/P21/P22/P23/P29/P39 accepted (25/40); P19/P24/P27 running.
+- Текущая фаза: P00–P24, P29/P39 accepted (27/40); P25/P27/P36 running.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -39,13 +39,13 @@
 | P16 | Создать единую панель проекта и вкладку Capabilities | done | b7589f7; independent165checks accepted;17SHA matched; visual gate P32 |
 | P17 | Добавить native действия MCP | done | f447ccd +0c0d1f9, /root/p01_review accepted; original/related probes GREEN,43affected/lint/SHA4/hostbuild0; live/P32 pending |
 | P18 | Добавить native действия плагинов | done | c917f45 backend/DTO, a4abc3f UI; independent /root/p02_codex_probe accepted; native live gate P32 |
-| P19 | Добавить передачу скилла второму CLI | running | /root/p02_codex_probe; TMP foundation first, shared integration locked |
+| P19 | Добавить передачу скилла второму CLI | done | 42f8f37; peer /root/p01_claude_probe |
 | P20 | Реализовать shared/local state и домен бэклога | done | 4391680; exact14SHA; author181checks; independent fixes/probes accepted /root/p01_review |
 | P21 | Подключить бэклог к MCP, host и панели | done | fb2784f; /root/p01_review accepted after4-file UIrework;38SHA/blob +registry,162MCP/build/types0 |
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
 | P23 | Подключить инструменты планов и будильник | done | 6a3635f helper + b511fda integration21; correction peer9/root lifecycle peer19, actual257GREEN |
-| P24 | Показать план и итог в комнате | running | /root/p01_claude_probe; TMP UI, existing bridge/DTO, serial strings |
-| P25 | Реализовать рецепты и плейбук ведущего | pending | — |
+| P24 | Показать план и итог в комнате | done | 1d76601; peer /root/p01_review |
+| P25 | Реализовать рецепты и плейбук ведущего | running | /root/p01_review; TMP recipes foundation, shared seams locked |
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
 | P27 | Реализовать журнал принятых версий и историю | running | /root/p01_review; TMP immutable journal/local history foundation |
 | P28 | Подключить Decisions и Share history | pending | — |
@@ -56,7 +56,7 @@
 | P33 | Обновить документацию по фактическому результату | pending | — |
 | P34 | Ограничить bootstrap и повторение контекста | pending | audit-token track; dependencies P25, P29 |
 | P35 | Ввести компактные map/snapshots и страницы | pending | audit-token track; dependencies P27, P31 |
-| P36 | Исправить свежесть usage и cache ledger | pending | audit-token track; dependencies P24 |
+| P36 | Исправить свежесть usage и cache ledger | running | /root/p01_claude_probe; TMP usage/cache/freshness foundation |
 | P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
 | P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
 | P39 | Доставлять внутренний навык minimal-development | done | 50a878f; author /root/p01_claude_probe; independent /root/p01_review accepted; 84core/17host, ownership/failure probes, builds0 |
@@ -262,3 +262,9 @@ P19 manual/source availability clarified: structurally known ordinary human SKIL
 P24 exact product15 + strings2 интегрированы для проверки, web noEmit0. Independent peer /root/p01_review воспроизвёл два Important: действия в архивной работе и очистка нового human draft старым ответом. Separate correction у автора; P24 ещё не принят. P19 UI6 independent peer10 GREEN; backend16 needs rework по трём ownership probes. Root exact-применил backend16 + correction3 6c205f8d…41c2154, UI4 subset + rebasedstrings2 и registry2 f8dc1661…a92a11c; actual host36/protocol26 GREEN и host/web types0. Повторная независимая проверка correction ещё впереди.
 
 P27 domain14 exact7d2da23f…fbe8d5 интегрирован, core/protocol/host build0 и146 actual transition/storage tests GREEN; independent domain review /root/p02_codex_probe. Host retry/debounce/deletion integration и local-only unknown-main correction ещё выполняются, full P27 не принят. Итог25/40 accepted. Недельный остаток39% (used61); остановка при30% остатка сохранена.
+
+P24 accepted1d76601: original2 RED→GREEN, independent10/final17 SHA matched; root actualUI119/web types0. P19 accepted42f8f37: exact24 source staged, descriptor/publication ownership3 RED→GREEN, peer22 backend+10UI, actualhost36/protocol26 GREEN and host/web types0. Shared strings staged separately to preserve independent commits; P27 source remained unstaged. Итог27/40accepted. P25 recipes foundation и P36 usage/cache foundation dispatched disjoint TMP owners.
+
+P27 host4/local-lock3 independently accepted as helpers; receiptWriter2 Important ownership cases fixed in private writer only, original probes RED→GREEN, rootactual3 history checks GREEN. Final lifecycle/delete wiring applied with exact4SHA, hostbuild0; aggregate independent acceptance still pending. Native/model/visual/economic gates remain open. Latest weekly remaining36% (used64), stop threshold30% remaining.
+
+P27 final wiring review нашёл Important cleanup: captured room IDs терялись при stale empty-room snapshot. Private HistoryService follow-up2 у автора; aggregate acceptance остаётся pending. Root actual startup/shutdown/delete3 GREEN после исправления только fixture home/index binding; source lifecycle unchanged, wiring lint0. Latest weekly remaining35% (used65).
