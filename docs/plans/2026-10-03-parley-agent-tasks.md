@@ -90,7 +90,7 @@
 | [P24 — Показать план и итог в комнате](#p24) | 7 | P23, P21 | /root/p01_claude_probe | done |
 | [P25 — Реализовать рецепты и плейбук ведущего](#p25) | 8 | P12, P24 | /root/p01_review | running |
 | [P26 — Подключить рецепты к диалогу и Save as recipe](#p26) | 8 | P25 | не назначен | pending |
-| [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | /root/p01_review | running |
+| [P27 — Реализовать журнал принятых версий и историю](#p27) | 9 | P23, P20 | /root/p01_review | done |
 | [P28 — Подключить Decisions и Share history](#p28) | 9 | P27, P16 | не назначен | pending |
 | [P29 — Реализовать память проекта и её слой](#p29) | 10 | P20, P09 | /root/p02_codex_probe | done |
 | [P30 — Реализовать search_history по записям проекта](#p30) | 10 | P27, P29, P22 | не назначен | pending |
@@ -1053,9 +1053,9 @@
 
 ### P27: Реализовать журнал принятых версий и историю
 
-- [ ] Принято ведущим после независимой проверки.
+- [x] Принято ведущим после независимой проверки.
 
-**Статус:** running. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** другой агент после frozen bundle.
+**Статус:** done. **Исполнитель:** /root/p01_review, gpt-6.1-sol/high. **Проверяющий:** /root/p02_codex_probe, gpt-6.1-sol/high; accepted exact22 afterSHA и18 независимых GREEN после original3 Important RED→GREEN.
 
 **Зависимости:** P23, P20. **Источник:** [этап 9 единого плана](2026-10-03-parley-unified-implementation-plan.md#step-9).
 
@@ -1083,6 +1083,8 @@
 **Evidence после выполнения:** diff/SHA, фактические проверки и вердикт проверяющего — заполняет ведущий.
 
 **Grant root:** TMP-only NEW decision-journal/room-history +tests first; shared capture/retry/state-dir/host integration требует bounded proposal. Foreign immutable journal/Share history protected; no second plan drain authority. Managed writes/registry/staging/commits root-only.
+
+**Evidence:** commit37f7511, 22 source/test paths; frozen domain14, local-lock3, host4, receipt-fix2, root-wiring4, fixture-fix1, cleanup-fix2 сохраняют отдельные SHA. Root146 transition/storage,11 history/lifecycle,3 receipt/unknown-main checks GREEN; types/build0, targeted lint0. Новый journal capture находится в Accept transition, immutable retry после map-lock; один host plan-effects authority. Local history lock 0600, owned receipts/inode/hash, explicit snapshot Share; stale cached rooms не теряют captured IDs, corrupt/reappearing source не удаляется. GUI/host history actions — P28; native/model/visual/economic gates — P32/P38.
 
 <a id="p28"></a>
 

@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: P00–P24, P29/P39 accepted (27/40); P25/P27/P36 running.
+- Текущая фаза: P00–P24, P27/P29/P39 accepted (28/40); P25/P36 running. P28 — подготовка интерфейсных контрактов, реализация pending.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -47,7 +47,7 @@
 | P24 | Показать план и итог в комнате | done | 1d76601; peer /root/p01_review |
 | P25 | Реализовать рецепты и плейбук ведущего | running | /root/p01_review; TMP recipes foundation, shared seams locked |
 | P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
-| P27 | Реализовать журнал принятых версий и историю | running | /root/p01_review; TMP immutable journal/local history foundation |
+| P27 | Реализовать журнал принятых версий и историю | done | commit 37f7511; /root/p01_review; independent /root/p02_codex_probe accepted22/18GREEN; root lifecycle/types GREEN |
 | P28 | Подключить Decisions и Share history | pending | — |
 | P29 | Реализовать память проекта и её слой | done | 127367e; /root/p01_claude_probe accepted; original Unicode9 GREEN,54affected/probes,16exact staged SHA,corebuild0 |
 | P30 | Реализовать search_history по записям проекта | pending | — |
@@ -268,3 +268,9 @@ P24 accepted1d76601: original2 RED→GREEN, independent10/final17 SHA matched; r
 P27 host4/local-lock3 independently accepted as helpers; receiptWriter2 Important ownership cases fixed in private writer only, original probes RED→GREEN, rootactual3 history checks GREEN. Final lifecycle/delete wiring applied with exact4SHA, hostbuild0; aggregate independent acceptance still pending. Native/model/visual/economic gates remain open. Latest weekly remaining36% (used64), stop threshold30% remaining.
 
 P27 final wiring review нашёл Important cleanup: captured room IDs терялись при stale empty-room snapshot. Private HistoryService follow-up2 у автора; aggregate acceptance остаётся pending. Root actual startup/shutdown/delete3 GREEN после исправления только fixture home/index binding; source lifecycle unchanged, wiring lint0. Latest weekly remaining35% (used65).
+
+
+P27 accepted37f7511: exact22 staged afterSHA совпали с final peer manifest; 18 meaningful independent checks GREEN, три Important закрыты (receipt ownership2 и stale cached room cleanup). Root actual146 transition/storage, затем11 history service/lifecycle и3 receipt/unknown-main checks GREEN; core/protocol/host types/build и targeted lint0. History сохраняется локально независимо от Git main; explicit Share публикует snapshot, work Delete сохраняет shared. Journal Accept capture и повторная запись используют прежнюю единственную plan-effects authority. Frozen bundle/manifest/RED→GREEN evidence сохранены для восстановления. Итог28/40accepted, P25/P36running; P28 bounded preparation у /root/p02_codex_probe без source write. Native/model/visual/economic gates открыты. Недельный остаток33% (used67), стоп при30% остатка.
+
+
+Durable local checkpoint: `.parley/upgrade-checkpoints/20261004T001852Z` (ignored, directories0700/files0600,1303 bounded files/13.8MB, per-file SHA verified; no node_modules/dist/cache). Содержит P27 frozen/review/integration и P25/P36 active draft copies; черновики не означают acceptance. P25 foundation frozen7 NEW recipes modules/tests,24GREEN/types/lint0, independent /root/p02_codex_probe review running; full room/lead delivery ещё pending. P28 preparation546слов завершена без source writes; методы и UI ещё не реализованы. Остаток32% (used68); порог30% сохранён.
