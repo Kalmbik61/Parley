@@ -6,6 +6,17 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.5.1
+
+### Fixed
+
+- **Embedded Node download during release builds.** Transient network failures and HTTP
+  408, 429 or 5xx responses retry up to three attempts, with 1-second and 2-second waits
+  within the existing ten-minute download deadline. SHA256, architecture and license
+  checks remain mandatory; TLS failures are not retried.
+- Download failures report the checksum or archive stage, URL, attempt count and an
+  allowlisted network error code when available, without dumping response bodies or causes.
+
 ## 0.5.0
 
 ### Added
