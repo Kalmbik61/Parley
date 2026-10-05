@@ -251,6 +251,11 @@ describe('parley-core work session new', () => {
       // Push включён по умолчанию: сторож входящих будит сессию звонком (4.4).
       PARLEY_CHANNEL: '1',
       HARNAS_CHANNEL: '1',
+      // Один снимок настройки навигатора и ревизия нативного контекста на запуск (спека навигатора, 6.1).
+      PARLEY_SKILL_NAVIGATOR: '0',
+      HARNAS_SKILL_NAVIGATOR: '0',
+      PARLEY_NATIVE_CONTEXT_REVISION: expect.any(String),
+      HARNAS_NATIVE_CONTEXT_REVISION: expect.any(String),
     });
   }, 60_000);
 

@@ -89,7 +89,9 @@ describe('startHost переносит каталог состояния про�
 
     expect(existsSync(path.join(project, '.harnas'))).toBe(false);
     expect(existsSync(path.join(project, '.parley', 'works', workId, 'map.json'))).toBe(true);
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe(
+      '*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n',
+    );
 
     const record = JSON.parse(await readFile(path.join(home, 'migrated-from-harnas.json'), 'utf8')) as {
       migrated: Array<Record<string, string>>;

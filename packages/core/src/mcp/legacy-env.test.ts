@@ -91,6 +91,8 @@ describe('сохранённый mcp/<sid>.json прежней сборки (т�
       workDir,
       sessionId: 's-01',
       channel: false,
+      // Старой сборки нет настройки навигатора скиллов: выключен, ревизии нативного контекста нет.
+      skillNavigator: false,
     });
     expect(contextFromEnv(savedEnv(workDir, { HARNAS_CHANNEL: '1' })).channel).toBe(true);
   });

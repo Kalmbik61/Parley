@@ -389,12 +389,14 @@ describe('create(): модель и усилие из диалога (дизай
     const create = (workId: string | null, provider: string, task: string, model: string) =>
       service.create({ projectPath: project, workId, provider, label: '', task, parent: null, model });
     // Все три пути создания: тихий старт, сессия с задачей (`pending`) и новая работа под быструю сессию.
+    // Попытки запускаются по одной: созданный заранее промис, отклонённый раньше своей очереди, под
+    // нагрузкой всплывал необработанным отклонением.
     for (const attempt of [
-      create(work.work.id, 'claude', '', 'gpt-6-sol'),
-      create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
-      create(null, 'codex', '', 'opus'),
+      () => create(work.work.id, 'claude', '', 'gpt-6-sol'),
+      () => create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
+      () => create(null, 'codex', '', 'opus'),
     ]) {
-      await expect(attempt).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+      await expect(attempt()).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
     }
 
     expect(existsSync(argsFile)).toBe(false);

@@ -117,15 +117,35 @@ describe('исключение для чтения settings.json в скрипт
   const STATUSLINE = 'packages/core/src/work/statusline.ts';
   const DECLARATION = "const SETTINGS_FILE = '.claude/settings.json';";
 
-  it('исключение ровно одно: statusline.ts, правило записи в каталоги агентов, причина — ссылка на 3.5', () => {
-    expect(FRAME_EXCEPTIONS).toHaveLength(1);
+  it('исключение statusline.ts: правило записи в каталоги агентов, причина — ссылка на 3.5', () => {
     expect(FRAME_EXCEPTIONS[0]).toMatchObject({
       file: STATUSLINE,
       rule: 'запись в каталоги агентов',
       line: DECLARATION,
     });
     expect(FRAME_EXCEPTIONS[0]?.reason).toContain('3.5');
-    expect(FRAME_EXCEPTIONS[0]?.reason).not.toContain('\n');
+  });
+
+  // Список исключений закреплён поимённо: новое — решение контролёра (frame-scan.ts), поэтому
+  // оно краснит этот тест, пока человек не прочитал строку и не добавил её сюда осознанно.
+  // Все, кроме statusline.ts, — чтение: спека возможностей (2026-10-02) запрещает писать в
+  // ~/.claude.json и settings.json, читать их можно; и проверка конфликтных флагов Codex в
+  // agents.ts, которая такие флаги отвергает, а не подставляет.
+  it('исключений ровно перечисленные: файл и правило, причина — одна строка', () => {
+    expect(FRAME_EXCEPTIONS.map((item) => `${item.file} | ${item.rule}`)).toEqual([
+      `${STATUSLINE} | запись в каталоги агентов`,
+      'packages/core/src/skills/claude.ts | запись в каталоги агентов',
+      'packages/core/src/work/agents.ts | YOLO-флаги',
+      'packages/host/src/capabilities/claude.ts | запись в каталоги агентов',
+      'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',
+      'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',
+      'packages/host/src/capabilities/native-targets.ts | запись в каталоги агентов',
+      'packages/host/src/capabilities/snapshot.ts | запись в каталоги агентов',
+    ]);
+    for (const exception of FRAME_EXCEPTIONS) {
+      expect(exception.reason, exception.file).not.toBe('');
+      expect(exception.reason, exception.file).not.toContain('\n');
+    }
   });
 
   it('объявление пути настроек в statusline.ts не находка', () => {
@@ -291,7 +311,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
     expect(hits, report).toEqual([]);
   });
 
-  // Нынешних «близких» совпадений в исходниках пять, все в комментариях — сверено
+  // Нынешних «близких» совпадений в исходниках пять (без явных исключений FRAME_EXCEPTIONS), все в комментариях — сверено
   // по факту (raw-скан без фильтра комментариев) при написании этого раунда
   // исправлений. Если список изменится, этот тест укажет ровно на новую строку,
   // не пропустив её молча в общем «all clean».
@@ -324,8 +344,8 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:14',
-        'packages/core/src/providers.ts:220',
-        'packages/core/src/work/mcp-config.ts:144',
+        'packages/core/src/providers.ts:230',
+        'packages/core/src/work/mcp-config.ts:155',
       ].sort(),
     );
   });
@@ -400,7 +420,7 @@ describe('строка статуса не пишет в каталоги аге
 });
 
 describe('скилл агентов не пишет в каталоги агента (юридическая рамка, кусок 10)', () => {
-  // Скилл `parley` кладётся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
+  // Скиллы `parley` и `minimal-development` кладутся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
   // `~/.claude.json` не трогаются ни при каких условиях: ни установкой, ни учётом, ни строками exclude.
   it('домашняя папка после установки в проект и в worktree не изменилась ни на байт', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'frame-skill-'));
@@ -427,9 +447,16 @@ describe('скилл агентов не пишет в каталоги аген
       await installAgentSkill({ projectPath: path.join(home, '.claude') });
 
       expect(await snapshot(home)).toEqual(before);
-      // А в проекте и в worktree скилл лёг: проверка не прошла бы на пустом месте.
-      expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual(['parley']);
-      expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual(['parley']);
+      // А в проекте и в worktree скиллы легли (parley и внутренний minimal-development, P39):
+      // проверка не прошла бы на пустом месте.
+      expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual([
+        'minimal-development',
+        'parley',
+      ]);
+      expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual([
+        'minimal-development',
+        'parley',
+      ]);
     } finally {
       if (savedHome === undefined) delete process.env['HOME'];
       else process.env['HOME'] = savedHome;
