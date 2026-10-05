@@ -191,13 +191,13 @@ core, нужный только ему, документы требований 
   `main/layout-store.ts` меряет файл целиком, с отступами `JSON.stringify(…, null, 2)`:
   много работ с большими раскладками упираются в предел все вместе. Нужен предел на
   одну раскладку и запись без отступов.
-- **`wait_for` не отменяется вместе с вызовом MCP.** Пробросить сигнал отмены
-  (`extra.signal` обработчика MCP) в `waitForMap`: отменённый `wait_for` должен
-  закрывать `fs.watch` и `setInterval` сразу, а не по своему таймауту. Сейчас клиент
-  отваливается по своему таймауту, а watcher и таймер живут до 30 минут и копятся по
-  числу отмен. С чего начать: `packages/core/src/mcp/tools.ts` (`waitFor`, обработчик
-  `CallToolRequestSchema` получает `extra`), `packages/core/src/mcp/watch-map.ts`
-  (`waitForMap`: добавить `signal`, снимать `stop()` по `abort`).
+- **Проверки освобождения ресурсов `wait_for` при lifecycle изменениях.** Отмена
+  MCP request уже проброшена через `extra.signal` в `waitForMap`: abort снимает
+  `fs.watch`, interval/deadline и listener; для отмены есть тесты в
+  `packages/core/src/mcp/server.test.ts`. Synthetic проверка 2026-10-04 подтвердила
+  request cancel и закрытие транспорта. Дополнить проверками повторных циклов и
+  abort/event race; при общем Stop/Close проверить закрытие принадлежащего сессии
+  MCP transport и cleanup. Отсутствующая отмена и новая утечка не установлены.
 
 ## 5. Облик: контраст и значки файлов
 

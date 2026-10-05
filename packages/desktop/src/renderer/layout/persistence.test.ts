@@ -202,6 +202,79 @@ describe('useLayoutPersistence', () => {
     expect(useLayoutStore.getState().layouts[keyB]).toBeUndefined();
   });
 
+  // Сессию удалили при живом окне: вкладки её сессии (терминал, дифф, файлы её worktree) должны
+  // закрыться сразу, а не висеть в строке вкладок телом «Session deleted» до перезапуска.
+  it('сессия пропала из снимка — её вкладки закрываются в живой раскладке, чужие остаются', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01'), session('s-02')]);
+    const keepTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+    const termTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' };
+    const diffTab: TabSpec = { kind: 'diff', id: tabId.diff('s-02', null), sessionId: 's-02', commit: null };
+
+    const { rerender } = renderHook(
+      ({ entries }: { entries: WorkEntry[] }) =>
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
+      { initialProps: { entries: [entryA] } },
+    );
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, keepTab, 'active'));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, termTab, 'active'));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, diffTab, 'active'));
+
+    rerender({ entries: [work('w-a', '/tmp/a', [session('s-01')])] });
+
+    const layout = useLayoutStore.getState().layouts[keyA] as WorkLayout;
+    expect(groups(layout).flatMap((g) => g.tabs.map((t) => t.id))).toEqual([keepTab.id]);
+  });
+
+  it('комната пропала из снимка — вкладка комнаты закрывается, вкладка сессии остаётся', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    entryA.map.rooms.push({ id: 'r-01', title: 'r', creator: 'human', members: [], createdAt: '2026-01-01' });
+    const keepTab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' };
+    const roomTab: TabSpec = { kind: 'room', id: tabId.room('r-01'), roomId: 'r-01' };
+
+    const { rerender } = renderHook(
+      ({ entries }: { entries: WorkEntry[] }) =>
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
+      { initialProps: { entries: [entryA] } },
+    );
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, keepTab, 'active'));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, roomTab, 'active'));
+
+    const withoutRoom = work('w-a', '/tmp/a', [session('s-01')]);
+    rerender({ entries: [withoutRoom] });
+
+    const layout = useLayoutStore.getState().layouts[keyA] as WorkLayout;
+    expect(groups(layout).flatMap((g) => g.tabs.map((t) => t.id))).toEqual([keepTab.id]);
+  });
+
+  it('закрытие вкладок удалённой сессии уходит на диск, а не только в память', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01'), session('s-02')]);
+    const tab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' };
+
+    const { rerender } = renderHook(
+      ({ entries }: { entries: WorkEntry[] }) =>
+        useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
+      { initialProps: { entries: [entryA] } },
+    );
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+    useLayoutStore.getState().apply(keyA, (l) => openTab(l, tab, 'active'));
+
+    rerender({ entries: [work('w-a', '/tmp/a', [session('s-01')])] });
+
+    await waitFor(
+      () => {
+        const saved = bridge.layoutSaves.find((s) => s.workKey === keyA);
+        expect(saved).toBeDefined();
+        expect(groups(saved?.layout as WorkLayout).flatMap((g) => g.tabs.map((t) => t.id))).toEqual([]);
+      },
+      { timeout: 2000 },
+    );
+  });
+
   it('пять изменений за 200 мс дают одно сохранение; изменения в двух работах — два сохранения (тест 3)', async () => {
     const bridge = createFakeBridge();
     const sessions = Array.from({ length: 5 }, (_, i) => session(`s-0${i}`));

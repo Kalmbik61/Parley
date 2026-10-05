@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RawRecord } from '../jsonl.js';
-import { feedFromTranscript, interruptedAt } from './from-transcript.js';
+import { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
 import { applyHookEvent } from './reduce.js';
 import type { FeedAgent, FeedItem, FeedPrompt, FeedTool, FeedTurn } from './types.js';
 
@@ -23,6 +23,44 @@ const records = (name: string): RawRecord[] =>
 
 const kinds = (items: readonly FeedItem[]): string[] =>
   items.map((item) => (item.kind === 'tool' ? `tool:${item.status}` : item.kind));
+
+describe('API retry records', () => {
+  const networkRetry = {
+    type: 'system', subtype: 'api_error', uuid: 'network-1',
+    timestamp: '2026-10-05T10:00:00.000Z',
+    error: { message: 'Connection error.', formatted: 'Connection dropped (ECONNRESET)' },
+    retryInMs: 614, retryAttempt: 1, maxRetries: 10,
+  };
+
+  it('uses the formatted network error from the actual CLI retry format', () => {
+    expect(retryFromTranscript(networkRetry)).toMatchObject({
+      error: 'api_error', message: 'Connection dropped (ECONNRESET)',
+      retry: { delayMs: 614, attempt: 1, maxAttempts: 10 },
+    });
+  });
+
+  it('ignores malformed retry records instead of producing a broken countdown', () => {
+    for (const invalid of [
+      { retryInMs: -1 }, { retryInMs: Infinity }, { retryAttempt: 0 },
+      { retryAttempt: 11 }, { retryAttempt: 1.5 }, { timestamp: 'invalid' },
+      { subtype: 'other' },
+    ]) expect(retryFromTranscript({ ...networkRetry, ...invalid })).toBeNull();
+  });
+
+  it('keeps 429 retry details in history without turning them into assistant text', () => {
+    const { items } = feedFromTranscript([{
+      type: 'system', subtype: 'api_error', uuid: 'retry-6',
+      timestamp: '2026-10-05T10:00:00.000Z',
+      error: { status: 429, message: 'Usage limit reached for 5 hour.' },
+      retryInMs: 8000, retryAttempt: 6, maxRetries: 10,
+    }]);
+    expect(items).toEqual([{
+      id: 'retry:retry-6', at: '2026-10-05T10:00:00.000Z', kind: 'error',
+      error: '429', message: 'Usage limit reached for 5 hour.',
+      retry: { delayMs: 8000, attempt: 6, maxAttempts: 10 },
+    }]);
+  });
+});
 
 describe('feedFromTranscript на настоящих журналах', () => {
   it('p2: порядок хода, отказ в диалоге и прерывание', () => {

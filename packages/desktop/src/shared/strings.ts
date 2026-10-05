@@ -657,6 +657,10 @@ export const S = {
     turnInterrupted: (duration: string | null): string => (duration === null ? 'Interrupted' : `Interrupted · ${duration}`),
     /** Строка «агент работает» под лентой, пока текста ещё нет (живая проверка 2026-10-02). */
     working: 'Working…',
+    retrying: 'Retrying request',
+    retryAttempt: (attempt: number, maxAttempts: number): string => `attempt ${attempt}/${maxAttempts}`,
+    retryDelay: (seconds: number): string => seconds > 0 ? `Retrying in ${seconds}s` : 'Retrying…',
+    retryScheduled: (seconds: number): string => `Retry scheduled after ${seconds}s`,
     error: 'Request failed',
     agent: {
       fallbackTitle: 'Agent',

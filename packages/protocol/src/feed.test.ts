@@ -162,6 +162,20 @@ describe('feedItem на том, что собирает core', () => {
     expect(failures(changes)).toEqual([]);
   });
 
+  it('retry records pass the wire schema; invalid delay and attempts do not', () => {
+    const item = {
+      id: 'retry:6', at: iso(0), kind: 'error', error: '429', message: 'Usage limit reached',
+      retry: { delayMs: 8000, attempt: 6, maxAttempts: 10 },
+    };
+    expect(feedItem.safeParse(item).success).toBe(true);
+    expect(feedItem.safeParse({ ...item, retry: { ...item.retry, resolved: true } }).success).toBe(true);
+    for (const retry of [
+      { delayMs: -1, attempt: 6, maxAttempts: 10 },
+      { delayMs: 8000, attempt: 11, maxAttempts: 10 },
+      { delayMs: 8000, attempt: 1.5, maxAttempts: 10 },
+    ]) expect(feedItem.safeParse({ ...item, retry }).success).toBe(false);
+  });
+
   it('пределы строк длиннее элементов core: усечённые элементы проходят схему', () => {
     const long = 'я'.repeat(FEED_TEXT_LIMIT * 2);
     const at = iso(0);
@@ -311,7 +325,7 @@ describe('пределы и версия', () => {
     expect(FEED_TEXT_LIMIT).toBe(core.FEED_TEXT_LIMIT);
     expect(FEED_AGENT_CHILDREN).toBe(core.FEED_AGENT_CHILDREN);
     expect(FEED_MIN_VERSION).toBe(core.FEED_MIN_VERSION);
-    expect(FEED_SCHEMA_VERSION).toBe(1);
+    expect(FEED_SCHEMA_VERSION).toBe(2);
   });
 
   it('карточка агента: вложенных вызовов не больше FEED_AGENT_CHILDREN', () => {
