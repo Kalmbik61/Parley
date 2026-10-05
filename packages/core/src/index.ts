@@ -437,3 +437,5 @@ export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalSt
 export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult } from './work/decision-journal.js';
 export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, RoomHistoryError } from './work/room-history.js';
 export type { RoomHistoryResult, RoomHistoryCode } from './work/room-history.js';
+export { searchHistory, HistorySearchError, HISTORY_SCOPES } from './work/history-search.js';
+export type { HistoryHit, HistoryScope, HistorySource, HistorySearchInput, HistorySearchResult } from './work/history-search.js';
