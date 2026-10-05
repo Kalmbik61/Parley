@@ -111,10 +111,7 @@ export async function buildSessionTree(
   adapter: SchemaAdapter = adapterV1,
 ): Promise<SessionTree> {
   const [session, subsessions, workflows] = await Promise.all([
-    indexSessionFile(discovered.file, root, {
-      adapter,
-      subsessionCount: discovered.subagents.length,
-    }),
+    indexSessionFile(discovered.file, root, { adapter, subagents: discovered.subagents }),
     Promise.all(discovered.subagents.map((subagent) => indexSubsession(subagent, adapter))),
     readSessionWorkflows(discovered.file),
   ]);
@@ -147,10 +144,7 @@ export async function buildIndex(
   const discovered = await discoverSessions(root);
   // Не больше INDEX_READ_CONCURRENCY файлов разом: история бывает в тысячи файлов (lane-r3, п. 1).
   const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
-    indexSessionFile(session.file, root, {
-      adapter,
-      subsessionCount: session.subagents.length,
-    }),
+    indexSessionFile(session.file, root, { adapter, subagents: session.subagents }),
   );
   index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
   return index;

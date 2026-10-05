@@ -13,17 +13,27 @@ import {
   codexSource,
   watchSessions,
   type ActivityLog,
+  type DescendantUsage,
   type MetricsRoots,
   type SessionChange,
   type SessionIndex,
   type SessionWatcher,
+  type UsageSummary,
   type WorkSession,
+  usageKey,
+  withDescendants,
 } from '@parley/core';
 
 export interface LogIndex {
   start(): Promise<void>;
   /** Запись индекса по `providerSessionId` сессии; `undefined` — лога нет. */
   index(session: WorkSession): SessionIndex | undefined;
+  /**
+   * Токены разговора вместе с потомками, которых увидел индекс: подагенты Claude уже в итоге записи, а
+   * порождённые треды Codex находятся по `parentId` и складываются здесь (один тред — один раз). `undefined` —
+   * лога нет или он собран кодом до P36.
+   */
+  usage(session: WorkSession): UsageSummary | undefined;
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: () => void): () => void;
@@ -40,13 +50,22 @@ const logKey = (provider: string, id: string): string => `${logFamily(provider)}
 export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   let sessions: SessionIndex[] = [];
   const byId = new Map<string, SessionIndex>();
+  /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
+  const byParent = new Map<string, SessionIndex[]>();
   const listeners = new Set<() => void>();
   let watcher: SessionWatcher | undefined;
   let stopped = false;
 
   const rebuild = (): void => {
     byId.clear();
-    for (const session of sessions) byId.set(logKey(session.provider, session.id), session);
+    byParent.clear();
+    for (const session of sessions) {
+      byId.set(logKey(session.provider, session.id), session);
+      if (session.provider === 'codex' && session.parentId !== undefined) {
+        const key = logKey('codex', session.parentId);
+        byParent.set(key, [...(byParent.get(key) ?? []), session]);
+      }
+    }
   };
 
   /** Та же склейка, что и `applyChange` в `use-sessions.ts`: по файлу, свежие первыми. */
@@ -63,6 +82,29 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
     session.providerSessionId === null
       ? undefined
       : byId.get(logKey(session.provider, session.providerSessionId));
+
+  /** Все порождённые треды Codex под корнем (дети, внуки…); цикл в данных их не зациклит. */
+  const descendantsOf = (root: SessionIndex): DescendantUsage[] => {
+    const seen = new Set([logKey('codex', root.id)]);
+    const found: DescendantUsage[] = [];
+    const queue = [root];
+    for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
+      for (const child of byParent.get(logKey('codex', parent.id)) ?? []) {
+        const key = logKey('codex', child.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        queue.push(child);
+        if (child.usage === undefined) continue;
+        found.push({
+          key: usageKey('codex', child.id, child.startedAt),
+          usage: child.usage,
+          // Форк унаследовал чужую историю: что в его итоге своё, не доказать.
+          ...(child.forkedFrom === undefined ? {} : { overlapUnresolved: true }),
+        });
+      }
+    }
+    return found;
+  };
 
   return {
     async start() {
@@ -89,6 +131,11 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
       );
     },
     index: indexOf,
+    usage(session) {
+      const found = indexOf(session);
+      if (found?.usage === undefined) return undefined;
+      return found.provider === 'codex' ? withDescendants(found.usage, descendantsOf(found)) : found.usage;
+    },
     log(session) {
       const found = indexOf(session);
       return found === undefined

@@ -1184,6 +1184,198 @@ describe('токены сессии: свежесть и учёт кэша (P36)
     });
   });
 
+  describe('потомки (P36c)', () => {
+    const SUB = 'agent-native-sub';
+    const answer = (id: string | null, at: string, input: number, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: NATIVE,
+        timestamp: at,
+        ...extra,
+        message: {
+          role: 'assistant',
+          ...(id === null ? {} : { id }),
+          model: 'claude-opus-5',
+          usage: { input_tokens: input, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      });
+
+    /** Родитель и подагент Claude рядом: `<id>.jsonl` и `<id>/subagents/agent-<id>.jsonl`. */
+    async function writeClaudeFamily(parent: string[], sub: string[]): Promise<void> {
+      const dir = path.join(claudeRoot, '-proj');
+      await mkdir(path.join(dir, NATIVE, 'subagents'), { recursive: true });
+      await writeFile(path.join(dir, `${NATIVE}.jsonl`), `${parent.join('\n')}\n`);
+      await writeFile(path.join(dir, NATIVE, 'subagents', `agent-${SUB}.jsonl`), `${sub.join('\n')}\n`);
+    }
+
+    it('Claude: родитель плюс подагент дают сумму, охват — с потомками', async () => {
+      const ref = await session();
+      await writeClaudeFamily(
+        [answer('msg_parent', AFTER_LAUNCH, 1000)],
+        [answer('msg_sub', '2026-10-04T12:00:02.000Z', 400)],
+      );
+
+      const metrics = (await started(ref)).get(ref)?.metrics;
+      expect(metrics).toMatchObject({
+        tokensIn: 1400,
+        tokensOut: 20,
+        usage: {
+          source: 'native-index',
+          input: 1400,
+          output: 20,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+          observedAt: '2026-10-04T12:00:02.000Z',
+        },
+      });
+    });
+
+    it('Claude: подагент, увиденный из двух видов родителя, учтён один раз в каждом', async () => {
+      const first = await session();
+      const second = await session();
+      await writeClaudeFamily([answer('msg_parent', AFTER_LAUNCH, 1000)], [answer('msg_sub', AFTER_LAUNCH, 400)]);
+
+      const a = await started(first);
+      await waitFor(() => a.get(second)?.metrics?.model === 'claude-opus-5', 15_000);
+      for (const ref of [first, second]) {
+        expect(a.get(ref)?.metrics?.usage).toMatchObject({
+          input: 1400,
+          output: 20,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+        });
+      }
+    });
+
+    it('Claude: запись агента у родителя и в файле агента без общего id — не удваивается, итог неполный', async () => {
+      const ref = await session();
+      await writeClaudeFamily(
+        [answer('msg_parent', AFTER_LAUNCH, 1000), answer(null, AFTER_LAUNCH, 400, { isSidechain: true, agentId: SUB })],
+        [answer(null, AFTER_LAUNCH, 400)],
+      );
+
+      const metrics = (await started(ref)).get(ref)?.metrics;
+      expect(metrics?.usage).toMatchObject({ input: 1400, completeness: 'partial' });
+    });
+
+    const SPAWNED = 'codex-thread-child';
+
+    /** Rollout Codex: тред `id` (с родителем и форком, если заданы) и его накопленный итог. */
+    async function writeCodexThread(
+      id: string,
+      total: { input_tokens: number; cached_input_tokens: number; output_tokens: number },
+      payload: Record<string, unknown> = {},
+    ): Promise<void> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, `rollout-2026-10-04T12-00-00-${id}.jsonl`),
+        [
+          { timestamp: AFTER_LAUNCH, type: 'session_meta', payload: { id, cwd: project, source: 'cli', ...payload } },
+          { timestamp: AFTER_LAUNCH, type: 'turn_context', payload: { type: 'turn_context', cwd: project, model: 'gpt-5.1-codex' } },
+          {
+            timestamp: AFTER_LAUNCH,
+            type: 'event_msg',
+            payload: { type: 'token_count', info: { total_token_usage: total } },
+          },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join('\n'),
+      );
+    }
+
+    const codexUsage = (input: number, cached = 200, output = 200) => ({
+      input_tokens: input,
+      cached_input_tokens: cached,
+      output_tokens: output,
+    });
+    const child = { source: { subagent: { thread_spawn: { parent_thread_id: NATIVE, depth: 1 } } }, parent_thread_id: NATIVE };
+
+    async function startedCodex(ref: SessionRef): Promise<ActivityService> {
+      const a = activity(await works());
+      await a.start();
+      await waitFor(() => a.get(ref)?.metrics?.model === 'gpt-5.1-codex', 15_000);
+      return a;
+    }
+
+    it('Codex: порождённый тред находится по parent_thread_id и входит в итог родителя один раз в каждом виде', async () => {
+      const first = await session({ provider: 'codex', metrics: null });
+      const second = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+
+      const a = await startedCodex(first);
+      await waitFor(() => a.get(first)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      await waitFor(() => a.get(second)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      for (const ref of [first, second]) {
+        expect(a.get(ref)?.metrics?.usage).toMatchObject({
+          source: 'native-index',
+          // 800 + 400 без кэша, 200 + 100 из кэша, полный вход 1000 + 500: запись в кэш у Codex не наблюдается.
+          input: 1200,
+          output: 250,
+          cacheRead: 300,
+          cacheWrite: null,
+          totalInput: 1500,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+        });
+      }
+    });
+
+    it('Codex: тред с чужим parent_thread_id и обычный тред в том же cwd потомками не считаются — по времени и cwd не угадываем', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread('codex-other-child', codexUsage(500), { parent_thread_id: 'another-parent' });
+      await writeCodexThread('codex-plain', codexUsage(700));
+
+      const metrics = (await startedCodex(ref)).get(ref)?.metrics;
+      expect(metrics?.usage).toMatchObject({ input: 800, coverage: 'conversation', completeness: 'complete' });
+    });
+
+    it('Codex: форк унаследовал историю — перекрытие без доказательства: итог неполный, цифры форка не прибавлены', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(5000, 100, 50), { ...child, forked_from_id: NATIVE });
+
+      const a = await startedCodex(ref);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.completeness === 'partial', 15_000);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 800, totalInput: 1000, coverage: 'conversation', completeness: 'partial' });
+    });
+
+    it('Codex: запись потомка после старта доезжает до метрик родителя', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      const a = await startedCodex(ref);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 800, coverage: 'conversation' });
+
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 1200, totalInput: 1500 });
+    }, 30_000);
+
+    it('в публичных метриках нет нативных id потомков, путей их логов и корней истории', async () => {
+      const claude = await session();
+      await writeClaudeFamily([answer('msg_parent', AFTER_LAUNCH, 1000)], [answer('msg_sub', AFTER_LAUNCH, 400)]);
+      const a = await started(claude);
+      const json = JSON.stringify(a.get(claude)?.metrics);
+      expect(json).not.toContain(SUB);
+      expect(json).not.toContain('msg_sub');
+      expect(json).not.toMatch(/agent-|\.jsonl|binding|epoch/);
+      expect(json).not.toContain(claudeRoot);
+    });
+
+    it('в публичных метриках Codex нет нативного id порождённого треда', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+      const a = await startedCodex(ref);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      const json = JSON.stringify(a.get(ref)?.metrics);
+      expect(json).not.toContain(SPAWNED);
+      expect(json).not.toContain(codexRoot);
+    });
+  });
+
   it('публичные метрики не раскрывают нативный id, путь лога и корень истории', async () => {
     const ref = await session();
     await writeClaudeLog(AFTER_LAUNCH, FULL);

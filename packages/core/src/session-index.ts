@@ -2,7 +2,8 @@ import path from 'node:path';
 import { forEachJsonlRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
-import { createUsageLedger, type UsageSummary } from './work/usage-ledger.js';
+import type { DiscoveredSubagent } from './discover.js';
+import { createUsageLedger, type UsageCounters, type UsageSummary } from './work/usage-ledger.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -61,7 +62,9 @@ export interface SessionIndex {
   /**
    * Те же токены с происхождением (P36): кэш и полный вход как наблюдения (`null` — не сообщено), время
    * последней записи, полнота. Источник истины для окна; `tokens` остаётся для прежних потребителей.
-   * Нет поля — индекс собран кодом до P36.
+   * У Claude в итог входят подагенты из соседних файлов (`coverage` это показывает), а `tokens` — только
+   * собственный лог. У Codex — только собственный лог треда: потомков по `parentId` складывает вызывающий
+   * (`withDescendants`). Нет поля — индекс собран кодом до P36.
    */
   usage?: UsageSummary;
   provider: Provider;
@@ -72,6 +75,16 @@ export interface SessionIndex {
    * тред обычный; у Claude его нет вовсе.
    */
   spawned?: boolean;
+  /**
+   * Нативный id родительского треда (только Codex): `parent_thread_id` порождённого треда. По нему
+   * потомок находится у родителя; к записи карты порождённый тред не привязывается. Нет поля — родителя нет.
+   */
+  parentId?: string;
+  /**
+   * Нативный id треда, чью историю этот тред унаследовал при форке (только Codex: `forked_from_id`).
+   * Базу унаследованного не отделить, поэтому перекрытие с родителем не разрешено (`overlapUnresolved`).
+   */
+  forkedFrom?: string;
 }
 
 /**
@@ -101,8 +114,24 @@ export function projectSlug(file: string, root: string): string {
 
 export interface IndexSessionOptions {
   adapter?: SchemaAdapter;
-  /** Известно только вызывающему, который обошёл <session-id>/subagents/. */
+  /**
+   * Файлы подагентов (вызывающий обошёл <session-id>/subagents/): их токены входят в `usage`, число —
+   * в `subsessionCount`. Не заданы — учёт только собственного лога.
+   */
+  subagents?: DiscoveredSubagent[];
+  /** Число подсессий, если известно без чтения файлов; по умолчанию — число `subagents`. */
   subsessionCount?: number;
+}
+
+/** Счётчики записи ответа Claude: `input_tokens` — вход без кэша, полный вход — сумма трёх частей. */
+function claudeCounters({ input, output, cacheRead, cacheWrite }: NonNullable<SessionRecord['usage']>): UsageCounters {
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalInput: input === null || cacheRead === null || cacheWrite === null ? null : input + cacheRead + cacheWrite,
+  };
 }
 
 /**
@@ -113,7 +142,7 @@ export interface IndexSessionOptions {
 export async function indexSessionFile(
   file: string,
   root: string,
-  { adapter = adapterV1, subsessionCount = 0 }: IndexSessionOptions = {},
+  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
@@ -122,6 +151,10 @@ export async function indexSessionFile(
   // Один ответ модели приходит несколькими записями: склейка по message.id — в учёте токенов.
   const ledger = createUsageLedger();
   let hasUsage = false;
+  // Родитель старых версий Claude Code пишет записи агента и у себя (`isSidechain`): их же несёт и файл
+  // агента, поэтому по ним решается, можно ли склеить два файла по id ответа.
+  const sidechainAgents = new Set<string | null>();
+  let sidechainUnidentified = false;
 
   let sessionId: string | null = null;
   let cwd: string | null = null;
@@ -156,18 +189,14 @@ export async function indexSessionFile(
     // У записей без message.id склеивать не по чему — их id это проверенное смещение записи.
     if (record.role === 'assistant' && record.usage !== null) {
       hasUsage = true;
-      const { input, output, cacheRead, cacheWrite } = record.usage;
+      if (record.isSidechain) {
+        sidechainAgents.add(record.agentId);
+        if (record.messageId === null) sidechainUnidentified = true;
+      }
       ledger.observe({
         kind: 'delta',
         id: record.messageId === null ? `line:${file}:${lineNo}` : `msg:${record.messageId}`,
-        // Для Claude `input_tokens` — вход без кэша, полный вход — сумма трёх частей; без любой из них неизвестен.
-        counters: {
-          input,
-          output,
-          cacheRead,
-          cacheWrite,
-          totalInput: input === null || cacheRead === null || cacheWrite === null ? null : input + cacheRead + cacheWrite,
-        },
+        counters: claudeCounters(record.usage),
         at: record.timestamp,
       });
     }
@@ -230,14 +259,39 @@ export async function indexSessionFile(
     titleSource = 'first-text';
   }
 
+  // `tokens` и `usage` собственного лога снимаются до подагентов: прежние потребители ждут его одного.
+  const own = ledger.summary();
+  for (const subagent of subagents) {
+    await forEachJsonlRecord(subagent.file, (raw, lineNo) => {
+      const record = adapter.toSessionRecord(raw);
+      if (record.role !== 'assistant' || record.usage === null) return;
+      // Запись агента, которую родитель уже записал у себя: без общего id ответа она не склеивается, и
+      // чем из двух копий её считать, не доказать — не учитывается, итог неполный.
+      if (
+        (sidechainAgents.has(subagent.agentId) || sidechainAgents.has(null)) &&
+        (record.messageId === null || sidechainUnidentified)
+      ) {
+        ledger.markAmbiguous();
+        return;
+      }
+      ledger.observe({
+        kind: 'delta',
+        id: record.messageId === null ? `line:${subagent.file}:${lineNo}` : `msg:${record.messageId}`,
+        counters: claudeCounters(record.usage),
+        at: record.timestamp,
+        child: true,
+      });
+    });
+  }
+
   const usage = ledger.summary();
   // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
   const tokens: TokenTotals | null = hasUsage
     ? {
-        input: usage.input ?? 0,
-        output: usage.output ?? 0,
-        cacheRead: usage.cacheRead ?? 0,
-        cacheWrite: usage.cacheWrite ?? 0,
+        input: own.input ?? 0,
+        output: own.output ?? 0,
+        cacheRead: own.cacheRead ?? 0,
+        cacheWrite: own.cacheWrite ?? 0,
       }
     : null;
 

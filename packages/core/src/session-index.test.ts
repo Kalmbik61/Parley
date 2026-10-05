@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { discoverSession } from './discover.js';
 import { indexSessionFile } from './session-index.js';
 
 let root: string;
@@ -508,5 +509,89 @@ describe('заголовок сессии', () => {
     const index = await indexSessionFile(file, root);
     expect(index.title).toBeNull();
     expect(index.titleSource).toBeNull();
+  });
+});
+
+describe('indexSessionFile: токены подагентов (P36c)', () => {
+  const assistant = (id: string | null, at: string, input: number, extra: Record<string, unknown> = {}) =>
+    line({
+      type: 'assistant',
+      timestamp: at,
+      ...extra,
+      message: {
+        role: 'assistant',
+        ...(id === null ? {} : { id }),
+        usage: { input_tokens: input, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+
+  async function withSubagents(
+    id: string,
+    parent: string,
+    subagents: Record<string, string>,
+  ): Promise<Awaited<ReturnType<typeof indexSessionFile>>> {
+    const file = await writeSession('-Users-me-proj', id, parent);
+    for (const [agentId, lines] of Object.entries(subagents)) {
+      const dir = path.join(root, '-Users-me-proj', id, 'subagents');
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, `agent-${agentId}.jsonl`), lines);
+    }
+    const discovered = await discoverSession(file, root);
+    return indexSessionFile(file, root, { subagents: discovered.subagents });
+  }
+
+  it('родитель плюс подагент: токены складываются, охват — с потомками, tokens остаётся собственным', async () => {
+    const index = await withSubagents('sub-sum', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      a1: assistant('msg_a', '2026-10-04T12:00:09.000Z', 40),
+    });
+
+    expect(index.usage).toMatchObject({
+      input: 140,
+      output: 2,
+      coverage: 'conversation-and-descendants',
+      completeness: 'complete',
+      observedAt: '2026-10-04T12:00:09.000Z',
+    });
+    expect(index.tokens).toEqual({ input: 100, output: 1, cacheRead: 0, cacheWrite: 0 });
+    expect(index.subsessionCount).toBe(1);
+  });
+
+  it('без файлов подагентов охват прежний — только разговор', async () => {
+    const index = await withSubagents('sub-none', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {});
+    expect(index.usage).toMatchObject({ input: 100, coverage: 'conversation' });
+  });
+
+  it('тот же ответ в файле родителя (isSidechain) и в файле подагента — один раз', async () => {
+    const index = await withSubagents(
+      'sub-dup',
+      assistant('msg_p', '2026-10-04T12:00:01.000Z', 100) +
+        assistant('msg_a', '2026-10-04T12:00:02.000Z', 40, { isSidechain: true, agentId: 'a1' }),
+      { a1: assistant('msg_a', '2026-10-04T12:00:02.000Z', 40) + assistant('msg_a2', '2026-10-04T12:00:03.000Z', 5) },
+    );
+    expect(index.usage).toMatchObject({ input: 145, completeness: 'complete', coverage: 'conversation-and-descendants' });
+  });
+
+  it('запись агента у родителя и в файле агента без общего id ответа: не учитывается дважды, итог неполный', async () => {
+    const index = await withSubagents(
+      'sub-overlap',
+      assistant('msg_p', '2026-10-04T12:00:01.000Z', 100) +
+        assistant(null, '2026-10-04T12:00:02.000Z', 40, { isSidechain: true, agentId: 'a1' }),
+      { a1: assistant(null, '2026-10-04T12:00:02.000Z', 40) },
+    );
+    expect(index.usage).toMatchObject({ input: 140, completeness: 'partial' });
+  });
+
+  it('подагент без записей родителя с тем же агентом перекрытия не создаёт: записи без id считаются раздельно', async () => {
+    const index = await withSubagents('sub-noids', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      a1: assistant(null, '2026-10-04T12:00:02.000Z', 40) + assistant(null, '2026-10-04T12:00:03.000Z', 40),
+    });
+    expect(index.usage).toMatchObject({ input: 180, completeness: 'complete' });
+  });
+
+  it('в итоге нет нативных id агента и путей файлов', async () => {
+    const index = await withSubagents('sub-secret', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      'agent-secret': assistant(null, '2026-10-04T12:00:02.000Z', 40),
+    });
+    expect(JSON.stringify(index.usage)).not.toMatch(/agent-secret|\.jsonl|subagents/);
   });
 });

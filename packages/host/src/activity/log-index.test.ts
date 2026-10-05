@@ -195,4 +195,89 @@ describe('createLogIndex', () => {
     await write();
     await waitFor(() => calls > 0, 15_000, write);
   }, 40_000);
+
+  describe('usage: потомки (P36c)', () => {
+    const THREAD = '22222222-2222-2222-2222-222222222222';
+    const AT = '2026-10-04T12:00:00.000Z';
+
+    /** Rollout Codex: тред `id`, необязательные признаки родства и накопленный итог (вход без кэша — `input`). */
+    async function writeThread(
+      id: string,
+      input: number,
+      payload: Record<string, unknown> = {},
+      file = `rollout-2026-10-04T12-00-00-${id}.jsonl`,
+    ): Promise<void> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, file),
+        [
+          { type: 'session_meta', timestamp: AT, payload: { id, cwd: '/codex', source: 'cli', ...payload } },
+          {
+            type: 'event_msg',
+            timestamp: AT,
+            payload: { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: 1 } } },
+          },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join('\n'),
+      );
+    }
+
+    const codex = (id: string) => session({ provider: 'codex', providerSessionId: id });
+
+    it('Codex: потомки по цепочке parent_thread_id (дети и внуки) входят в итог родителя, у потомка — только его цепочка', async () => {
+      await writeThread(THREAD, 100);
+      await writeThread('child-1', 10, { parent_thread_id: THREAD });
+      await writeThread('grandchild-1', 1, { parent_thread_id: 'child-1' });
+      const idx = index();
+      await idx.start();
+
+      expect(idx.usage(codex(THREAD))).toMatchObject({ input: 111, coverage: 'conversation-and-descendants' });
+      expect(idx.usage(codex('child-1'))).toMatchObject({ input: 11, coverage: 'conversation-and-descendants' });
+      expect(idx.usage(codex('grandchild-1'))).toMatchObject({ input: 1, coverage: 'conversation' });
+    });
+
+    it('Codex: цикл в родстве не зацикливает обход, а потомок с двумя файлами одного треда считается один раз', async () => {
+      await writeThread('loop-a', 100, { parent_thread_id: 'loop-b' });
+      await writeThread('loop-b', 10, { parent_thread_id: 'loop-a' });
+      await writeThread(THREAD, 100);
+      await writeThread('child-2', 10, { parent_thread_id: THREAD });
+      // Откатанный тред: второй rollout того же треда (`_<rollout>` в имени) с тем же session_meta.
+      await writeThread('child-2', 10, { parent_thread_id: THREAD }, `rollout-2026-10-04T12-00-00-child-2_other.jsonl`);
+      const idx = index();
+      await idx.start();
+
+      expect(idx.usage(codex('loop-a'))).toMatchObject({ input: 110, coverage: 'conversation-and-descendants' });
+      expect(idx.usage(codex(THREAD))).toMatchObject({ input: 110 });
+    });
+
+    it('Codex: форк и потомок без наблюдений — итог неполный, их цифры не прибавлены', async () => {
+      await writeThread(THREAD, 100);
+      await writeThread('fork-1', 5000, { parent_thread_id: THREAD, forked_from_id: THREAD });
+      await writeFile(
+        path.join(codexRoot, '2026', '10', '04', 'rollout-2026-10-04T12-00-00-silent-1.jsonl'),
+        `${JSON.stringify({ type: 'session_meta', timestamp: AT, payload: { id: 'silent-1', cwd: '/codex', source: 'cli', parent_thread_id: THREAD } })}\n`,
+      );
+      const idx = index();
+      await idx.start();
+
+      expect(idx.usage(codex(THREAD))).toMatchObject({ input: 100, completeness: 'partial', coverage: 'conversation' });
+    });
+
+    it('Claude: итог записи уже включает подагентов; лога нет — undefined', async () => {
+      const id = 's-claude';
+      const answer = (msg: string, input: number) =>
+        `${JSON.stringify({ type: 'assistant', sessionId: id, timestamp: AT, message: { role: 'assistant', id: msg, usage: { input_tokens: input, output_tokens: 1 } } })}\n`;
+      await writeClaudeSession(id, answer('msg_p', 100));
+      await mkdir(path.join(claudeRoot, '-proj', id, 'subagents'), { recursive: true });
+      await writeFile(path.join(claudeRoot, '-proj', id, 'subagents', 'agent-a1.jsonl'), answer('msg_a', 30));
+      const idx = index();
+      await idx.start();
+
+      expect(idx.usage(session({ providerSessionId: id }))).toMatchObject({ input: 130, coverage: 'conversation-and-descendants' });
+      expect(idx.usage(session({ providerSessionId: 'нет-такого' }))).toBeUndefined();
+      expect(idx.usage(session())).toBeUndefined();
+    });
+  });
 });

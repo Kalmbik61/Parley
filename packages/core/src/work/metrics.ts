@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { indexCodexSession } from '../codex/index-session.js';
-import { defaultRoot, discoverSessions } from '../discover.js';
+import { defaultRoot, discoverSession, discoverSessions } from '../discover.js';
 import type { ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { setResult, transitionSession } from './map.js';
@@ -51,8 +51,14 @@ function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
     return {
       list: async (): Promise<ProviderLog[]> =>
         (await discoverSessions(root)).map((session) => ({ id: session.id, file: session.file })),
-      // Для Claude id сессии в карте — uuid jsonl-файла (спецификация, раздел 3).
-      index: (file: string): Promise<SessionIndex> => indexSessionFile(file, root),
+      // Для Claude id сессии в карте — uuid jsonl-файла (спецификация, раздел 3). Подагентов читаем, только
+      // когда нужны их токены: привязке по времени они ни к чему.
+      index: async (file: string, withDescendants = false): Promise<SessionIndex> =>
+        indexSessionFile(
+          file,
+          root,
+          withDescendants ? { subagents: (await discoverSession(file, root)).subagents } : {},
+        ),
     };
   }
   if (provider === 'codex') {
@@ -63,7 +69,8 @@ function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
           id: session.id,
           file: session.file,
         })),
-      index: indexCodexSession,
+      // Потомков Codex (порождённые треды) по родителю в одиночном разборе не найти: их складывает хост.
+      index: (file: string): Promise<SessionIndex> => indexCodexSession(file),
     };
   }
   return null;
@@ -94,7 +101,7 @@ export async function readSessionMetrics(
   const log = (await adapter.list()).find((candidate) => candidate.id === providerSessionId);
   if (log === undefined) return null;
 
-  const index = await adapter.index(log.file);
+  const index = await adapter.index(log.file, true);
   return {
     metrics: metricsOf(index),
     lastRecordAt: index.endedAt,

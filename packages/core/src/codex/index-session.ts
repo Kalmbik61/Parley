@@ -70,6 +70,18 @@ function isSpawnedMeta(payload: RawRecord): boolean {
 }
 
 /**
+ * Родитель порождённого треда по родным признакам `session_meta`: `parent_thread_id` либо, у подагента,
+ * `source.subagent.thread_spawn.parent_thread_id`. По времени и cwd родителя не угадываем.
+ */
+function parentThreadId(payload: RawRecord): string | null {
+  const direct = str(payload, 'parent_thread_id');
+  if (direct !== null) return direct;
+  const source = asRecord(payload['source']);
+  const spawn = asRecord(asRecord(source?.['subagent'])?.['thread_spawn']);
+  return str(spawn, 'parent_thread_id');
+}
+
+/**
  * Индексирует один rollout-лог Codex в общую модель SessionIndex.
  *
  * Формат другой во всём (см. specs/runners.md): вся мета в одной записи
@@ -94,6 +106,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let lastCounters = null as ReturnType<typeof codexCounters>;
   const ledger = createUsageLedger();
   let spawned = false;
+  let parentId: string | null = null;
+  let forkedFrom: string | null = null;
 
   const stats = await forEachJsonlRecord(file, (raw) => {
     const type = str(raw, 'type');
@@ -116,6 +130,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
         version ??= str(payload, 'cli_version');
         gitBranch ??= str(asRecord(payload['git']), 'branch');
         spawned ||= isSpawnedMeta(payload);
+        parentId ??= parentThreadId(payload);
+        forkedFrom ??= str(payload, 'forked_from_id');
         break;
       }
 
@@ -212,6 +228,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     usage: ledger.summary(),
     provider: 'codex',
     ...(spawned ? { spawned: true } : {}),
+    ...(parentId === null ? {} : { parentId }),
+    ...(forkedFrom === null ? {} : { forkedFrom }),
   };
 }
 

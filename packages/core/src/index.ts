@@ -464,11 +464,14 @@ export {
   legacyUsage,
   selectUsage,
   sumUsage,
+  usageKey,
+  withDescendants,
   asCount,
   observedCount,
   EPOCH_TOLERANCE_MS,
 } from './work/usage-ledger.js';
 export type {
+  DescendantUsage,
   FrozenUsage,
   KeyedUsage,
   SelectUsageInput,

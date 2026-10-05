@@ -9,6 +9,9 @@
  *   его `input_tokens`, где кэш уже внутри);
  * - один и тот же запрос не считается дважды: дельты склеиваются по нативному id запроса или по
  *   проверенному смещению записи, накопительные значения сравниваются внутри своей нити;
+ * - потомок (подагент Claude, порождённый тред Codex) входит в итог разговора один раз; перекрытие
+ *   потомка с родителем, которое нечем доказать или разрешить, в сумму не берётся, а итог становится
+ *   неполным: сумма не выдумывается;
  * - в публичный `UsageSummary` нативные id, пути логов и карты соответствия не попадают: связывание и
  *   эпоха живут только в `FrozenUsage`, который лежит в карте работы, а наружу выходит без них.
  *
@@ -40,7 +43,7 @@ export type UsageSource =
 /**
  * - `complete` — каждый запрос учтён один раз, неоднозначностей нет;
  * - `partial` — итог нижняя граница: смешанные записи (поле есть не у всех), спад накопителя без
- *   доказанного сброса или другая неопределённость;
+ *   доказанного сброса, потомок без наблюдений или с неразрешённым перекрытием, другая неопределённость;
  * - `unknown` — наблюдений нет.
  */
 export type UsageCompleteness = 'complete' | 'partial' | 'unknown';
@@ -197,6 +200,11 @@ export function createUsageLedger() {
       periods[periods.length - 1] = maxCounters(current, counters);
     },
 
+    /** Адаптер нашёл перекрытие, которое нечем разрешить: запись не учтена, итог неполный. */
+    markAmbiguous(): void {
+      ambiguous = true;
+    },
+
     summary(): UsageSummary {
       const contributions = [...deltas.values(), ...[...streams.values()].flat()];
       if (contributions.length === 0) return { ...unknownCounters(), ...unobserved('native-index') };
@@ -333,30 +341,122 @@ export function selectUsage({ active, epoch, live, frozen }: SelectUsageInput): 
 const regressed = (live: number | null, frozen: number | null): boolean =>
   live !== null && frozen !== null && live < frozen;
 
-/** Итоги разных сессий с ключом разговора (провайдер + id у провайдера; эпоха в ключ не входит). */
+/**
+ * Потомок разговора со своим итогом: подагент Claude или порождённый тред Codex. Живёт только в памяти
+ * хоста — ключ несёт нативный id, наружу не уходит.
+ */
+export interface DescendantUsage {
+  /** `usageKey` потомка: провайдер, нативный id, эпоха. */
+  key: string;
+  /** Собственный лог потомка, без его потомков (они — отдельные записи списка). */
+  usage: UsageSummary;
+  /**
+   * Потомок мог унаследовать историю родителя или другого разговора (форк Codex), а базу не отделить:
+   * его цифры могут уже входить в чужие. Такой потомок в сумму не берётся, итог становится неполным.
+   */
+  overlapUnresolved?: boolean;
+}
+
+/**
+ * Ключ потомка для дедупликации между видами: семейство провайдера (Claude и его надстройки читают
+ * логи Claude, Codex — свои), нативный id и эпоха — начало его собственного лога (`null` — неизвестно).
+ * Один и тот же нативный id в другом запуске — другой потомок.
+ */
+export function usageKey(family: 'claude' | 'codex', nativeId: string, epoch: string | null): string {
+  return `${family}\u0000${nativeId}\u0000${epoch ?? ''}`;
+}
+
+/** Из двух наблюдений одного потомка (или разговора) остаётся более свежее. */
+function keepFresher<T extends { observedAt: string | null }>(known: Map<string, T>, key: string, item: T): void {
+  const previous = known.get(key);
+  if (previous === undefined || (item.observedAt ?? '') > (previous.observedAt ?? '')) known.set(key, item);
+}
+
+/** Потомок, чьи цифры можно прибавлять: есть наблюдения и перекрытие не вызывает сомнений. */
+const countable = (item: DescendantUsage): boolean => item.overlapUnresolved !== true && hasCounters(item.usage);
+
+/**
+ * Итог разговора вместе с его потомками. Один потомок (по `usageKey`) входит один раз, побеждает более
+ * свежее наблюдение. Потомок без наблюдений или с неразрешённым перекрытием не прибавляется, а итог
+ * помечается неполным; поле, известное не у всех слагаемых, неизвестно (как в `createUsageLedger`).
+ * Нет цифр у самого разговора — итог остаётся его, потомки в неизвестное не складываются.
+ */
+export function withDescendants(own: UsageSummary, descendants: DescendantUsage[]): UsageSummary {
+  if (descendants.length === 0 || !hasCounters(own)) return own;
+
+  const distinct = new Map<string, DescendantUsage & { observedAt: string | null }>();
+  for (const item of descendants) keepFresher(distinct, item.key, { ...item, observedAt: item.usage.observedAt });
+  const items = [...distinct.values()];
+  const parts = [own, ...items.filter(countable).map((item) => item.usage)];
+  let partial = parts.length < items.length + 1 || own.completeness !== 'complete';
+  if (parts.length === 1) return partial ? { ...own, completeness: 'partial' } : own;
+
+  const totals = unknownCounters();
+  for (const field of FIELDS) {
+    const known = parts.filter((part) => part[field] !== null);
+    if (known.length === parts.length) totals[field] = parts.reduce<number | null>((acc, part) => sum(acc, part[field]), 0);
+    else if (known.length > 0) partial = true;
+  }
+  const observedAt = parts.reduce<string | null>(
+    (latest, part) => (part.observedAt !== null && (latest === null || part.observedAt > latest) ? part.observedAt : latest),
+    null,
+  );
+  return {
+    ...totals,
+    source: own.source,
+    observedAt,
+    stale: parts.some((part) => part.stale),
+    completeness: partial || parts.some((part) => part.completeness !== 'complete') ? 'partial' : 'complete',
+    coverage: 'conversation-and-descendants',
+    ...(own.attribution === undefined ? {} : { attribution: own.attribution }),
+  };
+}
+
+/**
+ * Итоги разных сессий с ключом разговора (провайдер + id у провайдера; эпоха в ключ не входит). `usage` —
+ * собственный лог разговора, потомки перечислены отдельно: иначе один потомок, увиденный и из родителя,
+ * и своим разговором, вошёл бы дважды.
+ */
 export interface KeyedUsage {
   key: string;
   usage: UsageSummary;
+  descendants?: DescendantUsage[];
 }
 
 export interface UsageTotal extends UsageCounters {
   completeness: UsageCompleteness;
   stale: boolean;
+  /** `conversation-and-descendants` — в итог вошёл хотя бы один потомок. */
+  coverage: UsageSummary['coverage'];
   /** Сколько разных разговоров вошло в итог. */
   conversations: number;
 }
 
 /**
- * Сумма по разным разговорам. Один разговор в двух видах (две записи карты с одним нативным id) входит
- * один раз: побеждает наблюдение свежее. Неизвестное поле одного слагаемого делает неизвестной сумму,
- * а неполное или устаревшее слагаемое — весь итог.
+ * Сумма по разным разговорам и их потомкам. Один разговор в двух видах (две записи карты с одним нативным
+ * id) входит один раз: побеждает наблюдение свежее; так же потомок, увиденный из родителя и как отдельный
+ * разговор или из другого вида (один `key`). Неизвестное поле одного слагаемого делает неизвестной сумму,
+ * а неполное или устаревшее слагаемое — весь итог; потомок без наблюдений или с неразрешённым
+ * перекрытием не прибавляется и тоже делает итог неполным.
  */
 export function sumUsage(entries: KeyedUsage[]): UsageTotal {
   const distinct = new Map<string, UsageSummary>();
-  for (const { key, usage } of entries) {
-    const known = distinct.get(key);
-    if (known === undefined || (usage.observedAt ?? '') > (known.observedAt ?? '')) distinct.set(key, usage);
+  for (const { key, usage } of entries) keepFresher(distinct, key, usage);
+
+  const conversations = distinct.size;
+  let partial = false;
+  let hasKids = false;
+  for (const { descendants = [] } of entries) {
+    for (const item of descendants) {
+      if (!countable(item)) {
+        partial = true;
+        continue;
+      }
+      keepFresher(distinct, item.key, item.usage);
+      hasKids = true;
+    }
   }
+
   const values = [...distinct.values()];
   const totals = unknownCounters();
   if (values.length > 0) {
@@ -367,8 +467,13 @@ export function sumUsage(entries: KeyedUsage[]): UsageTotal {
   return {
     ...totals,
     completeness:
-      values.length === 0 ? 'unknown' : values.every((item) => item.completeness === 'complete') ? 'complete' : 'partial',
+      values.length === 0
+        ? 'unknown'
+        : !partial && values.every((item) => item.completeness === 'complete')
+          ? 'complete'
+          : 'partial',
     stale: values.some((item) => item.stale),
-    conversations: values.length,
+    coverage: hasKids ? 'conversation-and-descendants' : 'conversation',
+    conversations,
   };
 }

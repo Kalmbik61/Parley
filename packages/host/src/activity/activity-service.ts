@@ -468,7 +468,7 @@ export function createActivityService(
     const selected = selectUsage({
       active: session.lifecycle === 'active',
       epoch: session.startedAtProcess,
-      live: indexed?.usage ?? null,
+      live: logIndex.usage(session) ?? null,
       frozen,
     });
     const usage: UsageSummary = {

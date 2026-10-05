@@ -5,6 +5,9 @@ import {
   legacyUsage,
   selectUsage,
   sumUsage,
+  usageKey,
+  withDescendants,
+  type DescendantUsage,
   type UsageCounters,
   type UsageSummary,
 } from './usage-ledger.js';
@@ -140,6 +143,13 @@ describe('createUsageLedger', () => {
     ledger.observe({ ...delta('msg:child'), child: true });
 
     expect(ledger.summary()).toMatchObject({ input: 20, coverage: 'conversation-and-descendants' });
+  });
+
+  it('перекрытие, которое нечем разрешить: запись не учтена, итог неполный', () => {
+    const ledger = createUsageLedger();
+    ledger.observe(delta('msg:parent'));
+    ledger.markAmbiguous();
+    expect(ledger.summary()).toMatchObject({ input: 10, completeness: 'partial' });
   });
 
   it('значение не из неотрицательных целых становится неизвестным, а не нулём', () => {
@@ -333,5 +343,132 @@ describe('sumUsage', () => {
 
   it('без слагаемых итог неизвестен', () => {
     expect(sumUsage([])).toMatchObject({ input: null, completeness: 'unknown', conversations: 0 });
+  });
+});
+
+describe('usageKey', () => {
+  it('провайдер, нативный id и эпоха различают потомков; Claude и его надстройки — одно семейство логов', () => {
+    const base = usageKey('codex', 'thread-1', '2026-10-04T12:00:00.000Z');
+    expect(usageKey('codex', 'thread-1', '2026-10-04T12:00:00.000Z')).toBe(base);
+    expect(usageKey('claude', 'thread-1', '2026-10-04T12:00:00.000Z')).not.toBe(base);
+    expect(usageKey('codex', 'thread-2', '2026-10-04T12:00:00.000Z')).not.toBe(base);
+    expect(usageKey('codex', 'thread-1', '2026-10-04T13:00:00.000Z')).not.toBe(base);
+    expect(usageKey('codex', 'thread-1', null)).not.toBe(base);
+  });
+});
+
+describe('withDescendants', () => {
+  const child = (id: string, over: Partial<UsageSummary> = {}, extra: Partial<DescendantUsage> = {}): DescendantUsage => ({
+    key: usageKey('claude', id, '2026-10-04T12:00:00.000Z'),
+    usage: summary({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalInput: 8, ...over }),
+    ...extra,
+  });
+  const parent = summary({ input: 10, output: 20, cacheRead: 30, cacheWrite: 40, totalInput: 80 });
+
+  it('без потомков итог разговора как есть', () => {
+    expect(withDescendants(parent, [])).toBe(parent);
+  });
+
+  it('родитель плюс потомок: счётчики складываются, охват — с потомками, полнота сохраняется', () => {
+    const total = withDescendants(parent, [child('a1', { observedAt: '2026-10-04T12:00:09.000Z' })]);
+    expect(total).toMatchObject({
+      input: 11,
+      output: 22,
+      cacheRead: 33,
+      cacheWrite: 44,
+      totalInput: 88,
+      coverage: 'conversation-and-descendants',
+      completeness: 'complete',
+      observedAt: '2026-10-04T12:00:09.000Z',
+      source: 'native-index',
+    });
+  });
+
+  it('один потомок в двух видах входит один раз, побеждает более свежее наблюдение', () => {
+    const total = withDescendants(parent, [
+      child('a1', { input: 1, observedAt: '2026-10-04T12:00:01.000Z' }),
+      child('a1', { input: 5, observedAt: '2026-10-04T12:00:05.000Z' }),
+    ]);
+    expect(total).toMatchObject({ input: 15, completeness: 'complete' });
+  });
+
+  it('потомок с другой эпохой — другой потомок', () => {
+    const other: DescendantUsage = { ...child('a1'), key: usageKey('claude', 'a1', '2026-10-04T15:00:00.000Z') };
+    expect(withDescendants(parent, [child('a1'), other])).toMatchObject({ input: 12 });
+  });
+
+  it('перекрытие без доказательства: потомок не прибавляется, итог неполный и охват прежний', () => {
+    const total = withDescendants(parent, [child('a1', {}, { overlapUnresolved: true })]);
+    expect(total).toMatchObject({ input: 10, output: 20, completeness: 'partial', coverage: 'conversation' });
+  });
+
+  it('доказанный потомок прибавляется, неразрешённый — нет: итог неполный', () => {
+    const total = withDescendants(parent, [child('a1'), child('a2', { input: 100 }, { overlapUnresolved: true })]);
+    expect(total).toMatchObject({ input: 11, completeness: 'partial', coverage: 'conversation-and-descendants' });
+  });
+
+  it('потомок без наблюдений не обнуляет и не выдумывает: итог неполный', () => {
+    const none = child('a1', { input: null, output: null, cacheRead: null, cacheWrite: null, totalInput: null, completeness: 'unknown' });
+    expect(withDescendants(parent, [none])).toMatchObject({ input: 10, completeness: 'partial', coverage: 'conversation' });
+  });
+
+  it('поле известно не у всех слагаемых — сумма неизвестна и итог неполный; Codex: кэш записи неизвестен у всех', () => {
+    const mixed = withDescendants(parent, [child('a1', { cacheWrite: null, totalInput: null })]);
+    expect(mixed).toMatchObject({ input: 11, cacheWrite: null, totalInput: null, completeness: 'partial' });
+
+    const codex = (id: string, input: number) => ({
+      key: usageKey('codex', id, null),
+      usage: summary({ input, cacheWrite: null }),
+    });
+    const together = withDescendants(summary({ cacheWrite: null }), [codex('t1', 5)]);
+    expect(together).toMatchObject({ input: 15, cacheWrite: null, completeness: 'complete' });
+  });
+
+  it('у самого разговора нет цифр: потомки в неизвестное не складываются', () => {
+    const unknown = summary({ input: null, output: null, cacheRead: null, cacheWrite: null, totalInput: null, completeness: 'unknown' });
+    expect(withDescendants(unknown, [child('a1')])).toBe(unknown);
+  });
+
+  it('неполное слагаемое и устаревшее наблюдение делают весь итог неполным и устаревшим', () => {
+    const total = withDescendants(parent, [child('a1', { completeness: 'partial', stale: true })]);
+    expect(total).toMatchObject({ completeness: 'partial', stale: true });
+  });
+
+  it('в итог не попадают ключи потомков', () => {
+    expect(JSON.stringify(withDescendants(parent, [child('native-agent-id')]))).not.toContain('native-agent-id');
+  });
+});
+
+describe('sumUsage с потомками', () => {
+  const key = (id: string) => usageKey('codex', id, '2026-10-04T12:00:00.000Z');
+  const kid = (id: string, input: number, extra: Partial<DescendantUsage> = {}): DescendantUsage => ({
+    key: key(id),
+    usage: summary({ input, cacheWrite: null }),
+    ...extra,
+  });
+  const own = (input: number) => summary({ input, cacheWrite: null });
+
+  it('потомок, увиденный из родителя и как отдельный разговор, входит один раз', () => {
+    const total = sumUsage([
+      { key: 'codex\u0000parent', usage: own(10), descendants: [kid('child', 5)] },
+      { key: key('child'), usage: own(5) },
+    ]);
+    expect(total).toMatchObject({ input: 15, coverage: 'conversation-and-descendants', completeness: 'complete', conversations: 2 });
+  });
+
+  it('один потомок у родителя в двух видах — один раз', () => {
+    const total = sumUsage([
+      { key: 'codex\u0000parent', usage: own(10), descendants: [kid('child', 5)] },
+      { key: 'codex\u0000parent', usage: own(10), descendants: [kid('child', 5)] },
+    ]);
+    expect(total).toMatchObject({ input: 15, conversations: 1 });
+  });
+
+  it('неразрешённое перекрытие и потомок без наблюдений: итог неполный, чужие цифры не прибавлены', () => {
+    const none = kid('empty', 0, { usage: summary({ input: null, output: null, cacheRead: null, cacheWrite: null, totalInput: null, completeness: 'unknown' }) });
+    const total = sumUsage([
+      { key: 'codex\u0000parent', usage: own(10), descendants: [kid('fork', 50, { overlapUnresolved: true }), none] },
+    ]);
+    expect(total).toMatchObject({ input: 10, completeness: 'partial', coverage: 'conversation' });
   });
 });

@@ -175,3 +175,28 @@ describe('watchSessions', () => {
     }
   }, 20_000);
 });
+
+describe('claudeSource', () => {
+  it('перечитывание сессии включает токены её подагентов: охват — с потомками', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-watch-usage-'));
+    try {
+      const project = path.join(dir, '-proj');
+      const subagents = path.join(project, 's1', 'subagents');
+      await mkdir(subagents, { recursive: true });
+      const answer = (id: string, input: number) =>
+        `${JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-10-04T12:00:01.000Z',
+          message: { role: 'assistant', id, usage: { input_tokens: input, output_tokens: 1 } },
+        })}\n`;
+      await writeFile(path.join(project, 's1.jsonl'), answer('msg_p', 100));
+      await writeFile(path.join(subagents, 'agent-a1.jsonl'), answer('msg_a', 30));
+
+      const session = await claudeSource(dir).index(path.join(project, 's1.jsonl'), dir);
+      expect(session.usage).toMatchObject({ input: 130, coverage: 'conversation-and-descendants' });
+      expect(session.subsessionCount).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

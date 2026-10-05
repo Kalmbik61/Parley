@@ -124,4 +124,25 @@ describe('usage лога Codex', () => {
     expect(index.usage).toMatchObject({ input: null, completeness: 'unknown' });
     expect(JSON.stringify(index.usage)).not.toContain('thread-secret');
   });
+
+  it('потомок по родным признакам: parent_thread_id или source.subagent.thread_spawn, форк — forked_from_id', async () => {
+    const spawned = (payload: Record<string, unknown>) =>
+      line({ timestamp: '2026-10-04T12:00:00.000Z', type: 'session_meta', payload: { id: 'thread-child', cwd: '/proj', ...payload } });
+
+    const direct = await indexCodexSession(await writeRollout(spawned({ source: 'cli', parent_thread_id: 'parent-1' })));
+    expect(direct).toMatchObject({ spawned: true, parentId: 'parent-1' });
+    expect(direct.forkedFrom).toBeUndefined();
+
+    const nested = await indexCodexSession(
+      await writeRollout(
+        spawned({ source: { subagent: { thread_spawn: { parent_thread_id: 'parent-2', depth: 1 } } }, forked_from_id: 'parent-2' }),
+      ),
+    );
+    expect(nested).toMatchObject({ spawned: true, parentId: 'parent-2', forkedFrom: 'parent-2' });
+
+    // Обычный тред родителя не имеет; догадок по времени и cwd нет.
+    const plain = await indexCodexSession(await writeRollout(meta));
+    expect(plain.parentId).toBeUndefined();
+    expect(plain.forkedFrom).toBeUndefined();
+  });
 });

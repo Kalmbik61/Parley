@@ -323,12 +323,13 @@ describe('finishSession', () => {
         closed: true,
         source: 'frozen-snapshot',
         stale: false,
-        input: SESSION_1.tokens.input,
-        output: SESSION_1.tokens.output,
-        cacheRead: SESSION_1.tokens.cacheRead,
-        cacheWrite: SESSION_1.tokens.cacheWrite,
+        // Подагенты сессии лежат рядом с её журналом: их токены входят в снимок (P36c), а `tokens` — только собственный лог.
+        coverage: 'conversation-and-descendants',
+        completeness: 'complete',
       }),
     });
+    expect(session?.metrics?.usage?.input).toBeGreaterThan(SESSION_1.tokens.input);
+    expect(session?.metrics?.usage?.output).toBeGreaterThan(SESSION_1.tokens.output);
     expect(session?.history.at(-1)).toEqual({
       event: 'sleeping',
       at: '2026-08-26T13:10:00.000Z',
