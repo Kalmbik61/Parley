@@ -13,8 +13,9 @@ All notable changes to Parley are documented in this file.
   answered; otherwise the card names the reason (key rejected, plan expired, no active plan,
   limit reached, model not in plan, key restricted, Z.ai busy or erroring, no answer, no
   connection, unexpected answer) with a hint, the HTTP status and the Z.ai error code. The
-  outcome survives host restarts and resets when the key changes. Claude and Codex keep the
-  local check: Parley does not touch their credentials.
+  outcome survives host restarts and resets when the key changes. A key typed into the field is
+  saved first, and a card without a saved key says so. Claude and Codex keep the local check:
+  Parley does not touch their credentials.
 
 ## 0.5.1
 

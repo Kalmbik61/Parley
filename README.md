@@ -1370,7 +1370,8 @@ endpoint, `https://api.z.ai/api/anthropic`. You need an active GLM Coding Plan a
 unknown or unparseable version blocks GLM. Install or update Claude Code yourself, then use
 "Check again" in the GLM card.
 
-"Check again" in the GLM card, and saving a key, test the key for real. When the CLI and the
+"Check again" in the GLM card, and saving a key, test the key for real. A key typed into the
+field is saved first, as with "Save"; with no key saved, the card says so. When the CLI and the
 key are in place, the host sends one test message (`max_tokens: 1`, model GLM-5.3) to
 `https://api.z.ai/api/anthropic/v1/messages`, the endpoint GLM sessions use; nothing is sent in
 the background or at host start. "Connected" means Z.ai answered it. Otherwise the card names

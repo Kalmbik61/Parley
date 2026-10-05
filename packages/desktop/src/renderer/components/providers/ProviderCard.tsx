@@ -201,6 +201,17 @@ export function ProviderCard({
     }
   };
 
+  /** Save (и Check again с набранным ключом): сохранить ключ и сразу проверить его, как по Check again. */
+  const saveAndCheck = async (): Promise<void> => {
+    const saved = await run(
+      S.errors.actions.saveProviderKey,
+      () => window.parley.call('providers.setKey', { provider: 'glm', key }),
+      true,
+      true,
+    );
+    if (saved && verifies) await runCheck();
+  };
+
   if (!open) return null;
   const fiveHour = provider.limits?.fiveHour?.usedPercent;
   const week = provider.limits?.week?.usedPercent;
@@ -301,6 +312,9 @@ export function ProviderCard({
             <p className="text-xs text-muted-foreground">
               {S.providerCard.keyHint(maskedHint(provider.keyHint!))}
             </p>
+          ) : supportsKeys ? (
+            // Без сохранённого ключа шапка говорит лишь Not connected — здесь сказано, чего не хватает.
+            <p className="text-xs text-muted-foreground">{S.providerCard.noKey}</p>
           ) : null}
           {verifies ? <CheckLine check={check} checking={checking} /> : null}
           {supportsKeys ? (
@@ -323,16 +337,7 @@ export function ProviderCard({
                   size="sm"
                   disabled={busy || checking || key.trim() === ''}
                   onClick={() => {
-                    void (async () => {
-                      const saved = await run(
-                        S.errors.actions.saveProviderKey,
-                        () => window.parley.call('providers.setKey', { provider: 'glm', key }),
-                        true,
-                        true,
-                      );
-                      // Сохранённый ключ сразу проверяется тестовым сообщением, как по Check again.
-                      if (saved && verifies) await runCheck();
-                    })();
+                    void saveAndCheck();
                   }}
                 >
                   {hasKey ? S.providerCard.replace : S.providerCard.save}
@@ -389,7 +394,9 @@ export function ProviderCard({
         aria-busy={checking}
         disabled={busy || checking || hostStatus.state !== 'connected'}
         onClick={() => {
-          void runCheck();
+          // Набранный, но не сохранённый ключ человек и хочет проверить: сначала сохранить, как Save.
+          if (isGlm && supportsKeys && key.trim() !== '') void saveAndCheck();
+          else void runCheck();
         }}
       >
         {checking ? (

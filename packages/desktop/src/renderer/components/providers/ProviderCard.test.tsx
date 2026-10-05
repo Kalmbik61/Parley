@@ -355,6 +355,41 @@ describe('ProviderCard: проверка ключа GLM тестовым соо�
     await waitFor(() => expect((screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
+  it('Check again с набранным ключом: сохраняет его, как Save, и сразу проверяет', async () => {
+    bridge.setHandler('providers.setKey', () => ({ keyHint: '••••9999' }));
+    bridge.setHandler('providers.check', () => ({
+      check: { state: 'failed', reason: 'authentication', httpStatus: 401, code: '1000', at: AT },
+    }));
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={glm()} onReload={reload} onRestartHost={() => {}} />);
+    const field = screen.getByLabelText('Z.ai API key') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'fake-key-9999' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+    expect(bridge.calls).toEqual([
+      { method: 'providers.setKey', params: { provider: 'glm', key: 'fake-key-9999' } },
+      { method: 'providers.check', params: { provider: 'glm' } },
+    ]);
+    expect(field.value).toBe('');
+  });
+
+  it('Check again с полем из одних пробелов ключ не сохраняет — только проверка', async () => {
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Z.ai API key'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(bridge.calls).toEqual([{ method: 'providers.check', params: { provider: 'glm' } }]);
+  });
+
+  it('ключ не сохранён: карточка говорит об этом прямо, а не только Not connected', () => {
+    const { rerender } = render(<ProviderCard provider={glm()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText('Not connected')).toBeTruthy();
+    expect(screen.getByText(/No key saved/)).toBeTruthy();
+    rerender(<ProviderCard provider={ready()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.queryByText(/No key saved/)).toBeNull();
+  });
+
   it('старый хост без providers.check: прежний локальный перечит, шапка по готовности', async () => {
     useHostStore.setState({
       status: { state: 'connected', hostVersion: '0.5.1', methods: [...REQUIRED_METHODS, 'providers.setKey', 'providers.clearKey'] },

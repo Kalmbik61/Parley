@@ -235,6 +235,7 @@ export const S = {
     glmLogout: 'Avoid /logout in GLM: it can change the shared local Claude Code sign-in used by your Claude sessions.',
     keyLabel: 'Z.ai API key',
     keyHint: (hint: string): string => `Key ${hint}`,
+    noKey: 'No key saved. Paste your Z.ai key and choose Save or Check again.',
     save: 'Save',
     replace: 'Replace',
     remove: 'Remove',
