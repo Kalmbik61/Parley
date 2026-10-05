@@ -22,6 +22,15 @@ import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
+/** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
+const recipeSnapshot = z
+  .object({
+    id: z.string().min(1).max(300),
+    name: z.string().min(1).max(300),
+    playbook: z.string().refine((text) => new TextEncoder().encode(text).length <= 1024 * 1024),
+  })
+  .strict();
+
 export const sessionRef = z.object({
   projectPath: z.string(),
   workId: z.string(),
@@ -73,6 +82,8 @@ export const METHODS = {
     status: z.enum(['active', 'done', 'archived']),
   }),
   'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
+  // Каталог рецептов комнат: встроенные и рецепты выбранного проекта (спека рецептов, 5–6).
+  'recipes.list': z.object({ projectPath: z.string().min(1) }).strict(),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -136,6 +147,11 @@ export const METHODS = {
     // комнаты пуста, пока человек не напишет в неё задачу. Без флага приглашения уходят, как прежде:
     // сессии уже работают и о комнате иначе не узнают. Старый хост поле отбросит.
     quiet: z.boolean().optional(),
+    // Режим комнаты (планы и режимы): без него комната свободная, как прежде. Старый хост поле отбросит.
+    mode: z.enum(['free', 'checklist', 'verified']).optional(),
+    // Снимок рецепта на момент создания (спека рецептов, 6.2): хост кладёт его в комнату как есть, правка
+    // файла рецепта комнату потом не меняет. Лишние поля не принимаются.
+    recipe: recipeSnapshot.optional(),
   }),
   // Дизайн комнат, 3.2: человек вводит сессию в комнату; она уходит из прочих комнат работы. Уже
   // участник и нигде больше — `bad_request`; состоящая и в других комнатах (старая карта, решение 4)
@@ -254,6 +270,7 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
   'roles.list': import('@parley/core').RoleList;
+  'recipes.list': import('@parley/core').RecipeCatalogView;
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };

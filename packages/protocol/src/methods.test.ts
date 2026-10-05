@@ -171,6 +171,21 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Params<'rooms.create'>['quiet']>().toEqualTypeOf<boolean | undefined>();
   });
 
+  it('rooms.create: mode и снимок рецепта необязательны; снимок строгий, режим из трёх', () => {
+    const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-02', 's-03'] };
+    const parse = (extra: Record<string, unknown>) => METHODS['rooms.create'].safeParse({ ...base, ...extra });
+    const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Lead playbook' };
+
+    expect(parse({}).success).toBe(true);
+    expect(parse({ mode: 'verified', recipe }).success).toBe(true);
+    expect(parse({ recipe: { ...recipe, playbook: '' } }).success).toBe(true);
+    for (const mode of ['', 'strict', 1, null]) expect(parse({ mode }).success).toBe(false);
+    for (const bad of [{ ...recipe, extra: 1 }, { id: 'a', name: 'b' }, { ...recipe, name: '' }, { ...recipe, playbook: 5 }, { ...recipe, playbook: 'x'.repeat(1024 * 1024 + 1) }, null, 'text'])
+      expect(parse({ recipe: bad }).success).toBe(false);
+    expectTypeOf<Params<'rooms.create'>['mode']>().toEqualTypeOf<'free' | 'checklist' | 'verified' | undefined>();
+    expectTypeOf<Params<'rooms.create'>['recipe']>().toEqualTypeOf<{ id: string; name: string; playbook: string } | undefined>();
+  });
+
   it('rooms.addMember: комната и сессия обязательны', () => {
     expect(METHODS['rooms.addMember'].safeParse({ ...room, sessionId: 's-04' }).success).toBe(true);
     expect(METHODS['rooms.addMember'].safeParse(room).success).toBe(false);
@@ -384,6 +399,15 @@ describe('capabilities.list (живая проверка 2026-10-02: подск�
   });
 });
 
+
+describe('recipes.list', () => {
+  it('принимает только абсолютно заданный проект без лишних полей', () => {
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '/p' }).success).toBe(true);
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '' }).success).toBe(false);
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '/p', extra: 1 }).success).toBe(false);
+    expectTypeOf<Result<'recipes.list'>['partial']>().toEqualTypeOf<boolean>();
+  });
+});
 
 describe('session role protocol compatibility', () => {
   const base = { projectPath: '/p', workId: null, provider: 'claude', label: 'Plan', task: '', parent: null };

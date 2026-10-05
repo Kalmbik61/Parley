@@ -24,6 +24,7 @@ import {
   UNTITLED_WORK,
 } from './launch.js';
 import { setResult } from './map.js';
+import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
 
@@ -1158,12 +1159,59 @@ describe('common session layer delivery', () => {
     const { workId, sessionId } = await pending('codex');
     const session = await sessionOf(workId, sessionId);
     await writeFile(path.join(project, 'PARLEY.md'), 'first\n' + 'x'.repeat(40000));
-    const trimmed = await planLaunch(project, workId, session, { layer: { role: 'first\n' + 'x'.repeat(40000), playbook: 'first\n' + 'x'.repeat(40000), isLead: true } });
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'R', creator: 'human', members: [sessionId], lead: sessionId, recipe: { id: 'project:long', name: 'Long', playbook: 'first\n' + 'x'.repeat(40000) } });
+    });
+    const trimmed = await planLaunch(project, workId, session, { layer: { role: 'first\n' + 'x'.repeat(40000) } });
     expect(trimmed.diagnostics?.map((warning) => warning.code)).toEqual(['parley-md-truncated', 'role-truncated', 'recipe-playbook-truncated']);
     await writeFile(path.join(project, 'PARLEY.md'), '\u0001'.repeat(17000));
     await expect(planLaunch(project, workId, session)).rejects.toThrow('session-layer-too-large');
     await expect(planNew(project, workId, session)).rejects.toThrow('session-layer-too-large');
     await expect(planResume(project, workId, { ...session, providerSessionId: 'id' })).rejects.toThrow('session-layer-too-large');
+  });
+});
+
+describe('плейбук рецепта в слое ведущего', () => {
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+  const snapshot = { id: 'project:pay', name: 'Payments', playbook: 'SECRET LEAD PLAYBOOK' };
+
+  it('ведущий получает строку рецепта и плейбук на launch/new/resume, участник и сессия вне комнаты — нет', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const member = await createPendingSession(project, workId, { provider: 'codex', label: 'второй', task: 'x' });
+    const outsider = await createPendingSession(project, workId, { provider: 'codex', label: 'третий', task: 'x' });
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'R', creator: 'human', members: [sessionId, member], lead: sessionId, recipe: snapshot });
+    });
+    const lead = { ...await sessionOf(workId, sessionId), providerSessionId: 'id' };
+    for (const plan of [await planLaunch(project, workId, lead), await planNew(project, workId, lead), await planResume(project, workId, lead)]) {
+      expect(codexLayer(plan.args)).toContain('Recipe: Payments — you lead this room.\nSECRET LEAD PLAYBOOK');
+    }
+    for (const id of [member, outsider]) {
+      const plan = await planLaunch(project, workId, await sessionOf(workId, id));
+      expect(codexLayer(plan.args)).not.toContain('SECRET LEAD PLAYBOOK');
+      expect(codexLayer(plan.args)).not.toContain('Recipe:');
+    }
+  });
+
+  it('поля плейбука из options.layer не действуют: решает карта', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), { layer: { playbook: 'INJECTED', isLead: true } });
+    expect(codexLayer(plan.args)).not.toContain('INJECTED');
+  });
+
+  it('при смене ведущего плейбук уходит новому ведущему: закрытый прежний больше его не получает', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const next = await createPendingSession(project, workId, { provider: 'codex', label: 'второй', task: 'x' });
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'R', creator: 'human', members: [sessionId, next], lead: sessionId, recipe: snapshot });
+      const closed = map.sessions.find((row) => row.id === sessionId)!;
+      closed.lifecycle = 'closed';
+    });
+    expect(codexLayer((await planLaunch(project, workId, await sessionOf(workId, next))).args)).toContain('SECRET LEAD PLAYBOOK');
   });
 });
 

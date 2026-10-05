@@ -531,6 +531,16 @@ describe('get_map', () => {
     expect(byId('glm')).toMatchObject({ models: null, effort: false });
   });
 
+  it('комната с рецептом показывает агенту id и имя, но не плейбук ведущего', async () => {
+    await updateMap(project, workId, (current) => {
+      addRoom(current, { title: 'R', creator: HUMAN, members: ['s-01'], lead: 's-01', recipe: { id: 'project:pay', name: 'Payments', playbook: 'SECRET LEAD PLAYBOOK' } });
+    });
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map');
+    expect(JSON.stringify(result)).not.toContain('SECRET LEAD PLAYBOOK');
+    expect((result['map'] as WorkMap).rooms[0]?.recipe).toEqual({ id: 'project:pay', name: 'Payments' });
+  });
+
   it('работает без PARLEY_SESSION_ID', async () => {
     const client = await connect(null);
     const result = await callOk(client, 'get_map');

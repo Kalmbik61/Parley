@@ -519,9 +519,18 @@ async function getMap(context: McpContext): Promise<unknown> {
       effort: supportsEffort(entry),
     })),
   );
+  const map = await readMap(context.projectPath, context.workId);
   return {
     sessionId: context.sessionId,
-    map: await readMap(context.projectPath, context.workId),
+    // Плейбук рецепта получает только ведущий (слоем и письмом): в карте агенту видны id и имя рецепта.
+    map: {
+      ...map,
+      rooms: map.rooms.map((room) => {
+        const { recipe, recipeLeadNotified, ...rest } = room;
+        void recipeLeadNotified;
+        return { ...rest, recipe: recipe == null ? null : { id: recipe.id, name: recipe.name } };
+      }),
+    },
     providers,
   };
 }

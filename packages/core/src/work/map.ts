@@ -418,6 +418,16 @@ function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
 }
 
+/** Снимок рецепта в карте: ровно три строки, без лишних полей; границы — как у файла рецепта (1 MiB). */
+function isRecipeSnapshot(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 3 || !['id', 'name', 'playbook'].every((key) => keys.includes(key))) return false;
+  const { id, name, playbook } = value;
+  return typeof id === 'string' && id !== '' && id.length <= 300 && typeof name === 'string' && name !== '' &&
+    name.length <= 300 && typeof playbook === 'string' && Buffer.byteLength(playbook, 'utf8') <= 1024 * 1024;
+}
+
 /**
  * Ведущего и решения в комнатах до 2026-09-29 не было: подставляется `null`, а ведущим
  * такой комнаты считается первый из `members` (`roomLead`). Запись, которая не объект,
@@ -429,6 +439,9 @@ function migrateRoom(room: unknown): void {
   room['proposal'] ??= null;
   room['mode'] ??= 'free';
   if (!['free', 'checklist', 'verified'].includes(String(room['mode']))) throw new Error('invalid room mode');
+  room['recipe'] ??= null;
+  if (room['recipe'] !== null && !isRecipeSnapshot(room['recipe'])) throw new Error('invalid room recipe');
+  if (room['recipeLeadNotified'] !== undefined && typeof room['recipeLeadNotified'] !== 'string') throw new Error('invalid room recipe');
   if (isRecord(room['proposal'])) room['proposal']['kind'] ??= 'decision';
 }
 

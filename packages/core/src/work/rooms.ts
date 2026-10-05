@@ -1,3 +1,4 @@
+import type { RecipeSnapshot } from '../recipes/types.js';
 import { addMessage, maxNumber } from './map.js';
 import { sessionMention, sessionTag } from './thread.js';
 import { HUMAN, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
@@ -44,6 +45,8 @@ export interface NewRoom {
    * `lead: null` — ведущим считается первый из `members` (`roomLead`).
    */
   lead?: string | null;
+  /** Рецепт комнаты: копируется снимком, дальнейшие правки файла рецепта комнату не меняют. */
+  recipe?: RecipeSnapshot | null;
 }
 
 /** Заводит комнату в карте. */
@@ -63,6 +66,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
     lead,
     proposal: null,
     mode: init.mode ?? 'free',
+    recipe: init.recipe == null ? null : { id: init.recipe.id, name: init.recipe.name, playbook: init.recipe.playbook },
   };
   map.rooms.push(room);
   return room;

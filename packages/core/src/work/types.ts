@@ -1,6 +1,7 @@
 import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
+import type { RecipeSnapshot } from '../recipes/types.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
@@ -251,6 +252,17 @@ export interface Room {
   lead: string | null;
   /** Решение, ждущее человека; `null` — ждать нечего. Так же подставляется `parseMap`ом. */
   proposal: Proposal | null;
+  /**
+   * Снимок рецепта на момент создания комнаты (спека рецептов, 6.2): правка файла рецепта комнату
+   * не меняет. `null` — комната без рецепта; в картах до рецептов поля нет, `parseMap` подставляет `null`.
+   */
+  recipe?: RecipeSnapshot | null;
+  /**
+   * Ведущий, которому уже ушёл снимок плейбука письмом (спека рецептов, 6.4). Одна отметка на смену
+   * ведущего: хост не шлёт письмо повторно после перезапуска. Хост ставит её при создании комнаты, если ведущий
+   * ещё не запущен (плейбук придёт слоем). Нет поля — ведущему плейбук ещё не доставлен, письмо уйдёт.
+   */
+  recipeLeadNotified?: string;
 }
 
 /** Письмо: доставляется по pull, живёт в карте. */

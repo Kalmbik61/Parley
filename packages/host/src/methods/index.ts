@@ -22,6 +22,7 @@ import { createPtyHandlers } from './pty.js';
 import { createProvidersList } from './providers.js';
 import { createPlanHandlers, roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createRolesList } from './roles.js';
+import { createRecipesList } from './recipes.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
@@ -131,6 +132,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,
     'roles.list': createRolesList() as AnyHandler,
+    'recipes.list': createRecipesList() as AnyHandler,
     'sessions.create': sessions.sessionsCreate as AnyHandler,
     'sessions.resume': sessions.sessionsResume as AnyHandler,
     'sessions.stop': sessions.sessionsStop as AnyHandler,

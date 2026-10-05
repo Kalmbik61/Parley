@@ -626,7 +626,7 @@ describe('parseMap', () => {
     it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
       const parsed = parseMap(withRooms([oldRoom]), 'map.json');
 
-      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free' });
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free', recipe: null });
     });
 
     it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
@@ -645,7 +645,7 @@ describe('parseMap', () => {
       const written = { ...oldRoom, lead: 's-03', proposal };
 
       const parsed = parseMap(withRooms([written]), 'map.json');
-      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', proposal: { ...proposal, kind: 'decision' } });
+      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', recipe: null, proposal: { ...proposal, kind: 'decision' } });
       expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
     });
 

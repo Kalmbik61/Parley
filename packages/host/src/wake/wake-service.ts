@@ -39,6 +39,7 @@ import type { HostContext } from '../context.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
+import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -583,6 +584,26 @@ export function createWakeService(
     }
   }
 
+  // Работы, в которых письмо новому ведущему уже пишется: два события подряд не ставят второе письмо.
+  const recipeDelivering = new Set<string>();
+
+  /**
+   * Смена ведущего у комнаты с рецептом: письмо с плейбуком пишется в карту, а подъём и указатель
+   * делает этот же будильник по следующему изменению карты (спека рецептов, 6.4).
+   */
+  function deliverRecipes(): void {
+    for (const entry of works.snapshot().entries) {
+      const key = workKeyOf(entry.projectPath, entry.map.work.id);
+      if (recipeDelivering.has(key)) continue;
+      recipeDelivering.add(key);
+      void deliverRecipeToNewLeads(entry.projectPath, entry.map)
+        .catch((error: unknown) => {
+          host.log.error('плейбук рецепта новому ведущему не записался', { key, error: String(error) });
+        })
+        .finally(() => recipeDelivering.delete(key));
+    }
+  }
+
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
   function recomputeAll(): void {
     for (const entry of works.snapshot().entries) {
@@ -608,7 +629,10 @@ export function createWakeService(
         .catch(() => {});
 
       for (const entry of works.snapshot().entries) ensureKnown(entry);
-      unsubscribeWorks = works.onChange(() => recomputeAll());
+      unsubscribeWorks = works.onChange(() => {
+        deliverRecipes();
+        recomputeAll();
+      });
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую

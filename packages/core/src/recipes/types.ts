@@ -30,3 +30,13 @@ export interface ExpandedRecipeAgent {
 }
 export type RecipeEntry = { status: 'valid'; recipe: RecipeDefinition; agents: ExpandedRecipeAgent[] } | { status: 'invalid'; id: string; file: string; diagnostic: RecipeDiagnostic };
 export interface RecipeCatalog { entries: RecipeEntry[]; partial: boolean; diagnostics: RecipeDiagnostic[] }
+/** Безопасная проекция строки для окна: без текста роли, путей и нативной конфигурации. */
+export interface RecipeAgentView {
+  choice: ExpandedRecipeAgent['choice'];
+  status: ExpandedRecipeAgent['status'];
+  resolved: { provider: string; model: string | null; effort: string | null; readOnly: boolean } | null;
+}
+export type RecipeEntryView =
+  | { status: 'valid'; recipe: RecipeDefinition; agents: RecipeAgentView[] }
+  | Extract<RecipeEntry, { status: 'invalid' }>;
+export interface RecipeCatalogView { entries: RecipeEntryView[]; partial: boolean; diagnostics: RecipeDiagnostic[] }

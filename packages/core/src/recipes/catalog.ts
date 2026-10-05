@@ -7,7 +7,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import { stateDir } from '../work/state-dir.js';
 import { BUILTIN_RECIPES } from './builtin.js';
 import { parseProjectRecipe, projectRecipeId, RECIPE_DOCUMENT_MAX_BYTES } from './parse.js';
-import type { ExpandedRecipeAgent, ParsedRecipe, RecipeCatalog, RecipeDefinition, RecipeSnapshot } from './types.js';
+import type { ExpandedRecipeAgent, ParsedRecipe, RecipeCatalog, RecipeCatalogView, RecipeDefinition, RecipeSnapshot } from './types.js';
 
 /** Presets preserve explicit overrides; resolving defaults never mutates the recipe/session map. */
 export function expandRecipe(recipe: RecipeDefinition, roles: RoleCatalog): ExpandedRecipeAgent[] {
@@ -26,6 +26,18 @@ export function expandRecipe(recipe: RecipeDefinition, roles: RoleCatalog): Expa
 }
 export function snapshotRecipe(recipe: RecipeDefinition): RecipeSnapshot {
   return { id: recipe.id, name: recipe.name, playbook: recipe.playbook };
+}
+/** Каталог для окна: ошибки разбора остаются строками, а нативные роли сводятся к безопасной выжимке. */
+export function recipeCatalogView(catalog: RecipeCatalog): RecipeCatalogView {
+  return {
+    partial: catalog.partial,
+    diagnostics: catalog.diagnostics,
+    entries: catalog.entries.map(entry => entry.status === 'invalid' ? entry : {
+      status: 'valid' as const, recipe: entry.recipe,
+      agents: entry.agents.map(({ choice, status, resolved }) => ({ choice, status,
+        resolved: resolved === null ? null : { provider: resolved.provider, model: resolved.model, effort: resolved.effort, readOnly: resolved.readOnly } })),
+    }),
+  };
 }
 async function readRecipe(file: string): Promise<{ parsed: ParsedRecipe; bytes: number }> {
   try {

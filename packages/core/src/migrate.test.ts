@@ -511,7 +511,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     expect((await stat(currentDir(project))).ino).toBe(before.ino);
     expect(await readFile(path.join(currentDir(project), 'works', workId, 'map.json'), 'utf8')).toContain('Работа shop');
     expect(await readFile(path.join(currentDir(project), 'works', workId, 'artifacts', 'note.txt'), 'utf8')).toBe('заметка\n');
-    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n');
+    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
     expect(await record(home)).toEqual({
       schemaVersion: 1,
       migrated: [{ what: 'project', from: legacyDir(project), to: currentDir(project), at: AT.toISOString() }],
@@ -875,7 +875,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
     expect(await exists(path.join(currentDir(project), 'works', workId))).toBe(false);
-    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n');
+    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
   });
 
   it('свой .gitignore в прежнем каталоге остаётся как есть', async () => {

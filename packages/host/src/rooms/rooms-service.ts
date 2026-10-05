@@ -23,6 +23,8 @@ import {
   reservePlanEffects,
   PlanConflictError,
   isMember,
+  recipeLeadsPending,
+  reconcileRecipeLeads,
   joinNotice,
   leaveOtherRooms,
   ProposalConflictError,
@@ -92,7 +94,20 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
       throw bad('origin: two different sessions among the room participants');
     }
 
-    const room = addRoom(map, { title: input.title, creator: HUMAN, members, lead });
+    const room = addRoom(map, {
+      title: input.title,
+      creator: HUMAN,
+      members,
+      lead,
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
+      ...(input.recipe === undefined ? {} : { recipe: input.recipe }),
+    });
+    // Слой строится из карты при запуске: ведущий, ещё не запущенный (`pending`), получит плейбук им, и письмо
+    // не нужно. Запущенный раньше комнаты (окно создаёт сессии до неё) слой уже получил без рецепта — ему
+    // плейбук придёт письмом, как новому ведущему (`reconcileRecipeLeads`).
+    if (room.recipe != null && map.sessions.find((session) => session.id === lead)?.lifecycle === 'pending') {
+      room.recipeLeadNotified = lead;
+    }
     for (const id of members) leaveOtherRooms(map, id, room.id);
     roomId = room.id;
     if (origin !== undefined) addRoomOriginMessage(map, room.id, origin);
@@ -104,6 +119,27 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     }
   });
   return roomId;
+}
+
+class NothingToDeliver extends Error {}
+
+/**
+ * Смена ведущего у комнаты с рецептом: новому ведущему письмом от `parley` уходит исходный снимок плейбука
+ * (спека рецептов, 6.4). Отметка о доставленном ведущем пишется в карту вместе с письмом, поэтому повтор и
+ * перезапуск хоста второго письма не дают. Письмо будит адресата обычный будильник. Карту трогает только
+ * если есть кому слать: `recipeLeadsPending` смотрит снимок хоста без записи.
+ */
+export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap): Promise<void> {
+  if (!recipeLeadsPending(map)) return;
+  try {
+    await updateMap(projectPath, map.work.id, (current) => {
+      // Снимок хоста мог отстать: под локом уже могло быть сделано — карту не переписываем впустую.
+      if (!recipeLeadsPending(current)) throw new NothingToDeliver();
+      reconcileRecipeLeads(current);
+    });
+  } catch (error) {
+    if (!(error instanceof NothingToDeliver)) throw error;
+  }
 }
 
 /**

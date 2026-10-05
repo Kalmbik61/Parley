@@ -706,7 +706,7 @@ describe('read-only shared ignore diagnostics', () => {
     const file = path.join(paths.dir, '.gitignore'); await writeFile(file, '*\n');
     expect(await inspectSharedIgnore(paths)).toEqual([]); expect(await readFile(file, 'utf8')).toBe('*\n');
     expect(await prepareSharedIgnore(paths)).toEqual([]);
-    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n');
+    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
   });
   it('reuses the accepted bounded native ignore query without root ignore writes', async () => {
     const paths = await sharedProjectPaths(project);

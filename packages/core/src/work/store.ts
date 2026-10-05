@@ -18,7 +18,7 @@ import path from 'node:path';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
-import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
+import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
@@ -601,7 +601,7 @@ export async function inspectSharedIgnore(paths: SharedProjectPaths, options: Pr
     try { await lstat(paths.dir); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') exists = false; else throw error; }
   }
-  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== PRE_JOURNAL_STATE_IGNORE && previous.text !== '*\n')
+  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== PRE_JOURNAL_STATE_IGNORE && previous.text !== PRE_RECIPES_STATE_IGNORE && previous.text !== '*\n')
     diagnostics.push({ code: 'parley-gitignore-custom' });
   if (await sharedPathIgnored(paths.context, paths.backlog, options) || await sharedPathIgnored(paths.context, paths.memory, options)) diagnostics.push({ code: 'parley-dir-ignored' });
   return diagnostics;
@@ -610,7 +610,7 @@ export async function inspectSharedIgnore(paths: SharedProjectPaths, options: Pr
 export async function prepareSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
   const file = path.join(paths.dir, '.gitignore');
   const previous = await readSharedFile(file);
-  if ((previous.text === '*\n' || previous.text === PRE_MEMORY_STATE_IGNORE || previous.text === PRE_JOURNAL_STATE_IGNORE) && previous.version !== MISSING_SHARED_VERSION)
+  if ((previous.text === '*\n' || previous.text === PRE_MEMORY_STATE_IGNORE || previous.text === PRE_JOURNAL_STATE_IGNORE || previous.text === PRE_RECIPES_STATE_IGNORE) && previous.version !== MISSING_SHARED_VERSION)
     await writeSharedFile(file, SHARED_STATE_IGNORE, previous, 0o644);
   return inspectSharedIgnore(paths, options);
 }

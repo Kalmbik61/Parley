@@ -117,6 +117,24 @@ export {
   RoomRuleError,
 } from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
+export { leadRecipeBlock, recipeLeadBlock, recipeLeadsPending, reconcileRecipeLeads } from './work/recipe-lead.js';
+export { BUILTIN_RECIPES } from './recipes/builtin.js';
+export { listRecipeCatalog, expandRecipe, recipeCatalogView, snapshotRecipe } from './recipes/catalog.js';
+export { parseProjectRecipe, projectRecipeId } from './recipes/parse.js';
+export type {
+  ExpandedRecipeAgent,
+  ParsedRecipe,
+  RecipeAgent,
+  RecipeAgentView,
+  RecipeCatalog,
+  RecipeCatalogView,
+  RecipeCode,
+  RecipeDefinition,
+  RecipeDiagnostic,
+  RecipeEntry,
+  RecipeEntryView,
+  RecipeSnapshot,
+} from './recipes/types.js';
 export {
   ACCEPTED_LETTER,
   ACCEPTED_LINE,

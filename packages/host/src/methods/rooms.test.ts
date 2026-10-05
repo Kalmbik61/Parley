@@ -7,6 +7,7 @@ import {
   addSession,
   createWork,
   HUMAN,
+  PARLEY,
   readMap,
   roomLead,
   setProposal,
@@ -373,6 +374,74 @@ describe('rooms.create: ведущий и правило одной комнат
     await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Громкая', members: [b, c], quiet: false });
     map = await readMap(dir, workId);
     expect(map.messages.filter((message) => message.roomId === 'r-02').map((message) => message.to)).toEqual([[b], [c]]);
+  });
+});
+
+describe('rooms.create: режим и снимок рецепта (спека рецептов, 6.2–6.4)', () => {
+  const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Step one.\nStep two.' };
+  const parleyLetters = (map: Awaited<ReturnType<typeof readMap>>) => map.messages.filter((message) => message.from === PARLEY);
+  const waitFor = async (check: () => Promise<boolean>): Promise<void> => {
+    for (let i = 0; i < 100; i++) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('не дождались условия');
+  };
+
+  it('режим и снимок ложатся в комнату; ведущему, ещё не запущенному, письмо не нужно: плейбук придёт слоем', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    let pending = '';
+    await updateMap(dir, workId, (map) => { pending = addSession(map, { provider: 'claude', label: 'ждёт', task: 't' }).id; });
+    const response = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [pending, a, b], mode: 'verified', recipe, lead: pending });
+    expect(response.result).toEqual({ roomId: 'r-01' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]).toMatchObject({ mode: 'verified', recipe, recipeLeadNotified: pending });
+    expect(parleyLetters(map)).toEqual([]);
+  });
+
+  it('ведущий запущен до комнаты (сессии созданы раньше): слой он получил без рецепта, плейбук приходит письмом ровно один раз', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b], recipe, quiet: true });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 1);
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'задача', kind: 'note' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    expect(parleyLetters(map)).toHaveLength(1);
+    expect(parleyLetters(map)[0]).toMatchObject({ to: [a], roomId: 'r-01', text: 'Recipe: Payments — you lead this room.\nStep one.\nStep two.' });
+    expect(map.rooms[0]).toMatchObject({ recipe, recipeLeadNotified: a });
+    expect(unreadFor(map, b).some((message) => message.from === PARLEY)).toBe(false);
+  });
+
+  it('без mode и recipe комната свободная и без рецепта; снимок с лишним полем — отказ запроса', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    const bad = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b], recipe: { ...recipe, extra: 1 } });
+    expect(bad.error).toBeDefined();
+    expect((await readMap(dir, workId)).rooms).toEqual([]);
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b] });
+    expect((await readMap(dir, workId)).rooms[0]).toMatchObject({ mode: 'free', recipe: null });
+  });
+
+  it('закрытого ведущего заменяет первый живой: письмо с исходным снимком уходит только ему и ровно один раз', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b, c] = ids as [string, string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b, c], recipe, quiet: true });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 1);
+    await updateMap(dir, workId, (map) => { transitionSession(map, a, 'closed'); });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 2);
+    // Ещё несколько изменений карты подряд: второго письма нет.
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'задача', kind: 'note' });
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'ещё', kind: 'note' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    const letters = parleyLetters(map);
+    expect(letters).toHaveLength(2);
+    expect(letters[1]).toMatchObject({ to: [b], roomId: 'r-01', text: 'Recipe: Payments — you lead this room.\nStep one.\nStep two.' });
+    expect(map.rooms[0]).toMatchObject({ recipe, recipeLeadNotified: b });
+    expect(unreadFor(map, c).some((message) => message.from === PARLEY)).toBe(false);
   });
 });
 

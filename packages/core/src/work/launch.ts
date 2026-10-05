@@ -36,6 +36,7 @@ import { systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
+import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
@@ -310,8 +311,12 @@ async function plan(
     const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
       ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
       : '';
+    // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.
+    const recipeBlock = leadRecipeBlock(map, session.id);
     const layer = buildSessionLayer({
       ...options.layer,
+      playbook: recipeBlock ?? '',
+      isLead: recipeBlock !== null,
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, { skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined }),
