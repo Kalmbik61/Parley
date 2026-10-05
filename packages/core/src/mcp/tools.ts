@@ -31,6 +31,20 @@ import {
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
+import {
+  PAGE_MAX_BYTES,
+  PAGE_MAX_ITEMS,
+  PAGE_MIN_BYTES,
+  PageError,
+  clampPageBytes,
+  listPage,
+  mapTopology,
+  messagePage,
+  pageBySeq,
+  parseCursor,
+  seqOf,
+  textPage,
+} from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
@@ -56,8 +70,8 @@ import {
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
-import { SharedStateError, inspectSharedIgnore, readMap, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
-import { participantLabel } from '../work/thread.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
+import { participantLabel, threadOf } from '../work/thread.js';
 import {
   MESSAGE_KINDS,
   SYSTEM,
@@ -325,8 +339,24 @@ const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The whole workspace map: sessions, their statuses, summaries and artifacts, messages — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models and effort for spawn_session). Call it first; the detailed guide is the read_guide tool',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models and effort for spawn_session). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Session id (s-NN): that session in detail, or with field the one field of it.' },
+        room: { type: 'string', description: 'Room id (r-NN): that room in full, or with field messages its message pages. Without field only participants read a room.' },
+        field: {
+          type: 'string',
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive'],
+          description: 'goal/title — the workspace texts; task/summary/history/artifacts/contextFrom — one field of session; messages — message pages of room (without room — your direct messages), newest first; message — the text of the message id; summaries — summaries of all sessions; archive — other workspaces of this project.',
+        },
+        id: { type: 'string', description: 'Message id (m-NN) for field message.' },
+        kind: { type: 'string', enum: [...MESSAGE_KINDS], description: 'Only messages of this kind (field messages); decision lists the decisions of a room.' },
+        cursor: { type: 'string', description: 'The `next` of the previous page: continues it without gaps or repeats. Messages: a cursor before:N goes to older ones, after:N to newer ones.' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536.' },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'report',
@@ -494,12 +524,14 @@ const TOOLS: Tool[] = [
     name: 'read_room',
     annotations: READS,
     description:
-      "The room's feed for context — the last limit messages, without read marks. Available only to participants.",
+      "The room's feed for context — the last limit messages within the byte limit, without read marks; `page.next` continues to older ones. Available only to participants.",
     inputSchema: {
       type: 'object',
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
         limit: { type: 'number', description: 'How many of the latest messages to return; the default is 50.' },
+        cursor: { type: 'string', description: 'The `next` of the previous page: older messages (before:N) or newer ones (after:N).' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536. A message that does not fit is cut with its full size named (textBytes); get_map with field message reads it whole.' },
       },
       required: ['room'],
     },
@@ -557,7 +589,9 @@ const TOOLS: Tool[] = [
   },
 ];
 
-async function getMap(context: McpContext): Promise<unknown> {
+async function getMap(context: McpContext, args: Record<string, unknown> = {}): Promise<unknown> {
+  const map = await readMap(context.projectPath, context.workId);
+  if (Object.keys(args).length > 0) return mapPage(context, map, args);
   const registry = await loadProviders();
   const providers = await Promise.all(
     Object.values(registry).map(async (entry) => ({
@@ -570,20 +604,129 @@ async function getMap(context: McpContext): Promise<unknown> {
       effort: supportsEffort(entry),
     })),
   );
-  const map = await readMap(context.projectPath, context.workId);
-  return {
-    sessionId: context.sessionId,
-    // Плейбук рецепта получает только ведущий (слоем и письмом): в карте агенту видны id и имя рецепта.
-    map: {
-      ...map,
-      rooms: map.rooms.map((room) => {
+  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
+}
+
+const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
+  const value = args[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`argument ${name}: expected a string`);
+  return value;
+};
+
+/**
+ * Прямое письмо видно сессии, если оно в её треде (родитель и дети делят письма, одинокий корень видит все) или
+ * оно её собственное; письмо комнаты — участнику комнаты, как в `read_room`. Прежний `get_map` отдавал все письма
+ * работы всем, страницы — только то, что сессии положено читать.
+ */
+function canReadMessage(map: WorkMap, message: Message, sessionId: string, thread: ReadonlySet<string>): boolean {
+  if (message.roomId === null) return thread.has(message.id) || message.from === sessionId || message.to.includes(sessionId);
+  const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+  return room !== undefined && isMember(room, sessionId);
+}
+
+/** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
+async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
+  const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
+  const field = optionalString(args, 'field');
+  const sessionId = optionalString(args, 'session');
+  const roomId = optionalString(args, 'room');
+  const cursorRaw = optionalString(args, 'cursor');
+  try {
+    if (field === undefined) {
+      if (sessionId !== undefined) {
+        const session = requireSession(map, sessionId);
+        const entry = mapTopology(map, context.sessionId).sessions.find((candidate) => candidate.id === sessionId);
+        return { session: { ...entry, artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
+      }
+      if (roomId !== undefined) {
+        const room = requireRoom(map, roomId);
+        const topology = mapTopology(map, context.sessionId).rooms.find((candidate) => candidate.id === roomId);
         const { recipe, recipeLeadNotified, ...rest } = room;
         void recipeLeadNotified;
-        return { ...rest, recipe: recipe == null ? null : { id: recipe.id, name: recipe.name } };
-      }),
-    },
-    providers,
-  };
+        // Решение целиком (до 10000 знаков) — здесь, а не в общей топологии.
+        return { room: { ...rest, recipe: recipe == null ? null : { id: recipe.id, name: recipe.name } }, messages: topology?.messages };
+      }
+      throw new Error('give session, room or field; without parameters get_map returns the compact map');
+    }
+    if (field === 'goal' || field === 'title') return { field, ...textPage(map.work[field], cursorRaw, maxBytes) };
+    if (field === 'archive') {
+      const index = await readWorksIndex();
+      const others = index.works.filter((work) => work.projectPath === context.projectPath && work.id !== context.workId);
+      const { items, page } = pageBySeq(others, {
+        seq: (work) => seqOf(work.id, 'w-'),
+        view: (work) => ({ id: work.id, title: work.title, status: work.status, updatedAt: work.updatedAt }),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+      });
+      return { workspaces: items, page };
+    }
+    if (field === 'summaries') {
+      const withSummary = map.sessions.filter((session) => session.summary !== null);
+      const { items, page } = pageBySeq(withSummary, {
+        seq: (session) => seqOf(session.id, 's-'),
+        view: (session) => ({ id: session.id, label: session.label, status: displayStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        shrink: (view, limit) => shrinkSummary(view, limit),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+      });
+      return { summaries: items, page };
+    }
+    if (field === 'messages' || field === 'message') {
+      const caller = context.sessionId;
+      if (caller === null) throw new Error(NO_SESSION);
+      if (field === 'message') {
+        const id = optionalString(args, 'id');
+        if (id === undefined) throw new Error('argument id is required for field message');
+        const message = map.messages.find((candidate) => candidate.id === id);
+        if (message === undefined || !canReadMessage(map, message, caller, new Set(threadOf(map, caller).messages.map((row) => row.id)))) throw new PageError('unknown-target', `message ${id} is not available to this session`);
+        return { id, from: message.from, at: message.at, roomId: message.roomId, ...textPage(message.text, cursorRaw, maxBytes) };
+      }
+      let filter: ((message: Message) => boolean) | undefined;
+      if (roomId === undefined) {
+        const thread = new Set(threadOf(map, caller).messages.map((row) => row.id));
+        filter = (message) => canReadMessage(map, message, caller, thread);
+      }
+      else if (!isMember(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
+      const kind = optionalString(args, 'kind');
+      if (kind !== undefined && !(MESSAGE_KINDS as readonly string[]).includes(kind)) throw new Error(`argument kind: one of ${MESSAGE_KINDS.join(', ')}`);
+      return messagePage(map, {
+        roomId: roomId ?? null,
+        ...(kind === undefined ? {} : { kind: kind as Message['kind'] }),
+        ...(filter === undefined ? {} : { filter }),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+        view: (message) => messageView(message, map),
+      });
+    }
+    // Остальные поля — поля одной сессии.
+    if (sessionId === undefined) throw new Error(`field ${field} needs the session argument`);
+    const session = requireSession(map, sessionId);
+    if (field === 'task') return { session: sessionId, field, ...textPage(session.task, cursorRaw, maxBytes) };
+    if (field === 'summary') return { session: sessionId, field, ...textPage(session.summary ?? '', cursorRaw, maxBytes) };
+    if (field === 'contextFrom') return { session: sessionId, field, contextFrom: session.contextFrom };
+    if (field === 'history') {
+      const { items, page } = listPage(session.history, { view: (entry) => entry, cursor: parseCursor(cursorRaw), maxBytes });
+      return { session: sessionId, field, history: items, page };
+    }
+    if (field === 'artifacts') {
+      const { items, page } = listPage(session.artifacts, { view: (entry) => entry, cursor: parseCursor(cursorRaw), maxBytes });
+      return { session: sessionId, field, artifacts: items, page };
+    }
+    throw new Error(`unknown field ${field}`);
+  } catch (error) {
+    // Ошибка запроса страницы — для агента: код и что поправить, без внутренностей.
+    if (error instanceof PageError) throw new Error(`${error.code}: ${error.message}`);
+    throw error;
+  }
+}
+
+/** Резюме в странице `summaries`: длинное сокращается с полным размером — целиком оно читается полем summary. */
+function shrinkSummary<V extends { id: string; text: string }>(view: V, limit: number): V & { textBytes: number } {
+  const full = Buffer.byteLength(view.text, 'utf8');
+  const text = markedExcerpt(view.text, Math.max(256, limit - 1024)).text;
+  return { ...view, text: `${text} [read the whole summary: get_map {session: "${view.id}", field: "summary"}]`, textBytes: full };
 }
 
 async function report(
@@ -1024,11 +1167,20 @@ async function readRoom(
     throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
   }
 
-  const inRoom = map.messages
-    .filter((message) => message.roomId === roomId)
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(-limit);
-  return { messages: inRoom.map((message) => messageView(message, map)) };
+  // Хвост комнаты в пределах байтов: письмо, которое одно не влезает, сокращается с полным размером, а старее —
+  // по `page.next`. Прежний ответ был `limit` писем любого размера.
+  try {
+    return messagePage(map, {
+      roomId,
+      cursor: parseCursor(optionalString(args, 'cursor')),
+      maxBytes: clampPageBytes(numberArg(args, 'maxBytes')),
+      maxItems: Math.min(Math.max(Math.floor(limit), 1), PAGE_MAX_ITEMS),
+      view: (message) => messageView(message, map),
+    });
+  } catch (error) {
+    if (error instanceof PageError) throw new Error(`${error.code}: ${error.message}`);
+    throw error;
+  }
 }
 
 async function proposeDecision(
@@ -1231,7 +1383,7 @@ async function dispatch(
 ): Promise<unknown> {
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
-  if (name === 'get_map') return getMap(context);
+  if (name === 'get_map') return getMap(context, args);
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);

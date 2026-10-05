@@ -106,9 +106,15 @@ explicit consent — for example, the words "wrap up".`,
       'get_map, backlog, remember/memory_read/search_history, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
     text: `## Tools
 
-\`get_map\` — the whole map: sessions with their \`lifecycle\`/\`result\`, rooms, summaries,
-artifacts, messages, plus the list of registry providers with a mark telling whether the
-command is in PATH. Call it first: session and room ids come from here.
+\`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
+plan revisions, unread counts and message cursors, plus the list of registry providers with a
+mark telling whether the command is in PATH. Call it first: session and room ids come from
+here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
+with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02", field: "task" |
+"summary" | "history" | "artifacts"}\`; \`{room: "r-01"}\` (the room in full, with its whole
+decision); \`{field: "messages", room: "r-01", kind?: "decision"}\` — the messages, newest first,
+\`cursor\` goes on to older ones; \`{field: "message", id: "m-12"}\` — one long message;
+\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project.
 
 \`backlog_list(filter?, text?)\` — read this project's backlog; filter is open (default),
 taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.

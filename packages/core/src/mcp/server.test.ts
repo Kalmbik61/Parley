@@ -555,6 +555,216 @@ describe('get_map', () => {
   });
 });
 
+describe('get_map: компактная карта и страницы (P35)', () => {
+  const longText = (n: number, mark = 'я'): string => mark.repeat(n);
+
+  /** s-01 (план) и s-02, комната r-01 из обоих; письма дописывает `fill`. */
+  async function seedRoom(): Promise<void> {
+    await updateMap(project, workId, (current) => {
+      addSession(current, { provider: 'claude', label: 'код', task: 'писать', parent: 's-01' });
+      addRoom(current, { title: 'Обсуждение', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' });
+    });
+  }
+  const fill = async (count: number, size: number, extra: Partial<Parameters<typeof addMessage>[1]> = {}): Promise<void> => {
+    await updateMap(project, workId, (current) => {
+      for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
+    });
+  };
+
+  it('по умолчанию — топология без текстов писем: размер не растёт с перепиской, счётчики и подсказка страниц на месте', async () => {
+    await seedRoom();
+    const client = await connect('s-01');
+    const before = (await call(client, 'get_map')).text.length;
+    await fill(400, 5000);
+    const after = await call(client, 'get_map');
+    expect(after.isError).toBe(false);
+    expect(after.text.length).toBeLessThan(before + 1500);
+    expect(after.text).not.toContain('яяяя');
+    const result = JSON.parse(after.text) as { map: { messages: { total: number; latestId: string; unreadForYou: { total: number } }; pages: string; rooms: { messages: { total: number } }[] } };
+    expect(result.map.messages).toMatchObject({ total: 400, latestId: 'm-400' });
+    expect(result.map.messages.unreadForYou.total).toBe(400);
+    expect(result.map.rooms[0]?.messages.total).toBe(400);
+    expect(result.map.pages).toContain('field: messages');
+  });
+
+  it('длинная цель сокращена с полным размером в cut и читается страницами field goal до конца, без потерь', async () => {
+    const goal = longText(60_000, 'ц');
+    await updateMap(project, workId, (current) => { current.work.goal = goal; });
+    const client = await connect('s-01');
+    const map = (await callOk(client, 'get_map'))['map'] as { work: { cut: { goal: number }; goal: string } };
+    expect(map.work.cut.goal).toBe(120_000);
+    expect(map.work.goal).toContain('cut: 120000 bytes in full');
+
+    let text = '';
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await callOk(client, 'get_map', { field: 'goal', ...(cursor === undefined ? {} : { cursor }), maxBytes: 32768 });
+      text += page['text'] as string;
+      expect(page['totalBytes']).toBe(120_000);
+      if (page['complete'] === true) break;
+      cursor = page['next'] as string;
+    }
+    expect(text).toBe(goal);
+  });
+
+  it('поля сессии: task, summary, history, artifacts, contextFrom; без session — понятная ошибка', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      const target = current.sessions[1]!;
+      target.task = longText(30_000, 'з');
+      target.summary = 'итог';
+      target.artifacts = [{ kind: 'file', path: 'a.md' }, { kind: 'file', path: 'b.md' }];
+      target.contextFrom = ['s-01'];
+    });
+    const client = await connect('s-01');
+    const task = await callOk(client, 'get_map', { session: 's-02', field: 'task', maxBytes: 65536 });
+    expect(task).toMatchObject({ session: 's-02', field: 'task', totalBytes: 60_000, complete: true });
+    expect(await callOk(client, 'get_map', { session: 's-02', field: 'summary' })).toMatchObject({ text: 'итог', complete: true });
+    const artifacts = await callOk(client, 'get_map', { session: 's-02', field: 'artifacts' });
+    expect((artifacts['artifacts'] as { path: string }[]).map((a) => a.path)).toEqual(['a.md', 'b.md']);
+    expect(artifacts['page']).toMatchObject({ total: 2, complete: true, next: null });
+    const history = await callOk(client, 'get_map', { session: 's-02', field: 'history' });
+    expect((history['history'] as { event: string }[])[0]?.event).toBe('pending');
+    expect(await callOk(client, 'get_map', { session: 's-02', field: 'contextFrom' })).toMatchObject({ contextFrom: ['s-01'] });
+    expect(await callOk(client, 'get_map', { session: 's-02' })).toMatchObject({ session: { id: 's-02', artifactCount: 2 } });
+
+    const noSession = await call(client, 'get_map', { field: 'task' });
+    expect(noSession.isError).toBe(true);
+    expect(noSession.text).toContain('session');
+    expect((await call(client, 'get_map', { session: 's-99', field: 'task' })).isError).toBe(true);
+  });
+
+  it('страницы писем комнаты: байтовый потолок, next ведёт к старым без повторов, kind отбирает решения', async () => {
+    await seedRoom();
+    await fill(120, 3000);
+    await fill(1, 20, { kind: 'decision', from: 's-01' });
+    const client = await connect('s-01');
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const page = await call(client, 'get_map', { field: 'messages', room: 'r-01', maxBytes: 16384, ...(cursor === undefined ? {} : { cursor }) });
+      expect(page.isError, page.text).toBe(false);
+      expect(page.text.length).toBeLessThanOrEqual(16384);
+      const parsed = JSON.parse(page.text) as { messages: { id: string }[]; page: { complete: boolean; next: string | null; total: number } };
+      seen.unshift(...parsed.messages.map((m) => m.id));
+      expect(parsed.page.total).toBe(121);
+      if (parsed.page.complete) break;
+      cursor = parsed.page.next as string;
+    }
+    expect(seen).toHaveLength(121);
+    expect(new Set(seen).size).toBe(121);
+    expect(seen[0]).toBe('m-001'.replace('m-001', 'm-01'));
+    const decisions = await callOk(client, 'get_map', { field: 'messages', room: 'r-01', kind: 'decision' });
+    expect((decisions['messages'] as { id: string }[]).map((m) => m.id)).toEqual(['m-121']);
+    expect((await call(client, 'get_map', { field: 'messages', room: 'r-01', kind: 'bogus' })).isError).toBe(true);
+  });
+
+  it('письма комнаты читает только участник; без сессии страницы писем недоступны', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => { addSession(current, { provider: 'claude', label: 'сторонний', task: 'x' }); });
+    await fill(3, 20);
+    const stranger = await connect('s-03');
+    const denied = await call(stranger, 'get_map', { field: 'messages', room: 'r-01' });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('not a participant');
+    const none = await connect(null);
+    expect((await call(none, 'get_map', { field: 'messages' })).isError).toBe(true);
+  });
+
+  it('прямые письма: только из треда сессии; field message читает длинное письмо страницами', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      addMessage(current, { from: 's-01', to: ['s-02'], text: longText(40_000) }); // m-01
+      addSession(current, { provider: 'claude', label: 'чужой', task: 'x', parent: null }); // s-03
+      addSession(current, { provider: 'claude', label: 'чужой2', task: 'x', parent: null }); // s-04
+      addMessage(current, { from: 's-03', to: ['s-04'], text: 'секрет' }); // m-02
+    });
+    const client = await connect('s-02');
+    const direct = await callOk(client, 'get_map', { field: 'messages' });
+    expect((direct['messages'] as { id: string }[]).map((m) => m.id)).toEqual(['m-01']);
+    // 40 000 знаков по два байта — больше страницы по умолчанию: письмо сокращено, а целиком читается полем message.
+    expect((direct['page'] as { cut: number }).cut).toBe(1);
+    expect(JSON.stringify(direct)).not.toContain('секрет');
+
+    let text = '';
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await callOk(client, 'get_map', { field: 'message', id: 'm-01', maxBytes: 32768, ...(cursor === undefined ? {} : { cursor }) });
+      text += page['text'] as string;
+      if (page['complete'] === true) break;
+      cursor = page['next'] as string;
+    }
+    expect(text).toBe(longText(40_000));
+    const hidden = await call(client, 'get_map', { field: 'message', id: 'm-02' });
+    expect(hidden.isError).toBe(true);
+    expect(hidden.text).toContain('unknown-target');
+  });
+
+  it('устаревший или кривой курсор — понятная ошибка, а не молчаливая склейка', async () => {
+    await seedRoom();
+    const client = await connect('s-01');
+    const bad = await call(client, 'get_map', { field: 'messages', room: 'r-01', cursor: 'next-please' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('invalid-cursor');
+    await updateMap(project, workId, (current) => { current.sessions[0]!.summary = 'я'.repeat(9000); });
+    const first = await callOk(client, 'get_map', { session: 's-01', field: 'summary', maxBytes: 2048 });
+    expect(first['complete']).toBe(false);
+    await updateMap(project, workId, (current) => { current.sessions[0]!.summary = 'новое резюме'; });
+    const stale = await call(client, 'get_map', { session: 's-01', field: 'summary', cursor: first['next'] });
+    expect(stale.isError).toBe(true);
+    expect(stale.text).toContain('stale-cursor');
+  });
+
+  it('summaries и archive: страницы по номеру; архив — другие работы этого проекта', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      current.sessions[0]!.summary = 'первое';
+      current.sessions[1]!.summary = 'я'.repeat(20_000);
+    });
+    const other = await createWork(project, { title: 'Старая работа', goal: '' });
+    const client = await connect('s-01');
+    const summaries = await callOk(client, 'get_map', { field: 'summaries', maxBytes: 8192 });
+    const list = summaries['summaries'] as { id: string; text: string; textBytes?: number }[];
+    expect(list.map((row) => row.id)).toEqual(['s-01', 's-02']);
+    expect(list[1]?.textBytes).toBe(40_000);
+    expect(list[1]?.text).toContain('get_map {session: "s-02", field: "summary"}');
+    const archive = await callOk(client, 'get_map', { field: 'archive' });
+    expect((archive['workspaces'] as { id: string }[]).map((row) => row.id)).toEqual([other.work.id]);
+    expect(archive['page']).toMatchObject({ total: 1, complete: true });
+  });
+
+  it('get_map {room}: комната целиком, с решением полностью, без плейбука', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      current.rooms[0]!.recipe = { id: 'project:x', name: 'X', playbook: 'SECRET PLAYBOOK' };
+      current.rooms[0]!.proposal = { id: 'p-01', from: 's-01', text: 'р'.repeat(8000), rev: 0, at: '2026-10-05T00:00:00.000Z' };
+    });
+    const client = await connect('s-01');
+    const result = await call(client, 'get_map', { room: 'r-01' });
+    expect(result.text).not.toContain('SECRET PLAYBOOK');
+    const parsed = JSON.parse(result.text) as { room: { proposal: { text: string }; recipe: { id: string } } };
+    expect(parsed.room.proposal.text).toHaveLength(8000);
+    expect(parsed.room.recipe).toEqual({ id: 'project:x', name: 'X' });
+  });
+
+  it('read_room: потолок в байтах, длинное письмо сокращено с полным размером, page.next идёт к старым', async () => {
+    await seedRoom();
+    await fill(40, 2000);
+    await fill(1, 300_000, { from: 's-01' });
+    const client = await connect('s-02');
+    const first = await call(client, 'read_room', { room: 'r-01', limit: 100, maxBytes: 16384 });
+    expect(first.isError, first.text).toBe(false);
+    expect(first.text.length).toBeLessThanOrEqual(16384);
+    const parsed = JSON.parse(first.text) as { messages: { id: string; text: string; textBytes?: number }[]; page: { complete: boolean; next: string; cut: number } };
+    expect(parsed.messages.at(-1)).toMatchObject({ id: 'm-41', textBytes: 599_998 });
+    expect(parsed.messages.at(-1)?.text).toContain('cut: ');
+    expect(parsed.page.cut).toBe(1);
+    expect(parsed.page.complete).toBe(false);
+    const older = await callOk(client, 'read_room', { room: 'r-01', limit: 5, cursor: parsed.page.next });
+    expect((older['messages'] as { id: string }[]).map((m) => m.id).every((id) => id < parsed.messages[0]!.id)).toBe(true);
+  });
+});
+
 describe('без PARLEY_SESSION_ID', () => {
   it('остальные инструменты объясняют, что сессию надо создать через харнесс', async () => {
     const client = await connect(null);

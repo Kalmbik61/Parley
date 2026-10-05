@@ -133,7 +133,9 @@ export type NoticeKind =
   | 'startup-wait'
   // Скилл `parley` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
-  | 'skill-foreign';
+  | 'skill-foreign'
+  // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
+  | 'snapshot-too-large';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -179,7 +181,11 @@ export type ErrorCode =
  * - `worktree-corrupt` (`bad_request`) — файл `.git` worktree не ведёт в зарегистрированный worktree
  *   проекта (подменён агентом): git в нём не запускается (раунд fix-final-a, п. 1);
  * - `works-unreadable` (`internal`) — первое чтение работ хостом отказало, снимка нет до перезапуска
- *   хоста (раунд lane-r5).
+ *   хоста (раунд lane-r5);
+ * - `client-upgrade-required` (`conflict`) — клиент без `compact-works`, а прежний полный снимок не влезает в кадр:
+ *   обновите окно (P35);
+ * - `snapshot-too-large` (`internal`) — даже компактный снимок работ не влезает в кадр (тысячи сессий или комнат):
+ *   хост его не шлёт, окну остаётся сказать об этом человеку (P35).
  */
 export const HOST_ERROR_REASONS = {
   gitMissing: 'git-missing',
@@ -188,6 +194,8 @@ export const HOST_ERROR_REASONS = {
   worktreeMissing: 'worktree-missing',
   worktreeCorrupt: 'worktree-corrupt',
   worksUnreadable: 'works-unreadable',
+  clientUpgradeRequired: 'client-upgrade-required',
+  snapshotTooLarge: 'snapshot-too-large',
 } as const;
 
 export type HostErrorReason = (typeof HOST_ERROR_REASONS)[keyof typeof HOST_ERROR_REASONS];
@@ -202,4 +210,9 @@ export interface ProtocolError {
 export interface WorksSnapshot {
   entries: WorkEntry[];
   branches: Record<string, string | null>;
+  /**
+   * Номер снимка в жизни хоста: растёт на каждую рассылку. Окно применяет только снимок новее уже применённого, и
+   * поздно пришедший старый ответ `works.list` не откатывает свежее событие. Нет поля — хост до P35.
+   */
+  revision?: number;
 }

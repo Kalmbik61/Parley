@@ -12,7 +12,12 @@ import { useWorksStore } from '../store/works.js';
 export function WorksErrorBanner(): JSX.Element | null {
   const error = useWorksStore((state) => state.error);
   if (error === null) return null;
-  const text = error.reason === HOST_ERROR_REASONS.worksUnreadable ? S.works.unreadable : errorText(error.code, S.errors.actions.loadWorkspaces);
+  const text =
+    error.reason === HOST_ERROR_REASONS.worksUnreadable
+      ? S.works.unreadable
+      : error.reason === HOST_ERROR_REASONS.snapshotTooLarge
+        ? S.works.tooLarge
+        : errorText(error.code, S.errors.actions.loadWorkspaces);
   return (
     <div role="alert" className="border-b border-border bg-card px-3 py-2 text-sm text-destructive">
       {text}

@@ -32,7 +32,7 @@ export const unreadFor = (map: WorkMap, sessionId: string): Message[] =>
  * `humanUnreadLetters` и `roomUnreadForHuman` окна (`attention/derive.ts`): иначе
  * отметка гасила бы не то, что окно считает непрочитанным.
  */
-const unreadForHuman = (message: Message): boolean =>
+export const unreadForHuman = (message: Message): boolean =>
   message.from !== HUMAN &&
   message.readBy[HUMAN] === undefined &&
   (message.roomId !== null || message.to.includes(HUMAN));

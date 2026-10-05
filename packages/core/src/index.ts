@@ -99,6 +99,24 @@ export {
 } from './work/map.js';
 export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
+export {
+  PAGE_DEFAULT_BYTES,
+  PAGE_MAX_BYTES,
+  PAGE_MAX_ITEMS,
+  PAGE_MIN_BYTES,
+  PageError,
+  clampPageBytes,
+  compactWorkMap,
+  listPage,
+  mapTopology,
+  messagePage,
+  pageBySeq,
+  parseCursor,
+  seqOf,
+  textPage,
+  viewBytes,
+} from './work/context-pages.js';
+export type { MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
@@ -438,6 +456,7 @@ export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './wo
 export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
+export type { MapCompact } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';

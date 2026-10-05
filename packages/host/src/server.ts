@@ -1,6 +1,7 @@
 import { createServer as createNetServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import {
+  COMPACT_WORKS_FEATURE,
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
@@ -26,7 +27,11 @@ interface HelloParams {
   token: string;
   protocol: number;
   client: string;
+  features?: string[];
 }
+
+/** Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный. */
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE];
 
 /** Пишет один кадр напрямую в сокет — до рукопожатия у соединения ещё нет `Client`. */
 function writeRaw(socket: Socket, message: ResponseMessage): void {
@@ -119,7 +124,7 @@ function handleHello(
     return null;
   }
 
-  const registered = createClient(socket, hello.client);
+  const registered = createClient(socket, hello.client, hello.features);
   writeRaw(socket, {
     id,
     result: {
@@ -127,6 +132,7 @@ function handleHello(
       protocol: PROTOCOL_VERSION,
       pid: process.pid,
       methods: supportedMethods(options),
+      features: HOST_FEATURES,
     },
   });
   options.registerClient(registered);

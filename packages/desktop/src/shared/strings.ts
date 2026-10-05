@@ -608,6 +608,10 @@ export const S = {
     replyMissing: 'Original message is not in this room',
     /** Кнопка `↓N` над низом ленты (Parley 0.3.0): столько пришло снизу, пока человек читал историю; клик — к низу. */
     newBelow: (n: number): string => `${n} new below`,
+    /** Кнопка над лентой: письма комнаты старше хвоста, который прислал хост (`context.messages`, P35). */
+    earlier: (n: number): string => `Show earlier messages (${n})`,
+    earlierLoading: 'Loading earlier messages…',
+    earlierAction: 'load earlier messages',
     /** Карточка решения. */
     decisionWaiting: 'decision · waiting for you',
     accept: 'Accept',
@@ -1151,6 +1155,8 @@ export const S = {
    */
   works: {
     unreadable: "Host couldn't read the workspace list (works-index.json may be damaged). Fix the file, then restart the host.",
+    /** Причина хоста `snapshot-too-large`: даже компактный снимок не влезает в кадр (P35). */
+    tooLarge: 'Workspace data is too large to load. Delete or archive old workspaces, then restart the host.',
   },
 
   /** Экраны связи с хостом — `App.tsx`, короткие варианты — `shell/StatusBar.tsx`. */
@@ -1175,6 +1181,8 @@ export const S = {
     reasonClosed: 'Connection to host closed',
     /** `main/host-connection.ts` — запущенный процесс хоста жив, а сокета нет дольше срока старта (lane-r4). */
     reasonHostNotAnswering: 'Host process is running but not answering',
+    /** `main/host-connection.ts` — хост до P35 прислал строку длиннее предела кадра: переподключение её не уменьшит. */
+    reasonOversize: 'The host sent a response over the 8 MiB limit (an older host build). Restart the host to update it.',
   },
 
   /**
@@ -1508,6 +1516,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 
 /**

@@ -2,8 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import type { HostPaths } from '@parley/host';
 import {
+  COMPACT_WORKS_FEATURE,
   encodeLine,
   LineDecoder,
+  LineTooLongError,
   PROTOCOL_VERSION,
   refKey,
   type EventData,
@@ -100,6 +102,13 @@ export class HostConnection {
    * разрешения сессия выглядела бы idle до следующего события.
    */
   private readonly activityCache = new Map<string, EventData<'activity.changed'>>();
+  /**
+   * Сокет, на котором хост прислал строку длиннее предела кадра (хост до P35 с огромным снимком работ). Декодер на такой
+   * строке не восстановить, а переподключение получило бы ту же строку по кругу: сокет остаётся (чтобы «Restart host»
+   * мог послать `host.shutdown`), его данные не читаются, а человеку сказано, что делать. Его закрытие хостом — обычный
+   * обрыв: дальше работает переподключение к уже перезапущенному хосту.
+   */
+  private oversized: Socket | null = null;
 
   constructor(options: HostConnectionOptions) {
     this.paths = options.paths;
@@ -159,6 +168,8 @@ export class HostConnection {
    * петлю переподключения (fix-final-b, M4): без неё окно так и стояло бы на экране отказа.
    */
   async connect(): Promise<void> {
+    this.oversized?.destroy();
+    this.oversized = null;
     this.closed = false;
     this.spawnFailure = null;
     // Повтор человека — с начала: короткая пауза, а не накопленная автоповторами.
@@ -284,7 +295,12 @@ export class HostConnection {
     // текущий сокет не трогаются.
     socket.on('close', () => this.handleClose(socket, id));
     socket.write(
-      encodeLine({ id, method: 'hello', params: { token, protocol: PROTOCOL_VERSION, client: 'desktop' } }),
+      encodeLine({
+        id,
+        method: 'hello',
+        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`.
+        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE] },
+      }),
     );
 
     try {
@@ -322,15 +338,32 @@ export class HostConnection {
   private handleChunk(socket: Socket, decoder: LineDecoder, chunk: Buffer): void {
     // Сокет, уже не текущий и не рукопожатный, — осиротевший: его сообщения не наши.
     if (socket !== this.socket && socket !== this.candidate) return;
+    if (socket === this.oversized) return;
     let messages: unknown[];
     try {
       messages = decoder.push(chunk);
-    } catch {
-      // Строка длиннее лимита — от такого соединения толку нет.
+    } catch (error) {
+      if (error instanceof LineTooLongError && socket === this.socket) {
+        this.handleOversize(socket);
+        return;
+      }
+      // Строка длиннее лимита (или не JSON) — от такого соединения толку нет.
       socket.destroy();
       return;
     }
     for (const raw of messages) this.handleMessage(raw);
+  }
+
+  /**
+   * Хост прислал строку длиннее предела кадра. Переподключаться бессмысленно — хост ответит тем же, — поэтому ждущие
+   * запросы отказывают с понятной причиной, статус называет, что делать, а автоповтор не заводится (`oversized`).
+   */
+  private handleOversize(socket: Socket): void {
+    this.oversized = socket;
+    const error = new Error(S.connection.reasonOversize);
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    this.setStatus({ state: 'disconnected', reason: S.connection.reasonOversize });
   }
 
   private handleMessage(raw: unknown): void {

@@ -23,6 +23,8 @@ import { memoryMethodSchemas } from './memory.js';
 import type { MemoryMethodResults } from './memory.js';
 import { historyMethodSchemas } from './history.js';
 import type { HistoryMethodResults } from './history.js';
+import { contextPageMethodSchemas } from './context-pages.js';
+import type { ContextPageMethodResults } from './context-pages.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
@@ -59,7 +61,9 @@ export const METHODS = {
   ...journalMethodSchemas,
   ...memoryMethodSchemas,
   ...historyMethodSchemas,
-  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
+  ...contextPageMethodSchemas,
+  // `features` — что клиент умеет сверх протокола 1 (`COMPACT_WORKS_FEATURE`): старый клиент поля не шлёт.
+  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
@@ -240,9 +244,10 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
-  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
+  /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
+  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
   'providers.list': {

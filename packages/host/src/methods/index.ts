@@ -14,6 +14,7 @@ import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createBacklogHandlers } from './backlog.js';
+import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
 import { createHistoryHandlers } from './history.js';
@@ -128,6 +129,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
+    // Читают карту с диска, снимка работ не ждут: не в `WORKS_GATED_METHODS`.
+    'context.messages': contextMessages as AnyHandler,
+    'context.text': contextText as AnyHandler,
     'works.create': worksCreate as AnyHandler,
     'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,

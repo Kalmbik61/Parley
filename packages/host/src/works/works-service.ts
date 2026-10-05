@@ -15,6 +15,7 @@
  */
 
 import {
+  compactWorkMap,
   gitBranch,
   parleyHome,
   MapLockTimeoutError,
@@ -29,7 +30,9 @@ import {
   writeHostLease,
 } from '@parley/core';
 import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
+import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 
 export interface WorksServiceOptions {
@@ -41,7 +44,15 @@ export interface WorksServiceOptions {
 
 export interface WorksService {
   start(): Promise<void>;
+  /** Полный снимок для сервисов хоста: карты как на диске. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
   snapshot(): WorksSnapshot;
+  /**
+   * Снимок для окна с `compact-works` (P35): письма хвостом, длинные тексты сокращены, итоги и счётчики в
+   * `map.compact`. `null` — даже он не влезает в кадр; номер `revision` растёт на каждую рассылку.
+   */
+  windowSnapshot(): WorksSnapshot | null;
+  /** Прежний полный снимок для клиента без `compact-works`; `null` — он не влезает в кадр, клиенту нужно обновление. */
+  legacySnapshot(): WorksSnapshot | null;
   entry(projectPath: string, workId: string): WorkEntry | undefined;
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
@@ -50,6 +61,18 @@ export interface WorksService {
 }
 
 const DEFAULT_DEBOUNCE_MS = 100;
+
+/** Бюджет писем в снимке для окна: на все активные работы вместе, не больше на одну и не меньше на одну. */
+const WINDOW_MESSAGES_TOTAL_BYTES = 3 * 1024 * 1024;
+const WINDOW_MESSAGES_PER_WORK_BYTES = 1024 * 1024;
+const WINDOW_MESSAGES_MIN_BYTES = 64 * 1024;
+/** Потолок снимка для окна целиком: кадр ограничен 8 МиБ, остальное — запас на события и дописывание. */
+const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
+/** Тексты в запасном (сжатом) снимке: хвост писем не берётся вовсе, а длинные поля короче. */
+const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
+
+const isCompactClient = (client: Client): boolean => client.features.has(COMPACT_WORKS_FEATURE);
+const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
@@ -76,14 +99,97 @@ export function createWorksService(
   /** Номер чтения `latest` (`watchWorks`): старое чтение свежее не затирает. */
   let latestSeq = 0;
   let ownLease: HostLease | null = null;
+  /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
+  let revision = 0;
+  /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
+  let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  /** Клиенты, о которых уже записано «нужно обновление», и признак сообщения о слишком большом снимке: не на каждую рассылку. */
+  const upgradeNotified = new Set<string>();
+  let oversizeNotified = false;
 
   const buildSnapshot = (): WorksSnapshot => ({
     entries: Array.from(entries.values()),
     branches: Object.fromEntries(branches),
   });
 
-  const notice = (kind: 'map-lock' | 'map-corrupt', text: string): void => {
-    host.broadcast('host.notice', { kind, ref: null, text, at: new Date().toISOString() });
+  /**
+   * Снимок для окна: каждая работа сжата `compactWorkMap`, бюджет писем делится между активными работами, архивные
+   * идут без писем. Размер проверяется до отправки: не влез — запасной вариант без писем и с короткими текстами,
+   * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда).
+   */
+  function buildWindow(): WorksSnapshot | null {
+    const all = Array.from(entries.values());
+    const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
+    const share = Math.min(
+      WINDOW_MESSAGES_PER_WORK_BYTES,
+      Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
+    );
+    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot => ({
+      entries: all.map((entry) => ({
+        projectPath: entry.projectPath,
+        map: compactWorkMap(entry.map, {
+          messageBytes: messagesFor(entry.map.work.status === 'archived'),
+          ...(textMax === undefined ? {} : { textMax }),
+        }),
+      })),
+      branches: Object.fromEntries(branches),
+      revision,
+    });
+    const normal = build((archived) => (archived ? 0 : share));
+    if (jsonBytes(normal) <= WINDOW_SNAPSHOT_MAX_BYTES) return normal;
+    const fallback = build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
+    return jsonBytes(fallback) <= WINDOW_SNAPSHOT_MAX_BYTES ? fallback : null;
+  }
+
+  const windowSnapshot = (): WorksSnapshot | null => {
+    if (windowCache?.revision !== revision) windowCache = { revision, snapshot: buildWindow() };
+    return windowCache.snapshot;
+  };
+
+  const legacySnapshot = (): WorksSnapshot | null => {
+    if (legacyCache?.revision !== revision) {
+      const full: WorksSnapshot = { ...buildSnapshot(), revision };
+      legacyCache = { revision, snapshot: jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
+    }
+    return legacyCache.snapshot;
+  };
+
+  /**
+   * Рассылка снимка: окно с `compact-works` получает компактный, прежнее окно — полный, пока тот влезает в кадр. Не
+   * влезает — ни одного кадра сверх предела (декодер окна на таком разорвал бы соединение, и оно переподключалось бы
+   * по кругу): прежнее окно остаётся с последним снимком, а хост один раз на клиента пишет об этом в журнал.
+   * Уведомления `host.notice` прежнему окну не шлются: вида, которого оно не знает, его строка статуса не разберёт.
+   */
+  function publish(): void {
+    const compact = windowSnapshot();
+    if (compact !== null) {
+      host.broadcast('works.changed', compact, isCompactClient);
+      oversizeNotified = false;
+    } else if (!oversizeNotified) {
+      oversizeNotified = true;
+      notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
+    }
+
+    const legacyClients = host.clients().filter((client) => !isCompactClient(client));
+    const stillConnected = new Set(legacyClients.map((client) => client.id));
+    for (const id of upgradeNotified) if (!stillConnected.has(id)) upgradeNotified.delete(id);
+    if (legacyClients.length === 0) return;
+    const legacy = legacySnapshot();
+    if (legacy !== null) {
+      host.broadcast('works.changed', legacy, (client) => !isCompactClient(client));
+      return;
+    }
+    for (const client of legacyClients) {
+      if (upgradeNotified.has(client.id)) continue;
+      upgradeNotified.add(client.id);
+      host.log.warn('карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление', { client: client.name });
+    }
+  }
+
+  const notice = (kind: 'map-lock' | 'map-corrupt' | 'snapshot-too-large', text: string): void => {
+    // Вид, добавленный в P35, знает только окно с `compact-works`: прежнее его строка статуса не разберёт.
+    host.broadcast('host.notice', { kind, ref: null, text, at: new Date().toISOString() }, kind === 'snapshot-too-large' ? isCompactClient : undefined);
     host.log.warn(`карта: ${kind}`, { text });
   };
 
@@ -262,7 +368,10 @@ export function createWorksService(
     for (const work of works) await leaseWork(work);
 
     const snapshot = buildSnapshot();
-    host.broadcast('works.changed', snapshot);
+    revision += 1;
+    windowCache = null;
+    legacyCache = null;
+    publish();
     for (const listener of listeners) listener(snapshot, previous);
     for (const key of seenKeys) readAlready.add(key);
   }
@@ -289,6 +398,8 @@ export function createWorksService(
       await refresh(latest);
     },
     snapshot: buildSnapshot,
+    windowSnapshot,
+    legacySnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),
     firstReadDone: (projectPath, workId) => readAlready.has(workKey(projectPath, workId)),
     onChange(listener) {

@@ -11,6 +11,8 @@ describe('HOST_ERROR_REASONS', () => {
       worktreeMissing: 'worktree-missing',
       worktreeCorrupt: 'worktree-corrupt',
       worksUnreadable: 'works-unreadable',
+      clientUpgradeRequired: 'client-upgrade-required',
+      snapshotTooLarge: 'snapshot-too-large',
     });
   });
 });

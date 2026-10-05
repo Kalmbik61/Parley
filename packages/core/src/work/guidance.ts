@@ -51,7 +51,7 @@ function findSkillHint(skillList: GuidanceOptions['skillList']): string {
 export function stableGuidance({ skillNavigator = false, skillList }: Pick<GuidanceOptions, 'skillNavigator' | 'skillList'> = {}): string {
   const lines = [
     'You are inside Parley; coordination goes through the tools of the parley MCP server.',
-    'get_map — the workspace map: sessions with lifecycle/result, rooms, summaries, artifacts, messages and providers; call it first.',
+    'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions, unread counts and providers; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
     'report — done or failed: the result is handed in, the session stays reachable and does not close itself; progress — a summary along the way.',
     'spawn_session — a new session in this same workspace; it starts by itself as soon as the record is created, nobody needs to be called.',
     'wait_for — wait for a session (target is its id) or a message (target: "inbox"); for a new task given to a session that has handed in its report, wait via "inbox", not by id.',
@@ -80,11 +80,11 @@ export function stableGuidance({ skillNavigator = false, skillList }: Pick<Guida
  * ограниченная ссылка с размером и хешем, а читать полный текст агент идёт в `get_map`.
  */
 function sessionLine(map: WorkMap, sessionId: string, omitGoal: boolean): string {
-  const title = inlineOrRef('title', oneLine(map.work.title), CONTEXT_LIMITS.title, 'get_map (work.title)');
+  const title = inlineOrRef('title', oneLine(map.work.title), CONTEXT_LIMITS.title, 'get_map {field: "title"}');
   const line = `Your workspace is ${map.work.id} — ${title}; your session is ${sessionId}.`;
   const goal = oneLine(map.work.goal);
   if (goal === '' || omitGoal) return line;
-  return `${line} Workspace goal: ${inlineOrRef('goal', goal, CONTEXT_LIMITS.goal, 'get_map (work.goal)')}`;
+  return `${line} Workspace goal: ${inlineOrRef('goal', goal, CONTEXT_LIMITS.goal, 'get_map {field: "goal"}')}`;
 }
 
 /** Built-in guidance shared by the Claude and Codex layer channels; optional blocks stay outside it. */

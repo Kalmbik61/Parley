@@ -47,10 +47,13 @@ import { useMarkRead } from '../../attention/use-mark-read.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
+import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import type { ActivityEntry } from '../../store/activity.js';
+import { useRoomPagesStore } from '../../store/room-pages.js';
+import { useWorksStore } from '../../store/works.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
@@ -102,6 +105,11 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
   const canResolve = useHostSupports('rooms.resolveProposal') && entry.map.work.status === 'active';
+  // История старше хвоста, который прислал хост (P35): кнопка над лентой подгружает страницу `context.messages`.
+  const canLoadEarlier = useHostSupports('context.messages');
+  const earlier = earlierRemaining(entry, roomId);
+  const earlierKey = `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
+  const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
   const status = useHostStore(state => state.status.state);
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
@@ -122,6 +130,9 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     // Дочитал до низа сам — пришедшее он уже видит.
     if (atBottomRef.current) setBelow(0);
   }, []);
+
+  // Положение ленты перед подгрузкой старых писем: они встают выше, и без поправки лента уехала бы вниз на их высоту.
+  const anchorRef = useRef<{ top: number; height: number } | null>(null);
 
   const pinToBottom = useCallback((): void => {
     const container = containerRef.current;
@@ -250,6 +261,15 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     const key = `${messages.length}\u0000${proposal}`;
     const seen = seenRef.current;
     seenRef.current = { ids: new Set(messages.map((message) => message.id)), proposal };
+    // Пришла страница старых писем: это не новое снизу, ленту не прижимаем и `↓N` не растим — положение сохраняется.
+    const anchor = anchorRef.current;
+    if (anchor !== null && openedRef.current !== null) {
+      anchorRef.current = null;
+      const feed = containerRef.current;
+      feed.scrollTop = anchor.top + (feed.scrollHeight - anchor.height);
+      onFeedScroll();
+      return;
+    }
     if (openedRef.current === null) {
       const mention = messages.find((message) => message.unread && message.mentionsYou);
       openedRef.current = { key, mentionId: mention?.id ?? null };
@@ -297,6 +317,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
   const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
+
+  const handleLoadEarlier = (): void => {
+    void useRoomPagesStore
+      .getState()
+      .loadEarlier(bridge, entry, roomId, (messages) => {
+        const feed = containerRef.current;
+        anchorRef.current = feed === null ? null : { top: feed.scrollTop, height: feed.scrollHeight };
+        useWorksStore.getState().addMessages(entry.projectPath, entry.map.work.id, messages);
+      })
+      .catch((error: unknown) => toast(errorText(decodeIpcError(error).code, S.rooms.earlierAction)));
+  };
 
   const handleSend = (submission: ComposerSubmission): Promise<void> =>
     bridge
@@ -361,6 +392,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             onOpenExternal={onOpenExternal}
             className="max-w-[680px]"
           />
+          {canLoadEarlier && earlier > 0 ? (
+            <button
+              type="button"
+              data-room-earlier=""
+              disabled={earlierLoading}
+              onClick={handleLoadEarlier}
+              className="self-start rounded-full bg-secondary px-3 py-1 text-xs text-foreground disabled:opacity-60"
+            >
+              {earlierLoading ? S.rooms.earlierLoading : S.rooms.earlier(earlier)}
+            </button>
+          ) : null}
           {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
           {model.messages.map((message) => (
             <RoomMessage

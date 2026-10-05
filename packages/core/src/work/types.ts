@@ -300,6 +300,34 @@ export interface Message {
    * него уже некому.
    */
   deleted?: boolean;
+  /**
+   * Полный размер текста в байтах, когда `text` сокращён: так письмо выглядит только в карте окна и на страницах
+   * (`context-pages.ts`); на диске этого поля нет.
+   */
+  textBytes?: number;
+}
+
+/**
+ * Что осталось за пределами компактной карты окна (`compactWorkMap`): письма за окном, точные счётчики
+ * непрочитанного человеком и пути обрезанных полей. На диске поля нет — оно появляется только в снимке для окна.
+ */
+export interface MapCompact {
+  version: 1;
+  messages: {
+    total: number;
+    included: number;
+    latestId: string | null;
+    /**
+     * По комнатам и по прямым письмам (`direct`): сколько всего и сколько из них в карте. `tailFrom` — номер самого
+     * раннего письма хвоста, в котором в карте есть все письма комнаты подряд до последнего; всё, что старше, окно
+     * берёт страницами (`context.messages` с курсором `before:tailFrom`). `null` — хвоста нет (самое новое письмо за бюджетом).
+     */
+    rooms: Record<string, { total: number; included: number; tailFrom: number | null }>;
+  };
+  /** Точное число непрочитанных человеком: прямых писем и по комнатам, независимо от окна. */
+  unread: { letters: number; rooms: Record<string, number> };
+  cut: Array<{ path: string; bytes: number }>;
+  omitted: Record<string, number>;
 }
 
 /** Что израсходовано под бюджет работы (`resource-policy.ts`): запуск, возобновление, повтор запуска или новая сессия от агента. */
@@ -386,6 +414,8 @@ export interface WorkMap {
   planBacklogIntents?: PlanBacklogIntent[];
   /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
   resources?: WorkResources;
+  /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
+  compact?: MapCompact;
 }
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
