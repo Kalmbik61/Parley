@@ -111,8 +111,37 @@ describe('instance-local find_skill', () => {
     expect((await find(client, { query: 'review', for: 's-88' })).result.isError).toBe(true);
     expect((await find(client, { query: 'review', limit: 0 })).result.isError).toBe(true);
     const empty = JSON.parse((await find(client, { query: 'unrelated' })).text);
-    expect(empty.skills).toEqual([]); expect(empty.message).toBe('No skill matched: work without one, or try other words');
+    expect(empty.skills).toEqual([]); expect(empty.message).toBe('No skill matched: work without one, or try other words once');
     expect(JSON.parse((await find(client, { query: 'review', limit: 99 })).text).skills.length).toBeLessThanOrEqual(10);
+  });
+  it('refuses an oversized query or target instead of cutting it', async () => {
+    const client = await connect({ skillNavigator: true, skillCatalog: async () => catalog('codex', project) });
+    const long = await find(client, { query: `review ${'x'.repeat(600)}` });
+    expect(long.result.isError).toBe(true); expect(long.text).toContain('512');
+    // Многобайтовые знаки считаются байтами: 300 кириллических букв — 600 байт.
+    expect((await find(client, { query: 'я'.repeat(300) })).result.isError).toBe(true);
+    expect((await find(client, { query: 'review', for: 's'.repeat(100) })).result.isError).toBe(true);
+    expect((await find(client, { query: 'review' })).result.isError).not.toBe(true);
+  });
+  it('allows one correcting retry after no match, then refuses more until something is found', async () => {
+    const client = await connect({ skillNavigator: true, skillCatalog: async () => catalog('codex', project) });
+    const miss = async () => JSON.parse((await find(client, { query: 'unrelated' })).text).message;
+    expect(await miss()).toContain('once');
+    expect(await miss()).toContain('do not search for this task any more');
+    expect(await miss()).toContain('do not search for this task any more');
+    expect(JSON.parse((await find(client, { query: 'review' })).text).skills).toHaveLength(1);
+    expect(await miss()).toContain('once');
+  });
+  it('marks a cut description and keeps the whole answer in budget, naming what was left out', async () => {
+    const huge = Array.from({ length: 10 }, (_, index) => ({ provider: 'codex' as const, documentKind: 'skill' as const,
+      name: `review-${index}-${'n'.repeat(900)}`, description: `review ${'long '.repeat(500)}`, source: 'project' as const,
+      path: path.join(project, `${index}.md`), modelAvailable: true, unavailableReason: null }));
+    const client = await connect({ skillNavigator: true, skillCatalog: async () => ({ provider: 'codex', partial: false, diagnostics: [], skills: huge }) });
+    const found = JSON.parse((await find(client, { query: 'review', limit: 10 })).text);
+    expect(found.skills.length).toBeGreaterThan(0);
+    expect(found.skills[0].description).toMatch(/… \[cut: \d+ bytes in full\]$/);
+    expect(found.omitted).toBe(10 - found.skills.length);
+    expect(Buffer.byteLength(JSON.stringify(found.skills), 'utf8')).toBeLessThanOrEqual(8192);
   });
   it('missing bound context stays unavailable without native startup or raw diagnostic excerpts', async () => {
     const client = await connect({ skillNavigator: true });

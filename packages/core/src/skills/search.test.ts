@@ -70,3 +70,53 @@ describe('local deterministic BM25', () => {
     for (const limit of [0, -1, 1.5, Infinity]) expect(() => searchSkills(skills, 'review', limit)).toThrow('positive integer');
   });
 });
+
+describe('основы слов: write/writing и соседние запросы на фикстурном каталоге', () => {
+  // Описания — как у настоящих навыков, но фикстурные: тест не читает домашний каталог пользователя.
+  const catalog = [
+    skill('superpowers:writing-plans', 'Use when you have a spec or requirements for a multi-step task, before touching code'),
+    skill('superpowers:executing-plans', 'Use when executing an implementation plan in the current session as the implementer yourself, your human partner chose inline execution, or no subagent tool is available'),
+    skill('claude-seo:seo-plan', 'Strategic SEO planning for new or existing websites. Industry-specific templates, competitive analysis, content strategy, and implementation roadmap. Use when user says SEO plan, SEO strategy or SEO roadmap'),
+    skill('oh-my-claudecode:plan', 'Strategic planning with optional interview workflow'),
+    skill('superpowers:requesting-code-review', 'Use when completing tasks, implementing major features, or before merging to verify work meets requirements'),
+    skill('superpowers:receiving-code-review', 'Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable'),
+    skill('superpowers:systematic-debugging', 'Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes'),
+    skill('superpowers:test-driven-development', 'Use when implementing any feature or bugfix, before writing implementation code'),
+    skill('anthropic-skills:pptx', 'Use this skill any time a .pptx file is involved: creating slide decks, pitch decks, or presentations as PowerPoint files; reading, editing or updating existing presentations'),
+    skill('anthropic-skills:docx', 'Use this skill whenever the user wants to create, read, edit, or manipulate Word documents'),
+    skill('oh-my-claudecode:ultraqa', 'QA cycling workflow - test, verify, fix, repeat until goal met'),
+  ];
+  const top = (query: string, count = 1): string[] => searchSkills(catalog, query, count).map(match => match.skill.name);
+
+  it('write и writing — одна основа, поэтому writing-plans первый на «write an implementation plan»', () => {
+    expect(top('write an implementation plan')).toEqual(['superpowers:writing-plans']);
+    expect(top('writing implementation plans')).toEqual(['superpowers:writing-plans']);
+    // Было: executing-plans и seo-plan обгоняли writing-plans, потому что «write» и «writ» не совпадали.
+    expect(top('write an implementation plan', 3)[0]).toBe('superpowers:writing-plans');
+  });
+
+  it('конечная e не мешает: make/making, slide/slides, code/coding, review/reviewing', () => {
+    expect(searchSkills([skill('making', 'x')], 'make').map(match => match.skill.name)).toEqual(['making']);
+    expect(searchSkills([skill('slides', 'x')], 'slide').map(match => match.skill.name)).toEqual(['slides']);
+    expect(searchSkills([skill('coding', 'x')], 'code').map(match => match.skill.name)).toEqual(['coding']);
+    expect(searchSkills([skill('review', 'x')], 'reviewing').map(match => match.skill.name)).toEqual(['review']);
+  });
+
+  it('удвоенная согласная после ing/ed схлопывается только там, где это не ломает основу', () => {
+    for (const [name, query] of [['debugging', 'debug'], ['planning', 'plan'], ['mapped', 'map'], ['calling', 'call'], ['adding', 'add']] as const) {
+      expect(searchSkills([skill(name, 'x')], query).map(match => match.skill.name), query).toEqual([name]);
+    }
+  });
+
+  it('соседние запросы: код-ревью, слайды, отладка падающего теста', () => {
+    expect(top('review code', 2)).toEqual(expect.arrayContaining(['superpowers:requesting-code-review']));
+    expect(top('review code', 2).every(name => name.endsWith('-code-review'))).toBe(true);
+    expect(top('make a slide deck')).toEqual(['anthropic-skills:pptx']);
+    expect(top('debug a failing test')).toEqual(['superpowers:systematic-debugging']);
+  });
+
+  it('порядок каталога на результат не влияет', () => {
+    const query = 'write an implementation plan';
+    expect(searchSkills([...catalog].reverse(), query, 5)).toEqual(searchSkills(catalog, query, 5));
+  });
+});

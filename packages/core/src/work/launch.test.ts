@@ -1663,3 +1663,104 @@ describe('fresh canonical project memory on session assembly', () => {
     expect(codexLayer(large.args)).toContain('[Project memory is cut at 12 KiB');
   });
 });
+
+describe('ограниченный стартовый контекст (P34)', () => {
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+  const count = (text: string, part: string): number => text.split(part).length - 1;
+
+  it('цель стоит один раз: в брифе, который уходит тем же запуском, а не ещё и во вставке', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    // Обычная сессия: бриф первым сообщением, во вставке цели нет.
+    const launch = await planLaunch(project, workId, session);
+    expect(codexLayer(launch.args)).not.toContain('логин по e-mail');
+    expect(launch.args.at(-1)).toContain('Goal: логин по e-mail');
+
+    // Тихий ребёнок: бриф в слое, цель в нём одна.
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    child.provider = 'codex';
+    expect(count(codexLayer((await planLaunch(project, workId, child)).args), 'логин по e-mail')).toBe(1);
+
+    // Быстрая сессия без брифа: цель только во вставке, иначе её нет нигде.
+    const quick = await createNewSession(project, workId);
+    quick.session.provider = 'codex';
+    expect(count(codexLayer((await planNew(project, workId, quick.session)).args), 'логин по e-mail')).toBe(1);
+  });
+
+  it('разные id сессий не меняют стабильную политику в начале слоя', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    child.provider = 'codex';
+    const first = codexLayer((await planLaunch(project, workId, await sessionOf(workId, sessionId))).args);
+    const second = codexLayer((await planLaunch(project, workId, child)).args);
+    const stable = (text: string): string => text.split('\n').slice(0, 13).join('\n');
+    expect(stable(first)).toBe(stable(second));
+    expect(stable(first)).not.toContain('your session is');
+    expect(first.split('\n')[13]).toContain(`your session is ${sessionId}`);
+    expect(second.split('\n')[13]).toContain(`your session is ${child.id}`);
+  });
+
+  it('цель в 100 тыс. знаков не раздувает ни вставку, ни бриф: ссылка, размер и хеш', async () => {
+    const created = await createWork(project, { title: 'Авторизация', goal: 'ж'.repeat(100_000) });
+    const workId = created.work.id;
+    const sessionId = await createPendingSession(project, workId, { provider: 'codex', label: 'тесты', task: 'прогнать' });
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    child.provider = 'codex';
+    const launch = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+    const quiet = await planLaunch(project, workId, child);
+    for (const text of [launch.args.at(-1) ?? '', codexLayer(quiet.args)]) {
+      expect(text).toContain('goal is 200000 bytes');
+      expect(text).not.toContain('жжжж');
+    }
+    expect(Buffer.byteLength(codexLayer(quiet.args), 'utf8')).toBeLessThan(40_000);
+  });
+
+  it('возобновление: бриф не менялся — указатель на письма уходит как был, без нового подбора скилла', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'codex-thread' };
+    const plan = await planResume(project, workId, session, { prompt: 'INBOX POINTER' });
+    expect(plan.args.at(-1)).toBe('INBOX POINTER');
+    expect(plan.args.at(-1)).not.toContain('find_skill');
+    expect(plan.args.join(' ')).not.toContain('Your brief changed');
+  });
+
+  it('возобновление: задача изменилась — одна строка о новой ревизии перед указателем, файл обновлён, второй подъём тих', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const file = path.join(workPaths(project, workId).briefs, `${sessionId}.md`);
+    const before = await readFile(file, 'utf8');
+    await updateMap(project, workId, (map) => { map.sessions[0]!.task = 'новая задача'; });
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'codex-thread' };
+
+    const first = await planResume(project, workId, session, { prompt: 'INBOX POINTER' });
+    const prompt = first.args.at(-1) ?? '';
+    expect(prompt).toMatch(/^Your brief changed \(revision [0-9a-f]{12} is outdated\)[^\n]*get_map[^\n]*\n\nINBOX POINTER$/);
+    expect(prompt).not.toContain('новая задача');
+    expect(await readFile(file, 'utf8')).toContain('новая задача');
+    expect(await readFile(file, 'utf8')).not.toBe(before);
+
+    expect((await planResume(project, workId, session, { prompt: 'INBOX POINTER' })).args.at(-1)).toBe('INBOX POINTER');
+  });
+
+  it('тихая сессия при возобновлении получает свежий бриф в слое, а не отдельную строку', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'OLD SUMMARY'; });
+    const { session: child } = await createChildSession(project, workId, sessionId);
+    child.provider = 'codex';
+    await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'NEW SUMMARY'; });
+    const plan = await planResume(project, workId, { ...child, providerSessionId: 'codex-thread' });
+    expect(codexLayer(plan.args)).toContain('NEW SUMMARY');
+    expect(codexLayer(plan.args)).not.toContain('OLD SUMMARY');
+    expect(plan.args.join(' ')).not.toContain('Your brief changed');
+  });
+
+  it('разросшийся руками бриф — отказ запуска, а не обрезание', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const file = path.join(workPaths(project, workId).briefs, `${sessionId}.md`);
+    await writeFile(file, `${await readFile(file, 'utf8')}${'я'.repeat(40_000)}`, 'utf8');
+    await expect(planLaunch(project, workId, await sessionOf(workId, sessionId))).rejects.toThrow(/context-budget-exceeded/);
+  });
+});

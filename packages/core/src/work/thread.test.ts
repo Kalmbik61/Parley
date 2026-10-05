@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addMessage, addSession, removeSession } from './map.js';
-import { decisionsOf, participantLabel, sessionTag, threadOf } from './thread.js';
+import { decisionsOf, participantLabel, recentDecisions, sessionTag, threadOf } from './thread.js';
 import type { Message, MessageKind, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
@@ -131,5 +131,20 @@ describe('sessionTag', () => {
     ['', ''],
   ])('%s → %s', (id, expected) => {
     expect(sessionTag(id)).toBe(expected);
+  });
+});
+
+describe('recentDecisions', () => {
+  it('последние решения по порядку и общее число; заметки и вопросы не в счёте', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    for (const [clock, kind] of [['10:00', 'decision'], ['10:01', 'note'], ['10:02', 'decision'], ['10:03', 'question'], ['10:04', 'decision']] as const) {
+      addMessage(map, { from: 'human', to: ['s-01'], text: clock, kind }, at(clock));
+    }
+    const thread = threadOf(map, 's-01');
+    const { shown, total } = recentDecisions(thread, 2);
+    expect(total).toBe(3);
+    expect(shown.map((message) => message.text)).toEqual(['10:02', '10:04']);
+    expect(recentDecisions(thread, 10).shown).toEqual(decisionsOf(thread));
   });
 });

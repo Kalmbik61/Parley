@@ -1,3 +1,4 @@
+import { CONTEXT_LIMITS, GUIDANCE_MAX_BYTES, contextBytes, inlineOrRef, STABLE_POLICY_MAX_BYTES } from './context-budget.js';
 import type { WorkMap } from './types.js';
 
 /**
@@ -8,7 +9,16 @@ import type { WorkMap } from './types.js';
  *
  * Системный промпт в транскрипте не хранится: он собирается заново и при
  * `--resume`, поэтому текст зависит только от карты и id сессии.
+ *
+ * Вставка разделена на два куска (P34): `stableGuidance` — политика, одинаковая у всех сессий (ни id, ни данных
+ * работы), и последняя строка сессии с работой, названием и целью. Политика идёт первой и не меняется от
+ * сессии к сессии; что из этого выйдет для кеша провайдера, не измерено и здесь не утверждается.
+ * Четырнадцать строк — не бюджет: размер в байтах ограничен `STABLE_POLICY_MAX_BYTES` и `GUIDANCE_MAX_BYTES`,
+ * проверка — `guidanceBudgetProblems`.
  */
+
+/** Потолок строк вставки: растущие правила копят строки, а не уходят в `read_guide`. */
+export const GUIDANCE_MAX_LINES = 14;
 
 /**
  * Заголовок и цель работы пишет человек — там бывают переносы строк, а счёт
@@ -23,6 +33,8 @@ export interface GuidanceOptions {
    * списка нет. Фраза о сокращении появляется только тогда (спека, 2.3): при полном списке вставка ничего не обещает.
    */
   skillList?: 'names' | 'removed';
+  /** Цель работы уже в брифе того же запуска: второй раз её не печатаем. */
+  omitGoal?: boolean;
 }
 
 /** Подсказка о find_skill внутри строки read_guide: потолок в четырнадцать строк не поднимаем. */
@@ -32,16 +44,13 @@ function findSkillHint(skillList: GuidanceOptions['skillList']): string {
   return ' find_skill — skills by task, if needed.';
 }
 
-/** Built-in guidance shared by the Claude and Codex layer channels; optional blocks stay outside it. */
-export function systemGuidance(map: WorkMap, sessionId: string, { skillNavigator = false, skillList }: GuidanceOptions = {}): string {
+/**
+ * Стабильная политика: правила координации без id сессии, названия и цели. Меняется только от настроек запуска
+ * (навигатор скиллов), а не от сессии.
+ */
+export function stableGuidance({ skillNavigator = false, skillList }: Pick<GuidanceOptions, 'skillNavigator' | 'skillList'> = {}): string {
   const lines = [
-    `You are inside Parley: workspace ${map.work.id} — ${oneLine(map.work.title)}, your session is ${sessionId}; coordination goes through the tools of the parley MCP server.`,
-  ];
-
-  const goal = oneLine(map.work.goal);
-  if (goal !== '') lines.push(`Workspace goal: ${goal}`);
-
-  lines.push(
+    'You are inside Parley; coordination goes through the tools of the parley MCP server.',
     'get_map — the workspace map: sessions with lifecycle/result, rooms, summaries, artifacts, messages and providers; call it first.',
     'report — done or failed: the result is handed in, the session stays reachable and does not close itself; progress — a summary along the way.',
     'spawn_session — a new session in this same workspace; it starts by itself as soon as the record is created, nobody needs to be called.',
@@ -62,6 +71,38 @@ export function systemGuidance(map: WorkMap, sessionId: string, { skillNavigator
     `read_guide — the detailed guide to Parley: entities, lifecycle, rooms, what goes where, the human's window; window blocks in your terminal are the human's words.${skillNavigator ? findSkillHint(skillList) : ''} In plan rooms, use the accepted planId/rev and plan_update/plan_submit/plan_verify; read_guide(topic: plans) explains the workflow. Outside your task: check backlog_list, then backlog_suggest one worthwhile finding with a reason; do not expand the task. Memory: remember one lasting project fact or lesson (the human accepts it); before a big choice, search_history and memory_read.`,
     'Hand a subtask of this topic that lives longer than one turn or must run in parallel to spawn_session of this same workspace; your own subagents are for short exploration and edits.',
     'Before finishing you must call report — otherwise the result will not go anywhere.',
-  );
+  ];
   return lines.join('\n');
+}
+
+/**
+ * Строка сессии: работа, название, id и (если брифа рядом нет) цель. Название и цель пишет человек: не влезло —
+ * ограниченная ссылка с размером и хешем, а читать полный текст агент идёт в `get_map`.
+ */
+function sessionLine(map: WorkMap, sessionId: string, omitGoal: boolean): string {
+  const title = inlineOrRef('title', oneLine(map.work.title), CONTEXT_LIMITS.title, 'get_map (work.title)');
+  const line = `Your workspace is ${map.work.id} — ${title}; your session is ${sessionId}.`;
+  const goal = oneLine(map.work.goal);
+  if (goal === '' || omitGoal) return line;
+  return `${line} Workspace goal: ${inlineOrRef('goal', goal, CONTEXT_LIMITS.goal, 'get_map (work.goal)')}`;
+}
+
+/** Built-in guidance shared by the Claude and Codex layer channels; optional blocks stay outside it. */
+export function systemGuidance(map: WorkMap, sessionId: string, options: GuidanceOptions = {}): string {
+  return `${stableGuidance(options)}\n${sessionLine(map, sessionId, options.omitGoal === true)}`;
+}
+
+/**
+ * Диагностика размера рядом с правилом четырнадцати строк: пусто — вставка в бюджете. `stable` — стабильная
+ * часть отдельно, у неё свой потолок.
+ */
+export function guidanceBudgetProblems(text: string, stable: string = text): string[] {
+  const problems: string[] = [];
+  const lines = text.split('\n').length;
+  if (lines > GUIDANCE_MAX_LINES) problems.push(`guidance is ${lines} lines, the limit is ${GUIDANCE_MAX_LINES}`);
+  const bytes = contextBytes(text);
+  if (bytes > GUIDANCE_MAX_BYTES) problems.push(`guidance is ${bytes} bytes, the limit is ${GUIDANCE_MAX_BYTES}`);
+  const stableBytes = contextBytes(stable);
+  if (stableBytes > STABLE_POLICY_MAX_BYTES) problems.push(`stable policy is ${stableBytes} bytes, the limit is ${STABLE_POLICY_MAX_BYTES}`);
+  return problems;
 }

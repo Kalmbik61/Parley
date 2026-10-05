@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
@@ -31,7 +31,7 @@ import { prepareSessionRole, sessionRole, roleId, assertRoleDelivery, projectSki
 import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
-import { writeBrief } from './brief.js';
+import { loadBrief, writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
@@ -109,27 +109,19 @@ async function entryOf(provider: string): Promise<ProviderEntry> {
   return entry;
 }
 
-const briefFile = (projectPath: string, workId: string, sessionId: string): string =>
-  path.join(workPaths(projectPath, workId).briefs, `${sessionId}.md`);
-
 /**
  * Бриф сессии с диска. Между созданием записи и запуском файл можно править
- * своим редактором — поэтому он читается заново при каждом запуске (решение №1).
- * Файла нет (карту принесли из другого проекта) — собираем его заново.
+ * своим редактором — поэтому он читается заново при каждом запуске (решение №1). Но бриф версионирован
+ * (`brief.ts`): записанный под старую карту (другая задача, комнаты, роли, решения) пересобирается, а правленный
+ * руками остаётся. Файла нет (карту принесли из другого проекта) — собираем его заново.
  */
 export async function readBrief(
   projectPath: string,
   workId: string,
   sessionId: string,
 ): Promise<string> {
-  const file = briefFile(projectPath, workId, sessionId);
-  try {
-    return await readFile(file, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    await writeBrief(projectPath, await readMap(projectPath, workId), sessionId);
-    return readFile(file, 'utf8');
-  }
+  const loaded = await loadBrief(projectPath, workId, sessionId, { create: true });
+  return (loaded as NonNullable<typeof loaded>).text;
 }
 
 /**
@@ -141,12 +133,7 @@ async function writtenBrief(
   workId: string,
   sessionId: string,
 ): Promise<string | null> {
-  try {
-    return await readFile(briefFile(projectPath, workId, sessionId), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return null;
-  }
+  return (await loadBrief(projectPath, workId, sessionId, { create: false }))?.text ?? null;
 }
 
 /**
@@ -370,7 +357,12 @@ async function plan(
       isLead: recipeBlock !== null,
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
-      guidance: systemGuidance(map, session.id, { skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined, ...(skillList === undefined ? {} : { skillList }) }),
+      guidance: systemGuidance(map, session.id, {
+        skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        ...(skillList === undefined ? {} : { skillList }),
+        // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
+        omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
+      }),
       bridge,
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,
@@ -384,7 +376,18 @@ async function plan(
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
-    if (options.prompt !== undefined && template.includes('{prompt}')) subs.prompt = options.prompt;
+    // Бриф возобновлённой сессии заново не посылается: разговор помнит старый. Изменился он с тех пор (задача,
+    // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
+    // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
+    let notice = '';
+    if (!quiet && template.includes('{prompt}')) {
+      const loaded = await loadBrief(projectPath, workId, session.id, { create: false });
+      if (loaded?.refreshed) {
+        notice = `Your brief changed (revision ${loaded.previous ?? 'none'} is outdated): the task, rooms, roles or decisions were amended. Call get_map for the current state before continuing.`;
+      }
+    }
+    const prompt = [notice, options.prompt ?? ''].filter((part) => part !== '').join('\n\n');
+    if (prompt !== '' && template.includes('{prompt}')) subs.prompt = prompt;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал

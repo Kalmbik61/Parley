@@ -8,15 +8,28 @@ const STOP_WORDS = new Set(
   'a an and are as at be been being by for from had has have he her his i in is it its of on or our she that the their them there these they this those to was we were will with you your'.split(' '),
 );
 
-function tokens(text: string): string[] {
-  return text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean).filter(word => !STOP_WORDS.has(word)).map(word => {
-    // A small suffix trimmer, not a linguistic stemmer; always retain at least two letters.
-    for (const suffix of ['ing', 'ed', 'es', 's']) {
-      if (word.endsWith(suffix) && word.length - suffix.length >= 2)
-        return word.slice(0, -suffix.length);
+/**
+ * Основа слова: срез суффикса, затем удвоенная согласная после `ing`/`ed` и конечная `e`, чтобы write/writing,
+ * make/making, debug/debugging, plan/planning, slide/slides совпадали (иначе «write» и «writ» из «writing»
+ * расходятся). Удвоение схлопывается только у g, m, n, p, t: у l, s, z, d, b, r основа слова сама может
+ * оканчиваться двойной (call, pass, add, err). Не лингвистический стеммер, а детерминированная нормализация:
+ * одно слово всегда даёт одну основу, внешних моделей нет.
+ */
+function stem(word: string): string {
+  let result = word;
+  // A small suffix trimmer; always retain at least two letters.
+  for (const suffix of ['ing', 'ed', 'es', 's']) {
+    if (word.endsWith(suffix) && word.length - suffix.length >= 2) {
+      result = word.slice(0, -suffix.length);
+      if ((suffix === 'ing' || suffix === 'ed') && /([gmnpt])\1$/.test(result)) result = result.slice(0, -1);
+      break;
     }
-    return word;
-  });
+  }
+  return result.length > 2 && result.endsWith('e') ? result.slice(0, -1) : result;
+}
+
+function tokens(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean).filter(word => !STOP_WORDS.has(word)).map(stem);
 }
 
 function frequencies(words: readonly string[]): Map<string, number> {

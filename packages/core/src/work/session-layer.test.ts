@@ -217,3 +217,27 @@ it('direct fact formatting rejects lone surrogates but preserves emoji pairs and
   expect(result.text).toContain(fact);
   expect(Buffer.from(result.text, 'utf8').toString('utf8')).toBe(result.text);
 });
+
+describe('стабильный префикс слоя (P34)', () => {
+  const map = (goal: string) => ({
+    schemaVersion: 2 as const,
+    work: { id: 'w-0001', title: 'Work', goal, status: 'active' as const, createdAt: '2026-10-05T00:00:00.000Z', updatedAt: '2026-10-05T00:00:00.000Z' },
+    sessions: [], messages: [], rooms: [],
+  });
+
+  it('слой двух сессий начинается с одной и той же стабильной политики, роль и ограничения человека доставлены', async () => {
+    const { stableGuidance, systemGuidance } = await import('./guidance.js');
+    const stable = stableGuidance();
+    const layers = ['s-01', 's-42'].map((id) => buildSessionLayer({
+      guidance: systemGuidance(map('goal'), id),
+      role: 'ROLE: do not push',
+      brief: 'Task: keep the human constraint "no migrations"',
+    }).text);
+    for (const text of layers) {
+      expect(text.startsWith(`${stable}\n`)).toBe(true);
+      expect(text).toContain('ROLE: do not push');
+      expect(text).toContain('no migrations');
+    }
+    expect(layers[0]).not.toBe(layers[1]);
+  });
+});

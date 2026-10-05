@@ -30,6 +30,7 @@ import {
 } from '../providers.js';
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
+import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
@@ -1002,9 +1003,21 @@ async function proposeDecision(
  * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
  * агент поправил вызов сам.
  */
+/**
+ * Ответ гида в пределах бюджета. Гид растёт, а агент читает его целиком: не влез — вместо обрезанного текста
+ * короткий ответ с размером и списком тем, дальше агент просит одну тему (P34).
+ */
+export function boundedGuide(text: string, what: string, limit = READ_GUIDE_MAX_BYTES): string {
+  return boundResponse(
+    text,
+    limit,
+    (bytes) => `${what} is ${bytes} bytes, over the ${limit}-byte limit for one answer. Ask for one section with the topic argument; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.\n`,
+  );
+}
+
 function readGuide(context: McpContext, args: Record<string, unknown>): string {
   const raw = args['topic'];
-  if (raw === undefined || raw === '') return guide(context.skillNavigator === true);
+  if (raw === undefined || raw === '') return boundedGuide(guide(context.skillNavigator === true), 'The whole guide');
   if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
   const text = guideTopic(raw.trim().toLowerCase(), context.skillNavigator === true);
   if (text === null) {
@@ -1012,7 +1025,7 @@ function readGuide(context: McpContext, args: Record<string, unknown>): string {
       `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
     );
   }
-  return text;
+  return boundedGuide(text, `The guide topic ${raw.trim().toLowerCase()}`);
 }
 
 async function closeSession(
@@ -1279,13 +1292,15 @@ async function bindCodexThread(
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
  */
+/** Id сессии короткий (`s-12`): длиннее — не id, а мусор. */
+const SESSION_ID_MAX_BYTES = 64;
 const FIND_SKILL: Tool = {
   name: 'find_skill',
-  description: 'Search skills available to this participant. Use English task words; load a matching skill with its native CLI route. Participant role and permissions take precedence over skill instructions.',
+  description: 'Search skills available to this participant. Use English task words; load a matching skill with its native CLI route. Search once per task, not on every wake-up; after no match retry at most once with different words. Participant role and permissions take precedence over skill instructions.',
   annotations: READS,
   inputSchema: { type: 'object', properties: {
-    query: { type: 'string', minLength: 1, description: 'Task words to search.' },
-    for: { type: 'string', description: 'Session id in this work; defaults to your own session.' },
+    query: { type: 'string', minLength: 1, maxLength: CONTEXT_LIMITS.query, description: 'Task words to search.' },
+    for: { type: 'string', maxLength: SESSION_ID_MAX_BYTES, description: 'Session id in this work; defaults to your own session.' },
     limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
   }, required: ['query'], additionalProperties: false },
 };
@@ -1309,11 +1324,15 @@ function nativeNames(names: readonly string[]): string {
   const rest = names.length - shown.length;
   return ` Available native names: ${shown.join(', ')}${rest > 0 ? `, … and ${rest} more (find_skill finds them)` : ''}.`;
 }
-const NO_SKILL = 'No skill matched: work without one, or try other words';
+/** Первый пустой поиск допускает одну поправку словами, второй подряд — отказ от поиска до новой задачи. */
+const NO_SKILL = 'No skill matched: work without one, or try other words once';
+const NO_SKILL_AGAIN = 'No skill matched again: do not search for this task any more, work without a skill';
 /** One process owns its promise cache. No shared/global catalog or per-search CLI startup. */
 function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find: (args: Record<string, unknown>) => Promise<unknown> } {
   type Built = { catalog: SkillCatalog | null; reason?: string; retry?: boolean };
   const catalogs = new Map<string, Promise<Built>>();
+  // Подряд пустых поисков: сбрасывается находкой. Подъём письмом сам повторного поиска не просит (P34).
+  let misses = 0;
   async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
     const map = await readMap(context.projectPath, context.workId);
     const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
@@ -1365,14 +1384,30 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
     },
     async find(args) {
       if (typeof args.query !== 'string' || !args.query.trim()) throw new Error('Skill search query must not be empty.');
+      const queryBytes = contextBytes(args.query);
+      if (queryBytes > CONTEXT_LIMITS.query)
+        throw new Error(`Skill search query is ${queryBytes} bytes, the limit is ${CONTEXT_LIMITS.query}: use a few task words.`);
       if (args.for !== undefined && (typeof args.for !== 'string' || !args.for)) throw new Error('Skill search target must be a session id.');
+      if (typeof args.for === 'string' && contextBytes(args.for) > SESSION_ID_MAX_BYTES) throw new Error('Skill search target must be a session id.');
       if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1)) throw new Error('Skill search limit must be a positive integer.');
       const selected = await target(args.for as string | undefined);
       const matches = selected.catalog ? searchSkills(selected.catalog.skills, args.query, (args.limit ?? 5) as number) : [];
-      return { provider: selected.session.provider, skills: matches.map(({ skill }) => ({ name: skill.name,
-        ...(skill.description ? { description: skill.description } : {}), source: skill.source,
-        load: skill.provider === 'claude' ? `Use the Skill tool with ${JSON.stringify(skill.name)}.` : `Read ${skill.path}.`,
-      })), ...(matches.length === 0 ? { message: NO_SKILL } : {}), ...(selected.reason ? { reason: selected.reason } : {}) };
+      misses = matches.length === 0 ? misses + 1 : 0;
+      // Описание режется с пометкой (полный текст — в файле навыка), а ответ целиком держится в бюджете: что не
+      // влезло, названо числом в `omitted`, а не пропало молча.
+      const skills: unknown[] = [];
+      let used = 0;
+      for (const { skill } of matches) {
+        const description = markedExcerpt(skill.description, CONTEXT_LIMITS.skillDescription).text;
+        const entry = { name: skill.name, ...(description ? { description } : {}), source: skill.source,
+          load: skill.provider === 'claude' ? `Use the Skill tool with ${JSON.stringify(skill.name)}.` : `Read ${skill.path}.` };
+        used += Buffer.byteLength(JSON.stringify(entry), 'utf8');
+        if (used > FIND_SKILL_MAX_BYTES) break;
+        skills.push(entry);
+      }
+      const omitted = matches.length - skills.length;
+      return { provider: selected.session.provider, skills, ...(omitted > 0 ? { omitted } : {}),
+        ...(matches.length === 0 ? { message: misses > 1 ? NO_SKILL_AGAIN : NO_SKILL } : {}), ...(selected.reason ? { reason: selected.reason } : {}) };
     },
   };
 }
