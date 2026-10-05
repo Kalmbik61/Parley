@@ -86,7 +86,9 @@ const byId = (providers: ProviderItem[], id: string): ProviderItem => {
 };
 
 describe('providers.list: модели, усилие и версия CLI (дизайн комнат, 3.2)', () => {
-  it('claude и codex умеют effort, версия — из пробы; glm ничего не умеет и без версии', async () => {
+  it('claude, codex и glm принимают effort; GLM использует версию Claude Code', async () => {
+    process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
+    extraEnv.push('PARLEY_CLAUDE_BIN');
     const client = await boot({
       probeVersion: async (command) => (command === 'claude' ? '2.1.276' : command === 'codex' ? '0.44.0' : null),
     });
@@ -94,7 +96,8 @@ describe('providers.list: модели, усилие и версия CLI (диз
 
     expect(byId(providers, 'claude')).toMatchObject({ label: 'Claude', effort: true, version: '2.1.276' });
     expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
-    expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: false, models: null, version: null });
+    expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: true, version: '2.1.276', available: false });
+    expect(byId(providers, 'glm').models?.length).toBeGreaterThan(0);
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
 
@@ -114,7 +117,9 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(providers.every((provider) => provider.version === null)).toBe(true);
   });
 
-  it('проба одна на команду на весь хост: повторные providers.list её не повторяют', async () => {
+  it('обычные версии кэшируются; GLM заново проверяет версию Claude Code при каждом list', async () => {
+    process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
+    extraEnv.push('PARLEY_CLAUDE_BIN');
     const calls: string[] = [];
     const client = await boot({
       probeVersion: async (command) => {
@@ -126,7 +131,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     await list(client);
     await list(client);
     await list(client);
-    expect(calls.sort()).toEqual(['claude', 'codex', 'glm']);
+    expect(calls.sort()).toEqual(['claude', 'claude', 'claude', 'claude', 'codex']);
   });
 
   it('первый providers.list дожидается пробы, а не отвечает пустой версией', async () => {
@@ -331,7 +336,7 @@ describe('providers.list: лимиты подписок и событие provid
       fiveHour: { usedPercent: 58 },
       week: { usedPercent: 41 },
     });
-    expect(byId(providers, 'glm').limits).toMatchObject({ fiveHour: { usedPercent: 3 } });
+    expect(byId(providers, 'glm').limits).toBeNull();
     // Логов Codex в песочнице нет: данных нет — null, а не отсутствие поля.
     expect(byId(providers, 'codex').limits).toBeNull();
   });

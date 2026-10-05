@@ -4,6 +4,67 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+## 0.5.1
+
+### Fixed
+
+- **Embedded Node download during release builds.** Transient network failures and HTTP
+  408, 429 or 5xx responses retry up to three attempts, with 1-second and 2-second waits
+  within the existing ten-minute download deadline. SHA256, architecture and license
+  checks remain mandatory; TLS failures are not retried.
+- Download failures report the checksum or archive stage, URL, attempt count and an
+  allowlisted network error code when available, without dumping response bodies or causes.
+
+## 0.5.0
+
+### Added
+
+- **Provider connection cards.** Claude Code, Codex and GLM always appear in the status bar,
+  dimmed when disconnected. Click a segment, a disconnected provider or the selected provider
+  in New session or room for install or key guidance and "Check again". Key changes and host
+  reconnection refresh the dialog; creation waits for a connected provider. Older hosts offer
+  "Restart host" before key editing.
+- **GLM Coding Plan through Claude Code.** GLM uses the official `claude` CLI, version
+  2.1.287 or newer, with GLM-5.3 and GLM-5.3 Flash (1M context), transcripts, Chat view,
+  hooks, metrics and native resume. First-launch trust, onboarding and permission questions
+  remain in Terminal. GLM-5.3 is text-only; Flash accepts images. GLM has no Claude channel and
+  does not display Claude quota; it has a separate manual Z.ai quota request.
+  A Chat `/model` choice may reset on resume to the configured session model.
+- **Local Z.ai key management.** Save, replace or remove a voluntarily supplied key in the
+  GLM card. It stays in Parley's home with file mode `0600`; only a masked hint reaches the
+  window. The host uses it for explicit Z.ai quota refreshes and adds it to the final GLM
+  process environment. Claude Code's
+  host-managed authorization avoids saved Claude sign-in and scrubs the Z.ai credentials
+  from subprocesses; user and administrator policies remain effective. Custom GLM commands
+  and incompatible authorization templates are refused. Avoid `/logout` in GLM because it
+  can change the shared local Claude Code sign-in.
+- **Boundary guard for GLM.** Exact exceptions permit only the built-in endpoint record,
+  the secret-store path, the final process-environment token assignment and the fixed read-only
+  Z.ai monitor GET for manual quota refresh. The same strings elsewhere remain violations.
+  Parley reads no Claude or Codex credentials and writes no agent configuration.
+- **Manual provider limit refresh.** A button at the left of the provider row rereads local
+  Claude Code and Codex limits and requests GLM quota from Z.ai with the saved key. Concurrent
+  clicks share one request. The spinner remains visible for at least 600 ms, with a static
+  hourglass for reduced motion; data and errors appear as soon as available. GLM failures have
+  safe, specific messages and do not block local limit updates. Startup and polling do not
+  request Z.ai quota.
+
+### Fixed
+
+- The close button appears when hovering a background tab, and closing it preserves the
+  selected tab.
+- Launching Parley again after its window was closed safely reopens the window with the
+  existing host connection. A minimized window is restored and focused.
+
+### Known limitations
+
+- **TODO: GLM quota authentication.** Live manual Z.ai quota refresh still returns 401;
+  this release does not resolve it. GLM sessions were confirmed working by the user.
+- Unknown Z.ai quota response formats are rejected. Only the supported single unqualified
+  token quota is interpreted as five-hour usage; an unknown reset time has no countdown.
+
 ## 0.4.0
 
 ### Added

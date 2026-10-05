@@ -13,7 +13,13 @@ import { adapterV1 } from '../adapter-v1.js';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { defaultRoot, discoverSessions } from '../discover.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
-import { agentEnv, commandBinary, loadProviders, printCommand } from '../providers.js';
+import {
+  agentEnv,
+  commandBinary,
+  isClaudeCode,
+  loadProviders,
+  printCommand,
+} from '../providers.js';
 import type { MetricsRoots } from './metrics.js';
 import { readMap, updateMap } from './store.js';
 import type { WorkMap, WorkProvider, WorkSession } from './types.js';
@@ -91,7 +97,7 @@ async function transcriptSource(
   providerSessionId: string,
   roots: MetricsRoots,
 ): Promise<Promise<Line[]> | null> {
-  if (provider === 'claude') {
+  if (isClaudeCode(provider)) {
     const root = roots.claudeRoot ?? defaultRoot();
     const found = (await discoverSessions(root)).find(
       (session) => session.id === providerSessionId,
@@ -110,7 +116,7 @@ async function transcriptSource(
 
 /**
  * Текстовый транскрипт сессии провайдера. `null` — историю этого провайдера мы
- * не читаем (GLM и любой свой CLI) или лога с таким id нет.
+ * не читаем (любой свой CLI) или лога с таким id нет.
  *
  * Длинный разговор режется с головы: для резюме важно, чем он закончился.
  */

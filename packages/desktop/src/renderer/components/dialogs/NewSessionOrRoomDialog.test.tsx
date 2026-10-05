@@ -6,6 +6,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { Result } from '@parley/protocol';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../../shared/strings.js';
@@ -17,6 +18,8 @@ import { groups } from '../../layout/tree.js';
 import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useUiStore } from '../../store/ui.js';
+import { useHostStore } from '../../store/host.js';
+import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useWorksStore } from '../../store/works.js';
 import { recordOnInsert } from '../../test-utils/dom-insert.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -66,6 +69,8 @@ function stubHost(): void {
 beforeEach(() => {
   nextSession = 1;
   bridge = createFakeBridge();
+  window.parley = bridge;
+  useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS] }, connections: 1 });
   stubHost();
   useWorksStore.setState({
     entries: [makeWork('w-01', { projectPath: PROJECT, title: 'Payments' }), makeWork('w-02', { projectPath: '/tmp/other', title: 'Auth' })],
@@ -108,7 +113,7 @@ async function renderDialog(
   return { onOpenChange };
 }
 
-const dialog = (): HTMLElement => screen.getByRole('dialog');
+const dialog = (): HTMLElement => screen.getByRole('dialog', { name: /^New (session|room)$/ });
 const rows = (): HTMLElement[] => [...dialog().querySelectorAll<HTMLElement>('[data-agent-row]')];
 const button = (name: string | RegExp): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
 const providerRadio = (row: number, name: string): HTMLElement =>
@@ -154,11 +159,11 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     expect(rows()).toHaveLength(2);
   });
 
-  it('провайдеры — пилюли: доступные выбираются, недоступный неактивен; по умолчанию Claude', async () => {
+  it('провайдеры — пилюли: доступные выбираются, недоступный открывает карточку; по умолчанию Claude', async () => {
     await renderDialog();
     expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
     expect(isChecked(providerRadio(0, 'Codex'))).toBe(false);
-    expect((providerRadio(0, 'Cursor') as HTMLButtonElement).disabled).toBe(true);
+    expect((providerRadio(0, 'Cursor') as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(providerRadio(0, 'Codex'));
     expect(isChecked(providerRadio(0, 'Codex'))).toBe(true);
     expect(isChecked(providerRadio(0, 'Claude'))).toBe(false);
@@ -176,14 +181,10 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     expect([claude.getAttribute('tabindex'), codex.getAttribute('tabindex')]).toEqual(['-1', '0']);
     fireEvent.keyDown(codex, { key: 'ArrowRight' });
     expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
-    // Дальше недоступный Cursor: стрелка его пропускает и уходит по кругу на Claude; назад — обратно на GLM.
+    // Недоступный Cursor открывает подключение с клавиатуры, но GLM остаётся выбранным.
     fireEvent.keyDown(providerRadio(0, 'GLM'), { key: 'ArrowDown' });
-    expect(isChecked(claude)).toBe(true);
-    fireEvent.keyDown(claude, { key: 'ArrowLeft' });
     expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
-    // Не стрелка — ничего.
-    fireEvent.keyDown(providerRadio(0, 'GLM'), { key: 'a' });
-    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeTruthy();
   });
 
   it('ui.lastProvider — агент по умолчанию, как у диалога новой работы', async () => {
@@ -925,5 +926,326 @@ describe('NewSessionOrRoomDialog — ошибка диалога в подвал
   it('без ошибки role=alert нет', async () => {
     await renderDialog();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('NewSessionOrRoomDialog — подключение провайдера', () => {
+  type Providers = Result<'providers.list'>['providers'];
+  const glm = (available = false): Providers[number] => ({
+    id: 'glm', label: 'GLM', available, family: 'claude', version: '2.1.287',
+    needs: available ? null : 'key', keyHint: available ? '••••test' : null,
+    models: [{ id: 'glm-5.3', label: 'GLM-5.3' }, { id: 'glm-5.3-flash', label: 'GLM-5.3 Flash' }], effort: false,
+  });
+  const list = (available = false): Providers => [...PROVIDERS.filter((provider) => provider.id !== 'glm'), glm(available)];
+  const card = (): HTMLElement => document.querySelector<HTMLElement>('[data-provider-card]') as HTMLElement;
+  function openable(): { set: (open: boolean) => void } {
+    const element = (open: boolean): JSX.Element =>
+      <NewSessionOrRoomDialog open={open} bridge={bridge} work={null} room={false} onOpenChange={() => {}} />;
+    const view = render(element(true));
+    return { set: (open) => view.rerender(element(open)) };
+  }
+
+  it('недоступная пилюля открывает общую карточку без смены провайдера или модели', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: list() }));
+    await renderDialog();
+    const model = within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' });
+    await chooseOption(model, 'Sonnet');
+    // Radix возвращает фокус из списка модели до открытия следующей всплывающей панели.
+    await waitFor(() => expect(document.activeElement).toBe(model));
+    fireEvent.click(providerRadio(0, 'GLM'));
+    const keyInput = await screen.findByLabelText('Z.ai API key');
+    expect(keyInput.closest('form')).toBeNull();
+    fireEvent.keyDown(keyInput, { key: 'Enter' });
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }).textContent).toBe('Sonnet');
+    expect(callsOf('sessions.create')).toEqual([]);
+    for (const action of within(card()).getAllByRole('button')) expect(action.getAttribute('type')).toBe('button');
+  });
+
+  it('Save обновляет открытый диалог без события: GLM можно выбрать с моделями протокола и без effort', async () => {
+    let providers = list();
+    bridge.setHandler('providers.list', async () => ({ providers }));
+    bridge.setHandler('providers.setKey', async () => { providers = list(true); return { keyHint: '••••test' }; });
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    fireEvent.change(await screen.findByLabelText('Z.ai API key'), { target: { value: 'fake-test-key' } });
+    fireEvent.click(button('Save'));
+    await waitFor(() => expect(within(card()).getByText('Connected')).toBeTruthy());
+    expect((screen.getByLabelText('Z.ai API key') as HTMLInputElement).value).toBe('');
+    fireEvent.keyDown(card(), { key: 'Escape' });
+    await waitFor(() => expect(document.querySelector('[data-provider-card]')).toBeNull());
+    fireEvent.click(providerRadio(0, 'GLM'));
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GLM-5.3 Flash');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'glm', model: 'glm-5.3-flash' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+
+  it('Escape внешнего слоя закрывает только карточку и возвращает фокус пилюле', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [PROVIDERS[0]!, { id: 'codex', label: 'Codex', available: false }] }));
+    const captures: EventListenerOrEventListenerObject[] = [];
+    const add = document.addEventListener.bind(document);
+    const spy = vi.spyOn(document, 'addEventListener').mockImplementation((type, listener, options) => {
+      if (type === 'keydown' && typeof options === 'object' && options.capture && listener !== null) captures.push(listener);
+      add(type, listener, options);
+    });
+    let onOpenChange: ReturnType<typeof vi.fn>;
+    try {
+      ({ onOpenChange } = await renderDialog());
+    } finally {
+      spy.mockRestore();
+    }
+    const outerEscape = captures.at(-1);
+    expect(outerEscape).toBeDefined();
+    const codex = providerRadio(0, 'Codex');
+    act(() => providerRadio(0, 'Claude').focus());
+    fireEvent.keyDown(providerRadio(0, 'Claude'), { key: 'ArrowRight' });
+    const copy = await screen.findByRole('button', { name: 'Copy' });
+    await waitFor(() => expect(document.activeElement).toBe(copy));
+    // В Electron первым срабатывал capture-обработчик диалога; воспроизводим именно эту границу.
+    act(() => {
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+      if (typeof outerEscape === 'function') outerEscape.call(document, escape);
+      else outerEscape?.handleEvent(escape);
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.querySelector('[data-provider-card]')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(codex));
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    fireEvent.keyDown(codex, { key: 'Escape' });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it.each([1, 0.95])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s)', async (scale) => {
+    const observers: ObservedResize[] = [];
+    class ObservedResize implements ResizeObserver {
+      target: Element | null = null;
+      constructor(readonly callback: ResizeObserverCallback) { observers.push(this); }
+      observe(target: Element): void { this.target = target; }
+      unobserve(): void {}
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal('ResizeObserver', ObservedResize);
+    try {
+      bridge.setHandler('providers.list', async () => ({ providers: list() }));
+      await renderDialog();
+      fireEvent.click(providerRadio(0, 'GLM'));
+      const input = await screen.findByLabelText('Z.ai API key');
+      await waitFor(() => expect(document.activeElement).toBe(input));
+      const content = card().parentElement as HTMLElement;
+      const observer = observers.find((entry) => entry.target === content);
+      expect(observer).toBeDefined();
+      // Геометрия реального сбоя: карточка сжалась после автофокуса, поле осталось ниже её нижнего края.
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 226 });
+      Object.defineProperty(content, 'offsetHeight', { configurable: true, value: 226 });
+      const bounds = vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(265, 12, 360 * scale, 225.6 * scale));
+      vi.spyOn(input, 'getBoundingClientRect').mockImplementation(() => new DOMRect(281, 12 + (228 - content.scrollTop) * scale, 328 * scale, 36 * scale));
+      const sizes: ResizeObserverEntry[] = [{
+        target: content, borderBoxSize: [{ blockSize: 225.6, inlineSize: 360 }],
+        contentBoxSize: [], devicePixelContentBoxSize: [], contentRect: new DOMRect(),
+      }];
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBeCloseTo(38.4);
+      // Повторная доставка не двигает уже видимое поле.
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBeCloseTo(38.4);
+      content.scrollTop = 0;
+      bounds.mockReturnValueOnce(new DOMRect(265, 12, 360, 0));
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBe(0);
+      act(() => providerRadio(0, 'Claude').focus());
+      content.scrollTop = 0;
+      act(() => observer?.callback(sizes, observer));
+      expect(content.scrollTop).toBe(0);
+      fireEvent.keyDown(content, { key: 'Escape' });
+      await waitFor(() => expect(observer?.disconnect).toHaveBeenCalledOnce());
+    } finally {
+      cleanup();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([false, true])('Remove выбранного GLM блокирует запуск с понятным сообщением (room=%s)', async (room) => {
+    let providers = list(true);
+    bridge.setHandler('providers.list', async () => ({ providers }));
+    bridge.setHandler('providers.clearKey', async () => { providers = list(); return { ok: true }; });
+    await renderDialog({ room });
+    fireEvent.click(providerRadio(0, 'GLM'));
+    // Повторный клик по выбранному открывает управление подключением.
+    fireEvent.click(providerRadio(0, 'GLM'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(within(dialog()).getByRole('alert').textContent).toBe('GLM is unavailable. Connect it or choose another agent.'));
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    expect(button(room ? 'Create room' : 'Start session').disabled).toBe(true);
+    fireEvent.click(button(room ? 'Create room' : 'Start session'));
+    expect(callsOf('sessions.create')).toEqual([]);
+    expect(callsOf('rooms.create')).toEqual([]);
+  });
+
+  it('карточка с анимацией закрытия не отключает наблюдателя следующей карточки', async () => {
+    const observers: ObservedResize[] = [];
+    class ObservedResize implements ResizeObserver {
+      target: Element | null = null;
+      constructor(readonly callback: ResizeObserverCallback) { observers.push(this); }
+      observe(target: Element): void { this.target = target; }
+      unobserve(): void {}
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal('ResizeObserver', ObservedResize);
+    const computedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+      const style = computedStyle(element, pseudo);
+      if (element.matches('[role="dialog"][data-side]')) {
+        Object.defineProperty(style, 'animationName', {
+          configurable: true,
+          get: () => element.getAttribute('data-state') === 'open' ? 'card-enter' : 'card-exit',
+        });
+      }
+      return style;
+    });
+    try {
+      bridge.setHandler('providers.list', async () => ({ providers: list() }));
+      await renderDialog();
+      fireEvent.click(providerRadio(0, 'GLM'));
+      await screen.findByLabelText('Z.ai API key');
+      const priorContent = card().parentElement as HTMLElement;
+      fireEvent.click(providerRadio(0, 'Cursor'));
+      await waitFor(() => expect(document.querySelector('[data-provider-card="cursor"]')).not.toBeNull());
+      const nextContent = document.querySelector('[data-provider-card="cursor"]')?.parentElement as HTMLElement;
+      const observer = observers.find((entry) => entry.target === nextContent);
+      expect(priorContent.isConnected).toBe(true);
+      expect(nextContent.isConnected).toBe(true);
+      expect(observer).toBeDefined();
+      expect(observer?.disconnect).not.toHaveBeenCalled();
+      // Старый узел уходит после того, как новый уже прикреплён и наблюдается.
+      const end = new Event('animationend', { bubbles: true });
+      Object.defineProperty(end, 'animationName', { value: 'card-exit' });
+      fireEvent(priorContent, end);
+      await waitFor(() => expect(priorContent.isConnected).toBe(false));
+      expect(nextContent.isConnected).toBe(true);
+      expect(observer?.disconnect).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('changed блокирует запуск до нового ответа, старый reload не возвращает подключение', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: list(true) }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    const pending: Array<(providers: Providers) => void> = [];
+    bridge.setHandler('providers.list', () => new Promise((resolve) => pending.push((providers) => resolve({ providers }))));
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    await waitFor(() => expect(pending).toHaveLength(1));
+    expect(button('Start session').disabled).toBe(true);
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => pending[1]?.(list()));
+    await act(async () => pending[0]?.(list(true)));
+    expect(within(dialog()).getByRole('alert').textContent).toContain('GLM is unavailable');
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    expect(button('Start session').disabled).toBe(true);
+  });
+
+  it('провайдер по умолчанию сохраняется при удалении ключа без тихой замены на Claude', async () => {
+    let providers = list(true);
+    useUiStore.setState({ ui: { ...DEFAULT_UI, lastProvider: 'glm' } });
+    bridge.setHandler('providers.list', async () => ({ providers }));
+    await renderDialog();
+    providers = list();
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    await waitFor(() => expect(within(dialog()).getByRole('alert').textContent).toContain('GLM is unavailable'));
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+  });
+
+  it('переподключение обновляет открытый диалог и отменяет ответ прежнего хоста', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: list(true) }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    let release: () => void = () => {};
+    bridge.setHandler('providers.list', () => new Promise((resolve) => { release = () => resolve({ providers: list(true) }); }));
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    bridge.setHandler('providers.list', async () => ({ providers: list() }));
+    act(() => useHostStore.setState({ connections: 2 }));
+    await waitFor(() => expect(within(dialog()).getByRole('alert').textContent).toContain('GLM is unavailable'));
+    await act(async () => release());
+    expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
+    expect(button('Start session').disabled).toBe(true);
+  });
+
+  it('закрытие очищает карточку, отписывает changed, ответы и ошибки прошлого открытия игнорируются', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: list() }));
+    const { set } = openable();
+    await screen.findByRole('radio', { name: 'GLM' });
+    fireEvent.click(providerRadio(0, 'GLM'));
+    fireEvent.change(await screen.findByLabelText('Z.ai API key'), { target: { value: 'fake-unsaved-key' } });
+    const pending: Array<{ resolve: (providers: Providers) => void; reject: (error: unknown) => void }> = [];
+    bridge.setHandler('providers.list', () => new Promise((resolve, reject) => pending.push({ resolve: (providers) => resolve({ providers }), reject })));
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    set(false);
+    const before = callsOf('providers.list').length;
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    expect(callsOf('providers.list')).toHaveLength(before);
+    bridge.setHandler('providers.list', async () => ({ providers: list() }));
+    set(true);
+    await screen.findByRole('radio', { name: 'GLM' });
+    await act(async () => { pending[0]?.resolve(list(true)); pending[1]?.reject({ code: 'internal', message: 'устаревшая ошибка' }); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    expect((await screen.findByLabelText('Z.ai API key') as HTMLInputElement).value).toBe('');
+    expect(within(card()).getByText('Not connected')).toBeTruthy();
+  });
+
+  it('неудачный refresh не разрешает запуск старого доступного снимка, Check again восстанавливает его', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: list(true) }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    bridge.setHandler('providers.list', async () => { throw { code: 'internal', message: 'ошибка' }; });
+    act(() => bridge.emit('providers.changed', { provider: 'glm' }));
+    expect(await screen.findByText("Couldn't load providers: host error.")).toBeTruthy();
+    expect(button('Start session').disabled).toBe(true);
+    bridge.setHandler('providers.list', async () => ({ providers: list(true) }));
+    fireEvent.click(providerRadio(0, 'GLM'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(within(dialog()).queryByRole('alert')).toBeNull());
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('старый хост открывает существующее подтверждение Restart host без неизвестного RPC', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods: REQUIRED_METHODS.filter((method) => !method.startsWith('providers.') || method === 'providers.list') } });
+    bridge.setHandler('providers.list', async () => ({ providers: list() }));
+    useUiStore.getState().closeRestartHostDialog();
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'GLM'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart host' }));
+    expect(useUiStore.getState().dialogs.restartHost).toBe(true);
+    expect(callsOf('providers.setKey')).toEqual([]);
+    expect(callsOf('providers.clearKey')).toEqual([]);
+    expect(document.querySelector('[data-provider-card]')).toBeNull();
+    useUiStore.getState().closeRestartHostDialog();
+  });
+
+  it('busy и запущенная строка запрещают открытие карточки недоступного провайдера', async () => {
+    let release: () => void = () => {};
+    bridge.setHandler('sessions.create', (params) => new Promise((resolve) => { release = () => resolve({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } }); }));
+    bridge.setHandler('rooms.create', async () => { throw { code: 'internal', message: 'ошибка' }; });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    expect((providerRadio(0, 'Cursor') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(providerRadio(0, 'Cursor'));
+    expect(document.querySelector('[data-provider-card]')).toBeNull();
+    await act(async () => release());
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(2));
+    await act(async () => release());
+    await screen.findByText("Couldn't create room: host error.");
+    fireEvent.click(providerRadio(0, 'Cursor'));
+    expect(document.querySelector('[data-provider-card]')).toBeNull();
   });
 });

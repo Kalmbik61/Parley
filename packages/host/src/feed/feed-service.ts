@@ -24,6 +24,7 @@ import {
   feedFromTranscript,
   forEachJsonlRecord,
   interruptedAt,
+  isClaudeCode,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -479,7 +480,7 @@ export function createFeedService(
    */
   function seed(feed: SessionFeed, provider: string): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
-    const file = provider === 'claude' ? deps.activity.logFile(feed.ref) : null;
+    const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
     feed.seeding = (async () => {
       try {
@@ -597,7 +598,7 @@ export function createFeedService(
     } catch {
       return;
     }
-    if (provider !== 'claude') return;
+    if (!isClaudeCode(provider)) return;
     const feed = feedOf(ref);
     if (feed.live || feed.seeded || feed.seeding !== undefined) return;
     const before = feed.state;

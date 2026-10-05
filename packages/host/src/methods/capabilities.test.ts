@@ -26,6 +26,13 @@ describe('capabilities.list', () => {
     expect(scan).not.toHaveBeenCalled();
   });
 
+  it('GLM uses the Claude Code capabilities scanner', async () => {
+    const scan = vi.fn().mockResolvedValue(caps);
+    const result = await createCapabilitiesList(scan)({ projectPath: '/work/p', provider: 'glm' }, request);
+    expect(result).toBe(caps);
+    expect(scan).toHaveBeenCalledWith({ home: homedir(), projectPath: '/work/p' });
+  });
+
   it('относительный projectPath — bad_request', async () => {
     const scan = vi.fn();
     await expect(createCapabilitiesList(scan)({ projectPath: 'rel/p', provider: 'claude' }, request)).rejects.toMatchObject({

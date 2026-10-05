@@ -32,15 +32,15 @@ function builtInList(entry: typeof PROVIDERS.claude): Array<{ id: string; label:
 }
 
 describe('resolveModelChoice: модель из диалога запуска против списка провайдера', () => {
-  it('каждое значение встроенных списков claude и codex проходит и возвращается как есть', async () => {
-    for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+  it('каждое значение встроенных списков claude, codex и glm проходит и возвращается как есть', async () => {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
       for (const { id } of builtInList(entry))
         expect(await resolveModelChoice(entry.id, id)).toBe(id);
     }
   });
 
   it('и схема протокола принимает каждое значение списка: окно не предложит того, что схема отвергнет', () => {
-    for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
       for (const { id } of builtInList(entry)) {
         const parsed = METHODS['sessions.create'].safeParse({
           projectPath: '/p',
@@ -54,6 +54,15 @@ describe('resolveModelChoice: модель из диалога запуска п
         expect(parsed.success, `${entry.id}: ${id}`).toBe(true);
       }
     }
+  });
+
+  it('GLM принимает 5.3 и Flash из списка, а произвольную модель отклоняет', async () => {
+    expect(await resolveModelChoice('glm', 'glm-5.3[1m]')).toBe('glm-5.3[1m]');
+    expect(await resolveModelChoice('glm', 'glm-5.3-flash[1m]')).toBe('glm-5.3-flash[1m]');
+
+    const refusal = resolveModelChoice('glm', 'что-угодно');
+    await expect(refusal).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+    await expect(refusal).rejects.toThrow(/что-угодно.*glm.*glm-5\.3\[1m\].*glm-5\.3-flash\[1m\]/s);
   });
 
   it('providers.json принимает в id ровно то, что примет схема sessions.create: список не пропустит значение, на котором create упадёт', async () => {
@@ -117,10 +126,13 @@ describe('resolveModelChoice: модель из диалога запуска п
   });
 
   it('провайдер без списка — прежнее правило: любое значение проходит', async () => {
-    // У glm нет ни списка, ни `{model}` в шаблоне: выбор отбрасывает сам шаблон.
-    expect(await resolveModelChoice('glm', 'что-угодно')).toBe('что-угодно');
+    await writeProviders({
+      plain: { badge: 'Plain', command: 'plain', args: ['{prompt}'] },
+      smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}'] },
+    });
+    // Без `{model}` выбор отбрасывает сам шаблон.
+    expect(await resolveModelChoice('plain', 'что-угодно')).toBe('что-угодно');
     // Свой провайдер с `{model}`, но без списка: значение доедет до команды.
-    await writeProviders({ smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}'] } });
     expect(await resolveModelChoice('smart', 'anything')).toBe('anything');
   });
 

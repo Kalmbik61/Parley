@@ -6,8 +6,8 @@
  *
  * Облик Organic (спека окна 2026-09-29, 1.1): вкладка — пилюля 28px с зазором 7 и текстом 12px, отступ
  * слева 11, справа 11 (у активной 5 — под крестик). Активная — фон `neutral-100`, `shadow-sm`, вес
- * 600 и крестик 18×18 со значком 10; у неактивных крестика нет — закрытие средней кнопкой
- * (`onAuxClick`) и ⌘W. Подкраска (`meta.tint`) бьёт и фон активной: `blocked` и комната с ждущим
+ * 600 и крестик 18×18 со значком 10; у неактивных крестик появляется при наведении или фокусе,
+ * также работают средняя кнопка (`onAuxClick`) и ⌘W. Подкраска (`meta.tint`) бьёт и фон активной: `blocked` и комната с ждущим
  * решением, почта с непрочитанным — `accent-200`, `unseen` — `accent-2-200`. У вкладки терминала —
  * только значок состояния 12px, значка провайдера, как на снимках handoff, нет. Ширину — до 200,
  * не уже 72 — держит обёртка в `TabStrip.tsx` (`SortableTab`), пилюля занимает её целиком.
@@ -163,8 +163,10 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
             if (event.button === 1) closeThis();
           }}
           className={cn(
-            'flex h-7 w-full min-w-0 cursor-default select-none items-center gap-[7px] rounded-full pl-[11px] text-xs text-foreground',
-            isActive ? 'bg-neutral-100 pr-[5px] font-semibold shadow-sm' : 'pr-[11px] hover:bg-foreground/7',
+            'group/tab relative flex h-7 w-full min-w-0 cursor-default select-none items-center gap-[7px] rounded-full pl-[11px] text-xs text-foreground',
+            isActive
+              ? 'bg-neutral-100 pr-[5px] font-semibold shadow-sm'
+              : 'pr-[11px] hover:bg-foreground/7 hover:pr-[30px] focus-within:pr-[30px]',
             meta.tint !== null && TINT[meta.tint],
           )}
         >
@@ -181,19 +183,25 @@ export function Tab({ workKey, group, tab, meta, dot, isActive }: TabProps): JSX
               className="size-2 shrink-0 rounded-full bg-foreground/70"
             />
           ) : null}
-          {isActive ? (
-            <button
-              type="button"
-              aria-label={S.common.close}
-              onClick={(event) => {
-                event.stopPropagation();
-                closeThis();
-              }}
-              className="flex size-[18px] shrink-0 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-foreground/12"
-            >
-              <X className="size-2.5" aria-hidden="true" />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            aria-label={S.common.close}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              closeThis();
+            }}
+            className={cn(
+              'flex size-[18px] shrink-0 items-center justify-center rounded-full text-neutral-800 transition-colors hover:bg-foreground/12',
+              !isActive &&
+                'pointer-events-none absolute right-[5px] opacity-0 group-hover/tab:pointer-events-auto group-hover/tab:opacity-100 group-focus-within/tab:pointer-events-auto group-focus-within/tab:opacity-100',
+            )}
+          >
+            <X className="size-2.5" aria-hidden="true" />
+          </button>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

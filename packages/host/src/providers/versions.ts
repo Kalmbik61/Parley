@@ -8,51 +8,20 @@
  * и никогда — без таймаута.
  */
 
-import { execFile } from 'node:child_process';
-import { commandBinary, loadProviders, parseVersion } from '@parley/core';
+import { loadProviders } from '@parley/core';
+export { probeCliVersion } from '@parley/core';
 import type { Log } from '../log.js';
 
 /** Одна проба: версия команды, `null` — узнать не удалось (нет бинаря, таймаут, чужой ответ). */
 export type VersionProbe = (command: string) => Promise<string | null>;
-
-/** Как долго ждём ответа `--version`: живой CLI отвечает за доли секунды, зависший — не ждём. */
-const PROBE_TIMEOUT_MS = 3000;
-
-/**
- * Настоящая проба: `<команда> --version`, версия — первая тройка цифр ответа
- * (`2.1.276 (Claude Code)` → `2.1.276`, `codex-cli 0.44.0` → `0.44.0`). Хост подключает её
- * только в `main.ts`: тесты, где команды запускать нельзя, зовут `startHost` без пробы.
- */
-export function probeCliVersion(
-  command: string,
-  timeoutMs: number = PROBE_TIMEOUT_MS,
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      commandBinary(command),
-      ['--version'],
-      // SIGKILL, а не SIGTERM: зависший бинарь сигнал мог бы и проигнорировать.
-      { timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true },
-      (error, stdout) => {
-        if (error !== null) {
-          resolve(null);
-          return;
-        }
-        const version = parseVersion(stdout);
-        resolve(version === null ? null : version.join('.'));
-      },
-    );
-    // Бинарь, читающий stdin до конца, без EOF не вышел бы до таймаута.
-    child.stdin?.on('error', () => {});
-    child.stdin?.end();
-  });
-}
 
 export interface ProviderVersions {
   /** Пробы старта завершены, успехом или нет; не отказывает. Его ждёт `providers.list`. */
   ready: Promise<void>;
   /** Версия по команде провайдера; `null` — не узнали или команды не было в реестре на старте. */
   get(command: string): string | null;
+  /** Fresh local probe for readiness checks and launches; null without an injected probe. */
+  fresh(command: string): Promise<string | null>;
 }
 
 /**
@@ -86,5 +55,14 @@ export function startProviderVersions(probe: VersionProbe | undefined, log: Log)
     );
   };
 
-  return { ready: run(), get: (command) => cache.get(command) ?? null };
+  return {
+    ready: run(), get: (command) => cache.get(command) ?? null,
+    fresh: async (command) => {
+      if (probe === undefined) return null;
+      let version: string | null;
+      try { version = await probe(command); } catch { version = null; }
+      cache.set(command, version);
+      return version;
+    },
+  };
 }

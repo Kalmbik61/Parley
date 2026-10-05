@@ -31,6 +31,18 @@ const rateLimits = {
   seven_day: { used_percentage: 41.2, resets_at: NOW_SEC + 86_400 },
 };
 
+describe('Z.ai windows with unknown resets', () => {
+  const old: ProviderLimits = { source: 'zai', at: AT, fiveHour: { usedPercent: 70, resetsAt: null }, week: null };
+  const recent: ProviderLimits = { ...old, at: '2026-09-29T12:00:00.000Z', fiveHour: { usedPercent: 20, resetsAt: null } };
+  it('does not expire an unknown reset and preserves quota provenance', () => {
+    expect(dropExpiredWindows(old, NOW_MS + 1e10)).toEqual(old);
+  });
+  it('uses observation time rather than assuming unknown windows have monotonically increasing usage', () => {
+    expect(mergeLimits([old, recent])).toEqual(recent);
+    expect(mergeLimits([recent, old])).toEqual(recent);
+  });
+});
+
 describe('limitWindow', () => {
   it('процент и секунды сброса → usedPercent и resetsAt в ISO', () => {
     expect(limitWindow(23.5, NOW_SEC)).toEqual({
