@@ -1,5 +1,5 @@
 export { PROTOCOL_VERSION } from './version.js';
-export { HOST_ERROR_REASONS, refKey } from './types.js';
+export { HOST_ERROR_REASONS, PROVIDER_CHECK_REASONS, refKey } from './types.js';
 export type {
   ErrorCode,
   FeedCardState,
@@ -19,6 +19,8 @@ export type {
   CapabilitySource,
   NoticeKind,
   ProtocolError,
+  ProviderCheck,
+  ProviderCheckReason,
   ProviderLimits,
   SendReason,
   SendResult,

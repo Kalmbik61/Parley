@@ -1,7 +1,7 @@
 /** Подключение провайдеров: секрет остаётся в поле, ошибки не отражают текст хоста. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Result } from '@parley/protocol';
+import type { ProviderCheck, Result } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { useHostStore } from '../../store/host.js';
 import { useProvidersStore } from '../../store/providers.js';
@@ -22,16 +22,19 @@ const glm = (patch: Partial<Provider> = {}): Provider => ({
 });
 let bridge: ReturnType<typeof createFakeBridge>;
 let copy: ReturnType<typeof vi.fn>;
+const AT = '2026-10-05T09:30:00.000Z';
 beforeEach(() => {
   bridge = createFakeBridge();
   window.parley = bridge;
+  // Хост отвечает «провайдер не готов» — тесты, которым важен исход, ставят свой.
+  bridge.setHandler('providers.check', () => ({ check: null }));
   copy = vi.fn(async () => {});
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
   useHostStore.setState({
     status: {
       state: 'connected',
       hostVersion: '0.4.0',
-      methods: [...REQUIRED_METHODS, 'providers.setKey', 'providers.clearKey'],
+      methods: [...REQUIRED_METHODS, 'providers.setKey', 'providers.clearKey', 'providers.check'],
     },
     connections: 1,
   });
@@ -97,8 +100,10 @@ describe('ProviderCard', () => {
     expect(input.disabled).toBe(false);
     fireEvent.change(input, { target: { value: 'fixture-key-1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    // Сохранение и сразу проверка ключа: два перечитывания, тестовое сообщение между ними.
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
     expect(input.value).toBe('');
+    expect(bridge.calls.map((call) => call.method)).toEqual(['providers.setKey', 'providers.check']);
     expect(bridge.calls).toContainEqual({
       method: 'providers.setKey',
       params: { provider: 'glm', key: 'fixture-key-1234' },
@@ -143,7 +148,8 @@ describe('ProviderCard', () => {
     const field = () => screen.getByLabelText('Z.ai API key') as HTMLInputElement;
     fireEvent.change(field(), { target: { value: 'fixture-key-5678' } });
     fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
-    await waitFor(() => expect(props.onReload).toHaveBeenCalledTimes(1));
+    // Замена тоже запускает проверку: ждём её конца, иначе поле ещё занято спиннером.
+    await waitFor(() => expect(props.onReload).toHaveBeenCalledTimes(2));
     expect(field().value).toBe('');
     fireEvent.change(field(), { target: { value: 'unsaved-fixture' } });
     rerender(<ProviderCard {...props} open={false} />);
@@ -222,6 +228,145 @@ describe('ProviderCard', () => {
   });
 });
 
+
+describe('ProviderCard: проверка ключа GLM тестовым сообщением', () => {
+  const ready = (patch: Partial<Provider> = {}): Provider =>
+    glm({ available: true, needs: null, keyHint: '••••1234', ...patch });
+
+  it('Check again: видимая проверка, затем Connected и время — даже если снимок списка ещё старый', async () => {
+    let answer: (value: { check: ProviderCheck | null }) => void = () => {};
+    bridge.setHandler('providers.check', () => new Promise((resolve) => { answer = resolve; }));
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    expect(screen.getByText('Not verified')).toBeTruthy();
+    const button = screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'));
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe('Checking…');
+    expect(button.querySelector('svg.animate-spin')).not.toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Sending a test request to Z.ai');
+    expect(screen.queryByText('Connected')).toBeNull();
+    answer({ check: { state: 'ok', at: AT } });
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('false'));
+    expect(screen.getByText('Connected')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Test request OK · checked');
+    expect(bridge.calls).toEqual([{ method: 'providers.check', params: { provider: 'glm' } }]);
+  });
+
+  it.each([
+    ['authentication', 401, '1000', 'Key rejected', 'Z.ai rejected the saved key'],
+    ['plan_expired', 429, '1309', 'Plan expired', 'GLM Coding Plan has expired'],
+    ['no_plan', 429, '1113', 'No active plan', 'no active GLM Coding Plan'],
+    ['limit_reached', 429, '1308', 'Limit reached', '5-hour or weekly limit'],
+    ['model_unavailable', 429, '1311', 'Model not in plan', "doesn't include GLM-5.3"],
+    ['key_restricted', 403, '1220', 'Key restricted', 'restricts this key'],
+    ['rate_limited', 429, '1302', 'Z.ai busy', 'Try again in a minute'],
+    ['server_error', 500, undefined, 'Z.ai error', 'server error'],
+    ['unsupported_response', 200, undefined, 'Unexpected answer', 'unexpected format'],
+  ] as const)('исход %s из снимка: подпись в шапке, подсказка и HTTP · code', (reason, httpStatus, code, label, hint) => {
+    const check: ProviderCheck = { state: 'failed', reason, httpStatus, ...(code === undefined ? {} : { code }), at: AT };
+    render(<ProviderCard provider={ready({ check })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.queryByText('Connected')).toBeNull();
+    const line = screen.getByRole('status').textContent ?? '';
+    expect(line).toContain(hint);
+    expect(line).toContain(code === undefined ? `HTTP ${httpStatus} · checked` : `HTTP ${httpStatus} · code ${code} · checked`);
+  });
+
+  it.each([
+    ['timeout', 'No answer', "didn't answer in time"],
+    ['network', 'No connection', 'VPN or proxy'],
+  ] as const)('без ответа Z.ai (%s): подпись и подсказка, без HTTP', (reason, label, hint) => {
+    render(<ProviderCard provider={ready({ check: { state: 'failed', reason, at: AT } })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText(label)).toBeTruthy();
+    const line = screen.getByRole('status').textContent ?? '';
+    expect(line).toContain(hint);
+    expect(line).not.toContain('HTTP');
+  });
+
+  it('незнакомая окну причина (хост новее окна) читается как «незнакомый ответ», а не пустая строка', () => {
+    const check = { state: 'failed', reason: 'future_reason', at: AT } as unknown as ProviderCheck;
+    render(<ProviderCard provider={ready({ check })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText('Unexpected answer')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('unexpected format');
+  });
+
+  it('вчерашняя проверка показывает дату, сегодняшняя — только время', () => {
+    const today = new Date();
+    today.setHours(9, 30, 0, 0);
+    // Календарный день назад, а не 24 часа: в день перехода на летнее время часы сдвинулись бы.
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const { rerender } = render(
+      <ProviderCard provider={ready({ check: { state: 'ok', at: today.toISOString() } })} onReload={async () => {}} onRestartHost={() => {}} />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('Test request OK · checked 9:30 AM');
+    rerender(
+      <ProviderCard provider={ready({ check: { state: 'ok', at: yesterday.toISOString() } })} onReload={async () => {}} onRestartHost={() => {}} />,
+    );
+    const month = yesterday.toLocaleString('en-US', { month: 'short' });
+    expect(screen.getByRole('status').textContent).toBe(`Test request OK · checked ${month} ${yesterday.getDate()}, 9:30 AM`);
+  });
+
+  it('новый ключ требует своей проверки: прежний ответ этой карточки не показывается', async () => {
+    bridge.setHandler('providers.check', () => ({ check: { state: 'ok', at: AT } }));
+    const reload = vi.fn(async () => {});
+    const { rerender } = render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.getByText('Connected')).toBeTruthy());
+    rerender(<ProviderCard provider={ready({ keyHint: '••••5678' })} onReload={reload} onRestartHost={() => {}} />);
+    expect(screen.queryByText('Connected')).toBeNull();
+    expect(screen.getByText('Not verified')).toBeTruthy();
+  });
+
+  it('снимок новее ответа карточки (проверило другое окно) — побеждает снимок', async () => {
+    bridge.setHandler('providers.check', () => ({ check: { state: 'ok', at: AT } }));
+    const reload = vi.fn(async () => {});
+    const { rerender } = render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.getByText('Connected')).toBeTruthy());
+    const later: ProviderCheck = { state: 'failed', reason: 'limit_reached', httpStatus: 429, code: '1308', at: '2026-10-05T09:40:00.000Z' };
+    rerender(<ProviderCard provider={ready({ check: later })} onReload={reload} onRestartHost={() => {}} />);
+    expect(screen.getByText('Limit reached')).toBeTruthy();
+  });
+
+  it('провайдер не готов локально: хост отвечает null, строки проверки нет, шапка Not connected', async () => {
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={glm({ needs: 'cli', version: null, keyHint: '••••1234' })} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByText('Not connected')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('отказ хоста: безопасный текст по коду, без сырого сообщения; повтор возможен', async () => {
+    bridge.setHandler('providers.check', () => {
+      throw encodeIpcError({ code: 'internal', message: 'fixture-secret in host text' });
+    });
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    const error = await screen.findByRole('alert');
+    expect(error.textContent).toContain("Couldn't check the GLM key");
+    expect(error.textContent).not.toContain('fixture-secret');
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Check again' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('старый хост без providers.check: прежний локальный перечит, шапка по готовности', async () => {
+    useHostStore.setState({
+      status: { state: 'connected', hostVersion: '0.5.1', methods: [...REQUIRED_METHODS, 'providers.setKey', 'providers.clearKey'] },
+    });
+    const reload = vi.fn(async () => {});
+    render(<ProviderCard provider={ready()} onReload={reload} onRestartHost={() => {}} />);
+    expect(screen.getByText('Connected')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(bridge.calls).toEqual([]);
+  });
+});
 
 it('GLM показывает подтверждённую квоту Z.ai в существующей карточке', () => {
   render(<ProviderCard provider={glm({ available: true, limits: {

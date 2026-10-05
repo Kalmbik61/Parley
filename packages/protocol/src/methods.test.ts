@@ -2,7 +2,27 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
-import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderLimits } from './types.js';
+import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
+import { PROVIDER_CHECK_REASONS } from './types.js';
+
+describe('providers.check — явная проверка ключа тестовым запросом', () => {
+  it('принимает провайдера строкой; без провайдера — отказ', () => {
+    expect(METHODS['providers.check'].safeParse({ provider: 'glm' }).success).toBe(true);
+    expect(METHODS['providers.check'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.check'].safeParse({ provider: 42 }).success).toBe(false);
+  });
+
+  it('отдаёт исход проверки или null (провайдер не готов локально); в списке — необязательное поле', () => {
+    expectTypeOf<Result<'providers.check'>>().toEqualTypeOf<{ check: ProviderCheck | null }>();
+    type Provider = Result<'providers.list'>['providers'][number];
+    expectTypeOf<Provider['check']>().toEqualTypeOf<ProviderCheck | null | undefined>();
+  });
+
+  it('список причин закрыт, без повторов и совпадает с типом', () => {
+    expectTypeOf<(typeof PROVIDER_CHECK_REASONS)[number]>().toEqualTypeOf<ProviderCheckReason>();
+    expect(new Set(PROVIDER_CHECK_REASONS).size).toBe(PROVIDER_CHECK_REASONS.length);
+  });
+});
 
 describe('provider key protocol additions', () => {
   it('accepts key mutations and rejects non-string inputs', () => {
@@ -257,15 +277,19 @@ describe('модель, усилие и поля providers.list (дизайн к
     expect(parse({ model: '', effort: 'high' }).success).toBe(true);
   });
 
-  it('providers.list: models, effort, version и limits необязательны — хост, переживший окно, их не знает', () => {
+  it('providers.list: models, effort, version, limits и check необязательны — хост, переживший окно, их не знает', () => {
     expectTypeOf<Result<'providers.list'>['providers'][number]>().toEqualTypeOf<{
       id: string;
       label: string;
       available: boolean;
+      needs?: 'cli' | 'key' | null;
+      keyHint?: string | null;
+      family?: 'claude' | null;
       models?: Array<{ id: string; label: string }> | null;
       effort?: boolean;
       version?: string | null;
       limits?: ProviderLimits | null;
+      check?: ProviderCheck | null;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };

@@ -118,6 +118,11 @@ describe('узкие исключения добровольно введённ�
       line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",
     },
     {
+      file: 'packages/host/src/limits/zai-check.ts',
+      rule: 'API провайдеров',
+      line: "const ZAI_MESSAGES_URL = 'https://api.z.ai/api/anthropic/v1/messages';",
+    },
+    {
       file: 'packages/core/src/providers.ts',
       rule: 'API провайдеров',
       line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",

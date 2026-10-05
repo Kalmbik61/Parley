@@ -6,6 +6,16 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **"Check again" tests the GLM key for real.** The GLM card, and saving a key, send one
+  test message (`max_tokens: 1`) to the GLM Coding Plan endpoint. "Connected" means Z.ai
+  answered; otherwise the card names the reason (key rejected, plan expired, no active plan,
+  limit reached, model not in plan, key restricted, Z.ai busy or erroring, no answer, no
+  connection, unexpected answer) with a hint, the HTTP status and the Z.ai error code. The
+  outcome survives host restarts and resets when the key changes. Claude and Codex keep the
+  local check: Parley does not touch their credentials.
+
 ## 0.5.1
 
 ### Fixed

@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
+import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
@@ -241,6 +241,41 @@ export const S = {
     getKey: 'Get a key',
     restartRequired: 'Restart the host to manage your saved GLM key.',
     restartHost: 'Restart host',
+    /** Явная проверка ключа GLM тестовым сообщением (`providers.check`): шапка, строка и подробности. */
+    notVerified: 'Not verified',
+    checking: 'Checking…',
+    checkingLine: 'Sending a test request to Z.ai…',
+    checkedOk: (time: string): string => `Test request OK · checked ${time}`,
+    checkDetails: (httpStatus: number | undefined, code: string | undefined, time: string): string =>
+      [httpStatus === undefined ? '' : `HTTP ${httpStatus}`, code === undefined ? '' : `code ${code}`, `checked ${time}`]
+        .filter((part) => part !== '')
+        .join(' · '),
+    checkLabel: {
+      authentication: 'Key rejected',
+      plan_expired: 'Plan expired',
+      no_plan: 'No active plan',
+      limit_reached: 'Limit reached',
+      model_unavailable: 'Model not in plan',
+      key_restricted: 'Key restricted',
+      rate_limited: 'Z.ai busy',
+      server_error: 'Z.ai error',
+      timeout: 'No answer',
+      network: 'No connection',
+      unsupported_response: 'Unexpected answer',
+    } satisfies Record<ProviderCheckReason, string>,
+    checkHint: {
+      authentication: 'Z.ai rejected the saved key. Paste the whole key again or create a new one with "Get a key".',
+      plan_expired: 'Your GLM Coding Plan has expired. Renew it on Z.ai, then check again.',
+      no_plan: 'This key has no active GLM Coding Plan or balance. Subscribe on Z.ai, then check again.',
+      limit_reached: "The key works, but your plan's 5-hour or weekly limit is used up. GLM sessions work again after the reset.",
+      model_unavailable: "Your plan doesn't include GLM-5.3, the model GLM sessions start with.",
+      key_restricted: 'Z.ai restricts this key. Use a key from your GLM Coding Plan.',
+      rate_limited: 'Z.ai is busy or limiting requests. Try again in a minute.',
+      server_error: 'Z.ai returned a server error. Try again later.',
+      timeout: "Z.ai didn't answer in time. Check your connection and try again.",
+      network: "Couldn't reach Z.ai. Check your internet connection, VPN or proxy.",
+      unsupported_response: 'Z.ai answered in an unexpected format. Try again; if it repeats, the Z.ai API may have changed.',
+    } satisfies Record<ProviderCheckReason, string>,
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
@@ -1055,6 +1090,7 @@ export const S = {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
       saveProviderKey: 'save the provider key',
+      checkProviderKey: 'check the GLM key',
       removeProviderKey: 'remove the provider key',
       copyInstallCommand: 'copy the install command',
       openProviderGuide: 'open the provider guide',
