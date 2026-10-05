@@ -6,6 +6,13 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **GLM limits refresh reads Z.ai's credit quota.** Z.ai now reports the plan's five-hour and
+  weekly windows in credits (`CREDIT_LIMIT`). Refresh limits shows both, with their reset times,
+  instead of an "unsupported response" error. Only the two verified window kinds are read;
+  monthly MCP quotas and unknown windows are left out.
+
 ### Changed
 
 - **"Check again" tests the GLM key for real.** The GLM card, and saving a key, send one

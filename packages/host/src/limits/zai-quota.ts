@@ -19,7 +19,54 @@ const record = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown> : null;
 
-/** Only the legacy single unqualified token quota is documented as five-hour usage. */
+const HOUR_MS = 3_600_000;
+/** Запас на расхождение часов: сброс чуть дальше длины окна ещё не значит чужого окна. */
+const RESET_SLACK_MS = 60_000;
+
+/**
+ * Окна кредитов Z.ai (`CREDIT_LIMIT`). Кодов `unit`/`number` нет ни в документации, ни в официальном
+ * скрипте плагина: сочетания сверены по живому ответу monitor API 2026-10-05 (тариф Lite) — `3/5` с
+ * ближайшим сбросом через считанные часы и `6/1` со сбросом через дни; описание тарифа называет именно
+ * пятичасовое и недельное окна в кредитах. Прочие сочетания (месячные, новые) не толкуются.
+ */
+const CREDIT_WINDOWS = [
+  { unit: 3, number: 5, slot: 'fiveHour', lengthMs: 5 * HOUR_MS },
+  { unit: 6, number: 1, slot: 'week', lengthMs: 7 * 24 * HOUR_MS },
+] as const;
+
+const usedPercent = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new ZaiQuotaError('unsupported_response');
+  return Math.max(0, Math.min(100, value));
+};
+
+/** Окна кредитов из ответа; `null` — ни одного распознанного окна. */
+function creditWindows(limits: readonly unknown[], at: string): Pick<ProviderLimits, 'fiveHour' | 'week'> | null {
+  const credits = limits.map(record).filter((item) => item?.type === 'CREDIT_LIMIT');
+  const windows: Pick<ProviderLimits, 'fiveHour' | 'week'> = { fiveHour: null, week: null };
+  let found = false;
+  for (const window of CREDIT_WINDOWS) {
+    const matching = credits.filter((item) => item?.unit === window.unit && item.number === window.number);
+    if (matching.length === 0) continue;
+    if (matching.length > 1) throw new ZaiQuotaError('unsupported_response');
+    const item = matching[0]!;
+    const percent = usedPercent(item.percentage);
+    const reset = item.nextResetTime;
+    let resetsAt: string | null = null;
+    if (typeof reset === 'number' && Number.isFinite(reset) && reset > 0) {
+      // Сброс дальше длины окна — коды значат не то, что мы думаем: такое окно не толкуется.
+      if (reset - Date.parse(at) > window.lengthMs + RESET_SLACK_MS) continue;
+      resetsAt = new Date(reset).toISOString();
+    }
+    windows[window.slot] = { usedPercent: percent, resetsAt };
+    found = true;
+  }
+  return found ? windows : null;
+}
+
+/**
+ * Квота Z.ai: окна кредитов (нынешний формат monitor API), а без них — прежний единственный
+ * `TOKENS_LIMIT` без тегов периода, который официальный скрипт трактует как пятичасовое окно.
+ */
 export function zaiQuotaOf(value: unknown, at: string): ProviderLimits {
   const response = record(value);
   if (response?.success === false || response?.code === 401 || response?.code === '401') {
@@ -29,10 +76,12 @@ export function zaiQuotaOf(value: unknown, at: string): ProviderLimits {
   const data = record(response?.data);
   const limits = data?.limits;
   if (!Array.isArray(limits)) throw new ZaiQuotaError('unsupported_response');
+  const credits = creditWindows(limits, at);
+  if (credits !== null) return { ...credits, at, source: 'zai' };
   const tokens = limits.map(record).filter((item) => item?.type === 'TOKENS_LIMIT');
   if (tokens.length !== 1) throw new ZaiQuotaError('unsupported_response');
   const token = tokens[0]!;
-  // No verified mapping exists for typed/tagged windows, credit, tool, or monthly quotas.
+  // Прежний формат: у окна без кредитов тегов периода быть не должно — иначе его смысл не подтверждён.
   if (Object.hasOwn(token, 'unit') || Object.hasOwn(token, 'number')) throw new ZaiQuotaError('unsupported_response');
   const percentage = token.percentage;
   if (typeof percentage !== 'number' || !Number.isFinite(percentage)) throw new ZaiQuotaError('unsupported_response');
