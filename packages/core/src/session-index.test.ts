@@ -255,6 +255,70 @@ describe('indexSessionFile', () => {
     expect(index.tokens).toEqual({ input: 2, output: 240, cacheRead: 30, cacheWrite: 8 });
   });
 
+  it('usage: запись без полей кеша даёт неизвестный кеш и полный вход, а показ получает нули', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-nocache',
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-04T12:00:01.000Z',
+        message: { role: 'assistant', id: 'msg_a', usage: { input_tokens: 4, output_tokens: 9 } },
+      }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({
+      input: 4,
+      output: 9,
+      cacheRead: null,
+      cacheWrite: null,
+      totalInput: null,
+      completeness: 'complete',
+    });
+    // Для показа (`tokens`) неизвестное — ноль, решение потребителя; в `usage` оно осталось null.
+    expect(index.tokens).toEqual({ input: 4, output: 9, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('usage: явный ноль кеша — известный ноль, полный вход считается', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-zero',
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-04T12:00:01.000Z',
+        message: {
+          role: 'assistant',
+          id: 'msg_a',
+          usage: { input_tokens: 4, output_tokens: 9, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({ input: 4, cacheRead: 0, cacheWrite: 0, totalInput: 4, completeness: 'complete' });
+  });
+
+  it('usage: поле есть не у всех ответов — сумма неизвестна, итог неполный, известные поля суммируются', async () => {
+    const answer = (id: string, usage: Record<string, number>) =>
+      line({ type: 'assistant', timestamp: '2026-10-04T12:00:01.000Z', message: { role: 'assistant', id, usage } });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-mixed',
+      answer('msg_a', { input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 }) +
+        answer('msg_b', { input_tokens: 3, output_tokens: 20 }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({
+      input: 5,
+      output: 30,
+      cacheRead: null,
+      cacheWrite: null,
+      totalInput: null,
+      completeness: 'partial',
+    });
+  });
+
   it('usage: в публичном итоге нет ни id ответа, ни пути лога', async () => {
     const file = await writeSession(
       '-Users-me-proj',

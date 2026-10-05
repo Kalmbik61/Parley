@@ -160,8 +160,14 @@ export async function indexSessionFile(
       ledger.observe({
         kind: 'delta',
         id: record.messageId === null ? `line:${file}:${lineNo}` : `msg:${record.messageId}`,
-        // Для Claude `input_tokens` — вход без кэша, полный вход — сумма трёх частей.
-        counters: { input, output, cacheRead, cacheWrite, totalInput: input + cacheRead + cacheWrite },
+        // Для Claude `input_tokens` — вход без кэша, полный вход — сумма трёх частей; без любой из них неизвестен.
+        counters: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          totalInput: input === null || cacheRead === null || cacheWrite === null ? null : input + cacheRead + cacheWrite,
+        },
         at: record.timestamp,
       });
     }
@@ -225,6 +231,7 @@ export async function indexSessionFile(
   }
 
   const usage = ledger.summary();
+  // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
   const tokens: TokenTotals | null = hasUsage
     ? {
         input: usage.input ?? 0,
