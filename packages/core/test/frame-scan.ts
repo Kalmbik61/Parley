@@ -86,6 +86,13 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека провайдеров: пользователь разрешил хостовый GET квоты Z.ai с сохранённым ключом; только фиксированный read-only endpoint',
   },
   {
+    file: 'packages/host/src/limits/zai-check.ts',
+    rule: 'API провайдеров',
+    line: "const ZAI_MESSAGES_URL = 'https://api.z.ai/api/anthropic/v1/messages';",
+    reason:
+      'спека провайдеров: пользователь разрешил 2026-10-05 хостовое тестовое сообщение (max_tokens 1) с сохранённым ключом Z.ai по явной проверке; только этот фиксированный адрес',
+  },
+  {
     file: 'packages/core/src/providers.ts',
     rule: 'API провайдеров',
     line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",

@@ -25,7 +25,7 @@ import {
   newTool,
   parseTaskNotification,
 } from './reduce.js';
-import type { FeedState, FeedTool, FeedToolStatus } from './types.js';
+import type { FeedError, FeedState, FeedTool, FeedToolStatus } from './types.js';
 
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
 /** Запись прерывания: «[Request interrupted by user]», «… for tool use]». */
@@ -36,6 +36,32 @@ const REJECTED = 'User rejected tool use';
 const LOCAL_COMMAND = /^\s*<local-command-(stdout|stderr|caveat)>/;
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+
+/** Claude Code logs retries without emitting a MessageDisplay or StopFailure hook. */
+export function retryFromTranscript(raw: RawRecord): FeedError | null {
+  if (raw['type'] !== 'system' || raw['subtype'] !== 'api_error' || raw['isSidechain'] === true) return null;
+  const at = textOf(raw['timestamp']);
+  const delayMs = raw['retryInMs'];
+  const attempt = raw['retryAttempt'];
+  const maxAttempts = raw['maxRetries'];
+  if (
+    at === null || !Number.isFinite(Date.parse(at)) ||
+    typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0 ||
+    typeof attempt !== 'number' || !Number.isSafeInteger(attempt) || attempt < 1 ||
+    typeof maxAttempts !== 'number' || !Number.isSafeInteger(maxAttempts) || maxAttempts < attempt
+  ) return null;
+  const error = isRecord(raw['error']) ? raw['error'] : null;
+  const message = textOf(error?.['formatted']) ?? textOf(error?.['message']) ?? textOf(raw['error']);
+  const status = error?.['status'];
+  return {
+    id: `retry:${textOf(raw['uuid']) ?? `${at}:${attempt}`}`,
+    at,
+    kind: 'error',
+    error: typeof status === 'number' && Number.isInteger(status) ? String(status) : 'api_error',
+    message,
+    retry: { delayMs, attempt, maxAttempts },
+  };
+}
 
 /**
  * Время записи прерывания человеком («[Request interrupted by user…]» — реплика пользователя в журнале);
@@ -210,6 +236,9 @@ export function feedFromTranscript(
       if (!record.isMeta) onUser(draft, raw, message?.['content'], at);
     } else if (record.type === 'assistant') {
       onAssistant(draft, raw, uuid, record.messageId, message?.['content'], at);
+    } else if (record.type === 'system' && raw['subtype'] === 'api_error') {
+      const retry = retryFromTranscript(raw);
+      if (retry !== null) draft.put(retry);
     } else if (record.type === 'system' && raw['subtype'] === 'turn_duration') {
       const duration = raw['durationMs'];
       const durationMs = typeof duration === 'number' ? duration : null;

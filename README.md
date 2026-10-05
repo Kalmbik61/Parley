@@ -238,13 +238,15 @@ The project rests on one boundary, and it is not up for discussion:
   keeps is a Z.ai API key that you paste in yourself to use GLM: it is stored only on this
   Mac (`~/.parley/secrets.json`, mode `0600`, under `PARLEY_HOME` when set), passed to GLM
   sessions running the official `claude`, and used by the host to read Z.ai quota metadata
-  from the fixed official monitor endpoint. The window receives only a key hint and validated limits;
+  from the fixed official monitor endpoint and to send a one-token test message when you check
+  the key. The window receives only a key hint, validated limits and the check outcome;
 - history directories (`~/.claude/projects`, `~/.codex/sessions`) are opened **read-only**;
   Parley writes nothing to `~/.claude` — hooks are passed with the `--settings` flag from a
   file in the workspace directory;
-- inference runs through the official CLI; the only provider API request made by Parley
-  itself is a read-only Z.ai quota query using the key you supplied. There is no wrapper
-  around Claude or Codex subscription tokens;
+- inference runs through the official CLI; the only provider API requests made by Parley
+  itself use the Z.ai key you supplied: a read-only quota query on Refresh limits and a
+  one-token test message to the GLM Coding Plan endpoint on "Check again" or when you save the
+  key. There is no wrapper around Claude or Codex subscription tokens;
 - `--dangerously-load-development-channels` is a documented flag of Claude Code itself
   (research preview, `code.claude.com/docs/en/channels`): it turns on a built-in client
   mechanism and does not modify the binary.
@@ -367,8 +369,8 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   (for the weekly window if there is no five-hour one)
   and "58% 5h · 41% wk". From 80% in either window the text and the bar use the accent color,
   and the tooltip says when the windows reset and when the CLI reported the numbers. With no
-  data the segment has no limits. GLM has no subscription-limit bar: Parley does not request
-  Z.ai quotas or show Claude subscription limits on GLM. When space runs short, the limits
+  data the segment has no limits. GLM never shows Claude subscription limits: its bar comes
+  only from the Z.ai quota, read on Refresh limits. When space runs short, the limits
   text disappears first
   (the bar stays), then the version, and the name last. Further right: the host's latest
   notice; "N need you · M unseen" — a click goes to the next such session or room; the
@@ -865,6 +867,10 @@ Other variables:
   the range 200…2,147,483,647 (`1` gives 200); a non-numeric value (empty, garbage) is
   ignored, and polling happens every 30 seconds. The window's E2E tests need it so as not to
   wait half a minute.
+- `PARLEY_GLM_CHECK_STUB` — `ok` or a check reason (`authentication`, `limit_reached`,
+  `network` and the others of `providers.check`): the GLM key check returns this outcome
+  without sending anything. Any other value is ignored. The window's E2E tests set it so as not
+  to send test messages to the real Z.ai.
 - `PARLEY_CODEX_STARTUP_MS` — within how many milliseconds after launch Codex must show a
   status (`Ready` or `Working`) before the session becomes "needs you" (a sign-in or folder
   trust screen); 20,000 by default. An integer from 100 to 600,000; any other value is
@@ -1364,6 +1370,20 @@ endpoint, `https://api.z.ai/api/anthropic`. You need an active GLM Coding Plan a
 unknown or unparseable version blocks GLM. Install or update Claude Code yourself, then use
 "Check again" in the GLM card.
 
+"Check again" in the GLM card, and saving a key, test the key for real. A key typed into the
+field is saved first, as with "Save"; with no key saved, the card says so. When the CLI and the
+key are in place, the host sends one test message (`max_tokens: 1`, model GLM-5.3) to
+`https://api.z.ai/api/anthropic/v1/messages`, the endpoint GLM sessions use; nothing is sent in
+the background or at host start. "Connected" means Z.ai answered it. Otherwise the card names
+the reason — key rejected, plan expired, no active plan, limit reached, model not in plan, key
+restricted, Z.ai busy, Z.ai error, no answer within 20 seconds, no connection or an unexpected
+answer — with a hint and the HTTP status and Z.ai error code. Only the status and code are
+kept, never the response text. The outcome survives a host restart in `glm-check.json` under
+Parley's home, stored with a SHA-256 fingerprint of the key instead of the key; saving or
+removing the key deletes it, so a new key starts unverified. Each check uses a tiny amount of
+your plan's allowance. The check and the quota query go straight from the host and ignore the
+`HTTP_PROXY` and `HTTPS_PROXY` variables; a system-wide VPN works.
+
 Open the card from GLM in the status bar or the New session or room dialog. "Get a key" opens
 Z.ai; paste your key into the password field and choose "Save". You can save it before
 installing the CLI, but GLM becomes connected only when both the key and a supported CLI are
@@ -1407,8 +1427,8 @@ choice made in Chat is not separately persisted and may reset. Avoid `/logout` i
 it can change the shared local Claude Code sign-in used by your Claude sessions.
 
 GLM-5.3 is text-only; choose **GLM-5.3 Flash** for screenshots and other images. GLM has no
-Claude channel and no quota display: Parley never requests Z.ai quotas or shows Claude
-subscription limits on GLM. Parallel agents still share your plan's allowance and can receive
+Claude channel and never shows Claude subscription limits; its Z.ai quota is read only on
+Refresh limits. Parallel agents still share your plan's allowance and can receive
 429 errors. Custom GLM runner commands and templates containing `--bare`, `--safe-mode` or
 `--setting-sources` are refused before the key is delivered. Other safe registry overrides
 remain available; `secret`, `family`, provider environment and the minimum version cannot

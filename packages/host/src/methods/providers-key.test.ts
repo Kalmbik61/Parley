@@ -35,7 +35,13 @@ async function connect(): Promise<{ client: TestClient; greeting: RawMessage }> 
   return { client, greeting };
 }
 
-async function boot(options: { cli?: boolean; version?: () => string | null; providersJson?: unknown; limits?: HostOptions['limits'] } = {}) {
+async function boot(options: {
+  cli?: boolean;
+  version?: () => string | null;
+  providersJson?: unknown;
+  limits?: HostOptions['limits'];
+  glmCheck?: HostOptions['glmCheck'];
+} = {}) {
   home = await tempHome();
   const binary = path.join(home, 'claude-stub');
   if (options.cli !== false) {
@@ -46,7 +52,12 @@ async function boot(options: { cli?: boolean; version?: () => string | null; pro
   if (options.providersJson !== undefined) {
     await writeFile(path.join(home, 'providers.json'), JSON.stringify(options.providersJson));
   }
-  host = await startHost({ home, probeVersion: async () => options.version?.() ?? '2.1.287', ...(options.limits === undefined ? {} : { limits: options.limits }) });
+  host = await startHost({
+    home,
+    probeVersion: async () => options.version?.() ?? '2.1.287',
+    ...(options.limits === undefined ? {} : { limits: options.limits }),
+    ...(options.glmCheck === undefined ? {} : { glmCheck: options.glmCheck }),
+  });
   return connect();
 }
 
@@ -66,6 +77,60 @@ async function glm(client: TestClient) {
   const result = seen.at(-1)?.result as Result<'providers.list'>;
   return result.providers.find((provider) => provider.id === 'glm');
 }
+
+describe('providers.check over RPC', () => {
+  const message = (): Response => new Response(JSON.stringify({ type: 'message', content: [] }), { status: 200 });
+
+  it('объявлен в hello; без ключа — null без сети; с ключом — тестовое сообщение, исход в списке и событие', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => message());
+    const { client, greeting } = await boot({ glmCheck: { fetch } });
+    expect((greeting.result as Result<'hello'>).methods).toContain('providers.check');
+    expect((await rpc(client, 'providers.check', { provider: 'glm' })).at(-1)?.result).toEqual({ check: null });
+    expect(fetch).not.toHaveBeenCalled();
+    await rpc(client, 'providers.setKey', { provider: 'glm', key: 'synthetic-check-key' });
+    // Проверки ещё не было — исход неизвестен.
+    expect(await glm(client)).toMatchObject({ available: true, check: null });
+    const seen = await rpc(client, 'providers.check', { provider: 'glm' });
+    expect(seen.at(-1)?.result).toMatchObject({ check: { state: 'ok' } });
+    expect(seen).toContainEqual({ event: 'providers.changed', data: { provider: 'glm' } });
+    expect(await glm(client)).toMatchObject({ available: true, check: { state: 'ok' } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // Новый ключ — прежний исход про него ничего не говорит.
+    await rpc(client, 'providers.setKey', { provider: 'glm', key: 'synthetic-check-key-2' });
+    expect(await glm(client)).toMatchObject({ check: null });
+    // Remove уносит и файл исхода: отпечаток не переживает ключ.
+    await rpc(client, 'providers.check', { provider: 'glm' });
+    await readFile(path.join(home, 'glm-check.json'), 'utf8');
+    await rpc(client, 'providers.clearKey', { provider: 'glm' });
+    await expect(readFile(path.join(home, 'glm-check.json'), 'utf8')).rejects.toThrow();
+    const log = await readFile(hostPaths(home).log, 'utf8');
+    expect(log).not.toContain('synthetic-check-key');
+  });
+
+  it('отвергнутый ключ: причина и код в ответе и в списке, текста Z.ai нет', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+      new Response(JSON.stringify({ error: { code: '1000', message: 'upstream synthetic-bad-key' } }), { status: 401 }));
+    const { client } = await boot({ glmCheck: { fetch } });
+    await rpc(client, 'providers.setKey', { provider: 'glm', key: 'synthetic-bad-key' });
+    const reply = (await rpc(client, 'providers.check', { provider: 'glm' })).at(-1)?.result as Result<'providers.check'>;
+    expect(reply.check).toMatchObject({ state: 'failed', reason: 'authentication', httpStatus: 401, code: '1000' });
+    expect(JSON.stringify(reply)).not.toContain('upstream');
+    expect(await glm(client)).toMatchObject({ check: { state: 'failed', reason: 'authentication' } });
+  });
+
+  it('CLI ниже минимальной версии — null без сети', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const { client } = await boot({ version: () => '2.1.200', glmCheck: { fetch } });
+    await rpc(client, 'providers.setKey', { provider: 'glm', key: 'synthetic-old-cli' });
+    expect((await rpc(client, 'providers.check', { provider: 'glm' })).at(-1)?.result).toEqual({ check: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('провайдер, который ключ не хранит, — bad_request', async () => {
+    const { client } = await boot();
+    expect((await rpc(client, 'providers.check', { provider: 'claude' })).at(-1)?.error).toMatchObject({ code: 'bad_request' });
+  });
+});
 
 describe('provider readiness and key mutations over RPC', () => {
   it.each([false, true])('CLI present=%s: no key and saved key report coherent readiness', async (cli) => {

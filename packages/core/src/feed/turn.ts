@@ -6,7 +6,8 @@
 import type { FeedItem } from './types.js';
 
 /**
- * Ход идёт: после последнего `turn`/`error` есть промпт, вызов в работе или текст, который ещё пишется.
+ * Ход идёт: последняя ошибка ждёт ретрая, либо после последнего `turn`/окончательной ошибки есть
+ * промпт, вызов в работе или текст, который ещё пишется.
  * Карточки субагентов в счёт не идут: фоновый агент живёт и после конца хода родителя (решение 13).
  *
  * Промпт-слеш-команда (`/exit`, `/clear`, `/model`), после которой нет ничего, кроме `notice` и `turn`,
@@ -18,7 +19,8 @@ export function turnActive(items: readonly FeedItem[]): boolean {
   let quiet = true;
   for (let at = items.length - 1; at >= 0; at -= 1) {
     const item = items[at]!;
-    if (item.kind === 'turn' || item.kind === 'error') return false;
+    if (item.kind === 'turn') return false;
+    if (item.kind === 'error') return item.retry !== undefined;
     if (item.kind === 'prompt') {
       if (quiet && item.text.trim().startsWith('/')) continue;
       return true;

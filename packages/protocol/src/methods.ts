@@ -9,7 +9,7 @@ import type {
   WorktreeDiff,
 } from '@parley/core';
 import { feedDecision } from './feed.js';
-import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -31,6 +31,7 @@ export const METHODS = {
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
   'providers.refreshLimits': z.object({}),
+  'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
   'providers.clearKey': z.object({ provider: z.string() }),
@@ -200,6 +201,12 @@ export interface Results {
   'host.shutdown': { ok: true };
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
   'providers.refreshLimits': { ok: true };
+  /**
+   * Явная проверка сохранённого ключа тестовым сообщением (только у провайдера с ключом — GLM).
+   * `null` — провайдер не готов локально (нет CLI нужной версии или ключа: см. `providers.list.needs`),
+   * и запроса в сеть не было. Исход хост запоминает: дальше он приходит полем `providers.list.check`.
+   */
+  'providers.check': { check: ProviderCheck | null };
   'providers.list': {
     providers: Array<{
       id: string;
@@ -232,6 +239,12 @@ export interface Results {
        * Дальше числа приходят событием `providers.limitsChanged`.
        */
       limits?: ProviderLimits | null;
+      /**
+       * Исход последней явной проверки сохранённого ключа (`providers.check`), только у GLM. `null` —
+       * не проверяли или ключ с тех пор сменился. Необязательно по той же причине, что `limits`:
+       * хост, оставшийся с живыми сессиями, может не знать поля.
+       */
+      check?: ProviderCheck | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

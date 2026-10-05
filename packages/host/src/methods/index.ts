@@ -2,6 +2,7 @@ import type { MethodName, NotificationName } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
@@ -15,7 +16,13 @@ import { createFeedHandlers } from './feed.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
-import { createProvidersList, createProvidersClearKey, createProvidersSetKey, createProvidersRefreshLimits } from './providers.js';
+import {
+  createProvidersCheck,
+  createProvidersClearKey,
+  createProvidersList,
+  createProvidersRefreshLimits,
+  createProvidersSetKey,
+} from './providers.js';
 import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
@@ -38,6 +45,8 @@ export interface MethodDeps {
   providerVersions?: ProviderVersions;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
   limits?: LimitsService;
+  /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
+  glmCheck?: GlmCheckService;
 }
 
 /**
@@ -103,10 +112,11 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': worksDelete as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits) as AnyHandler,
-    'providers.setKey': createProvidersSetKey(deps.limits) as AnyHandler,
-    'providers.clearKey': createProvidersClearKey(deps.limits) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck) as AnyHandler,
+    'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck) as AnyHandler,
+    'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck) as AnyHandler,
     ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits) as AnyHandler }),
+    ...(deps.glmCheck === undefined ? {} : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck) as AnyHandler }),
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,

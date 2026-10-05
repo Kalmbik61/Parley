@@ -217,11 +217,12 @@ export interface FeedNotice extends FeedItemBase {
   notice: FeedNoticeData;
 }
 
-/** Ход оборвался ошибкой API (`StopFailure`, в журнале — `isApiErrorMessage`). */
+/** Ошибка API: окончательная (`StopFailure`) или повторная попытка из журнала. */
 export interface FeedError extends FeedItemBase {
   kind: 'error';
   error: string;
   message: string | null;
+  retry?: { delayMs: number; attempt: number; maxAttempts: number; resolved?: true };
 }
 
 /** Конец хода. */

@@ -35,6 +35,68 @@ describe('Z.ai quota parsing', () => {
   });
 });
 
+describe('Z.ai credit windows (monitor API, сверено живым ответом 2026-10-05)', () => {
+  // Живой ответ monitor API на тарифе Lite (числа и времена сброса — как пришли, ключа нет).
+  const NOW = '2026-10-05T16:50:00.000Z';
+  const fiveHour = { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2000, currentValue: 1018, remaining: 981, percentage: 50, nextResetTime: 1791220767696 };
+  const week = { type: 'CREDIT_LIMIT', unit: 6, number: 1, usage: 10000, currentValue: 3092, remaining: 6907, percentage: 30, nextResetTime: 1791672337984 };
+  const live = (limits: unknown[]) => ({ code: 200, msg: 'Operation successful', data: { limits, level: 'lite' }, success: true });
+
+  it('пятичасовое и недельное окна с временем сброса', () => {
+    expect(zaiQuotaOf(live([fiveHour, week]), NOW)).toEqual({
+      source: 'zai',
+      at: NOW,
+      fiveHour: { usedPercent: 50, resetsAt: '2026-10-05T17:19:27.696Z' },
+      week: { usedPercent: 30, resetsAt: '2026-10-10T22:45:37.984Z' },
+    });
+  });
+
+  it('одно из окон — второе остаётся неизвестным; без времени сброса — resetsAt: null', () => {
+    expect(zaiQuotaOf(live([week]), NOW)).toMatchObject({ fiveHour: null, week: { usedPercent: 30 } });
+    expect(zaiQuotaOf(live([{ ...fiveHour, nextResetTime: undefined }]), NOW)).toMatchObject({
+      fiveHour: { usedPercent: 50, resetsAt: null }, week: null,
+    });
+  });
+
+  it('пустое пятичасовое окно после сброса приходит без nextResetTime — 0 %, время сброса неизвестно', () => {
+    // Тот же ответ через 12 минут после сброса окна (живая проверка 2026-10-05).
+    const idle = { type: 'CREDIT_LIMIT', unit: 3, number: 5, usage: 2000, currentValue: 0, remaining: 2000, percentage: 0 };
+    expect(zaiQuotaOf(live([idle, week]), NOW)).toMatchObject({
+      fiveHour: { usedPercent: 0, resetsAt: null }, week: { usedPercent: 30 },
+    });
+  });
+
+  it('месячный MCP (TIME_LIMIT) и незнакомые сочетания unit/number не толкуются', () => {
+    const mcp = { type: 'TIME_LIMIT', unit: 5, number: 1, usage: 100, currentValue: 3, percentage: 3 };
+    expect(zaiQuotaOf(live([fiveHour, mcp, { ...week, unit: 5 }]), NOW)).toMatchObject({ fiveHour: { usedPercent: 50 }, week: null });
+    expect(() => zaiQuotaOf(live([{ ...fiveHour, number: 4 }, mcp]), NOW)).toThrow(expect.objectContaining({ reason: 'unsupported_response' }));
+  });
+
+  it('сброс дальше длины окна — коды значат не то, окно не толкуется', () => {
+    const tooFar = { ...fiveHour, nextResetTime: Date.parse(NOW) + 6 * 3_600_000 };
+    expect(zaiQuotaOf(live([tooFar, week]), NOW)).toMatchObject({ fiveHour: null, week: { usedPercent: 30 } });
+    expect(() => zaiQuotaOf(live([tooFar]), NOW)).toThrow(expect.objectContaining({ reason: 'unsupported_response' }));
+  });
+
+  it('два одинаковых окна или процент не числом — отказ, а не догадка', () => {
+    expect(() => zaiQuotaOf(live([fiveHour, { ...fiveHour, percentage: 70 }]), NOW)).toThrow(expect.objectContaining({ reason: 'unsupported_response' }));
+    expect(() => zaiQuotaOf(live([{ ...week, percentage: '30' }]), NOW)).toThrow(expect.objectContaining({ reason: 'unsupported_response' }));
+  });
+
+  it('кредитные окна главнее старого TOKENS_LIMIT; процент зажат в 0–100', () => {
+    expect(zaiQuotaOf(live([{ type: 'TOKENS_LIMIT', percentage: 90 }, { ...fiveHour, percentage: 120 }]), NOW)).toMatchObject({
+      fiveHour: { usedPercent: 100 }, week: null,
+    });
+  });
+
+  it('readZaiQuota на живом ответе отдаёт оба окна', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response(live([fiveHour, week])));
+    expect(await readZaiQuota('synthetic-key', { fetch, now: () => Date.parse(NOW) })).toMatchObject({
+      fiveHour: { usedPercent: 50 }, week: { usedPercent: 30 }, source: 'zai',
+    });
+  });
+});
+
 describe('bounded host transport', () => {
   it('uses raw Authorization once at the fixed endpoint without redirects', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response(payload()));

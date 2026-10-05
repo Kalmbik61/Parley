@@ -134,6 +134,8 @@ test.describe('подключение провайдеров на изолиро
       PARLEY_CLAUDE_BIN: stub, PARLEY_CODEX_BIN: path.join(home, 'absent-codex'),
       PARLEY_GLM_BIN: path.join(home, 'absent-glm-wrapper'), PARLEY_SKIP_VERSION_PROBE: '',
       PARLEY_TERMINAL_RENDERER: 'dom', STUB_LAUNCH_LOG: path.join(home, 'launches.jsonl'), STUB_HOOK_LOG: path.join(home, 'hooks.jsonl'),
+      // Проверка ключа после Save — тестовое сообщение Z.ai; E2E в сеть не ходит: хост отдаёт исход сам.
+      PARLEY_GLM_CHECK_STUB: 'ok',
     });
     const app = await electron.launch({ args: [mainEntry], env, ...(visual ? { slowMo: 350 } : {}) });
     running = app;
@@ -196,6 +198,7 @@ test.describe('подключение провайдеров на изолиро
     await expect(cardOf(window)).toContainText('Not connected');
     await save(cardOf(window), FIRST_KEY);
     await expect(cardOf(window)).toContainText('Connected');
+    await expect(cardOf(window)).toContainText('Test request OK');
     expect((await stat(path.join(home, 'secrets.json'))).mode & 0o777).toBe(0o600);
     // Проверяем только собственный временный файл, не показывая содержимое в ошибке.
     expect((await readFile(path.join(home, 'secrets.json'), 'utf8')).includes(FIRST_KEY)).toBe(true);

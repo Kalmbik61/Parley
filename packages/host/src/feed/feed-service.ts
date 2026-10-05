@@ -25,6 +25,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   isClaudeCode,
+  retryFromTranscript,
   settleCards,
   turnActive,
 } from '@parley/core';
@@ -442,6 +443,14 @@ export function createFeedService(
     if (transcript !== null) feed.transcriptPath = transcript;
 
     const update = applyHookEvent(feed.state, body, at());
+    const retry = feed.state.items.at(-1);
+    if (retry?.kind === 'error' && retry.retry !== undefined && retry.retry.resolved !== true &&
+      update.changes.some((item) => item.kind === 'text' || item.kind === 'prompt' || item.kind === 'turn' ||
+        (item.kind === 'tool' && item.agentId === undefined) || isCard(item))) {
+      const resolved = { ...retry, retry: { ...retry.retry, resolved: true as const } };
+      update.state = { ...update.state, items: update.state.items.map((item) => item.id === retry.id ? resolved : item) };
+      update.changes.push(resolved);
+    }
     commit(feed, update);
 
     const card = heldCard(feed, body, update.changes);
@@ -727,7 +736,8 @@ export function createFeedService(
    * окне). Его видно только записью «[Request interrupted by user…]» в журнале сессии — по изменению
    * журнала хост читает его хвост у лент с идущим ходом и, найдя запись новее начала хода, закрывает
    * ход чертой `interrupted`: идущие вызовы отклонены, ждущие карточки — `elsewhere`, их хукам `{}`.
-   * Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг.
+   * Из того же хвоста читаются `system/api_error`: ретраи не присылают хуков, но должны появляться
+   * в живой ленте. Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг.
    */
   let checkingInterrupts = false;
   let recheckInterrupts = false;
@@ -749,6 +759,21 @@ export function createFeedService(
           const records = await readTail(file);
           // За время чтения ход мог кончиться или начаться заново — тогда записи сверяются уже с ним.
           if (records === null || stopped || feed.state.turnStartedAt !== started) continue;
+          const seen = new Set(feed.state.items.map((item) => item.id));
+          const retries = records.flatMap((record) => {
+            const retry = retryFromTranscript(record);
+            if (retry === null || retry.at < started || seen.has(retry.id)) return [];
+            // A hook may have delivered recovered output while the log tail was being read.
+            if (feed.state.items.some((item) => item.at > retry.at && item.kind !== 'error')) return [];
+            seen.add(retry.id);
+            return [retry];
+          });
+          if (retries.length > 0) {
+            commit(feed, {
+              state: { ...feed.state, items: [...feed.state.items, ...retries] },
+              changes: retries,
+            });
+          }
           const latest = records
             .map(interruptedAt)
             .filter((time): time is string => time !== null)

@@ -26,7 +26,7 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { FeedItem } from '@parley/core';
+import type { FeedError, FeedItem } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
@@ -74,15 +74,20 @@ export interface FeedListProps {
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
-function WorkingRow({ since }: { since: string | null }): JSX.Element {
+function WorkingRow({ since, retry }: { since: string | null; retry: FeedError | null }): JSX.Element {
   const now = useNow(1000);
   const started = since === null ? Number.NaN : Date.parse(since);
   const elapsed = Number.isNaN(started) ? null : Math.max(0, now.getTime() - started);
+  const details = retry?.retry;
+  const seconds = details === undefined || retry === null ? 0
+    : Math.max(0, Math.ceil((Date.parse(retry.at) + details.delayMs - now.getTime()) / 1000));
   return (
     <div data-testid="chat-working" className="px-4 pb-3 pt-1">
       <div className="mx-auto flex w-full max-w-[860px] items-center gap-2 text-xs text-muted-foreground">
         <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-        <span>{elapsed === null ? S.chat.working : `${S.chat.working} ${formatDuration(elapsed)}`}</span>
+        <span role="status">{details === undefined
+          ? elapsed === null ? S.chat.working : `${S.chat.working} ${formatDuration(elapsed)}`
+          : `${S.chat.retryDelay(seconds)} · ${S.chat.retryAttempt(details.attempt, details.maxAttempts)}`}</span>
       </div>
     </div>
   );
@@ -129,6 +134,8 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
 });
 
 export function FeedList({ items, queued, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
+  const latest = items.at(-1);
+  const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
@@ -258,7 +265,7 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
             );
           })}
         </div>
-        {working === undefined ? null : <WorkingRow since={working.since} />}
+        {working === undefined ? null : <WorkingRow since={working.since} retry={activeRetry} />}
       </div>
       {atBottom ? null : (
         <Button
