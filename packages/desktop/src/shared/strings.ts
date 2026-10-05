@@ -232,6 +232,7 @@ export const S = {
     worktreeField: 'Own worktree',
     roleMissing: (role: string): string => `Role not found: ${role}. Pick another role or remove this agent.`,
     noWorktree: 'This project is not a Git repository, so agents share the project folder.',
+    singleDropsRecipe: 'A recipe and a mode apply to rooms of two or more agents. With one agent this starts a plain session without them.',
     gone: 'The recipe is no longer available. Choose it again or pick No recipe.',
     save: 'Save as recipe…', saveTitle: 'Save as recipe',
     saveHint: 'Saves the agents, mode and playbook as a project recipe in .parley/recipes.',

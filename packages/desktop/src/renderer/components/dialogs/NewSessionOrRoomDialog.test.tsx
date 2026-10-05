@@ -1167,6 +1167,27 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
     expect(callsOf('rooms.create')[0]).not.toHaveProperty('recipe');
   });
 
+  it('рецепт выбран, осталась одна строка: заметка, что рецепт и режим не сохранятся; создаётся обычная сессия', async () => {
+    await renderDialog();
+    await pick('Review');
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(rows()).toHaveLength(1);
+    expect(dialog().querySelector('[data-recipe-dropped]')?.textContent).toMatch(/starts a plain session without them/);
+    // Вернули вторую строку — заметки нет.
+    await addAgent();
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+  });
+
+  it('режим без рецепта при одной строке тоже не теряется молча; без рецепта и режима заметки нет', async () => {
+    await renderDialog();
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+    await addAgent();
+    await chooseOption(modeSelect(), 'Checklist');
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(dialog().querySelector('[data-recipe-dropped]')).not.toBeNull();
+  });
+
   it('заданное рецептом — явный выбор: провайдер, модель и усилие уходят и не перетираются умолчаниями роли', async () => {
     stubRecipes([recipeEntry('project:pinned', 'Pinned', 'free', [
       agentView({ role: 'builtin:critic', worktree: false, lead: true, provider: 'claude', model: 'sonnet', effort: 'high' }),
@@ -1318,6 +1339,21 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
       await waitFor(() => expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy());
       expect(vi.mocked(toast)).toHaveBeenCalledWith('Saved recipe Payments change');
       expect(callsOf('recipes.list').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('тронутый провайдер, который не определился (пустой у роли), в файл не уходит пустой строкой', async () => {
+      bridge.setHandler('roles.list', async () => ({ roles: [...ROLES, role('claude:blank', '')], diagnostics: [], partial: false }));
+      await renderDialog();
+      await addAgent();
+      await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'executor · Builtin');
+      fireEvent.click(providerRadio(1, 'Codex'));
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'blank · Claude');
+      await openSave();
+      typeIn('Recipe name', 'Blank'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(1));
+      expect(bridge.saveRecipeCalls[0]?.agents[1]).not.toHaveProperty('provider');
     });
 
     it('плейбук выбранного рецепта предлагается как основа и правится', async () => {

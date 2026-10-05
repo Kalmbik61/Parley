@@ -782,10 +782,12 @@ export function createActivityService(
           sessionId: session.id,
         };
         if (journals.has(refKey(ref)) && !renewed) recompute(ref);
-        // Первое чтение журнала новой сессии — читатель мог появиться раньше её
-        // (работа известна, сессия только что добавлена); после нового
+        // Журнал читается и у уже известной сессии: событие, дописанное в окно между созданием fs-наблюдателя
+        // и его реальным включением, наблюдатель теряет, и до следующей записи хука его не увидел бы никто.
+        // Чтение инкрементальное — без новых байт это один stat. Первое чтение журнала новой сессии —
+        // читатель мог появиться раньше её (работа известна, сессия только что добавлена); после нового
         // наблюдателя — всё, что хуки дописали без него.
-        else void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
       }
     }
     pruneRemoved(snapshot);

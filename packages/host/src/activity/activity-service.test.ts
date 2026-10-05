@@ -1,11 +1,12 @@
 import { mkdir, appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
   freezeUsage,
+  readMap,
   transitionSession,
   updateMap,
   workPaths,
@@ -96,6 +97,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> =>
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 };
+
+/**
+ * Метка сессии — с диска, а не из снимка works-сервиса: снимок обновляет fs-наблюдатель, и под нагрузкой
+ * его событие приходит поздно или теряется, тогда как проверяется запись автозаголовка в карту.
+ */
+const labelOnDisk = async (workId: string, sessionId: string): Promise<string | undefined> =>
+  (await readMap(project, workId)).sessions.find((s) => s.id === sessionId)?.label;
 
 const hook = (name: string, extra: Record<string, unknown> = {}): string =>
   `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
@@ -325,15 +333,10 @@ describe('createActivityService', () => {
     await a.start();
     // Индекс логов строится в фоне (не блокирует старт) — под общей сборкой
     // пакетов подключается заметно медленнее, чем в одиночном прогоне.
-    await waitFor(
-      () =>
-        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
-        'первый заголовок',
-      15_000,
+    await vi.waitFor(
+      async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('первый заголовок'),
+      { timeout: 30_000, interval: 25 },
     );
-
-    const afterAuto = w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId);
-    expect(afterAuto?.label).toBe('первый заголовок');
 
     // Переименовали руками — метка больше не NEW_LABEL.
     await updateMap(project, workId, (map) => {
@@ -350,9 +353,8 @@ describe('createActivityService', () => {
     );
     await settle(1500);
 
-    const final = w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId);
-    expect(final?.label).toBe('своё имя');
-  }, 40_000);
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe('своё имя');
+  }, 60_000);
 
   it('6b: ярлык в прежней русской записи (карта сборки до перевода) тоже получает автозаголовок', async () => {
     const { ref, workId } = await activeSession({ label: 'новая сессия', providerSessionId: 's-legacy' });
@@ -364,13 +366,11 @@ describe('createActivityService', () => {
 
     const w = await works();
     await activity(w).start();
-    await waitFor(
-      () =>
-        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
-        'заголовок из лога',
-      15_000,
+    await vi.waitFor(
+      async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('заголовок из лога'),
+      { timeout: 30_000, interval: 25 },
     );
-  }, 40_000);
+  }, 60_000);
 
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
     await activeSession({ launchedBy: 'host', createEventsDir: false });

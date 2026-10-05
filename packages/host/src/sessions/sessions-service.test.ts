@@ -48,14 +48,38 @@ async function initGitProject(dir: string): Promise<void> {
   await runGit('git', ['-C', dir, 'commit', '-m', 'первый']);
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
+/**
+ * `nudge` — подталкивание для ожидания, которое зависит от fs-наблюдателя: запись карты, сделанная сразу после
+ * `works.start()`, уходит раньше, чем наблюдатель проекта включился, и событие теряется (под нагрузкой это
+ * случалось). Холостая запись карты раз в секунду даёт сервису новое событие; сам запуск по-прежнему
+ * определяется диффом снимков, так что проверяемое поведение то же.
+ */
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 5000,
+  nudge?: () => Promise<unknown>,
+): Promise<void> {
   const started = Date.now();
+  let nudgedAt = started;
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > timeoutMs) throw new Error('не дождались условия');
+    const now = Date.now();
+    if (now - started > timeoutMs) throw new Error('не дождались условия');
+    if (nudge !== undefined && now - nudgedAt >= 1000) {
+      nudgedAt = now;
+      await nudge();
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+/**
+ * Тесты файла ждут настоящий процесс стаба или автозапуск через наблюдатель карт; под нагрузкой машины (полный
+ * прогон рядом с другими наборами) пять секунд по умолчанию — и для ожидания условия, и для самого теста — им
+ * хватало не всегда. Это верхняя граница, а не пауза: условие проверяется как и прежде и не ослаблено.
+ */
+const REAL_PROCESS_WAIT_MS = 20_000;
+vi.setConfig({ testTimeout: 30_000 });
 
 let broadcasts: Array<{ event: EventName; data: unknown }>;
 
@@ -121,7 +145,8 @@ afterEach(async () => {
   extraEnv = [];
   await Promise.all(worksServices.map((service) => service.stop()));
   worksServices = [];
-  await rm(project, { recursive: true, force: true });
+  // Процессы стаба после выхода ещё дописывают карту и журнал; повторы убирают гонку «каталог не пуст».
+  await rm(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 async function tempArgsFile(): Promise<string> {
@@ -148,7 +173,7 @@ interface StubArgs {
 }
 
 async function readArgs(file: string): Promise<StubArgs> {
-  await waitFor(() => existsSync(file));
+  await waitFor(() => existsSync(file), REAL_PROCESS_WAIT_MS);
   return JSON.parse(await readFile(file, 'utf8')) as StubArgs;
 }
 
@@ -639,8 +664,13 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     );
 
     expect(registered).toHaveLength(1);
-    await waitFor(() => unregistered.length > 0);
+    await waitFor(() => unregistered.length > 0, REAL_PROCESS_WAIT_MS);
     expect(unregistered).toEqual([launched.ref]);
+    // Обработчик выхода после снятия токена ещё записывает сессию в карту: тест не кончается раньше него.
+    await waitFor(async () => {
+      const map = await readMap(project, launched.ref.workId);
+      return map.sessions.find((candidate) => candidate.id === launched.ref.sessionId)?.lifecycle !== 'active';
+    }, REAL_PROCESS_WAIT_MS);
   });
 
   it('pty.start бросил — выданный токен снимается, ошибка доходит до вызывающего', async () => {
@@ -747,6 +777,8 @@ describe('autoLaunch: сервис', () => {
 
     await waitFor(
       async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === spawnedId)?.lifecycle === 'active',
+      REAL_PROCESS_WAIT_MS,
+      () => updateMap(project, work.work.id, () => undefined),
     );
 
     const map = await readMap(project, work.work.id);
@@ -1040,6 +1072,8 @@ describe('worktree (план, кусок 4.2)', () => {
     await waitFor(
       async () =>
         (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)?.lifecycle === 'active',
+      REAL_PROCESS_WAIT_MS,
+      () => updateMap(project, work.work.id, () => undefined),
     );
 
     const map = await readMap(project, work.work.id);

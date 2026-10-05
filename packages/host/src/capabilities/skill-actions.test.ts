@@ -21,7 +21,9 @@ beforeEach(async()=>{
  service.get(context.projectPath);await ready();
 });
 afterEach(async()=>{actions.dispose();scheduler.dispose();service.dispose();await rm(root,{recursive:true,force:true});});
-async function ready(){await vi.waitFor(()=>{const snapshot=service.get(context.projectPath);expect(snapshot.columns.claude.phase).toBe('ready');expect(snapshot.columns.codex.phase).toBe('ready');});}
+async function ready(){await vi.waitFor(()=>{const snapshot=service.get(context.projectPath);expect(snapshot.columns.claude.phase).toBe('ready');expect(snapshot.columns.codex.phase).toBe('ready');
+ // phase=ready ставится раньше, чем присвоены skillActions: без этого ожидание видит промежуточное состояние под нагрузкой
+ for(const row of snapshot.rows.filter(row=>row.kind==='skill'))for(const presence of[...row.claude,...row.codex])expect(presence.skillActions).toBeDefined();});}
 function params(){const snapshot=service.get(context.projectPath);const entry=snapshot.rows.find(row=>row.kind==='skill'&&row.name==='folder')!.claude[0]!;return{projectPath:context.projectPath,revision:snapshot.revision,provider:'claude' as const,presenceId:entry.id};}
 it('manual opaque source uses current private catalog, refreshes and removes only its owned link without changing model policy',async()=>{
  const before=service.get(context.projectPath),presence=before.rows.find(row=>row.kind==='skill')!.claude[0]!;

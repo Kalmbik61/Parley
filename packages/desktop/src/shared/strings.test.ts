@@ -297,7 +297,7 @@ it('decisions and room history labels are English, Share warns about Git and sec
 
 it('recipe labels are English, name every parse diagnostic and the template playbook stays short', () => {
   const R = S.recipes;
-  const labels = [R.field, R.none, R.loadFailed, R.modeField, R.worktreeField, R.noWorktree, R.gone, R.save, R.saveTitle, R.saveHint, R.nameField, R.descriptionField,
+  const labels = [R.field, R.none, R.loadFailed, R.modeField, R.worktreeField, R.noWorktree, R.singleDropsRecipe, R.gone, R.save, R.saveTitle, R.saveHint, R.nameField, R.descriptionField,
     R.fileField, R.playbookField, R.nameRequired, R.fileInvalid, R.needRoles, R.needAgents, R.confirmSave, R.back, R.replace, R.rename, R.noPlaybook,
     R.roleMissing('claude:x'), R.exists('x'), R.saved('X'), R.savedNotOpened('X'), R.chip('X'), R.playbookFor('X'), R.playbookTemplate, ...Object.values(R.reason)];
   for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }

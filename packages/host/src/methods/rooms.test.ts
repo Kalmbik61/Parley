@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addRoom,
   addSession,
@@ -21,6 +21,9 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+
+// Каждый тест поднимает хост и ждёт письма настоящих сессий: под нагрузкой машины пяти секунд по умолчанию мало.
+vi.setConfig({ testTimeout: 30_000 });
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -71,14 +74,37 @@ async function setup(): Promise<{ client: TestClient; dir: string; workId: strin
 }
 
 let nextId = 1;
+/**
+ * Чтение сокета, общее для параллельных `call()` одного клиента: ответы разбираются по id и откладываются
+ * в `stash`, а не достаются чужому вызову (иначе два `call` без ожидания съедают ответы друг друга и один виснет).
+ */
+const readers = new WeakMap<TestClient, { stash: Map<number, RawMessage>; reading: Promise<void> | null }>();
+function readerOf(client: TestClient): { stash: Map<number, RawMessage>; reading: Promise<void> | null } {
+  let reader = readers.get(client);
+  if (reader === undefined) {
+    reader = { stash: new Map(), reading: null };
+    readers.set(client, reader);
+  }
+  return reader;
+}
+
 /** Ответ на свой запрос: события хоста (`works.changed` и др.) идут тем же сокетом. */
 async function call(client: TestClient, method: string, params: unknown): Promise<RawMessage> {
   const id = nextId;
   nextId += 1;
+  const reader = readerOf(client);
   client.send({ id, method, params });
   for (;;) {
-    const message = await client.next();
-    if (message.id === id) return message;
+    const answer = reader.stash.get(id);
+    if (answer !== undefined) {
+      reader.stash.delete(id);
+      return answer;
+    }
+    // Одно чтение за раз: остальные вызовы ждут его же и перепроверяют свой id.
+    reader.reading ??= client.next().then((message) => {
+      if (typeof message.id === 'number') reader.stash.set(message.id, message);
+    }).finally(() => { reader.reading = null; });
+    await reader.reading;
   }
 }
 

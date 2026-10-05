@@ -63,10 +63,25 @@ async function writeClaudeSession(id: string, lines: string): Promise<string> {
   return file;
 }
 
-const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> => {
+/**
+ * `redo` повторяет запись раз в секунду: рекурсивный fs-наблюдатель включается не мгновенно, и запись сразу
+ * после `start()` под нагрузкой уходила раньше него и терялась. Повторяется та же запись (тот же заголовок), так
+ * что от повторов индекс не меняется — проверяется по-прежнему доставка через `watchSessions`, не опрос.
+ */
+const waitFor = async (
+  check: () => boolean,
+  timeoutMs = 5000,
+  redo?: () => Promise<unknown>,
+): Promise<void> => {
   const started = Date.now();
+  let redoneAt = started;
   while (!check()) {
-    if (Date.now() - started > timeoutMs) throw new Error('изменение не доехало до индекса');
+    const now = Date.now();
+    if (now - started > timeoutMs) throw new Error('изменение не доехало до индекса');
+    if (redo !== undefined && now - redoneAt >= 1000) {
+      redoneAt = now;
+      await redo();
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 };
@@ -155,11 +170,13 @@ describe('createLogIndex', () => {
     // болезнь у своего debounce-теста).
     await waitFor(() => idx.index(session({ providerSessionId: 's-01' }))?.title === 'старое', 15_000);
 
-    await appendFile(
-      path.join(claudeRoot, '-proj', 's-01.jsonl'),
-      `${JSON.stringify({ type: 'custom-title', customTitle: 'новое', sessionId: 's-01' })}\n`,
-    );
-    await waitFor(() => idx.index(session({ providerSessionId: 's-01' }))?.title === 'новое', 15_000);
+    const append = (): Promise<void> =>
+      appendFile(
+        path.join(claudeRoot, '-proj', 's-01.jsonl'),
+        `${JSON.stringify({ type: 'custom-title', customTitle: 'новое', sessionId: 's-01' })}\n`,
+      );
+    await append();
+    await waitFor(() => idx.index(session({ providerSessionId: 's-01' }))?.title === 'новое', 15_000, append);
   }, 40_000);
 
   it('onChange зовётся при изменении индекса', async () => {
@@ -170,10 +187,12 @@ describe('createLogIndex', () => {
     });
     await idx.start();
 
-    await writeClaudeSession(
-      's-02',
-      `${JSON.stringify({ type: 'custom-title', customTitle: 'новая', sessionId: 's-02' })}\n`,
-    );
-    await waitFor(() => calls > 0, 15_000);
+    const write = (): Promise<string> =>
+      writeClaudeSession(
+        's-02',
+        `${JSON.stringify({ type: 'custom-title', customTitle: 'новая', sessionId: 's-02' })}\n`,
+      );
+    await write();
+    await waitFor(() => calls > 0, 15_000, write);
   }, 40_000);
 });

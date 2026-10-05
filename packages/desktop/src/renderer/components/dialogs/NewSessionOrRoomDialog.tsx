@@ -377,9 +377,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
     const rowsOut: RecipeAgent[] = [];
     for (const row of agents) {
       if (row.role === null) return null;
+      // Тронутый, но не определившийся провайдер (null или пустая строка) в файл не идёт: пустое значение хост отвергает.
+      const providerId = providerIdOf(row);
       rowsOut.push({
         role: row.role, worktree: wantsWorktree(row), lead: row.key === lead, count: 1,
-        ...(row.providerTouched ? { provider: providerIdOf(row) ?? '' } : {}),
+        ...(row.providerTouched && providerId ? { provider: providerId } : {}),
         ...(row.modelTouched ? { model: row.model } : {}),
         ...(row.effortTouched ? { effort: row.effort } : {}),
       });
@@ -780,6 +782,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
               </Button>
             ) : null}
           </div>
+          {/* Рецепт и режим живут только у комнаты (спека рецептов, 5.3: не меньше двух агентов): у одной строки они молча терялись. */}
+          {!multi && (recipeId !== null || mode !== 'free') ? <p role="status" data-recipe-dropped className="m-0 text-xs text-neutral-700">{S.recipes.singleDropsRecipe}</p> : null}
           {multi && !worktreeAvailable && agents.some((row) => row.worktree === true) ? <p className="m-0 text-xs text-neutral-700">{S.recipes.noWorktree}</p> : null}
         </div>
         <DialogFooter className="items-center">

@@ -87,6 +87,38 @@ describe('usage лога Codex', () => {
     });
   });
 
+  it('явный ноль кэша — измеренный ноль: вход без кэша равен полному входу', async () => {
+    const file = await writeRollout(
+      meta + tokenCount('2026-10-04T12:00:01.000Z', { input_tokens: 500, cached_input_tokens: 0, output_tokens: 7 }),
+    );
+    const index = await indexCodexSession(file);
+    expect(index.usage).toMatchObject({ input: 500, cacheRead: 0, cacheWrite: null, totalInput: 500, completeness: 'complete' });
+    expect(index.tokens).toEqual({ input: 500, output: 7, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('нечисловое поле кэша — неизвестно, а не 0; легаси tokens не выдаёт полный вход за вход без кэша', async () => {
+    const file = await writeRollout(
+      meta +
+        line({
+          timestamp: '2026-10-04T12:00:01.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: { total_token_usage: { input_tokens: 500, cached_input_tokens: 'many', output_tokens: 7 } },
+          },
+        }),
+    );
+    const index = await indexCodexSession(file);
+    expect(index.usage).toMatchObject({ input: null, cacheRead: null, totalInput: 500, output: 7 });
+    // Для показа неизвестное — 0, но вход без кэша не равен 500: вычитать из него нечем.
+    expect(index.tokens).toEqual({ input: 0, output: 7, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('нет поля output: выход неизвестен, сумма не подменяется нулём', async () => {
+    const file = await writeRollout(meta + tokenCount('2026-10-04T12:00:01.000Z', { input_tokens: 500, cached_input_tokens: 100 }));
+    expect((await indexCodexSession(file)).usage).toMatchObject({ input: 400, output: null, totalInput: 500 });
+  });
+
   it('без token_count итог неизвестен; нативного id нет в публичном итоге', async () => {
     const index = await indexCodexSession(await writeRollout(meta));
     expect(index.usage).toMatchObject({ input: null, completeness: 'unknown' });
