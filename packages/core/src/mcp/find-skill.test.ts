@@ -122,4 +122,34 @@ describe('instance-local find_skill', () => {
     expect(JSON.parse((await find(client)).text).reason).toContain('no verified');
     expect((await readMap(project, work)).sessions[0]!.provider).toBe('glm');
   });
+
+  it('describes the reduced native list only in a confirmed mode, with names for Codex and the Claude names-only note', async () => {
+    const descriptionOf = async (overrides: Partial<McpContext>) => (await (await connect(overrides)).listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
+    const codex = (names = ['review-code']) => async () => ({ ...catalog('codex', project), skills: names.map(name => ({ ...catalog('codex', project).skills[0]!, name })) });
+    // Full list: the description promises nothing about a reduction.
+    expect(await descriptionOf({ skillNavigator: true, skillCatalog: codex() })).not.toContain('native skill list');
+    const reduced = await descriptionOf({ skillNavigator: true, skillListReduced: true, skillCatalog: codex() });
+    expect(reduced).toContain('native skill list is removed'); expect(reduced).toContain('"review-code"');
+    // Names unreadable: the phrase stays, names are not invented.
+    const noNames = await descriptionOf({ skillNavigator: true, skillListReduced: true, skillCatalog: async () => null });
+    expect(noNames).toContain('names could not be read'); expect(noNames).not.toContain('Available native names');
+    // Claude: names-only note in the confirmed mode, plain description otherwise.
+    const claude = { sessionId: 's-02', skillNavigator: true, skillCatalog: async () => catalog('claude', project) };
+    expect(await descriptionOf({ ...claude, skillListReduced: true })).toContain('shows names only');
+    expect(await descriptionOf(claude)).not.toContain('names only');
+  });
+
+  it('caps the Codex name list with a truncation marker and the number of hidden names', async () => {
+    const names = Array.from({ length: 400 }, (_, index) => `skill-${String(index).padStart(3, '0')}-with-a-rather-long-name`);
+    const adapter = async () => ({ ...catalog('codex', project), skills: names.map(name => ({ ...catalog('codex', project).skills[0]!, name })) });
+    const description = (await (await connect({ skillNavigator: true, skillListReduced: true, skillCatalog: adapter })).listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
+    const list = description.slice(description.indexOf('Available native names:'));
+    expect(list.length).toBeLessThan(3200);
+    expect(list).toContain('"skill-000-with-a-rather-long-name"'); expect(list).not.toContain('skill-399');
+    const hidden = Number(/and (\d+) more/.exec(list)?.[1]);
+    expect(hidden).toBeGreaterThan(0); expect(list.split('", "').length + hidden).toBe(400);
+    // A short list is shown whole, without a marker.
+    const short = (await (await connect({ skillNavigator: true, skillCatalog: async () => catalog('codex', project) })).listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
+    expect(short).not.toContain('more (');
+  });
 });

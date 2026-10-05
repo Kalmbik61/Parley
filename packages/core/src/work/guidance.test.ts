@@ -546,6 +546,29 @@ describe('optional skill navigator guidance', () => {
 });
 
 
+describe('фраза о сокращённом списке скиллов', () => {
+  const map = mapOf('Task', 'Goal');
+  const hint = ' find_skill — skills by task, if needed.';
+
+  it('без подтверждённого сокращения вставка о списке ничего не обещает', () => {
+    const full = systemGuidance(map, 's-01', { skillNavigator: true });
+    expect(full).toContain(hint);
+    expect(full).not.toContain('names only');
+    expect(full).not.toContain('no native skill list');
+    // Сокращение без навигатора в вставку не попадает вовсе.
+    expect(systemGuidance(map, 's-01', { skillList: 'names' })).toBe(systemGuidance(map, 's-01'));
+  });
+
+  it.each([['names', 'your skill list shows names only'], ['removed', 'no native skill list']] as const)('%s: фраза стоит в той же строке, строк не больше четырнадцати', (skillList, phrase) => {
+    const text = systemGuidance(map, 's-01', { skillNavigator: true, skillList });
+    expect(text).toContain(phrase);
+    expect(text).not.toContain(hint);
+    expect(text.split('\n')).toHaveLength(systemGuidance(map, 's-01', { skillNavigator: true }).split('\n').length);
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+});
+
+
 it('backlog hints share the guide line across full guidance combinations', () => {
   for (const goal of ['', 'Goal with\nline']) for (const enabled of [false, true]) {
     const text = systemGuidance(mapOf('Title', goal), 's-03', { skillNavigator: enabled });

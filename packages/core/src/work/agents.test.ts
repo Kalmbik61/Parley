@@ -160,6 +160,11 @@ describe('chosen native runner context projection', () => {
     for (const template of [PROVIDERS.codex.runner.args!, PROVIDERS.codex.runner.resumeArgs!])
       expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true, configArgs: [] });
   });
+  it('{skillCatalog} — служебная подстановка Parley: проверка контекста остаётся, в снимок она не попадает', () => {
+    const template = ['-c', '{mcpConfig}', '-c', '{skillCatalog}', '-c', 'skills.config=[{name="review",enabled=false}]', '{prompt}'];
+    expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true,
+      configArgs: ['-c', 'skills.config=[{name="review",enabled=false}]'] });
+  });
   it('canonicalizes literal human skills.config and inline config options, excluding comments', () => {
     const template = ['--config=skills.config=[{name="review",enabled=false}] # SECRET', '-cproject_root_markers=[".git"]', '{prompt}'];
     expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true,

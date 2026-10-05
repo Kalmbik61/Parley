@@ -16,6 +16,8 @@ export interface McpContext {
   roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
   /** Immutable launch environment snapshot. Absence is safely disabled for legacy sessions. */
   skillNavigator?: boolean;
+  /** Родной список скиллов этого запуска сокращён (снимок запуска, как и `skillNavigator`). */
+  skillListReduced?: boolean;
   nativeContextRevision?: string;
   /** Internal isolated adapter fixture; never protocol/environment input. */
   skillCatalog?: (session: WorkSession, cwd: string) => Promise<SkillCatalog | null>;
@@ -76,6 +78,7 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     // не наша настройка, и звонок остаётся выключенным.
     channel: envValue(env, 'CHANNEL') === '1',
     skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
+    ...(envValue(env, 'SKILL_LIST_REDUCED') === '1' ? { skillListReduced: true } : {}),
     ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
   };
 }

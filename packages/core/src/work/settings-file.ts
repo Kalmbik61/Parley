@@ -86,6 +86,8 @@ export interface StatusLineSetting {
 export interface SettingsFile {
   hooks: Record<string, HookMatcher[]>;
   statusLine: StatusLineSetting;
+  /** Только `false`: плагины, выключенные в этой сессии (мод jev при сокращённом списке скиллов). */
+  enabledPlugins?: Record<string, false>;
 }
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
@@ -133,6 +135,8 @@ export interface WorkSettingsOptions {
   hookUrl?: string;
   /** Какие события слать HTTP; по умолчанию — `FEED_HOOK_EVENTS`. */
   hookEvents?: readonly string[];
+  /** Точные id плагинов, которые выключаются только в этой сессии; пусто или нет — поля в файле нет. */
+  disablePlugins?: readonly string[];
 }
 
 function feedHook(url: string, event: string): HookHttp {
@@ -161,6 +165,7 @@ function feedHook(url: string, event: string): HookHttp {
 export function workSettings({
   hookUrl,
   hookEvents = FEED_HOOK_EVENTS,
+  disablePlugins = [],
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -180,7 +185,11 @@ export function workSettings({
       }
     }
   }
-  return { hooks, statusLine: { type: 'command', command: statusLineCommand() } };
+  return {
+    hooks,
+    statusLine: { type: 'command', command: statusLineCommand() },
+    ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
+  };
 }
 
 export function workSettingsJson(options: WorkSettingsOptions = {}): string {

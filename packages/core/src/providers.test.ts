@@ -981,6 +981,28 @@ describe('codex: запуск и возобновление (спека комн
     expect(args.at(-1)).toBe('# Работа w-0001');
   });
 
+  it('{skillCatalog}: без значения пара выпадает и аргументы прежние, со значением — отдельное -c для запуска и resume', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{skillCatalog}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{skillCatalog}');
+    expect(PROVIDERS.claude.runner.args).not.toContain('{skillCatalog}');
+    const plain = startCommand(PROVIDERS.codex, subs).args;
+    expect(plain.join(' ')).not.toContain('skills.include_instructions');
+    const resume = { ...subs, providerSessionId: 'uuid-1' };
+    expect(resumeCommand(PROVIDERS.codex, resume).args.join(' ')).not.toContain('skills.include_instructions');
+    const off = { ...subs, skillCatalog: 'skills.include_instructions=false' };
+    for (const [without, withFlag] of [
+      [plain, startCommand(PROVIDERS.codex, off).args],
+      [resumeCommand(PROVIDERS.codex, resume).args, resumeCommand(PROVIDERS.codex, { ...resume, ...off }).args],
+    ] as const) {
+      expect(withFlag).toHaveLength(without.length + 2);
+      const at = withFlag.indexOf('skills.include_instructions=false');
+      expect(withFlag[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(withFlag[at]!).value).toBe(false);
+      expect(withFlag.filter((_, index) => index !== at && index !== at - 1)).toEqual(without);
+    }
+    expect(substituteArgs(['-c', '{skillCatalog}', 'x'], {})).toEqual(['x']);
+  });
+
   it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
     for (const args of [
       startCommand(PROVIDERS.codex, subs).args,

@@ -1286,6 +1286,26 @@ const FIND_SKILL: Tool = {
     limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
   }, required: ['query'], additionalProperties: false },
 };
+// Подтверждённое сокращение родного списка (спека, 2.3): фраза о нём есть только тогда. Для Claude сокращение
+// включается только вместе с боевым каталогом (work/skill-reduction.ts, claudeSkillRoute): сейчас его нет.
+const CLAUDE_NAMES_ONLY = ' Your native skill list shows names only: this tool returns the descriptions.';
+const CODEX_NO_LIST = ' Your native skill list is removed: this tool returns descriptions, the names are below.';
+const CODEX_NO_LIST_NO_NAMES = ' Your native skill list is removed and its names could not be read: search with task words.';
+/** Потолок знаков в перечне имён описания: длиннее — перечень обрывается с признаком и числом непоказанных. */
+const NATIVE_NAMES_CHARS = 3000;
+function nativeNames(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  const shown: string[] = [];
+  let used = 0;
+  for (const name of names) {
+    const quoted = JSON.stringify(name);
+    if (used + quoted.length + 2 > NATIVE_NAMES_CHARS) break;
+    shown.push(quoted);
+    used += quoted.length + 2;
+  }
+  const rest = names.length - shown.length;
+  return ` Available native names: ${shown.join(', ')}${rest > 0 ? `, … and ${rest} more (find_skill finds them)` : ''}.`;
+}
 const NO_SKILL = 'No skill matched: work without one, or try other words';
 /** One process owns its promise cache. No shared/global catalog or per-search CLI startup. */
 function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find: (args: Record<string, unknown>) => Promise<unknown> } {
@@ -1321,10 +1341,14 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   return {
     async list() {
       const map = await readMap(context.projectPath, context.workId);
-      if (map.sessions.find(item => item.id === context.sessionId)?.provider !== 'codex') return FIND_SKILL;
+      const provider = map.sessions.find(item => item.id === context.sessionId)?.provider;
+      const reduced = context.skillListReduced === true;
+      if (provider === 'claude') return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
+      if (provider !== 'codex') return FIND_SKILL;
       const own = await target();
       const names = own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [];
-      return { ...FIND_SKILL, description: FIND_SKILL.description + (names.length ? ` Available native names: ${names.map(name => JSON.stringify(name)).join(', ')}.` : '') };
+      const lead = reduced ? (names.length ? CODEX_NO_LIST : CODEX_NO_LIST_NO_NAMES) : '';
+      return { ...FIND_SKILL, description: FIND_SKILL.description + lead + nativeNames(names) };
     },
     async find(args) {
       if (typeof args.query !== 'string' || !args.query.trim()) throw new Error('Skill search query must not be empty.');

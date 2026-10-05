@@ -42,6 +42,7 @@ import { addSession, removeSession, transitionSession, type NewSession } from '.
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
+import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction } from './skill-reduction.js';
 import { ensureStateDir } from './state-dir.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
@@ -237,12 +238,61 @@ async function plan(
     warnings.push(NO_CHANNEL_WARNING);
   }
 
+  // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
+  const nativeClaudeRole = role.nativeAgent !== null || (entry.id === 'claude' && options.layer?.nativeClaudeRole === true);
+  // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
+  const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
+
+  // Native context of the launch is computed before the command: the Codex reduction needs it confirmed.
+  // Only the actual chosen template/environment enters the LOCAL descriptor.
+  let nativeVerified = false;
+  if (skillNavigator) {
+    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
+    let descriptor: NativeContextDescriptor | null = null;
+    try {
+      const homeDir = await realpath(process.env.HOME ?? homedir());
+      const roots: NativeContextDescriptor['roots'] = { homeDir };
+      if (process.env.CODEX_HOME) roots.codexHome = await realpath(path.resolve(cwd, process.env.CODEX_HOME));
+      if (process.env.CLAUDE_CONFIG_DIR) roots.claudeConfigDir = await realpath(path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR));
+      const nativeCommand = entry.id === 'codex' && projection.verified ? await findRunnerBinary(entry.runner.command, process.env) : undefined;
+      descriptor = { version: 1, revision: nativeContextRevision, provider: session.provider, cwd: await realpath(cwd),
+        verified: projection.verified && nativeCommand !== undefined, ...(nativeCommand ? { command: nativeCommand } : {}),
+        configArgs: projection.configArgs, roots };
+    } catch { /* Unreadable roots/binary do not invent a native context. */ }
+    const written = descriptor !== null && await writeNativeContext(projectPath, workId, session.id, descriptor);
+    nativeVerified = written && descriptor?.verified === true;
+  }
+
+  // Сокращение родного списка скиллов — только при навигаторе и только там, где путь загрузки подтверждён
+  // (спека, 6.1): иначе список остаётся полным.
+  let skillList: 'names' | 'removed' | undefined;
+  let disablePlugins: string[] = [];
+  if (skillNavigator && entry.id === 'claude') {
+    const claude = await claudeSkillReduction({
+      nativeRole: nativeClaudeRole,
+      mcpRoute,
+      settingsFile: template.includes('{settingsFile}'),
+      cwd,
+      configDir: process.env.CLAUDE_CONFIG_DIR ? path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR) : path.join(process.env.HOME ?? homedir(), '.claude'),
+    });
+    if (claude.reduced) { skillList = 'names'; disablePlugins = claude.disablePlugins; }
+  } else if (skillNavigator && entry.id === 'codex' && mcpRoute) {
+    // Запись `codex` в providers.json заменяет шаблон целиком: без `{skillCatalog}` флаг не дойдёт, список остаётся полным.
+    if (!template.includes('{skillCatalog}')) {
+      diagnostics.push({
+        code: 'provider-override-gap',
+        message: 'Custom Codex runner has no {skillCatalog}; add this placeholder so the skill navigator can shorten the native skill list. The full list stays enabled.',
+      });
+    } else if (nativeVerified) skillList = 'removed';
+  }
+
   // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
   // `PARLEY_*` и `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
   const params = {
     workDir: paths.dir,
     sessionId: session.id,
     skillNavigator,
+    skillListReduced: skillList !== undefined,
     nativeContextRevision,
     env: process.env,
     ...(channel ? { channel } : {}),
@@ -252,7 +302,7 @@ async function plan(
   // значением `-c`, и лишний файл ему незачем.
   const file =
     entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, { skillNavigator, nativeContextRevision })
+      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, { skillNavigator, skillListReduced: skillList !== undefined, nativeContextRevision })
       : null;
   const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
 
@@ -272,12 +322,14 @@ async function plan(
       projectPath,
       workId,
       { ...(options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {}),
-        ...(skillNavigator ? { sessionId: session.id } : {}) },
+        ...(skillNavigator ? { sessionId: session.id } : {}),
+        ...(disablePlugins.length > 0 ? { disablePlugins } : {}) },
     );
   }
   // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
   // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
   // журналов хоста не встанет на каталог, которого нет.
+  if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   if (template.includes('{notify}')) {
     await ensureStateDir(projectPath);
     await mkdir(paths.events, { recursive: true });
@@ -285,7 +337,6 @@ async function plan(
   }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');
-  const nativeClaudeRole = role.nativeAgent !== null || (entry.id === 'claude' && options.layer?.nativeClaudeRole === true);
   if (options.layer?.role?.trim()) {
     const deliverable = nativeClaudeRole
       ? role.nativeAgent !== null && template.includes('{agent}')
@@ -319,7 +370,7 @@ async function plan(
       isLead: recipeBlock !== null,
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
-      guidance: systemGuidance(map, session.id, { skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined }),
+      guidance: systemGuidance(map, session.id, { skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined, ...(skillList === undefined ? {} : { skillList }) }),
       bridge,
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,
@@ -357,22 +408,8 @@ async function plan(
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
-  if (skillNavigator) {
-    // Only the actual chosen template/environment enters the LOCAL descriptor.
-    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
-    let descriptor: NativeContextDescriptor | null = null;
-    try {
-      const homeDir = await realpath(process.env.HOME ?? homedir());
-      const roots: NativeContextDescriptor['roots'] = { homeDir };
-      if (process.env.CODEX_HOME) roots.codexHome = await realpath(path.resolve(cwd, process.env.CODEX_HOME));
-      if (process.env.CLAUDE_CONFIG_DIR) roots.claudeConfigDir = await realpath(path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR));
-      const nativeCommand = entry.id === 'codex' && projection.verified ? await findRunnerBinary(entry.runner.command, process.env) : undefined;
-      descriptor = { version: 1, revision: nativeContextRevision, provider: session.provider, cwd: await realpath(cwd),
-        verified: projection.verified && nativeCommand !== undefined, ...(nativeCommand ? { command: nativeCommand } : {}),
-        configArgs: projection.configArgs, roots };
-    } catch { /* Unreadable roots/binary do not invent a native context. */ }
-    const written = descriptor !== null && await writeNativeContext(projectPath, workId, session.id, descriptor);
-    if (!written || !descriptor?.verified) warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
+  if (skillNavigator && skillList === undefined && !nativeVerified) {
+    warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
   }
   warnings.push(...diagnostics.map((warning) => warning.message));
   return {
@@ -384,7 +421,11 @@ async function plan(
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
-    env: bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+    env: {
+      ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
+        ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
+      ...(entry.id === 'claude' && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
+    },
     providerSessionId,
     warnings,
     diagnostics,

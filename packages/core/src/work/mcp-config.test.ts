@@ -362,3 +362,25 @@ describe('immutable navigator snapshot', () => {
     }
   });
 });
+
+describe('сокращённый список скиллов в окружении сервера', () => {
+  it('SKILL_LIST_REDUCED=1 есть в обоих форматах только у подтверждённого сокращения и не наследуется', () => {
+    const inherited = { PARLEY_SKILL_LIST_REDUCED: '1', HARNAS_SKILL_LIST_REDUCED: '1' };
+    for (const skillListReduced of [undefined, false] as const) {
+      const snapshot = { ...params, skillNavigator: true, ...(skillListReduced === undefined ? {} : { skillListReduced }), env: inherited };
+      const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+      const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+      for (const env of [json, table.env]) {
+        expect(env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+        expect(env).not.toHaveProperty('HARNAS_SKILL_LIST_REDUCED');
+      }
+    }
+    const snapshot = { ...params, skillNavigator: true, skillListReduced: true };
+    const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+    const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+    for (const env of [json, table.env]) {
+      expect(env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+      expect(env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
+    }
+  });
+});

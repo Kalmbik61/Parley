@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
 import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
+import { claudeSkillRoute } from './skill-reduction.js';
 import {
   applyAutoTitle,
   createChildSession,
@@ -62,6 +63,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  claudeSkillRoute.catalogReady = false;
   delete process.env['PARLEY_HOME'];
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
@@ -96,6 +98,22 @@ async function claudeTranscript(id: string): Promise<void> {
   const dir = path.join(logs, '-private-tmp-parley-project');
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, `${id}.jsonl`), '{"type":"user"}\n');
+}
+
+/**
+ * Конфигурация Claude Code этого теста: пустая папка вместо настоящего `~/.claude`, где у разработчика может стоять мод jev.
+ * Лежит внутри `home` и уходит вместе с ним.
+ */
+async function claudeConfig(plugins: Array<{ name?: string; folder?: string }> = []): Promise<string> {
+  const dir = path.join(home, 'claude-config');
+  await mkdir(dir, { recursive: true });
+  setEnv('CLAUDE_CONFIG_DIR', dir);
+  for (const plugin of plugins) {
+    const manifest = path.join(dir, 'skills', plugin.folder ?? 'jev-skill-suggestion', '.claude-plugin');
+    await mkdir(manifest, { recursive: true });
+    await writeFile(path.join(manifest, 'plugin.json'), JSON.stringify({ name: plugin.name ?? 'jev-skill-suggestion', version: '0.1.0' }));
+  }
+  return dir;
 }
 
 describe('создание pending сессии', () => {
@@ -1308,22 +1326,28 @@ describe('immutable skill navigator launch snapshot', () => {
     expect(launch.args.some(arg => arg.startsWith('skills.config='))).toBe(false);
     expect(resume.args.some(arg => arg.startsWith('skills.config='))).toBe(false);
   });
-  it('Claude unknown Skill route retains full native settings and explicit snapshot, with a safe warning', async () => {
+  it('Claude with a confirmed Skill route reduces the list: budget env, explicit snapshot, no unverified warning', async () => {
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
     setEnv('PARLEY_SKILL_NAVIGATOR', '1');
     const { workId, sessionId } = await pending('claude');
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
     const mcp = JSON.parse(await readFile(path.join(workPaths(project, workId).mcp, `${sessionId}.json`), 'utf8'));
     expect(mcp.mcpServers.parley.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    expect(mcp.mcpServers.parley.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
     expect(mcp.mcpServers.parley.env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(plan.env.PARLEY_NATIVE_CONTEXT_REVISION);
     expect((await readNativeContext(project, workId, sessionId))?.verified).toBe(false);
-    expect(plan.warnings.join(' ')).toContain('full native skill list');
-    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(plan.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+    expect(plan.warnings.join(' ')).not.toContain('full native skill list');
   });
 });
 
 describe('navigator launch settings and fallback', () => {
   it.each([false, true])('Claude quiet=%s uses session-local settings on actual start/resume only when enabled', async quiet => {
     const provider = 'claude';
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
     setEnv('PARLEY_AGENT_SKILLS', '0');
     setEnv('PARLEY_SKILL_NAVIGATOR', '0');
     const { workId, sessionId } = await pending(provider);
@@ -1348,7 +1372,7 @@ describe('navigator launch settings and fallback', () => {
       expect(await readFile(legacyFile, 'utf8')).toBe(legacy);
       expect(plan.args.join(' ')).toContain('find_skill');
       expect(plan.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
-      expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+      expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
       const settings = JSON.parse(await readFile(file, 'utf8'));
       expect(Object.keys(settings).sort()).toEqual(['hooks', 'statusLine']);
       expect(JSON.stringify(settings)).not.toContain('enabledPlugins');
@@ -1404,6 +1428,209 @@ describe('native Claude navigator permission gate', () => {
     }
   });
 });
+
+/** Значение пары `-c <ключ>=…` в аргументах Codex, если она есть. */
+const codexConfigValues = (args: string[]): string[] =>
+  args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
+const SKILL_FLAG = 'skills.include_instructions=false';
+
+describe('сокращение родного списка скиллов вместе с навигатором', () => {
+  it.each([['claude', 'planNew'], ['claude', 'planResume'], ['codex', 'planNew'], ['codex', 'planResume']] as const)(
+    '%s %s при выключенном навигаторе: ни переменной, ни флага, ни выключения плагинов',
+    async (provider, which) => {
+      await claudeConfig([{}]);
+      claudeSkillRoute.catalogReady = true;
+      setEnv('PARLEY_SKILL_NAVIGATOR', '0');
+      const { workId, sessionId } = await pending(provider);
+      const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+      if (provider === 'claude') await claudeTranscript(session.providerSessionId);
+      const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session);
+      expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+      expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+      expect(plan.env).not.toHaveProperty('HARNAS_SKILL_LIST_REDUCED');
+      expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
+      expect(plan.args.join(' ')).not.toContain('names only');
+      expect(plan.args.join(' ')).not.toContain('find_skill');
+      if (provider === 'claude') {
+        const settings = await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8');
+        expect(settings).toBe(workSettingsJson());
+        const mcp = JSON.parse(await readFile(path.join(workPaths(project, workId).mcp, `${sessionId}.json`), 'utf8'));
+        expect(mcp.mcpServers.parley.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+      } else {
+        const server = parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
+        expect(server.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+      }
+    },
+  );
+
+  it.each(['planNew', 'planResume'] as const)('Claude %s: у find_skill нет боевого каталога Claude — список полный, мод jev не трогаем, фразы об именах нет', async (which) => {
+    await claudeConfig([{}]);
+    claudeSkillRoute.catalogReady = false;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    await claudeTranscript(session.providerSessionId);
+    const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session, { hookUrl: 'http://127.0.0.1:40001/hooks' });
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+    expect(plan.args.join(' ')).not.toContain('names only');
+    const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
+    expect(settings).not.toHaveProperty('enabledPlugins');
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+  });
+
+  it.each(['planNew', 'planResume'] as const)('Claude %s: budget in the agent env only, jev absent — nothing disabled, hooks intact', async (which) => {
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    await claudeTranscript(session.providerSessionId);
+    const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session);
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(plan.env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
+    // The budget is a launch env, not a setting: neither the settings file nor the MCP config carries it.
+    const settingsText = await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8');
+    expect(settingsText).not.toContain('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(JSON.parse(settingsText)).not.toHaveProperty('enabledPlugins');
+    expect(settingsText).toBe(workSettingsJson());
+    expect(plan.args.join(' ')).toContain('skill list shows names only');
+    expect(plan.warnings.join(' ')).not.toContain('full native skill list');
+  });
+
+  it.each(['planNew', 'planResume'] as const)('Claude %s: installed jev is disabled by its exact id only in the session file', async (which) => {
+    await claudeConfig([{}]);
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    await claudeTranscript(session.providerSessionId);
+    const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session, { hookUrl: 'http://127.0.0.1:40001/hooks' });
+    const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+    expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
+    const settings = JSON.parse(await readFile(file, 'utf8'));
+    expect(settings.enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false });
+    // Everything else of the session file is as before: Parley hooks and statusLine are kept.
+    delete settings.enabledPlugins;
+    expect(settings).toEqual(JSON.parse(workSettingsJson({ hookUrl: 'http://127.0.0.1:40001/hooks' })));
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(plan.env).not.toHaveProperty('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS');
+    // The legacy work file and the human's own Claude config stay untouched.
+    expect(await exists(path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json'))).toBe(false);
+  });
+
+  it('Claude: the id comes from the install place — a renamed folder keeps the manifest name, a foreign plugin is left alone', async () => {
+    await claudeConfig([{ folder: 'my-copy' }, { name: 'other-plugin', folder: 'other' }]);
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
+    expect(settings.enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false });
+  });
+
+  it('Claude: jev installed but the runner has no {settingsFile} — it cannot be disabled, so the list stays full', async () => {
+    await claudeConfig([{}]);
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--mcp-config', '{mcpConfig}', '--append-system-prompt', '{systemPrompt}'] } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).toContain('find_skill');
+    expect(plan.args.join(' ')).not.toContain('names only');
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+  });
+
+  it('Claude: jev not installed and no {settingsFile} — nothing to disable, the list is reduced', async () => {
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--mcp-config', '{mcpConfig}', '--append-system-prompt', '{systemPrompt}'] } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+  });
+
+  it('Claude: a role without a confirmed Skill route (native agent or native layer) keeps the full list', async () => {
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('claude');
+    const session = await sessionOf(workId, sessionId);
+    const layered = await planNew(project, workId, session, { layer: { nativeClaudeRole: true } });
+    expect(layered.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(layered.args.join(' ')).not.toContain('names only');
+    expect(layered.warnings.join(' ')).toContain('full native skill list');
+    const mcp = JSON.parse(await readFile(path.join(workPaths(project, workId).mcp, `${sessionId}.json`), 'utf8'));
+    expect(mcp.mcpServers.parley.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+  });
+
+  it.each(['planNew', 'planResume'] as const)('Codex %s: -c skills.include_instructions=false through the template, names promised only now', async (which) => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('codex');
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'native-thread' };
+    const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session);
+    expect(codexConfigValues(plan.args).filter((value) => value === SKILL_FLAG)).toHaveLength(1);
+    expect(plan.args.indexOf(SKILL_FLAG)).toBeGreaterThan(0);
+    expect(plan.args[plan.args.indexOf(SKILL_FLAG) - 1]).toBe('-c');
+    expect(plan.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+    const server = parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
+    expect(server.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+    expect(server.env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
+    const layer = JSON.parse(plan.args.find((arg) => arg.startsWith('developer_instructions='))!.slice('developer_instructions='.length)) as string;
+    expect(layer).toContain('no native skill list');
+    expect(layer.split('\n').length).toBeLessThanOrEqual(14);
+    // The native context for find_skill is read without the flag: the names come from the full inventory.
+    expect((await readNativeContext(project, workId, sessionId))?.configArgs).toEqual([]);
+    expect(plan.warnings.join(' ')).not.toContain('full native skill list');
+  });
+
+  it('Codex: a custom runner without {skillCatalog} keeps the list full and gets provider-override-gap', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('codex');
+    // Same shape as the human's real override: own model and effort, {mcpConfig}, the prompt — no Parley placeholders besides it.
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: {
+      args: ['--model', 'm', '-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'],
+      resumeArgs: ['resume', '{providerSessionId}', '-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'],
+    } }));
+    for (const planner of [planNew, planResume]) {
+      const plan = await planner(project, workId, { ...(await sessionOf(workId, sessionId)), providerSessionId: 'native-thread' });
+      expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
+      expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+      expect(plan.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap']);
+      expect(plan.diagnostics?.[0]?.message).toContain('{skillCatalog}');
+      const layer = JSON.parse(plan.args.find((arg) => arg.startsWith('developer_instructions='))!.slice('developer_instructions='.length)) as string;
+      expect(layer).toContain('find_skill — skills by task, if needed.');
+      expect(layer).not.toContain('no native skill list');
+    }
+  });
+
+  it('Codex: a runner the context cannot verify gets no flag and the generic warning', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('codex');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: {
+      args: ['--profile', 'mine', '-c', '{mcpConfig}', '-c', '{developerInstructions}', '-c', '{skillCatalog}', '{prompt}'],
+    } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
+    expect(plan.diagnostics?.map((warning) => warning.code)).toEqual([]);
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+  });
+
+  it('Codex without {mcpConfig} has no find_skill, so its list is not reduced', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('codex');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: {
+      args: ['-c', '{developerInstructions}', '-c', '{skillCatalog}', '{prompt}'],
+    } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
+  });
+});
+
+const exists = async (file: string): Promise<boolean> => stat(file).then(() => true, () => false);
 
 describe('fresh canonical project memory on session assembly', () => {
   const codexLayer = (args: string[]): string => {

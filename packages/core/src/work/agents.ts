@@ -48,7 +48,7 @@ function nativeConfigArgs(entry: ProviderEntry): { args: string[]; unsupported: 
         const value = template[++i];
         if (value === undefined) return { args: [], unsupported: true };
         if (!value.includes('{')) args.push('-c', value);
-        else if (!['{mcpConfig}', '{developerInstructions}', '{notify}', '{sandbox}', 'model_reasoning_effort="{effort}"'].includes(value)) return { args: [], unsupported: true };
+        else if (!['{mcpConfig}', '{developerInstructions}', '{notify}', '{skillCatalog}', '{sandbox}', 'model_reasoning_effort="{effort}"'].includes(value)) return { args: [], unsupported: true };
       } else if (!['--no-daemon', '-a', 'on-request', '--model', '{model}', '{prompt}', 'resume', '{providerSessionId}'].includes(item)) {
         // Profiles, cwd and other permission switches are not represented by config/read.
         // No guessed merge: native role selection remains unavailable for that custom runner.
@@ -66,7 +66,7 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
   const configArgs: string[] = [];
   const knownGenerated = new Set(['tui.terminal_title', 'tui.notifications', 'tui.notification_method',
     'tui.notification_condition', 'project_doc_fallback_filenames']);
-  const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
+  const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{skillCatalog}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
   for (let i = 0; i < template.length; i++) {
     const item = template[i]!;
     if (item === '--no-daemon' || item === '{prompt}') continue;

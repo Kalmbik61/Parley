@@ -62,6 +62,22 @@ describe('workSettings', () => {
   });
 });
 
+describe('выключение плагинов в сессии (сокращение списка скиллов)', () => {
+  it('без disablePlugins файл побайтно прежний, поля enabledPlugins нет', () => {
+    expect(workSettingsJson({ disablePlugins: [] })).toBe(workSettingsJson());
+    expect(workSettings()).not.toHaveProperty('enabledPlugins');
+    expect(workSettingsJson()).not.toContain('enabledPlugins');
+  });
+
+  it('точные id уходят значением false, хуки и statusLine сохраняются', () => {
+    const plain = workSettings({ hookUrl: 'http://127.0.0.1:40001/hooks' });
+    const off = workSettings({ hookUrl: 'http://127.0.0.1:40001/hooks', disablePlugins: ['jev-skill-suggestion@skills-dir'] });
+    expect(off.enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false });
+    expect({ ...off, enabledPlugins: undefined }).toEqual({ ...plain, enabledPlugins: undefined });
+    expect(Object.keys(off.hooks)).toEqual(Object.keys(plain.hooks));
+  });
+});
+
 describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, решение 1)', () => {
   const URL = 'http://127.0.0.1:53123/hooks';
 
