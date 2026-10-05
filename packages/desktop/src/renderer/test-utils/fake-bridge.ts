@@ -623,6 +623,7 @@ export function createFakeBridge(): FakeBridge {
       },
       openBacklog: async () => ({ opened: true }),
       openDecision: async () => ({ opened: true }),
+      openSharedFile: async () => ({ opened: true }),
       parleyMd: async () => ({ exists: true, created: false }),
       saveRecipe: async (request) => {
         saveRecipeCalls.push(request);

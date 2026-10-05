@@ -1331,6 +1331,75 @@ describe('app:open-decision fixed accepted revision boundary', () => {
 });
 
 
+describe('app:open-shared-file known shared state files', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  const PLAN = 'w-01-r-01-pl-01-rev-00-abc.md';
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-shared-file-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    await mkdir(path.join(project, '.parley', 'plans'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'memory.md'), 'Memory'); await writeFile(path.join(project, '.parley', 'plans', PLAN), 'Plan');
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  const host = () => { const made = setup({ roots }); vi.mocked(made.connection.call).mockResolvedValue(snapshot); return made; };
+
+  it('opens memory.md and a plan of the shared directory of a known project', async () => {
+    const { ipcMain, openPath } = host();
+    expect(await ipcMain.invoke('app:open-shared-file', project, 'memory.md')).toEqual({ opened: true });
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'memory.md'));
+    await ipcMain.invoke('app:open-shared-file', project, `plans/${PLAN}`);
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'plans', PLAN));
+  });
+  it('rejects parent segments, absolute paths, unknown files and unsafe argument forms before any lookup or editor delivery', async () => {
+    const { ipcMain, openPath } = host();
+    for (const file of [42, '../memory.md', '../../etc/passwd', '/etc/passwd', path.join(project, '.parley', 'memory.md'), 'plans/../memory.md', 'plans/../../x.md',
+      'preferences.json', 'memory-suggestions.json', 'plans/sub/x.md', 'plans/.hidden.md', 'plans', 'memory.md\0', 'memory.md ', 'decisions/' + 'a'.repeat(300) + '.md'])
+      await expect(ipcMain.invoke('app:open-shared-file', project, file)).rejects.toThrow();
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0'])
+      await expect(ipcMain.invoke('app:open-shared-file', value, 'memory.md')).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled();
+  });
+  it('refuses symlinked files, a symlinked subdirectory and non-regular files', async () => {
+    const { ipcMain, openPath } = host();
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await rm(path.join(project, '.parley', 'memory.md')); await symlink(outside, path.join(project, '.parley', 'memory.md'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, 'memory.md')).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'plans'), { recursive: true }); await mkdir(path.join(project, 'elsewhere'));
+    await writeFile(path.join(project, 'elsewhere', PLAN), 'Foreign'); await symlink(path.join(project, 'elsewhere'), path.join(project, '.parley', 'plans'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, `plans/${PLAN}`)).rejects.toThrow();
+    await mkdir(path.join(project, '.parley', 'backlog.md'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, 'backlog.md')).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('refuses an unknown project and gives the same safe error for a missing file and a failing editor', async () => {
+    const { ipcMain, openPath } = host();
+    await expect(ipcMain.invoke('app:open-shared-file', path.join(project, 'other'), 'memory.md')).rejects.toThrow();
+    openPath.mockResolvedValue('/private editor error');
+    const failed = await Promise.resolve(ipcMain.invoke('app:open-shared-file', project, 'memory.md')).catch((value: unknown) => value);
+    expect(String(failed)).not.toContain('/private editor error'); expect(String(failed)).not.toContain(project);
+    const missing = await Promise.resolve(ipcMain.invoke('app:open-shared-file', project, 'history-shared/w-01-r-01.md')).catch((value: unknown) => value);
+    expect(String(missing)).not.toContain(project);
+  });
+  it('a linked worktree project opens the file of the main copy shared directory, never its own', async () => {
+    const run = (await import('node:util')).promisify((await import('node:child_process')).execFile);
+    const main = path.join(project, 'main'), participant = path.join(project, 'participant');
+    await mkdir(main);
+    await run('git', ['init', '-b', 'main', main]);
+    await run('git', ['-C', main, 'config', 'user.name', 'Fixture']); await run('git', ['-C', main, 'config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await run('git', ['-C', main, 'add', 'README.md']); await run('git', ['-C', main, 'commit', '-m', 'fixture']);
+    await run('git', ['-C', main, 'worktree', 'add', '-b', 'participant', participant]);
+    await mkdir(path.join(main, '.parley')); await writeFile(path.join(main, '.parley', 'memory.md'), 'Shared main memory');
+    snapshot = { entries: [{ projectPath: participant, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    const { ipcMain, openPath } = host();
+    expect(await ipcMain.invoke('app:open-shared-file', participant, 'memory.md')).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledWith(path.join(main, '.parley', 'memory.md'));
+    await expect(readFile(path.join(participant, '.parley', 'memory.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+
 describe('app:save-recipe project recipe boundary', () => {
   let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
   const agents = [

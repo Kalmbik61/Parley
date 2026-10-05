@@ -16,15 +16,15 @@ export interface MemoryPanelProps {
   supported: boolean;
   /** Номер подключения к хосту: новое подключение — новый запрос, старые ответы отбрасываются. */
   connection: number;
-  /** Открывает `memory.md` во вкладке файла; путь — внутри проекта. */
-  onOpenFile(relativePath: string): void;
+  /** Открывает `memory.md`: во вкладке файла (путь внутри проекта) или, при `shared`, через main (общий каталог вне проекта). */
+  onOpenFile(relativePath: string, shared: boolean): unknown;
   /** Сколько предложений ждёт решения: число в подписи вкладки. */
   onCount?(count: number): void;
 }
 
 type Kind = MemoryItemView['kind'];
 type Editor = { mode: 'add' | 'item' | 'suggestion'; id: string | null; kind: Kind; fact: string; details: string };
-type Failure = 'load' | 'action' | 'conflict' | 'undo-conflict';
+type Failure = 'load' | 'action' | 'conflict' | 'undo-conflict' | 'open';
 const KINDS: readonly Kind[] = ['fact', 'lesson', 'agreement'];
 
 /** Память проекта (спека памяти и журнала, 5): записи по разделам, Suggested, Add, Edit, Dismiss и Undo записей «по просьбе». */
@@ -77,6 +77,14 @@ export function MemoryPanel({ bridge, projectPath, supported, connection, onOpen
     } finally { if (generation.current === current) setBusy(false); }
   };
 
+  const openFile = async (): Promise<void> => {
+    if (!snapshot) return;
+    try {
+      // `false` — открывать некуда (нет работы проекта); исключение — main не смог открыть файл.
+      if (await onOpenFile(snapshot.file.relativePath, snapshot.file.shared === true) === false) setFailure('open');
+    } catch { setFailure('open'); }
+  };
+
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     if (!editor || projectPath === null || !snapshot || !editor.fact.trim()) return;
@@ -104,12 +112,13 @@ export function MemoryPanel({ bridge, projectPath, supported, connection, onOpen
   return <div className="space-y-3 text-sm">
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={busy} onClick={() => setReload(value => value + 1)}>{S.memory.refresh}</Button>
-      <Button size="sm" variant="outline" disabled={!snapshot?.file.exists} onClick={() => snapshot && onOpenFile(snapshot.file.relativePath)}>{S.memory.openFile}</Button>
+      <Button size="sm" variant="outline" disabled={!snapshot?.file.exists} onClick={() => { void openFile(); }}>{S.memory.openFile}</Button>
       <Button size="sm" disabled={busy || !snapshot} onClick={() => setEditor({ mode: 'add', id: null, kind: 'fact', fact: '', details: '' })}>{S.memory.addEntry}</Button>
     </div>
     {busy && snapshot === null && <p role="status" className="text-xs">{S.memory.loading}</p>}
     {failure === 'load' && <p role="alert" className="text-destructive">{S.memory.loadFailed}</p>}
     {failure === 'action' && <p role="alert" className="text-destructive">{S.memory.failed}</p>}
+    {failure === 'open' && <p role="alert" className="text-destructive">{S.memory.openFailed}</p>}
     {failure === 'conflict' && <p role="alert" className="text-destructive">{S.memory.conflict}</p>}
     {failure === 'undo-conflict' && <p role="alert" className="text-destructive">{S.memory.undoConflict}</p>}
     {snapshot?.diagnostics.map(row => <p key={row.code} role="status" className="text-xs text-muted-foreground">{S.memory.ignore[row.code]}</p>)}

@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createParleyMd, sharedProjectPaths } from '@parley/core';
-import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -542,6 +542,28 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (result) throw new HostError('internal', 'The decision file could not be opened.');
       return { opened: true };
     } catch { throw new HostError('internal', 'The decision file could not be opened.'); }
+  }));
+
+  // Файл общего каталога состояния проекта, когда тот лежит вне папки проекта (linked worktree): окно называет путь
+  // относительно каталога, только из известного набора (SHARED_FILE_PATH). Каталог строит main сам; ссылки и подмена отсекаются.
+  ipcMain.handle('app:open-shared-file', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !SHARED_FILE_PATH.test(file))
+      throw new HostError('bad_request', 'Invalid shared file request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.dir, ...file.split('/'));
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The shared file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The shared file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The shared file could not be opened.'); }
   }));
 
   // Save as recipe: окно присылает данные рецепта и основу имени файла, не путь. Пишется только файл рецепта в каталоге

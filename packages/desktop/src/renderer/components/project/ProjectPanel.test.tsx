@@ -323,6 +323,28 @@ describe('Memory and Search tabs in the existing project panel', () => {
     expect(Object.values(useFilesStore.getState().reveals)).toEqual([{ line: 4, col: 1 }]);
     expect(close).toHaveBeenCalledWith(false);
   });
+  it('in a linked worktree a shared-file result and the Memory button open through main, not a project tab', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, ...MEMORY_METHODS, 'history.search'] } });
+    bridge.setHandler('history.search', () => found([{ source: 'plans', title: 'Shared plan', excerpt: 'Shared plan', date: null,
+      file: 'plans/w-01-r-01-pl-01-rev-00-abc.md', sharedFile: true, line: 3, complete: true }]));
+    bridge.setHandler('memory.get', () => memory({ file: { relativePath: '.parley/memory.md' as const, exists: true, shared: true } }));
+    const open = vi.spyOn(bridge.app, 'openSharedFile');
+    const close = vi.fn(); render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={close} />);
+    await search(); fireEvent.click(await screen.findByRole('button', { name: 'Open file: Shared plan' }));
+    await waitFor(() => expect(open).toHaveBeenLastCalledWith(PROJECT, 'plans/w-01-r-01-pl-01-rev-00-abc.md'));
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Memory (1)' }), { button: 0 });
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file' }));
+    await waitFor(() => expect(open).toHaveBeenLastCalledWith(PROJECT, 'memory.md'));
+    expect(open).toHaveBeenCalledTimes(2); expect(tabsOf()).toEqual([]); expect(close).not.toHaveBeenCalled();
+  });
+  it('a refused shared-file open is reported in the Search tab', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, 'history.search'] } });
+    bridge.setHandler('history.search', () => found([{ source: 'memory', title: 'PTY flake', excerpt: 'PTY flake', date: null, file: 'memory.md', sharedFile: true, complete: true }]));
+    vi.spyOn(bridge.app, 'openSharedFile').mockRejectedValueOnce(new Error('SECRET'));
+    render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+    await search(); fireEvent.click(await screen.findByRole('button', { name: 'Open file: PTY flake' }));
+    await screen.findByText('The result could not be opened.'); expect(document.body.textContent).not.toContain('SECRET');
+  });
   it('room and session results open their tabs; a missing room or workspace is reported and nothing opens', async () => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, 'history.search'] } });
     bridge.setHandler('history.search', () => found([

@@ -1,8 +1,8 @@
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readProjectMemory, rememberProjectMemory } from '@parley/core';
+import { addProjectMemory, readProjectMemory, rememberProjectMemory } from '@parley/core';
 import { createMemoryHandlers } from './memory.js';
 
 let root: string;
@@ -28,6 +28,19 @@ describe('memory.get', () => {
     const snapshot = await get();
     expect(snapshot).toMatchObject({ projectPath: project, file: { relativePath: '.parley/memory.md', exists: false }, items: [], suggestions: [], undoable: [] });
     expect(await readdir(project)).not.toContain('.parley');
+  });
+  it('в обычном проекте признака общего каталога нет, в linked worktree он есть', async () => {
+    expect((await get()).file).not.toHaveProperty('shared');
+    const { execFile } = await import('node:child_process'); const { promisify } = await import('node:util');
+    const git = (...args: string[]) => promisify(execFile)('git', args);
+    const main = path.join(root, 'main'), participant = path.join(root, 'participant');
+    await mkdir(main); await git('init', '-b', 'main', main);
+    await git('-C', main, 'config', 'user.name', 'Fixture'); await git('-C', main, 'config', 'user.email', 'fixture@example.invalid');
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await git('-C', main, 'add', 'README.md'); await git('-C', main, 'commit', '-m', 'fixture');
+    await git('-C', main, 'worktree', 'add', '-b', 'participant', participant);
+    await addProjectMemory(participant, { kind: 'lesson', fact: 'Needle' });
+    expect((await handlers['memory.get']({ projectPath: participant })).file).toEqual({ relativePath: '.parley/memory.md', exists: true, shared: true });
+    expect(JSON.stringify(await handlers['memory.get']({ projectPath: participant }))).not.toContain(root + path.sep + 'main');
   });
   it('в снимке нет служебного состояния и абсолютных путей', async () => {
     await suggest();

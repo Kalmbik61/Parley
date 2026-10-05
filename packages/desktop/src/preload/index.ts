@@ -210,6 +210,7 @@ const bridge = {
     },
     openBacklog: (projectPath: string) => ipcRenderer.invoke('app:open-backlog', projectPath),
     openDecision: (projectPath: string, file: string) => ipcRenderer.invoke('app:open-decision', projectPath, file),
+    openSharedFile: (projectPath: string, file: string) => ipcRenderer.invoke('app:open-shared-file', projectPath, file),
     parleyMd: (projectPath: string, create: boolean) =>
       ipcRenderer.invoke('app:parley-md', projectPath, create) as Promise<{ exists: boolean; created: boolean }>,
     saveRecipe: (request: RecipeSaveRequest) => ipcRenderer.invoke('app:save-recipe', request) as Promise<RecipeSaveResult>,

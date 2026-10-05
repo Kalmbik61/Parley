@@ -149,6 +149,11 @@ export interface ParleyBridge {
     openBacklog: (projectPath: string) => Promise<{ opened: boolean }>;
     /** Main-only: opens one accepted journal revision (`file` is a journal file name, never a path) of a known project. */
     openDecision: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
+    /**
+     * Main-only: opens one known file of the project's shared state directory (`file` is a path relative to it, such as
+     * `memory.md` or `plans/<name>.md`, never absolute) when that directory lives outside the project folder.
+     */
+    openSharedFile: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
     parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
     /** Save as recipe: main пишет только `.parley/recipes/<имя>.md` известного проекта и открывает файл; занятое имя — `exists`. */
     saveRecipe(request: RecipeSaveRequest): Promise<RecipeSaveResult>;

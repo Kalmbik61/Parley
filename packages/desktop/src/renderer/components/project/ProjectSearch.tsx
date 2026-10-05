@@ -7,9 +7,10 @@ import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 
-/** Куда ведёт находка: файл проекта на строке, комната или сессия работы. */
+/** Куда ведёт находка: файл проекта на строке, файл общего каталога (открывает main), комната или сессия работы. */
 export type SearchTarget =
   | { kind: 'file'; path: string; line?: number }
+  | { kind: 'shared-file'; file: string }
   | { kind: 'room'; workId: string; roomId: string }
   | { kind: 'session'; workId: string; sessionId: string };
 
@@ -20,8 +21,8 @@ export interface ProjectSearchProps {
   supported: boolean;
   /** Номер подключения к хосту: новое подключение — чистый поиск, старые ответы отбрасываются. */
   connection: number;
-  /** Открывает цель; `false` — работы, комнаты или сессии уже нет. */
-  onOpen(target: SearchTarget): boolean;
+  /** Открывает цель; `false` — работы, комнаты или сессии уже нет, отказ — ошибка открытия. */
+  onOpen(target: SearchTarget): boolean | Promise<boolean>;
 }
 
 type Scope = keyof typeof S.projectSearch.scopes;
@@ -58,9 +59,9 @@ export function ProjectSearch({ bridge, projectPath, supported, connection, onOp
     }).finally(() => { if (generation.current === current) setBusy(false); });
   };
 
-  const open = (target: SearchTarget): void => {
+  const open = async (target: SearchTarget): Promise<void> => {
     setNotice(null);
-    try { if (!onOpen(target)) setNotice('gone'); } catch { setNotice('open-failed'); }
+    try { if (!await onOpen(target)) setNotice('gone'); } catch { setNotice('open-failed'); }
   };
 
   if (!supported) return <p role="status" className="text-sm">{S.projectSearch.unavailable}</p>;
@@ -69,11 +70,11 @@ export function ProjectSearch({ bridge, projectPath, supported, connection, onOp
   const actions = (hit: HistoryHitView): JSX.Element[] => {
     const out: JSX.Element[] = [];
     if (hit.file !== undefined) out.push(<Button key="file" size="xs" variant="outline" aria-label={`${S.projectSearch.openFile}: ${hit.title}`}
-      onClick={() => open({ kind: 'file', path: hit.file!, ...(hit.line === undefined ? {} : { line: hit.line }) })}>{S.projectSearch.openFile}</Button>);
+      onClick={() => { void open(hit.sharedFile ? { kind: 'shared-file', file: hit.file! } : { kind: 'file', path: hit.file!, ...(hit.line === undefined ? {} : { line: hit.line }) }); }}>{S.projectSearch.openFile}</Button>);
     if (hit.workId !== undefined && hit.roomId !== undefined) out.push(<Button key="room" size="xs" variant="outline" aria-label={`${S.projectSearch.openRoom}: ${hit.title}`}
-      onClick={() => open({ kind: 'room', workId: hit.workId!, roomId: hit.roomId! })}>{S.projectSearch.openRoom}</Button>);
+      onClick={() => { void open({ kind: 'room', workId: hit.workId!, roomId: hit.roomId! }); }}>{S.projectSearch.openRoom}</Button>);
     if (hit.workId !== undefined && hit.sessionId !== undefined) out.push(<Button key="session" size="xs" variant="outline" aria-label={`${S.projectSearch.openSession}: ${hit.title}`}
-      onClick={() => open({ kind: 'session', workId: hit.workId!, sessionId: hit.sessionId! })}>{S.projectSearch.openSession}</Button>);
+      onClick={() => { void open({ kind: 'session', workId: hit.workId!, sessionId: hit.sessionId! }); }}>{S.projectSearch.openSession}</Button>);
     return out;
   };
   return <div className="space-y-3 text-sm">

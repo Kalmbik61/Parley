@@ -102,5 +102,5 @@ export type { DecisionRef, DecisionsListResult, RoomHistoryStatusView, JournalMe
 export { MEMORY_SNAPSHOT_MAX_BYTES, memoryKind, memoryDiagnostic, memoryItemView, memorySuggestionView, memoryUndoView, memorySnapshot, memoryMethodSchemas } from './memory.js';
 export type { MemoryItemView, MemorySuggestionView, MemoryUndoView, MemorySnapshot, MemoryMethodName, MemoryMethodParams, MemoryMethodResults } from './memory.js';
 
-export { HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMIT, historySource, historyScope, historyHit, historySearchResult, historyMethodSchemas } from './history.js';
+export { SHARED_FILE_PATH, HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMIT, historySource, historyScope, historyHit, historySearchResult, historyMethodSchemas } from './history.js';
 export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMethodParams, HistoryMethodResults } from './history.js';

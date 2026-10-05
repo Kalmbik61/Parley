@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addBacklogItem, addProjectMemory, addSession, createWork, setResult, updateMap } from '@parley/core';
 import { createHistoryHandlers } from './history.js';
@@ -62,5 +64,34 @@ describe('history.search', () => {
     for (const params of [{ projectPath: 'relative', query: 'x' }, { projectPath: project, query: '' }, { projectPath: project, query: 'x', limit: 31 },
       { projectPath: project, query: 'x', scope: 'skills' }, { projectPath: project, query: 'x', extra: 1 }])
       await expect(handlers['history.search'](params as never)).rejects.toMatchObject({ code: 'bad_request', message: 'Invalid history search request.' });
+  });
+});
+
+describe('history.search в linked worktree: общий каталог лежит в основной копии', () => {
+  const git = (...args: string[]) => promisify(execFile)('git', args);
+  let participant: string;
+  beforeEach(async () => {
+    const main = path.join(root, 'main'); participant = path.join(root, 'participant');
+    await mkdir(main);
+    await git('init', '-b', 'main', main);
+    await git('-C', main, 'config', 'user.name', 'Fixture'); await git('-C', main, 'config', 'user.email', 'fixture@example.invalid');
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await git('-C', main, 'add', 'README.md'); await git('-C', main, 'commit', '-m', 'fixture');
+    await git('-C', main, 'worktree', 'add', '-b', 'participant', participant);
+    await addProjectMemory(participant, { kind: 'lesson', fact: 'Shared needle lesson' });
+    await addBacklogItem(participant, { title: 'Shared needle task' });
+  });
+  const found = () => handlers['history.search']({ projectPath: participant, query: 'needle' });
+  it('находка общего файла: путь внутри общего каталога, признак sharedFile, абсолютных путей нет', async () => {
+    const result = await found();
+    expect(result.hits.find(row => row.source === 'memory')).toMatchObject({ file: 'memory.md', sharedFile: true, id: 'm-001' });
+    expect(result.hits.find(row => row.source === 'backlog')).toMatchObject({ file: 'backlog.md', sharedFile: true, id: 'b-001' });
+    expect(result.hits.every(row => row.line === undefined || row.line > 0)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(root);
+  });
+  it('обычный проект общий признак не ставит: путь от папки проекта', async () => {
+    await addProjectMemory(project, { kind: 'lesson', fact: 'Plain needle lesson' });
+    const result = await handlers['history.search']({ projectPath: project, query: 'needle' });
+    expect(result.hits[0]).toMatchObject({ file: '.parley/memory.md' });
+    expect(result.hits[0]).not.toHaveProperty('sharedFile');
   });
 });

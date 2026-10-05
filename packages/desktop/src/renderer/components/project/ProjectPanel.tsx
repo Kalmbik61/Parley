@@ -175,8 +175,10 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
     } finally { if (generation.current === current) setActionBusy(false); }
   };
   /** Открывает место находки поиска: файл проекта на строке, комнату или сессию. `false` — цели уже нет. */
-  const openSearchTarget = (target: SearchTarget): boolean => {
+  const openSearchTarget = (target: SearchTarget): boolean | Promise<boolean> => {
     if (projectPath === null) return false;
+    // Общий каталог вне папки проекта (linked worktree) окно не показывает: файл открывает main во внешнем редакторе.
+    if (target.kind === 'shared-file') return bridge.app.openSharedFile(projectPath, target.file).then(result => result.opened);
     const mine = entries.filter(entry => entry.projectPath === projectPath);
     const entry = target.kind === 'file' ? mine.find(item => item.map.work.status === 'active') ?? mine[0]
       : mine.find(item => item.map.work.id === target.workId);
@@ -271,7 +273,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           <TabsContent value="memory" forceMount className="min-h-48 flex-1 overflow-auto data-[state=inactive]:hidden">
             <MemoryPanel bridge={bridge} projectPath={projectPath} supported={['memory.get', 'memory.add', 'memory.update', 'memory.accept', 'memory.dismiss', 'memory.undo'].every(method => methods.has(method))}
               connection={connection} onCount={setPendingMemory}
-              onOpenFile={path => { openSearchTarget({ kind: 'file', path }); }} />
+              onOpenFile={(path, shared) => openSearchTarget(shared ? { kind: 'shared-file', file: 'memory.md' } : { kind: 'file', path })} />
           </TabsContent>
           <TabsContent value="search" className="min-h-48 flex-1 overflow-auto">
             <ProjectSearch bridge={bridge} projectPath={projectPath} supported={methods.has('history.search')} connection={connection} onOpen={openSearchTarget} />

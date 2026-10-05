@@ -12,7 +12,7 @@ const result = (hits: HistoryHitView[], patch: Partial<HistorySearchView> = {}):
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 let bridge: FakeBridge;
-const onOpen = vi.fn<(target: SearchTarget) => boolean>(() => true);
+const onOpen = vi.fn<(target: SearchTarget) => boolean | Promise<boolean>>(() => true);
 const show = (patch: { projectPath?: string | null; supported?: boolean; connection?: number } = {}) =>
   <ProjectSearch bridge={bridge} projectPath={patch.projectPath === undefined ? PROJECT : patch.projectPath} supported={patch.supported ?? true}
     connection={patch.connection ?? 1} onOpen={onOpen} />;
@@ -65,6 +65,22 @@ describe('Search tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open session: Migrated the cache' }));
     expect(onOpen).toHaveBeenLastCalledWith({ kind: 'session', workId: 'w-0001', sessionId: 's-01' });
     expect(screen.queryByRole('button', { name: 'Open file: Migrated the cache' })).toBeNull();
+  });
+  it('a file of the shared directory opens as a shared-file target without a project path', async () => {
+    bridge.setHandler('history.search', () => result([hit({ file: 'memory.md', sharedFile: true })]));
+    render(show()); type('x'); submit(); await screen.findByText('PTY tests flake');
+    fireEvent.click(screen.getByRole('button', { name: 'Open file: PTY tests flake' }));
+    expect(onOpen).toHaveBeenLastCalledWith({ kind: 'shared-file', file: 'memory.md' });
+  });
+  it('an asynchronous open that fails or finds nothing is reported', async () => {
+    bridge.setHandler('history.search', () => result([hit({ file: 'memory.md', sharedFile: true })]));
+    render(show()); type('x'); submit(); await screen.findByText('PTY tests flake');
+    onOpen.mockRejectedValueOnce(new Error('SECRET'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open file: PTY tests flake' }));
+    await screen.findByText('The result could not be opened.'); expect(document.body.textContent).not.toContain('SECRET');
+    onOpen.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Open file: PTY tests flake' }));
+    await screen.findByText(/no longer exists/);
   });
   it('says so when the target no longer exists or cannot be opened', async () => {
     bridge.setHandler('history.search', () => result([hit()]));

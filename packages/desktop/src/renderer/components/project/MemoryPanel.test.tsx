@@ -15,7 +15,7 @@ const suggestion = { id: 'ms-01', kind: 'lesson' as const, fact: 'Compare flaky 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 let bridge: FakeBridge;
-const onOpenFile = vi.fn<(path: string) => void>();
+const onOpenFile = vi.fn<(path: string, shared: boolean) => unknown>();
 const onCount = vi.fn<(count: number) => void>();
 const show = (patch: { projectPath?: string | null; supported?: boolean; connection?: number } = {}) =>
   <MemoryPanel bridge={bridge} projectPath={patch.projectPath === undefined ? PROJECT : patch.projectPath} supported={patch.supported ?? true}
@@ -53,7 +53,18 @@ describe('Memory tab: entries and provenance', () => {
     bridge.setHandler('memory.get', () => snap({ items: [item()] }));
     render(show()); await screen.findByText('PTY tests flake in long-path worktrees');
     fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
-    expect(onOpenFile).toHaveBeenCalledWith('.parley/memory.md');
+    expect(onOpenFile).toHaveBeenCalledWith('.parley/memory.md', false);
+  });
+  it('a shared directory outside the project is announced to the callback, and a failed open is shown without details', async () => {
+    bridge.setHandler('memory.get', () => snap({ items: [item()], file: { relativePath: '.parley/memory.md', exists: true, shared: true } }));
+    render(show()); await screen.findByText('PTY tests flake in long-path worktrees');
+    fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
+    expect(onOpenFile).toHaveBeenLastCalledWith('.parley/memory.md', true);
+    onOpenFile.mockRejectedValueOnce(new Error('SECRET'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
+    await screen.findByText('memory.md could not be opened.'); expect(document.body.textContent).not.toContain('SECRET');
+    onOpenFile.mockReturnValueOnce(false); fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
+    await screen.findByText('memory.md could not be opened.');
   });
 });
 

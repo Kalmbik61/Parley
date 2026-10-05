@@ -174,6 +174,7 @@ export const S = {
     disconnected: 'Reconnect to the host to load project memory.',
     loading: 'Loading memory…', loadFailed: 'Project memory could not be loaded. Fix memory.md or try Refresh.',
     failed: 'The memory could not be updated. Refresh and try again.',
+    openFailed: 'memory.md could not be opened.',
     conflict: 'The memory changed. Refresh to see the current entries, then try again.',
     undoConflict: 'The entry was edited after it was remembered, so Undo kept it. Remove it by editing memory.md.',
     authors: { human: 'You', agent: 'Agent', unknown: 'Hand-written' },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyMethodSchemas, historySearchResult } from './history.js';
+import { SHARED_FILE_PATH, historyMethodSchemas, historySearchResult } from './history.js';
 import { METHODS } from './methods.js';
 
 const hit = { source: 'memory', title: 'PTY tests flake', excerpt: 'PTY tests flake in worktrees', date: null, file: '.parley/memory.md', line: 4, id: 'm-001', complete: true };
@@ -22,5 +22,15 @@ describe('поиск по прошлому: метод окна', () => {
     expect(historySearchResult.safeParse({ ...base, hits: [{ ...hit, hash: 'abc' }] }).success).toBe(false);
     expect(historySearchResult.safeParse({ ...base, hits: [{ ...hit, source: 'skills' }] }).success).toBe(false);
     expect(historySearchResult.safeParse({ ...base, hits: Array.from({ length: 31 }, () => hit) }).success).toBe(false);
+  });
+  it('sharedFile: только известный файл общего каталога', () => {
+    const base = { query: 'pty', scope: 'all', limit: 10, total: 1, unavailable: [] };
+    const ok = (file: string) => historySearchResult.safeParse({ ...base, hits: [{ ...hit, file, sharedFile: true }] }).success;
+    for (const file of ['memory.md', 'backlog.md', 'plans/w-01-r-01-pl-01-rev-00-abc.md', 'decisions/2026-10-05-w-01-r-01-p-01-rev-00.md', 'history-shared/w-01-r-01.md'])
+      expect(ok(file), file).toBe(true);
+    for (const file of ['.parley/memory.md', '../memory.md', '/etc/passwd', 'plans/../memory.md', 'preferences.json', 'plans/a/b.md', 'plans/.x.md'])
+      expect(ok(file), file).toBe(false);
+    expect(historySearchResult.safeParse({ ...base, hits: [{ ...hit, file: undefined, sharedFile: true }] }).success).toBe(false);
+    expect(SHARED_FILE_PATH.test('memory.md\n')).toBe(false);
   });
 });

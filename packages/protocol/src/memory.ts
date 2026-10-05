@@ -36,7 +36,9 @@ export const memoryUndoView = z.strictObject({ operationId, memoryId, fact: text
 
 export const memorySnapshot = z.strictObject({
   projectPath: project,
-  file: z.strictObject({ relativePath: z.enum(['.parley/memory.md', '.harnas/memory.md']), exists: z.boolean() }),
+  file: z.strictObject({ relativePath: z.enum(['.parley/memory.md', '.harnas/memory.md']), exists: z.boolean(),
+    /** Общий каталог лежит вне папки проекта (linked worktree): файл открывает только main (`app:open-shared-file`, `memory.md`). */
+    shared: z.literal(true).optional() }),
   /** Версия `memory.md`; её же ждут Edit и Add как `version`. */
   version,
   items: z.array(memoryItemView).max(10000),

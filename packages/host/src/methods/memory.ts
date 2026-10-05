@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   SharedStateError, acceptMemorySuggestion, addProjectMemory, dismissMemorySuggestion, inspectSharedIgnore, listMemorySuggestions,
@@ -31,6 +32,12 @@ function view(item: MemoryItem): MemoryItemView {
     amended: item.amendedByHuman === true || item.provenance?.amendedByHuman === true };
 }
 
+/** Общий каталог лежит вне папки проекта (linked worktree): файл памяти в окне открывает только main. */
+async function outside(projectPath: string, dir: string): Promise<boolean> {
+  const roots = [projectPath, await realpath(projectPath).catch(() => projectPath)];
+  return !roots.some(root => { const relative = path.relative(root, dir); return !relative.startsWith('..') && !path.isAbsolute(relative); });
+}
+
 /** Чтение ничего не пишет: версии файлов сверяются до и после, при расхождении чтение повторяется. */
 export async function readMemorySnapshot(projectPath: string, diagnostics: SharedDiagnostic[] = []): Promise<MemorySnapshot> {
   const paths = await sharedProjectPaths(projectPath);
@@ -42,7 +49,8 @@ export async function readMemorySnapshot(projectPath: string, diagnostics: Share
     const after = await Promise.all([readSharedFile(paths.memory), readSharedFile(paths.memorySuggestions)]);
     if (before.some((file, index) => file.version !== after[index]!.version)) continue;
     const assembled = { projectPath,
-      file: { relativePath: path.basename(paths.dir) === '.harnas' ? '.harnas/memory.md' : '.parley/memory.md', exists: before[0].version !== 'missing' },
+      file: { relativePath: path.basename(paths.dir) === '.harnas' ? '.harnas/memory.md' : '.parley/memory.md', exists: before[0].version !== 'missing',
+        ...(await outside(projectPath, paths.dir) ? { shared: true as const } : {}) },
       version: document.version, items: document.items.map(view),
       suggestions: suggestions.map(row => ({ id: row.id, kind: row.kind, fact: row.fact, details: row.details, why: row.why,
         ...(row.provenance.workId === undefined ? {} : { workId: row.provenance.workId }),
