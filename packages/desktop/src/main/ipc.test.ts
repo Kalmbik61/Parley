@@ -1264,3 +1264,68 @@ it('OpenBacklog resolves a known linked participant project to its corresponding
     await expect(readFile(path.join(participant, '.parley', 'backlog.md'))).rejects.toMatchObject({ code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+describe('app:open-decision fixed accepted revision boundary', () => {
+  const FIRST = '2026-10-05-w-01-r-01-p-01-rev-00.md';
+  const SECOND = '2026-10-06-w-01-r-01-p-01-rev-01.md';
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-decision-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    await mkdir(path.join(project, '.parley', 'decisions'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'decisions', FIRST), 'First accepted revision');
+    await writeFile(path.join(project, '.parley', 'decisions', SECOND), 'Second accepted revision');
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  /** Хост подтверждает перечисленные файлы; остальные не знает. */
+  function host(openable: string[]) {
+    const made = setup({ roots });
+    vi.mocked(made.connection.call).mockImplementation((async (method: string, params: { query?: string }) => method === 'works.list' ? snapshot
+      : { decisions: openable.filter(file => file === params.query).map(file => ({ file, openable: true })), total: 1, partial: false, errors: [] }) as never);
+    return made;
+  }
+  it('opens exactly the requested accepted revision, confirmed by the host list, and nothing else', async () => {
+    const { ipcMain, connection, openPath } = host([FIRST, SECOND]);
+    expect(await ipcMain.invoke('app:open-decision', project, FIRST)).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledTimes(1); expect(openPath).toHaveBeenCalledWith(path.join(project, '.parley', 'decisions', FIRST));
+    await ipcMain.invoke('app:open-decision', project, SECOND);
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'decisions', SECOND));
+    expect(connection.call).toHaveBeenCalledWith('decisions.list', { projectPath: project, query: FIRST, limit: 10 });
+  });
+  it('refuses a file the host does not confirm as an openable accepted revision', async () => {
+    const { ipcMain, openPath } = host([]);
+    await expect(ipcMain.invoke('app:open-decision', project, FIRST)).rejects.toThrow();
+    const unlisted = host([FIRST]);
+    await expect(unlisted.ipcMain.invoke('app:open-decision', project, SECOND)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(unlisted.openPath).not.toHaveBeenCalled();
+  });
+  it('rejects paths, foreign names, unsafe argument forms and unknown projects before any lookup or editor delivery', async () => {
+    const { ipcMain, connection, openPath } = host([FIRST]);
+    for (const file of [42, '../' + FIRST, '/etc/passwd', 'notes.md', FIRST + 'x', `sub/${FIRST}`, FIRST + '\0', 'a'.repeat(300) + '.md'])
+      await expect(ipcMain.invoke('app:open-decision', project, file)).rejects.toThrow();
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0'])
+      await expect(ipcMain.invoke('app:open-decision', value, FIRST)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled();
+    expect(vi.mocked(connection.call).mock.calls.some(call => call[0] === 'decisions.list')).toBe(false);
+  });
+  it('refuses a symlinked or non-regular journal file even when the host lists it', async () => {
+    const { ipcMain, openPath } = host([FIRST, SECOND]);
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await rm(path.join(project, '.parley', 'decisions', FIRST)); await symlink(outside, path.join(project, '.parley', 'decisions', FIRST));
+    await expect(ipcMain.invoke('app:open-decision', project, FIRST)).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'decisions', SECOND)); await mkdir(path.join(project, '.parley', 'decisions', SECOND));
+    await expect(ipcMain.invoke('app:open-decision', project, SECOND)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('a missing file and a failing editor give the same fixed safe error', async () => {
+    const { ipcMain, openPath } = host([FIRST]);
+    openPath.mockResolvedValue('/private editor error');
+    const failed = await Promise.resolve(ipcMain.invoke('app:open-decision', project, FIRST)).catch((value: unknown) => value);
+    expect(String(failed)).not.toContain('/private editor error');
+    await rm(path.join(project, '.parley', 'decisions', FIRST));
+    const missing = await Promise.resolve(ipcMain.invoke('app:open-decision', project, FIRST)).catch((value: unknown) => value);
+    expect(String(missing)).not.toContain(project);
+  });
+});

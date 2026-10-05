@@ -284,3 +284,13 @@ it('describes closed-work plan controls without labeling pending delivery retry 
  expect(S.plans.workClosed).toBe('Reopen this workspace to change the plan.');
  expect(S.plans.retry).toBe('Retry pending deliveries');
 });
+
+it('decisions and room history labels are English, Share warns about Git and secrets, Unshare does not promise history removal', () => {
+  const walk = (value: unknown): string[] => typeof value === 'string' ? [value] : typeof value === 'function' ? [String((value as (n: never) => string)(1 as never))]
+    : value && typeof value === 'object' ? Object.values(value).flatMap(walk) : [];
+  for (const label of [...walk(S.decisions), ...walk(S.roomHistory)]) { expect(label).not.toMatch(CYRILLIC); expect(label.length).toBeGreaterThan(0); }
+  expect(S.roomHistory.shareWarning).toContain('shared Git files'); expect(S.roomHistory.shareWarning).toContain('secrets');
+  expect(S.roomHistory.unshareWarning).toContain('Previous Git commits retain it');
+  expect(S.roomHistory.sharedAt('2026-10-05T10:00:00.000Z')).toMatch(/^Shared at /);
+  expect(S.decisions.open).toBe('Open accepted revision');
+});

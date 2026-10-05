@@ -94,3 +94,7 @@ export type { PlanMethodName, PlanMethodParams, PlanMethodResults, PlanActionRes
 export { capabilitySkillActions } from './capability-snapshot.js';
 export { capabilitySkillTarget, capabilitySkillResult, capabilitySkillMethodSchemas } from './capability-skill-actions.js';
 export type { CapabilitySkillTarget, CapabilitySkillResult, CapabilitySkillMethodResults } from './capability-skill-actions.js';
+
+export { DECISIONS_LIST_MAX_LIMIT, DECISIONS_LIST_DEFAULT_LIMIT, DECISION_FILE_NAME, decisionState, decisionRef, decisionListErrorCode,
+  decisionsListResult, historyState, historyDiagnostic, roomHistoryStatus, historyErrorCode, journalMethodSchemas } from './journal.js';
+export type { DecisionRef, DecisionsListResult, RoomHistoryStatusView, JournalMethodName, JournalMethodParams, JournalMethodResults } from './journal.js';

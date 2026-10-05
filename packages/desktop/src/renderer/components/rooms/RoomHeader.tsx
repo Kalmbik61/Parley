@@ -11,13 +11,15 @@ import { ParticipantStrip } from './ParticipantStrip.js';
 
 export interface RoomHeaderProps {
   modeControl?: ReactNode;
+  /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
+  historyMenu?: ReactNode;
   title: string;
   subtitle: string;
   participants: readonly ParticipantModel[];
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl, historyMenu }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -32,6 +34,7 @@ export function RoomHeader({ title, subtitle, participants, onOpenSession, modeC
         </span>
       </div>
       {modeControl}
+      {historyMenu}
       <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
     </div>
   );

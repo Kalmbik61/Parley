@@ -16,6 +16,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createBacklogHandlers } from './backlog.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
+import { createJournalHandlers } from './journal.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
@@ -69,6 +70,7 @@ export const WORKS_GATED_METHODS = [
   'plans.cancel',
   'plans.retryEffects',
   'works.list',
+  'decisions.list',
   'sessions.create',
   'sessions.resume',
   'sessions.stop',
@@ -117,6 +119,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     ...createBacklogHandlers(deps.backlog),
+    ...createJournalHandlers(deps.works),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,

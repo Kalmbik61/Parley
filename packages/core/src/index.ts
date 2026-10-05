@@ -451,9 +451,9 @@ export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanL
 export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 
-export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError } from './work/decision-journal.js';
-export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult } from './work/decision-journal.js';
-export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, RoomHistoryError } from './work/room-history.js';
-export type { RoomHistoryResult, RoomHistoryCode } from './work/room-history.js';
+export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
+export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';
+export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, readRoomHistoryStatus, RoomHistoryError } from './work/room-history.js';
+export type { RoomHistoryResult, RoomHistoryCode, RoomHistoryState, RoomHistoryStatus } from './work/room-history.js';
 export { searchHistory, HistorySearchError, HISTORY_SCOPES } from './work/history-search.js';
 export type { HistoryHit, HistoryScope, HistorySource, HistorySearchInput, HistorySearchResult } from './work/history-search.js';

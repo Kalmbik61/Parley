@@ -59,6 +59,7 @@ import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel } from './feed-model.js';
 import { RoomHeader } from './RoomHeader.js';
+import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
 
 export interface RoomPanelProps {
@@ -342,7 +343,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
-      <RoomHeader modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div

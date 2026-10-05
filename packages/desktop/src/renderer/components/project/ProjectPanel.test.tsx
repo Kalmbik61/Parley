@@ -246,3 +246,26 @@ it('keeps Suggested count live before tab selection and opens only a prepared sa
   expect(useUiStore.getState().dialogs.newSession.work).toEqual({ projectPath: PROJECT, workId: 'w-01' }); expect(close).toHaveBeenCalledWith(false);
   expect(bridge.calls.some(row => row.method === 'backlog.take')).toBe(false);
 });
+
+describe('Decisions tab in the existing project panel', () => {
+  const decision = { file: '2026-10-05-w-01-r-01-p-01-rev-01.md', workId: 'w-01', roomId: 'r-01', proposalId: 'p-01', rev: 1,
+    acceptedAt: '2026-10-05T10:00:00.000Z', title: 'Ship it', kind: 'decision' as const, state: 'accepted' as const, openable: true };
+  it('loads only when the tab is opened and opens the clicked revision through the fixed bridge path', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, 'decisions.list'] } });
+    bridge.setHandler('decisions.list', () => ({ decisions: [decision], total: 1, partial: false, errors: [] }));
+    const open = vi.spyOn(bridge.app, 'openDecision');
+    render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+    await screen.findByRole('tab', { name: 'Decisions' });
+    expect(bridge.calls.some(call => call.method === 'decisions.list')).toBe(false);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Decisions' }), { button: 0 });
+    await screen.findByText('Ship it');
+    fireEvent.click(screen.getByRole('button', { name: 'Open accepted revision: Ship it' }));
+    expect(open).toHaveBeenCalledWith(PROJECT, decision.file);
+  });
+  it('an old host shows the decisions tab as unavailable without calling it', async () => {
+    render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Decisions' }), { button: 0 });
+    await screen.findByText(/does not support the decisions list/);
+    expect(bridge.calls.some(call => call.method === 'decisions.list')).toBe(false);
+  });
+});

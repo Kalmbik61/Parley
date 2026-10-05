@@ -612,6 +612,7 @@ export function createFakeBridge(): FakeBridge {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);
       },
       openBacklog: async () => ({ opened: true }),
+      openDecision: async () => ({ opened: true }),
       parleyMd: async () => ({ exists: true, created: false }),
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });

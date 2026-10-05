@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createParleyMd, sharedProjectPaths } from '@parley/core';
-import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -516,6 +516,31 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (result) throw new HostError('internal', 'The backlog file could not be opened.');
       return { opened: true };
     } catch { throw new HostError('internal', 'The backlog file could not be opened.'); }
+  }));
+
+  // One accepted journal revision. The renderer names a file, never a path: the host list must confirm that exact file
+  // as an accepted (or retained) revision, then the fixed canonical location is checked before the editor opens it.
+  ipcMain.handle('app:open-decision', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !DECISION_FILE_NAME.test(file))
+      throw new HostError('bad_request', 'Invalid decision request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const listed = await connection.call('decisions.list', { projectPath, query: file, limit: 10 }) as Result<'decisions.list'>;
+      if (!listed.decisions.some(row => row.file === file && row.openable))
+        throw new HostError('not_found', 'The accepted revision is unavailable.');
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.decisions, file);
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The decision file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The decision file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The decision file could not be opened.'); }
   }));
 
   ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {

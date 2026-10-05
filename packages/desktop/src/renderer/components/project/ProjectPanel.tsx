@@ -9,6 +9,7 @@ import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { RoleChip } from '../../lib/role-summary.js';
 import { BacklogPanel } from './BacklogPanel.js';
+import { DecisionsPanel } from './DecisionsPanel.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/dialog.js';
@@ -181,7 +182,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           </Button>
         </section>
         <Tabs defaultValue="capabilities">
-          <TabsList aria-label={S.projectPanel.title}><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger></TabsList>
+          <TabsList aria-label={S.projectPanel.title}><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger></TabsList>
           <TabsContent value="capabilities" className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-xs text-muted-foreground">{S.projectPanel.appliesToNew}</p>
@@ -222,6 +223,10 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                 role={suggestion.author.role} sessionRef={{ projectPath: suggestion.author.projectPath,
                   workId: suggestion.author.workId, sessionId: suggestion.author.sessionId }} bridge={bridge} revision={suggestion.author.revision} /></span>
                 : `${suggestion.workId}/${suggestion.sessionId}`} />
+          </TabsContent>
+          <TabsContent value="decisions" className="space-y-3">
+            <DecisionsPanel bridge={bridge} projectPath={projectPath} supported={methods.has('decisions.list')} connection={connection}
+              onOpen={async (project, file) => { await bridge.app.openDecision(project, file); }} />
           </TabsContent>
         </Tabs>
       </div>

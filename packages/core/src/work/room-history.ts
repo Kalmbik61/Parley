@@ -220,6 +220,41 @@ async function operation(projectPath: string, workId: string, roomId: string, ac
     throw new RoomHistoryError('history-unavailable');
   }
 }
+export type RoomHistoryState = 'not-shared' | 'shared' | 'conflict';
+export interface RoomHistoryStatus {
+  state: RoomHistoryState;
+  /** Время выкладки — только если выложенный файл принадлежит Parley и не менялся; иначе `null`. */
+  sharedAt: string | null;
+  /** Версия выложенного файла: ждёт её `expectedVersion` Share и Unshare. `missing` — файла нет. */
+  version: string;
+}
+/**
+ * Только чтение: ничего не создаёт (ни папку истории, ни замок) и не переносит. Владение проверяется по тому же
+ * приватному квитку, что и у Share: чужой или правленный файл — `conflict`, а не «выложено».
+ */
+export async function readRoomHistoryStatus(projectPath: string, workId: string, roomId: string, options: SharedWriteOptions = {}): Promise<RoomHistoryStatus> {
+  try {
+    if (!validId(workId, roomId)) throw new RoomHistoryError('history-invalid');
+    const shared = await sharedProjectPaths(projectPath, options);
+    const target = path.join(shared.historyShared, `${workId}-${roomId}.md`);
+    const file = await readSharedFile(target);
+    const project = await realpath(projectPath); const root = stateDir(project); const parent = path.join(root, 'history');
+    const paths: HistoryPaths = { projectPath: project, root, parent, file: path.join(parent, `${workId}-${roomId}.md`), receipt: path.join(parent, `${workId}-${roomId}.receipt.json`) };
+    const none: RoomHistoryStatus = { state: file.version === MISSING_SHARED_VERSION ? 'not-shared' : 'conflict', sharedAt: null, version: file.version };
+    const dir = await lstat(parent).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; });
+    if (!dir) return none;
+    if (!dir.isDirectory() || await realpath(parent) !== parent) throw new RoomHistoryError('history-unavailable');
+    let receipt: HistoryReceipt;
+    try { receipt = parseReceipt(await readSharedFile(paths.receipt), paths, workId, roomId, target); }
+    catch (error) { if (error instanceof RoomHistoryError && error.code === 'history-conflict') return { ...none, state: 'conflict' }; throw error; }
+    if (file.version === MISSING_SHARED_VERSION) return none;
+    if (!receipt.shared || !await matches(receipt.shared)) return { state: 'conflict', sharedAt: null, version: file.version };
+    return { state: 'shared', sharedAt: receipt.shared.at, version: file.version };
+  } catch (error) {
+    if (error instanceof RoomHistoryError) throw error;
+    throw new RoomHistoryError('history-unavailable');
+  }
+}
 export const rebuildRoomHistory = (projectPath: string, workId: string, roomId: string, options: SharedWriteOptions = {}): Promise<RoomHistoryResult> => operation(projectPath, workId, roomId, 'local', options);
 /** Host calls only after explicit human publication confirmation. Snapshot never auto-follows future map changes. */
 export const shareRoomHistory = (projectPath: string, workId: string, roomId: string, options: SharedWriteOptions = {}): Promise<RoomHistoryResult> => operation(projectPath, workId, roomId, 'share', options);

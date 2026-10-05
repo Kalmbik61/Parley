@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import type { ProjectContextOptions } from './project-context.js';
 import type { SharedWriteOptions } from './store.js';
 import type { Proposal, Room, WorkMap } from './types.js';
 
@@ -156,4 +158,102 @@ export async function flushDecisionJournal(projectPath: string, workId: string, 
   }
   result.diagnostics = [...new Map(result.diagnostics.map(row => [row.code, row])).values()];
   return result;
+}
+
+/** Окно читает журнал только узким чтением: сколько файлов и байт берётся за один запрос. */
+export const DECISION_LIST_MAX_FILES = 300;
+export const DECISION_LIST_MAX_BYTES = 16 * 1024 * 1024;
+const DECISION_FILE = /^(\d{4}-\d{2}-\d{2})-(w-\d+)-(r-\d+)-(p-\d+)-rev-(\d+)\.md$/;
+const TITLE_LENGTH = 200;
+/** Файл журнала как он лежит на диске. `headerAgrees` — шапка совпала с именем; это не доказательство принятия. */
+export interface DecisionJournalFile {
+  file: string; workId: string; roomId: string; proposalId: string; rev: number;
+  /** Дата из имени файла (`YYYY-MM-DD`). */
+  date: string;
+  title: string;
+  kind: 'decision' | 'completion' | null;
+  acceptedAt: string | null;
+  headerAgrees: boolean;
+  sha256: string;
+}
+export interface DecisionJournalListing {
+  /** Новые сверху (по имени: дата первой). */
+  files: DecisionJournalFile[];
+  /** Симлинки, не-файлы и файлы, которые не удалось прочесть строго. */
+  unreadable: number;
+  /** `.md` с чужим именем: журналом не считаются и не читаются. */
+  unrecognized: number;
+  /** Не всё прочитано: предел числа файлов или байт. */
+  truncated: boolean;
+}
+/**
+ * Только чтение каталога решений общего контекста проекта: ничего не создаёт и не переносит. Читаются обычные файлы
+ * без перехода по симлинкам (`readSharedFile`: NOFOLLOW, строгий UTF-8, до 1 МиБ); каталог должен быть канонической
+ * папкой. Нет каталога — пустой журнал.
+ */
+export async function readDecisionJournalFiles(projectPath: string, options: ProjectContextOptions = {}): Promise<DecisionJournalListing> {
+  const store = await import('./store.js');
+  const paths = await store.sharedProjectPaths(projectPath, options);
+  const dir = paths.decisions;
+  const result: DecisionJournalListing = { files: [], unreadable: 0, unrecognized: 0, truncated: false };
+  let entries;
+  try {
+    const info = await lstat(dir);
+    if (!info.isDirectory() || info.isSymbolicLink() || await realpath(dir) !== dir) throw new DecisionJournalError('journal-unavailable');
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return result;
+    throw error instanceof DecisionJournalError ? error : new DecisionJournalError('journal-unavailable');
+  }
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.md')) continue;
+    if (!DECISION_FILE.test(entry.name)) { result.unrecognized++; continue; }
+    if (!entry.isFile()) { result.unreadable++; continue; }
+    names.push(entry.name);
+  }
+  names.sort().reverse();
+  if (names.length > DECISION_LIST_MAX_FILES) result.truncated = true;
+  let bytes = 0;
+  for (const name of names.slice(0, DECISION_LIST_MAX_FILES)) {
+    try {
+      const snapshot = await store.readSharedFile(path.join(dir, name));
+      if (snapshot.version === store.MISSING_SHARED_VERSION) continue;
+      bytes += Buffer.byteLength(snapshot.text);
+      if (bytes > DECISION_LIST_MAX_BYTES) { result.truncated = true; break; }
+      result.files.push(describeDecisionFile(name, snapshot.text));
+    } catch { result.unreadable++; }
+  }
+  return result;
+}
+function describeDecisionFile(name: string, text: string): DecisionJournalFile {
+  const [, date, workId, roomId, proposalId, rev] = DECISION_FILE.exec(name)!;
+  const first = (pattern: RegExp): RegExpExecArray | null => pattern.exec(text);
+  const accepted = first(/^Accepted: (\S+)$/m)?.[1] ?? null;
+  const decision = first(/^Decision: (p-\d+); revision: (\d+)$/m);
+  const kind = first(/^Kind: (decision|completion)$/m)?.[1] as 'decision' | 'completion' | undefined;
+  const acceptedAt = accepted !== null && iso(accepted) ? accepted : null;
+  return {
+    file: name, workId: workId!, roomId: roomId!, proposalId: proposalId!, rev: Number(rev), date: date!,
+    title: (first(/^# (.*)$/m)?.[1] ?? '').slice(0, TITLE_LENGTH), kind: kind ?? null, acceptedAt,
+    headerAgrees: acceptedAt !== null && acceptedAt.slice(0, 10) === date &&
+      first(/^Work: (w-\d+) — /m)?.[1] === workId && first(/^Room: (r-\d+) — /m)?.[1] === roomId &&
+      decision?.[1] === proposalId && Number(decision?.[2]) === Number(rev),
+    sha256: createHash('sha256').update(text).digest('hex'),
+  };
+}
+
+export type DecisionFileState = 'accepted' | 'retained' | 'edited' | 'unverified';
+/**
+ * Чем файл журнала можно считать. Имя файла не доказывает принятия: `accepted` — байты совпали с захваченным в карте
+ * принятым решением; `retained` — карты работы нет (удалена), шапка согласна с именем; `edited` — карта знает решение,
+ * но файл правили; `unverified` — карты не прочли или она такого решения не захватывала.
+ * `map`: `null` — работы больше нет, `undefined` — карта не читается.
+ */
+export function classifyDecisionFile(file: DecisionJournalFile, map: DecisionJournalMap | null | undefined): DecisionFileState {
+  if (map === null) return file.headerAgrees ? 'retained' : 'unverified';
+  if (map === undefined || map.work.id !== file.workId) return 'unverified';
+  const intent = map.decisionExports?.find(row => row.file === file.file && validDecisionJournalIntent(row));
+  if (!intent) return 'unverified';
+  return createHash('sha256').update(intent.content).digest('hex') === file.sha256 ? 'accepted' : 'edited';
 }

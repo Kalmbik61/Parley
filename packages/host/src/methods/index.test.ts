@@ -36,6 +36,13 @@ function fakeDeps(worksReady: Promise<void>): { deps: MethodDeps; touched: () =>
   return { deps, touched: () => calls };
 }
 
+it('registers the window-only decisions list and room history actions', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['decisions.list', 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] as const)
+    expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
 it('registers both explicit native skill sharing actions', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const handlers = createHostHandlers(deps);
@@ -58,6 +65,7 @@ describe('методы на старте хоста ждут первого чт
         'plans.cancel',
         'plans.retryEffects',
         'works.list',
+        'decisions.list',
         'sessions.create',
         'sessions.resume',
         'sessions.stop',

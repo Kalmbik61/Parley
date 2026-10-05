@@ -146,6 +146,8 @@ export interface ParleyBridge {
     revealWork(projectPath: string, workId: string): Promise<void>;
     /** Main-only status/exclusive creation in a known project's root. */
     openBacklog: (projectPath: string) => Promise<{ opened: boolean }>;
+    /** Main-only: opens one accepted journal revision (`file` is a journal file name, never a path) of a known project. */
+    openDecision: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
     parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное

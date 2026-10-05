@@ -6,7 +6,7 @@ import { addSession, addMessage } from './map.js';
 import { addRoom } from './rooms.js';
 import { createWork, readMap, updateMap, sharedProjectPaths } from './store.js';
 import { HUMAN, SYSTEM } from './types.js';
-import { rebuildRoomHistory, renderRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories } from './room-history.js';
+import { rebuildRoomHistory, renderRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, readRoomHistoryStatus } from './room-history.js';
 const receiptAttack = vi.hoisted(() => ({ mode: '', temporary: '', foreignIno: 0 }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>();
@@ -185,4 +185,45 @@ it('refused receipt publication preserves foreign temp and concurrent human rece
   const receipt = path.join(project, '.parley', 'history', `${workId}-r-01.receipt.json`);
   expect(await readFile(receipt, 'utf8')).toBe('Human replaced receipt');
   await expect(readFile(shared())).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+describe('read-only history status (P28)', () => {
+  const snapshotOf = async (dir: string): Promise<string[]> => (await readdir(dir, { recursive: true })).sort();
+  it('reports not-shared without creating the history folder, lock or shared folder', async () => {
+    const before = await snapshotOf(path.join(project, '.parley'));
+    expect(await readRoomHistoryStatus(project, workId, 'r-01')).toEqual({ state: 'not-shared', sharedAt: null, version: 'missing' });
+    expect(await snapshotOf(path.join(project, '.parley'))).toEqual(before);
+  });
+  it('shows sharedAt and the file version only for an owned unchanged snapshot, and follows Unshare', async () => {
+    const shared_ = await shareRoomHistory(project, workId, 'r-01');
+    const status = await readRoomHistoryStatus(project, workId, 'r-01');
+    expect(status).toMatchObject({ state: 'shared', sharedAt: shared_.sharedAt });
+    expect(status.version).not.toBe('missing');
+    await unshareRoomHistory(project, workId, 'r-01', { expectedVersion: status.version });
+    expect(await readRoomHistoryStatus(project, workId, 'r-01')).toEqual({ state: 'not-shared', sharedAt: null, version: 'missing' });
+  });
+  it('does not present a foreign or edited shared file as shared', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.historyShared);
+    await writeFile(shared(), 'Foreign text');
+    expect(await readRoomHistoryStatus(project, workId, 'r-01')).toMatchObject({ state: 'conflict', sharedAt: null });
+    await rm(shared());
+    await shareRoomHistory(project, workId, 'r-01'); await writeFile(shared(), 'Human edit');
+    expect(await readRoomHistoryStatus(project, workId, 'r-01')).toMatchObject({ state: 'conflict', sharedAt: null });
+    expect(await readFile(shared(), 'utf8')).toBe('Human edit');
+  });
+  it('a corrupt receipt is a conflict, and a symlinked history folder is unavailable, without writes', async () => {
+    await shareRoomHistory(project, workId, 'r-01');
+    const receipt = path.join(project, '.parley', 'history', `${workId}-r-01.receipt.json`);
+    await writeFile(receipt, '{broken');
+    expect(await readRoomHistoryStatus(project, workId, 'r-01')).toMatchObject({ state: 'conflict', sharedAt: null });
+    expect(await readFile(receipt, 'utf8')).toBe('{broken');
+    const outside = path.join(root, 'foreign-history'); await mkdir(outside);
+    await rm(path.join(project, '.parley', 'history'), { recursive: true }); await symlink(outside, path.join(project, '.parley', 'history'));
+    await expect(readRoomHistoryStatus(project, workId, 'r-01')).rejects.toMatchObject({ code: 'history-unavailable' });
+    expect(await readdir(outside)).toEqual([]);
+  });
+  it('rejects malformed identifiers', async () => {
+    await expect(readRoomHistoryStatus(project, '../w-01', 'r-01')).rejects.toMatchObject({ code: 'history-invalid' });
+    await expect(readRoomHistoryStatus(project, workId, 'room')).rejects.toMatchObject({ code: 'history-invalid' });
+  });
 });

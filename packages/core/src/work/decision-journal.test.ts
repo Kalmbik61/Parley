@@ -112,3 +112,94 @@ it('verified completion journals its exact completed snapshot, while a returned 
   expect(intent.kind).toBe('completion'); expect(intent.snapshot).toBe('w-0001-r-01-pl-01-rev-0-completed.md');
   expect(intent.content).toContain('Final truthful summary'); expect(intent.content).toContain('b-001'); expect(intent.content).not.toContain('Returned summary');
 });
+
+describe('read-only journal listing (P28)', () => {
+  async function disk() {
+    const fs = await import('node:fs/promises'); const path = (await import('node:path')).default;
+    const store = await import('./store.js'); const { setProposal, resolveProposal } = await import('./proposals.js');
+    const root = await fs.realpath(await fs.mkdtemp('/private/tmp/parley-journal-list-')); const project = path.join(root, 'project');
+    const oldHome = process.env.PARLEY_HOME; process.env.PARLEY_HOME = path.join(root, 'home');
+    await fs.mkdir(project); await fs.mkdir(path.join(root, 'home'));
+    const workId = (await store.createWork(project, { title: 'List' })).work.id;
+    await store.updateMap(project, workId, map => {
+      addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
+      addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
+      for (const rev of [0, 1]) {
+        const p = setProposal(map, 'r-01', 's-01', `Version ${rev}\nBody`, at);
+        resolveProposal(map, 'r-01', p.proposalId, 'accept', { rev: p.rev }, at);
+      }
+    });
+    const { flushDecisionJournal } = await import('./decision-journal.js');
+    await flushDecisionJournal(project, workId);
+    return { fs, path, store, root, project, workId, dir: path.join(project, '.parley', 'decisions'),
+      done: async () => { if (oldHome === undefined) delete process.env.PARLEY_HOME; else process.env.PARLEY_HOME = oldHome; await fs.rm(root, { recursive: true, force: true }); } };
+  }
+  it('lists accepted files newest first, classifies them against the map and creates nothing', async () => {
+    const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
+    const t = await disk();
+    try {
+      const before = (await t.fs.readdir(t.path.join(t.project, '.parley'), { recursive: true })).sort();
+      const listing = await readDecisionJournalFiles(t.project);
+      expect(listing.files.map(row => row.file)).toEqual((await t.store.readMap(t.project, t.workId)).decisionExports!.map(row => row.file).sort().reverse());
+      expect(listing).toMatchObject({ unreadable: 0, unrecognized: 0, truncated: false });
+      expect(listing.files[0]).toMatchObject({ workId: t.workId, roomId: 'r-01', kind: 'decision', headerAgrees: true });
+      const map = await t.store.readMap(t.project, t.workId);
+      expect(listing.files.map(row => classifyDecisionFile(row, map))).toEqual(['accepted', 'accepted']);
+      expect(listing.files.map(row => classifyDecisionFile(row, null))).toEqual(['retained', 'retained']);
+      expect(listing.files.map(row => classifyDecisionFile(row, undefined))).toEqual(['unverified', 'unverified']);
+      expect((await t.fs.readdir(t.path.join(t.project, '.parley'), { recursive: true })).sort()).toEqual(before);
+    } finally { await t.done(); }
+  });
+  it('an edited file is not accepted, and a foreign header never becomes retained', async () => {
+    const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
+    const t = await disk();
+    try {
+      const map = await t.store.readMap(t.project, t.workId);
+      const [first, second] = map.decisionExports!;
+      await t.fs.writeFile(t.path.join(t.dir, first!.file), `${first!.content}\nHuman note`);
+      await t.fs.writeFile(t.path.join(t.dir, second!.file), 'Not a journal header');
+      const listing = await readDecisionJournalFiles(t.project);
+      const byFile = Object.fromEntries(listing.files.map(row => [row.file, row]));
+      expect(classifyDecisionFile(byFile[first!.file]!, map)).toBe('edited');
+      expect(classifyDecisionFile(byFile[second!.file]!, map)).toBe('edited');
+      expect(byFile[second!.file]!.headerAgrees).toBe(false);
+      expect(classifyDecisionFile(byFile[second!.file]!, null)).toBe('unverified');
+      const foreign = { ...map, decisionExports: [] };
+      expect(classifyDecisionFile(byFile[first!.file]!, foreign)).toBe('unverified');
+    } finally { await t.done(); }
+  });
+  it('does not read symlinked, directory or unknown-name entries and counts them', async () => {
+    const { readDecisionJournalFiles } = await import('./decision-journal.js');
+    const t = await disk();
+    try {
+      const outside = t.path.join(t.root, 'outside.md'); await t.fs.writeFile(outside, 'Outside text');
+      await t.fs.symlink(outside, t.path.join(t.dir, '2026-10-05-w-0009-r-01-p-01-rev-00.md'));
+      await t.fs.mkdir(t.path.join(t.dir, '2026-10-05-w-0009-r-01-p-02-rev-00.md'));
+      await t.fs.writeFile(t.path.join(t.dir, 'notes.md'), 'Unknown'); await t.fs.writeFile(t.path.join(t.dir, 'readme.txt'), 'Ignored');
+      await t.fs.writeFile(t.path.join(t.dir, '2026-10-05-w-0009-r-01-p-03-rev-00.md'), Buffer.from([0xff, 0xfe, 0xfd]));
+      const listing = await readDecisionJournalFiles(t.project);
+      expect(listing.files).toHaveLength(2); expect(listing).toMatchObject({ unreadable: 3, unrecognized: 1 });
+      expect(JSON.stringify(listing)).not.toContain('Outside text');
+    } finally { await t.done(); }
+  });
+  it('bounds the number of files read and refuses a symlinked decisions folder', async () => {
+    const { readDecisionJournalFiles, DECISION_LIST_MAX_FILES } = await import('./decision-journal.js');
+    const t = await disk();
+    try {
+      for (let index = 0; index < DECISION_LIST_MAX_FILES; index++)
+        await t.fs.writeFile(t.path.join(t.dir, `2027-01-01-w-0100-r-01-p-${String(index).padStart(3, '0')}-rev-00.md`), '# T\n');
+      const listing = await readDecisionJournalFiles(t.project);
+      expect(listing.files).toHaveLength(DECISION_LIST_MAX_FILES); expect(listing.truncated).toBe(true);
+      await t.fs.rm(t.dir, { recursive: true }); await t.fs.symlink(t.root, t.dir);
+      await expect(readDecisionJournalFiles(t.project)).rejects.toMatchObject({ code: 'journal-unavailable' });
+    } finally { await t.done(); }
+  });
+  it('a missing decisions folder is an empty journal', async () => {
+    const { readDecisionJournalFiles } = await import('./decision-journal.js');
+    const t = await disk();
+    try {
+      await t.fs.rm(t.dir, { recursive: true });
+      expect(await readDecisionJournalFiles(t.project)).toEqual({ files: [], unreadable: 0, unrecognized: 0, truncated: false });
+    } finally { await t.done(); }
+  });
+});

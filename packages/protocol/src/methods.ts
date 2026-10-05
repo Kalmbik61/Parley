@@ -17,6 +17,8 @@ import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
 import type { CapabilityActionResult } from './capability-actions.js';
 import { planMethodSchemas } from './plan-actions.js';
 import type { PlanMethodResults } from './plan-actions.js';
+import { journalMethodSchemas } from './journal.js';
+import type { JournalMethodResults } from './journal.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
@@ -50,6 +52,7 @@ export const METHODS = {
   ...capabilitySkillMethodSchemas,
   ...backlogMethodSchemas,
   ...planMethodSchemas,
+  ...journalMethodSchemas,
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
@@ -231,7 +234,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
