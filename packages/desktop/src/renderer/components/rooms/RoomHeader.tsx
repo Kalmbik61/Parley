@@ -11,6 +11,8 @@ import { ParticipantStrip } from './ParticipantStrip.js';
 
 export interface RoomHeaderProps {
   modeControl?: ReactNode;
+  /** Чип рецепта комнаты (`RoomRecipeChip`) рядом с режимом. */
+  recipeChip?: ReactNode;
   /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
   historyMenu?: ReactNode;
   title: string;
@@ -19,7 +21,7 @@ export interface RoomHeaderProps {
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl, historyMenu }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl, recipeChip, historyMenu }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -33,7 +35,9 @@ export function RoomHeader({ title, subtitle, participants, onOpenSession, modeC
           {subtitle}
         </span>
       </div>
-      {modeControl}
+      {recipeChip === undefined ? modeControl : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}</div>
+      )}
       {historyMenu}
       <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
     </div>

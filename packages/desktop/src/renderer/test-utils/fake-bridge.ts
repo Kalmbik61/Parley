@@ -32,6 +32,7 @@ import type {
 } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import type { NotesFile } from '../../shared/notes-types.js';
+import type { RecipeSaveRequest, RecipeSaveResult } from '../../shared/recipe-save.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -102,6 +103,9 @@ export interface FakeBridge extends ParleyBridge {
   readonly locateCalls: Array<{ workKey: string; absPaths: string[] }>;
   /** Чем ответит `app.openPath`: `'opened'` (по умолчанию), `'revealed'` или ошибка — отказ. */
   setOpenPathResult(result: 'opened' | 'revealed' | { error: unknown }): void;
+  /** Вызовы `app.saveRecipe` и ответ на них (по умолчанию — `saved`). */
+  readonly saveRecipeCalls: RecipeSaveRequest[];
+  setSaveRecipeAnswer(answer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult>): void;
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -201,6 +205,8 @@ export function createFakeBridge(): FakeBridge {
   const located = new Map<string, Located | null>();
   const fileStats = new Map<string, FileStat | null>();
   const locateCalls: Array<{ workKey: string; absPaths: string[] }> = [];
+  const saveRecipeCalls: RecipeSaveRequest[] = [];
+  let saveRecipeAnswer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult> = (request) => ({ status: 'saved', id: `project:${request.file}`, opened: true });
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
   const revealedPaths: string[] = [];
@@ -291,6 +297,10 @@ export function createFakeBridge(): FakeBridge {
       fileStats.set(`${rootKey(root)}\n${path}`, stat);
     },
     locateCalls,
+    saveRecipeCalls,
+    setSaveRecipeAnswer: (answer) => {
+      saveRecipeAnswer = answer;
+    },
     setOpenPathResult: (result) => {
       openPathResult = result;
     },
@@ -614,6 +624,10 @@ export function createFakeBridge(): FakeBridge {
       openBacklog: async () => ({ opened: true }),
       openDecision: async () => ({ opened: true }),
       parleyMd: async () => ({ exists: true, created: false }),
+      saveRecipe: async (request) => {
+        saveRecipeCalls.push(request);
+        return saveRecipeAnswer(request);
+      },
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });
         if (revealWorkError !== null) throw revealWorkError;

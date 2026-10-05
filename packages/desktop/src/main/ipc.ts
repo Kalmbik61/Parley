@@ -12,6 +12,7 @@ import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
+import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
 import { isNotesFile } from '../shared/notes-types.js';
@@ -541,6 +542,23 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (result) throw new HostError('internal', 'The decision file could not be opened.');
       return { opened: true };
     } catch { throw new HostError('internal', 'The decision file could not be opened.'); }
+  }));
+
+  // Save as recipe: окно присылает данные рецепта и основу имени файла, не путь. Пишется только файл рецепта в каталоге
+  // рецептов известного проекта; занятое имя без `replace` — ответ `exists`, файл не тронут (спека рецептов, 5.2).
+  ipcMain.handle('app:save-recipe', withIpcError(async (_event, request: unknown) => {
+    const input = parseRecipeSaveRequest(request);
+    if (input === null) throw new HostError('bad_request', 'Invalid recipe request.');
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find(item => item.projectPath === input.projectPath);
+    if (!entry) throw new HostError('not_found', 'Project not found.');
+    await roots.rootPath({ workKey: projectWorkKey(input.projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const written = await writeProjectRecipe(input);
+    if (written.status === 'exists') return { status: 'exists' };
+    // Файл уже записан: отказ редактора рецепт не отменяет, окно скажет, что он не открылся.
+    let opened = false;
+    try { opened = !(await openPath(written.file)); } catch { /* сохранённый рецепт остаётся */ }
+    return { status: 'saved', id: written.id, opened };
   }));
 
   ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {

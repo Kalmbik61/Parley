@@ -61,6 +61,7 @@ import { buildRoomModel } from './feed-model.js';
 import { RoomHeader } from './RoomHeader.js';
 import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
+import { RoomRecipeChip } from './RoomRecipeChip.js';
 
 export interface RoomPanelProps {
   entry: WorkEntry;
@@ -90,6 +91,7 @@ const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
+  const recipe = entry.map.rooms.find((room) => room.id === roomId)?.recipe;
   // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
   // исчезла или сменилась: от него зависит высота ленты.
   const busy = model?.participants.filter((participant) => participant.doing !== null) ?? [];
@@ -343,7 +345,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   return (
     <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
-      <RoomHeader modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div

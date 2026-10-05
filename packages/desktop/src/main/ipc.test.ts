@@ -1329,3 +1329,54 @@ describe('app:open-decision fixed accepted revision boundary', () => {
     expect(String(missing)).not.toContain(project);
   });
 });
+
+
+describe('app:save-recipe project recipe boundary', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  const agents = [
+    { role: 'builtin:planner', worktree: false, lead: true, count: 1 },
+    { role: 'builtin:executor', worktree: true, lead: false, count: 1 },
+  ];
+  const request = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({
+    projectPath: project, file: 'payments-change', name: 'Payments change', description: 'Plan and build', mode: 'verified', agents, playbook: 'Ask first.\n', replace: false, ...patch });
+  const file = (): string => path.join(project, '.parley', 'recipes', 'payments-change.md');
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-save-recipe-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+
+  it('writes only the fixed recipe file of a known project and opens it', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:save-recipe', request())).toEqual({ status: 'saved', id: 'project:payments-change', opened: true });
+    expect(openPath).toHaveBeenCalledWith(file());
+    expect(await readFile(file(), 'utf8')).toContain('name: "Payments change"');
+    expect(await readdir(path.join(project, '.parley', 'recipes'))).toEqual(['payments-change.md']);
+  });
+
+  it('does not overwrite an existing file without an explicit replace', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await ipcMain.invoke('app:save-recipe', request());
+    const before = await readFile(file(), 'utf8'); openPath.mockClear();
+    expect(await ipcMain.invoke('app:save-recipe', request({ description: 'Changed' }))).toEqual({ status: 'exists' });
+    expect(await readFile(file(), 'utf8')).toBe(before); expect(openPath).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('app:save-recipe', request({ description: 'Changed', replace: true }))).toMatchObject({ status: 'saved' });
+    expect(await readFile(file(), 'utf8')).toContain('description: "Changed"');
+  });
+
+  it('rejects a file name with ../ or a slash, and arbitrary projects, before touching the disk', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const bad of [request({ file: '../escape' }), request({ file: '../../etc/x' }), request({ file: 'a/b' }), request({ file: '/abs' }), request({ file: 'a\\b' }),
+      request({ file: 'x.md' }), request({ projectPath: '/not-a-known-project' }), request({ projectPath: '../private' }), 42, null])
+      await expect(ipcMain.invoke('app:save-recipe', bad)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readdir(project)).toEqual([]);
+  });
+
+  it('keeps the saved recipe when the editor cannot open it, and reports that', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    openPath.mockResolvedValue('/private editor error');
+    expect(await ipcMain.invoke('app:save-recipe', request())).toEqual({ status: 'saved', id: 'project:payments-change', opened: false });
+    expect(await readFile(file(), 'utf8')).toContain('Payments change');
+  });
+});

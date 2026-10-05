@@ -1015,3 +1015,395 @@ describe('prepared backlog completion context', () => {
     expect(callsOf('sessions.create')[0]!.projectPath).toBe(PROJECT);
   });
 });
+
+
+describe('рецепты комнат (P26, спека рецептов 6.1, 6.2, 8)', () => {
+  const role = (id: string, provider: string) => ({
+    id, name: id.slice(id.indexOf(':') + 1), source: id.startsWith('builtin') ? ('builtin' as const) : ('claude' as const), provider,
+    description: id, model: null, effort: null, readOnly: false, models: { claude: null, codex: null },
+  });
+  const ROLES = [role('builtin:planner', 'claude'), role('builtin:critic', 'codex'), role('builtin:executor', 'claude'), role('builtin:reviewer', 'codex'), role('builtin:architect', 'claude'), role('claude:security', 'claude')];
+  interface Choice { role: string; worktree: boolean; lead: boolean; provider?: string; model?: string | null; effort?: string | null }
+  const agentView = (choice: Choice, resolvedProvider = choice.provider ?? 'claude', status = 'ready') =>
+    ({ choice, status, resolved: status === 'ready' ? { provider: resolvedProvider, model: null, effort: null, readOnly: false } : null });
+  const recipeEntry = (id: string, name: string, mode: string, agents: unknown[], playbook = 'Lead playbook\n') => ({
+    status: 'valid' as const,
+    recipe: { id, source: id.startsWith('builtin') ? 'builtin' : 'project', name, description: `${name} description`, mode, playbook, agents: [] },
+    agents,
+  });
+  const PLAN_BUILD = recipeEntry('builtin:plan-build', 'Plan & build', 'verified', [
+    agentView({ role: 'builtin:planner', worktree: false, lead: true }),
+    agentView({ role: 'builtin:critic', worktree: false, lead: false }, 'codex'),
+    agentView({ role: 'builtin:executor', worktree: true, lead: false }),
+    agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+  ]);
+  const REVIEW = recipeEntry('builtin:review', 'Review', 'free', [
+    agentView({ role: 'builtin:reviewer', worktree: false, lead: true }, 'codex'),
+    agentView({ role: 'builtin:architect', worktree: false, lead: false }),
+  ]);
+  const BROKEN = { status: 'invalid' as const, id: 'project:broken', file: 'broken.md', diagnostic: { code: 'invalid-yaml' as const, line: 3 } };
+  let entriesNow: unknown[] = [];
+  const stubRecipes = (entries: unknown[] = [PLAN_BUILD, REVIEW, BROKEN]): void => {
+    entriesNow = entries;
+    bridge.setHandler('recipes.list', async () => ({ entries: entriesNow, partial: false, diagnostics: [] }) as never);
+  };
+  beforeEach(() => {
+    bridge.setHandler('roles.list', async () => ({ roles: ROLES, diagnostics: [], partial: false }));
+    stubRecipes();
+  });
+
+  const recipeSelect = (): HTMLElement => within(dialog()).getByRole('combobox', { name: 'Recipe' });
+  const modeSelect = (): HTMLElement => within(dialog()).getByRole('combobox', { name: 'Mode' });
+  async function pick(name: string | RegExp): Promise<void> {
+    await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+    await chooseOption(recipeSelect(), name);
+    await act(async () => {});
+  }
+  const roleOfRow = (row: number): string => within(rows()[row] as HTMLElement).getByRole('combobox', { name: 'Role' }).textContent ?? '';
+  const worktreeButton = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('button', { name: 'Own worktree' });
+  const stars = (): Array<string | null> => screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ }).map((item) => item.getAttribute('aria-pressed'));
+
+  it('хост без recipes.list: выбора рецепта нет, диалог работает как раньше', async () => {
+    bridge.setHandler('recipes.list', async () => { throw new Error('unknown method'); });
+    await renderDialog();
+    await act(async () => {});
+    expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('список: No recipe первым, встроенные, битый — с причиной и без возможности выбрать', async () => {
+    await renderDialog();
+    await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+    expect(recipeSelect().textContent).toBe('No recipe');
+    fireEvent.keyDown(recipeSelect(), { key: 'ArrowDown' });
+    const options = (await screen.findAllByRole('option')).map((item) => item.textContent);
+    expect(options).toEqual(['No recipe', 'Plan & build', 'Review', 'broken.md · Not valid YAML']);
+    const broken = screen.getByRole('option', { name: /broken\.md/ });
+    expect(broken.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(broken);
+    await act(async () => {});
+    // Список остался открытым (прячет диалог от дерева доступности), строки не менялись.
+    expect(document.querySelectorAll('[data-agent-row]')).toHaveLength(1);
+  });
+
+  it('выбор рецепта заполняет состав по ролям, режим и ведущего; описание — под списком', async () => {
+    await renderDialog();
+    await pick('Plan & build');
+    expect(rows()).toHaveLength(4);
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    expect([0, 1, 2, 3].map(roleOfRow)).toEqual(['planner · Builtin', 'critic · Builtin', 'executor · Builtin', 'reviewer · Builtin']);
+    expect(modeSelect().textContent).toBe('Verified');
+    expect(stars()).toEqual(['true', 'false', 'false', 'false']);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    expect(isChecked(providerRadio(2, 'Claude'))).toBe(true);
+    expect([0, 1, 2, 3].map((index) => worktreeButton(index).getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true', 'false']);
+    expect(dialog().querySelector('[data-recipe-description]')?.textContent).toBe('Plan & build description');
+    expect(screen.getByText('Room with 4 agents in Payments')).toBeTruthy();
+  });
+
+  it('поля после выбора правятся: провайдер, роль, строки, ведущий, режим, worktree; No recipe строки не трогает', async () => {
+    await renderDialog();
+    await pick('Review');
+    expect(stars()).toEqual(['true', 'false']);
+    fireEvent.click(providerRadio(0, 'Claude'));
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'critic · Builtin');
+    expect(roleOfRow(1)).toBe('critic · Builtin');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make lead' })[0] as HTMLElement);
+    expect(stars()).toEqual(['false', 'true']);
+    await chooseOption(modeSelect(), 'Checklist');
+    expect(modeSelect().textContent).toBe('Checklist');
+    fireEvent.click(worktreeButton(1));
+    expect(worktreeButton(1).getAttribute('aria-pressed')).toBe('true');
+    await addAgent();
+    expect(rows()).toHaveLength(3);
+    fireEvent.click(within(rows()[2] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(rows()).toHaveLength(2);
+    await chooseOption(recipeSelect(), 'No recipe');
+    expect(rows()).toHaveLength(2);
+    expect(modeSelect().textContent).toBe('Checklist');
+    expect(roleOfRow(1)).toBe('critic · Builtin');
+  });
+
+  it('запуск: роли, worktree построчно, rooms.create с mode и снимком рецепта из свежего recipes.list', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    // Файл рецепта поправили, пока диалог был открыт: снимок берётся в момент создания.
+    stubRecipes([{ ...PLAN_BUILD, recipe: { ...PLAN_BUILD.recipe, playbook: 'Edited playbook\n' } }, REVIEW]);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    const sessions = callsOf('sessions.create');
+    expect(sessions.map((call) => call.role)).toEqual([
+      { source: 'builtin', name: 'planner' }, { source: 'builtin', name: 'critic' }, { source: 'builtin', name: 'executor' }, { source: 'builtin', name: 'reviewer' },
+    ]);
+    expect(sessions.map((call) => call.provider)).toEqual(['claude', 'codex', 'claude', 'codex']);
+    expect(sessions.map((call) => call.worktree)).toEqual([false, false, true, false]);
+    // Умолчания роли не превращаются в явный выбор: model и effort не уходят.
+    for (const call of sessions) { expect(call).not.toHaveProperty('model'); expect(call).not.toHaveProperty('effort'); }
+    expect(callsOf('rooms.create')).toEqual([
+      { projectPath: PROJECT, workId: 'w-01', title: 'Room 1', members: ['s-01', 's-02', 's-03', 's-04'], lead: 's-01', quiet: true, mode: 'verified',
+        recipe: { id: 'builtin:plan-build', name: 'Plan & build', playbook: 'Edited playbook\n' } },
+    ]);
+  });
+
+  it('режим, выбранный человеком, главнее режима рецепта; free не уходит параметром', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Free');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')[0]).not.toHaveProperty('mode');
+    expect(callsOf('rooms.create')[0]).toHaveProperty('recipe');
+  });
+
+  it('без рецепта режим выбирается в диалоге; одиночная сессия режима не показывает', async () => {
+    const { onOpenChange } = await renderDialog();
+    expect(within(dialog()).queryByRole('combobox', { name: 'Mode' })).toBeNull();
+    await addAgent();
+    await chooseOption(modeSelect(), 'Checklist');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')[0]).toMatchObject({ mode: 'checklist' });
+    expect(callsOf('rooms.create')[0]).not.toHaveProperty('recipe');
+  });
+
+  it('заданное рецептом — явный выбор: провайдер, модель и усилие уходят и не перетираются умолчаниями роли', async () => {
+    stubRecipes([recipeEntry('project:pinned', 'Pinned', 'free', [
+      agentView({ role: 'builtin:critic', worktree: false, lead: true, provider: 'claude', model: 'sonnet', effort: 'high' }),
+      agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+    ])]);
+    const { onOpenChange } = await renderDialog();
+    await pick('Pinned');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }).textContent).toBe('Sonnet');
+    // Смена роли умолчание (Codex) поверх явного выбора рецепта не ставит.
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    // Строка без явного провайдера следует роли.
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'critic · Builtin');
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', model: 'sonnet', effort: 'high', role: { source: 'builtin', name: 'planner' } });
+    expect(callsOf('sessions.create')[1]).toMatchObject({ provider: 'codex' });
+    expect(callsOf('sessions.create')[1]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[1]).not.toHaveProperty('effort');
+  });
+
+  it('провайдер встроенной роли недоступен на машине — строка берёт агента по умолчанию', async () => {
+    stubRecipes([recipeEntry('project:far', 'Far', 'free', [
+      agentView({ role: 'builtin:planner', worktree: false, lead: true }, 'cursor'),
+      agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+    ])]);
+    await renderDialog();
+    await pick('Far');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+  });
+
+  it('роли нет на этой машине: строка помечена, комната не создаётся, пока её не поправят', async () => {
+    stubRecipes([recipeEntry('project:ghost', 'Ghost', 'free', [
+      agentView({ role: 'builtin:planner', worktree: false, lead: true }),
+      agentView({ role: 'claude:vanished', worktree: false, lead: false }, 'claude', 'role-missing'),
+    ])]);
+    await renderDialog();
+    await pick('Ghost');
+    expect(dialog().querySelector('[data-role-missing]')?.textContent).toBe('Role not found: claude:vanished. Pick another role or remove this agent.');
+    expect(button('Create room').disabled).toBe(true);
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'reviewer · Builtin');
+    expect(dialog().querySelector('[data-role-missing]')).toBeNull();
+    expect(button('Create room').disabled).toBe(false);
+    expect(callsOf('sessions.create')).toHaveLength(0);
+  });
+
+  it('не git-проект: worktree рецепта не просят, причина видна', async () => {
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    expect(screen.getByText('This project is not a Git repository, so agents share the project folder.')).toBeTruthy();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create').map((call) => call.worktree)).toEqual([false, false, false, false]);
+  });
+
+  it('сбой строки: комнаты и рецепта нет, итог по строке; Retry создаёт только упавших и комнату с mode и снимком', async () => {
+    let fail = true;
+    bridge.setHandler('sessions.create', async (params) => {
+      const role = (params as { role?: { name: string } }).role?.name;
+      if (role === 'critic' && fail) throw Object.assign(new Error('boom'), { code: 'internal' });
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } };
+    });
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(4));
+    await act(async () => {});
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(button('Retry')).toBeTruthy();
+    expect(within(rows()[1] as HTMLElement).getByRole('status').textContent).toMatch(/create session/);
+    fail = false;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    // Повтор — только упавшая строка (critic), остальные не пересоздаются.
+    expect(callsOf('sessions.create')).toHaveLength(5);
+    expect((callsOf('sessions.create')[4] as { role: { name: string } }).role.name).toBe('critic');
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')[0]).toMatchObject({ mode: 'verified', members: ['s-01', 's-04', 's-02', 's-03'], recipe: { id: 'builtin:plan-build' } });
+  });
+
+  it('рецепт исчез к созданию: комната без него не создаётся; когда он вернулся, Retry создаёт только комнату', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    stubRecipes([REVIEW]);
+    fireEvent.click(button('Create room'));
+    await screen.findByText('The recipe is no longer available. Choose it again or pick No recipe.');
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    stubRecipes([PLAN_BUILD, REVIEW]);
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(4);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+  });
+
+  describe('Save as recipe', () => {
+    const field = (name: string): HTMLInputElement => within(dialog()).getByLabelText(name) as HTMLInputElement;
+    const typeIn = (name: string, value: string): void => { fireEvent.change(field(name), { target: { value } }); };
+    async function openSave(): Promise<void> {
+      await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+      fireEvent.click(button('Save as recipe…'));
+      await act(async () => {});
+    }
+    /** Состав из двух ролей: исполнитель — ведущий, с явными провайдером и моделью и своим worktree. */
+    async function compose(): Promise<void> {
+      await addAgent();
+      await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'executor · Builtin');
+      fireEvent.click(providerRadio(1, 'Codex'));
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GPT-6 Astra');
+      fireEvent.click(worktreeButton(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Make lead' }));
+      await chooseOption(modeSelect(), 'Checklist');
+    }
+
+    it('кнопки нет у одиночной сессии; у комнаты она есть', async () => {
+      await renderDialog();
+      await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+      expect(screen.queryByRole('button', { name: 'Save as recipe…' })).toBeNull();
+      await addAgent();
+      expect(screen.getByRole('button', { name: 'Save as recipe…' })).toBeTruthy();
+    });
+
+    it('пишет состав, режим, worktree и ведущего; явные provider/model — только тронутые; плейбук — шаблон этапов', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      expect(screen.getByRole('heading', { name: 'Save as recipe' })).toBeTruthy();
+      typeIn('Recipe name', 'Payments change');
+      expect(field('File name').value).toBe('payments-change');
+      typeIn('Description', 'Plan then build');
+      expect((within(dialog()).getByLabelText('Lead playbook') as HTMLTextAreaElement).value).toMatch(/^1\. Ask the human/);
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(1));
+      expect(bridge.saveRecipeCalls[0]).toMatchObject({
+        projectPath: PROJECT, file: 'payments-change', name: 'Payments change', description: 'Plan then build', mode: 'checklist', replace: false,
+        agents: [
+          { role: 'builtin:planner', worktree: false, lead: false, count: 1 },
+          { role: 'builtin:executor', worktree: true, lead: true, count: 1, provider: 'codex', model: 'gpt-6-astra' },
+        ],
+      });
+      expect(bridge.saveRecipeCalls[0]?.agents[0]).not.toHaveProperty('provider');
+      expect(bridge.saveRecipeCalls[0]?.playbook.endsWith('\n')).toBe(true);
+      // Возврат в форму: список перечитан, новый рецепт выбран, диалог открыт.
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy());
+      expect(vi.mocked(toast)).toHaveBeenCalledWith('Saved recipe Payments change');
+      expect(callsOf('recipes.list').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('плейбук выбранного рецепта предлагается как основа и правится', async () => {
+      await renderDialog();
+      await pick('Review');
+      await openSave();
+      expect((within(dialog()).getByLabelText('Lead playbook') as HTMLTextAreaElement).value).toBe('Lead playbook\n');
+    });
+
+    it('строка без роли — рецепт не собрать, файл не пишется', async () => {
+      await renderDialog();
+      await addAgent();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByText('Choose a role for every agent to save a recipe.');
+      expect(bridge.saveRecipeCalls).toHaveLength(0);
+    });
+
+    it('имя файла с ../ или слешем отвергается до обращения к main', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      for (const bad of ['../escape', 'a/b', '.hidden', 'x.md', '']) {
+        typeIn('File name', bad);
+        fireEvent.click(button('Save recipe'));
+        await screen.findByText('Use letters, digits, - and _ in the file name.');
+      }
+      expect(bridge.saveRecipeCalls).toHaveLength(0);
+    });
+
+    it('занятое имя: main ответил exists — предлагаются Rename и Replace, перезаписи без выбора нет', async () => {
+      bridge.setSaveRecipeAnswer(async (request) => request.replace ? { status: 'saved', id: 'project:taken', opened: true } : { status: 'exists' });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'Taken'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByText('taken.md already exists. Rename the file or replace it.');
+      expect(bridge.saveRecipeCalls.map((call) => call.replace)).toEqual([false]);
+      expect(screen.queryByRole('button', { name: 'Save recipe' })).toBeNull();
+      // Rename: сообщение уходит, поле имени файла доступно, запрос заново — уже без replace.
+      fireEvent.click(button('Rename'));
+      expect(screen.queryByText(/already exists/)).toBeNull();
+      expect(document.activeElement).toBe(field('File name'));
+      typeIn('File name', 'taken-2');
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(2));
+      expect(bridge.saveRecipeCalls[1]).toMatchObject({ file: 'taken-2', replace: false });
+    });
+
+    it('Replace — явный выбор человека: запрос с replace: true', async () => {
+      let first = true;
+      bridge.setSaveRecipeAnswer(async (request) => { if (first) { first = false; return { status: 'exists' }; } return { status: 'saved', id: `project:${request.file}`, opened: false }; });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'Taken'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByRole('button', { name: 'Replace' });
+      fireEvent.click(button('Replace'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(2));
+      expect(bridge.saveRecipeCalls.map((call) => call.replace)).toEqual([false, true]);
+      await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith('Saved recipe Taken. The file could not be opened.'));
+    });
+
+    it('отказ main — безопасный текст без сырой ошибки, форма остаётся', async () => {
+      bridge.setSaveRecipeAnswer(async () => { throw Object.assign(new Error('/private/path EACCES'), { code: 'failed' }); });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByRole('alert');
+      expect(dialog().textContent).not.toContain('EACCES');
+      expect(button('Save recipe')).toBeTruthy();
+    });
+
+    it('Back возвращает в форму с тем же составом', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      fireEvent.click(button('Back'));
+      expect(rows()).toHaveLength(2);
+      expect(modeSelect().textContent).toBe('Checklist');
+    });
+  });
+});

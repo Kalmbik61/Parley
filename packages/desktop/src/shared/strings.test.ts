@@ -294,3 +294,16 @@ it('decisions and room history labels are English, Share warns about Git and sec
   expect(S.roomHistory.sharedAt('2026-10-05T10:00:00.000Z')).toMatch(/^Shared at /);
   expect(S.decisions.open).toBe('Open accepted revision');
 });
+
+it('recipe labels are English, name every parse diagnostic and the template playbook stays short', () => {
+  const R = S.recipes;
+  const labels = [R.field, R.none, R.loadFailed, R.modeField, R.worktreeField, R.noWorktree, R.gone, R.save, R.saveTitle, R.saveHint, R.nameField, R.descriptionField,
+    R.fileField, R.playbookField, R.nameRequired, R.fileInvalid, R.needRoles, R.needAgents, R.confirmSave, R.back, R.replace, R.rename, R.noPlaybook,
+    R.roleMissing('claude:x'), R.exists('x'), R.saved('X'), R.savedNotOpened('X'), R.chip('X'), R.playbookFor('X'), R.playbookTemplate, ...Object.values(R.reason)];
+  for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }
+  // Каждый код разбора рецепта (`RecipeCode` core) имеет свою причину в списке рецептов.
+  for (const code of ['invalid-id', 'missing-frontmatter', 'invalid-yaml', 'invalid-schema', 'invalid-role', 'invalid-count', 'invalid-lead', 'too-few-agents', 'invalid-utf8', 'file-too-large', 'unreadable', 'discovery-limit'])
+    expect(R.reason[code], code).toBeTruthy();
+  expect(R.playbookTemplate.split('\n').length).toBeLessThanOrEqual(30);
+  expect(R.invalidOption('broken.md', R.reason['invalid-yaml'] as string)).toBe('broken.md · Not valid YAML');
+});

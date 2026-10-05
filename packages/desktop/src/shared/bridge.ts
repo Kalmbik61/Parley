@@ -26,6 +26,7 @@ import type {
 import type { ActionId } from './keybindings.js';
 import type { WorkLayout } from './layout-types.js';
 import type { NotesFile } from './notes-types.js';
+import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
@@ -149,6 +150,8 @@ export interface ParleyBridge {
     /** Main-only: opens one accepted journal revision (`file` is a journal file name, never a path) of a known project. */
     openDecision: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
     parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
+    /** Save as recipe: main пишет только `.parley/recipes/<имя>.md` известного проекта и открывает файл; занятое имя — `exists`. */
+    saveRecipe(request: RecipeSaveRequest): Promise<RecipeSaveResult>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное
      * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.
