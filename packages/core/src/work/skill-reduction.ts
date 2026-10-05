@@ -14,14 +14,12 @@ import path from 'node:path';
 export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } as const;
 
 /**
- * Выключатель сокращения списка Claude. Сокращённый список оставляет Claude имена, а описания должен отдавать
- * `find_skill` (спека, 2.3). Боевого каталога Claude у `find_skill` пока нет: в `mcp/tools.ts` для Claude он не
- * читается, а `discoverClaudeSkills` без подтверждённых признаков (политика, плагины, путь загрузки) отдаёт
- * всё как `availability-unverified`, и поиск не находит ничего. Поэтому до отдельного куска с боевым каталогом
- * список Claude остаётся полным, переменная бюджета и мод jev не трогаются. Кусок включает сокращение, выставив
- * `catalogReady`; тесты выставляют его сами.
+ * Выключатель сокращения списка Claude. Сокращённый список оставляет Claude имена, а описания отдаёт `find_skill`
+ * (спека, 2.3): его каталог Claude берётся из вложения `skill_listing` транскрипта сессии и описаний на диске
+ * (`skills/claude-listing.ts`), поэтому сокращение включено по умолчанию. Выключатель остаётся для тестов и как
+ * рубильник: `false` оставляет список Claude полным, переменная бюджета и мод jev не трогаются.
  */
-export const claudeSkillRoute = { catalogReady: false };
+export const claudeSkillRoute = { catalogReady: true };
 
 /** Значение подстановки `{skillCatalog}`: целое присваивание TOML для `-c` Codex. */
 export const CODEX_SKILL_CATALOG_OVERRIDE = 'skills.include_instructions=false';
@@ -92,7 +90,7 @@ export async function findJevPluginIds(cwd: string, configDir: string): Promise<
 
 /**
  * Можно ли сократить список Claude в этом запуске и что для этого выключить. Путь загрузки подтверждён, когда
- * у `find_skill` есть боевой каталог Claude (`claudeSkillRoute.catalogReady`), сессия без нативной роли (у неё
+ * у `find_skill` есть каталог Claude (`claudeSkillRoute.catalogReady`), сессия без нативной роли (у неё
  * список инструментов свой, Skill и `find_skill` не гарантированы), сервер
  * `parley` доставляется шаблоном, а мод jev либо не установлен, либо выключается файлом настроек сессии.
  */

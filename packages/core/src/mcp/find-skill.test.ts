@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readNativeContext, stampNativeContext, writeNativeContext } from '../work/native-context.js';
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -151,5 +151,50 @@ describe('instance-local find_skill', () => {
     // A short list is shown whole, without a marker.
     const short = (await (await connect({ skillNavigator: true, skillCatalog: async () => catalog('codex', project) })).listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
     expect(short).not.toContain('more (');
+  });
+
+  describe('каталог Claude из транскрипта сессии', () => {
+    const UUID = '0b8f1c52-3d0e-4f7a-9a61-2c5d7e8f9a10';
+    const listing = (names: string[]) => JSON.stringify({ type: 'attachment', attachment: { type: 'skill_listing', content: names.join('\n'), skillCount: names.length, isInitial: true, names } }) + '\n';
+    let projects: string;
+    beforeEach(async () => {
+      projects = await mkdtemp(path.join(tmpdir(), 'parley-search-transcripts-'));
+      await mkdir(path.join(projects, '-proj'));
+      vi.stubEnv('PARLEY_CLAUDE_PROJECTS_DIR', projects);
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+      await updateMap(project, work, map => { map.sessions[1]!.providerSessionId = UUID; });
+      const plugin = path.join(home, 'cache/superpowers');
+      await mkdir(path.join(plugin, '.claude-plugin'), { recursive: true });
+      await writeFile(path.join(plugin, '.claude-plugin/plugin.json'), JSON.stringify({ name: 'superpowers' }));
+      await mkdir(path.join(plugin, 'skills/writing-plans'), { recursive: true });
+      await writeFile(path.join(plugin, 'skills/writing-plans/SKILL.md'), '---\ndescription: Use when you have a spec for a multi-step task\n---\n');
+      await mkdir(path.join(home, '.claude/plugins'), { recursive: true });
+      await writeFile(path.join(home, '.claude/plugins/installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'superpowers@market': [{ scope: 'user', installPath: plugin }] } }));
+    });
+    afterEach(() => rm(projects, { recursive: true, force: true }));
+    const writeTranscript = (...names: string[]) => writeFile(path.join(projects, '-proj', `${UUID}.jsonl`), listing(names));
+
+    it('own search returns descriptions from disk for names the engine listed, and explains a missing listing without caching it', async () => {
+      const client = await connect({ sessionId: 's-02', skillNavigator: true, skillListReduced: true });
+      const early = JSON.parse((await find(client, { query: 'implementation plan' })).text);
+      expect(early.skills).toEqual([]); expect(early.reason).toContain('not readable');
+      await writeTranscript('superpowers:writing-plans', 'simplify');
+      const found = JSON.parse((await find(client, { query: 'write an implementation plan for a multi-step task' })).text);
+      expect(found.provider).toBe('claude'); expect(found).not.toHaveProperty('reason');
+      expect(found.skills[0]).toMatchObject({ name: 'superpowers:writing-plans', source: 'plugin', description: expect.stringContaining('multi-step task'), load: 'Use the Skill tool with "superpowers:writing-plans".' });
+      // A listed name without a file on disk is returned without a description.
+      const builtin = JSON.parse((await find(client, { query: 'simplify' })).text);
+      expect(builtin.skills).toEqual([{ name: 'simplify', source: 'system', load: 'Use the Skill tool with "simplify".' }]);
+    });
+
+    it('for: a lead searches the skills of a Claude participant by that participant transcript; a Codex participant keeps its own route', async () => {
+      await writeTranscript('superpowers:writing-plans');
+      const client = await connect({ sessionId: 's-01', skillNavigator: true });
+      const found = JSON.parse((await find(client, { query: 'plan multi-step task', for: 's-02' })).text);
+      expect(found.provider).toBe('claude'); expect(found.skills.map((skill: { name: string }) => skill.name)).toEqual(['superpowers:writing-plans']);
+      // The lead is Codex without a verified native context: the old explanation stays.
+      expect(JSON.parse((await find(client, { query: 'plan' })).text).reason).toContain('unverified');
+    });
   });
 });

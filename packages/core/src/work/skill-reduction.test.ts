@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, claudeSkillRoute, findJevPluginIds } from './skill-reduction.js';
 
 let root = '';
@@ -81,9 +81,14 @@ describe('findJevPluginIds', () => {
 describe('claudeSkillReduction', () => {
   const base = { nativeRole: false, mcpRoute: true, settingsFile: true };
   beforeEach(() => { claudeSkillRoute.catalogReady = true; });
-  afterEach(() => { claudeSkillRoute.catalogReady = false; });
+  afterEach(() => { claudeSkillRoute.catalogReady = true; });
 
-  it('боевого каталога Claude у find_skill нет (выключатель по умолчанию) — список полный', async () => {
+  it('каталог Claude у find_skill есть: выключатель по умолчанию включён', async () => {
+    vi.resetModules();
+    expect((await import('./skill-reduction.js')).claudeSkillRoute.catalogReady).toBe(true);
+  });
+
+  it('выключатель выключен — список Claude полный', async () => {
     claudeSkillRoute.catalogReady = false;
     expect(await claudeSkillReduction({ ...base, cwd, configDir: config })).toEqual({ reduced: false });
   });

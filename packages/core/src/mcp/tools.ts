@@ -1,4 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { claudeProjectRoots } from '../discover.js';
+import { readClaudeSkillCatalog } from '../skills/claude-listing.js';
 import { readCodexSkillCatalog } from '../skills/context.js';
 import { searchSkills } from '../skills/search.js';
 import type { SkillCatalog } from '../skills/catalog.js';
@@ -1286,8 +1289,8 @@ const FIND_SKILL: Tool = {
     limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
   }, required: ['query'], additionalProperties: false },
 };
-// Подтверждённое сокращение родного списка (спека, 2.3): фраза о нём есть только тогда. Для Claude сокращение
-// включается только вместе с боевым каталогом (work/skill-reduction.ts, claudeSkillRoute): сейчас его нет.
+// Подтверждённое сокращение родного списка (спека, 2.3): фраза о нём есть только тогда. Каталог Claude берётся из
+// транскрипта сессии (skills/claude-listing.ts), поэтому сокращение его списка включено вместе с навигатором.
 const CLAUDE_NAMES_ONLY = ' Your native skill list shows names only: this tool returns the descriptions.';
 const CODEX_NO_LIST = ' Your native skill list is removed: this tool returns descriptions, the names are below.';
 const CODEX_NO_LIST_NO_NAMES = ' Your native skill list is removed and its names could not be read: search with task words.';
@@ -1309,7 +1312,8 @@ function nativeNames(names: readonly string[]): string {
 const NO_SKILL = 'No skill matched: work without one, or try other words';
 /** One process owns its promise cache. No shared/global catalog or per-search CLI startup. */
 function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find: (args: Record<string, unknown>) => Promise<unknown> } {
-  const catalogs = new Map<string, Promise<SkillCatalog | null>>();
+  type Built = { catalog: SkillCatalog | null; reason?: string; retry?: boolean };
+  const catalogs = new Map<string, Promise<Built>>();
   async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
     const map = await readMap(context.projectPath, context.workId);
     const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
@@ -1325,18 +1329,27 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
     const bound = descriptor !== null && (!own || context.nativeContextRevision !== undefined) && await nativeContextMatches(descriptor, session.provider, cwd,
       own ? context.nativeContextRevision : undefined, session);
     const key = JSON.stringify([session.id, session.provider, cwd, descriptor?.revision ?? 'fixture', bound,
-      own ? context.nativeContextRevision : descriptor?.process ?? [session.pid, session.startedAtProcess]]);
-    if (!catalogs.has(key)) catalogs.set(key, (async () => {
-      if (context.skillCatalog) return context.skillCatalog(session, cwd);
-      if (!bound || !descriptor?.verified || !descriptor.command) return null;
-      // Claude menu presence cannot establish that Skill is available to the actual native role.
-      if (session.provider !== 'codex') return null;
-      return readCodexSkillCatalog({ cwd, command: descriptor.command, configArgs: descriptor.configArgs,
+      own ? context.nativeContextRevision : descriptor?.process ?? [session.pid, session.startedAtProcess], session.providerSessionId ?? null]);
+    if (!catalogs.has(key)) catalogs.set(key, (async (): Promise<Built> => {
+      if (context.skillCatalog) return { catalog: await context.skillCatalog(session, cwd) };
+      if (session.provider === 'claude') {
+        // Что модель может загрузить, пишет в транскрипт сам Claude Code: отдельная проверка роли и настроек не нужна.
+        const homeDir = descriptor?.roots.homeDir ?? process.env.HOME ?? homedir();
+        const configDir = descriptor?.roots.claudeConfigDir ?? (process.env.CLAUDE_CONFIG_DIR ? path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR) : undefined);
+        const built = await readClaudeSkillCatalog({ cwd, homeDir, providerSessionId: session.providerSessionId ?? null,
+          ...(configDir ? { configDir } : {}), roots: claudeProjectRoots({ ...process.env, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }, homeDir) });
+        // Транскрипта или вложения ещё нет: честная причина, и следующий вызов прочитает заново.
+        return 'catalog' in built ? built : { catalog: null, reason: built.reason, retry: true };
+      }
+      if (!bound || !descriptor?.verified || !descriptor.command) return { catalog: null };
+      return { catalog: await readCodexSkillCatalog({ cwd, command: descriptor.command, configArgs: descriptor.configArgs,
         env: { ...process.env, HOME: descriptor.roots.homeDir, CODEX_HOME: descriptor.roots.codexHome ?? path.join(descriptor.roots.homeDir, '.codex') },
-        homeDir: descriptor.roots.homeDir, ...(descriptor.roots.codexHome ? { codexHome: descriptor.roots.codexHome } : {}) });
-    })().catch(() => null));
-    const catalog = await catalogs.get(key)!;
-    return { session, cwd, catalog, ...(catalog === null ? { reason: 'Native skill availability or loading route is unverified; use the full native skill list.' } : catalog.partial ? { reason: 'Some native skill metadata or policy could not be verified.' } : {}) };
+        homeDir: descriptor.roots.homeDir, ...(descriptor.roots.codexHome ? { codexHome: descriptor.roots.codexHome } : {}) }) };
+    })().catch(() => ({ catalog: null })));
+    const built = await catalogs.get(key)!;
+    if (built.retry) catalogs.delete(key);
+    const { catalog } = built;
+    return { session, cwd, catalog, ...(catalog === null ? { reason: built.reason ?? 'Native skill availability or loading route is unverified; use the full native skill list.' } : catalog.partial ? { reason: 'Some native skill metadata or policy could not be verified.' } : {}) };
   }
   return {
     async list() {
@@ -1357,7 +1370,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
       const selected = await target(args.for as string | undefined);
       const matches = selected.catalog ? searchSkills(selected.catalog.skills, args.query, (args.limit ?? 5) as number) : [];
       return { provider: selected.session.provider, skills: matches.map(({ skill }) => ({ name: skill.name,
-        description: skill.description, source: skill.source,
+        ...(skill.description ? { description: skill.description } : {}), source: skill.source,
         load: skill.provider === 'claude' ? `Use the Skill tool with ${JSON.stringify(skill.name)}.` : `Read ${skill.path}.`,
       })), ...(matches.length === 0 ? { message: NO_SKILL } : {}), ...(selected.reason ? { reason: selected.reason } : {}) };
     },

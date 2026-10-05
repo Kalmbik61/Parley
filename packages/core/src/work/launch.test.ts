@@ -63,7 +63,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  claudeSkillRoute.catalogReady = false;
+  claudeSkillRoute.catalogReady = true;
   delete process.env['PARLEY_HOME'];
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
