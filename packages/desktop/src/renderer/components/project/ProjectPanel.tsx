@@ -170,9 +170,9 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   return <Dialog open={projectPath !== null} onOpenChange={onOpenChange}>
     <DialogContent className="w-[calc(100%-2rem)] max-w-4xl">
       <DialogTitle>{S.projectPanel.title}</DialogTitle>
-      <DialogDescription className="break-all">{projectPath}</DialogDescription>
-      <div className="space-y-5">
-        <section aria-label="PARLEY.md" className="space-y-2 rounded-md border border-border p-3">
+      <DialogDescription className="shrink-0 break-all">{projectPath}</DialogDescription>
+      <div className="flex flex-col gap-5">
+        <section aria-label="PARLEY.md" className="shrink-0 space-y-2 rounded-md border border-border p-3">
           <h3 className="font-medium">PARLEY.md</h3>
           <p className="text-sm">{S.projectPanel.parleyDescription}</p>
           {parley.exists === null && !parley.error && <p role="status" className="text-xs">{S.projectPanel.parleyLoading}</p>}
@@ -181,8 +181,8 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
             {parley.exists === false ? S.sidebar.createParleyMd : S.sidebar.openParleyMd}
           </Button>
         </section>
-        <Tabs defaultValue="capabilities">
-          <TabsList aria-label={S.projectPanel.title}><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger></TabsList>
+        <Tabs defaultValue="capabilities" className="flex min-h-0 flex-1 flex-col">
+          <TabsList aria-label={S.projectPanel.title} className="self-start"><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger></TabsList>
           <TabsContent value="capabilities" className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-xs text-muted-foreground">{S.projectPanel.appliesToNew}</p>
@@ -224,7 +224,9 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                   workId: suggestion.author.workId, sessionId: suggestion.author.sessionId }} bridge={bridge} revision={suggestion.author.revision} /></span>
                 : `${suggestion.workId}/${suggestion.sessionId}`} />
           </TabsContent>
-          <TabsContent value="decisions" className="space-y-3">
+          {/* Список решений прокручивается внутри диалога: общий верх (путь, PARLEY.md) его не вытесняет.
+              min-h-48 — запас, чтобы в низком окне список не сжимался в одну строку: тогда прокручивается вся колонка. */}
+          <TabsContent value="decisions" className="min-h-48 flex-1 overflow-auto">
             <DecisionsPanel bridge={bridge} projectPath={projectPath} supported={methods.has('decisions.list')} connection={connection}
               onOpen={async (project, file) => { await bridge.app.openDecision(project, file); }} />
           </TabsContent>

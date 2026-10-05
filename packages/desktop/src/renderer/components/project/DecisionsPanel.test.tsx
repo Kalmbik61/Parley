@@ -43,7 +43,8 @@ describe('Decisions tab', () => {
     ]));
     render(show());
     await screen.findByText('Retained one');
-    expect(screen.getByText('Accepted · workspace deleted')).toBeTruthy();
+    // Работы больше нет: подпись не выдаёт решение за сверенное.
+    expect(screen.getByText('Accepted · workspace deleted · contents not verified')).toBeTruthy();
     expect(screen.getByText('Edited after acceptance')).toBeTruthy(); expect(screen.getByText('Unverified file')).toBeTruthy();
     expect(screen.getByText('Export pending · not written yet')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /Open accepted revision/ })).toHaveLength(1);

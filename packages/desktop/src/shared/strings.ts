@@ -154,7 +154,7 @@ export const S = {
       'map-unreadable': (n: number): string => `${n} workspace ${n === 1 ? 'map' : 'maps'} could not be checked, so some files are unverified.`,
       'scan-limit': (): string => 'Only the newest files were read.',
     },
-    states: { accepted: 'Accepted', retained: 'Accepted · workspace deleted', edited: 'Edited after acceptance',
+    states: { accepted: 'Accepted', retained: 'Accepted · workspace deleted · contents not verified', edited: 'Edited after acceptance',
       unverified: 'Unverified file', pending: 'Export pending · not written yet' },
     completion: 'Completion', revision: (rev: number): string => `revision ${rev}`,
     showing: (shown: number, total: number): string => `Showing ${shown} of ${total}`,

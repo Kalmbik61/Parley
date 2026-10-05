@@ -7,6 +7,7 @@ import { S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { Button } from '../../ui/button.js';
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 
 const H = S.roomHistory;
 type Action = 'share' | 'unshare';
@@ -33,6 +34,8 @@ export function RoomHistoryMenu({ projectPath, workId, roomId, bridge }: RoomHis
   const currentIdentity = useRef(identity); currentIdentity.current = identity;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
   const generation = useRef(0);
+  // Номер последнего чтения: ответ более раннего чтения, пришедший позже, не применяется.
+  const readSeq = useRef(0);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<RoomHistoryStatusView | null>(null);
   const [reading, setReading] = useState(false);
@@ -56,15 +59,16 @@ export function RoomHistoryMenu({ projectPath, workId, roomId, bridge }: RoomHis
   // Чтение только когда меню открыто: закрытое меню хост не трогает.
   useEffect(() => {
     if (!open || !supported || !connected) return;
-    const token = generation.current; const captured = identity;
+    const token = generation.current; const captured = identity; const seq = ++readSeq.current;
+    const latest = (): boolean => alive(token, captured) && readSeq.current === seq;
     setReading(true); setReadFailed(false);
     void bridge.call('rooms.history.get', { projectPath, workId, roomId }).then(value => {
-      if (!alive(token, captured)) return;
+      if (!latest()) return;
       const parsed = roomHistoryStatus.safeParse(value);
       if (parsed.success) setStatus(parsed.data); else { setStatus(null); setReadFailed(true); }
     }).catch(() => {
-      if (alive(token, captured)) { setStatus(null); setReadFailed(true); }
-    }).finally(() => { if (alive(token, captured)) setReading(false); });
+      if (latest()) { setStatus(null); setReadFailed(true); }
+    }).finally(() => { if (latest()) setReading(false); });
   }, [open, supported, connected, identity, bridge, reload]);
 
   const run = async (action: Action): Promise<void> => {
@@ -88,30 +92,39 @@ export function RoomHistoryMenu({ projectPath, workId, roomId, bridge }: RoomHis
     } finally { if (alive(token, captured)) setBusy(false); }
   };
 
+  // Закрытие (Escape, клик вне, повторный клик) снимает неподтверждённое: после повторного открытия Share снова явный.
+  const changeOpen = (next: boolean): void => { setOpen(next); if (!next) { setConfirm(null); setFeedback(null); } };
+
   const shared = status?.state === 'shared';
-  return <div data-room-history="" className="flex flex-wrap items-center gap-2 text-xs">
-    <Button type="button" variant="outline" aria-expanded={open} onClick={() => setOpen(value => !value)}>{H.menu}</Button>
-    {open && <div role="group" aria-label={H.menu} className="basis-full space-y-2">
-      {!connected ? <p role="status">{H.disconnected}</p>
-        : !supported ? <p role="status">{H.unavailable}</p>
-          : <>
-            {reading && status === null && <p role="status">{H.loading}</p>}
-            {readFailed && <p role="alert" className="text-destructive">{H.loadFailed}</p>}
-            {status !== null && <p role="status">{shared && status.sharedAt !== null ? H.sharedAt(status.sharedAt) : status.state === 'conflict' ? H.conflict : H.notShared}</p>}
-            {diagnostics.map(code => <p key={code} role="status">{H.ignore[code as keyof typeof H.ignore]}</p>)}
-            {feedback !== null && <p role="alert" className="text-destructive">{feedback}</p>}
-            {confirm === null ? <div className="flex flex-wrap gap-2">
-              {status !== null && status.state !== 'conflict' && <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm('share')}>{shared ? H.reshare : H.share}</Button>}
-              {shared && <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm('unshare')}>{H.unshare}</Button>}
-              <Button type="button" variant="outline" disabled={reading || busy} onClick={() => setReload(value => value + 1)}>{H.refresh}</Button>
-            </div> : <div className="space-y-2">
-              <p>{confirm === 'share' ? H.shareWarning : H.unshareWarning}</p>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" disabled={busy} onClick={() => void run(confirm)}>{confirm === 'share' ? H.confirmShare : H.confirmUnshare}</Button>
-                <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm(null)}>{S.common.cancel}</Button>
-              </div>
-            </div>}
-          </>}
-    </div>}
+  // Панель всплывает поверх ленты: шапка комнаты от раскрытия не растёт, длинное содержимое прокручивается внутри панели.
+  return <div data-room-history="" className="flex items-center gap-2 text-xs">
+    <Popover open={open} onOpenChange={changeOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline">{H.menu}</Button>
+      </PopoverTrigger>
+      <PopoverContent role="group" aria-label={H.menu} align="start" collisionPadding={8}
+        className="max-h-[min(24rem,var(--radix-popover-content-available-height))] w-80 max-w-[calc(100vw-1rem)] space-y-2 overflow-y-auto text-xs">
+        {!connected ? <p role="status">{H.disconnected}</p>
+          : !supported ? <p role="status">{H.unavailable}</p>
+            : <>
+              {reading && status === null && <p role="status">{H.loading}</p>}
+              {readFailed && <p role="alert" className="text-destructive">{H.loadFailed}</p>}
+              {status !== null && <p role="status">{shared && status.sharedAt !== null ? H.sharedAt(status.sharedAt) : status.state === 'conflict' ? H.conflict : H.notShared}</p>}
+              {diagnostics.map(code => <p key={code} role="status">{H.ignore[code as keyof typeof H.ignore]}</p>)}
+              {feedback !== null && <p role="alert" className="text-destructive">{feedback}</p>}
+              {confirm === null ? <div className="flex flex-wrap gap-2">
+                {status !== null && status.state !== 'conflict' && <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm('share')}>{shared ? H.reshare : H.share}</Button>}
+                {shared && <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm('unshare')}>{H.unshare}</Button>}
+                <Button type="button" variant="outline" disabled={reading || busy} onClick={() => setReload(value => value + 1)}>{H.refresh}</Button>
+              </div> : <div className="space-y-2">
+                <p>{confirm === 'share' ? H.shareWarning : H.unshareWarning}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" disabled={busy} onClick={() => void run(confirm)}>{confirm === 'share' ? H.confirmShare : H.confirmUnshare}</Button>
+                  <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm(null)}>{S.common.cancel}</Button>
+                </div>
+              </div>}
+            </>}
+      </PopoverContent>
+    </Popover>
   </div>;
 }

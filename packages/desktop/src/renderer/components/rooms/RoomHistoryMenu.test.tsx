@@ -136,4 +136,31 @@ describe('room History menu', () => {
     await screen.findByText('The history could not be shared. Nothing was recorded as shared.');
     expect(screen.queryByText(/^Shared at /)).toBeNull();
   });
+  it('applies only the reply of the latest read when two reads overlap', async () => {
+    const first = deferred<RoomHistoryStatusView>();
+    let calls = 0;
+    bridge.setHandler('rooms.history.get', () => (++calls === 1 ? first.promise : NOT_SHARED));
+    render(show()); await openMenu();
+    await waitFor(() => expect(methodsCalled('rooms.history.get')).toHaveLength(1));
+    // Закрыли и открыли заново, пока первое чтение висит: идёт второе, оно и последнее.
+    await openMenu(); await openMenu();
+    await screen.findByText('Not shared');
+    await act(async () => { first.resolve(SHARED); });
+    expect(methodsCalled('rooms.history.get')).toHaveLength(2);
+    expect(screen.getByText('Not shared')).toBeTruthy(); expect(screen.queryByText(/^Shared at /)).toBeNull();
+  });
+  it('is a floating panel: Escape closes it and drops a pending confirmation', async () => {
+    bridge.setHandler('rooms.history.get', () => NOT_SHARED);
+    bridge.setHandler('rooms.history.share', () => SHARED);
+    const { container } = render(show()); await openMenu(); await screen.findByText('Not shared');
+    // Панель вынесена из шапки (портал): раскрытие не растит саму шапку.
+    expect(container.contains(screen.getByRole('group', { name: 'History' }))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Share history…' }));
+    expect(screen.getByText(/shared Git files/)).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'History' })).toBeNull());
+    expect(methodsCalled('rooms.history.share')).toHaveLength(0);
+    await openMenu(); await screen.findByText('Not shared');
+    expect(screen.queryByText(/shared Git files/)).toBeNull();
+  });
 });
