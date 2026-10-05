@@ -46,6 +46,12 @@
  * что проект — git-репозиторий (`branches` для этого не годится: при отсоединённой голове ветки нет и у git-проекта).
  * Флажок один на все сессии диалога: у каждого агента комнаты свой worktree.
  *
+ * Бюджет работы (P37): пороги читаются из настроек при открытии, занятое — из карты выбранной работы. Подвал показывает,
+ * сколько сессий идёт и сколько запусков осталось в часе; старт, который не помещается (нужные участники больше свободных
+ * слотов или запусков, комната больше своего порога), блокируется с объяснением — до первого `sessions.create`, чтобы
+ * команда не стартовала наполовину. Старт команды создаёт ровно запрошенных участников: временной одиночной сессии нет.
+ * Отказ самого хоста (бюджет исчерпал другой процесс) показывается по агенту его же текстом.
+ *
  * Агент по умолчанию — то же правило, что у диалога новой работы (`lib/default-provider.ts`); последний выбранный
  * запоминается в `ui.json.lastProvider`. Список провайдеров может прийти позже открытия — строки ждут его как
  * «агент по умолчанию», а кнопка неактивна до ответа.
@@ -58,6 +64,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GitBranch, Plus, X } from 'lucide-react';
 import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WorkEntry } from '@parley/core';
+import {
+  RESOURCE_LIMIT_KEYS,
+  limitsFromConfig,
+  resourceStatus,
+  teamStartFits,
+  type ResourceLimits,
+} from '@parley/core/resource-policy';
 import type { BacklogMethodParams, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -192,6 +205,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   const [results, setResults] = useState<Record<number, AgentResult>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Пороги бюджета из настроек этого открытия; `null` — хост их не отдал (старый хост) или ответ не пришёл. */
+  const [limits, setLimits] = useState<ResourceLimits | null>(null);
   const nextKey = useRef(room ? 3 : 2);
   /** Снятия ожиданий снимка (`openWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
@@ -246,6 +261,23 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
         if (stale) return;
         console.warn('[parley] providers.list', err);
         setError(errorText(decodeIpcError(err).code, S.errors.actions.loadProviders));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [open, bridge]);
+
+  useEffect(() => {
+    if (!open) return;
+    let stale = false;
+    setLimits(null);
+    bridge
+      .call('settings.get', {})
+      .then(({ config }) => {
+        if (!stale && RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number')) setLimits(limitsFromConfig(config));
+      })
+      .catch(() => {
+        // Без порогов подвал бюджета не показывается, а решает хост.
       });
     return () => {
       stale = true;
@@ -449,7 +481,14 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
           if (!backlog) console.warn('[parley] sessions.create', err);
-          done[row.key] = { status: 'failed', message: errorText(decodeIpcError(err).code, S.errors.actions.createSession) };
+          const failure = decodeIpcError(err);
+          // Бюджет исчерпал кто-то другой за время диалога: хост назвал предел сам — показываем его слова.
+          done[row.key] = {
+            status: 'failed',
+            message: failure.data?.['code'] === 'resource-budget'
+              ? S.dialogs.newSession.budgetRefused(failure.message)
+              : errorText(failure.code, S.errors.actions.createSession),
+          };
           allStarted = false;
         }
         // Диалог закрыли, пока шёл этот агент, — следующих не запускаем и итог в форму не пишем.
@@ -524,6 +563,20 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   };
 
   const text = S.dialogs.newSession;
+  /**
+   * Бюджет выбранной работы. Нужны слоты только тем строкам, что ещё не запущены (после частичного сбоя «Retry»
+   * повторяет упавших), а порог комнаты — всему составу: комната работает целиком.
+   */
+  const budget = limits === null || selected === null ? null : resourceStatus(selected.map, limits, Date.now());
+  const pendingStarts = agents.filter((row) => !started(row)).length;
+  const fit = budget === null || limits === null ? null : teamStartFits(budget, pendingStarts, multi ? limits.roomConcurrent : undefined);
+  const budgetBlocked =
+    fit === null || fit.fits ? null
+      : fit.scope === 'room' ? text.budgetBlockedRoom(agents.length, fit.remaining)
+        : fit.reason === 'launches' ? text.budgetBlockedStarts(fit.needed, fit.remaining)
+          : text.budgetBlockedSlots(fit.needed, fit.remaining);
+  const budgetText = budget === null ? null
+    : text.budgetLine(budget.work.concurrent.used + budget.work.concurrent.reserved, budget.work.concurrent.limit, budget.work.launches.remaining);
   const workTitle = selected === null ? '' : workTitleText(selected.map.work.title);
   const summary = multi ? text.summaryRoom(agents.length, workTitle) : text.summarySession(workTitle);
 
@@ -794,16 +847,22 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
                 {error}
               </p>
             ) : null}
+            {budgetBlocked !== null ? (
+              <p role="status" data-budget-blocked className="m-0 break-words text-destructive">{budgetBlocked}</p>
+            ) : null}
             <span className="truncate text-neutral-700" title={summary}>
               {summary}
             </span>
+            {budgetText !== null ? (
+              <span data-budget className="truncate text-neutral-700" title={budgetText}>{budgetText}</span>
+            ) : null}
           </div>
           <DialogClose asChild>
             <Button type="button" variant="outline">
               {S.common.cancel}
             </Button>
           </DialogClose>
-          <Button type="button" disabled={busy || providers === null || selected === null || agents.some((row) => row.roleMissing !== null)} onClick={() => void submit()}>
+          <Button type="button" disabled={busy || providers === null || selected === null || budgetBlocked !== null || agents.some((row) => row.roleMissing !== null)} onClick={() => void submit()}>
             {retrying ? S.common.retry : multi ? text.submitRoom : text.submitSession}
           </Button>
         </DialogFooter>

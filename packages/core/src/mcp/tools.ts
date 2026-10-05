@@ -17,7 +17,7 @@ import {
   type Request,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
   EFFORT_LEVELS,
@@ -44,6 +44,15 @@ import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
+import {
+  admitSpawn,
+  assertMessageBudget,
+  countRecipients,
+  deniedForAgent,
+  limitsFromConfig,
+  ResourceDeniedError,
+  type ResourceLimits,
+} from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
@@ -224,15 +233,23 @@ const messageView = (message: Message, map: WorkMap) => {
  * этой сессии за последний час по всей карте. Скользящий час отличает петлю от
  * честной долгой работы и восстанавливается сам; состояния нет — всё в карте.
  */
-function assertRate(map: WorkMap, sessionId: string, limit: number, now: number): void {
+function assertRate(map: WorkMap, sessionId: string, limit: number, now: number, needed = 1): void {
   const recent = map.messages.filter(
     (message) => message.from === sessionId && now - Date.parse(message.at) < RATE_WINDOW_MS,
   ).length;
-  if (recent >= limit) {
+  if (recent + needed > limit) {
     throw new Error(
       `too many messages: ${recent} from this session in the last hour (limit ${limit}); call report and turn to the human`,
     );
   }
+}
+
+/**
+ * Пороги бюджета для допуска. Настройки читаются заново на каждый допуск, а не при старте сервера: изменение человека
+ * в окне действует сразу, а агент остановленный лимит сам расширить не может — у него нет ни инструмента, ни аргумента.
+ */
+async function limitsOf(context: McpContext): Promise<ResourceLimits> {
+  return context.resourceLimits ?? limitsFromConfig((await loadConfig()).config);
 }
 
 /**
@@ -669,10 +686,14 @@ async function spawnSession(
       parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
   }
 
+  const limits = await limitsOf(context);
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
     for (const id of contextFrom) requireSession(current, id);
+    // Допуск и запись сессии — одна мутация под замком карты: отказ не оставляет ни сессии, ни резерва, а параллельные
+    // вызовы разных агентов видят слоты друг друга.
+    const attempt = admitSpawn(current, { actor: sessionId, limits });
     const session = addSession(current, {
       provider,
       label,
@@ -684,6 +705,7 @@ async function spawnSession(
       ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
     });
     created = session.id;
+    attempt.session = session.id;
     if (worktreeBase !== null) {
       // Сам worktree на диске заводит хост перед запуском (кусок 4.2); здесь —
       // только план с `createdAt: null`.
@@ -842,6 +864,7 @@ async function sendMessage(
   // Пустая строка — ошибка, как у `room`: `stringArg` пустое значение не пропускает.
   const replyTo = optionalStringArg(args, 'replyTo');
 
+  const limits = await limitsOf(context);
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
@@ -870,6 +893,13 @@ async function sendMessage(
           throw new Error(`message ${replyTo} is not in room ${roomId}`);
         }
       }
+      assertMessageBudget(current, {
+        actor: sessionId,
+        room: roomId,
+        messages: 1,
+        recipients: countRecipients(current, sessionId, roomId, to),
+        limits,
+      });
       // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
       created = addMessage(current, {
         from: sessionId,
@@ -888,6 +918,7 @@ async function sendMessage(
       }
       const target = to[0] as string;
       assertDeliverable(current, target);
+      assertMessageBudget(current, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
@@ -916,6 +947,7 @@ async function createRoom(
   const membersInput = stringsArg(args, 'members');
   const leadInput = optionalStringArg(args, 'lead');
 
+  const limits = await limitsOf(context);
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
@@ -927,6 +959,12 @@ async function createRoom(
       if (member.lifecycle === 'closed') {
         throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
+    }
+    // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
+    // иначе исчерпанный лимит обходился бы созданием комнаты.
+    if (members.length > 0) {
+      assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), members.length);
+      assertMessageBudget(current, { actor: sessionId, room: null, messages: members.length, recipients: members.length, limits });
     }
 
     // Без `lead` ведущий — вызывающий: агент заводит комнату для своих подчинённых и ведёт её сам
@@ -964,6 +1002,9 @@ async function addToRoom(
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
+    // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
+    // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
     messageId = addMemberByLead(current, roomId, sessionId, target).id;
   });
   return { messageId };
@@ -1462,7 +1503,9 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
         const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
         return { content: [{ type: 'text', text }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: (error as Error).message }], isError: true };
+        // Исчерпанный бюджет — безопасный исход: текст говорит, что расширяет его только человек.
+        const text = error instanceof ResourceDeniedError ? deniedForAgent(error) : (error as Error).message;
+        return { content: [{ type: 'text', text }], isError: true };
       }
     },
   );

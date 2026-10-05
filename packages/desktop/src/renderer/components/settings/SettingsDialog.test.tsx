@@ -425,3 +425,70 @@ describe('SettingsDialog — skill navigator', () => {
     } finally { warn.mockRestore(); }
   });
 });
+
+describe('SettingsDialog — пороги бюджета работы (P37)', () => {
+  const LIMITS = {
+    workConcurrent: 10, roomConcurrent: 6, workNewSessions: 30, roomNewSessions: 12, spawnDepth: 3,
+    workLaunches: 40, roomLaunches: 20, workMessages: 200, roomMessages: 100, fanout: 400,
+  };
+  const WITH_LIMITS = { ...CONFIG, ...LIMITS };
+
+  it('подраздел показывает все десять порогов с границами, а подсказка называет, что это не токены и не деньги', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const section = await screen.findByRole('region', { name: 'Work limits' });
+    expect(section.querySelectorAll('input')).toHaveLength(10);
+    expect(section.textContent).toContain('Running sessions, workspace (1…64)');
+    expect(section.textContent).toContain('Agent-created sessions, room (0…1000)');
+    expect(section.textContent).toContain('not tokens or money');
+    expect(section.textContent).toContain('Subagents a CLI starts inside its own session are not counted');
+    expect((screen.getByLabelText(/Spawn depth/) as HTMLInputElement).value).toBe('3');
+  });
+
+  it('человек меняет порог явно: blur зовёт settings.set с ключом и текстом', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...WITH_LIMITS, [key]: Number(value) } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = await screen.findByLabelText(/Running sessions, room/);
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'roomConcurrent', value: '4' } }),
+    );
+  });
+
+  it('отказ хоста по порогу — безопасный текст под полем; порог из окружения заперт', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: { fanout: 'PARLEY_FANOUT' } }));
+    bridge.setHandler('settings.set', () => {
+      throw { code: 'bad_request', message: 'fanout: expected an integer from 1 to 100000 /private/path' };
+    });
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    expect((await screen.findByLabelText(/Message deliveries per hour/) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/set by PARLEY_FANOUT/)).toBeTruthy();
+
+    const input = screen.getByLabelText(/Agent messages per hour, workspace/);
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getByText(/Couldn't save settings/)).toBeTruthy());
+    expect(document.body.textContent).not.toContain('/private/path');
+  });
+
+  it('хост прежней версии порогов не отдаёт: подраздела нет', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('region', { name: 'Work limits' })).toBeNull();
+  });
+});

@@ -451,6 +451,40 @@ export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanL
 export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 
+export {
+  DEFAULT_RESOURCE_LIMITS,
+  REQUEST_BUDGET_EXTENSION,
+  RESOURCE_COVERAGE,
+  RESOURCE_LIMIT_BOUNDS,
+  RESOURCE_LIMIT_KEYS,
+  RESOURCE_WINDOW_MS,
+  ResourceDeniedError,
+  admitSpawn,
+  assertMessageBudget,
+  attemptKindFor,
+  countRecipients,
+  deniedForAgent,
+  limitsFromConfig,
+  reserveAttempt,
+  resourceStatus,
+  roomOfSession,
+  settleAttempt,
+  settleByEvidence,
+  spawnDepthOf,
+  teamStartFits,
+} from './work/resource-policy.js';
+export type {
+  Meter,
+  MessageRequest,
+  ReserveRequest,
+  ResourceDeniedCode,
+  ResourceLimits,
+  ResourceStatus,
+  ScopeStatus,
+  SpawnRequest,
+} from './work/resource-policy.js';
+export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+
 export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
 export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';
 export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, readRoomHistoryStatus, RoomHistoryError } from './work/room-history.js';

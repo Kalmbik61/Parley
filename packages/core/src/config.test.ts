@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, ENV_NAMES, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
 import { DEFAULT_WORKTREE_ROOT } from './names.js';
+import { DEFAULT_RESOURCE_LIMITS } from './work/resource-policy.js';
 
 let home = '';
 const file = (): string => path.join(home, 'config.json');
@@ -36,6 +37,7 @@ describe('loadConfig', () => {
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
+      ...DEFAULT_RESOURCE_LIMITS,
     });
     expect(loaded.config).toEqual(DEFAULT_CONFIG);
     expect(loaded.warning).toBeNull();
@@ -71,6 +73,7 @@ describe('loadConfig', () => {
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
+      ...DEFAULT_RESOURCE_LIMITS,
     });
     expect(fromFile.warning).toBeNull();
 
@@ -91,6 +94,7 @@ describe('loadConfig', () => {
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
+      ...DEFAULT_RESOURCE_LIMITS,
     });
     expect(fromEnv.warning).toBeNull();
   });
@@ -343,6 +347,16 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
+    ['workConcurrent', 'WORK_CONCURRENT', '12', 12],
+    ['roomConcurrent', 'ROOM_CONCURRENT', '4', 4],
+    ['workNewSessions', 'WORK_NEW_SESSIONS', '0', 0],
+    ['roomNewSessions', 'ROOM_NEW_SESSIONS', '5', 5],
+    ['spawnDepth', 'SPAWN_DEPTH', '2', 2],
+    ['workLaunches', 'WORK_LAUNCHES', '50', 50],
+    ['roomLaunches', 'ROOM_LAUNCHES', '25', 25],
+    ['workMessages', 'WORK_MESSAGES', '300', 300],
+    ['roomMessages', 'ROOM_MESSAGES', '150', 150],
+    ['fanout', 'FANOUT', '500', 500],
   ] as const;
 
   it('ключи таблицы ENV_NAMES — соответствуют всем настройкам', () => {
@@ -405,6 +419,49 @@ describe('переменные окружения: PARLEY_* и прежние HA
       if (saved.harnas === undefined) delete process.env.HARNAS_HOME;
       else process.env.HARNAS_HOME = saved.harnas;
     }
+  });
+});
+
+describe('пороги бюджета (P37)', () => {
+  it('по умолчанию комната уже работы, а у каждого порога есть видимое число', () => {
+    expect(DEFAULT_CONFIG.roomConcurrent).toBeLessThan(DEFAULT_CONFIG.workConcurrent);
+    expect(DEFAULT_CONFIG.roomNewSessions).toBeLessThan(DEFAULT_CONFIG.workNewSessions);
+    expect(DEFAULT_CONFIG.roomLaunches).toBeLessThan(DEFAULT_CONFIG.workLaunches);
+    expect(DEFAULT_CONFIG.roomMessages).toBeLessThan(DEFAULT_CONFIG.workMessages);
+  });
+
+  it('старый файл без порогов читается с умолчаниями и без предупреждения', async () => {
+    await write({ messageRate: 5, autoLaunch: false });
+    const loaded = await loadConfig(file(), {});
+    expect(loaded.warning).toBeNull();
+    expect(loaded.config.workConcurrent).toBe(DEFAULT_CONFIG.workConcurrent);
+    expect(loaded.config.fanout).toBe(DEFAULT_CONFIG.fanout);
+  });
+
+  it('значение вне границ ключа — предупреждение, порог остаётся умолчанием; ноль нужен только новым сессиям', async () => {
+    await write({ workConcurrent: 0, workNewSessions: 0, spawnDepth: 99, fanout: 2.5 });
+    const loaded = await loadConfig(file(), {});
+    expect(loaded.config.workConcurrent).toBe(DEFAULT_CONFIG.workConcurrent);
+    expect(loaded.config.spawnDepth).toBe(DEFAULT_CONFIG.spawnDepth);
+    expect(loaded.config.fanout).toBe(DEFAULT_CONFIG.fanout);
+    expect(loaded.config.workNewSessions).toBe(0);
+    expect(loaded.warning).toContain('workConcurrent: expected an integer from 1 to 64');
+    expect(loaded.warning).toContain('spawnDepth: expected an integer from 1 to 8');
+  });
+
+  it('parseSetting: теми же границами, что у файла и окружения; пустая строка — не ноль', () => {
+    expect(parseSetting('roomConcurrent', '3')).toEqual({ value: 3 });
+    expect(parseSetting('workNewSessions', '0')).toEqual({ value: 0 });
+    expect(parseSetting('workConcurrent', '0')).toEqual({ error: 'workConcurrent: expected an integer from 1 to 64' });
+    expect(parseSetting('fanout', '')).toMatchObject({ error: expect.any(String) });
+    expect(parseSetting('spawnDepth', '9')).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('человек меняет порог явно: saveConfig пишет ключ, остальные и чужие ключи остаются', async () => {
+    await write({ messageRate: 5, theme: 'nord' });
+    await saveConfig({ workConcurrent: 14 }, file());
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ messageRate: 5, theme: 'nord', workConcurrent: 14 });
+    expect((await loadConfig(file(), {})).config.workConcurrent).toBe(14);
   });
 });
 

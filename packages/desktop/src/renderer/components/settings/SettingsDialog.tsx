@@ -21,6 +21,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ParleyConfig } from '@parley/core';
+import { RESOURCE_LIMIT_BOUNDS, RESOURCE_LIMIT_KEYS } from '@parley/core/resource-policy';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
@@ -322,6 +323,31 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     onBlur={(event) => void save('worktreeRoot', event.target.value)}
                   />
                 </FieldRow>
+
+                {/* Хост прежней версии порогов не знает: подраздел показывает только то, что хост отдал. */}
+                {RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number') ? (
+                  <section aria-label={S.settings.limits.heading} className="flex flex-col gap-2 border-t pt-3">
+                    <h3 className="m-0 text-sm font-medium">{S.settings.limits.heading}</h3>
+                    <p className="m-0 text-xs text-muted-foreground">{S.settings.limits.hint}</p>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      {RESOURCE_LIMIT_KEYS.map((key) => (
+                        <FieldRow
+                          key={key}
+                          label={`${S.settings.limits[key]} (${S.settings.limits.range(RESOURCE_LIMIT_BOUNDS[key].min, RESOURCE_LIMIT_BOUNDS[key].max)})`}
+                          lockedBy={locked[key] ?? null}
+                          error={errors[key]}
+                        >
+                          <Input
+                            inputMode="numeric"
+                            defaultValue={String(config[key])}
+                            disabled={locked[key] !== undefined}
+                            onBlur={(event) => void save(key, event.target.value)}
+                          />
+                        </FieldRow>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
               </>
             ) : null}
           </TabsContent>

@@ -8,6 +8,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RESOURCE_LIMITS } from '@parley/core/resource-policy';
 import { S } from '../../../shared/strings.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
@@ -1287,6 +1288,25 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
     expect(callsOf('rooms.create')).toHaveLength(1);
   });
 
+  it('старт рецепта запускает ровно его участников: четыре sessions.create и одна комната, временной одиночной сессии нет (P37)', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(4);
+    expect(callsOf('sessions.create').map((call) => (call as { role: { name: string } }).role.name)).toEqual(['planner', 'critic', 'executor', 'reviewer']);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+  });
+
+  it('рецепт из четырёх при трёх свободных слотах: старт блокируется до первой сессии, а не наполовину (P37)', async () => {
+    bridge.setHandler('settings.get', async () => ({ config: { ...DEFAULT_RESOURCE_LIMITS, workConcurrent: 3 } as never, locked: {} }));
+    await renderDialog();
+    await pick('Plan & build');
+    await waitFor(() => expect(dialog().querySelector('[data-budget-blocked]')?.textContent).toBe('This start needs 4 session slots, 3 left. Stop a session or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+    expect(callsOf('sessions.create')).toHaveLength(0);
+  });
+
   describe('Save as recipe', () => {
     const field = (name: string): HTMLInputElement => within(dialog()).getByLabelText(name) as HTMLInputElement;
     const typeIn = (name: string, value: string): void => { fireEvent.change(field(name), { target: { value } }); };
@@ -1441,5 +1461,125 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
       expect(rows()).toHaveLength(2);
       expect(modeSelect().textContent).toBe('Checklist');
     });
+  });
+});
+
+describe('бюджет работы при старте (P37)', () => {
+  /** Пороги приходят из настроек при открытии диалога. */
+  const stubSettings = (patch: Record<string, number> = {}): void => {
+    // Диалогу нужны только пороги: остальное в настройках ему не интересно.
+    bridge.setHandler('settings.get', async () => ({ config: { ...DEFAULT_RESOURCE_LIMITS, ...patch } as never, locked: {} }));
+  };
+  const activeSessions = (count: number): void => {
+    useWorksStore.setState({
+      entries: [
+        makeWork('w-01', {
+          projectPath: PROJECT,
+          title: 'Payments',
+          sessions: Array.from({ length: count }, (_, index) => makeSession(`s-0${index + 1}`, `s${index + 1}`)),
+        }),
+      ],
+    });
+  };
+  const budgetLine = (): string | null => dialog().querySelector('[data-budget]')?.textContent ?? null;
+  const blocked = (): string | null => dialog().querySelector('[data-budget-blocked]')?.textContent ?? null;
+
+  it('подвал показывает занятое и сколько запусков осталось; пороги — из настроек, не выдуманные окном', async () => {
+    stubSettings({ workConcurrent: 5, workLaunches: 9 });
+    activeSessions(2);
+    await renderDialog();
+    await waitFor(() => expect(budgetLine()).toBe('2 of 5 sessions running · 9 starts left this hour'));
+    expect(blocked()).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('хост без порогов (прежняя версия): подвала бюджета нет, решает хост', async () => {
+    bridge.setHandler('settings.get', async () => { throw new Error('unknown method'); });
+    await renderDialog();
+    await act(async () => {});
+    expect(budgetLine()).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('старт не помещается в слоты: кнопка неактивна, причина видна, ни одной sessions.create', async () => {
+    stubSettings({ workConcurrent: 3 });
+    activeSessions(2);
+    await renderDialog({ room: true });
+    await waitFor(() => expect(blocked()).toBe('This start needs 2 session slots, 1 left. Stop a session or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+    fireEvent.click(button('Create room'));
+    await act(async () => {});
+    expect(callsOf('sessions.create')).toHaveLength(0);
+    expect(callsOf('rooms.create')).toHaveLength(0);
+
+    // Убрали агента — теперь нужно одно место, и один агент помещается.
+    fireEvent.click(screen.getAllByRole('button', { name: S.dialogs.newSession.removeAgent })[1] as HTMLElement);
+    await act(async () => {});
+    expect(blocked()).toBeNull();
+  });
+
+  it('окно запусков в часе исчерпано: сказано про запуски, а не про слоты', async () => {
+    stubSettings({ workLaunches: 1 });
+    await renderDialog({ room: true });
+    await waitFor(() => expect(blocked()).toBe('This start needs 2 launches, 1 left this hour. Wait or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+  });
+
+  it('комната больше своего порога: сказано про комнату, работа вместить могла бы', async () => {
+    stubSettings({ roomConcurrent: 2 });
+    await renderDialog({ room: true });
+    await addAgent();
+    await waitFor(() => expect(blocked()).toBe('A room runs at most 2 sessions at once; this one has 3. Remove an agent or raise the limit in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+  });
+
+  it('старт команды запускает ровно запрошенных участников: три sessions.create, одна комната, лишней одиночной сессии нет', async () => {
+    stubSettings();
+    const { onOpenChange } = await renderDialog({ room: true });
+    await addAgent();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('sessions.create').every((call) => call.parent === null && call.task === '')).toBe(true);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')[0]?.members).toEqual(['s-01', 's-02', 's-03']);
+  });
+
+  it('отказ самого хоста по агенту показан его словами, комнаты нет, модель не запущена', async () => {
+    stubSettings();
+    bridge.setHandler('sessions.create', async () => {
+      throw Object.assign(new Error('session limit reached: 10 of 10 sessions are running or reserved in this workspace; stop one or raise the limit in Settings'), {
+        code: 'conflict', data: { code: 'resource-budget', reason: 'concurrent' },
+      });
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(within(rows()[0] as HTMLElement).getByRole('status').textContent).toMatch(/^Not started: session limit reached: 10 of 10/));
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(button('Retry')).toBeTruthy();
+  });
+
+  it('Retry после частичного сбоя считает слоты только для упавших строк: запущенный уже занял своё место в карте', async () => {
+    stubSettings({ workConcurrent: 3 });
+    activeSessions(1);
+    bridge.setHandler('sessions.create', async (params) => {
+      if (callsOf('sessions.create').length === 2) throw Object.assign(new Error('boom'), { code: 'internal' });
+      const id = `s-0${nextSession++ + 1}`;
+      // Хост записал сессию в карту, окно получило новый снимок работ.
+      const [entry] = useWorksStore.getState().entries;
+      if (entry !== undefined) {
+        useWorksStore.setState({ entries: [{ ...entry, map: { ...entry.map, sessions: [...entry.map.sessions, makeSession(id, id)] } }] });
+      }
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: id } };
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await screen.findByRole('button', { name: 'Retry' });
+    await act(async () => {});
+    // Свободен один слот из трёх (занято два: прежняя и запущенная), и нужен один — упавшей строке.
+    expect(budgetLine()).toBe('2 of 3 sessions running · 40 starts left this hour');
+    expect(blocked()).toBeNull();
+    expect(button('Retry').disabled).toBe(false);
   });
 });

@@ -302,6 +302,43 @@ export interface Message {
   deleted?: boolean;
 }
 
+/** Что израсходовано под бюджет работы (`resource-policy.ts`): запуск, возобновление, повтор запуска или новая сессия от агента. */
+export type ResourceKind = 'spawn' | 'launch' | 'resume' | 'retry';
+
+/**
+ * Одна попытка в журнале ресурсов. `reserved` — слот взят до операции и ещё не подтверждён; `spent` — операция
+ * случилась (процесс стартовал, запись создана); `released` — отменена своим владельцем до результата, слот вернулся.
+ */
+export interface ResourceAttempt {
+  /** `a-0001`; счётчик `resources.seq`, id попытки не переиспользуется. */
+  id: string;
+  kind: ResourceKind;
+  state: 'reserved' | 'spent' | 'released';
+  at: string;
+  settledAt?: string;
+  /** Кто просил: id сессии (`spawn_session`), `human`, `wake` или `auto`. */
+  actor: string;
+  /** Сессия, под которую взят слот: новая (`spawn`) или поднимаемая. */
+  session: string;
+  /** Комната, чей бюджет тратится; `null` — только бюджет работы. */
+  room: string | null;
+  /** Поколение владельца резерва: чужой нерешённый резерв неоднозначен и сам по сроку не снимается. */
+  owner: string;
+}
+
+/**
+ * Журнал ресурсов работы: переживает перезапуск хоста, потому что лежит в карте и меняется под тем же замком, что и
+ * сама операция. Это счётчики запусков и сессий, а не денег: жёсткого денежного потолка у провайдера нет.
+ */
+export interface WorkResources {
+  seq: number;
+  /** Сколько новых сессий агенты завели за всё время работы; удаление сессии счётчик не уменьшает. */
+  spawned: number;
+  spawnedByRoom: Record<string, number>;
+  /** Только попытки в пределах окна и нерешённые: старые свёрнуты в счётчики. */
+  attempts: ResourceAttempt[];
+}
+
 export interface Work {
   id: string;
   title: string;
@@ -347,6 +384,8 @@ export interface WorkMap {
   decisionExports?: DecisionJournalIntent[];
   planEffects?: PlanEffect[];
   planBacklogIntents?: PlanBacklogIntent[];
+  /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
+  resources?: WorkResources;
 }
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */

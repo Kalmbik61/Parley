@@ -1,6 +1,7 @@
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
+import { validateResources } from './resource-policy.js';
 import type { EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
@@ -365,6 +366,7 @@ export function parseMap(raw: string, file: string): WorkMap {
   validatePlanStorage(map);
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);
+  validateResources(map);
   return map;
 }
 

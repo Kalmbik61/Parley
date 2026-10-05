@@ -495,6 +495,18 @@ export const S = {
       selectWorkRequired: 'No workspace selected',
       /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
       agentStarted: (tag: string): string => `${tag} started`,
+      /** Бюджет работы (P37): строка в подвале — что занято и сколько запусков осталось в часе. */
+      budgetLine: (running: number, limit: number, startsLeft: number): string =>
+        `${running} of ${limit} sessions running · ${startsLeft} starts left this hour`,
+      /** Старт не поместится: нужно столько-то слотов, осталось меньше; кнопка неактивна, расширяет лимит человек. */
+      budgetBlockedSlots: (needed: number, remaining: number): string =>
+        `This start needs ${needed} session slots, ${remaining} left. Stop a session or raise the limits in Settings → Agents.`,
+      budgetBlockedStarts: (needed: number, remaining: number): string =>
+        `This start needs ${needed} launches, ${remaining} left this hour. Wait or raise the limits in Settings → Agents.`,
+      budgetBlockedRoom: (needed: number, limit: number): string =>
+        `A room runs at most ${limit} sessions at once; this one has ${needed}. Remove an agent or raise the limit in Settings → Agents.`,
+      /** Отказ хоста по агенту (бюджет исчерпал другой процесс за время диалога): текст хоста уже называет предел. */
+      budgetRefused: (reason: string): string => `Not started: ${reason}`,
     },
     /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
     mergeRoom: {
@@ -661,6 +673,22 @@ export const S = {
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
     worktreeRoot: 'Worktree root',
+    /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
+    limits: {
+      heading: 'Work limits',
+      hint: 'Counts of sessions, starts and messages, not tokens or money. A room is limited more tightly than its workspace. Changes apply to new starts; running sessions are not stopped. Subagents a CLI starts inside its own session are not counted.',
+      workConcurrent: 'Running sessions, workspace',
+      roomConcurrent: 'Running sessions, room',
+      workNewSessions: 'Agent-created sessions, workspace',
+      roomNewSessions: 'Agent-created sessions, room',
+      spawnDepth: 'Spawn depth',
+      workLaunches: 'Starts and wake-ups per hour, workspace',
+      roomLaunches: 'Starts and wake-ups per hour, room',
+      workMessages: 'Agent messages per hour, workspace',
+      roomMessages: 'Agent messages per hour, room',
+      fanout: 'Message deliveries per hour, workspace',
+      range: (min: number, max: number): string => `${min}…${max}`,
+    },
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',
     notifyMail: 'mail and mentions to you',

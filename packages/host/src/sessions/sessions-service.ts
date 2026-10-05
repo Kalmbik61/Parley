@@ -12,8 +12,11 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   addMessage,
+  attemptKindFor,
+  limitsFromConfig,
   prepareSessionRole,
   roleId,
   type SessionRole,
@@ -46,7 +49,10 @@ import {
   validateSpawnBudget,
   SpawnBudgetError,
   readMap,
+  reserveAttempt,
+  ResourceDeniedError,
   sessionTag,
+  settleAttempt,
   startSession,
   SYSTEM,
   transitionSession,
@@ -98,6 +104,12 @@ export type LaunchMode = 'launch' | 'resume' | 'new';
 
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
+  /**
+   * Кто просит запуск — для журнала бюджета (`resource-policy.ts`): `human` — окно, `auto` — автозапуск
+   * созданного агентом, `wake` — будильник. Нет значения — человек. Возобновление будильником подчиняется ещё и
+   * личному потолку `resumeRate`.
+   */
+  by?: 'human' | 'auto' | 'wake';
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
   model?: string | null;
@@ -192,6 +204,90 @@ export function createSessionsService(
   // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
 
+  // Поколение этого хоста: им подписаны резервы бюджета. Резерв прошлого поколения без свидетельств неоднозначен —
+  // он считается занятым и сам по сроку не снимается (`resource-policy.ts`); новая попытка той же сессии его подхватывает.
+  const generation = `host-${randomUUID()}`;
+
+  /**
+   * Бюджет исчерпан — безопасный исход: процесс и worktree не создаются, модель не запускается. Автозапуску
+   * созданного агентом отказ виден: уведомление человеку и системное письмо родителю (иначе тот ждал бы ребёнка).
+   * Окну отказ возвращается ошибкой со значением `data.code = 'resource-budget'`, будильнику — тоже: письма ждут.
+   */
+  async function refuseLaunch(
+    ref: SessionRef,
+    parentId: string | null,
+    by: 'human' | 'auto' | 'wake',
+    error: ResourceDeniedError,
+  ): Promise<never> {
+    host.log.warn('launch refused by the resource budget', { ref, by, code: error.code, scope: error.scope });
+    if (by === 'auto') {
+      const text = `${sessionTag(ref.sessionId)} was not started: ${error.message}`;
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      if (parentId !== null) {
+        await updateMap(ref.projectPath, ref.workId, (current) => {
+          if (current.sessions.some((candidate) => candidate.id === parentId)) {
+            addMessage(current, { from: SYSTEM, to: [parentId], text });
+          }
+        }).catch((mapError: unknown) => {
+          host.log.error('письмо об отказе запуска не записалось', { ref, error: String(mapError) });
+        });
+      }
+    }
+    throw new HostError('conflict', error.message, {
+      code: 'resource-budget',
+      reason: error.code,
+      scope: error.scope,
+      limit: error.limit,
+      used: error.used,
+    });
+  }
+
+  /** Резерв слота до запуска: проверка и запись одним действием под замком карты. */
+  async function reserveLaunch(
+    ref: SessionRef,
+    parentId: string | null,
+    mode: LaunchMode,
+    by: 'human' | 'auto' | 'wake',
+  ): Promise<string> {
+    const { config } = await loadConfig();
+    let attemptId = '';
+    try {
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map) => {
+          attemptId = reserveAttempt(map, {
+            kind: attemptKindFor(map, ref.sessionId, mode),
+            actor: by,
+            session: ref.sessionId,
+            owner: generation,
+            limits: limitsFromConfig(config),
+            ...(by === 'wake' ? { sessionResumeRate: config.resumeRate } : {}),
+          }).id;
+        },
+        { touch: false },
+      );
+    } catch (error) {
+      if (error instanceof ResourceDeniedError) return refuseLaunch(ref, parentId, by, error);
+      throw error;
+    }
+    return attemptId;
+  }
+
+  /** Исход резерва: `spent` — процесс стартовал, `released` — запуска не было. Трогает только резерв этого поколения. */
+  async function settleLaunch(ref: SessionRef, attemptId: string, outcome: 'spent' | 'released'): Promise<void> {
+    await updateMap(
+      ref.projectPath,
+      ref.workId,
+      (map) => {
+        settleAttempt(map, attemptId, generation, outcome);
+      },
+      { touch: false },
+    ).catch((error: unknown) => {
+      host.log.error('исход резерва бюджета не записался', { ref, attemptId, outcome, error: String(error) });
+    });
+  }
+
   // Закрываемые сейчас: между остановкой PTY и записью `closed` сессия успевает
   // побыть `sleeping`, и письмо в этот миг подняло бы её обратно.
   const closing = new Set<string>();
@@ -245,6 +341,9 @@ export function createSessionsService(
     const key = refKey(ref);
     if (launching.has(key) || closing.has(key) || pty.get(ref) !== undefined) return;
     launching.add(key);
+    // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
+    let attemptId: string | null = null;
+    let processStarted = false;
     try {
       const map = await readMap(ref.projectPath, ref.workId);
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -256,6 +355,9 @@ export function createSessionsService(
       if (session.lifecycle === 'closed') {
         throw new Error(`session ${ref.sessionId} is closed`);
       }
+
+      // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
+      attemptId = await reserveLaunch(ref, session.parent, mode, options.by ?? 'human');
 
       // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
       // в core), но каталога на диске ещё нет — заводим его перед первым же
@@ -364,6 +466,7 @@ export function createSessionsService(
           env,
           provider: session.provider,
         });
+        processStarted = true;
       } catch (error) {
         if (hookUrl !== undefined) hooks?.unregister(ref);
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
@@ -375,11 +478,16 @@ export function createSessionsService(
         throw safe;
       }
       const started = (async () => {
-        await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
-          pid: handle.pid,
-          startedAtProcess: await processStartedAt(handle.pid),
-          launchedBy: 'host',
-        }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+        try {
+          await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
+            pid: handle.pid,
+            startedAtProcess: await processStartedAt(handle.pid),
+            launchedBy: 'host',
+          }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+        } finally {
+          // Процесс уже идёт: слот потрачен, даже если запись старта в карту не удалась.
+          if (attemptId !== null) await settleLaunch(ref, attemptId, 'spent');
+        }
       })();
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));
@@ -389,6 +497,8 @@ export function createSessionsService(
         starting.delete(key);
       }
     } finally {
+      // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
+      if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
       launching.delete(key);
     }
   }
@@ -626,7 +736,7 @@ export function createSessionsService(
           workId: entry.map.work.id,
           sessionId,
         };
-        launch(ref, 'launch').catch((error: unknown) => {
+        launch(ref, 'launch', { by: 'auto' }).catch((error: unknown) => {
           host.log.error('autoLaunch: запуск сессии не удался', { ref, error: String(error) });
         });
       }

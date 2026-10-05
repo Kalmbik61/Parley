@@ -36,6 +36,7 @@ import { refKey } from '@parley/protocol';
 import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
+import { HostError } from '../errors.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
@@ -73,6 +74,8 @@ const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
 const LIMIT_NOTICE_EVERY_MS = 60 * 60 * 1000;
+/** Пауза между просьбами о слоте после отказа бюджета работы (P37). */
+const BUDGET_RETRY_MS = 30_000;
 /**
  * Codex получает указатель только вставкой, а режима вставки на экране хоста может ещё не быть: экран
  * разбирает поток чуть позже сигнала терминала, по которому будильник и проснулся. Пересчёт стоит
@@ -124,12 +127,22 @@ interface AttemptState {
    * начала, и «заново» тут нечего.
    */
   resumeUnavailable: boolean;
+  /**
+   * Когда бюджет работы отказал в подъёме (P37): письма ждут, а не считаются указанными. Новую попытку не начинаем
+   * `BUDGET_RETRY_MS` — иначе каждое событие карты заново стучалось бы за слотом. Это пауза между просьбами, а не
+   * снятие чьего-то резерва.
+   */
+  budgetDeniedAt: number | null;
   /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
   pasteRetry: NodeJS.Timeout | undefined;
   /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
   pasteRetries: number;
 }
 
+
+/** Отказ бюджета работы из `sessions.launch` (P37): код ошибки хоста несёт `data.code`. */
+const isResourceDenial = (error: unknown): boolean =>
+  error instanceof HostError && error.data?.['code'] === 'resource-budget';
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
@@ -186,6 +199,7 @@ export function createWakeService(
         resumeLetters: [],
         pointerAfter: null,
         resumeUnavailable: false,
+        budgetDeniedAt: null,
         pasteRetry: undefined,
         pasteRetries: 0,
       };
@@ -266,17 +280,13 @@ export function createWakeService(
   }
 
   /** Лимит подъёмов исчерпан — письма ждут, человеку уведомление раз в час. */
-  function limitNotice(ref: SessionRef): void {
+  function limitNotice(ref: SessionRef, reason = 'the hourly resume limit is reached'): void {
     const key = refKey(ref);
     const at = Date.now();
     const last = limitNoticedAt.get(key);
     if (last !== undefined && at - last < LIMIT_NOTICE_EVERY_MS) return;
     limitNoticedAt.set(key, at);
-    notice(
-      'resume-limit',
-      ref,
-      `${sessionTag(ref.sessionId)} was not resumed: the hourly resume limit is reached, messages are waiting`,
-    );
+    notice('resume-limit', ref, `${sessionTag(ref.sessionId)} was not resumed: ${reason}, messages are waiting`);
   }
 
   /**
@@ -332,6 +342,8 @@ export function createWakeService(
       // Без id у провайдера core запустил бы новый процесс по брифу, а не `resume`.
       if (template === undefined || session.providerSessionId === null) {
         state.resumeUnavailable = true;
+        // Подъёма не будет — слот часа, взятый под него, не потрачен.
+        limiter.release(ref);
         return;
       }
       const withPrompt = template.includes('{prompt}');
@@ -342,11 +354,21 @@ export function createWakeService(
       if (withPrompt) for (const id of action.letterIds) state.pointed.add(id);
       else state.pointerAfter = state.resumedAt;
 
-      await sessions.launch(ref, 'resume', withPrompt ? { prompt: action.text } : {});
+      await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
     } catch (error) {
       state.resumedAt = null;
       state.pointerAfter = null;
-      await resumeFailed(ref, state, action.letterIds, (error as Error).message);
+      if (isResourceDenial(error)) {
+        // Бюджет работы отказал до запуска: процесса нет, слот не получен. Это не сбой подъёма — письма остаются
+        // непрочитанными и ждут, а счёт часа возвращается, чтобы отказ не расходовал его впустую.
+        limiter.release(ref);
+        for (const id of action.letterIds) state.pointed.delete(id);
+        state.budgetDeniedAt = Date.now();
+        limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
+        publishWaiting(ref, state, 'resume-limit');
+      } else {
+        await resumeFailed(ref, state, action.letterIds, (error as Error).message);
+      }
     } finally {
       state.resuming = false;
     }
@@ -489,7 +511,8 @@ export function createWakeService(
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
       let action = deliveryAction(input);
-      if (action.kind === 'resume' && !limiter.tryTake(ref)) {
+      const backedOff = state.budgetDeniedAt !== null && Date.now() - state.budgetDeniedAt < BUDGET_RETRY_MS;
+      if (action.kind === 'resume' && (backedOff || !limiter.tryTake(ref))) {
         action = deliveryAction({ ...input, resumeAllowed: false });
       }
       if (action.kind === 'resume') void resumeSession(ref, session, state, action);

@@ -1,4 +1,5 @@
 import type { SkillCatalog } from '../skills/catalog.js';
+import type { ResourceLimits } from '../work/resource-policy.js';
 import type { WorkSession } from '../work/types.js';
 import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
@@ -44,6 +45,12 @@ export interface McpContext {
    * В окружении его тоже нет — `server.ts` берёт из настроек, как и `messageRate`.
    */
   worktreeRoot?: string;
+  /**
+   * Пороги бюджета работы и комнаты (`work/resource-policy.ts`). В окружении их нет, и подставить их агенту нечем:
+   * без этого поля сервер читает настройки заново перед каждым допуском, чтобы изменение человека действовало сразу.
+   * Поле нужно тестам и встраиванию.
+   */
+  resourceLimits?: ResourceLimits;
 }
 
 /**
