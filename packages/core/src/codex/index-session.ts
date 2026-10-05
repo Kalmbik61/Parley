@@ -3,6 +3,7 @@ import { Counter, oneLine, tokenCount, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
+import { createUsageLedger, observedCount } from '../work/usage-ledger.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
 function asRecord(value: unknown): RawRecord | null {
@@ -24,7 +25,8 @@ function str(source: RawRecord | null, key: string): string | null {
  * У Codex `input_tokens` включает в себя `cached_input_tokens`, поэтому кэш
  * вычитается: иначе четыре счётчика перестают складываться в общий итог, как
  * они складываются у Claude. Отдельного счётчика ЗАПИСИ в кэш у Codex нет —
- * `cacheWrite` всегда 0 (docs/schema/codex-schema-report.json).
+ * `cacheWrite` всегда 0 (docs/schema/codex-schema-report.json). Это прежняя форма `tokens`; в `usage`
+ * ненаблюдаемая запись в кэш — `null`, а не измеренный ноль.
  */
 function codexTokens(payload: RawRecord): TokenTotals | null {
   const info = asRecord(payload['info']);
@@ -37,6 +39,28 @@ function codexTokens(payload: RawRecord): TokenTotals | null {
     output: tokenCount(total, 'output_tokens'),
     cacheRead,
     cacheWrite: 0,
+  };
+}
+
+/**
+ * Тот же `total_token_usage` как наблюдение для учёта токенов. Поля, которых в записи нет, остаются
+ * `null`: `cacheWrite` у Codex не наблюдается никогда (в логе нет такого счётчика) и нулём не
+ * подменяется. `input_tokens` у Codex уже включает кэш, поэтому он же — полный вход, а вход без кэша
+ * известен, только если известен и кэш.
+ */
+function codexCounters(payload: RawRecord) {
+  const info = asRecord(payload['info']);
+  const total = info === null ? null : asRecord(info['total_token_usage']);
+  if (total === null) return null;
+
+  const totalInput = observedCount(total, 'input_tokens');
+  const cacheRead = observedCount(total, 'cached_input_tokens');
+  return {
+    input: totalInput === null || cacheRead === null ? null : Math.max(0, totalInput - cacheRead),
+    output: observedCount(total, 'output_tokens'),
+    cacheRead,
+    cacheWrite: null,
+    totalInput,
   };
 }
 
@@ -91,6 +115,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
   let tokens: TokenTotals | null = null;
+  const ledger = createUsageLedger();
   let spawned = false;
 
   const stats = await forEachJsonlRecord(file, (raw) => {
@@ -144,7 +169,15 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
             lastUserRecordAt = at;
           }
         }
-        if (kind === 'token_count') tokens = codexTokens(payload) ?? tokens;
+        if (kind === 'token_count') {
+          tokens = codexTokens(payload) ?? tokens;
+          // Накопитель сессии: одна нить на лог. Падение значения без доказанного сброса учёт не
+          // суммирует и не угадывает — итог остаётся наибольшим и помечается неполным.
+          const counters = codexCounters(payload);
+          if (counters !== null) {
+            ledger.observe({ kind: 'cumulative', stream: 'rollout', counters, at });
+          }
+        }
         break;
       }
 
@@ -187,6 +220,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     // Субагентов у Codex нет как явления.
     subsessionCount: 0,
     tokens,
+    usage: ledger.summary(),
     provider: 'codex',
     ...(spawned ? { spawned: true } : {}),
   };

@@ -457,3 +457,26 @@ export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHis
 export type { RoomHistoryResult, RoomHistoryCode, RoomHistoryState, RoomHistoryStatus } from './work/room-history.js';
 export { searchHistory, HistorySearchError, HISTORY_SCOPES } from './work/history-search.js';
 export type { HistoryHit, HistoryScope, HistorySource, HistorySearchInput, HistorySearchResult } from './work/history-search.js';
+
+export {
+  createUsageLedger,
+  freezeUsage,
+  legacyUsage,
+  selectUsage,
+  sumUsage,
+  asCount,
+  observedCount,
+  EPOCH_TOLERANCE_MS,
+} from './work/usage-ledger.js';
+export type {
+  FrozenUsage,
+  KeyedUsage,
+  SelectUsageInput,
+  UsageAttribution,
+  UsageCompleteness,
+  UsageCounters,
+  UsageObservation,
+  UsageSource,
+  UsageSummary,
+  UsageTotal,
+} from './work/usage-ledger.js';

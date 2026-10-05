@@ -23,7 +23,9 @@ import {
   isNewLabel,
   linkSession,
   loadConfig,
+  legacyUsage,
   openEvents,
+  selectUsage,
   sessionTag,
   unreadFor,
   watchEvents,
@@ -36,6 +38,7 @@ import {
   type MetricsRoots,
   type SessionActivity,
   type SessionIndex,
+  type UsageSummary,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
@@ -449,13 +452,38 @@ export function createActivityService(
     activity: SessionActivity,
     indexed: SessionIndex | undefined,
   ): LiveMetrics {
-    // Метрики завершённой сессии зафиксированы в карте, у живой — в логе
-    // провайдера; модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
-    const tokens = session.metrics?.tokens ?? indexed?.tokens ?? null;
+    // Токены: у идущей сессии побеждает свежий индекс лога, а снимок из карты (его ставят `report` и
+    // усыпление) годится для остановленной и как запасной, когда свежего индекса нет. Какой источник
+    // выбран, видно в `usage.source`; сумма не выдумывается (`selectUsage`). Снимок чужого разговора
+    // (сессию перепривязали) за свой не принимается. Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
+    const snapshot = session.metrics;
+    const frozen =
+      snapshot === null
+        ? null
+        : snapshot.usage === undefined
+          ? legacyUsage(snapshot.tokens)
+          : snapshot.usage.binding === session.providerSessionId
+            ? snapshot.usage
+            : null;
+    const selected = selectUsage({
+      active: session.lifecycle === 'active',
+      epoch: session.startedAtProcess,
+      live: indexed?.usage ?? null,
+      frozen,
+    });
+    const usage: UsageSummary = {
+      ...selected,
+      // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
+      attribution: { workId: ref.workId, sessionId: session.id, roomId: null, runId: null },
+    };
     return {
-      tokensIn: tokens?.input ?? null,
-      tokensOut: tokens?.output ?? null,
-      durationMs: session.metrics?.durationMs ?? indexed?.durationMs ?? null,
+      usage,
+      tokensIn: usage.input,
+      tokensOut: usage.output,
+      durationMs:
+        usage.source === 'native-index'
+          ? (indexed?.durationMs ?? snapshot?.durationMs ?? null)
+          : (snapshot?.durationMs ?? indexed?.durationMs ?? null),
       unread: unreadOf(entry, session.id),
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,

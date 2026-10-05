@@ -102,6 +102,28 @@ describe('createLogIndex', () => {
     });
   });
 
+  it('один и тот же нативный id у Claude и Codex друг друга не вытесняет: лог выбирает провайдер сессии', async () => {
+    const id = '11111111-1111-1111-1111-111111111111';
+    await writeClaudeSession(
+      id,
+      `${JSON.stringify({ type: 'assistant', sessionId: id, timestamp: '2026-10-04T12:00:00.000Z', message: { role: 'assistant' } })}\n`,
+    );
+    const dir = path.join(codexRoot, '2026', '10', '04');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, `rollout-2026-10-04T12-00-01-${id}.jsonl`),
+      `${JSON.stringify({ type: 'session_meta', timestamp: '2026-10-04T12:00:01.000Z', payload: { id, cwd: '/codex', source: 'cli' } })}\n`,
+    );
+
+    const idx = index();
+    await idx.start();
+
+    expect(idx.index(session({ provider: 'claude', providerSessionId: id }))?.provider).toBe('claude');
+    expect(idx.index(session({ provider: 'codex', providerSessionId: id }))?.provider).toBe('codex');
+    // GLM запускает Claude Code: его логи — логи Claude.
+    expect(idx.index(session({ provider: 'glm', providerSessionId: id }))?.provider).toBe('claude');
+  });
+
   it('без явных корней читает каталоги из PARLEY_CLAUDE_PROJECTS_DIR/PARLEY_CODEX_SESSIONS_DIR (lane-r3, п. 1)', async () => {
     // Так E2E окна уводят настоящий хост от истории человека: корни хосту не передать иначе.
     await writeClaudeSession(

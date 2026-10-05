@@ -30,6 +30,13 @@ export interface LogIndex {
   stop(): void;
 }
 
+/**
+ * Чьи логи читает сессия: Codex — свои, всё прочее (Claude и его надстройки вроде GLM) — Claude Code.
+ * Один и тот же нативный id у двух семейств друг друга не вытесняет.
+ */
+const logFamily = (provider: string): 'codex' | 'claude' => (provider === 'codex' ? 'codex' : 'claude');
+const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
+
 export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   let sessions: SessionIndex[] = [];
   const byId = new Map<string, SessionIndex>();
@@ -39,7 +46,7 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
 
   const rebuild = (): void => {
     byId.clear();
-    for (const session of sessions) byId.set(session.id, session);
+    for (const session of sessions) byId.set(logKey(session.provider, session.id), session);
   };
 
   /** Та же склейка, что и `applyChange` в `use-sessions.ts`: по файлу, свежие первыми. */
@@ -53,7 +60,9 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   };
 
   const indexOf = (session: WorkSession): SessionIndex | undefined =>
-    session.providerSessionId === null ? undefined : byId.get(session.providerSessionId);
+    session.providerSessionId === null
+      ? undefined
+      : byId.get(logKey(session.provider, session.providerSessionId));
 
   return {
     async start() {

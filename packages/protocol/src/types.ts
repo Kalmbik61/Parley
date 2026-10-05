@@ -1,4 +1,4 @@
-import type { WorkEntry } from '@parley/core';
+import type { UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -77,6 +77,13 @@ export type MailWait =
 
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
+  /**
+   * Токены с происхождением: кэш (`null` — не сообщено), полный вход, источник, время наблюдения,
+   * устарелость и полнота (P36). Без нативных id и путей. Поля нет у хоста более ранней версии: окно
+   * показывает `tokensIn`/`tokensOut` как раньше. Это токены, а не деньги и не доля лимита подписки.
+   */
+  usage?: UsageSummary;
+  /** Вход без кэша; `null` — не известен. */
   tokensIn: number | null;
   tokensOut: number | null;
   durationMs: number | null;

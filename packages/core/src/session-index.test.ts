@@ -221,6 +221,67 @@ describe('indexSessionFile', () => {
     });
   });
 
+  it('usage: частичные записи одного ответа не теряют и не удваивают итог, полный вход — сумма трёх частей', async () => {
+    // Первая запись ответа пришла до конца потока: выход ещё мал. Вторая — полный usage того же ответа.
+    const block = (at: string, output: number) =>
+      line({
+        type: 'assistant',
+        timestamp: at,
+        message: {
+          role: 'assistant',
+          id: 'msg_01',
+          usage: { input_tokens: 2, output_tokens: output, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 },
+        },
+      });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage1',
+      block('2026-10-04T12:00:01.000Z', 5) + block('2026-10-04T12:00:02.000Z', 240),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toEqual({
+      input: 2,
+      output: 240,
+      cacheRead: 30,
+      cacheWrite: 8,
+      totalInput: 40,
+      source: 'native-index',
+      observedAt: '2026-10-04T12:00:02.000Z',
+      stale: false,
+      completeness: 'complete',
+      coverage: 'conversation',
+    });
+    expect(index.tokens).toEqual({ input: 2, output: 240, cacheRead: 30, cacheWrite: 8 });
+  });
+
+  it('usage: в публичном итоге нет ни id ответа, ни пути лога', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage2',
+      line({
+        type: 'assistant',
+        message: { role: 'assistant', id: 'msg_secret', usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+    );
+    const json = JSON.stringify((await indexSessionFile(file, root)).usage);
+    expect(json).not.toContain('msg_secret');
+    expect(json).not.toContain('usage2');
+  });
+
+  it('usage: без записей с usage итог неизвестен', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage3',
+      line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5' } }),
+    );
+    expect((await indexSessionFile(file, root)).usage).toMatchObject({
+      input: null,
+      cacheRead: null,
+      completeness: 'unknown',
+    });
+  });
+
   it('без записей с usage токенов нет', async () => {
     const file = await writeSession(
       '-Users-me-proj',

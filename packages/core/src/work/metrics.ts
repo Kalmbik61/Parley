@@ -6,6 +6,7 @@ import { defaultRoot, discoverSessions } from '../discover.js';
 import type { ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { setResult, transitionSession } from './map.js';
+import { freezeUsage, type UsageSummary } from './usage-ledger.js';
 import type { TransitionOptions } from './map.js';
 import { readMap, updateMap } from './store.js';
 import type { SessionMetrics, SessionResult, WorkMap, WorkProvider } from './types.js';
@@ -29,6 +30,8 @@ export interface LiveSessionMetrics {
    * разрешение выдано, а хук про это не приходит (дизайн TUI v2, раздел 4.3).
    */
   lastUserRecordAt: string | null;
+  /** Токены с происхождением; `null` — индекс собран без них. */
+  usage: UsageSummary | null;
 }
 
 /** Один файл лога провайдера: id, под которым его знает карта, и путь. */
@@ -96,6 +99,7 @@ export async function readSessionMetrics(
     metrics: metricsOf(index),
     lastRecordAt: index.endedAt,
     lastUserRecordAt: index.lastUserRecordAt,
+    usage: index.usage ?? null,
   };
 }
 
@@ -220,7 +224,21 @@ export async function finishSession(
       // Лог читался до захвата блокировки: если сессию за это время перепривязали
       // к другому логу, чужие числа в карту не попадут.
       if (measured !== null && target.providerSessionId === providerSessionId) {
-        target.metrics = measured.metrics;
+        target.metrics = {
+          ...measured.metrics,
+          // Снимок помнит, к какому разговору и запуску процесса он относится: по возобновлении
+          // окно сравнит его с живым индексом, а не примет за цифры нового запуска.
+          ...(measured.usage === null || providerSessionId === null
+            ? {}
+            : {
+                usage: freezeUsage(measured.usage, {
+                  binding: providerSessionId,
+                  epoch: session.startedAtProcess,
+                  // Сон — закрытый период; `report` снимает цифры посреди работы.
+                  closed: to === 'sleeping',
+                }),
+              }),
+        };
       }
     },
     options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs },

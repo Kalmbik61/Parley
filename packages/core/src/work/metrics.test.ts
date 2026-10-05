@@ -315,6 +315,19 @@ describe('finishSession', () => {
       durationMs: SESSION_1.durationMs,
       tokens: SESSION_1.tokens,
       toolCalls: SESSION_1.toolCalls,
+      // Снимок помнит разговор и запуск процесса, при которых снят (P36); процесс здесь не Parley — эпохи нет.
+      usage: expect.objectContaining({
+        binding: 'session-1',
+        epoch: null,
+        // Сон — закрытый период.
+        closed: true,
+        source: 'frozen-snapshot',
+        stale: false,
+        input: SESSION_1.tokens.input,
+        output: SESSION_1.tokens.output,
+        cacheRead: SESSION_1.tokens.cacheRead,
+        cacheWrite: SESSION_1.tokens.cacheWrite,
+      }),
     });
     expect(session?.history.at(-1)).toEqual({
       event: 'sleeping',
@@ -333,6 +346,44 @@ describe('finishSession', () => {
     // Итог процесс не меняет (спецификация 7.1).
     expect(session?.lifecycle).toBe('active');
     expect(session?.metrics?.tokens).toEqual(SESSION_1.tokens);
+  });
+
+  it('снимок при отчёте несёт эпоху запуска процесса: по возобновлении его не примут за цифры нового запуска', async () => {
+    const workId = await workWithActiveSession('session-1');
+    await updateMap(project, workId, (current) => {
+      current.sessions[0]!.startedAtProcess = '2026-08-26T12:50:01.000Z';
+    });
+
+    await finishSession(project, workId, 's-01', 'done', { claudeRoot: FIXTURES });
+
+    const [session] = (await readMap(project, workId)).sessions;
+    // Отчёт снимает цифры посреди работы: сессия идёт и пишет дальше, период не закрыт.
+    expect(session?.metrics?.usage).toMatchObject({ binding: 'session-1', epoch: '2026-08-26T12:50:01.000Z', closed: false });
+  });
+
+  it('Codex: ненаблюдаемая запись в кэш в снимке — null, а не измеренный ноль', async () => {
+    await writeRollout('2026-03-12', '019ce3d5-584a-7be2-922e-b8185a8d7c19', {
+      cwd: '/Users/dev/проект',
+      at: '2026-03-12T10:00:00.000Z',
+      tools: [],
+    });
+    const map = await createWork(project, { title: 'Codex' });
+    await updateMap(project, map.work.id, (current) => {
+      const session = addSession(current, { provider: 'codex', label: 'план', task: 'Составить план' });
+      transitionSession(current, session.id, 'active', { at: '2026-03-12T10:00:00.000Z' });
+      session.providerSessionId = '019ce3d5-584a-7be2-922e-b8185a8d7c19';
+    });
+
+    await finishSession(project, map.work.id, 's-01', 'done', { codexRoot });
+
+    const [session] = (await readMap(project, map.work.id)).sessions;
+    expect(session?.metrics?.usage).toMatchObject({
+      input: 200,
+      output: 340,
+      cacheRead: 1000,
+      cacheWrite: null,
+      totalInput: 1200,
+    });
   });
 
   it('сессия не привязана к логу — статус меняется, метрики остаются null', async () => {

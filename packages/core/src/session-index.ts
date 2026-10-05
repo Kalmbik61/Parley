@@ -2,6 +2,7 @@ import path from 'node:path';
 import { forEachJsonlRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
+import { createUsageLedger, type UsageSummary } from './work/usage-ledger.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -57,6 +58,12 @@ export interface SessionIndex {
    * записи с usage: нулями это не заменяется, «не знаем» и «ноль» — разные вещи.
    */
   tokens: TokenTotals | null;
+  /**
+   * Те же токены с происхождением (P36): кэш и полный вход как наблюдения (`null` — не сообщено), время
+   * последней записи, полнота. Источник истины для окна; `tokens` остаётся для прежних потребителей.
+   * Нет поля — индекс собран кодом до P36.
+   */
+  usage?: UsageSummary;
   provider: Provider;
   /**
    * Лог порождённого треда (только Codex): у `session_meta` задан `parent_thread_id` или `source` не
@@ -112,9 +119,8 @@ export async function indexSessionFile(
   const tools = new Counter();
   const roles = new Counter();
   const recordTypes = new Counter();
-  const tokens: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  // Уже посчитанные ответы модели: один ответ приходит несколькими записями.
-  const countedMessages = new Set<string>();
+  // Один ответ модели приходит несколькими записями: склейка по message.id — в учёте токенов.
+  const ledger = createUsageLedger();
   let hasUsage = false;
 
   let sessionId: string | null = null;
@@ -132,7 +138,7 @@ export async function indexSessionFile(
   let lastPrompt: string | null = null;
   let firstText: string | null = null;
 
-  const stats = await forEachJsonlRecord(file, (raw) => {
+  const stats = await forEachJsonlRecord(file, (raw, lineNo) => {
     const record: SessionRecord = adapter.toSessionRecord(raw);
 
     recordTypes.add(record.type);
@@ -147,19 +153,17 @@ export async function indexSessionFile(
     // пишет несколькими записями — по одной на блок content (thinking, text,
     // tool_use), и КАЖДАЯ несёт полный usage всего ответа. Поэтому счёт идёт
     // по message.id, а не по записям (на реальных логах разница в 2–3 раза).
-    // У записей без message.id склеивать не по чему — они считаются как есть.
-    const messageId = record.messageId;
-    if (
-      record.role === 'assistant' &&
-      record.usage !== null &&
-      (messageId === null || !countedMessages.has(messageId))
-    ) {
-      if (messageId !== null) countedMessages.add(messageId);
+    // У записей без message.id склеивать не по чему — их id это проверенное смещение записи.
+    if (record.role === 'assistant' && record.usage !== null) {
       hasUsage = true;
-      tokens.input += record.usage.input;
-      tokens.output += record.usage.output;
-      tokens.cacheRead += record.usage.cacheRead;
-      tokens.cacheWrite += record.usage.cacheWrite;
+      const { input, output, cacheRead, cacheWrite } = record.usage;
+      ledger.observe({
+        kind: 'delta',
+        id: record.messageId === null ? `line:${file}:${lineNo}` : `msg:${record.messageId}`,
+        // Для Claude `input_tokens` — вход без кэша, полный вход — сумма трёх частей.
+        counters: { input, output, cacheRead, cacheWrite, totalInput: input + cacheRead + cacheWrite },
+        at: record.timestamp,
+      });
     }
 
     sessionId ??= record.sessionId;
@@ -220,6 +224,16 @@ export async function indexSessionFile(
     titleSource = 'first-text';
   }
 
+  const usage = ledger.summary();
+  const tokens: TokenTotals | null = hasUsage
+    ? {
+        input: usage.input ?? 0,
+        output: usage.output ?? 0,
+        cacheRead: usage.cacheRead ?? 0,
+        cacheWrite: usage.cacheWrite ?? 0,
+      }
+    : null;
+
   return {
     id: sessionId ?? path.basename(file, '.jsonl'),
     project: projectSlug(file, root),
@@ -243,7 +257,8 @@ export async function indexSessionFile(
     recordTypes: recordTypes.toObject(),
     primaryModel: models.top(new Set([SYNTHETIC_MODEL])),
     subsessionCount,
-    tokens: hasUsage ? tokens : null,
+    tokens,
+    usage,
     provider: 'claude',
   };
 }

@@ -2,6 +2,7 @@ import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 import type { RecipeSnapshot } from '../recipes/types.js';
+import type { FrozenUsage } from './usage-ledger.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
@@ -60,6 +61,11 @@ export interface SessionMetrics {
   durationMs: number;
   /** `null` — в логе нет ни одной записи с usage: «не знаем» и «ноль» — разные вещи. */
   tokens: TokenTotals | null;
+  /**
+   * Те же токены с происхождением: кэш как наблюдение, время записи, связывание и эпоха, при которых
+   * снимок снят (P36). Нет поля — снимок до P36: известны только вход и выход (`legacyUsage`).
+   */
+  usage?: FrozenUsage;
   toolCalls: Record<string, number>;
 }
 
