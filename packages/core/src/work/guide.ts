@@ -103,7 +103,7 @@ explicit consent — for example, the words "wrap up".`,
   {
     topic: 'tools',
     summary:
-      'get_map, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
+      'get_map, backlog, remember/memory_read/search_history, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
     text: `## Tools
 
 \`get_map\` — the whole map: sessions with their \`lifecycle\`/\`result\`, rooms, summaries,
@@ -117,6 +117,18 @@ idea, with a reason. Check backlog_list first; do not expand your task. The proj
 answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID. These tools
 cannot edit, remove or close existing items. Before completion, collect worthwhile loose
 ends as suggestions. A project with its own TODOS.md specifies its policy in PARLEY.md.
+
+\`remember(kind, fact, details?, why, onHumanRequest?)\` — one lasting project fact, lesson or
+agreement (kind: fact, lesson, agreement): short, one per call, with a reason; not what the
+code, git, PARLEY.md or CLAUDE.md already say. The human accepts it first: the answer is
+suggested: ms-NN. Set onHumanRequest only when the human has just asked you to remember it:
+the answer is remembered: m-NNN, and the human sees that you claimed their request. A repeat
+answers already remembered. The phrases of the project memory already come with your
+instructions (the Project memory block); \`memory_read(ids?)\` adds the details of all entries
+or of the given ids. \`search_history(query, scope?, limit?)\` — the past of this project: all
+words of the query in one entry; scope is decisions, memory, plans, backlog, history, sessions
+or all (default); limit 1 to 30. Before something big, search for earlier decisions and
+lessons. It does not search skills.
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.

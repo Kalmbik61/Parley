@@ -43,6 +43,13 @@ it('registers the window-only decisions list and room history actions', () => {
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('registers the window-only project memory and history search methods', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['memory.get', 'memory.add', 'memory.update', 'memory.accept', 'memory.dismiss', 'memory.undo', 'history.search'] as const)
+    expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
 it('registers both explicit native skill sharing actions', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const handlers = createHostHandlers(deps);

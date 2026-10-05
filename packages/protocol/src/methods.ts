@@ -19,6 +19,10 @@ import { planMethodSchemas } from './plan-actions.js';
 import type { PlanMethodResults } from './plan-actions.js';
 import { journalMethodSchemas } from './journal.js';
 import type { JournalMethodResults } from './journal.js';
+import { memoryMethodSchemas } from './memory.js';
+import type { MemoryMethodResults } from './memory.js';
+import { historyMethodSchemas } from './history.js';
+import type { HistoryMethodResults } from './history.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
@@ -53,6 +57,8 @@ export const METHODS = {
   ...backlogMethodSchemas,
   ...planMethodSchemas,
   ...journalMethodSchemas,
+  ...memoryMethodSchemas,
+  ...historyMethodSchemas,
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
@@ -234,7 +240,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };

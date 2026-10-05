@@ -3,13 +3,22 @@ import { capabilityActionResult, capabilitySnapshot } from '@parley/protocol';
 import type { CapabilityActionResult, CapabilityMcpAdd, CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
+import { openFile } from '../../files/Tree.js';
+import { useFilesStore } from '../../files/store.js';
+import { tabId } from '../../layout/ids.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { openTab } from '../../layout/tree.js';
 import { hostMethods } from '../../lib/capabilities.js';
+import { workKey } from '../../lib/tree-order.js';
 import { openParleyEditor } from '../../sidebar/SectionMenu.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { RoleChip } from '../../lib/role-summary.js';
 import { BacklogPanel } from './BacklogPanel.js';
 import { DecisionsPanel } from './DecisionsPanel.js';
+import { MemoryPanel } from './MemoryPanel.js';
+import { ProjectSearch } from './ProjectSearch.js';
+import type { SearchTarget } from './ProjectSearch.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../ui/dialog.js';
@@ -31,6 +40,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   const supported = methods.has('capabilities.get') && methods.has('capabilities.refresh');
   const entries = useWorksStore(state => state.entries);
   const [pendingSuggestions, setPendingSuggestions] = useState(0);
+  const [pendingMemory, setPendingMemory] = useState(0);
   const backlogSupported = ['backlog.get', 'backlog.subscribe', 'backlog.unsubscribe', 'backlog.prepareTake', 'backlog.take'].every(method => methods.has(method));
   const backlogWork = entries.find(entry => entry.projectPath === projectPath && entry.map.work.status === 'active');
   const [snapshot, setSnapshot] = useState<CapabilitySnapshot | null>(null);
@@ -164,6 +174,33 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
       return results;
     } finally { if (generation.current === current) setActionBusy(false); }
   };
+  /** Открывает место находки поиска: файл проекта на строке, комнату или сессию. `false` — цели уже нет. */
+  const openSearchTarget = (target: SearchTarget): boolean => {
+    if (projectPath === null) return false;
+    const mine = entries.filter(entry => entry.projectPath === projectPath);
+    const entry = target.kind === 'file' ? mine.find(item => item.map.work.status === 'active') ?? mine[0]
+      : mine.find(item => item.map.work.id === target.workId);
+    if (!entry) return false;
+    const key = workKey(projectPath, entry.map.work.id);
+    const layout = useLayoutStore.getState();
+    if (target.kind === 'file') {
+      layout.setActiveWork(key);
+      const root = { workKey: key, spec: { kind: 'project' as const } };
+      openFile(root, target.path, false);
+      if (target.line !== undefined) useFilesStore.getState().revealAt(key, tabId.file(root.spec, target.path), target.line, 1);
+    } else if (target.kind === 'room') {
+      if (!entry.map.rooms.some(room => room.id === target.roomId)) return false;
+      layout.setActiveWork(key);
+      layout.apply(key, current => openTab(current, { kind: 'room', id: tabId.room(target.roomId), roomId: target.roomId }));
+    } else {
+      if (!entry.map.sessions.some(session => session.id === target.sessionId)) return false;
+      layout.setActiveWork(key);
+      layout.apply(key, current => openTab(current, { kind: 'terminal', id: tabId.terminal(target.sessionId), sessionId: target.sessionId }));
+    }
+    onOpenChange(false);
+    return true;
+  };
+
   const canAdd = methods.has('capabilities.mcp.add') && snapshot !== null &&
     Object.values(snapshot.columns).some(column => Object.values(column.mcpAdd ?? {}).some(value => value.allowed));
 
@@ -182,7 +219,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           </Button>
         </section>
         <Tabs defaultValue="capabilities" className="flex min-h-0 flex-1 flex-col">
-          <TabsList aria-label={S.projectPanel.title} className="self-start"><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger></TabsList>
+          <TabsList aria-label={S.projectPanel.title} className="self-start"><TabsTrigger value="capabilities">{S.projectPanel.capabilities}</TabsTrigger><TabsTrigger value="backlog">{S.backlog.title}{pendingSuggestions > 0 ? ` (${pendingSuggestions})` : ''}</TabsTrigger><TabsTrigger value="decisions">{S.decisions.title}</TabsTrigger><TabsTrigger value="memory">{S.memory.title}{pendingMemory > 0 ? ` (${pendingMemory})` : ''}</TabsTrigger><TabsTrigger value="search">{S.projectSearch.title}</TabsTrigger></TabsList>
           <TabsContent value="capabilities" className="space-y-3">
             <div className="flex items-start justify-between gap-3">
               <p className="text-xs text-muted-foreground">{S.projectPanel.appliesToNew}</p>
@@ -229,6 +266,15 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
           <TabsContent value="decisions" className="min-h-48 flex-1 overflow-auto">
             <DecisionsPanel bridge={bridge} projectPath={projectPath} supported={methods.has('decisions.list')} connection={connection}
               onOpen={async (project, file) => { await bridge.app.openDecision(project, file); }} />
+          </TabsContent>
+          {/* У Memory и Search своя прокрутка, как у Decisions. Memory смонтирована всегда: число Suggested в подписи вкладки. */}
+          <TabsContent value="memory" forceMount className="min-h-48 flex-1 overflow-auto data-[state=inactive]:hidden">
+            <MemoryPanel bridge={bridge} projectPath={projectPath} supported={['memory.get', 'memory.add', 'memory.update', 'memory.accept', 'memory.dismiss', 'memory.undo'].every(method => methods.has(method))}
+              connection={connection} onCount={setPendingMemory}
+              onOpenFile={path => { openSearchTarget({ kind: 'file', path }); }} />
+          </TabsContent>
+          <TabsContent value="search" className="min-h-48 flex-1 overflow-auto">
+            <ProjectSearch bridge={bridge} projectPath={projectPath} supported={methods.has('history.search')} connection={connection} onOpen={openSearchTarget} />
           </TabsContent>
         </Tabs>
       </div>

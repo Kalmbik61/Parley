@@ -32,6 +32,11 @@ import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
+import { rememberProjectMemory } from '../work/memory-suggestions.js';
+import { HISTORY_SCOPES, HistorySearchError, MAX_SEARCH_LIMIT, searchHistory } from '../work/history-search.js';
+import type { HistoryScope } from '../work/history-search.js';
+import { readProjectMemory } from '../work/project-memory.js';
+import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
@@ -269,6 +274,31 @@ const TOOLS: Tool[] = [
       kind: { type: 'string', enum: ['bug', 'debt', 'idea'] }, title: { type: 'string', minLength: 1, maxLength: 4096 },
       details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
     }, required: ['kind', 'title', 'why'], additionalProperties: false },
+  },
+  {
+    name: 'remember', annotations: WRITES,
+    description: 'Propose one lasting fact, lesson or agreement about this project, with a reason. It waits for the human to accept it, unless the human has just asked you to remember it: then set onHumanRequest. One fact per call, short; do not store what the code, git, PARLEY.md or CLAUDE.md already say.',
+    inputSchema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['fact', 'lesson', 'agreement'] }, fact: { type: 'string', minLength: 1, maxLength: 4096 },
+      details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
+      onHumanRequest: { type: 'boolean', description: 'Only when the human asked you in this conversation to remember it.' },
+    }, required: ['kind', 'fact', 'why'], additionalProperties: false },
+  },
+  {
+    name: 'memory_read', annotations: READS,
+    description: 'Read the project memory with details: all entries, or only the given ids (m-NNN). The memory phrases are already in your instructions; this adds the details. Current human instructions take precedence over memory.',
+    inputSchema: { type: 'object', properties: {
+      ids: { type: 'array', items: { type: 'string', pattern: '^m-\\d{3,}$' }, maxItems: 100 },
+    }, additionalProperties: false },
+  },
+  {
+    name: 'search_history', annotations: READS,
+    description: `Search this project's past before deciding something big: accepted decisions, memory, plans, backlog, room histories and session results. All words of the query must meet in one entry. scope: ${HISTORY_SCOPES.join(', ')} (default all). Does not search skills.`,
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', minLength: 1, maxLength: 1000 },
+      scope: { type: 'string', enum: [...HISTORY_SCOPES], default: 'all' },
+      limit: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_LIMIT, default: 10 },
+    }, required: ['query'], additionalProperties: false },
   },
   {
     name: 'get_map',
@@ -1060,6 +1090,82 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
   }
 }
 
+/** Ответ `memory_read` ограничен: лишнее отбрасывается с пометкой, а не раздувает контекст агента. */
+const MEMORY_READ_BYTES = 64 * 1024;
+const FEED_FACT_LENGTH = 300;
+const MEMORY_KINDS: readonly string[] = ['fact', 'lesson', 'agreement'];
+const MEMORY_ID = /^m-\d{3,}$/;
+
+/** Memory and history tools: the caller is the launched session fixed by the context; arguments cannot redirect it. */
+async function memoryTool(context: McpContext, name: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const allowed = name === 'remember' ? ['kind', 'fact', 'details', 'why', 'onHumanRequest']
+      : name === 'memory_read' ? ['ids'] : ['query', 'scope', 'limit'];
+    if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('memory-invalid');
+    const sessionId = context.sessionId;
+    if (sessionId === null) throw new Error('Memory tools require a known launched session.');
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(row => row.id === sessionId);
+    if (!caller || map.work.id !== context.workId) throw new Error('Memory tools require a known launched session.');
+    if (name === 'search_history') {
+      const { query, scope, limit } = args;
+      if (typeof query !== 'string' || (scope !== undefined && typeof scope !== 'string') ||
+        (limit !== undefined && typeof limit !== 'number')) throw new HistorySearchError('search-invalid');
+      const found = await searchHistory(context.projectPath, { query, ...(scope === undefined ? {} : { scope: scope as HistoryScope }),
+        ...(limit === undefined ? {} : { limit }) });
+      return found.total === 0 ? { ...found, message: 'Nothing found: try fewer or other words.' } : found;
+    }
+    if (name === 'memory_read') {
+      const { ids } = args;
+      if (ids !== undefined && (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !MEMORY_ID.test(id))))
+        throw new SharedStateError('memory-invalid');
+      const wanted = ids === undefined ? null : new Set(ids as string[]);
+      const items = (await readProjectMemory(context.projectPath)).items.filter(row => wanted === null || (row.id !== null && wanted.has(row.id)));
+      const shown: unknown[] = []; let bytes = 0;
+      for (const row of items) {
+        const entry = { id: row.id, kind: row.kind, fact: row.fact, details: row.details,
+          state: row.state ?? row.provenance?.state ?? 'current',
+          by: row.human === true || row.provenance?.origin === 'human' ? 'human' : row.by ?? 'unknown',
+          ...(row.onHumanRequest === true || row.provenance?.claimedHumanRequest === true ? { onRequest: true } : {}) };
+        bytes += Buffer.byteLength(JSON.stringify(entry), 'utf8');
+        if (bytes > MEMORY_READ_BYTES) break;
+        shown.push(entry);
+      }
+      return { items: shown, total: items.length, ...(shown.length < items.length ? { truncated: true } : {}) };
+    }
+    if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to remember.');
+    if (typeof args.kind !== 'string' || !MEMORY_KINDS.includes(args.kind) || typeof args.fact !== 'string' || typeof args.why !== 'string' ||
+      (args.details !== undefined && typeof args.details !== 'string') ||
+      (args.onHumanRequest !== undefined && typeof args.onHumanRequest !== 'boolean')) throw new SharedStateError('memory-invalid');
+    const request = args.onHumanRequest === true;
+    const result = await rememberProjectMemory(context.projectPath, { kind: args.kind as MemoryKind, fact: args.fact, why: args.why,
+      ...(typeof args.details === 'string' ? { details: args.details } : {}), ...(request ? { onHumanRequest: true } : {}),
+      workId: context.workId, sessionId });
+    let feedUnavailable = false;
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+      try {
+        await updateMap(context.projectPath, context.workId, current => {
+          const label = sessionId.replace(/^s-/, 'S');
+          const fact = args.fact as string;
+          const brief = fact.length > FEED_FACT_LENGTH ? `${fact.slice(0, FEED_FACT_LENGTH)}…` : fact;
+          // The agent only claims that the human asked: the line says so instead of vouching for it.
+          const text = result.status === 'remembered' ? `${label} remembered, saying you asked for it: ${brief}` : `${label} suggests remembering: ${brief}`;
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+        });
+      } catch { feedUnavailable = true; }
+    }
+    return { message: `${result.status === 'remembered' ? 'remembered' : result.status === 'pending' ? 'suggested' : 'already remembered'}: ${result.id}`,
+      diagnostics: result.diagnostics, ...(feedUnavailable ? { feedUnavailable: true } : {}) };
+  } catch (error) {
+    if (error instanceof SharedStateError) throw new Error(`Memory operation failed (${error.code}).`);
+    if (error instanceof HistorySearchError) throw new Error('Search request is invalid: give a non-empty query (up to 16 words), a known scope and a limit from 1 to 30.');
+    // Never return parser/filesystem/raw-input errors through the generic MCP error handler.
+    const safe = error instanceof Error && ['Memory tools require a known launched session.', 'A live launched session is required to remember.'].includes(error.message);
+    throw new Error(safe ? (error as Error).message : 'Memory operation could not be completed.');
+  }
+}
+
 async function dispatch(
   context: McpContext,
   name: string,
@@ -1067,6 +1173,7 @@ async function dispatch(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
+  if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context);
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);

@@ -51,6 +51,20 @@ export async function listMemorySuggestions(projectPath: string, options: Memory
   const { state } = await readMemoryLocal(await sharedProjectPaths(projectPath, options));
   return state.suggestions.filter(row => row.status === 'pending');
 }
+/** Запись, сделанная по заявленной просьбе человека и ещё не отменённая: окно предлагает для неё Undo. */
+export interface UndoableMemory { operationId: string; memoryId: string; fact: string; workId?: string; sessionId?: string }
+const UNDOABLE_LIMIT = 20;
+/** Последние записи «по просьбе» с применённой операцией, новые первыми. Чтение ничего не пишет. */
+export async function listUndoableMemory(projectPath: string, options: MemoryWriteOptions = {}): Promise<UndoableMemory[]> {
+  const { state } = await readMemoryLocal(await sharedProjectPaths(projectPath, options));
+  return state.suggestions
+    .filter(row => row.status === 'accepted' && row.memoryId !== undefined && row.provenance.claimedHumanRequest === true &&
+      state.operations.some(op => op.id === operationId(row.id) && op.status === 'applied' && op.memoryId === row.memoryId))
+    .slice(-UNDOABLE_LIMIT).reverse()
+    .map(row => ({ operationId: operationId(row.id), memoryId: row.memoryId!, fact: row.fact,
+      ...(row.provenance.workId === undefined ? {} : { workId: row.provenance.workId }),
+      ...(row.provenance.sessionId === undefined ? {} : { sessionId: row.provenance.sessionId }) }));
+}
 export async function rememberProjectMemory(projectPath: string, input: RememberInput, options: RememberOptions = {}): Promise<MemorySuggestionResult> {
   const source = provenance(input);
   validateMemoryInput({ kind: input.kind, fact: input.fact, ...(input.details === undefined ? {} : { details: input.details }), provenance: source });

@@ -98,3 +98,9 @@ export type { CapabilitySkillTarget, CapabilitySkillResult, CapabilitySkillMetho
 export { DECISIONS_LIST_MAX_LIMIT, DECISIONS_LIST_DEFAULT_LIMIT, DECISION_FILE_NAME, decisionState, decisionRef, decisionListErrorCode,
   decisionsListResult, historyState, historyDiagnostic, roomHistoryStatus, historyErrorCode, journalMethodSchemas } from './journal.js';
 export type { DecisionRef, DecisionsListResult, RoomHistoryStatusView, JournalMethodName, JournalMethodParams, JournalMethodResults } from './journal.js';
+
+export { MEMORY_SNAPSHOT_MAX_BYTES, memoryKind, memoryDiagnostic, memoryItemView, memorySuggestionView, memoryUndoView, memorySnapshot, memoryMethodSchemas } from './memory.js';
+export type { MemoryItemView, MemorySuggestionView, MemoryUndoView, MemorySnapshot, MemoryMethodName, MemoryMethodParams, MemoryMethodResults } from './memory.js';
+
+export { HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMIT, historySource, historyScope, historyHit, historySearchResult, historyMethodSchemas } from './history.js';
+export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMethodParams, HistoryMethodResults } from './history.js';

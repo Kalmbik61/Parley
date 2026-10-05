@@ -442,8 +442,8 @@ export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanIte
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
 export type { MemoryKind, MemoryProvenance, MemoryItem, MemoryDocument, MemoryInput, MemoryPatch, MemoryWriteOptions, MemoryWriteResult, MemorySuggestion } from './work/project-memory.js';
-export { rememberProjectMemory, listMemorySuggestions, acceptMemorySuggestion, dismissMemorySuggestion } from './work/memory-suggestions.js';
-export type { RememberInput, RememberOptions, MemorySuggestionResult } from './work/memory-suggestions.js';
+export { rememberProjectMemory, listMemorySuggestions, listUndoableMemory, acceptMemorySuggestion, dismissMemorySuggestion } from './work/memory-suggestions.js';
+export type { RememberInput, RememberOptions, MemorySuggestionResult, UndoableMemory } from './work/memory-suggestions.js';
 export { formatMemoryFactBlock, MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER } from './work/session-layer.js';
 export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-layer.js';
 

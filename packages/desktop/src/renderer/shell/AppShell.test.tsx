@@ -2272,7 +2272,8 @@ it('project capabilities opens one shared panel through the project state and cl
  await act(async () => { useUiStore.getState().openProjectPanel('/tmp/project'); });
  const dialog = await screen.findByRole('dialog'); expect(screen.getAllByRole('dialog')).toHaveLength(1);
  expect(within(dialog).getByRole('tab', { name: 'Capabilities' })).toBeTruthy();
- expect(within(dialog).queryByRole('tab', { name: 'Memory' })).toBeNull();
+ // Вкладки Decisions, Memory и Search видны всегда; без методов у хоста их панели говорят, что хост их не поддерживает.
+ expect(within(dialog).getByRole('tab', { name: /^Memory/ })).toBeTruthy();
  fireEvent.keyDown(dialog, { key: 'Escape' }); await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
  expect(useUiStore.getState().projectPanel).toBeNull();
 });

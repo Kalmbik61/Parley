@@ -26,6 +26,8 @@ import { decisionsOf, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
+import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
+import { undoProjectMemory } from '../work/project-memory.js';
 import { setBacklogRule } from '../work/project-preferences.js';
 import { planLaunch } from '../work/launch.js';
 import { buildRoleCatalog } from '../roles/catalog.js';
@@ -227,6 +229,7 @@ describe('список инструментов', () => {
       'create_room',
       'get_map',
       'list_roles',
+      'memory_read',
       'plan_submit',
       'plan_update',
       'plan_verify',
@@ -234,7 +237,9 @@ describe('список инструментов', () => {
       'propose_decision',
       'read_guide',
       'read_room',
+      'remember',
       'report',
+      'search_history',
       'send_message',
       'set_room_mode',
       'spawn_session',
@@ -2744,5 +2749,109 @@ describe('trusted caller backlog MCP tools', () => {
     await writeFile(path.join(project, '.parley', 'preferences.json'), 'secret native parser input');
     const response = await call(closed, 'backlog_list'); expect(response.isError).toBe(true); expect(response.text).not.toContain('secret');
     expect(response.text).toContain('preferences-invalid');
+  });
+});
+
+describe('memory and history MCP tools', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  const FACT = 'PTY tests flake in worktrees with long paths';
+  /** Системная вставка, с которой стартует новая сессия claude. */
+  async function newSessionPrompt(client: Client): Promise<string> {
+    const id = `s-0${(await readMapFile()).sessions.length + 1}`;
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'Fresh', task: 'Check the memory' });
+    const plan = await planLaunch(project, workId, session(await readMapFile(), id));
+    return plan.args[plan.args.indexOf('--append-system-prompt') + 1] ?? '';
+  }
+  it('обычный remember ждёт человека: файла памяти нет, в комнате строка-предложение, повтор не принимается', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Memory room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const first = await callOk(client, 'remember', { kind: 'lesson', fact: FACT, details: 'Compare with a baseline run.', why: 'Seen twice' });
+    expect(first.message).toBe('suggested: ms-01');
+    expect(await readFile(path.join(project, '.parley', 'memory.md')).catch(() => null)).toBeNull();
+    expect(await listMemorySuggestions(project)).toMatchObject([{ id: 'ms-01', kind: 'lesson', fact: FACT, why: 'Seen twice' }]);
+    expect((await callOk(client, 'remember', { kind: 'lesson', fact: FACT.toUpperCase(), why: 'Again' })).message).toBe('already remembered: ms-01');
+    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('remembering'));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ from: 'system', text: `S01 suggests remembering: ${FACT}` });
+    expect(await listUndoableMemory(project)).toEqual([]);
+  });
+  it('принятый урок виден новой сессии с первого хода', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'lesson', fact: FACT, why: 'Seen twice' });
+    expect(await newSessionPrompt(client)).not.toContain(FACT);
+    expect((await acceptMemorySuggestion(project, 'ms-01')).status).toBe('remembered');
+    const prompt = await newSessionPrompt(client);
+    expect(prompt).toContain('Project memory (.parley/memory.md):');
+    expect(prompt).toContain(FACT);
+  });
+  it('remember по просьбе человека пишет сразу с пометкой, строка в комнате честная, Undo убирает запись', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Memory room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const done = await callOk(client, 'remember', { kind: 'agreement', fact: 'Sessions close only with consent', why: 'The human said so', onHumanRequest: true });
+    expect(done.message).toBe('remembered: m-001');
+    const file = await readFile(path.join(project, '.parley', 'memory.md'), 'utf8');
+    expect(file).toContain('Sessions close only with consent');
+    expect(file).toContain('on request');
+    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 'system', text: 'S01 remembered, saying you asked for it: Sessions close only with consent' });
+    expect(await newSessionPrompt(client)).toContain('Sessions close only with consent');
+    const [undoable] = await listUndoableMemory(project);
+    expect(undoable).toMatchObject({ memoryId: 'm-001', fact: 'Sessions close only with consent', sessionId: 's-01' });
+    expect((await undoProjectMemory(project, undoable!.operationId)).status).toBe('undone');
+    expect(await listUndoableMemory(project)).toEqual([]);
+    expect(await readFile(path.join(project, '.parley', 'memory.md'), 'utf8')).not.toContain('Sessions close only with consent');
+    expect(await newSessionPrompt(client)).not.toContain('Sessions close only with consent');
+  });
+  it('memory_read отдаёт подробности, фильтрует по ids и не пишет файлов', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'fact', fact: 'Build with pnpm', details: 'Use pnpm build, not npm.', why: 'Asked', onHumanRequest: true });
+    await callOk(client, 'remember', { kind: 'lesson', fact: 'Second fact', why: 'Asked', onHumanRequest: true });
+    const all = await callOk(client, 'memory_read');
+    expect(all.total).toBe(2);
+    expect((all.items as { id: string; details: string; by: string; onRequest?: true }[])[0]).toMatchObject({ id: 'm-001', details: 'Use pnpm build, not npm.', by: 's-01', onRequest: true });
+    const one = await callOk(client, 'memory_read', { ids: ['m-002'] });
+    expect((one.items as { fact: string }[]).map(row => row.fact)).toEqual(['Second fact']);
+    for (const args of [{ ids: ['x-1'] }, { ids: 'm-001' }, { ids: Array.from({ length: 101 }, () => 'm-001') }, { projectPath: '/private/secret' }])
+      expect((await call(client, 'memory_read', args)).isError).toBe(true);
+  });
+  it('search_history находит урок и пункт бэклога, пустой результат — подсказка, скиллы не читаются', async () => {
+    await addBacklogItem(project, { title: 'Flaky pty harness', details: 'Needs a baseline' });
+    await mkdir(path.join(project, '.claude', 'skills', 'pty'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'skills', 'pty', 'SKILL.md'), '# pty flake skill\nSKILLBODYNEEDLE');
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'lesson', fact: FACT, why: 'Seen twice', onHumanRequest: true });
+    const found = await callOk(client, 'search_history', { query: 'pty flake' });
+    const sources = (found.hits as { source: string }[]).map(row => row.source);
+    expect(sources).toContain('memory');
+    expect((await callOk(client, 'search_history', { query: 'pty', scope: 'backlog' })).total).toBe(1);
+    expect((await callOk(client, 'search_history', { query: 'pty', limit: 1 })).hits).toHaveLength(1);
+    const none = await callOk(client, 'search_history', { query: 'SKILLBODYNEEDLE' });
+    expect(none.total).toBe(0); expect(none.message).toMatch(/Nothing found/);
+  });
+  it('search_history и remember отвергают чужие поля и неверные значения фиксированными ошибками', async () => {
+    const client = await connect('s-01');
+    for (const args of [{ query: '' }, { query: 'x', scope: 'skills' }, { query: 'x', limit: 31 }, { query: 'x', limit: 1.5 }, { query: 5 }, { query: 'x', sessionId: 's-99' }])
+      expect((await call(client, 'search_history', args)).isError, JSON.stringify(args)).toBe(true);
+    for (const args of [{ kind: 'note', fact: 'x', why: 'y' }, { kind: 'fact', fact: 'a\nb', why: 'y' }, { kind: 'fact', fact: 'x', why: 'y', onHumanRequest: 'yes' },
+      { kind: 'fact', fact: 'x', why: 'y', workId: 'w-99' }, { kind: 'fact', fact: 'x' }]) {
+      const response = await call(client, 'remember', args);
+      expect(response.isError, JSON.stringify(args)).toBe(true); expect(response.text).not.toContain('w-99');
+    }
+    expect(await listMemorySuggestions(project)).toEqual([]);
+  });
+  it('без сессии, с неизвестной или закрытой сессией — отказ; закрытая читает, но не пишет', async () => {
+    expect((await call(await connect(null), 'memory_read')).isError).toBe(true);
+    expect((await call(await connect(null), 'search_history', { query: 'x' })).isError).toBe(true);
+    expect((await call(await connect('s-99'), 'remember', { kind: 'fact', fact: 'x', why: 'y' })).isError).toBe(true);
+    await updateMap(project, workId, map => { map.sessions.find(row => row.id === 's-01')!.lifecycle = 'closed'; });
+    const closed = await connect('s-01');
+    expect((await call(closed, 'remember', { kind: 'fact', fact: 'x', why: 'y' })).isError).toBe(true);
+    expect((await call(closed, 'memory_read')).isError).toBe(false);
+  });
+  it('ошибка памяти (маркеры конфликта) — безопасный отказ без текста файла', async () => {
+    await mkdir(path.join(project, '.parley'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'memory.md'), '# Project memory\n\n## Facts\n<<<<<<< ours\nsecret text\n');
+    const client = await connect('s-01');
+    const response = await call(client, 'memory_read');
+    expect(response.isError).toBe(true); expect(response.text).toContain('memory-merge-conflict'); expect(response.text).not.toContain('secret');
   });
 });

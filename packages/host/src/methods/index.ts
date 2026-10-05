@@ -16,7 +16,9 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createBacklogHandlers } from './backlog.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
+import { createHistoryHandlers } from './history.js';
 import { createJournalHandlers } from './journal.js';
+import { createMemoryHandlers } from './memory.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
@@ -120,6 +122,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     ...createBacklogHandlers(deps.backlog),
     ...createJournalHandlers(deps.works),
+    ...createMemoryHandlers(),
+    ...createHistoryHandlers(),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,

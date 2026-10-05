@@ -1,6 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CapabilitySnapshot } from '@parley/protocol';
+import { useFilesStore } from '../../files/store.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { emptyLayout, groups } from '../../layout/tree.js';
+import { workKey } from '../../lib/tree-order.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { useUiStore } from '../../store/ui.js';
@@ -267,5 +272,73 @@ describe('Decisions tab in the existing project panel', () => {
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Decisions' }), { button: 0 });
     await screen.findByText(/does not support the decisions list/);
     expect(bridge.calls.some(call => call.method === 'decisions.list')).toBe(false);
+  });
+});
+
+describe('Memory and Search tabs in the existing project panel', () => {
+  const MEMORY_METHODS = ['memory.get', 'memory.add', 'memory.update', 'memory.accept', 'memory.dismiss', 'memory.undo'];
+  const memory = (patch: Record<string, unknown> = {}) => ({ projectPath: PROJECT, file: { relativePath: '.parley/memory.md' as const, exists: true }, version: 'v1', items: [],
+    suggestions: [{ id: 'ms-01', kind: 'lesson' as const, fact: 'A suggested lesson', details: '', why: 'Seen', createdAt: '2026-10-05T10:00:00.000Z' }],
+    undoable: [], diagnostics: [], ...patch });
+  const found = (hits: unknown[]) => ({ query: 'x', scope: 'all', limit: 10, total: hits.length, hits, unavailable: [] });
+  const search = async (query = 'x') => {
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Search' }), { button: 0 });
+    fireEvent.change(await screen.findByLabelText('Search project history'), { target: { value: query } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+  };
+  const work = makeWork('w-0001', { projectPath: PROJECT, rooms: [{ id: 'r-01', title: 'Room', creator: 'human', members: [], createdAt: '2026-09-27T08:00:00.000Z', lead: null, proposal: null }],
+    sessions: [makeSession('s-01', 'Lead')] });
+  const key = workKey(PROJECT, 'w-0001');
+  beforeEach(() => {
+    useWorksStore.setState({ entries: [work] });
+    useFilesStore.setState({ reveals: {} });
+    useLayoutStore.setState({ activeWorkKey: null, layouts: { [key]: emptyLayout() }, hydrated: { [key]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  });
+  const tabsOf = () => groups(useLayoutStore.getState().layouts[key]!).flatMap(group => group.tabs);
+
+  it('shows the Suggested count in the tab before it is selected, and lists suggestions when selected', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, ...MEMORY_METHODS] } });
+    bridge.setHandler('memory.get', () => memory());
+    render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+    await screen.findByRole('tab', { name: 'Memory (1)' });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Memory (1)' }), { button: 0 });
+    await screen.findByText('A suggested lesson');
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeTruthy();
+  });
+  it('an old host shows both tabs as unavailable and calls nothing', async () => {
+    render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={vi.fn()} />);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Memory' }), { button: 0 });
+    await screen.findByText(/does not support project memory/);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Search' }), { button: 0 });
+    await screen.findByText(/does not support history search/);
+    expect(bridge.calls.some(call => call.method.startsWith('memory.') || call.method === 'history.search')).toBe(false);
+  });
+  it('a file result opens the file tab of the project work and reveals its line, then closes the panel', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, 'history.search'] } });
+    bridge.setHandler('history.search', () => found([{ source: 'memory', title: 'PTY flake', excerpt: 'PTY flake', date: null, file: '.parley/memory.md', line: 4, id: 'm-001', complete: true }]));
+    const close = vi.fn(); render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={close} />);
+    await search(); fireEvent.click(await screen.findByRole('button', { name: 'Open file: PTY flake' }));
+    expect(tabsOf()).toMatchObject([{ kind: 'file', path: '.parley/memory.md', root: { kind: 'project' } }]);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(key);
+    expect(Object.values(useFilesStore.getState().reveals)).toEqual([{ line: 4, col: 1 }]);
+    expect(close).toHaveBeenCalledWith(false);
+  });
+  it('room and session results open their tabs; a missing room or workspace is reported and nothing opens', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: [...METHODS, 'history.search'] } });
+    bridge.setHandler('history.search', () => found([
+      { source: 'history', title: 'A letter', excerpt: 'A letter', date: null, workId: 'w-0001', roomId: 'r-01', complete: true },
+      { source: 'sessions', title: 'A result', excerpt: 'A result', date: null, workId: 'w-0001', sessionId: 's-01', complete: true },
+      { source: 'sessions', title: 'Gone result', excerpt: 'Gone result', date: null, workId: 'w-0099', sessionId: 's-01', complete: true },
+      { source: 'history', title: 'Gone letter', excerpt: 'Gone letter', date: null, workId: 'w-0001', roomId: 'r-09', complete: true },
+    ]));
+    const close = vi.fn(); render(<ProjectPanel bridge={bridge} projectPath={PROJECT} onOpenChange={close} />);
+    await search();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open session: Gone result' }));
+    await screen.findByText(/no longer exists/); expect(tabsOf()).toEqual([]); expect(close).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open room: Gone letter' }));
+    expect(tabsOf()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Open room: A letter' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open session: A result' }));
+    expect(tabsOf()).toMatchObject([{ kind: 'room', roomId: 'r-01' }, { kind: 'terminal', sessionId: 's-01' }]);
   });
 });

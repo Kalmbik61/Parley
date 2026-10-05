@@ -37,6 +37,9 @@ const TABLE: Record<string, Hints> = {
   get_map: READ,
   backlog_list: READ,
   backlog_suggest: WRITE,
+  remember: WRITE,
+  memory_read: READ,
+  search_history: READ,
   list_roles: READ,
   read_room: READ,
   read_guide: READ,
@@ -173,8 +176,10 @@ describe('аннотации инструментов parley: таблица', (
       'backlog_list',
       'get_map',
       'list_roles',
+      'memory_read',
       'read_guide',
       'read_room',
+      'search_history',
       'wait_for',
     ]);
   });
@@ -193,6 +198,8 @@ describe('аннотации инструментов parley: правда по 
 
     await callOk(client, 'get_map');
     await callOk(client, 'backlog_list');
+    await callOk(client, 'memory_read');
+    await callOk(client, 'search_history', { query: 'делаем' });
     await callOk(client, 'read_guide');
     await callOk(client, 'read_guide', { topic: 'letters' });
     await callOk(client, 'read_room', { room: 'r-01' });

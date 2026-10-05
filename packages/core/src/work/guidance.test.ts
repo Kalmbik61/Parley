@@ -565,3 +565,22 @@ it('plan hints preserve the fourteen-line bound with either navigator snapshot',
     expect(text.includes('find_skill')).toBe(skillNavigator);
   }
 });
+
+describe('память и поиск в вставке и гиде', () => {
+  it('вставка называет remember, memory_read и search_history; со всеми функциями вместе — не больше 14 строк', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03', { skillNavigator: true });
+    for (const tool of ['remember', 'memory_read', 'search_history']) expect(text).toContain(tool);
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+    expect(text).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('гид описывает три инструмента, ожидание человека, пометку по просьбе и что скиллы не ищутся', () => {
+    const tools = sectionOf('## Tools', '## Rooms');
+    expect(tools).toContain('`remember(kind, fact, details?, why, onHumanRequest?)`');
+    expect(tools).toMatch(/The human accepts it first/);
+    expect(tools).toMatch(/Set onHumanRequest only when the human has just asked/);
+    expect(tools).toContain('`memory_read(ids?)`');
+    expect(tools).toContain('`search_history(query, scope?, limit?)`');
+    expect(tools).toMatch(/It does not search skills/);
+  });
+});
