@@ -1,16 +1,16 @@
 /**
  * Вкладка Settings → Voice (спека 3.1, 6.2): переключатель (только при скачанной модели), три модели с
  * Download / Cancel / Delete и прогрессом, язык, горячая клавиша. Выбор пишет `ui.json` через `patchUi`; список
- * скачанного и прогресс — у main (`bridge.voice`).
+ * скачанное и прогресс — в `downloads-store` (окно, не вкладка).
  */
-import { useCallback, useEffect, useState } from 'react';
-import { toast } from 'sonner';
+import { useEffect } from 'react';
 import { S } from '../../shared/strings.js';
-import { VOICE_MODELS, WHISPER_LANGUAGES, type DownloadResult, type VoiceApi, type VoiceModelId } from '../../shared/voice-types.js';
+import { VOICE_MODELS, WHISPER_LANGUAGES } from '../../shared/voice-types.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select.js';
 import { Switch } from '../ui/switch.js';
+import { useDownloadsStore } from './downloads-store.js';
 
 /** Список языков: Auto, English, Russian, затем остальные по алфавиту (спека 3.1). */
 const LANGUAGE_OPTIONS = [
@@ -19,58 +19,17 @@ const LANGUAGE_OPTIONS = [
   ...WHISPER_LANGUAGES.filter((language) => language.code !== 'en' && language.code !== 'ru'),
 ];
 
-/** Копия записи без ключа `id` (линт не любит неиспользуемую переменную в деструктуризации). */
-function omitKey<T>(record: Partial<Record<VoiceModelId, T>>, id: VoiceModelId): Partial<Record<VoiceModelId, T>> {
-  const next = { ...record };
-  delete next[id];
-  return next;
-}
-
-export function VoiceSettings({ voice }: { voice: VoiceApi }): JSX.Element {
+export function VoiceSettings(): JSX.Element {
   const settings = useUiStore((state) => state.ui.voice);
   const patchUi = useUiStore((state) => state.patchUi);
-  const [downloaded, setDownloaded] = useState<readonly VoiceModelId[]>([]);
-  const [progress, setProgress] = useState<Partial<Record<VoiceModelId, number>>>({});
-  const [busy, setBusy] = useState<Partial<Record<VoiceModelId, true>>>({});
-
-  const refresh = useCallback(async (): Promise<readonly VoiceModelId[]> => {
-    const list = await voice.listModels().catch(() => [] as VoiceModelId[]);
-    setDownloaded(list);
-    return list;
-  }, [voice]);
+  const { downloaded, progress, busy, refresh, download, cancel, remove } = useDownloadsStore();
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  useEffect(() => voice.onProgress((next) => setProgress((prev) => ({ ...prev, [next.id]: next.receivedBytes }))), [voice]);
-
   const patchVoice = (patch: Partial<typeof settings>): void => {
     patchUi({ voice: { ...useUiStore.getState().ui.voice, ...patch } });
-  };
-
-  const download = async (id: VoiceModelId): Promise<void> => {
-    setBusy((prev) => ({ ...prev, [id]: true }));
-    const result: DownloadResult = await voice.downloadModel(id).catch(() => ({ error: 'network' }) as const);
-    setBusy((prev) => omitKey(prev, id));
-    setProgress((prev) => omitKey(prev, id));
-    if ('ok' in result) {
-      await refresh();
-      if (useUiStore.getState().ui.voice.model === null) patchVoice({ model: id });
-      return;
-    }
-    if (result.error === 'disk_full') toast(S.voice.diskFull(Math.ceil(result.needBytes / 1_000_000)));
-    else if (result.error === 'corrupted') toast(S.voice.downloadCorrupted);
-    else if (result.error === 'network') toast(S.voice.downloadFailed);
-  };
-
-  const remove = async (id: VoiceModelId): Promise<void> => {
-    await voice.removeModel(id).catch(() => undefined);
-    const list = await refresh();
-    const current = useUiStore.getState().ui.voice;
-    if (current.model !== id) return;
-    const next = list[0] ?? null;
-    patchVoice({ model: next, enabled: next !== null && current.enabled });
   };
 
   const hasModel = downloaded.length > 0;
@@ -113,7 +72,7 @@ export function VoiceSettings({ voice }: { voice: VoiceApi }): JSX.Element {
                 </span>
               </span>
               {busy[model.id] === true ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => void voice.cancelDownload(model.id)}>
+                <Button type="button" variant="outline" size="sm" onClick={() => void cancel(model.id)}>
                   {S.voice.settings.cancel}
                 </Button>
               ) : isDownloaded ? (

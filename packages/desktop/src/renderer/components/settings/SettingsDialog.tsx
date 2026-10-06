@@ -353,7 +353,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             </Button>
           </TabsContent>
 
-          <TabsContent value="voice">{uiLoaded ? <VoiceSettings voice={bridge.voice} /> : null}</TabsContent>
+          <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
         </Tabs>
 
         <DialogFooter>
