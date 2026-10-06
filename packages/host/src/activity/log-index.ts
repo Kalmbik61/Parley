@@ -36,6 +36,9 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   const listeners = new Set<() => void>();
   let watcher: SessionWatcher | undefined;
   let stopped = false;
+  // Прерывает построение списка на остановке: чтение истории в гигабайты держало бы процесс хоста
+  // живым и после «хост остановлен» — минутами, пока не дочитает (2026-10-06).
+  const building = new AbortController();
 
   const rebuild = (): void => {
     byId.clear();
@@ -60,8 +63,14 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
       // Полный список могут читать гигабайты истории (`~/.claude/projects`) —
       // вызывающий (`ActivityService`) не ждёт эту функцию, чтобы не задерживать
       // старт хоста; `stopped` здесь ловит остановку, случившуюся, пока список
-      // ещё строился.
-      const built = await buildAllSessions(roots);
+      // ещё строился: `stop()` прерывает чтение, и прерванное построение — не сбой.
+      let built: SessionIndex[];
+      try {
+        built = await buildAllSessions({ ...roots, signal: building.signal });
+      } catch (error) {
+        if (stopped) return;
+        throw error;
+      }
       if (stopped) return;
       sessions = built;
       rebuild();
@@ -94,6 +103,7 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
     },
     stop() {
       stopped = true;
+      building.abort();
       watcher?.close();
       listeners.clear();
     },
