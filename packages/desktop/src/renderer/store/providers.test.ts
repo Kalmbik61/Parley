@@ -89,8 +89,28 @@ describe('useProvidersStore — подключение ключа и покол�
     expect(useProvidersStore.getState().loaded).toBe(true);
     expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: true, keyHint: '••••1234' });
     pending.resolve(snapshot(false));
+    await vi.waitFor(() => expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: false, keyHint: null }));
+    nextDispose();
+  });
+
+  it('отказ до первого ответа и у запроса, вытеснившего первый, — снимок прежнего хоста не остаётся', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
     await flush();
-    expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: false, keyHint: null });
+    oldDispose();
+    const first = deferred();
+    const second = deferred();
+    let count = 0;
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => (++count === 1 ? first.promise : second.promise));
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    // Check again или providers.changed до первого ответа вытесняет первый запрос.
+    const newer = useProvidersStore.getState().reload();
+    second.reject(new Error('отказ'));
+    await expect(newer).rejects.toThrow('отказ');
+    expect(useProvidersStore.getState().providers).toEqual([]);
+    expect(useProvidersStore.getState().loaded).toBe(true);
     nextDispose();
   });
 

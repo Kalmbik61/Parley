@@ -26,6 +26,7 @@ export interface ProvidersState {
   /**
    * Первый ответ `providers.list` пришёл (успехом или отказом). До него версия `claude` неизвестна не
    * потому, что её нет, а потому, что её ещё не спросили: вид вкладки (`lib/feed-view.ts`) ждёт.
+   * Переподключение его не сбрасывает: прежний снимок живёт до ответа нового хоста (`init`).
    */
   loaded: boolean;
   /** Ручное обновление всех источников; повторные клики разделяют один запрос. */
@@ -45,6 +46,8 @@ export const useProvidersStore = create<ProvidersState>((set) => {
   let connection = 0;
   let request = 0;
   let refreshPromise: Promise<void> | null = null;
+  // Ответ этого подключения уже лёг в стор; до него в списке — снимок прежнего хоста.
+  let answered = false;
   const reload = async (): Promise<void> => {
     if (activeBridge === null) return;
     const currentConnection = connection;
@@ -52,6 +55,7 @@ export const useProvidersStore = create<ProvidersState>((set) => {
     try {
       const result = await activeBridge.call('providers.list', {});
       if (connection !== currentConnection || request !== currentRequest) return;
+      answered = true;
       set({
         providers: result.providers.map((provider) => ({
           ...provider,
@@ -64,7 +68,8 @@ export const useProvidersStore = create<ProvidersState>((set) => {
     } catch (error: unknown) {
       if (connection !== currentConnection || request !== currentRequest) return;
       console.warn('[parley] providers.list failed', decodeIpcError(error).message);
-      set({ loaded: true });
+      // Отказ до ответа подключения — список пуст: снимок прежнего хоста за ответ нового не выдаём.
+      set(answered ? { loaded: true } : { providers: [], loaded: true });
       throw error;
     }
   };
@@ -111,15 +116,13 @@ export const useProvidersStore = create<ProvidersState>((set) => {
     init: (bridge) => {
       activeBridge = bridge;
       const currentConnection = ++connection;
+      answered = false;
       refreshPromise = null;
       // Прежний снимок и `loaded` — до ответа нового подключения: сброс снова делал бы вид вкладок
       // «неизвестным» (`lib/feed-view.ts`), слой снимал бы поверхности терминалов, и после «Restart host»
       // пропадал бы последний вывод неживой сессии (раунд main-r2, п. 2). Старый ответ отсекают поколения.
       set({ refreshing: false });
-      void reload().catch(() => {
-        // Отказ первого ответа подключения — список пуст: снимок прежнего хоста за ответ нового не выдаём.
-        if (connection === currentConnection) set({ providers: [] });
-      });
+      void reload().catch(() => {});
       const offChanged = bridge.on('providers.changed', () => {
         if (connection === currentConnection) void reload().catch(() => {});
       });
