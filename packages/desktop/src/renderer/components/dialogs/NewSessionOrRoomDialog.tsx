@@ -261,7 +261,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
     setProviderCard(null);
   }, [open, room, work]);
 
-  useEffect(() => {
+  // Снимок провайдеров — тоже до отрисовки, как форма: в `useEffect` диалог успевал показать пилюли прошлого открытия, и
+  // карточка, открытая на такой пилюле, теряла её из-под себя, когда сброс доходил (фокус после Escape — на диалоге).
+  useLayoutEffect(() => {
     if (!open) return;
     let stale = false;
     let generation = 0;

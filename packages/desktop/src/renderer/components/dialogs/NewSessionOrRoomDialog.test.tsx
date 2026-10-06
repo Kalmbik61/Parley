@@ -263,6 +263,32 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     }
     expect(shown.seen).toEqual([{ name: '', agents: 1 }]);
   });
+
+  // Пилюли — снимок `providers.list` этого открытия. Сброс снимка в `useEffect` шёл после вставки: диалог показывал пилюли
+  // прошлого открытия, стрелка успевала открыть карточку на такой пилюле, а пришедший сброс снимал пилюлю из-под неё — после
+  // Escape фокус уходил на сам диалог (E2E `providers-connect.spec.ts`, 800×500, второй проход).
+  it('пилюли прошлого открытия не показываются: до ответа нового providers.list их нет', async () => {
+    const onOpenChange = vi.fn();
+    const element = (open: boolean): JSX.Element => (
+      <NewSessionOrRoomDialog open={open} bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />
+    );
+    const view = render(element(true));
+    await act(async () => {});
+    expect(providerRadio(0, 'Codex')).toBeTruthy();
+    view.rerender(element(false));
+    // Ответ нового открытия задержан: всё, что видно до него, было бы прошлым снимком.
+    bridge.setHandler('providers.list', () => new Promise(() => {}));
+    const shown = recordOnInsert((inserted) => {
+      const group = inserted.querySelector('[role="radiogroup"][aria-label="Agent 1"]');
+      return group === null ? null : group.querySelectorAll('[role="radio"]').length;
+    });
+    try {
+      view.rerender(element(true));
+    } finally {
+      shown.stop();
+    }
+    expect(shown.seen).toEqual([0]);
+  });
 });
 
 describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
