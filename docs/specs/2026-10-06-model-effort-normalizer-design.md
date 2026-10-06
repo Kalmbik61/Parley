@@ -354,18 +354,18 @@ export function resolveModelEffort(entry: ProviderEntry, choice: ModelEffortChoi
 
 ## 13. Приёмка (2026-10-06)
 
-**Полный прогон, как в CI.** install, build, typecheck и lint зелёные.
+**Полный прогон, как в CI**, на ветке после слияния master с Kalmbik61/Parley#18 и Kalmbik61/Parley#19: install, build, typecheck и lint зелёные.
 
 | Пакет | Тесты |
 |---|---|
 | core | 1837 |
 | protocol | 96 |
-| host | 941 |
-| desktop | 4647 |
+| host | 926 |
+| desktop | 4776, ещё 3 пропущены (вместе с голосовым вводом из master) |
 
 **E2E: 103 из 108.**
 - `codex.spec` и `second-instance.spec` в общем прогоне падают от нагрузки, по отдельности проходят.
-- `host-disconnect.spec:165` и `restart-host.spec:54` так же падают на чистом master `cec7dcb`. Это не от этой работы, вынесено отдельной задачей.
+- `host-disconnect.spec:165` и `restart-host.spec:54` так же падали на чистом master `cec7dcb`, то есть не от этой работы. Их починил Kalmbik61/Parley#19. После слияния master в ветку оба проходят: 11 из 11 в наборе `model-effort`, чат, голосовой ввод, провайдеры, `host-disconnect`, `restart-host`.
 - `providers-connect` «800×500» был красным и до этой работы.
 
 **Живая проверка в dev-окне.** Окно запущено с изолированным домом `~/.parley-chatview`, сценарий проходил пользователь, проверял контроллер.
