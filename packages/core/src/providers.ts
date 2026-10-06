@@ -364,12 +364,6 @@ export const EFFORT_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
  */
 export type EffortLevel = string;
 
-/**
- * Прежние три уровня, которыми `spawn_session` проверяет `effort`.
- * @deprecated Уровни для выбора даёт `effortsFor`, проверку пары — `resolveModelEffort`.
- */
-export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'];
-
 /** Значения подстановок в шаблоны аргументов реестра. */
 export interface RunnerSubstitutions {
   sessionUuid?: string;
