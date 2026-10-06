@@ -9,6 +9,10 @@
     "codex": {
       "model": "gpt-6-luna",
       "effort": "low"
+    },
+    "glm": {
+      "model": "glm-5.3[1m]",
+      "effort": "medium"
     }
   },
   "repetitions": 1,
@@ -27,11 +31,37 @@
       "obvious"
     ]
   },
-  "maxRuns": 90,
+  "maxRuns": 120,
   "waves": [
     {
       "id": "wq",
       "title": "Skill choice by names",
+      "scenarios": [
+        "ambiguous",
+        "russian",
+        "multiple",
+        "long-skill",
+        "unavailable"
+      ],
+      "repetitions": 3
+    },
+    {
+      "id": "wq-codex",
+      "title": "Skill choice by names, Codex",
+      "provider": "codex",
+      "scenarios": [
+        "ambiguous",
+        "russian",
+        "multiple",
+        "long-skill",
+        "unavailable"
+      ],
+      "repetitions": 3
+    },
+    {
+      "id": "wq-glm",
+      "title": "Skill choice by names, GLM",
+      "provider": "glm",
       "scenarios": [
         "ambiguous",
         "russian",
@@ -70,5 +100,5 @@
     "Never start a wave without an explicit go from the human (P32)."
   ],
   "cacheNote": "Claude Code keeps the cache for an hour (ephemeral_1h_input_tokens) and the tools and the unchanged system prompt are shared by both arms, so warm runs cannot be told from cold ones and are not planned: one cell per scenario, arm and repetition. The `cache` value stays cold for compatibility with old records and means no deliberate warm-up; the real cache hit is read from the first request of the run (`firstRequest`). warmWithinSec is kept only to read old warm records.",
-  "waveNote": "wq is the shortened wave: five scenarios moved out of w1 (ambiguous, russian, multiple, long-skill, unavailable), both arms, jev off, minimal-development off, `repetitions` of the wave (3) instead of the common one. Run it alone with `plan --wave wq`."
+  "waveNote": "wq is the shortened wave: five scenarios moved out of w1 (ambiguous, russian, multiple, long-skill, unavailable), both arms, jev off, minimal-development off, `repetitions` of the wave (3) instead of the common one. Run it alone with `plan --wave wq`. wq-codex and wq-glm are the same five scenarios and the same arms, jev off, minimal-development off, 3 repetitions, with the single participant run by the wave `provider` instead of the one named in the scenario (run ids carry `.codex.` or `.glm.` before `rN`); plan them with `plan --wave wq-codex` or `plan --wave wq-glm`. Conditions per provider are in `conditions`: Codex keeps gpt-6-luna with effort low, GLM uses glm-5.3[1m] with effort medium (the id from the GLM model list as is)."
 }

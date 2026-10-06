@@ -1,15 +1,22 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildHostEnv,
   changedFiles,
+  checkSecretsOption,
   classifyScreen,
+  codexTurnEnded,
+  findCodexRollout,
   findTranscript,
+  linkSecrets,
   modelAlias,
   parseJournal,
+  providerProblem,
   selectedOption,
+  sessionModel,
+  stopCount,
   turnEnded,
 } from './parley-token-benchmark-drive.js';
 
@@ -193,5 +200,152 @@ describe('findTranscript', () => {
     expect(findTranscript(tmp, 'abc')).toBe(path.join(tmp, '-b', 'abc.jsonl'));
     expect(findTranscript(tmp, 'nope')).toBeNull();
     expect(findTranscript(path.join(tmp, 'missing'), 'abc')).toBeNull();
+  });
+});
+
+/** Вопрос доверия Codex как в снимке: маркер выделения `›`, пробелы между словами теряются. */
+const codexTrustScreen = (selected: 'yes' | 'no' | 'none', shownPath = COPY): string =>
+  [
+    `You are running Codex in ${shownPath}`,
+    'Doyoutrustthecontentsofthisdirectory?Workingwithuntrustedcontentscomeswithhigherriskofpromptinjection.',
+    selected === 'yes' ? '› 1.Yes,continue' : '  1.Yes,continue',
+    selected === 'no' ? '› 2.No,quit' : '  2.No,quit',
+    'Pressentertocontinue',
+  ].join('\n');
+
+describe('экраны запуска Codex', () => {
+  it('вопрос доверия к копии: выделено Yes, выделено No, выделения нет', () => {
+    expect(classifyScreen(codexTrustScreen('yes'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'yes', ours: true });
+    expect(classifyScreen(codexTrustScreen('no'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'no', ours: true });
+    expect(classifyScreen(codexTrustScreen('none'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: null, ours: true });
+  });
+
+  it('чужой путь и копия вне <out>/work — не наша; незнакомый вариант под выделением — other', () => {
+    expect(classifyScreen(codexTrustScreen('yes', '/Users/someone/project'), COPY, WORK_ROOT, 'codex')).toMatchObject({ kind: 'trust', ours: false });
+    const outside = '/Users/someone/project';
+    expect(classifyScreen(codexTrustScreen('yes', outside), outside, WORK_ROOT, 'codex')).toMatchObject({ ours: false });
+    expect(selectedOption('› 1.Allowworkwithoutasking', 'codex')).toBe('other');
+    expect(selectedOption('› 1.Yes,continue', 'codex')).toBe('yes');
+    expect(selectedOption('❯ 2.No,quit', 'codex')).toBe('no');
+  });
+
+  it('текст Claude Code у Codex не вопрос доверия, и наоборот; незнакомый экран — other', () => {
+    expect(classifyScreen(trustScreen('yes'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+    expect(classifyScreen(codexTrustScreen('yes'), COPY, WORK_ROOT)).toEqual({ kind: 'other' });
+    expect(classifyScreen('Updateavailable!0.1->0.2\n› 1.Updatenow\n  2.Skip', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+  });
+
+  it('маркер › у провайдера claude выделением не считается', () => {
+    expect(selectedOption('› 1.Yes,continue')).toBeNull();
+  });
+});
+
+describe('провайдер сессии', () => {
+  it('модель: у claude псевдоним, у glm и codex id из списка как есть', () => {
+    expect(sessionModel('claude', 'claude-sonnet-5-5')).toBe('sonnet');
+    expect(sessionModel('glm', 'glm-5.3[1m]')).toBe('glm-5.3[1m]');
+    expect(sessionModel('codex', 'gpt-6-luna')).toBe('gpt-6-luna');
+    expect(() => sessionModel('claude', 'glm-5.3[1m]')).toThrow(/нет псевдонима/);
+  });
+
+  it('готовность по providers.list: нет ключа, нет CLI, нет провайдера, недоступен, готов', () => {
+    const list = [
+      { id: 'glm', available: false, needs: 'key' as const },
+      { id: 'codex', available: false, needs: 'cli' as const },
+      { id: 'claude', available: true, needs: null },
+      { id: 'other', available: false },
+    ];
+    expect(providerProblem(list, 'glm')).toMatch(/не видит ключ/);
+    expect(providerProblem(list, 'codex')).toMatch(/нет CLI/);
+    expect(providerProblem(list, 'nope')).toMatch(/не знает/);
+    expect(providerProblem(list, 'other')).toMatch(/недоступен/);
+    expect(providerProblem(list, 'claude')).toBeNull();
+    expect(providerProblem([{ id: 'glm' }], 'glm')).toBeNull();
+  });
+
+  it('ссылка на ключ нужна glm и только ему', () => {
+    expect(() => checkSecretsOption('glm', null)).toThrow(/--link-secrets PATH/);
+    expect(() => checkSecretsOption('claude', '/x/key')).toThrow(/только прогону с провайдером glm/);
+    expect(() => checkSecretsOption('codex', '/x/key')).toThrow(/только прогону с провайдером glm/);
+    expect(() => checkSecretsOption('glm', '/x/key')).not.toThrow();
+    expect(() => checkSecretsOption('claude', null)).not.toThrow();
+    expect(() => checkSecretsOption('codex', null)).not.toThrow();
+  });
+});
+
+describe('конец хода Codex', () => {
+  const rows = (...names: string[]): string => names.map((hook_event_name) => JSON.stringify({ hook_event_name })).join('\n');
+
+  it('первая Stop сверх уже бывших к отправке запроса; UserPromptSubmit не нужен', () => {
+    expect(stopCount(parseJournal(rows('SessionStart', 'Stop', 'Stop')))).toBe(2);
+    expect(codexTurnEnded(parseJournal(rows('Stop')), 0)).toBe(true);
+    expect(codexTurnEnded(parseJournal(rows()), 0)).toBe(false);
+    // Stop от прошлого хода уже была к отправке (1): ход идёт, пока не появится вторая.
+    expect(codexTurnEnded(parseJournal(rows('Stop')), 1)).toBe(false);
+    expect(codexTurnEnded(parseJournal(rows('Stop', 'Stop')), 1)).toBe(true);
+    // Правило Claude Code тут не годится: без UserPromptSubmit оно не видит конца.
+    expect(turnEnded(parseJournal(rows('Stop')))).toBe(false);
+  });
+
+  it('строка Stop, как её пишет notify Codex (kebab-case поля), считается', () => {
+    const row = JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'готово', 'thread-id': 't1', 'turn-id': 'u1' });
+    expect(codexTurnEnded(parseJournal(`${row}\n`), 0)).toBe(true);
+  });
+});
+
+describe('журнал Codex по id треда', () => {
+  it('находит rollout-…-<id>.jsonl в каталогах по датам; чужой id и пустой корень — null', async () => {
+    const day = path.join(tmp, '2026', '10', '06');
+    await mkdir(day, { recursive: true });
+    await writeFile(path.join(day, 'rollout-2026-10-06T10-00-00-019ce3d5-aaaa.jsonl'), '');
+    await writeFile(path.join(day, 'rollout-2026-10-06T10-00-00-019ce3d5-bbbb.jsonl'), '');
+    expect(findCodexRollout(tmp, '019ce3d5-aaaa')).toBe(path.join(day, 'rollout-2026-10-06T10-00-00-019ce3d5-aaaa.jsonl'));
+    expect(findCodexRollout(tmp, 'нет')).toBeNull();
+    expect(findCodexRollout(path.join(tmp, 'нет каталога'), 'x')).toBeNull();
+  });
+});
+
+describe('ссылка на ключ GLM', () => {
+  it('ссылка в доме на файл по указанному пути, имя — имя файла; remove снимает ссылку, файл цел; повтор безвреден', async () => {
+    const source = path.join(tmp, 'store', 'keystore.json');
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(source, 'тестовое-содержимое');
+    const home = path.join(tmp, 'home');
+
+    const linked = linkSecrets(source, home);
+    expect(linked.link).toBe(path.join(home, 'keystore.json'));
+    expect((await lstat(linked.link)).isSymbolicLink()).toBe(true);
+    expect(await readlink(linked.link)).toBe(source);
+
+    linked.remove();
+    await expect(lstat(linked.link)).rejects.toThrow();
+    expect((await lstat(source)).isFile()).toBe(true);
+    expect(() => linked.remove()).not.toThrow();
+  });
+
+  it('файл не читается: ссылка встаёт и на файл без прав чтения', async () => {
+    const source = path.join(tmp, 'keystore.json');
+    await writeFile(source, 'x');
+    await chmod(source, 0o000);
+    try {
+      const linked = linkSecrets(source, path.join(tmp, 'home'));
+      expect((await lstat(linked.link)).isSymbolicLink()).toBe(true);
+      linked.remove();
+    } finally {
+      await chmod(source, 0o600);
+    }
+  });
+
+  it('нет файла — отказ без создания дома; занятое имя в доме — отказ, прежнее не тронуто', async () => {
+    const home = path.join(tmp, 'home');
+    expect(() => linkSecrets(path.join(tmp, 'нет.json'), home)).toThrow(/файла нет/);
+    await expect(lstat(home)).rejects.toThrow();
+
+    const source = path.join(tmp, 'keystore.json');
+    await writeFile(source, 'x');
+    await mkdir(home, { recursive: true });
+    await writeFile(path.join(home, 'keystore.json'), 'прежний');
+    expect(() => linkSecrets(source, home)).toThrow(/уже что-то лежит/);
+    expect((await lstat(path.join(home, 'keystore.json'))).isFile()).toBe(true);
   });
 });

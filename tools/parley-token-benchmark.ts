@@ -56,6 +56,9 @@ export type Arm = (typeof ARMS)[number];
 export type CacheTemp = 'cold' | 'warm';
 export type Toggle = 'off' | 'on';
 export type Axis = 'arm' | 'jev' | 'skill';
+/** Провайдер прогона: у `glm` тот же бинарь `claude` с ключом Z.ai, у `codex` свой CLI и свой журнал. */
+export const PROVIDERS = ['claude', 'codex', 'glm'] as const;
+export type Provider = (typeof PROVIDERS)[number];
 
 /** Покрытие аудита: каждый пункт — один сценарий. */
 export const COVERAGE = [
@@ -104,14 +107,17 @@ export interface ScenarioFile {
 export interface Budget {
   schema: 1;
   note: string;
-  conditions: Record<'claude' | 'codex', { model: string; effort: string }>;
+  conditions: Record<Provider, { model: string; effort: string }>;
   repetitions: number;
   cache: { ttlSec: number; warmWithinSec: number };
   perSession: { maxTotalInputTokens: number; maxOutputTokens: number; maxMinutes: number };
   pilot: { scenarios: string[] };
   maxRuns: number;
-  /** `repetitions` волны перекрывает общее `repetitions` бюджета (сокращённая волна с несколькими повторами). */
-  waves: { id: string; title: string; scenarios: string[]; repetitions?: number }[];
+  /**
+   * `repetitions` волны перекрывает общее `repetitions` бюджета (сокращённая волна с несколькими повторами).
+   * `provider` волны (по умолчанию `claude`): сценарии с одним участником идут с ним вместо указанного в сценарии.
+   */
+  waves: { id: string; title: string; scenarios: string[]; repetitions?: number; provider?: Provider }[];
   stopRules: string[];
 }
 
@@ -192,23 +198,36 @@ export function validateBudget(raw: unknown, file: ScenarioFile): string[] {
     problems.push('budget.perSession: maxTotalInputTokens, maxOutputTokens, maxMinutes — числа больше 0');
   }
   const conditions = budget.conditions;
-  for (const provider of ['claude', 'codex'] as const) {
+  for (const provider of PROVIDERS) {
     if (!isObject(conditions) || !isObject(conditions[provider]) || !isString(conditions[provider].model) || !isString(conditions[provider].effort)) {
       problems.push(`budget.conditions.${provider}: model и effort`);
     }
   }
   const ids = new Set(file.scenarios.map((s) => s.id));
+  const byId = new Map(file.scenarios.map((s) => [s.id, s]));
+  // Пара (сценарий, провайдер) лежит не больше чем в одной волне; у claude — ровно в одной (покрытие аудита).
   const placed = new Map<string, number>();
   for (const wave of Array.isArray(budget.waves) ? budget.waves : []) {
     if (wave.repetitions !== undefined && (!positive(wave.repetitions) || !Number.isInteger(wave.repetitions))) {
       problems.push(`budget.waves ${wave.id}: repetitions — целое больше 0`);
     }
+    if (wave.provider !== undefined && !(PROVIDERS as readonly unknown[]).includes(wave.provider)) {
+      problems.push(`budget.waves ${wave.id}: provider — claude, codex или glm`);
+    }
+    const provider = wave.provider ?? 'claude';
     for (const id of Array.isArray(wave.scenarios) ? wave.scenarios : []) {
       if (!ids.has(id)) problems.push(`budget.waves ${wave.id}: нет сценария ${id}`);
-      placed.set(id, (placed.get(id) ?? 0) + 1);
+      if (provider !== 'claude' && (byId.get(id)?.room.length ?? 1) !== 1) {
+        problems.push(`budget.waves ${wave.id}: сценарий ${id} с комнатой не переопределяется провайдером ${provider}`);
+      }
+      placed.set(`${id}|${provider}`, (placed.get(`${id}|${provider}`) ?? 0) + 1);
     }
   }
-  for (const id of ids) if (placed.get(id) !== 1) problems.push(`сценарий ${id} должен быть ровно в одной волне`);
+  for (const id of ids) if (placed.get(`${id}|claude`) !== 1) problems.push(`сценарий ${id} должен быть ровно в одной волне`);
+  for (const [key, count] of placed) {
+    const [id, provider] = key.split('|');
+    if (provider !== 'claude' && count > 1) problems.push(`сценарий ${id} с провайдером ${provider} лежит в нескольких волнах`);
+  }
   if (!isObject(budget.pilot) || !Array.isArray(budget.pilot.scenarios) || budget.pilot.scenarios.some((id) => !ids.has(id))) {
     problems.push('budget.pilot.scenarios: ссылки на сценарии');
   }
@@ -244,12 +263,15 @@ export interface PlannedRun {
   jev: Toggle;
   skill: Toggle;
   repetition: number;
+  /** Провайдер одиночного участника (волна с `provider`); у остальных — `claude`. */
+  provider: Provider;
   sessions: number;
   pilot: boolean;
 }
 
-export const runIdOf = (p: Pick<PlannedRun, 'scenario' | 'arm' | 'cache' | 'jev' | 'skill' | 'repetition'>): string =>
-  `${p.scenario}.${p.arm}.${p.cache}.jev-${p.jev}.skill-${p.skill}.r${p.repetition}`;
+/** id прогона; у не-claude провайдера перед повтором стоит его имя (`.codex.r1`), прежние id claude не меняются. */
+export const runIdOf = (p: Pick<PlannedRun, 'scenario' | 'arm' | 'cache' | 'jev' | 'skill' | 'repetition'> & { provider?: Provider }): string =>
+  `${p.scenario}.${p.arm}.${p.cache}.jev-${p.jev}.skill-${p.skill}${p.provider === undefined || p.provider === 'claude' ? '' : `.${p.provider}`}.r${p.repetition}`;
 
 /**
  * Матрица прогонов. Основная ось: сценарий × рука × повтор (jev выключен, навык выключен), по одной ячейке:
@@ -261,11 +283,11 @@ export const runIdOf = (p: Pick<PlannedRun, 'scenario' | 'arm' | 'cache' | 'jev'
  */
 export function planRuns(file: ScenarioFile, budget: Budget, waveId?: string): PlannedRun[] {
   const byId = new Map(file.scenarios.map((s) => [s.id, s]));
-  const base = (scenario: Scenario, wave: string, repetition: number, arm: Arm, jev: Toggle, skill: Toggle): Omit<PlannedRun, 'order'> => {
-    const draft = { scenario: scenario.id, arm, cache: 'cold' as const, jev, skill, repetition };
+  const base = (scenario: Scenario, wave: string, repetition: number, arm: Arm, jev: Toggle, skill: Toggle, provider: Provider = 'claude'): Omit<PlannedRun, 'order'> => {
+    const draft = { scenario: scenario.id, arm, cache: 'cold' as const, jev, skill, repetition, provider };
     return {
       id: runIdOf(draft), wave, ...draft, sessions: scenario.room.length,
-      pilot: wave !== AXES_WAVE && budget.pilot.scenarios.includes(scenario.id) && repetition === 1,
+      pilot: wave !== AXES_WAVE && provider === 'claude' && budget.pilot.scenarios.includes(scenario.id) && repetition === 1,
     };
   };
   const planned: Omit<PlannedRun, 'order'>[] = [];
@@ -276,7 +298,7 @@ export function planRuns(file: ScenarioFile, budget: Budget, waveId?: string): P
       if (scenario === undefined) continue;
       for (let repetition = 1; repetition <= (wave.repetitions ?? budget.repetitions); repetition += 1, flip += 1) {
         const arms = flip % 2 === 0 ? ARMS : [...ARMS].reverse();
-        for (const arm of arms) planned.push(base(scenario, wave.id, repetition, arm, 'off', 'off'));
+        for (const arm of arms) planned.push(base(scenario, wave.id, repetition, arm, 'off', 'off', wave.provider));
       }
     }
   }
@@ -349,6 +371,17 @@ export function hostEnv(run: Pick<PlannedRun, 'arm' | 'jev'>, scenario: Scenario
   ];
 }
 
+/** Строка листа о провайдере волны: модель и усилие из условий бюджета, откуда брать журнал, как идёт ключ GLM. */
+function providerLine(provider: Provider, budget: Budget): string {
+  const { model, effort } = budget.conditions[provider];
+  const where =
+    provider === 'codex'
+      ? 'журнал — rollout в `~/.codex/sessions` (`--codex`)'
+      : 'журнал — транскрипт `claude` (`--claude`), сессия идёт тем же бинарём, что и у Claude, с ключом Z.ai';
+  const key = provider === 'glm' ? ' Ключ Z.ai драйвер подключает ссылкой на время прогона: `--link-secrets <путь к файлу ключа в ~/.parley>`, только с разрешения человека.' : '';
+  return `- Провайдер ${provider}: модель ${model}, усилие ${effort}; ${where}.${key}`;
+}
+
 /**
  * Лист запуска для человека, ведущего живой прогон: всё, что нужно сделать в Parley на каждый ход. `home` — дом
  * хоста Parley (`PARLEY_HOME`), по умолчанию `<out>/home`; влезает ли в него сокет хоста, проверяет `plan`.
@@ -364,6 +397,7 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
     ...budget.stopRules.map((rule) => `- ${rule}`),
     '',
     'Версия `claude` на всю волну одна: `DISABLE_AUTOUPDATER=1` в строке хоста, `begin` записывает версию, `collect` сверяет её с `version` записей транскрипта (расхождение — флаг `cli-version-mismatch`, пара исключается).',
+    'У Codex версия CLI — `cli_version` из `session_meta` его журнала: `collect` сверяет её с версией `codex`, записанной `begin` (то же `cli-version-mismatch`). Прогоны glm идут тем же `claude`, версия — как у Claude.',
     '`begin` не пишет настройки Claude Code: имена серверов из всех `.mcp.json` выше копии он только записывает в `begin.json` (`mcpServersAbove`). При первом запуске в копии Claude Code спросит «N new MCP servers found in this project»: диалог закрывает оператор или драйвер (Esc, отклонить все), у обеих рук одинаково.',
     '',
   ];
@@ -379,18 +413,22 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
       '- Кеш: без намеренного прогрева (значение `cache` в записи — `cold` для совместимости); попал ли первый запрос в кеш, видно по `firstRequest` записи, а не по плану.',
       `- Начало: \`pnpm exec tsx tools/parley-token-benchmark.ts begin ${run.id} --out ${out}\``,
       `- Хост Parley: \`PARLEY_HOME=${home} ${hostEnv(run, scenario).join(' ')}\`; проект работы — \`${path.join(out, 'work', run.id, 'project')}\`.`,
+      ...(run.provider === 'claude' ? [] : [providerLine(run.provider, budget)]),
       ...(setup === undefined ? [] : [`- Особенность руки: ${setup}`]),
-      run.jev === 'off'
+      run.provider !== 'claude'
+        ? '- jev: у этого провайдера не применим, ось не планируется. `begin` мод jev не ищет и не отказывает. Если провайдер — glm, сессия идёт тем же `claude` и вставку jev мог бы дать установленный мод: `collect` ищет её в транскрипте, отчёт исключает пару со вставкой (`jev-leak`); у codex `jevFired` — `null`.'
+        : run.jev === 'off'
         ? '- jev off: мод jev удаляет человек до волны: одной переменной хоста мод не выключить (настройки CLI человека её перекрывают), а стенд настройки Claude Code не пишет. `begin` ищет установку мода (id — `jevInstalled` в `begin.json`) и отказывает, пока мод установлен; отключения в настройках человека мало. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — `collect` ищет её, а отчёт исключает пару со вставкой у стороны jev off (`jev-leak`).'
         : '- jev on: мод включён настройками CLI человека, стенд их не трогает; переменная хоста в строке выше включает функциональные хуки. В транскрипте должна быть вставка jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.',
-      `- Участники: ${scenario.room.map((member) => `${member.provider}/${member.role}`).join(', ')}.`,
+      // У волны с провайдером единственный участник идёт с ним, а не с провайдером из сценария.
+      `- Участники: ${scenario.room.map((member) => `${scenario.room.length === 1 ? run.provider : member.provider}/${member.role}`).join(', ')}.`,
       `- Запрос: ${JSON.stringify(scenario.prompt)}`,
       ...(scenario.followUps ?? []).map((item) => `- Позже (${item.when}): ${JSON.stringify(item.text)}`),
       ...scenario.operatorSteps.map((step) => `- Шаг: ${step}`),
       task.accept.kind === 'command'
         ? `- Принятие: \`pnpm exec tsx tools/parley-token-benchmark.ts accept ${run.id} --out ${out}\` (команда \`${task.accept.command}\`).`
         : `- Принятие человеком: ${task.accept.criteria}`,
-      `- Сбор: \`pnpm exec tsx tools/parley-token-benchmark.ts collect ${run.id} --claude <лог.jsonl> [--codex <rollout.jsonl>] --out ${out}\``,
+      `- Сбор: \`pnpm exec tsx tools/parley-token-benchmark.ts collect ${run.id} ${run.provider === 'codex' ? '--codex <rollout.jsonl>' : run.provider === 'glm' ? '--claude <лог.jsonl>' : '--claude <лог.jsonl> [--codex <rollout.jsonl>]'} --out ${out}\``,
       '',
     );
   }
@@ -876,9 +914,16 @@ export interface Report {
 export function buildReport(runs: RunRecord[], file: ScenarioFile, options: PairOptions): Report {
   const scenarios = new Map(file.scenarios.map((s) => [s.id, s]));
   const sections: Section[] = [];
+  // Разные провайдеры в пары не смешиваются и в одном разделе не считаются: при нескольких провайдерах в записях
+  // у каждого свои разделы (в заголовке — его имя); у записей одного провайдера отчёт прежний.
+  const known: readonly string[] = PROVIDERS;
+  const providers = [...new Set(runs.map((run) => run.conditions.provider))].sort((a, b) => (known.indexOf(a) + 1 || 99) - (known.indexOf(b) + 1 || 99) || a.localeCompare(b));
   const add = (axis: Axis, cache: CacheTemp, fixed: Parameters<typeof pairSection>[3]): void => {
-    const section = pairSection(runs, axis, cache, fixed, options);
-    if (section.candidates > 0 || section.excluded.length > 0) sections.push(section);
+    for (const provider of providers.length > 1 ? providers : [null]) {
+      const section = pairSection(provider === null ? runs : runs.filter((run) => run.conditions.provider === provider), axis, cache, fixed, options);
+      if (provider !== null) section.label += ` [${provider}]`;
+      if (section.candidates > 0 || section.excluded.length > 0) sections.push(section);
+    }
   };
   for (const cache of ['cold', 'warm'] as const) add('arm', cache, { jev: 'off', skill: 'off' });
   add('jev', 'cold', { arm: 'native', skill: 'off' });
@@ -894,8 +939,12 @@ export function buildReport(runs: RunRecord[], file: ScenarioFile, options: Pair
     return why.length === 0 ? [] : [{ run: run.id, why }];
   });
   // Тёплые ячейки не планируются: у основной оси одна ячейка на руку.
-  const cells = (scenario: string): string[] =>
-    ARMS.filter((arm) => !runs.some((r) => r.scenario === scenario && r.conditions.arm === arm && r.conditions.cache === 'cold' && r.conditions.jev === 'off' && r.conditions.skill === 'off'));
+  // Ячейки claude обязательны у каждого сценария; у другого провайдера — только у сценариев, где он уже есть.
+  const cells = (scenario: string): string[] => [
+    ...ARMS.filter((arm) => !runs.some((r) => r.scenario === scenario && r.conditions.provider === 'claude' && r.conditions.arm === arm && r.conditions.cache === 'cold' && r.conditions.jev === 'off' && r.conditions.skill === 'off')),
+    ...providers.filter((provider) => provider !== 'claude' && runs.some((r) => r.scenario === scenario && r.conditions.provider === provider)).flatMap((provider) =>
+      ARMS.filter((arm) => !runs.some((r) => r.scenario === scenario && r.conditions.provider === provider && r.conditions.arm === arm && r.conditions.cache === 'cold' && r.conditions.jev === 'off' && r.conditions.skill === 'off')).map((arm) => `${arm}/${provider}`)),
+  ];
   return {
     runs: runs.length,
     origins: { 'synthetic-fixture': runs.filter((r) => r.origin === 'synthetic-fixture').length, live: runs.filter((r) => r.origin === 'live').length },
@@ -1036,7 +1085,7 @@ export interface BeginRecord {
   projectDir: string;
   /**
    * Id мода jev, найденные при `jev off`. Установленный мод — отказ `begin`, поэтому в записи список пуст: он говорит,
-   * что проверка прошла и мода нет. При `jev on` мод не ищется, и список пуст так же.
+   * что проверка прошла и мода нет. При `jev on` и у провайдера не claude (codex, glm: ось jev не применима) мод не ищется, и список пуст так же.
    */
   jevInstalled: string[];
   /** Имена MCP-серверов из всех `.mcp.json` от копии вверх: о них Claude Code спросит диалогом, его закрывает оператор или драйвер. */
@@ -1109,7 +1158,8 @@ export async function beginRun(
   const projectDir = path.join(workDir, 'project');
   // Установленный мод при `jev off` — отказ до стирания прежней копии, копирования и любых записей: иначе платные
   // сессии прошли бы со вставками jev, и отчёт исключил бы пару как `jev-leak`.
-  const jevInstalled = planned.jev === 'off' ? await findJevInstalled(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
+  // Только у claude: для codex и glm jev не применим, и begin из-за мода не отказывает (у glm вставку ловит отчёт: jev-leak).
+  const jevInstalled = planned.jev === 'off' && planned.provider === 'claude' ? await findJevInstalled(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
   if (jevInstalled.length > 0) {
     throw new Error(
       `jev off: мод jev установлен (${jevInstalled.join(', ')}), а прогон с выключенным jev без правки настроек человека не провести: переменной хоста мод не выключить, настройки Claude Code стенд не пишет. Удалите мод до волны (отключения в настройках мало: проверка ищет установку) и повторите begin, иначе вставки jev исключили бы пару как jev-leak.`,
@@ -1137,14 +1187,14 @@ export async function beginRun(
   git(projectDir, 'commit', '-q', '-m', 'fixture');
 
   const versions = (deps.versions ?? (() => ({ claude: cliVersion('claude'), codex: cliVersion('codex') })))();
-  const claudeModel = budget.conditions.claude;
+  const providerConditions = budget.conditions[planned.provider];
   const record: BeginRecord = {
     id: planned.id,
     scenario: planned.scenario,
     repetition: planned.repetition,
     conditions: {
       arm: planned.arm, cache: planned.cache, jev: planned.jev, skill: planned.skill,
-      provider: 'claude', model: claudeModel.model, effort: claudeModel.effort,
+      provider: planned.provider, model: providerConditions.model, effort: providerConditions.effort,
       cli: `claude ${versions.claude}; codex ${versions.codex}`,
       hashes: await fixtureHashes(fixtureDir),
       warmIntervalSec: null,
@@ -1326,9 +1376,119 @@ export async function collectClaudeSession(file: string, knownSkills: readonly s
   };
 }
 
-/** Логи Codex: токены — индекс ядра; потомки (порождённые треды) прикрепляются к родителю по `parentId`. */
-export async function collectCodexSessions(files: string[]): Promise<{ entries: KeyedUsage[]; startedAt: string | null; endedAt: string | null; orphans: number }> {
+/** Счётчики и признаки одного rollout-журнала Codex; что в журнале не видно, остаётся `null`. */
+export interface CodexTranscript {
+  skillUse: Counts;
+  bytes: Counts;
+  traffic: Counts;
+  loaded: string[];
+  offered: string[];
+  firstRequest: FirstRequest | null;
+}
+
+/** Чтение файла навыка копии: `.agents/skills/<имя>/SKILL.md` или `.claude/skills/<имя>/SKILL.md`; имя навыка — из пути. */
+const SKILL_FILE = /\.(?:agents|claude)\/skills\/([^/\s"'`\\]+)\/SKILL\.md/g;
+
+/** Разобранный JSON-объект или массив из строки; обычный текст и скаляры — `null`. */
+function parsedJson(value: string): object | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Строки значения; строка с JSON-объектом или массивом (аргументы вызова, результат MCP) раскрывается в строки внутри него. */
+function textsOf(value: unknown): string[] {
+  if (typeof value !== 'string') return stringsIn(value);
+  const parsed = parsedJson(value);
+  return parsed === null ? [value] : stringsIn(parsed);
+}
+
+/** Поля `text` внутри значения (блоки результата MCP). */
+const textFields = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.flatMap(textFields)
+    : isObject(value)
+      ? Object.entries(value).flatMap(([key, inner]) => (key === 'text' && typeof inner === 'string' ? [inner] : textFields(inner)))
+      : [];
+
+/** Текст результата инструмента: поля `text` блоков, если они есть, иначе все строки результата; обычная строка — она сама. */
+function resultTexts(value: unknown): string[] {
+  const data = typeof value === 'string' ? (parsedJson(value) ?? value) : value;
+  if (typeof data === 'string') return [data];
+  const blocks = textFields(data);
+  return blocks.length > 0 ? blocks : stringsIn(data);
+}
+
+/**
+ * Один rollout-журнал Codex (`response_item` и `event_msg`, формат — `indexCodexSession` ядра): вызовы `find_skill`,
+ * загрузки навыков и первый запрос. Имя MCP-инструмента в живом журнале Codex не проверено, поэтому `find_skill` —
+ * любое имя вызова со словом `find_skill`; загрузка навыка — вызов (оболочки, чтения файла), в аргументах которого
+ * есть путь к `SKILL.md` навыка копии (при непустом `knownSkills` — навыка из списка). Результат `find_skill`
+ * сопоставляется по `call_id`. Первый запрос — первая запись `token_count` с `last_token_usage` (это запрос, а не
+ * накопитель; ядро берёт тот же `info`): `input_tokens` у Codex уже включает кеш. Байты списка навыков, писем,
+ * результатов инструментов и сжатия в журнале Codex не размечены надёжно: `null`.
+ */
+export async function collectCodexTranscript(file: string, knownSkills: readonly string[] = []): Promise<CodexTranscript> {
+  const findCalls = new Set<string>();
+  const loaded: string[] = [];
+  const offered = new Set<string>();
+  let [lookups, noMatch, reformulations, findBytes, lookupsSinceLoad] = [0, 0, 0, 0, 0];
+  let firstRequest: FirstRequest | null = null;
+  await forEachJsonlRecord(file, (record: RawRecord) => {
+    const payload = asRecord(record['payload']);
+    if (payload === null) return;
+    const kind = payload['type'];
+    if (record['type'] === 'event_msg' && kind === 'token_count' && firstRequest === null) {
+      const last = asRecord(asRecord(payload['info'])?.['last_token_usage']);
+      if (last !== null) firstRequest = { cacheRead: asCount(last['cached_input_tokens']), totalInput: asCount(last['input_tokens']) };
+      return;
+    }
+    if (record['type'] !== 'response_item') return;
+    const callId = isString(payload['call_id']) ? payload['call_id'] : null;
+    if (kind === 'function_call' || kind === 'custom_tool_call') {
+      if (isString(payload['name']) && payload['name'].includes('find_skill')) {
+        lookups += 1;
+        if (lookupsSinceLoad > 0) reformulations += 1;
+        lookupsSinceLoad += 1;
+        if (callId !== null) findCalls.add(callId);
+      }
+      const text = textsOf(kind === 'function_call' ? payload['arguments'] : payload['input']).join('\n');
+      const names = new Set([...text.matchAll(SKILL_FILE)].map((match) => match[1]!).filter((name) => knownSkills.length === 0 || knownSkills.includes(name)));
+      loaded.push(...names);
+      if (names.size > 0) lookupsSinceLoad = 0;
+    }
+    if ((kind === 'function_call_output' || kind === 'custom_tool_call_output') && callId !== null && findCalls.has(callId)) {
+      const texts = resultTexts(payload['output']);
+      findBytes += Buffer.byteLength(texts.join(''));
+      if (texts.some((text) => text.startsWith('No skill matched'))) noMatch += 1;
+      for (const name of knownSkills) if (texts.some((text) => text.includes(name))) offered.add(name);
+    }
+  });
+  const unique = new Set(loaded);
+  return {
+    skillUse: { lookups, loads: loaded.length, noMatch, reformulations, duplicateLoads: loaded.length - unique.size, forbiddenOffered: null },
+    bytes: { bootstrapBytes: null, listingBytes: null, findSkillResultBytes: findBytes, toolResultBytes: null },
+    traffic: { messages: null, broadcasts: null, deliveries: null },
+    loaded,
+    offered: [...offered],
+    firstRequest,
+  };
+}
+
+/**
+ * Логи Codex: токены — индекс ядра; потомки (порождённые треды) прикрепляются к родителю по `parentId`. Счётчики
+ * навыков — `collectCodexTranscript` по каждому файлу, версия CLI — `cli_version` из `session_meta` каждого, первый
+ * запрос — у самого раннего родительского треда.
+ */
+export async function collectCodexSessions(
+  files: string[],
+  knownSkills: readonly string[] = [],
+): Promise<{ entries: KeyedUsage[]; startedAt: string | null; endedAt: string | null; orphans: number; versions: string[]; transcripts: CodexTranscript[]; firstRequest: FirstRequest | null }> {
   const indexes = await Promise.all(files.map((file) => indexCodexSession(file)));
+  const transcripts = await Promise.all(files.map((file) => collectCodexTranscript(file, knownSkills)));
   const parents = indexes.filter((index) => index.spawned !== true);
   const children = indexes.filter((index) => index.spawned === true);
   const claimed = new Set<string>();
@@ -1341,7 +1501,16 @@ export async function collectCodexSessions(files: string[]): Promise<{ entries: 
     return { key: usageKey('codex', parent.id, null), usage, ...(descendants.length > 0 ? { descendants } : {}) };
   });
   const times = indexes.flatMap((index) => [index.startedAt, index.endedAt]).filter((value): value is string => value !== null).sort();
-  return { entries, startedAt: times[0] ?? null, endedAt: times[times.length - 1] ?? null, orphans: children.filter((child) => !claimed.has(child.id)).length };
+  const lead = indexes
+    .map((index, i) => ({ index, transcript: transcripts[i]! }))
+    .filter((item) => item.index.spawned !== true)
+    .sort((a, b) => (a.index.startedAt ?? '￿').localeCompare(b.index.startedAt ?? '￿'))[0];
+  return {
+    entries, startedAt: times[0] ?? null, endedAt: times[times.length - 1] ?? null, orphans: children.filter((child) => !claimed.has(child.id)).length,
+    versions: [...new Set(indexes.flatMap((index) => (index.version === null ? [] : [index.version])))],
+    transcripts,
+    firstRequest: lead?.transcript.firstRequest ?? null,
+  };
 }
 
 export interface CollectInput {
@@ -1361,27 +1530,34 @@ export interface CollectInput {
 export async function collectRun(input: CollectInput): Promise<RunRecord> {
   const flags: string[] = [];
   const claude = await Promise.all(input.claude.map((file) => collectClaudeSession(file, input.knownSkills)));
-  const codex = input.codex.length > 0 ? await collectCodexSessions(input.codex) : null;
+  const codex = input.codex.length > 0 ? await collectCodexSessions(input.codex, input.knownSkills) : null;
   if (claude.length + input.codex.length === 0) throw new Error('нужен хотя бы один лог сессии');
+  // Журнал, который прогону с таким провайдером положен: без него условия прогона и собранное не сойдутся.
+  if (input.begin.conditions.provider === 'codex' && codex === null) throw new Error(`${input.begin.id}: провайдер codex — нужен --codex <rollout.jsonl>`);
+  if (input.begin.conditions.provider === 'glm' && claude.length === 0) throw new Error(`${input.begin.id}: провайдер glm — нужен --claude <транскрипт.jsonl>`);
   if (codex !== null && codex.orphans > 0) flags.push(`codex-orphan-descendants:${codex.orphans}`);
-  if (codex !== null) flags.push('codex-tool-counters-not-collected');
   // Версия CLI одна на всю волну: другая в транскрипте или несколько версий — прогон нельзя сравнивать с парой.
-  const seenVersions = new Set(claude.flatMap((s) => s.versions));
-  const pinned = /^claude (\S+)/.exec(input.begin.conditions.cli)?.[1];
-  if (seenVersions.size > 1 || (seenVersions.size === 1 && pinned !== undefined && pinned !== 'unknown' && !seenVersions.has(pinned))) {
+  // У Claude версия — `version` записей главного разговора, у Codex — `cli_version` из `session_meta` каждого журнала.
+  const mismatched = (seen: Set<string>, pinned: string | undefined): boolean =>
+    seen.size > 1 || (seen.size === 1 && pinned !== undefined && pinned !== 'unknown' && !seen.has(pinned));
+  const pinnedClaude = /^claude (\S+)/.exec(input.begin.conditions.cli)?.[1];
+  const pinnedCodex = /codex\s+(?:[A-Za-z-]+\s+)?(\d[\w.+-]*)/.exec(input.begin.conditions.cli)?.[1];
+  if (mismatched(new Set(claude.flatMap((s) => s.versions)), pinnedClaude) || mismatched(new Set(codex?.versions ?? []), pinnedCodex)) {
     flags.push('cli-version-mismatch');
   }
 
-  const sum = (pick: (s: SessionCollected) => number | null): number | null =>
-    codex !== null ? null : claude.reduce<number | null>((acc, s) => (acc === null || pick(s) === null ? null : acc + pick(s)!), 0);
+  // Журнал Codex отдаёт неизвестное как `null`, поэтому суммы по прогону с ним остаются неизвестными там, где оно есть.
+  const counted: Pick<SessionCollected, 'skillUse' | 'bytes' | 'traffic'>[] = [...claude, ...(codex?.transcripts ?? [])];
+  const sum = (pick: (s: Pick<SessionCollected, 'skillUse' | 'bytes' | 'traffic'>) => number | null): number | null =>
+    counted.reduce<number | null>((acc, s) => (acc === null || pick(s) === null ? null : acc + pick(s)!), 0);
   const group = (key: 'skillUse' | 'bytes' | 'traffic', keys: readonly string[]): Counts =>
     Object.fromEntries(keys.map((name) => [name, sum((s) => s[key][name] ?? null)]));
   const times = [...claude.flatMap((s) => [s.startedAt, s.endedAt]), codex?.startedAt ?? null, codex?.endedAt ?? null].filter((v): v is string => v !== null).sort();
-  const loaded = claude.flatMap((s) => s.loaded);
+  const loaded = [...claude.flatMap((s) => s.loaded), ...(codex?.transcripts.flatMap((t) => t.loaded) ?? [])];
   const listings = claude.map((s) => s.listedNames);
-  const offered = claude.flatMap((s) => s.offered);
+  const offered = [...claude.flatMap((s) => s.offered), ...(codex?.transcripts.flatMap((t) => t.offered) ?? [])];
   const md = 'minimal-development';
-  // Первый запрос и старт MCP берутся у главного разговора: у самой ранней Claude-сессии прогона.
+  // Первый запрос и старт MCP берутся у главного разговора: у самой ранней Claude-сессии прогона, без неё — у Codex.
   const lead = [...claude].sort((a, b) => (a.startedAt ?? '\uffff').localeCompare(b.startedAt ?? '\uffff'))[0];
   const sawListing = listings.some((names) => names !== null);
 
@@ -1412,8 +1588,8 @@ export async function collectRun(input: CollectInput): Promise<RunRecord> {
     bytes: merged('bytes', group('bytes', COUNT_GROUPS.bytes)),
     traffic: merged('traffic', group('traffic', COUNT_GROUPS.traffic)),
     process,
-    loadedSkills: codex !== null ? null : loaded,
-    offeredSkills: codex !== null ? null : offered,
+    loadedSkills: loaded,
+    offeredSkills: offered,
     axisEvidence: {
       // Список имён Claude или ответ find_skill называют навык: иначе признаков нет, а не «отсутствует».
       minimalDevelopmentListed: !sawListing && offered.length === 0 ? null : listings.some((names) => names?.includes(md) === true) || offered.includes(md),
@@ -1421,7 +1597,7 @@ export async function collectRun(input: CollectInput): Promise<RunRecord> {
       // Только по транскриптам Claude: без них (чистый Codex) наблюдения нет.
       jevFired: claude.length === 0 ? null : claude.some((s) => s.jevFired),
     },
-    firstRequest: lead?.firstRequest ?? null,
+    firstRequest: lead?.firstRequest ?? codex?.firstRequest ?? null,
     startup: lead?.startup ?? { pendingMcpServers: null, failedMcpServers: null },
     flags,
   };

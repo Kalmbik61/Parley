@@ -3,25 +3,28 @@
  * Оператор живого прогона стенда замера (P32): один прогон от `begin` до `accept` одной командой.
  *
  * Вынесено из скрипта пилота 2026-10-06 (четыре живые сессии): `begin` стенда → хост Parley с чистым окружением →
- * одна сессия Claude с одним запросом сценария → ожидание конца хода по журналу хуков → остановка сессии и хоста →
- * `accept` стенда. Платный ход модели здесь есть, поэтому запускать только с явного разрешения человека (P32).
+ * одна сессия с одним запросом сценария → ожидание конца хода по журналу хуков → остановка сессии и хоста →
+ * `accept` стенда. Провайдер сессии — из `begin.json` (`claude`, `glm` или `codex`): GLM — тот же `claude` с ключом
+ * Z.ai, который хост берёт из дома стенда (ссылкой `--link-secrets` на время прогона), Codex — свой CLI, свои экраны
+ * запуска и свой журнал. Платный ход модели здесь есть, поэтому запускать только с явного разрешения человека (P32).
  *
  * Запуск: `pnpm exec tsx tools/parley-token-benchmark-drive.ts <id> [--out DIR] [--home DIR] [--claude-bin PATH]
- * [--trust-copies] [--timeout-min N]`, справка — `--help`. Последняя строка stdout — `RESULT <json>`.
+ * [--trust-copies] [--link-secrets PATH] [--timeout-min N]`, справка — `--help`. Последняя строка stdout —
+ * `RESULT <json>`.
  *
  * Чистые части (распознавание экранов, окружение хоста, псевдоним модели, разбор журнала хуков, список изменённых
- * файлов, поиск транскрипта) вынесены в функции и покрыты тестом без живых процессов.
+ * файлов, поиск транскрипта, ссылка на ключ) вынесены в функции и покрыты тестом без живых процессов.
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { hostEnv } from './parley-token-benchmark.js';
-import type { PlannedRun, Scenario } from './parley-token-benchmark.js';
+import type { PlannedRun, Provider, Scenario } from './parley-token-benchmark.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_DIR = path.join(repoRoot, 'docs/research/2026-10-04-parley-token-benchmark');
@@ -34,12 +37,22 @@ const HOST_EXIT_WAIT_MS = 5_000;
 
 const squash = (text: string): string => text.replace(/\s+/g, '');
 
-/** Выделенный пункт диалога доверия (строка с `❯`); `null` — выделения на экране нет. */
-export function selectedOption(text: string): 'yes' | 'no' | 'other' | null {
-  const line = text.split(/\r?\n/).find((l) => l.includes('❯'));
+/**
+ * Выделенный пункт диалога доверия: строка с `❯` (Claude Code) или с `›` либо `❯` (Codex); `null` — выделения на
+ * экране нет. У Claude доверие — «Yes, I trust this folder», у Codex — любой пункт, начинающийся с «Yes,»
+ * (формулировка в живом CLI не проверена: незнакомый пункт — `other`, и драйвер остановится).
+ */
+export function selectedOption(text: string, provider: Provider = 'claude'): 'yes' | 'no' | 'other' | null {
+  const marker = provider === 'codex' ? /[❯›]/ : /❯/;
+  const line = text.split(/\r?\n/).find((l) => marker.test(l));
   if (line === undefined) return null;
   const flat = squash(line);
-  const tail = flat.slice(flat.indexOf('❯'));
+  const tail = flat.slice(flat.search(marker));
+  if (provider === 'codex') {
+    if (/^[❯›](?:\d+\.)?Yes,/i.test(tail)) return 'yes';
+    if (/^[❯›](?:\d+\.)?No,/i.test(tail)) return 'no';
+    return 'other';
+  }
   if (/^❯(?:\d+\.)?Yes,Itrustthisfolder/i.test(tail)) return 'yes';
   if (/^❯(?:\d+\.)?No,exit/i.test(tail)) return 'no';
   return 'other';
@@ -56,11 +69,15 @@ export type Screen =
  * пробелов), поэтому текст сверяется без пробелов. `ours` — в диалоге доверия показан путь копии, и копия лежит под
  * `workRoot` (`<out>/work`): только такие копии пилот разрешает доверять.
  */
-export function classifyScreen(text: string, copyPath: string, workRoot: string): Screen {
+export function classifyScreen(text: string, copyPath: string, workRoot: string, provider: Provider = 'claude'): Screen {
   const flat = squash(text);
-  if (/Isthisaprojectyoucreatedoroneyoutrust|Itrustthisfolder|Quicksafetycheck/i.test(flat)) {
+  // Вопрос доверия у Codex — «Do you trust the contents of this directory?»; других экранов Codex драйвер не знает.
+  const trustQuestion = provider === 'codex'
+    ? /Doyoutrustthecontentsofthisdirectory|Doyoutrustthisdirectory|Doyoutrustthisfolder/i
+    : /Isthisaprojectyoucreatedoroneyoutrust|Itrustthisfolder|Quicksafetycheck/i;
+  if (trustQuestion.test(flat)) {
     const ours = copyPath.startsWith(workRoot + path.sep) && flat.includes(squash(copyPath));
-    return { kind: 'trust', selected: selectedOption(text), ours };
+    return { kind: 'trust', selected: selectedOption(text, provider), ours };
   }
   if (/newMCPservers?foundinthisproject/i.test(flat) && /Esctorejectall/i.test(flat)) return { kind: 'mcp' };
   if (/developmentchannel/i.test(flat)) return { kind: 'channel' };
@@ -72,6 +89,27 @@ export function modelAlias(model: string): string {
   const match = /^(?:claude-)?(sonnet|opus|haiku)(?:-|$)/.exec(model);
   if (match === null) throw new Error(`модель ${model}: нет псевдонима провайдера (ждём claude-sonnet-…, claude-opus-…, claude-haiku-…)`);
   return match[1]!;
+}
+
+/**
+ * Модель для `sessions.create`: у Claude хост принимает только псевдоним из списка провайдера; у GLM и Codex — id из
+ * списка провайдера как есть (`glm-5.3[1m]`, `gpt-6-luna`).
+ */
+export function sessionModel(provider: Provider, model: string): string {
+  return provider === 'claude' ? modelAlias(model) : model;
+}
+
+/**
+ * Готов ли провайдер к сессии по `providers.list` хоста; текст проблемы или `null`. Без этого сессия GLM без ключа
+ * или Codex без CLI упала бы позже, уже внутри платного прогона.
+ */
+export function providerProblem(list: readonly { id: string; available?: boolean; needs?: 'cli' | 'key' | null }[], provider: string): string | null {
+  const entry = list.find((item) => item.id === provider);
+  if (entry === undefined) return `хост не знает провайдера ${provider}`;
+  if (entry.needs === 'key') return `провайдер ${provider}: хост не видит ключ (--link-secrets ведёт не на файл ключа дома Parley?)`;
+  if (entry.needs === 'cli') return `провайдер ${provider}: нет CLI нужной версии`;
+  if (entry.available === false) return `провайдер ${provider}: недоступен`;
+  return null;
 }
 
 /** Метки родительской сессии Claude Code, ключи API и прочее окружение оператора хосту не передаются. */
@@ -141,6 +179,16 @@ export function turnEnded(rows: readonly HookRow[]): boolean {
   return submitted !== -1 && rows.slice(submitted + 1).some((row) => row.hook_event_name === 'Stop');
 }
 
+/** Сколько строк `Stop` в журнале. */
+export const stopCount = (rows: readonly HookRow[]): number => rows.filter((row) => row.hook_event_name === 'Stop').length;
+
+/**
+ * Конец хода у Codex: `UserPromptSubmit` в его журнале нет (строки пишет `notify`, только `Stop` — после хода), и
+ * времени в строках нет, только порядок. Поэтому конец хода — первая `Stop` сверх тех, что уже были в журнале в момент
+ * отправки запроса (`stopsBefore`).
+ */
+export const codexTurnEnded = (rows: readonly HookRow[], stopsBefore: number): boolean => stopCount(rows) > stopsBefore;
+
 /** Изменённые файлы копии по `git status --porcelain`; служебное (`.parley/`, `PARLEY.md`, `.omc/`) не считается. */
 export function changedFiles(porcelain: string): string[] {
   const files: string[] = [];
@@ -164,6 +212,43 @@ export function findTranscript(root: string, uuid: string): string | null {
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * Журнал Codex (rollout) с id треда: файл `rollout-<время>-<id>.jsonl` в любом подкаталоге `root`. Читаются только
+ * имена файлов, не содержимое журналов.
+ */
+export function findCodexRollout(root: string, threadId: string): string | null {
+  if (!existsSync(root)) return null;
+  for (const entry of readdirSync(root, { recursive: true })) {
+    const name = String(entry);
+    if (path.basename(name).startsWith('rollout-') && name.endsWith(`-${threadId}.jsonl`)) return path.join(root, name);
+  }
+  return null;
+}
+
+/** `--link-secrets` нужен прогону glm и только ему: без опции у glm ключа нет, у остальных ссылка — лишний доступ к ключу. */
+export function checkSecretsOption(provider: Provider, option: string | null): void {
+  if (provider !== 'glm' && option !== null) throw new Error('--link-secrets нужен только прогону с провайдером glm');
+  if (provider === 'glm' && option === null) {
+    throw new Error('провайдер glm: ключ Z.ai хосту стенда дать нечем; передайте --link-secrets PATH (файл ключа в доме Parley человека; ссылка живёт только на время прогона, файл не читается и не копируется) — только с разрешения человека');
+  }
+}
+
+/**
+ * Ссылка на файл ключа GLM в доме стенда на время прогона: хост читает ключ из дома, а сам файл остаётся там, где
+ * лежит. Файл не читается, не копируется и не печатается: проверяется только, что он есть. Имя ссылки — имя исходного
+ * файла (хост ищет ключ под именем, которое ему известно; если оно другое, `providers.list` скажет `needs: key`, и
+ * драйвер остановится). Поверх существующего файла или ссылки не пишет. `remove` убирает ссылку, повторный вызов безвреден.
+ */
+export function linkSecrets(source: string, home: string): { link: string; remove: () => void } {
+  const target = path.resolve(source);
+  if (!existsSync(target)) throw new Error(`--link-secrets ${target}: файла нет`);
+  mkdirSync(home, { recursive: true });
+  const link = path.join(home, path.basename(target));
+  if (lstatSync(link, { throwIfNoEntry: false }) !== undefined) throw new Error(`${link}: в доме стенда уже что-то лежит; уберите это или возьмите другой --home`);
+  symlinkSync(target, link);
+  return { link, remove: () => rmSync(link, { force: true }) };
 }
 
 const strip = (text: string): string =>
@@ -299,6 +384,8 @@ export interface DriveOptions {
   home: string;
   claudeBin: string | null;
   trustCopies: boolean;
+  /** Файл ключа GLM, на который до старта хоста ставится ссылка в доме стенда; нужен только прогону glm. */
+  linkSecrets: string | null;
   timeoutMin: number | null;
 }
 
@@ -315,7 +402,7 @@ export type Outcome =
 
 interface BeginJson {
   scenario: string;
-  conditions: { arm: PlannedRun['arm']; jev: PlannedRun['jev']; model: string; effort: string };
+  conditions: { arm: PlannedRun['arm']; jev: PlannedRun['jev']; provider: Provider; model: string; effort: string };
   projectDir: string;
 }
 
@@ -368,7 +455,7 @@ interface SessionSummary {
 async function runSession(
   client: HostClient,
   ref: Ref,
-  ctx: { copy: string; workRoot: string; prompt: string; trustCopies: boolean; timeoutMin: number },
+  ctx: { copy: string; workRoot: string; prompt: string; trustCopies: boolean; timeoutMin: number; provider: Provider },
 ): Promise<SessionSummary> {
   const summary: SessionSummary = { providerSessionId: null, outcome: 'start-timeout', sentAt: null, endedAt: null, trustAnswered: false, mcpRejected: false };
   const stop = async (outcome: Outcome, text: string | null): Promise<SessionSummary> => {
@@ -377,6 +464,10 @@ async function runSession(
     return summary;
   };
 
+  const journal = path.join(ctx.copy, '.parley', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
+  const rows = (): HookRow[] => (existsSync(journal) ? parseJournal(readFileSync(journal, 'utf8')) : []);
+  // Codex: Stop, уже лежащие в журнале к моменту отправки (см. `codexTurnEnded`).
+  let stopsBefore = 0;
   const startDeadline = Date.now() + START_TIMEOUT_MS;
   let trustMoves = 0;
   let afterAnswer = 0;
@@ -388,7 +479,7 @@ async function runSession(
     }
     await sleep(2000);
     const text = await client.screen(ref);
-    const screen = classifyScreen(text, ctx.copy, ctx.workRoot);
+    const screen = classifyScreen(text, ctx.copy, ctx.workRoot, ctx.provider);
     if (screen.kind === 'trust') {
       if (summary.trustAnswered) {
         // Enter уже нажат: диалог мог не успеть исчезнуть; второй Enter не нажимаем.
@@ -405,7 +496,8 @@ async function runSession(
         summary.trustAnswered = true;
         continue;
       }
-      if (screen.ours && screen.selected === 'no' && trustMoves < 2) {
+      // У Codex выделение не двигаем: оно должно стоять на варианте доверия само, иначе стоп со снимком.
+      if (screen.ours && screen.selected === 'no' && ctx.provider !== 'codex' && trustMoves < 2) {
         console.log('folder trust prompt for the benchmark copy: moving the selection to "Yes"');
         client.notify('pty.input', { ref, data: '\x1b[B' });
         trustMoves += 1;
@@ -430,6 +522,7 @@ async function runSession(
       console.log('development channel dialog — not answering');
       return stop('channel-dialog', text);
     }
+    stopsBefore = stopCount(rows());
     const sent = await client.call<{ inserted: boolean; submitted: boolean; reason: string | null }>('pty.send', { ref, text: ctx.prompt, submit: true });
     console.log(`pty.send ${JSON.stringify(sent)}`);
     if (sent.submitted) {
@@ -438,11 +531,10 @@ async function runSession(
     } else if (sent.inserted) return stop(`send-${sent.reason ?? 'unknown'}`, await client.screen(ref));
   }
 
-  const journal = path.join(ctx.copy, '.parley', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
   const turnDeadline = summary.sentAt + ctx.timeoutMin * 60_000;
   for (;;) {
     await sleep(3000);
-    if (existsSync(journal) && turnEnded(parseJournal(readFileSync(journal, 'utf8')))) {
+    if (ctx.provider === 'codex' ? codexTurnEnded(rows(), stopsBefore) : turnEnded(rows())) {
       summary.endedAt = Date.now();
       summary.outcome = 'turn-ended';
       break;
@@ -495,6 +587,9 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     symlinkSync(path.resolve(options.claudeBin), path.join(claudeBinDir, 'claude'));
   }
   let keepBinDir = false;
+  let secrets: { link: string; remove: () => void } | null = null;
+  const removeSecrets = (): void => secrets?.remove();
+  const onSignal = (): void => process.exit(1);
   try {
     const base = { ...process.env, PATH: claudeBinDir ? `${claudeBinDir}${path.delimiter}${process.env['PATH'] ?? ''}` : (process.env['PATH'] ?? '') };
     log(`begin ${options.id}`);
@@ -504,9 +599,21 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     const budget = JSON.parse(readFileSync(path.join(FIXTURE_DIR, 'budget.json'), 'utf8')) as { perSession: { maxMinutes: number } };
     const scenario = scenarios.scenarios.find((s) => s.id === begin.scenario);
     if (scenario === undefined) throw new Error(`нет сценария ${begin.scenario}`);
-    const model = modelAlias(begin.conditions.model);
+    const provider = begin.conditions.provider;
+    if (provider !== 'claude' && provider !== 'glm' && provider !== 'codex') throw new Error(`провайдер ${String(provider)}: драйвер ведёт claude, glm и codex`);
+    const model = sessionModel(provider, begin.conditions.model);
     const effort = begin.conditions.effort;
     if (effort !== 'low' && effort !== 'medium' && effort !== 'high') throw new Error(`усилие ${effort}: хост принимает low, medium или high`);
+
+    // Ключ GLM — ссылка в доме стенда до старта хоста; она нужна только прогону glm и убирается при любом выходе.
+    checkSecretsOption(provider, options.linkSecrets);
+    if (options.linkSecrets !== null) {
+      secrets = linkSecrets(options.linkSecrets, home);
+      process.on('exit', removeSecrets);
+      process.on('SIGINT', onSignal);
+      process.on('SIGTERM', onSignal);
+      log(`ссылка на ключ GLM: ${secrets.link}`);
+    }
 
     const env = buildHostEnv({
       base: process.env,
@@ -535,13 +642,18 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     let summary: SessionSummary;
     let ref: Ref | null = null;
     try {
+      if (provider !== 'claude') {
+        const listed = await client.call<{ providers: { id: string; available?: boolean; needs?: 'cli' | 'key' | null }[] }>('providers.list', {});
+        const problem = providerProblem(listed.providers, provider);
+        if (problem !== null) throw new Error(problem);
+      }
       const created = await client.call<{ ref: Ref }>('sessions.create', {
-        projectPath: begin.projectDir, workId: null, provider: 'claude', label: 'bench', task: '', parent: null, model, effort,
+        projectPath: begin.projectDir, workId: null, provider, label: 'bench', task: '', parent: null, model, effort,
       });
       ref = created.ref;
       log(`created ${JSON.stringify(ref)}`);
       summary = await runSession(client, ref, {
-        copy: begin.projectDir, workRoot, prompt: scenario.prompt, trustCopies: options.trustCopies,
+        copy: begin.projectDir, workRoot, prompt: scenario.prompt, trustCopies: options.trustCopies, provider,
         timeoutMin: options.timeoutMin ?? budget.perSession.maxMinutes,
       });
     } catch (error) {
@@ -552,7 +664,7 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     if (summary.outcome === 'blocked') {
       // Сессия ждёт решения человека: хост оставляем живым, остановка — явная.
       keepBinDir = true;
-      console.log(`== сессия ждёт решения: хост оставлен живым (pid ${child.pid}, PARLEY_HOME=${home}); остановить: kill ${child.pid}`);
+      console.log(`== сессия ждёт решения: хост оставлен живым (pid ${child.pid}, PARLEY_HOME=${home}); остановить: kill ${child.pid}${secrets === null ? '' : '; ссылка на ключ GLM снята, новые сессии GLM этот хост не запустит'}`);
     } else {
       if (ref !== null) await client.call('sessions.stop', { ref }).then(() => log('session stopped'), () => undefined);
       await stopHost(client, child, exited);
@@ -568,8 +680,13 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     const status = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: begin.projectDir, encoding: 'utf8' });
     const result = {
       id: options.id,
+      provider,
       providerSessionId: summary.providerSessionId,
-      transcript: summary.providerSessionId === null ? null : findTranscript(path.join(homedir(), '.claude/projects'), summary.providerSessionId),
+      transcript: summary.providerSessionId === null
+        ? null
+        : provider === 'codex'
+          ? findCodexRollout(path.join(homedir(), '.codex/sessions'), summary.providerSessionId)
+          : findTranscript(path.join(homedir(), '.claude/projects'), summary.providerSessionId),
       outcome: summary.outcome,
       turnSeconds: summary.sentAt === null || summary.endedAt === null ? null : Math.round((summary.endedAt - summary.sentAt) / 1000),
       changedFiles: changedFiles(status.stdout),
@@ -578,13 +695,17 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
     return { result, code: summary.outcome === 'turn-ended' ? 0 : 1 };
   } finally {
     if (claudeBinDir !== null && !keepBinDir) rmSync(claudeBinDir, { recursive: true, force: true });
+    removeSecrets();
+    process.off('exit', removeSecrets);
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
   }
 }
 
 const HELP = `parley-token-benchmark-drive — оператор живого прогона стенда замера (P32)
 
   pnpm exec tsx tools/parley-token-benchmark-drive.ts <id> [--out DIR] [--home DIR] [--claude-bin PATH]
-                                                        [--trust-copies] [--timeout-min N]
+                                                        [--trust-copies] [--link-secrets PATH] [--timeout-min N]
 
   id                   id прогона из плана стенда (begin, хост, сессия, accept — одна команда)
   --out DIR            каталог стенда (по умолчанию .parley/benchmark)
@@ -593,7 +714,15 @@ const HELP = `parley-token-benchmark-drive — оператор живого п�
   --claude-bin PATH    закрепить версию claude: каталог со ссылкой на этот бинарь ставится первым в PATH
   --trust-copies       отвечать «Yes, I trust this folder» на вопрос доверия к папке КОПИИ прогона (под <out>/work).
                        Оператор ставит флаг только с разрешения человека; без флага диалог доверия — стоп
+  --link-secrets PATH  только для прогона glm: до старта хоста поставить в доме стенда (<home>) символическую ссылку на
+                       файл ключа Z.ai по этому пути, а после прогона и при любом выходе снять. Файл не читается,
+                       не копируется и не печатается. Без опции прогон glm — отказ. Только с разрешения человека
   --timeout-min N      потолок времени хода (по умолчанию budget.perSession.maxMinutes)
+
+Провайдер берётся из begin.json прогона (волны wq-codex и wq-glm плана): у claude и glm экраны запуска и конец хода как
+у Claude Code; у codex драйвер отвечает только на вопрос доверия к копии (при выделенном «Yes», только с
+--trust-copies), на любом другом экране, не ушедшем за срок старта, — стоп со снимком; конец хода — первая строка
+журнала Stop после отправки запроса.
 
 Платный ход модели: запускать только с явного разрешения человека. Последняя строка stdout — RESULT <json>;
 код выхода 0 только при outcome turn-ended.
@@ -605,7 +734,7 @@ export async function main(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       out: { type: 'string' }, home: { type: 'string' }, 'claude-bin': { type: 'string' },
-      'trust-copies': { type: 'boolean' }, 'timeout-min': { type: 'string' }, help: { type: 'boolean' },
+      'trust-copies': { type: 'boolean' }, 'link-secrets': { type: 'string' }, 'timeout-min': { type: 'string' }, help: { type: 'boolean' },
     },
   });
   const [id] = positionals;
@@ -618,7 +747,7 @@ export async function main(argv: string[]): Promise<number> {
   if (timeout !== null && !(timeout > 0)) throw new Error('--timeout-min: ждём положительное число минут');
   const { result, code } = await drive({
     id, out, home: values.home ?? path.join(out, 'home'), claudeBin: values['claude-bin'] ?? null,
-    trustCopies: values['trust-copies'] === true, timeoutMin: timeout,
+    trustCopies: values['trust-copies'] === true, linkSecrets: values['link-secrets'] ?? null, timeoutMin: timeout,
   });
   console.log(`RESULT ${JSON.stringify(result)}`);
   return code;
