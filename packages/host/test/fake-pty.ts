@@ -20,6 +20,8 @@ export interface FakePty {
   humanDraft: boolean;
   hostDraft: boolean;
   paste: boolean;
+  /** Видимая область экрана для `screenText`; пустая по умолчанию. */
+  screen: string[];
   emitDraft(ref: SessionRef): void;
 }
 
@@ -35,6 +37,7 @@ export function fakePty(): FakePty {
     humanDraft: false,
     hostDraft: false,
     paste: false,
+    screen: [],
     emitDraft(ref) {
       for (const listener of draftListeners) listener(ref, state.humanDraft || state.hostDraft);
     },
@@ -65,6 +68,7 @@ export function fakePty(): FakePty {
     input: () => {},
     resize: () => {},
     snapshot: () => ({ snapshot: '', cols: 80, rows: 24 }),
+    screenText: () => (state.live ? state.screen : undefined),
     stop: async () => ({ exitCode: 0, signal: null }),
     setHostDraft: (_ref, value) => {
       state.hostDraftCalls.push(value);

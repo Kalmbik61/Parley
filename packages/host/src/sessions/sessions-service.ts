@@ -158,7 +158,10 @@ export function busyError(message: string): HostError {
 }
 
 /** Замок смены модели и effort: вторая смена той же сессии, пока идёт первая, — `busy`. */
-export type SwitchLock = <T>(ref: SessionRef, run: () => Promise<T>) => Promise<T>;
+export type SwitchLock = (<T>(ref: SessionRef, run: () => Promise<T>) => Promise<T>) & {
+  /** Идёт ли сейчас смена этой сессии: `pty.send` в это время не печатает — клавиши смены идут в открытый ползунок. */
+  held(ref: SessionRef): boolean;
+};
 
 /**
  * Одна смена модели или effort на сессию за раз (спека нормалайзера, 5.7–5.8): двойной клик или `setEffort` во время
@@ -167,7 +170,7 @@ export type SwitchLock = <T>(ref: SessionRef, run: () => Promise<T>) => Promise<
  */
 export function createSwitchLock(): SwitchLock {
   const running = new Set<string>();
-  return async <T>(ref: SessionRef, run: () => Promise<T>): Promise<T> => {
+  const lock = async <T>(ref: SessionRef, run: () => Promise<T>): Promise<T> => {
     const key = refKey(ref);
     if (running.has(key)) throw busyError('Another model or effort change of this session is in progress');
     running.add(key);
@@ -177,6 +180,7 @@ export function createSwitchLock(): SwitchLock {
       running.delete(key);
     }
   };
+  return Object.assign(lock, { held: (ref: SessionRef): boolean => running.has(refKey(ref)) });
 }
 
 export function createSessionsService(
@@ -601,12 +605,19 @@ export function createSessionsService(
         session.effort !== undefined && (effortsFor(entry, next)?.some((level) => level.id === session.effort) ?? false)
           ? session.effort
           : null;
+      // Сессия сейчас поднимается: процесса ещё нет, но он уже прочитал старую модель из карты — запись «для неживой»
+      // и следующий запуск молча остались бы с ней.
+      if (launching.has(refKey(ref))) throw busyError('The session is starting; try again in a moment');
       const live = pty.get(ref) !== undefined;
       if (live) {
         const state = activity.get(ref);
         if (!atPrompt(state)) throw busyError('Wait until the agent is idle');
         if (state?.activity.tasks.some((task) => task.background) === true) {
           throw busyError('Wait until background tasks finish');
+        }
+        // Остановка и resume потеряли бы неотправленный текст; `hasDraft` включает и указатель будильника.
+        if (pty.get(ref)?.hasDraft() === true) {
+          throw busyError('The input field has unsent text; send or clear it first');
         }
       }
       await setChoice(ref, { model: next, effort });

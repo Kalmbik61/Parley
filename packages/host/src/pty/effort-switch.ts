@@ -30,7 +30,7 @@ const ESC = '\x1b';
 /** «Только для этой сессии»: уровень применяется без записи умолчания человека. */
 const SESSION_ONLY = 's';
 /** Подсказка открытого ползунка: «←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel». */
-const SLIDER_HINT = 's for this session only';
+export const SLIDER_HINT = 's for this session only';
 /** Сколько ждать ползунка после Enter (спека 5.7, п. 2). */
 const SLIDER_MAX_MS = 3_000;
 /** Сколько ждать подвала с уровнем после `s` (спека 5.7, п. 4). */

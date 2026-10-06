@@ -1525,11 +1525,16 @@ describe('atPrompt и busyError: агент у приглашения (спек�
       data: { reason: 'busy' },
     });
     await expect(lock({ ...ref, sessionId: 's-02' }, async () => 'соседняя')).resolves.toBe('соседняя');
+    // `pty.send` по `held` узнаёт, что смена идёт: клавиши смены в PTY, текст среди них не нужен.
+    expect(lock.held(ref)).toBe(true);
+    expect(lock.held({ ...ref, sessionId: 's-02' })).toBe(false);
     release();
     await expect(first).resolves.toBe('первая');
+    expect(lock.held(ref)).toBe(false);
     await expect(lock(ref, async () => {
       throw new Error('сбой');
     })).rejects.toThrow('сбой');
+    expect(lock.held(ref)).toBe(false);
     await expect(lock(ref, async () => 'после сбоя')).resolves.toBe('после сбоя');
   });
 });
@@ -1654,6 +1659,40 @@ describe('setModel(): смена модели (спека нормалайзер
       expect(await sessionOf(ref)).toMatchObject({ model: 'opus', effort: 'xhigh' });
       await service.stop(ref);
     }
+  });
+
+  it('неотправленный текст в поле ввода (в том числе черновик хоста) — conflict busy: процесс тот же, карта прежняя', async () => {
+    const { service, pty, ref } = await liveSession(activityAt('idle'));
+    const pid = pty.get(ref)?.pid;
+    // Указатель будильника — черновик хоста: `hasDraft` его учитывает, как и ввод человека.
+    pty.setHostDraft(ref, true);
+
+    await expect(service.setModel(ref, 'sonnet')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'conflict',
+      message: 'The input field has unsent text; send or clear it first',
+      data: { reason: 'busy' },
+    });
+    expect(pty.get(ref)?.pid).toBe(pid);
+    expect(await sessionOf(ref)).toMatchObject({ model: 'opus', effort: 'xhigh' });
+    await service.stop(ref);
+  });
+
+  it('сессия сейчас запускается — conflict busy: карта прежняя, а не запись «для неживой»', async () => {
+    const { service, pty, ref } = await liveSession(activityAt('idle'));
+    await service.stop(ref);
+
+    // launch занимает ключ запуска синхронно; процесса ещё нет, и без проверки setModel счёл бы сессию неживой.
+    const starting = service.launch(ref, 'resume');
+    await expect(service.setModel(ref, 'sonnet')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    await starting;
+    expect(await sessionOf(ref)).toMatchObject({ model: 'opus', effort: 'xhigh' });
+    expect(pty.get(ref)).toBeDefined();
+    await service.stop(ref);
   });
 
   it('resume не поднялся — ошибка уходит вызывающему, а в карте уже новая модель', async () => {
