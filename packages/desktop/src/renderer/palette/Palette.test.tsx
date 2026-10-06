@@ -423,6 +423,16 @@ describe('Palette — облик Organic (1.9)', () => {
 });
 
 describe('Palette — файлы: ⌘P и префикс / (тест 5 куска 7.4)', () => {
+  it('строка файла — значок по имени файла (спека значков 3.3)', async () => {
+    setup([w]);
+    bridge.setLsFiles(root, { paths: ['src/package.json'], truncated: false });
+    act(() => usePaletteStore.getState().openWith('default'));
+    renderPalette();
+    await type('/package');
+    await waitFor(() => expect(headings()).toEqual(['Files']));
+    expect(screen.getAllByRole('option')[0]?.querySelector('img[data-file-icon]')?.getAttribute('src')).toMatch(/nodejs\.svg$/);
+  });
+
   const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Первая', sessions: [makeSession('s-01', 'main')] });
   const root = { workKey: keyOf(w), spec: { kind: 'project' as const } };
 

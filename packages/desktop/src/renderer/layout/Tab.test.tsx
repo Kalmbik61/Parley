@@ -361,6 +361,9 @@ describe('Tab — вкладка файла (тест 9 куска 7.3a)', () =>
     const el = screen.getByRole('tab');
     expect(el.querySelector('[data-dirty-dot]')).not.toBeNull();
     expect(el.querySelector('[data-file-kind]')?.getAttribute('data-file-kind')).toBe('markdown');
+    // Спека значков 3.2: значок Material по имени файла, 14 px.
+    expect(el.querySelector('img[data-file-icon]')?.getAttribute('src')).toBe('file-icons/markdown.svg');
+    expect(el.querySelector('img[data-file-icon]')?.getAttribute('width')).toBe('14');
     // Раунд fix-live, D5: в подсказке всегда видно, из какого корня файл.
     expect(el.querySelector(`[title="docs/${LONG} · Project"]`)).not.toBeNull();
 
