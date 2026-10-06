@@ -6,12 +6,13 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
-### Fixed
+## 0.5.2
 
-- **GLM limits refresh reads Z.ai's credit quota.** Z.ai now reports the plan's five-hour and
-  weekly windows in credits (`CREDIT_LIMIT`). Refresh limits shows both, with their reset times,
-  instead of an "unsupported response" error. Only the two verified window kinds are read;
-  monthly MCP quotas and unknown windows are left out.
+### Added
+
+- **API retries in Chat.** When Claude Code retries a failed request (rate limit, dropped
+  connection), Chat shows it under the feed — "Retrying in 8s · attempt 6/10" — instead of a
+  bare "Working…", and keeps the retry in the history.
 
 ### Changed
 
@@ -23,6 +24,17 @@ All notable changes to Parley are documented in this file.
   outcome survives host restarts and resets when the key changes. A key typed into the field is
   saved first, and a card without a saved key says so. Claude and Codex keep the local check:
   Parley does not touch their credentials.
+
+### Fixed
+
+- **GLM limits refresh reads Z.ai's credit quota.** Z.ai now reports the plan's five-hour and
+  weekly windows in credits (`CREDIT_LIMIT`). Refresh limits shows both, with their reset times,
+  instead of an "unsupported response" error. Only the two verified window kinds are read;
+  monthly MCP quotas and unknown windows are left out.
+- **Codex turn end.** A Codex session leaves "working" when its log records the end of the turn,
+  even if the terminal sent no completion signal.
+- **Tabs of deleted sessions and rooms** close in open windows at once instead of showing
+  "Session deleted" until the window restarts.
 
 ## 0.5.1
 
