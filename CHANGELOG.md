@@ -20,7 +20,7 @@ All notable changes to Parley are documented in this file.
 - **Model and effort in Chat.** The toolbar shows "model · effort", and its menu changes either
   one for this session only: the effort through Claude Code's `/effort` slider, confirmed in the
   footer, the model by restarting the session with `--resume`. Claude Code's saved defaults stay
-  untouched, and GLM sessions have the menu again.
+  untouched, and it works for GLM sessions too.
 
 ### Changed
 
