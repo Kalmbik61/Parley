@@ -301,15 +301,18 @@ describe('watchEvents', () => {
     const watcher = watchEvents(dir, (sessionId) => seen.push(sessionId), { debounceMs: 10 });
 
     try {
-      await appendFile(journal(), line('UserPromptSubmit'), 'utf8');
-      const deadline = Date.now() + 3000;
+      // fs.watch включается не сразу: запись в окно между вызовом и включением (macOS, под нагрузкой — до сотен
+      // миллисекунд) не приходит событием вовсе. Проверяется, что дописывание отдаёт id сессии, а не гонка с
+      // включением, поэтому дописываем, пока событие не придёт.
+      const deadline = Date.now() + 10_000;
       while (seen.length === 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await appendFile(journal(), line('UserPromptSubmit'), 'utf8');
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
     } finally {
       watcher.close();
     }
 
     expect(seen).toContain(SESSION);
-  });
+  }, 20_000);
 });

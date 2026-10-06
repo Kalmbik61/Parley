@@ -418,16 +418,32 @@ describe('журнал в карте: чтение, запись, перезап
       for (let i = 0; i < 6; i += 1) addSession(map, { provider: 'claude', label: 'x', task: 't' });
     });
     const two = limits({ workConcurrent: 2, workLaunches: 50 });
+    // Замок карты берут опросом, порядок захвата не задан: какие две сессии займут слоты и достанется ли слот
+    // повтору `s-01`, решает очередь. Проверяются инварианты, не порядок. Таймаут замка — запас на нагрузку:
+    // семь записей подряд с индексом и `.bak` под ней укладываются в три секунды по умолчанию не всегда.
     const reserve = (session: string) =>
-      updateMap(project, workId, (map) => {
-        reserveAttempt(map, { kind: 'launch', actor: 'human', session, owner: 'host-A', limits: two });
-      });
-    const results = await Promise.allSettled(['s-01', 's-02', 's-03', 's-04', 's-05', 's-06', 's-01'].map(reserve));
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(3); // s-01 дважды, но один резерв
+      updateMap(
+        project,
+        workId,
+        (map) => {
+          reserveAttempt(map, { kind: 'launch', actor: 'human', session, owner: 'host-A', limits: two });
+        },
+        { lockTimeoutMs: 30_000 },
+      );
+    const sessions = ['s-01', 's-02', 's-03', 's-04', 's-05', 's-06', 's-01'];
+    const results = await Promise.allSettled(sessions.map(reserve));
+
     const map = await readMap(project, workId);
     const reserved = map.resources?.attempts.filter((attempt) => attempt.state === 'reserved') ?? [];
     expect(reserved).toHaveLength(2);
-    expect(new Set(reserved.map((attempt) => attempt.session)).size).toBe(2);
+    expect(new Set(reserved.map((attempt) => attempt.session)).size).toBe(2); // повтор не занял второй слот
+    const holders = new Set(reserved.map((attempt) => attempt.session));
+    sessions.forEach((session, index) => {
+      const result = results[index] as PromiseSettledResult<unknown>;
+      // Слот держит — вызов прошёл (повтор `s-01` тоже); не держит — отказ именно по потолку слотов, не сбой замка.
+      if (holders.has(session)) expect(result.status).toBe('fulfilled');
+      else expect(result).toMatchObject({ status: 'rejected', reason: { code: 'concurrent' } });
+    });
   });
 
   it('перезапуск не выдаёт новый бюджет: счётчики читаются с диска, окно запусков и новые сессии на месте', async () => {

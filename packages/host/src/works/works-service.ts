@@ -34,6 +34,7 @@ import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protoc
 import type { WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
+import { createSettler } from '../watch-settle.js';
 
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
@@ -299,8 +300,27 @@ export function createWorksService(
       },
     );
     watchers.set(projectPath, watcher);
+    settler.schedule();
     return true;
   }
+
+  /**
+   * Дочитывание после включения наблюдателя (`watch-settle`): запись карты, попавшая в окно между созданием
+   * наблюдателя и его реальным включением, не приходит событием никогда. Список перечитывается заново, и
+   * если он отличается от последнего полученного, идёт обычное обновление; без отличий — ничего.
+   */
+  async function settleRead(): Promise<void> {
+    if (stopped) return;
+    const seq = latestSeq;
+    const fresh = await readWorks(parleyHome()).catch(() => null);
+    // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
+    if (stopped || fresh === null || seq !== latestSeq) return;
+    if (JSON.stringify(fresh) === JSON.stringify(latest)) return;
+    latest = fresh;
+    scheduleRefresh();
+  }
+
+  const settler = createSettler(() => void settleRead());
 
   function scheduleRefresh(): void {
     if (timer !== undefined) clearTimeout(timer);
@@ -409,6 +429,7 @@ export function createWorksService(
     async stop() {
       if (stopped) return;
       stopped = true;
+      settler.cancel();
       if (timer !== undefined) clearTimeout(timer);
       for (const watcher of watchers.values()) watcher.close();
       watchers.clear();

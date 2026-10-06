@@ -53,6 +53,7 @@ import {
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
+import { createSettler, type Settler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
@@ -232,6 +233,8 @@ interface WorkWatch {
   journal: EventsLog;
   /** `null` — каталога `events/` ещё нет или наблюдение сломалось: ждём повтора. */
   watcher: EventsWatcher | null;
+  /** Дочитывание журналов после создания наблюдателя (`watch-settle`); `null` — наблюдателя нет. */
+  settler: Settler | null;
 }
 
 export function createActivityService(
@@ -680,7 +683,7 @@ export function createActivityService(
     const eventsDir = workPaths(entry.projectPath, entry.map.work.id).events;
     let watch = workWatches.get(wk);
     if (watch === undefined) {
-      watch = { journal: openEvents(eventsDir), watcher: null };
+      watch = { journal: openEvents(eventsDir), watcher: null, settler: null };
       workWatches.set(wk, watch);
     }
     if (watch.watcher !== null || !existsSync(eventsDir)) return { watch, renewed: false };
@@ -703,6 +706,7 @@ export function createActivityService(
             current.watcher.close();
             current.watcher = null;
           }
+          current.settler?.cancel();
         },
       },
     );
@@ -711,7 +715,18 @@ export function createActivityService(
       return { watch, renewed: false };
     }
     watch.watcher = watcher;
+    // Хук, дописанный в окно включения наблюдателя, он теряет: журналы работы перечитываются ещё несколько раз.
+    watch.settler = createSettler(() => settleJournals(entry.projectPath, entry.map.work.id));
+    watch.settler.schedule();
     return { watch, renewed: true };
+  }
+
+  /** Дочитывание журналов работы после включения наблюдателя: чтение без новых байт состояния не меняет. */
+  function settleJournals(projectPath: string, workId: string): void {
+    const current = works.entry(projectPath, workId);
+    const watch = workWatches.get(workKeyOf(projectPath, workId));
+    if (stopped || current === undefined || watch === undefined) return;
+    for (const session of current.map.sessions) void readJournal(projectPath, workId, watch.journal, session.id);
   }
 
   async function readJournal(
@@ -744,6 +759,7 @@ export function createActivityService(
     for (const [wk, watch] of Array.from(workWatches)) {
       if (validWorks.has(wk)) continue;
       watch.watcher?.close();
+      watch.settler?.cancel();
       workWatches.delete(wk);
     }
 
@@ -921,7 +937,10 @@ export function createActivityService(
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);
-      for (const watch of workWatches.values()) watch.watcher?.close();
+      for (const watch of workWatches.values()) {
+        watch.watcher?.close();
+        watch.settler?.cancel();
+      }
       workWatches.clear();
       logIndex.stop();
     },

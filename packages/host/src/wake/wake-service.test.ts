@@ -366,8 +366,9 @@ describe('WakeService: процесс без хуков и диалог пере
       path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
     );
-    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
-  });
+    // Верхняя граница, а не пауза: хук доходит событием fs (или дочитыванием), настоящий процесс отвечает под нагрузкой не сразу.
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 15_000);
+  }, 30_000);
 
   it('хуки прошлого процесса не в счёт: журнал до запуска — указатель не печатается', async () => {
     const { workId, sessionId } = await activeSession();

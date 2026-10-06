@@ -406,8 +406,10 @@ describe('rooms.create: ведущий и правило одной комнат
 describe('rooms.create: режим и снимок рецепта (спека рецептов, 6.2–6.4)', () => {
   const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Step one.\nStep two.' };
   const parleyLetters = (map: Awaited<ReturnType<typeof readMap>>) => map.messages.filter((message) => message.from === PARLEY);
+  // Верхняя граница, а не пауза: письмо ведущему идёт по событию карты, а под нагрузкой оно приходит с запозданием.
   const waitFor = async (check: () => Promise<boolean>): Promise<void> => {
-    for (let i = 0; i < 100; i++) {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
       if (await check()) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
