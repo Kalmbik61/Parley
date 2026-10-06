@@ -116,10 +116,12 @@ function makeFakeTools(): void {
     'arch',
     '[ "$1" = "-x86_64" ] || exit 2\nshift\n[ "${FAKE_ROSETTA:-1}" = "1" ] || { echo "arch: Bad CPU type in executable" >&2; exit 86; }\necho "arch -x86_64 $*" >> "$FAKE_LOG"\nexec "$@"',
   );
-  // otool -L FILE: печатает только системные библиотеки; `FAKE_OTOOL_RPATH=1` добавляет библиотеку сборки (@rpath).
+  // otool -L FILE: печатает только системные библиотеки; `FAKE_OTOOL_RPATH=1` добавляет библиотеку сборки (@rpath) и
+  // следом ещё мегабайт вывода тем же процессом (`exec`): grep -q закрывает конвейер на первой находке, otool получает SIGPIPE (под pipefail
+  // конвейер — 141), и проверка, которая на этом строится, пропускает находку.
   tool(
     'otool',
-    'echo "$2:"\necho "\\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)"\n[ "${FAKE_OTOOL_RPATH:-0}" = "1" ] && echo "\\t@rpath/libggml.dylib (compatibility version 0.0.0)"\nexit 0',
+    'echo "$2:"\necho "\\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)"\nif [ "${FAKE_OTOOL_RPATH:-0}" = "1" ]; then\n  echo "\\t@rpath/libggml.dylib (compatibility version 0.0.0)"\n  exec awk \'BEGIN { for (i = 0; i < 20000; i++) print "\\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0)" }\'\nfi\nexit 0',
   );
   // Настоящий node нужен самому скрипту (`node -p` для версии окна и закреплённой версии Node).
   symlinkSync(process.execPath, path.join(fakeBin, 'node'));

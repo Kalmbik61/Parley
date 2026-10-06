@@ -93,7 +93,11 @@ run_app() {
   if [ "$#" -eq 0 ]; then
     "$resources/whisper/bin/whisper-cli" --help >/dev/null 2>&1 || fail "$out: whisper-cli does not start"
   fi
-  ! otool -L "$resources/whisper/bin/whisper-cli" | grep -q '@rpath' || fail "$out: whisper-cli links libraries from the build (@rpath)"
+  # Вывод otool — в переменную, а не в `grep -q`: под pipefail SIGPIPE от otool превращал находку в успех.
+  deps="$(otool -L "$resources/whisper/bin/whisper-cli")"
+  case "$deps" in
+    *@rpath*) fail "$out: whisper-cli links libraries from the build (@rpath)" ;;
+  esac
   echo "$out: embedded node v$node_version runs and loads node-pty"
 }
 
