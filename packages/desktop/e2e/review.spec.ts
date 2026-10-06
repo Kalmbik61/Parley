@@ -61,6 +61,9 @@ test.describe('ревью изменений: заметки, коммит, сл
     project = await makeTempProject('review');
     await mkdir(path.join(project, 'src'), { recursive: true });
     await writeFile(path.join(project, 'src', 'base.ts'), `${LINES.join('\n')}\n`);
+    // PARLEY.md закоммичен в первом коммите: хост создаёт шаблон только при его отсутствии, а
+    // неотслеживаемый шаблон попал бы в Changes, в дифф и сделал бы базу грязной (base_dirty).
+    await writeFile(path.join(project, 'PARLEY.md'), '# PARLEY.md\n');
     git(project, 'init', '-q', '-b', 'main');
     git(project, 'config', 'user.email', 'e2e@example.com');
     git(project, 'config', 'user.name', 'e2e');

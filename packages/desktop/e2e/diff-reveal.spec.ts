@@ -64,6 +64,9 @@ test.describe('переход к файлу во вкладке диффа на 
     project = await makeTempProject('diff-reveal');
     await mkdir(path.join(project, 'src'), { recursive: true });
     for (const name of NAMES) await writeFile(path.join(project, 'src', name), lines(name, LONG.has(name) ? 150 : 5, 'old'));
+    // PARLEY.md закоммичен в первом коммите: хост создаёт шаблон только при его отсутствии, а
+    // неотслеживаемый шаблон попал бы в Changes, в дифф и сделал бы базу грязной (base_dirty).
+    await writeFile(path.join(project, 'PARLEY.md'), '# PARLEY.md\n');
     git(project, 'init', '-q', '-b', 'main');
     git(project, 'config', 'user.email', 'e2e@example.com');
     git(project, 'config', 'user.name', 'e2e');
