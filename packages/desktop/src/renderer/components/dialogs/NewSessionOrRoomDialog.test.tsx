@@ -1158,7 +1158,14 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it.each([1, 0.95])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s)', async (scale) => {
+  // Нужно прокрутить на 38.4, а Chromium кладёт scrollTop на сетку пикселей устройства, округляя к ближнему: при DPR 1 вышло
+  // бы 38, и низ поля остался бы на 0.4 px под краем карточки (E2E `providers-connect.spec.ts`, 800×500, экран без Retina).
+  // Поэтому цель — на сетке и с запасом в сторону раскрытия: 39 при DPR 1, 38.5 при DPR 2.
+  it.each([
+    [1, 1, 39],
+    [0.95, 1, 39],
+    [1, 2, 38.5],
+  ])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s, DPR %s)', async (scale, dpr, scrolled) => {
     const observers: ObservedResize[] = [];
     class ObservedResize implements ResizeObserver {
       target: Element | null = null;
@@ -1168,6 +1175,7 @@ describe('NewSessionOrRoomDialog — подключение провайдера
       disconnect = vi.fn();
     }
     vi.stubGlobal('ResizeObserver', ObservedResize);
+    vi.stubGlobal('devicePixelRatio', dpr);
     try {
       bridge.setHandler('providers.list', async () => ({ providers: list() }));
       await renderDialog();
@@ -1187,10 +1195,10 @@ describe('NewSessionOrRoomDialog — подключение провайдера
         contentBoxSize: [], devicePixelContentBoxSize: [], contentRect: new DOMRect(),
       }];
       act(() => observer?.callback(sizes, observer));
-      expect(content.scrollTop).toBeCloseTo(38.4);
+      expect(content.scrollTop).toBe(scrolled);
       // Повторная доставка не двигает уже видимое поле.
       act(() => observer?.callback(sizes, observer));
-      expect(content.scrollTop).toBeCloseTo(38.4);
+      expect(content.scrollTop).toBe(scrolled);
       content.scrollTop = 0;
       bounds.mockReturnValueOnce(new DOMRect(265, 12, 360, 0));
       act(() => observer?.callback(sizes, observer));
