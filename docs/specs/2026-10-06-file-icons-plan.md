@@ -1335,8 +1335,8 @@ EOF
 Запуск: `pnpm test`, `pnpm typecheck`, `pnpm lint`
 Ожидается: зелёные.
 
-Запуск: `grep -rln "material-icon-theme" packages --include='*.ts' --include='*.tsx' --include='package.json' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=out | grep -v '^packages/file-icons/'`
-Ожидается: пусто — набор упоминается только внутри пакета (приёмка 5 спеки).
+Запуск: `grep -rlnE "from 'material-icon-theme|resolve\('material-icon-theme" packages --include='*.ts' --include='*.tsx' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=out | grep -v '^packages/file-icons/'`
+Ожидается: пусто — импорт набора есть только внутри пакета (приёмка 5 спеки). Строка `'material-icon-theme'` в `notice.test.ts` — не импорт, она сверяет версию.
 
 Тесты из раздела 6 TODOS.md (`fs.watch`, дебаунс) под нагрузкой бывают нестабильны. Упавший тест перезапустить поодиночке и сравнить с прогоном на `master`, прежде чем считать падение своим.
 
