@@ -2,7 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, type EffortOption, type ModelOption } from './provider-models.js';
+import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -94,6 +94,12 @@ export interface ProviderEntry {
    * списке не хранится: это отсутствие выбора, без флага.
    */
   models?: readonly ModelOption[] | null;
+  /**
+   * `args` пришли из `providers.json`: принимает ли провайдер модель и effort, решает уже шаблон
+   * человека (`supportsModel`, `supportsEffort`), и окно говорит об этом в карточке провайдера.
+   * Поля нет — шаблон встроенный.
+   */
+  argsOverridden?: true;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -676,9 +682,12 @@ export interface ProviderOverride {
   mcpConfig?: McpConfigKind;
   /**
    * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
-   * пара `{ id, label }`; `id` — одно слово, не с дефиса, до 200 знаков, и в списке не повторяется.
+   * `{ id, label }` и необязательные `efforts`; `id` — одно слово, не с дефиса, до 200 знаков, и в
+   * списке не повторяется. `efforts` — уровни модели (непустой список токенов `EFFORT_TOKEN` без
+   * повторов, подписи выводит `effortLabel`) или `null`, если effort у модели нет; без поля —
+   * прежние `low|medium|high` (`effortsFor`).
    */
-  models?: ModelOption[];
+  models?: Array<{ id: string; label: string; efforts?: string[] | null }>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -808,6 +817,17 @@ const isModelList = (value: unknown): value is ModelOption[] =>
   value.every(isModelEntry) &&
   new Set(value.map((model) => model.id)).size === value.length;
 
+/**
+ * Уровни модели в `providers.json`: `null` — effort у модели нет, иначе непустой список токенов
+ * `EFFORT_TOKEN` без повторов. Пустой список не «уровней нет» — для этого есть `null`.
+ */
+const isEffortList = (value: unknown): value is string[] | null =>
+  value === null ||
+  (Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && EFFORT_TOKEN.test(item)) &&
+    new Set(value).size === value.length);
+
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
     ['family', 'env', 'settingsModel', 'secret', 'minVersion', 'runner'].some(
@@ -828,6 +848,14 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
   if (wrong) throw new Error(`provider ${id} in ${file}: unexpected entry shape`);
+  // Уровни моделей — с причиной: их правят руками, и «unexpected entry shape» не сказал бы, что не так.
+  for (const model of (patch['models'] ?? []) as Array<{ id: string; efforts?: unknown }>) {
+    if (model.efforts !== undefined && !isEffortList(model.efforts)) {
+      throw new Error(
+        `provider ${id} in ${file}: model ${model.id}: efforts must be null or a non-empty list of unique levels (lowercase letters, digits, - and _, up to 32 characters)`,
+      );
+    }
+  }
 }
 
 /** Накладывает переопределение на запись встроенного реестра (или создаёт свою). */
@@ -857,11 +885,23 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
-  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON.
+  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON; уровни в файле — id,
+  // в записи — с подписями, как у встроенного каталога.
   const models =
     patch.models === undefined
       ? base?.models
-      : patch.models.map((model) => ({ id: model.id, label: model.label }));
+      : patch.models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          ...(model.efforts === undefined
+            ? {}
+            : {
+                efforts:
+                  model.efforts === null
+                    ? null
+                    : model.efforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+              }),
+        }));
   return {
     id,
     ...(base?.family === undefined ? {} : { family: base.family }),
@@ -871,6 +911,7 @@ function applyOverride(
     linkBy: patch.linkBy ?? base?.linkBy ?? 'cwd+time',
     runner,
     ...(models === undefined ? {} : { models }),
+    ...(patch.args === undefined ? {} : { argsOverridden: true as const }),
   };
 }
 

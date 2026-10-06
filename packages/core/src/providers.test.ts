@@ -788,11 +788,29 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       hasHistory: false,
       linkBy: 'cwd+time',
       runner: { command: 'opencode', args: ['{prompt}'] },
+      argsOverridden: true,
     });
     expect(startCommand(opencode, { prompt: 'бриф' })).toEqual({
       command: 'opencode',
       args: ['бриф'],
     });
+  });
+
+  it('argsOverridden — только у записи, чьи args пришли из providers.json', async () => {
+    await write({
+      codex: { args: ['{prompt}'] },
+      claude: { command: '/opt/claude/bin/claude', resumeArgs: ['--resume', '{providerSessionId}'] },
+    });
+    const registry = await loadProviders();
+
+    expect(registry['codex']?.argsOverridden).toBe(true);
+    // Команда и resumeArgs — не args: выбор модели и effort по-прежнему решает встроенный шаблон.
+    expect('argsOverridden' in (registry['claude'] ?? {})).toBe(false);
+    expect('argsOverridden' in (registry['glm'] ?? {})).toBe(false);
+    expect('argsOverridden' in PROVIDERS.codex).toBe(false);
+    // Свой шаблон без {model} и {effort} выключает выбор — это окно и объясняет по argsOverridden.
+    expect(supportsModel(registry['codex'] as ProviderEntry)).toBe(false);
+    expect(supportsEffort(registry['codex'] as ProviderEntry)).toBe(false);
   });
 
   it('встроенный реестр не мутируется переопределениями', async () => {
@@ -915,6 +933,51 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       await write({ claude: { models: rightIds.map((id) => ({ id, label: 'Х' })) } });
       const registry = await loadProviders();
       expect(registry['claude']?.models?.map((model) => model.id)).toEqual(rightIds);
+    });
+
+    it('efforts: уровни модели id-ами, подписи выводятся; null — effort у модели нет; без поля — прежнее правило', async () => {
+      await write({
+        codex: {
+          models: [
+            { id: 'my-sol', label: 'Моя Sol', efforts: ['low', 'xhigh', 'ultra', 'turbo'] },
+            { id: 'my-mini', label: 'Моя мини', efforts: null },
+            { id: 'my-old', label: 'Моя старая' },
+          ],
+        },
+      });
+      const codex = (await loadProviders())['codex'] as ProviderEntry;
+
+      expect(selectableModels(codex)).toStrictEqual([
+        {
+          id: 'my-sol',
+          label: 'Моя Sol',
+          efforts: [
+            { id: 'low', label: 'Low' },
+            { id: 'xhigh', label: 'Extra high' },
+            { id: 'ultra', label: 'Ultra' },
+            { id: 'turbo', label: 'Turbo' },
+          ],
+        },
+        { id: 'my-mini', label: 'Моя мини', efforts: null },
+        { id: 'my-old', label: 'Моя старая' },
+      ]);
+      expect(effortsFor(codex, 'my-mini')).toBeNull();
+      expect(effortsFor(codex, 'my-old')?.map((level) => level.id)).toEqual(['low', 'medium', 'high']);
+      // «Default» — общее у моделей с уровнями: у my-sol и прежних трёх my-old общий только low.
+      expect(effortsFor(codex, undefined)?.map((level) => level.id)).toEqual(['low']);
+      expect(resolveModelEffort(codex, { model: 'my-sol', effort: 'turbo' })).toStrictEqual({
+        choice: { model: 'my-sol', effort: 'turbo' },
+      });
+    });
+
+    it('неверные efforts — loadProviders падает с причиной: провайдер, файл, модель и что не так', async () => {
+      const wrong: unknown[] = [[], ['low', 'low'], ['hi gh'], ['High'], ['x"'], [''], ['a'.repeat(33)], 'low', [1], {}, [null]];
+      for (const efforts of wrong) {
+        await write({ codex: { models: [{ id: 'my-sol', label: 'Моя Sol', efforts }] } });
+        await expect(loadProviders(), JSON.stringify(efforts)).rejects.toThrow(
+          /^provider codex in .*providers\.json: model my-sol: efforts must be null or a non-empty list of unique levels/,
+        );
+      }
     });
 
     it('повтор id в одном списке — ошибка: окно не различило бы две строки, а хост принял бы любую', async () => {
