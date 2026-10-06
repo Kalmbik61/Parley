@@ -95,7 +95,8 @@ test.describe('голосовой ввод', () => {
     // 2. Клик — запись, клик — текст в поле, письма нет.
     await mic.getByRole('button').click();
     await expect(mic).toHaveAttribute('data-state', 'recording');
-    await window.waitForTimeout(500);
+    // Фейковый микрофон Chromium даёт короткий тон примерно раз в 0,5 с — запись короче может попасть в тишину
+    await window.waitForTimeout(2000);
     await mic.getByRole('button').click();
     await expect(editor).toHaveText(VOICE_TEXT);
     // Пока лента не показана, счёт нуля ничего не доказывает: сначала ждём саму ленту комнаты.
@@ -114,7 +115,7 @@ test.describe('голосовой ввод', () => {
     await window.keyboard.press('End');
     await window.keyboard.press('Meta+Shift+M');
     await expect(mic).toHaveAttribute('data-state', 'recording');
-    await window.waitForTimeout(500);
+    await window.waitForTimeout(2000);
     await window.keyboard.press('Meta+Shift+M');
     await expect(editor).toHaveText(`${VOICE_TEXT} ${VOICE_TEXT}`);
   });
