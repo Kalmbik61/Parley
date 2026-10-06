@@ -1,4 +1,4 @@
-import os from 'node:os';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -49,6 +49,12 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { isFileSync, resolveEngine } from './voice/engine.js';
+import { registerVoiceIpc } from './voice/ipc.js';
+import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
+import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
+import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
+import { removeStaleRecordings } from './voice/transcribe.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
@@ -504,6 +510,32 @@ if (!gotLock) {
       git: gitRunner,
       spawnGrepWorker: () => createGrepWorker({}),
     });
+    // Голосовой ввод (спека 2026-10-06-voice-input-design.md, 4.2): модели в ~/.parley/desktop/voice/models, движок —
+    // Resources/whisper или build/whisper (dev). PARLEY_VOICE=fake (E2E) — подменные службы без движка и сети.
+    const voiceServices = switches.voice
+      ? createFakeVoiceServices(envValue(process.env, 'VOICE_TEXT') ?? 'hello from voice')
+      : createVoiceServices({
+          models: createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes }),
+          engine: () =>
+            resolveEngine({
+              isPackaged: app.isPackaged,
+              resourcesPath: process.resourcesPath,
+              devDir: path.resolve(dirname, '../../build/whisper', `darwin-${process.arch}`),
+              pathEnv: shellEnv.env.PATH,
+              isFile: isFileSync,
+            }),
+          mic: {
+            status: () => normalizeMicStatus(systemPreferences.getMediaAccessStatus('microphone')),
+            request: () => systemPreferences.askForMediaAccess('microphone'),
+            openSettings: async () => {
+              if (logShell) shellLog.push({ action: 'openExternal', url: MIC_SETTINGS_URL });
+              else await shell.openExternal(MIC_SETTINGS_URL);
+            },
+          },
+          log: (message) => console.warn('[parley] voice', message),
+        });
+    registerVoiceIpc({ ipcMain, services: voiceServices });
+    void removeStaleRecordings(tmpdir());
     createAppMenu(() => mainWindow);
 
     // Последним: к первому ответу GitHub обработчики каналов уже стоят.

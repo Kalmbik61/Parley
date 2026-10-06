@@ -36,6 +36,7 @@ import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { DEFAULT_UI, normalizeUi, type UiFile } from '../../shared/ui-types.js';
+import type { DownloadProgress, TranscribeResult, VoiceModelId } from '../../shared/voice-types.js';
 
 type Handler = (params: never) => unknown;
 
@@ -173,6 +174,14 @@ export interface FakeBridge extends ParleyBridge {
   setPickResult(answer: PickResult | null | IpcErrorInfo): void;
   /** Вызовы `browser.pickStart` и `browser.pickCancel` по порядку (кусок 9.3a). */
   readonly pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }>;
+  /** Вызовы `voice.*` по порядку (голосовой ввод). */
+  readonly voiceCalls: Array<{ method: string; args: unknown[] }>;
+  /** Скачанные модели Whisper: что отдаёт `voice.listModels`. */
+  setVoiceModels(ids: VoiceModelId[]): void;
+  /** Ответ `voice.transcribe`; по умолчанию `{ text: 'dictated text' }`. */
+  setTranscribeResult(result: TranscribeResult): void;
+  /** Прогресс скачивания модели: событие слушателям `voice.onProgress`. */
+  emitVoiceProgress(progress: DownloadProgress): void;
 }
 
 export function createFakeBridge(): FakeBridge {
@@ -242,6 +251,10 @@ export function createFakeBridge(): FakeBridge {
   const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
   const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
+  let voiceModels: VoiceModelId[] = [];
+  let transcribeResult: TranscribeResult = { text: 'dictated text' };
+  const voiceCalls: Array<{ method: string; args: unknown[] }> = [];
+  const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
   let pickAnswer: PickResult | null | IpcErrorInfo = null;
   const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
   let watchSeq = 0;
@@ -378,6 +391,49 @@ export function createFakeBridge(): FakeBridge {
       pickAnswer = answer;
     },
     pickCalls,
+    voice: {
+      listModels: async () => {
+        voiceCalls.push({ method: 'listModels', args: [] });
+        return [...voiceModels];
+      },
+      downloadModel: async (id) => {
+        voiceCalls.push({ method: 'downloadModel', args: [id] });
+        if (!voiceModels.includes(id)) voiceModels = [...voiceModels, id];
+        return { ok: true };
+      },
+      cancelDownload: async (id) => {
+        voiceCalls.push({ method: 'cancelDownload', args: [id] });
+      },
+      removeModel: async (id) => {
+        voiceCalls.push({ method: 'removeModel', args: [id] });
+        voiceModels = voiceModels.filter((model) => model !== id);
+      },
+      onProgress: (listener) => {
+        voiceProgressListeners.add(listener);
+        return () => {
+          voiceProgressListeners.delete(listener);
+        };
+      },
+      transcribe: async (request) => {
+        voiceCalls.push({ method: 'transcribe', args: [request] });
+        return transcribeResult;
+      },
+      micStatus: async () => 'granted',
+      requestMic: async () => true,
+      openMicSettings: async () => {
+        voiceCalls.push({ method: 'openMicSettings', args: [] });
+      },
+    },
+    voiceCalls,
+    setVoiceModels: (ids) => {
+      voiceModels = [...ids];
+    },
+    setTranscribeResult: (result) => {
+      transcribeResult = result;
+    },
+    emitVoiceProgress: (progress) => {
+      for (const listener of voiceProgressListeners) listener(progress);
+    },
     // Безвредные заглушки: поиск ничего не находит, остальное — успех.
     browser: {
       openDevTools: async (webContentsId) => {
