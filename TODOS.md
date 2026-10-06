@@ -260,8 +260,7 @@ core, нужный только ему, документы требований 
     `sessions/sessions-service.test.ts` «закрытие по карте», тест 8 (`close_session`
     при живом PTY).
   - `server.test.ts` «второй клиент сразу после ответа на hello получает её
-    activity.changed» и `activity/activity-terminal.test.ts` «порог тишины по-прежнему
-    роняет working сессии codex, чей процесс не под хостом» — под нагрузкой;
+    activity.changed» — под нагрузкой;
   - `activity/activity-service.test.ts`, тесты 6 и 6b (автозаголовок): ждут фоновый индекс логов
     15 с. 2026-10-01 при load average около 13 от посторонних приложений упали 1 раз из 6 и 2 из 4
     прогонов. На свободной машине зелёные, на master так же;

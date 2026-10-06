@@ -4,7 +4,7 @@
  * хуки Claude Code, и дальше — тем же путём: `activity.changed`, внимание окна, уведомления macOS.
  */
 
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -302,18 +302,23 @@ describe('сигналы терминала codex → активность', () 
   it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
     // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
     // состояние — по журналу, как у всякой, и порог тишины действует.
-    // Порог — с запасом: под нагрузкой полного прогона первое чтение журнала приходило позже 300 мс, и
-    // `working` было уже не застать (сессия сразу считалась закончившей ход).
     const { workId, ref } = await codexSession({ eventsDir: true });
+    // Строка — до старта: её приносит первое чтение журнала, а не уведомление fs.watch. Старт заводит
+    // наблюдателей (журналы, индекс логов), на macOS каждый новый пересоздаёт общий для процесса поток
+    // FSEvents, и запись в этот миг не доходила ни до одного из них: `working` не наступало вовсе.
+    const journal = path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(journal, `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
+    // Часы сервиса стоят на времени строки (событие журнала получает mtime файла): порог не истечёт,
+    // как бы ни запоздало чтение, пока часы не сдвинуты.
+    const at = (await stat(journal)).mtime.getTime();
+    let now = at;
     const w = await works();
-    const a = activity(w, { silenceThresholdMs: 1500 });
+    const a = activity(w, { silenceThresholdMs: 1500, now: () => now });
     await a.start();
-    await appendFile(
-      path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
-      `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`,
-    );
-    await updateMap(project, workId, () => undefined);
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    // Порог позади: сессию пересчитывает таймер тишины, и ход окончен.
+    now = at + 1501;
     await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 6000);
   }, 20_000);
 
