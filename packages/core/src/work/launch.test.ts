@@ -1407,13 +1407,22 @@ describe('navigator launch settings and fallback', () => {
   });
 });
 
-describe('unsupported navigator launch', () => {
-  it.each([false, true])('GLM gets no navigator reduction with navigator %s', async enabled => {
-    setEnv('PARLEY_SKILL_NAVIGATOR', enabled ? '1' : '0');
+describe('навигатор у GLM (семейство Claude Code)', () => {
+  const hookUrl = 'http://127.0.0.1:40001/hooks';
+  /** `~/.claude` GLM-сессии: хост срезает у неё `CLAUDE_CONFIG_DIR`, поэтому мод jev ищется здесь. */
+  const homeWithJev = async (): Promise<void> => {
+    const fakeHome = path.join(home, 'user-home');
+    const manifest = path.join(fakeHome, '.claude', 'skills', 'jev-skill-suggestion', '.claude-plugin');
+    await mkdir(manifest, { recursive: true });
+    await writeFile(path.join(manifest, 'plugin.json'), JSON.stringify({ name: 'jev-skill-suggestion', version: '0.1.0' }));
+    setEnv('HOME', fakeHome);
+  };
+
+  it('навигатор выключен: файл настроек GLM и окружение как раньше, ничего лишнего', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '0');
     const { workId, sessionId } = await pending('glm');
     for (const planner of [planNew, planResume]) {
       const plan = await planner(project, workId, await sessionOf(workId, sessionId));
-      // Файл настроек у GLM свой (маршрутизация и модель), без сессионного слоя навигатора и без выключенных плагинов.
       const settingsFile = plan.args[plan.args.indexOf('--settings') + 1]!;
       expect(path.basename(settingsFile)).toBe('settings-glm.json');
       expect(await readFile(settingsFile, 'utf8')).not.toContain('enabledPlugins');
@@ -1422,6 +1431,57 @@ describe('unsupported navigator launch', () => {
       expect(plan.env['PARLEY_SKILL_NAVIGATOR']).toBe('0');
       expect(plan.warnings).toEqual([]);
     }
+  });
+
+  it.each(['planNew', 'planResume'] as const)('%s: бюджет в окружении процесса, jev выключен в файле сессии вместе с моделью Z.ai и хуками', async (which) => {
+    await homeWithJev();
+    // Конфигурация Claude хозяина без jev: GLM её не видит, а значит, не должна по ней решать.
+    await claudeConfig();
+    claudeSkillRoute.catalogReady = true;
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('glm');
+    const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, await sessionOf(workId, sessionId), { hookUrl });
+    expect(plan.command).toBe('claude');
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(plan.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
+    expect(plan.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+    // Маршрутизация Z.ai из окружения раннера не потеряна.
+    expect(plan.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' });
+    const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+    expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
+    const settings = JSON.parse(await readFile(file, 'utf8'));
+    expect(settings.enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false });
+    expect(settings.model).toBe('glm-5.3[1m]');
+    delete settings.enabledPlugins;
+    // Остальное — то, что пишет master для GLM: модель, токен хуков `PARLEY_HOOK_CAPABILITY`, HTTP-хуки ленты, строка статуса.
+    expect(settings).toEqual(JSON.parse(workSettingsJson({ provider: 'glm', model: 'glm-5.3[1m]', hookUrl })));
+    expect(JSON.stringify(settings)).toContain('PARLEY_HOOK_CAPABILITY');
+    // Файл GLM прежнего вида не заводится.
+    await expect(stat(path.join(workPaths(project, workId).dir, 'settings-glm.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(plan.args.join(' ')).toContain('find_skill');
+    expect(plan.args.join(' ')).toContain('skill list shows names only');
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('jev не установлен: список сокращается, плагины не трогаются', async () => {
+    setEnv('HOME', path.join(home, 'empty-home'));
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('glm');
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
+    expect(settings).not.toHaveProperty('enabledPlugins');
+    expect(settings.model).toBe('glm-5.3[1m]');
+  });
+
+  it('подмена записи glm без {mcpConfig}: список остаётся полным, переменная бюджета не ставится', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('glm');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { args: ['--append-system-prompt', '{systemPrompt}', '{prompt}'] } }));
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('find_skill');
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
   });
 });
 

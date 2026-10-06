@@ -147,9 +147,10 @@ describe('instance-local find_skill', () => {
     const client = await connect({ skillNavigator: true });
     const found = JSON.parse((await find(client)).text);
     expect(found.skills).toEqual([]); expect(found.reason).toContain('unverified');
-    await updateMap(project, work, map => { map.sessions[0]!.provider = 'glm'; });
+    // Провайдер вне семейств Claude Code и Codex маршрута не имеет.
+    await updateMap(project, work, map => { map.sessions[0]!.provider = 'zcode'; });
     expect(JSON.parse((await find(client)).text).reason).toContain('no verified');
-    expect((await readMap(project, work)).sessions[0]!.provider).toBe('glm');
+    expect((await readMap(project, work)).sessions[0]!.provider).toBe('zcode');
   });
 
   it('describes the reduced native list only in a confirmed mode, with names for Codex and the Claude names-only note', async () => {
@@ -215,6 +216,21 @@ describe('instance-local find_skill', () => {
       // A listed name without a file on disk is returned without a description.
       const builtin = JSON.parse((await find(client, { query: 'simplify' })).text);
       expect(builtin.skills).toEqual([{ name: 'simplify', source: 'system', load: 'Use the Skill tool with "simplify".' }]);
+    });
+
+    it('GLM is the Claude Code family: its own search and a lead search with for read the Claude catalog from its transcript', async () => {
+      await updateMap(project, work, map => { map.sessions[1]!.provider = 'glm'; });
+      await writeTranscript('superpowers:writing-plans', 'simplify');
+      const own = await connect({ sessionId: 's-02', skillNavigator: true, skillListReduced: true });
+      const description = (await own.listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
+      expect(description).toContain('shows names only');
+      const found = JSON.parse((await find(own, { query: 'write an implementation plan for a multi-step task' })).text);
+      expect(found).not.toHaveProperty('reason');
+      expect(found.skills[0]).toMatchObject({ name: 'superpowers:writing-plans', source: 'plugin', description: expect.stringContaining('multi-step task'), load: 'Use the Skill tool with "superpowers:writing-plans".' });
+      const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+      const viaFor = JSON.parse((await find(lead, { query: 'plan multi-step task', for: 's-02' })).text);
+      expect(viaFor.skills.map((skill: { name: string }) => skill.name)).toEqual(['superpowers:writing-plans']);
+      expect(viaFor).not.toHaveProperty('reason');
     });
 
     it('for: a lead searches the skills of a Claude participant by that participant transcript; a Codex participant keeps its own route', async () => {

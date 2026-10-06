@@ -21,6 +21,7 @@ import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
   EFFORT_LEVELS,
+  isClaudeCode,
   providerReadiness,
   providerReadinessError,
   loadProviders,
@@ -1534,7 +1535,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
     let cwd: string;
     try { if (!(await stat(rawCwd)).isDirectory()) throw new Error(); cwd = await realpath(rawCwd); }
     catch { return { session, cwd: rawCwd, catalog: null, reason: 'Participant working directory is unavailable.' }; }
-    if (session.provider !== 'codex' && session.provider !== 'claude')
+    if (session.provider !== 'codex' && !isClaudeCode(session.provider))
       return { session, cwd, catalog: null, reason: 'This provider has no verified native skill route.' };
     const descriptor = await readNativeContext(context.projectPath, context.workId, session.id);
     const own = session.id === context.sessionId;
@@ -1544,7 +1545,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
       own ? context.nativeContextRevision : descriptor?.process ?? [session.pid, session.startedAtProcess], session.providerSessionId ?? null]);
     if (!catalogs.has(key)) catalogs.set(key, (async (): Promise<Built> => {
       if (context.skillCatalog) return { catalog: await context.skillCatalog(session, cwd) };
-      if (session.provider === 'claude') {
+      if (isClaudeCode(session.provider)) {
         // Что модель может загрузить, пишет в транскрипт сам Claude Code: отдельная проверка роли и настроек не нужна.
         const homeDir = descriptor?.roots.homeDir ?? process.env.HOME ?? homedir();
         const configDir = descriptor?.roots.claudeConfigDir ?? (process.env.CLAUDE_CONFIG_DIR ? path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR) : undefined);
@@ -1568,7 +1569,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
       const map = await readMap(context.projectPath, context.workId);
       const provider = map.sessions.find(item => item.id === context.sessionId)?.provider;
       const reduced = context.skillListReduced === true;
-      if (provider === 'claude') return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
+      if (provider !== undefined && isClaudeCode(provider)) return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
       if (provider !== 'codex') return FIND_SKILL;
       const own = await target();
       const names = own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [];

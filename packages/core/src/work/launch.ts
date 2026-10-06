@@ -191,8 +191,9 @@ async function plan(
   const { config: launchConfig } = await loadConfig();
   const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
-  // Навигатор на GLM пока не распространяется: он идёт как есть — со своим файлом настроек, полным списком скиллов и без `find_skill`.
-  const skillNavigator = launchConfig.skillNavigator && entry.id !== 'glm';
+  const skillNavigator = launchConfig.skillNavigator;
+  // GLM — тот же Claude Code, но хост срезает у него `CLAUDE_CONFIG_DIR` (provider-env.ts): конфигурация — `~/.claude`.
+  const claudeConfigEnv = entry.runner.secret === 'zai' ? undefined : process.env.CLAUDE_CONFIG_DIR;
   const incompatibility = providerCompatibilityError(entry);
   if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
@@ -248,7 +249,7 @@ async function plan(
       const homeDir = await realpath(process.env.HOME ?? homedir());
       const roots: NativeContextDescriptor['roots'] = { homeDir };
       if (process.env.CODEX_HOME) roots.codexHome = await realpath(path.resolve(cwd, process.env.CODEX_HOME));
-      if (process.env.CLAUDE_CONFIG_DIR) roots.claudeConfigDir = await realpath(path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR));
+      if (claudeConfigEnv) roots.claudeConfigDir = await realpath(path.resolve(cwd, claudeConfigEnv));
       const nativeCommand = entry.id === 'codex' && projection.verified ? await findRunnerBinary(entry.runner.command, process.env) : undefined;
       descriptor = { version: 1, revision: nativeContextRevision, provider: session.provider, cwd: await realpath(cwd),
         verified: projection.verified && nativeCommand !== undefined, ...(nativeCommand ? { command: nativeCommand } : {}),
@@ -262,13 +263,13 @@ async function plan(
   // (спека, 6.1): иначе список остаётся полным.
   let skillList: 'names' | 'removed' | undefined;
   let disablePlugins: string[] = [];
-  if (skillNavigator && entry.id === 'claude') {
+  if (skillNavigator && isClaudeCode(entry)) {
     const claude = await claudeSkillReduction({
       nativeRole: nativeClaudeRole,
       mcpRoute,
       settingsFile: template.includes('{settingsFile}'),
       cwd,
-      configDir: process.env.CLAUDE_CONFIG_DIR ? path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR) : path.join(process.env.HOME ?? homedir(), '.claude'),
+      configDir: claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : path.join(process.env.HOME ?? homedir(), '.claude'),
     });
     if (claude.reduced) { skillList = 'names'; disablePlugins = claude.disablePlugins; }
   } else if (skillNavigator && entry.id === 'codex' && mcpRoute) {
@@ -442,7 +443,7 @@ async function plan(
       ...entry.runner.env,
       ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
-      ...(entry.id === 'claude' && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
+      ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
     },
     providerSessionId,
     warnings,

@@ -114,6 +114,26 @@ describe('GLM launch boundaries', () => {
     await sessions.resumeInterrupted([ref]);
     expect(launches).toEqual([]);
   });
+  it('skill navigator: the list budget reaches the GLM process while provider routing and selectors are still scrubbed', async () => {
+    await writeSecret('zai', 'fake-zai-key');
+    Object.assign(process.env, {
+      HOME: home, PARLEY_SKILL_NAVIGATOR: '1', CLAUDE_CONFIG_DIR: '/wrong', ANTHROPIC_MODEL: 'wrong',
+      SLASH_COMMAND_TOOL_CHAR_BUDGET: '9999',
+    });
+    await service().create(input());
+    const launch = launches[0]!;
+    expect(launch.env).toMatchObject({
+      SLASH_COMMAND_TOOL_CHAR_BUDGET: '1', PARLEY_SKILL_NAVIGATOR: '1', PARLEY_SKILL_LIST_REDUCED: '1',
+      ANTHROPIC_AUTH_TOKEN: 'fake-zai-key', ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+    });
+    expect(launch.env['CLAUDE_CONFIG_DIR']).toBeUndefined();
+    expect(launch.env['ANTHROPIC_MODEL']).toBeUndefined();
+    const file = launch.args[launch.args.indexOf('--settings') + 1]!;
+    const settings = JSON.parse(await readFile(file, 'utf8'));
+    expect(settings.model).toBe('glm-5.3[1m]');
+    expect(JSON.stringify(settings)).toContain('PARLEY_HOOK_CAPABILITY');
+  });
   it.each(['0', '1'])('final env is authoritative and honors subprocess scrub=%s', async (scrub) => {
     await writeSecret('zai', 'fake-zai-key');
     Object.assign(process.env, {
