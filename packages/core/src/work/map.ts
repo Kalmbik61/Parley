@@ -1,4 +1,4 @@
-import type { EffortLevel } from '../providers.js';
+import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
   Message,
@@ -419,7 +419,7 @@ function migrateRoom(room: unknown): void {
   room['proposal'] ??= null;
 }
 
-/** Полей процесса в старых картах просто не было. */
+/** Полей процесса в старых картах просто не было; испорченный effort читается как «нет выбора». */
 function migrateSession(session: Record<string, unknown>): void {
   session['pid'] ??= null;
   session['startedAtProcess'] ??= null;
@@ -428,4 +428,10 @@ function migrateSession(session: Record<string, unknown>): void {
   session['agent'] ??= null;
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
+  // Effort уходит в команду, у Codex — в кавычки TOML: значение, не прошедшее токен, не уходит никуда.
+  // Ключ убирается из прочитанной карты, и следующая её запись его уже не несёт.
+  const effort = session['effort'];
+  if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_TOKEN.test(effort))) {
+    delete session['effort'];
+  }
 }

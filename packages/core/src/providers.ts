@@ -57,7 +57,7 @@ export interface RunnerConfig {
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{model}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -189,11 +189,11 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // целиком, как у `--mcp-config`, — тогда сессия живёт по pull.
         '--dangerously-load-development-channels',
         '{channel}',
-        // Модель и усилие новой сессии из диалога окна. Оба флага документированы
+        // Модель и усилие из диалога окна или из карты сессии. Оба флага документированы
         // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
-        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
-        // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
-        // того же сайта), а выбор из диалога в карте не хранится.
+        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. Те же пары стоят и в
+        // `resumeArgs`: effort возобновлённой сессии Claude Code сам не восстанавливает и без флага
+        // уходит на умолчание (спека нормалайзера модели и effort, раздел 3, п. 6).
         '--model',
         '{model}',
         '--effort',
@@ -213,6 +213,12 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '--dangerously-load-development-channels',
         '{channel}',
+        // Выбор из карты сессии (спека нормалайзера, 5.4). Нет выбора — пары выпадают, и модель
+        // Claude Code при `--resume` восстанавливает сам.
+        '--model',
+        '{model}',
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         // Указатель на письма, которыми хост поднимает спящую сессию (спека окна
@@ -247,8 +253,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // переопределением конфига: выделенного флага у Codex нет, а ключ `model_reasoning_effort`
       // есть в справочнике конфига. `-c key=value` разбирает значение как TOML (справочник CLI
       // Codex, флаг `--config`), поэтому строка в кавычках; так же передаёт усилие SDK самого Codex
-      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а
-      // при `resume` не передаются.
+      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают; при
+      // `resume` их нет, в отличие от claude: тред Codex помнит модель и усилие сам.
       args: [
         ...CODEX_PARLEY_FLAGS,
         '--model',
@@ -318,6 +324,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '--model',
         '{model}',
+        // Effort из карты: без флага возобновлённая сессия ушла бы на умолчание Claude Code.
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         '{prompt}',

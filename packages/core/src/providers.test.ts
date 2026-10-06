@@ -314,11 +314,49 @@ describe('модель и усилие новой сессии (дизайн к�
     ]);
   });
 
-  it('claude при возобновлении модель и усилие не несёт: модель CLI возвращает сам', () => {
+  it('claude при возобновлении несёт модель и усилие из карты парами перед --agent; без выбора пар нет', () => {
     expect(
-      resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', model: 'opus', effort: 'high' })
-        .args,
-    ).toEqual(['--resume', 'bb2137cb']);
+      resumeCommand(PROVIDERS.claude, {
+        providerSessionId: 'bb2137cb',
+        model: 'opus',
+        effort: 'high',
+        agent: 'ревьюер',
+        prompt: 'New messages (1). Call check_inbox.',
+      }).args,
+    ).toEqual([
+      '--resume',
+      'bb2137cb',
+      '--model',
+      'opus',
+      '--effort',
+      'high',
+      '--agent',
+      'ревьюер',
+      'New messages (1). Call check_inbox.',
+    ]);
+    // Одно усилие — одна пара; без выбора модель Claude Code при --resume восстанавливает сам.
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', effort: 'xhigh' }).args).toEqual([
+      '--resume',
+      'bb2137cb',
+      '--effort',
+      'xhigh',
+    ]);
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb' }).args).toEqual([
+      '--resume',
+      'bb2137cb',
+    ]);
+  });
+
+  it('GLM при возобновлении несёт effort сразу за моделью; без effort пара выпадает', () => {
+    expect(
+      resumeCommand(PROVIDERS.glm, { providerSessionId: 'id-1', model: 'glm-5.3[1m]', effort: 'max' }).args,
+    ).toEqual(['--resume', 'id-1', '--model', 'glm-5.3[1m]', '--effort', 'max']);
+    expect(resumeCommand(PROVIDERS.glm, { providerSessionId: 'id-1', model: 'glm-5.3[1m]' }).args).toEqual([
+      '--resume',
+      'id-1',
+      '--model',
+      'glm-5.3[1m]',
+    ]);
   });
 
   it('codex: модель — флагом --model, усилие — переопределением конфига -c model_reasoning_effort', () => {
@@ -366,7 +404,7 @@ describe('модель и усилие новой сессии (дизайн к�
     ]);
   });
 
-  it('codex при возобновлении модель и усилие тоже не несёт', () => {
+  it('codex при возобновлении модель и усилие не несёт: тред помнит их сам', () => {
     expect(
       resumeCommand(PROVIDERS.codex, {
         providerSessionId: 'uuid-1',

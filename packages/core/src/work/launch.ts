@@ -50,12 +50,9 @@ export interface LaunchOptions {
    */
   prompt?: string;
   /**
-   * Модель и усилие новой сессии из диалога окна. Доезжают только до провайдера, у которого
-   * в шаблоне запуска есть их подстановки (`supportsModel`, `supportsEffort`), и только при
-   * запуске у Claude/Codex; GLM resume явно берёт настроенную модель, поскольку tier aliases
-   * подавляют восстановление модели CLI. Выбор Chat /model отдельно не сохраняется. Выбор из диалога
-   * в карте не хранится. Перекрывают выбор, записанный в сессию `spawn_session`ом
-   * (`WorkSession.model`, `.effort`): его хост подставляет сам, когда поднимает `pending`.
+   * Модель и усилие из диалога окна. Доезжают только до провайдера, у которого в шаблоне есть
+   * их подстановки (`supportsModel`, `supportsEffort`). Перекрывают выбор, записанный в карте
+   * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`; без них берётся записанный.
    */
   model?: string;
   effort?: EffortLevel;
@@ -266,9 +263,14 @@ async function plan(
     subs.systemPrompt = brief === null ? guidance : `${guidance}\n\n${brief}`;
   }
 
-  if (entry.runner.settingsModel !== undefined) {
-    subs.model = options.model ?? session.model ?? entry.runner.settingsModel;
-  }
+  // Модель и усилие — из выбора запуска, а без него из карты, во всех режимах, включая `resume`:
+  // Claude Code при `--resume` effort не восстанавливает (спека нормалайзера, 5.4). Нет ни того ни
+  // другого — подстановки нет, флаг выпадает, и CLI берёт своё. GLM без выбора берёт настроенную
+  // модель: tier aliases не дают Claude Code восстановить её самому.
+  const model = options.model ?? session.model ?? entry.runner.settingsModel;
+  if (model !== undefined) subs.model = model;
+  const effort = options.effort ?? session.effort;
+  if (effort !== undefined) subs.effort = effort;
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
@@ -283,10 +285,6 @@ async function plan(
     const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
     const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
-    const model = options.model ?? session.model;
-    if (model !== undefined) subs.model = model;
-    const effort = options.effort ?? session.effort;
-    if (effort !== undefined) subs.effort = effort;
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;
