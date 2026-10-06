@@ -32,7 +32,7 @@ describe('buildMenuTemplate (тест 1)', () => {
     expect(labels.filter((label) => /[Ѐ-ӿ]/.test(label))).toEqual([]);
   });
 
-  it('Edit — родные роли undo, redo, cut, copy, paste, selectAll и пункт Find', () => {
+  it('Edit — родные роли undo, redo, cut, copy, paste, selectAll и пункты Find, Toggle dictation', () => {
     const edit = buildMenuTemplate(() => {}).find((item) => item.label === 'Edit');
     const items = edit === undefined ? [] : submenuOf(edit).filter((item) => item.type !== 'separator');
     expect(items.filter((item) => item.role !== undefined).map((item) => item.role)).toEqual([
@@ -43,7 +43,7 @@ describe('buildMenuTemplate (тест 1)', () => {
       'paste',
       'selectAll',
     ]);
-    expect(items.filter((item) => item.role === undefined).map((item) => item.label)).toEqual(['Find']);
+    expect(items.filter((item) => item.role === undefined).map((item) => item.label)).toEqual(['Find', 'Toggle dictation']);
   });
 
   it('Parley — about, Settings, quit; у about и quit явные подписи с именем продукта', () => {
