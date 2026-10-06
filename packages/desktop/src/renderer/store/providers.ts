@@ -112,8 +112,14 @@ export const useProvidersStore = create<ProvidersState>((set) => {
       activeBridge = bridge;
       const currentConnection = ++connection;
       refreshPromise = null;
-      set({ providers: [], loaded: false, refreshing: false });
-      void reload().catch(() => {});
+      // Прежний снимок и `loaded` — до ответа нового подключения: сброс снова делал бы вид вкладок
+      // «неизвестным» (`lib/feed-view.ts`), слой снимал бы поверхности терминалов, и после «Restart host»
+      // пропадал бы последний вывод неживой сессии (раунд main-r2, п. 2). Старый ответ отсекают поколения.
+      set({ refreshing: false });
+      void reload().catch(() => {
+        // Отказ первого ответа подключения — список пуст: снимок прежнего хоста за ответ нового не выдаём.
+        if (connection === currentConnection) set({ providers: [] });
+      });
       const offChanged = bridge.on('providers.changed', () => {
         if (connection === currentConnection) void reload().catch(() => {});
       });

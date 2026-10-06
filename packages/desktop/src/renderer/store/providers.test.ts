@@ -75,7 +75,42 @@ describe('useProvidersStore — подключение ключа и покол�
     dispose();
   });
 
-  it('новое подключение сбрасывает loaded; старый ответ и старые события не меняют новый хост', async () => {
+  it('новое подключение держит прежний снимок и loaded до своего ответа: вид вкладок не становится «неизвестным»', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    oldDispose();
+    const pending = deferred();
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => pending.promise);
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    await flush();
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: true, keyHint: '••••1234' });
+    pending.resolve(snapshot(false));
+    await flush();
+    expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: false, keyHint: null });
+    nextDispose();
+  });
+
+  it('отказ первого ответа нового подключения — прежнего снимка нет, список пуст', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    oldDispose();
+    const pending = deferred();
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => pending.promise);
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    pending.reject(new Error('отказ'));
+    await vi.waitFor(() => expect(useProvidersStore.getState().providers).toEqual([]));
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    nextDispose();
+  });
+
+  it('новое подключение: старый ответ и старые события не меняют новый хост', async () => {
     const oldBridge = createFakeBridge();
     const pending = deferred();
     oldBridge.setHandler('providers.list', () => pending.promise);
@@ -83,7 +118,6 @@ describe('useProvidersStore — подключение ключа и покол�
     const nextBridge = createFakeBridge();
     nextBridge.setHandler('providers.list', () => snapshot(false));
     const nextDispose = useProvidersStore.getState().init(nextBridge);
-    expect(useProvidersStore.getState().loaded).toBe(false);
     await flush();
     pending.resolve(snapshot(true));
     oldBridge.emit('providers.changed', { provider: 'glm' });
