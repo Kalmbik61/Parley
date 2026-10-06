@@ -128,4 +128,20 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
     expect(notice).toContain('packages/desktop/src/renderer/terminal/xterm-themes.ts');
   });
+
+  // Спека значков 2026-10-06, раздел 6: набор едет в сборку целиком, его MIT требует уведомления. Версия в
+  // NOTICE сверяется с зависимостью пакета: подняли версию набора — правится и NOTICE (спека 4.5).
+  it('NOTICE: Material Icon Theme — пакет и версия, куда копируется, правообладатель и текст MIT', () => {
+    const iconsPkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages', 'file-icons', 'package.json'), 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
+    const version = iconsPkg.dependencies['material-icon-theme'];
+    const start = notice.indexOf('\nMaterial Icon Theme\n');
+    expect(start, 'раздел «Material Icon Theme»').toBeGreaterThan(-1);
+    const section = notice.slice(start);
+    expect(section).toContain(`\`material-icon-theme\` ${version}`);
+    expect(section).toContain('packages/desktop/out/renderer/file-icons/');
+    expect(section).toContain('Copyright (c) 2025 Material Extensions');
+    expect(section).toContain('Permission is hereby granted, free of charge');
+  });
 });
