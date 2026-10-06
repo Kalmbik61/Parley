@@ -252,15 +252,31 @@ describe('подробный гид', () => {
     expect(tools).toContain('The rules for working in it are in topic `worktrees`.');
   });
 
-  it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — три уровня', () => {
+  it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map`/);
     expect(tools).toMatch(/a value not in the list is an error, and the session is not created/);
     expect(tools).toMatch(/`models: null` has no list/);
-    expect(tools).toMatch(/`low`, `medium` or `high`/);
+    // Нормалайзер модели и effort (5.6): гид говорит то же, что описание `effort` у spawn_session.
+    expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in `get_map`/);
+    expect(tools).toMatch(/with the default model, one of the levels shared by its provider's models/);
+    expect(tools).toMatch(/A model with `efforts: null` \(Haiku\) has no levels: omit `effort` for it/);
+    expect(tools).toMatch(
+      /A level that does not fit is an error that names the allowed levels, and the session is not created/,
+    );
     expect(tools).toMatch(/`effort: false` in `get_map` does not accept it, and the value is dropped/);
-    expect(tools).toMatch(/it does not change a sleeping session that a message woke up/);
+    // Прежнего закрытого списка из трёх уровней в гиде нет.
+    expect(GUIDE).not.toMatch(/`low`, `medium` or `high`/);
+  });
+
+  it('spawn_session: выбор хранится в записи — разбуженная письмом сессия возобновляется с той же моделью и effort', () => {
+    const tools = sectionOf('## Tools', '## Rooms');
+
+    // Resume теперь передаёт модель и effort из карты (нормалайзер, 5.4): прежняя оговорка
+    // «спящую не меняет» ушла.
+    expect(tools).toMatch(/a session that a message wakes from sleep resumes with the same model and effort/);
+    expect(tools).not.toMatch(/it does not change a sleeping session that a message woke up/);
   });
 
   it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», письма новому нет', () => {

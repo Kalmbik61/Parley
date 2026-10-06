@@ -59,6 +59,11 @@ export interface EventRecord {
    * бывает несколько сразу, и конец снимает только своё ожидание. Строк прежних версий без него — `null`.
    */
   waitId: string | null;
+  /**
+   * `source` у `SessionStart`: `startup`, `resume`, `clear` или `compact` — откуда взялась сессия. У остальных
+   * событий и у строк без поля — `null`.
+   */
+  source: string | null;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -103,6 +108,7 @@ export const bareEvent = (at: string, name: string): EventRecord => ({
   backgroundTasks: null,
   waitTarget: null,
   waitId: null,
+  source: null,
 });
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -165,6 +171,7 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
     backgroundTasks: parseTasks(data.background_tasks),
     waitTarget: textOf(data.parley_wait_target),
     waitId: textOf(data.parley_wait_id),
+    source: textOf(data.source),
   };
 }
 

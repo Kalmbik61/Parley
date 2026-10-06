@@ -79,6 +79,8 @@ export interface ActionContext {
   attention: { next(): AttentionTarget | null }; // openNextAttention (4.2): сессия или комната с решением (кусок 5)
   /** useFilesStore.getState() (7.4): ⌘⇧F переводит «Файлы» в режим поиска. */
   files: Pick<FilesState, 'openSearch'>;
+  /** Диктовка (спека 3.4): цель с фокусом или последняя, идёт запись — её стоп. */
+  voice: { toggle(): void };
   toast(text: string): void;
   /** Как terminals.active() (6.3): активная вкладка активной группы активной работы, если это браузер с webContentsId. */
   browser: { active(): { tabId: string; webContentsId: number } | null };
@@ -262,6 +264,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'find':
       (ctx.terminals.focused() ?? ctx.terminals.active())?.openSearch();
+      return;
+    case 'voice.toggle':
+      ctx.voice.toggle();
       return;
     case 'terminal.clear':
       (ctx.source === 'palette' ? ctx.terminals.active() : ctx.terminals.focused())?.clear();

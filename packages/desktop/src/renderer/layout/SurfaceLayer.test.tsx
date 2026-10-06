@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { refKey } from '@parley/protocol';
+import { refKey, type Result } from '@parley/protocol';
 import type { WorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
@@ -595,6 +595,52 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(attachCount('a')).toBe(1);
     expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
     expect(screen.queryByTestId('chat-view')).toBeNull();
+  });
+
+  it('переподключение не перемонтирует поверхность: пока providers.list нового хоста в пути, xterm и последний вывод прежние (раунд main-r2, п. 2)', async () => {
+    // Проба версий выключена, как в E2E: вид — терминал.
+    useProvidersStore.setState({
+      providers: [{ id: 'claude', label: 'Claude Code', available: true, version: null, limits: null }],
+      loaded: true,
+    });
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'последний вывод', cols: 80, rows: 24 }));
+    setLayout(twoGroups(), 'g1');
+    renderWork();
+    await flush();
+    const before = surface('terminal:a');
+    if (before === null) throw new Error('нет поверхности terminal:a');
+    const mountId = before.dataset.mountId;
+    const constructed = xtermMock.constructed;
+    const term = xtermMock.terminals.find((item) => item.element !== null && before.contains(item.element));
+    expect(term?.writes).toEqual(['последний вывод']);
+
+    // «Restart host»: связь рвётся, новый хост агента не знает — его pty.attach отказывает.
+    act(() => useHostStore.setState({ status: { state: 'disconnected', reason: 'closed' } }));
+    await flush();
+    bridge.setHandler('pty.attach', () => {
+      throw new Error('no live PTY');
+    });
+    let answer: (result: Result<'providers.list'>) => void = () => {};
+    bridge.setHandler('providers.list', () => new Promise((resolve) => (answer = resolve)));
+    let disposeProviders: () => void = () => {};
+    act(() => {
+      useHostStore.setState({ status: { state: 'connected', hostVersion: '0.3.0', methods: FEED_METHODS } });
+      // Связь вернулась — App заново заводит хранилища (`App.tsx`).
+      disposeProviders = useProvidersStore.getState().init(bridge);
+    });
+    await flush();
+    expect(surface('terminal:a')).toBe(before);
+    expect(before.dataset.mountId).toBe(mountId);
+    expect(xtermMock.constructed).toBe(constructed);
+    expect(term?.disposed).toBe(false);
+    expect(term?.resets).toBe(0);
+
+    act(() => answer({ providers: [{ id: 'claude', label: 'Claude Code', available: true, version: null }] }));
+    await flush();
+    expect(surface('terminal:a')).toBe(before);
+    expect(xtermMock.constructed).toBe(constructed);
+    expect(term?.writes).toEqual(['последний вывод']);
+    disposeProviders();
   });
 
   it('хост без feed.snapshot — терминал без тулбара, как раньше', async () => {

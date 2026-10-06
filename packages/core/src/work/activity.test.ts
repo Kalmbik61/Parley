@@ -30,9 +30,88 @@ describe('activityOf: таблица переходов 4.2', () => {
     expect(activity([event('UserPromptSubmit')]).activity).toBe('working');
   });
 
-  it('SessionStart с любым startup_type → working', () => {
-    expect(activity([event('SessionStart')]).activity).toBe('working');
-    expect(activity([event('SessionStart')]).source).toBe('hooks');
+  it('SessionStart(startup) ход не открывает → idle', () => {
+    const result = activity([hook('SessionStart', { source: 'startup' })]);
+    expect(result.activity).toBe('idle');
+    expect(result.turnEndedAt).toBeNull();
+    expect(result.lastEventAt).toBe(AT);
+  });
+
+  it('SessionStart(startup), затем UserPromptSubmit → working', () => {
+    expect(
+      activity([hook('SessionStart', { source: 'startup' }), event('UserPromptSubmit')]).activity,
+    ).toBe('working');
+  });
+
+  it('смена модели: ход просмотрен, SessionEnd и SessionStart(resume) → то же, что до перезапуска', () => {
+    const turn = [event('UserPromptSubmit'), event('Stop')];
+    const before = activity(turn, true);
+    const after = activity(
+      [...turn, event('SessionEnd'), hook('SessionStart', { source: 'resume' })],
+      true,
+    );
+    expect(before.activity).toBe('idle');
+    expect(after.activity).toBe('idle');
+    expect(after.turnEndedAt).toBe(before.turnEndedAt);
+  });
+
+  it('смена модели: перезапуск не создаёт нового unseen и не гасит старый', () => {
+    const turn = [event('UserPromptSubmit'), event('Stop')];
+    const restarted = [...turn, event('SessionEnd'), hook('SessionStart', { source: 'resume' })];
+    expect(activity(restarted, false).activity).toBe('unseen');
+    expect(activity(restarted, true).activity).toBe('idle');
+    // Сессия, у которой хода не было, после перезапуска тоже без unseen.
+    expect(activity([hook('SessionStart', { source: 'resume' })], false).activity).toBe('idle');
+  });
+
+  it('SessionStart(resume) после хода без Stop: прежний процесс умер посреди хода — ход окончен', () => {
+    const afterStop = activity([event('UserPromptSubmit'), event('Stop')]);
+    const restarted = activity([event('UserPromptSubmit'), hook('SessionStart', { source: 'resume' })]);
+    expect(restarted.activity).toBe('unseen');
+    expect(restarted.activity).toBe(afterStop.activity);
+    expect(restarted.turnEndedAt).toBe(AT);
+    expect(restarted.source).toBe('hooks');
+  });
+
+  it('SessionStart(resume) посреди вопроса к человеку: ход окончен', () => {
+    const result = activity([
+      event('UserPromptSubmit'),
+      event('PermissionRequest'),
+      hook('SessionStart', { source: 'resume' }),
+    ]);
+    expect(result.activity).toBe('unseen');
+  });
+
+  it('SessionStart(compact) посреди хода: working не меняется', () => {
+    const result = activity([event('UserPromptSubmit'), hook('SessionStart', { source: 'compact' })]);
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
+  it('SessionStart с незнакомым source посреди хода: фаза не меняется, как у compact', () => {
+    const result = activity([event('UserPromptSubmit'), hook('SessionStart', { source: 'something-new' })]);
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
+  it('SessionStart(compact) после хода: новый ход не открывается', () => {
+    const turn = [event('UserPromptSubmit'), event('Stop')];
+    const result = activity([...turn, hook('SessionStart', { source: 'compact' })], true);
+    expect(result.activity).toBe('idle');
+    expect(activity([hook('SessionStart', { source: 'compact' })]).activity).toBe('idle');
+  });
+
+  it('SessionStart(clear) после хода — как после Stop', () => {
+    const turn = [event('UserPromptSubmit'), event('Stop')];
+    const cleared = [...turn, hook('SessionStart', { source: 'clear' })];
+    expect(activity(cleared).activity).toBe(activity(turn).activity);
+    expect(activity(cleared, true).activity).toBe('idle');
+    expect(activity(cleared).turnEndedAt).toBe(activity(turn).turnEndedAt);
+  });
+
+  it('SessionStart без поля source читается как запуск: ход не открывает', () => {
+    expect(activity([event('SessionStart')]).activity).toBe('idle');
+    expect(activity([event('UserPromptSubmit'), event('SessionStart')]).activity).toBe('unseen');
   });
 
   // Пункт 2.
@@ -612,13 +691,35 @@ describe('activityOf: субагенты по id и фоновые задачи 
     expect(activity(before).waitingFor).toBe('s-03');
 
     const reset = activity([...before, event('SessionStart')]);
-    expect(reset.activity).toBe('working');
+    // Процесс перезапущен посреди хода — ход окончен, сессия у приглашения.
+    expect(reset.activity).toBe('unseen');
     expect(reset.tasks).toEqual([]);
     expect(reset.subagents).toBe(0);
     expect(reset.waitingFor).toBeNull();
 
     const withOwn = activity([...before, hook('SessionStart', { backgroundTasks: [task('b')] })]);
     expect(withOwn.tasks.map((item) => item.id)).toEqual(['b']);
+  });
+
+  it('перезапуск сессии, которую держали фоновые, не даёт нового конца хода: просмотренная остаётся idle', () => {
+    const stopAt = '2026-09-05T10:00:05.000Z';
+    const restartAt = '2026-09-05T10:00:08.000Z';
+    const held = [
+      event('UserPromptSubmit', null, '2026-09-05T09:59:50.000Z'),
+      hook('Stop', { backgroundTasks: [task('a')] }, stopAt),
+    ];
+    // Контроль: пока фоновый держит, ход не окончен; освобождение снимком даёт конец хода «сейчас».
+    expect(activity(held, true).activity).toBe('working');
+    const released = activity([...held, hook('Notification', { backgroundTasks: [] }, restartAt)], true);
+    expect(released.turnEndedAt).toBe(restartAt);
+
+    const restarted = activity(
+      [...held, hook('SessionStart', { source: 'resume', backgroundTasks: [] }, restartAt)],
+      true,
+    );
+    expect(restarted.activity).toBe('idle');
+    expect(restarted.turnEndedAt).toBe(stopAt);
+    expect(restarted.heldByBackground).toBe(false);
   });
 
   it('без журнала событий задач и ожидания нет', () => {
@@ -878,7 +979,8 @@ describe('activityOf: heldByBackground — working только из-за фон
       event('SessionStart'),
     ]);
 
-    expect(result.activity).toBe('working');
+    // Ход был окончен до перезапуска, SessionStart его не открывает.
+    expect(result.activity).toBe('unseen');
     expect(result.heldByBackground).toBe(false);
   });
 });
@@ -931,6 +1033,24 @@ describe('activityOf: отставший снимок не воскрешает 
     const result = activity(stoppedLead(hook('SessionStart', { backgroundTasks: [task('a')] })));
 
     expect(result.tasks.map((item) => item.id)).toEqual(['a']);
+  });
+
+  it('фоновый субагент в снимке SessionStart: сессию держит он, а не сам SessionStart', () => {
+    const turn = [event('UserPromptSubmit'), event('Stop')];
+    const resumed = hook('SessionStart', { source: 'resume', backgroundTasks: [task('a')] });
+
+    const afterTurn = activity([...turn, resumed]);
+    expect(afterTurn.activity).toBe('working');
+    expect(afterTurn.heldByBackground).toBe(true);
+    expect(afterTurn.tasks.map((item) => item.id)).toEqual(['a']);
+
+    // Хода до старта не было: о приглашении агента ничего не известно, удержания нет.
+    const fresh = activity([resumed]);
+    expect(fresh.activity).toBe('working');
+    expect(fresh.heldByBackground).toBe(false);
+
+    // Тот же снимок без работающих задач: сессия просто idle.
+    expect(activity([hook('SessionStart', { source: 'startup', backgroundTasks: [] })]).activity).toBe('idle');
   });
 
   it('чужая остановка (id, которого не стартовали) тоже запоминается и вычищает его из снимков', () => {

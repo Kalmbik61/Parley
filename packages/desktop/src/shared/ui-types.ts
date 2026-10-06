@@ -5,7 +5,17 @@
  * `ParleyBridge.app.loadUi`/`saveUi`/`setAppearance`.
  */
 
+import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
+
 export type Appearance = 'system' | 'dark' | 'light';
+
+/** Голосовой ввод (спека 2026-10-06-voice-input-design.md, 3.1): включён только при выбранной модели. */
+export interface VoiceUi {
+  enabled: boolean;
+  model: VoiceModelId | null;
+  /** `auto` или код Whisper (`WHISPER_LANGUAGES`). */
+  language: string;
+}
 
 export interface UiFile {
   version: 1;
@@ -30,6 +40,8 @@ export interface UiFile {
    * новой — да. `null` — ничего не закрыто.
    */
   dismissedUpdate: string | null;
+  /** Голосовой ввод (спека 2026-10-06, 3.1). */
+  voice: VoiceUi;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -47,6 +59,7 @@ export const DEFAULT_UI: UiFile = {
   lastProvider: null,
   checkForUpdates: true,
   dismissedUpdate: null,
+  voice: { enabled: false, model: null, language: 'auto' },
 };
 
 /**
@@ -117,6 +130,17 @@ function normalizeRightSidebar(value: unknown): UiFile['rightSidebar'] {
   return { open, width, tab };
 }
 
+function normalizeVoice(value: unknown): VoiceUi {
+  const source = isRecord(value) ? value : {};
+  const model = isVoiceModelId(source.model) ? source.model : null;
+  return {
+    // Включённый голос без модели нечем распознавать: это «выключен».
+    enabled: source.enabled === true && model !== null,
+    model,
+    language: isVoiceLanguage(source.language) ? source.language : DEFAULT_UI.voice.language,
+  };
+}
+
 function normalizeNotifications(value: unknown): UiFile['notifications'] {
   const source = isRecord(value) ? value : {};
   const bool = (key: keyof UiFile['notifications']): boolean =>
@@ -164,5 +188,6 @@ export function normalizeUi(raw: unknown): UiFile {
       typeof source.checkForUpdates === 'boolean' ? source.checkForUpdates : DEFAULT_UI.checkForUpdates,
     dismissedUpdate:
       typeof source.dismissedUpdate === 'string' ? source.dismissedUpdate : DEFAULT_UI.dismissedUpdate,
+    voice: normalizeVoice(source.voice),
   };
 }

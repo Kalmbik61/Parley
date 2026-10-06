@@ -17,12 +17,15 @@ import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useHostStore } from '../store/host.js';
+import { useUiStore } from '../store/ui.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
+import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
 import { TerminalSurface } from './TerminalSurface.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { terminalSurfaces } from './surface-registry.js';
 
 const state = vi.hoisted(() => ({ xtermPaste: vi.fn() }));
@@ -690,5 +693,23 @@ describe('TerminalSurface — связь и неживая сессия вмес
       await Promise.resolve();
     });
     expect(attaches()).toBe(0);
+  });
+});
+
+describe('TerminalSurface — диктовка (спека 3.3)', () => {
+  it('диктовка в терминал: текст уходит вставкой без Enter (pty.send submit: false)', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+    const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
+    const sent: unknown[] = [];
+    bridge.setHandler('pty.send', (params) => {
+      sent.push(params);
+      return { inserted: true, submitted: false, reason: null };
+    });
+    renderSurface();
+    const id = `terminal:${refKey(ref)}`;
+    await useDictationStore.getState().toggle(id);
+    await useDictationStore.getState().toggle(id);
+    await waitFor(() => expect(sent).toEqual([{ ref, text: 'hello from voice', submit: false }]));
+    dispose();
   });
 });

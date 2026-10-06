@@ -79,6 +79,7 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
   const attention = { next: vi.fn(() => null) };
   const toast = vi.fn();
   const files = { openSearch: vi.fn() };
+  const voice = { toggle: vi.fn() };
   const mruCycle = createMruCycle();
   const step = vi.spyOn(mruCycle, 'step');
   const bridge = createFakeBridge();
@@ -93,10 +94,11 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
     terminals: { focused: () => (patch.focused === false ? null : focused), active: () => (patch.active === false ? null : active) },
     attention,
     files,
+    voice,
     toast,
     browser: { active: () => (patch.browser === false ? null : { tabId: BROWSER_TAB, webContentsId: 7 }) },
   };
-  return { ctx, layout, ui, palette, attention, files, toast, focused, active, step, bridge };
+  return { ctx, layout, ui, palette, attention, files, voice, toast, focused, active, step, bridge };
 }
 
 /** Что должно случиться у каждого действия — по реестру, один случай на действие (тест 1). */
@@ -147,6 +149,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     },
     find: ({ focused }) => expect(focused.openSearch).toHaveBeenCalledTimes(1),
     'terminal.clear': ({ focused }) => expect(focused.clear).toHaveBeenCalledTimes(1),
+    'voice.toggle': ({ voice }) => expect(voice.toggle).toHaveBeenCalledTimes(1),
     'attention.next': ({ attention }) => expect(attention.next).toHaveBeenCalledTimes(1),
     'wake.toggle': ({ ui }) => expect(ui.toggleWake).toHaveBeenCalledTimes(1),
     'host.restart': ({ ui }) => expect(ui.confirmRestartHost).toHaveBeenCalledTimes(1),

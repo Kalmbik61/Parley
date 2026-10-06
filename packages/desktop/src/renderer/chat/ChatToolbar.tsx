@@ -4,15 +4,17 @@
  * вернуться в чат можно было бы только палитрой. Выбор пишется полем `view` вкладки в раскладку и
  * переживает перезапуск. Вид «Chat» сессии недоступен (Codex, старый `claude`) — сегмент выключен с
  * подсказкой. В виде «Chat» справа — меню режима разрешений (кусок 4a, решение 9: подпись текущего
- * режима из ленты, пункты Manual / Accept edits / Plan; выбор уходит `sessions.setMode` из `ChatView`),
- * модель сессии (из ленты; с меню выбора, если у провайдера есть список моделей — живая проверка 2026-10-02; «Stop» ушёл в поле ввода).
+ * режима из ленты, пункты Manual / Accept edits / Plan; выбор уходит `sessions.setMode` из `ChatView`)
+ * и кнопка «модель · effort» (нормалайзер модели и effort 2026-10-06, 5.9): меню из двух разделов — модели провайдера
+ * и уровни модели из карты, выбор уходит `sessions.setModel` / `sessions.setEffort` из `ChatView`; у хоста без этих
+ * методов — подпись модели простым текстом («Stop» ушёл в поле ввода).
  * Левее них, пока в ленте есть работающие карточки агентов, — «N agents running» (кусок 4b): клик ведёт ленту к первой из
  * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала.
  */
 
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
-import type { ModelOption } from '@parley/protocol';
+import type { EffortOption, ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -21,11 +23,14 @@ import { Button } from '../ui/button.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
+import { MicButton } from '../voice/MicButton.js';
 
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
@@ -57,11 +62,29 @@ export interface ModeMenuProps {
   onSelect: (mode: ModeChoice) => void;
 }
 
-export interface ModelMenuProps {
-  options: readonly ModelOption[];
-  /** Отправка в пути или сессия не живая — меню выключено. */
+/**
+ * Меню «модель · effort» (нормалайзер модели и effort 2026-10-06, 5.9). Пункта «Default» в разделе уровней нет:
+ * `/effort auto` в идущей сессии стёр бы уровень, сохранённый человеком (спека 5.7, п. 5).
+ */
+export interface ChoiceMenuProps {
+  /** Модели провайдера; пусто — раздела моделей нет. */
+  models: readonly ModelOption[];
+  /** Модель из карты (`WorkSession.model`) — отмеченный пункт; `null` — «Default», ничего не отмечено. */
+  model: string | null;
+  /** Подпись модели на кнопке: из ленты, иначе из карты, иначе «Default». */
+  modelLabel: string;
+  /** Уровни модели из карты (`effortChoices`); `null` — раздела уровней нет. */
+  efforts: readonly EffortOption[] | null;
+  /** Уровень из карты (`WorkSession.effort`); `null` — «Default». */
+  effort: string | null;
+  /** Почему пункты моделей неактивны; `null` — активны. */
+  modelDisabled: string | null;
+  /** Почему пункты уровней неактивны; `null` — активны. */
+  effortDisabled: string | null;
+  /** Запрос смены в пути — кнопка выключена. */
   busy: boolean;
-  onSelect: (id: string) => void;
+  onSelectModel: (id: string) => void;
+  onSelectEffort: (id: string) => void;
 }
 
 export interface ChatToolbarProps {
@@ -73,17 +96,106 @@ export interface ChatToolbarProps {
   available: boolean;
   /** Меню режима; нет — не показывается (вид терминала или хост без `sessions.setMode`). */
   modeMenu?: ModeMenuProps;
-  /** Модель сессии; `null` или нет — не показывается. */
+  /** Подпись модели без меню (хост без `sessions.setModel`/`setEffort`); `null` или нет — не показывается. */
   model?: string | null;
-  /** Меню моделей; нет — подпись модели просто текстом. */
-  modelMenu?: ModelMenuProps;
+  /** Меню «модель · effort»; есть — вместо подписи модели. */
+  choiceMenu?: ChoiceMenuProps;
   /** Сколько карточек агентов ещё работает; нет — кнопки «N agents running» нет. Клик ведёт ленту к первой из них. */
   agents?: { running: number; onShow: () => void };
+  /** Цель диктовки вида Terminal (`terminal:<refKey>`, спека 3.2); нет — кнопки нет. */
+  micTargetId?: string;
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
+/** Причина неактивных пунктов раздела — строкой под его заголовком. */
+const REASON = 'px-2 pb-1 text-xs text-muted-foreground';
 
-export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, modelMenu, agents }: ChatToolbarProps): JSX.Element {
+/** Уровень на кнопке: подпись из списка, незнакомый id — как есть, выбора нет — «Default»; уровней у модели нет — ничего. */
+function effortText(menu: ChoiceMenuProps): string | null {
+  if (menu.effort === null) return menu.efforts === null ? null : S.chat.choice.default;
+  return menu.efforts?.find((level) => level.id === menu.effort)?.label ?? menu.effort;
+}
+
+function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
+  const effort = effortText(menu);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={menu.busy}>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          data-testid="chat-model"
+          aria-label={S.chat.choice.label}
+          title={effort === null ? menu.modelLabel : `${menu.modelLabel} · ${effort}`}
+          className="min-w-0 max-w-[40%] shrink"
+        >
+          {/* Длинная модель обрезается многоточием, уровень виден всегда: он короткий, и его меняют чаще. */}
+          <span data-testid="chat-model-label" className="min-w-0 truncate">
+            {menu.modelLabel}
+          </span>
+          {effort === null ? null : (
+            <span data-testid="chat-effort-label" className="shrink-0">
+              · {effort}
+            </span>
+          )}
+          <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {menu.models.length === 0 ? null : (
+          <>
+            <DropdownMenuLabel>{S.chat.choice.model}</DropdownMenuLabel>
+            {menu.modelDisabled === null ? null : (
+              <p data-testid="chat-model-reason" className={REASON}>
+                {menu.modelDisabled}
+              </p>
+            )}
+            <DropdownMenuRadioGroup value={menu.model ?? ''} onValueChange={menu.onSelectModel}>
+              {menu.models.map((option) => (
+                <DropdownMenuRadioItem
+                  key={option.id}
+                  value={option.id}
+                  disabled={menu.modelDisabled !== null}
+                  data-testid="chat-model-option"
+                  data-model={option.id}
+                >
+                  {option.label === '' ? option.id : option.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        )}
+        {menu.efforts === null ? null : (
+          <>
+            {menu.models.length === 0 ? null : <DropdownMenuSeparator />}
+            <DropdownMenuLabel>{S.chat.choice.effort}</DropdownMenuLabel>
+            {menu.effortDisabled === null ? null : (
+              <p data-testid="chat-effort-reason" className={REASON}>
+                {menu.effortDisabled}
+              </p>
+            )}
+            <DropdownMenuRadioGroup value={menu.effort ?? ''} onValueChange={menu.onSelectEffort}>
+              {menu.efforts.map((level) => (
+                <DropdownMenuRadioItem
+                  key={level.id}
+                  value={level.id}
+                  disabled={menu.effortDisabled !== null}
+                  data-testid="chat-effort-option"
+                  data-effort={level.id}
+                >
+                  {level.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -153,38 +265,19 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      {modelMenu === undefined ? (
+      {choiceMenu === undefined ? (
         model === null ? null : (
           <span data-testid="chat-model" title={S.chat.model} className="min-w-0 max-w-[40%] truncate text-xs text-muted-foreground">
             {model}
           </span>
         )
       ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild disabled={modelMenu.busy}>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              data-testid="chat-model"
-              aria-label={S.chat.modelMenu.label}
-              title={S.chat.modelMenu.label}
-              className="min-w-0 max-w-[40%] shrink"
-            >
-              <span className="truncate">{model ?? S.chat.model}</span>
-              <ChevronDown className="size-3 shrink-0" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuRadioGroup value={model ?? ''} onValueChange={(value) => modelMenu.onSelect(value)}>
-              {modelMenu.options.map((option) => (
-                <DropdownMenuRadioItem key={option.id} value={option.id} data-testid="chat-model-option" data-model={option.id}>
-                  {option.label === '' ? option.id : option.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ChoiceMenu menu={choiceMenu} />
+      )}
+      {micTargetId === undefined ? null : (
+        <span className="ml-auto">
+          <MicButton targetId={micTargetId} size="sm" />
+        </span>
       )}
     </div>
   );

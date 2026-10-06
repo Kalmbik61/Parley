@@ -3,13 +3,14 @@ import { startupWaitFromEnv } from './activity/activity-service.js';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import { glmCheckOptionsFromEnv } from './limits/glm-check.js';
 import { limitsOptionsFromEnv } from './limits/limits-service.js';
+import { probeCodexCatalog } from './providers/codex-catalog.js';
 import { probeCliVersion } from './providers/versions.js';
 
 /** Коды выхода: 0 — обычная остановка, 3 — хост уже запущен, 4 — путь сокета слишком длинный. */
 async function main(): Promise<number> {
   const envIdleMs = envValue(process.env, 'HOST_IDLE_MS');
-  // Версии CLI — проба `<команда> --version` на старте. E2E окна её отключает: в их окружении
-  // настоящие claude и codex запускать нельзя, и подменён у них только claude.
+  // Версии CLI (`<команда> --version`) и каталог Codex (`codex debug models`) — пробы на старте. E2E окна их
+  // отключает: в их окружении настоящие claude и codex запускать нельзя, и подменён у них только claude.
   const probeVersions = envValue(process.env, 'SKIP_VERSION_PROBE') !== '1';
   // Лимиты подписок хост перечитывает раз в 30 секунд (спека комнат Organic, 3.5). Переменная нужна
   // только E2E окна: ждать полминуты, пока в строке статуса появятся числа, тест не может.
@@ -20,7 +21,7 @@ async function main(): Promise<number> {
   const startupWaitMs = startupWaitFromEnv(process.env);
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
-    ...(probeVersions ? { probeVersion: probeCliVersion } : {}),
+    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog } : {}),
     ...(limits === undefined ? {} : { limits }),
     ...(glmCheck === undefined ? {} : { glmCheck }),
     ...(startupWaitMs === undefined ? {} : { startupWaitMs }),

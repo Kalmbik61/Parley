@@ -83,9 +83,10 @@ async function hostCalls(skipProbe: boolean, legacy = false): Promise<string[]> 
   });
   try {
     expect(await waitFor(() => existsSync(hostPaths(home).pid), 20_000)).toBe(true);
-    // Проба идёт сразу за стартом и быстрая. Без пробы даём ей время, которого хватило бы.
+    // Пробы идут сразу за стартом и быстрые: `--version` на каждую команду и каталог Codex (`debug models`).
+    // Без проб даём им время, которого хватило бы.
     const done = (): boolean =>
-      existsSync(calls) && readFileSync(calls, 'utf8').trim().split('\n').length >= COMMANDS.length;
+      existsSync(calls) && readFileSync(calls, 'utf8').trim().split('\n').length >= COMMANDS.length + 1;
     await waitFor(done, skipProbe ? 2000 : 15_000);
     await new Promise((resolve) => setTimeout(resolve, 300));
     child.kill('SIGTERM');
@@ -96,10 +97,10 @@ async function hostCalls(skipProbe: boolean, legacy = false): Promise<string[]> 
   return existsSync(calls) ? (await readFile(calls, 'utf8')).trim().split('\n') : [];
 }
 
-describe('main.ts: проба версий CLI на старте (дизайн комнат, 3.2)', () => {
-  it('по умолчанию хост зовёт `--version` по одному разу на уникальную команду: claude общий для Claude и GLM', async () => {
+describe('main.ts: пробы CLI на старте — версии (дизайн комнат, 3.2) и каталог Codex (спека нормалайзера, 5.2)', () => {
+  it('по умолчанию хост зовёт `--version` по одному разу на уникальную команду (claude общий для Claude и GLM) и один раз `codex debug models`', async () => {
     const calls = await hostCalls(false);
-    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version']);
+    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'codex:2:debug']);
   }, 60_000);
 
   it('PARLEY_SKIP_VERSION_PROBE=1 — ни одна команда не запускается: так живут тесты и E2E', async () => {
@@ -108,7 +109,7 @@ describe('main.ts: проба версий CLI на старте (дизайн �
 
   it('прежние имена (R3): HARNAS_<КОМАНДА>_BIN подменяет бинарь, HARNAS_SKIP_VERSION_PROBE и HARNAS_HOME работают как запасные', async () => {
     const calls = await hostCalls(false, true);
-    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version']);
+    expect(calls.sort()).toEqual(['claude:1:--version', 'codex:1:--version', 'codex:2:debug']);
     expect(await hostCalls(true, true)).toEqual([]);
   }, 120_000);
 });

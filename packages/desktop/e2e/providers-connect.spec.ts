@@ -218,7 +218,8 @@ test.describe('подключение провайдеров на изолиро
     expect(await launchOf(flashRef)).toMatchObject({ model: FLASH_MODEL, settingsModel: FLASH_MODEL, firstKey: true, secondKey: false, settings: 'settings-glm.json' });
     await call(window, 'sessions.stop', { ref: flashRef });
     await call(window, 'sessions.resume', { ref: flashRef });
-    expect(await launchOf(flashRef, 1)).toMatchObject({ resume: true, model: DEFAULT_MODEL, settingsModel: DEFAULT_MODEL, firstKey: true });
+    // Модель из диалога хранится в карте (нормалайзер 2026-10-06, 5.5): resume идёт с ней, а не с моделью по умолчанию.
+    expect(await launchOf(flashRef, 1)).toMatchObject({ resume: true, model: FLASH_MODEL, settingsModel: FLASH_MODEL, firstKey: true });
 
     await segment(window, 'glm').click();
     await save(cardOf(window), SECOND_KEY, 'Replace');
@@ -290,10 +291,11 @@ test.describe('подключение провайдеров на изолиро
     expect((await hooks.lines('PermissionRequest'))[0]).toMatchObject({ status: 200, response: { hookSpecificOutput: { decision: { behavior: 'allow' } } } });
     await hooks.fire('PostToolUse', { tool_name: 'Bash', tool_input: input, tool_use_id: 'glm-tool-1', permission_mode: 'default', tool_response: { stdout: 'fixture', stderr: '' } });
     await hooks.fire('Stop', { last_assistant_message: 'Hello from the GLM fixture.', stop_hook_active: false });
-    // Выбор /model в текущем процессе не записывается как launch model следующего resume.
+    // Меню чата у GLM (нормалайзер 2026-10-06): подсказок `/model ` нет; выбор модели — `sessions.setModel`, хост перезапускает
+    // сессию через resume с новой моделью, и следующий resume берёт её из карты.
     const field = chat.getByTestId('chat-composer').locator('textarea');
     await field.fill('/model ');
-    await expect(window.getByTestId('chat-suggestions')).toContainText('GLM-5.3 Flash');
+    await expect(window.getByTestId('chat-suggestions')).toHaveCount(0);
     await field.fill('');
     await window.getByRole('radio', { name: 'Terminal', exact: true }).click();
     await window.getByRole('radio', { name: 'Chat', exact: true }).click();
@@ -303,10 +305,12 @@ test.describe('подключение провайдеров на изолиро
     await expect(choices).toHaveCount(2);
     await expect(choices.nth(0)).toHaveAttribute('data-model', DEFAULT_MODEL);
     await expect(choices.nth(1)).toHaveAttribute('data-model', FLASH_MODEL);
+    await expect(window.getByTestId('chat-effort-option')).toHaveCount(5);
     await choices.nth(1).click();
+    expect(await launchOf(ref, 1)).toMatchObject({ resume: true, model: FLASH_MODEL, settingsModel: FLASH_MODEL });
     await call(window, 'sessions.stop', { ref });
     await call(window, 'sessions.resume', { ref });
-    expect(await launchOf(ref, 1)).toMatchObject({ resume: true, model: DEFAULT_MODEL, settingsModel: DEFAULT_MODEL });
+    expect(await launchOf(ref, 2)).toMatchObject({ resume: true, model: FLASH_MODEL, settingsModel: FLASH_MODEL });
 
     const ordinary = await create(window, workId, 'claude', 'ordinary after save');
     await openSession(window, ordinary);

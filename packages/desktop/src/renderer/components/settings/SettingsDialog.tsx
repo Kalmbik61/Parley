@@ -25,13 +25,14 @@ import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import type { Appearance, UiFile } from '../../../shared/ui-types.js';
-import { useUiStore } from '../../store/ui.js';
+import { useUiStore, type SettingsSection } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Input } from '../../ui/input.js';
 import { Switch } from '../../ui/switch.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
 import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
+import { VoiceSettings } from '../../voice/VoiceSettings.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -41,18 +42,16 @@ export interface SettingsDialogProps {
   onConfigChange?: (config: ParleyConfig) => void;
 }
 
-/** Четыре секции спеки 4.10, в порядке таблицы, и «Браузер» (кусок 9.1). */
-type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser';
-
 const SECTION_LABELS: Record<SettingsSection, string> = {
   appearance: S.settings.sections.appearance,
   terminal: S.settings.sections.terminal,
   agents: S.settings.sections.agents,
   notifications: S.settings.sections.notifications,
   browser: S.settings.sections.browser,
+  voice: S.settings.sections.voice,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser', 'voice'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
@@ -106,8 +105,13 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
   const ui = useUiStore((state) => state.ui);
   const uiLoaded = useUiStore((state) => state.uiLoaded);
+  const settingsSection = useUiStore((state) => state.settingsSection);
   const setAppearance = useUiStore((state) => state.setAppearance);
   const patchUi = useUiStore((state) => state.patchUi);
+
+  useEffect(() => {
+    if (open) setSection(settingsSection);
+  }, [open, settingsSection]);
 
   useEffect(() => {
     if (!open) return;
@@ -165,8 +169,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* 28rem: пятая секция «Browser» (кусок 9.1) в 26rem выходила за край диалога. */}
-      <DialogContent aria-describedby={undefined} className="w-[28rem] max-w-[28rem]">
+      {/* 32rem: шесть вкладок (пятая «Browser» — кусок 9.1, шестая «Voice») в 28rem выходили за край диалога. */}
+      <DialogContent aria-describedby={undefined} className="w-[32rem] max-w-[32rem]">
         <DialogTitle>{S.settings.title}</DialogTitle>
         {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
@@ -348,6 +352,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
               {S.settings.clearBrowserData}
             </Button>
           </TabsContent>
+
+          <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
         </Tabs>
 
         <DialogFooter>

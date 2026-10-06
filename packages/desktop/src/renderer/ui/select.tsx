@@ -115,8 +115,14 @@ SelectLabel.displayName = SelectPrimitive.Label.displayName;
 
 export const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+    /**
+     * Вторая, приглушённая строка пункта — описание уровня effort (нормалайзер модели и effort 2026-10-06, 5.9). Она вне
+     * `ItemText`: Radix копирует в кнопку списка и берёт в имя пункта только его, поэтому там остаётся одна подпись.
+     */
+    description?: string | undefined;
+  }
+>(({ className, children, description, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
@@ -130,7 +136,16 @@ export const SelectItem = React.forwardRef<
         <Check className="size-4" />
       </SelectPrimitive.ItemIndicator>
     </span>
-    <SelectPrimitive.ItemText className="min-w-0 truncate">{children}</SelectPrimitive.ItemText>
+    {description === undefined ? (
+      <SelectPrimitive.ItemText className="min-w-0 truncate">{children}</SelectPrimitive.ItemText>
+    ) : (
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate">
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+        </span>
+        <span className="truncate text-[11px] leading-[15px] text-muted-foreground">{description}</span>
+      </span>
+    )}
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;

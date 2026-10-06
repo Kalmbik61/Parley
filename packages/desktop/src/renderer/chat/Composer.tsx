@@ -9,9 +9,9 @@
  * вкладки их не теряет. Поле получает фокус, когда вид появляется (`visible`), и держит его после
  * отправки — в том числе кнопкой, которая иначе забрала бы фокус себе.
  *
- * Подсказки (живая проверка 2026-10-02): `/` — команды и скиллы, `/model ` — модели, `@` — субагенты и
- * файлы; попап над полем (`SuggestionList`), ↑/↓ выбирают, Enter и Tab принимают (Enter тогда не отправляет),
- * Esc закрывает. Окно только вставляет текст — разбирает его CLI.
+ * Подсказки (живая проверка 2026-10-02): `/` — команды и скиллы, `@` — субагенты и файлы; попап над полем
+ * (`SuggestionList`), ↑/↓ выбирают, Enter и Tab принимают (Enter тогда не отправляет), Esc закрывает. Окно
+ * только вставляет текст — разбирает его CLI. Подсказок `/model <id>` нет: модель меняет меню тулбара.
  *
  * Вложения: картинка из буфера (вставка без текста), файлы, брошенные на вид (их кладёт в стор владелец), и
  * скрепка в текст поля не попадают — это чипы над ним: у картинки миниатюра, у файла значок и имя,
@@ -32,6 +32,8 @@ import { Paperclip, Square } from 'lucide-react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
+import { MicButton } from '../voice/MicButton.js';
+import { useTextareaDictation } from '../voice/targets.js';
 import { pasteHasOnlyImage } from '../terminal/drop.js';
 import { addAttachments } from './attachments.js';
 import { AttachmentChip } from './AttachmentChip.js';
@@ -64,6 +66,8 @@ export interface ComposerProps {
   onPickFiles: () => Promise<string[]>;
   /** Скриншот из буфера обмена → путь сохранённого файла; `null` — нет картинки или отказ (тост у владельца). */
   onPasteImage: () => Promise<string | null>;
+  /** Id цели диктовки (`chat:<refKey>`, спека 3.2). */
+  dictationId: string;
 }
 
 export function Composer({
@@ -79,6 +83,7 @@ export function Composer({
   source,
   onPickFiles,
   onPasteImage,
+  dictationId,
 }: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -87,6 +92,10 @@ export function Composer({
 
   // Каретка: подсказки зависят от места в тексте, а текст живёт снаружи (черновик в сторе).
   const [caretAt, setCaretAt] = useState(text.length);
+  useTextareaDictation(dictationId, field, (value) => {
+    onTextChange(value);
+    setCaretAt(value.length);
+  });
   const caret = Math.min(caretAt, text.length);
   const pendingCaret = useRef<number | null>(null);
   useLayoutEffect(() => {
@@ -207,6 +216,7 @@ export function Composer({
         >
           <Paperclip className="size-4" aria-hidden="true" />
         </Button>
+        <MicButton targetId={dictationId} />
         <textarea
           ref={field}
           aria-label={S.chat.composer.label}

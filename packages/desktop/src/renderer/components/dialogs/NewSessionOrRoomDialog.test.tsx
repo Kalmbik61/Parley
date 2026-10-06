@@ -118,8 +118,15 @@ const rows = (): HTMLElement[] => [...dialog().querySelectorAll<HTMLElement>('[d
 const button = (name: string | RegExp): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
 const providerRadio = (row: number, name: string): HTMLElement =>
   within(within(rows()[row] as HTMLElement).getByRole('radiogroup', { name: `Agent ${row + 1}` })).getByRole('radio', { name });
-/** Сегмент усилия строки: у Radix ToggleGroup единственного выбора роль — radiogroup. */
-const effortGroup = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('radiogroup', { name: 'Effort' });
+/** Список уровней effort строки (нормалайзер модели и effort 2026-10-06): Radix Select, у кнопки роль combobox. */
+const effortSelect = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('combobox', { name: 'Effort' });
+const modelSelect = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('combobox', { name: 'Model' });
+/** Имена пунктов открытого списка: пункт Radix связан со своим `ItemText`, описание уровня второй строкой в имя не входит. */
+async function optionNames(trigger: HTMLElement): Promise<string[]> {
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const options = await screen.findAllByRole('option');
+  return options.map((option) => document.getElementById(option.getAttribute('aria-labelledby') ?? '')?.textContent ?? '');
+}
 const isChecked = (element: HTMLElement): boolean => element.getAttribute('aria-checked') === 'true';
 
 async function addAgent(times = 1): Promise<void> {
@@ -193,15 +200,14 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     expect(isChecked(providerRadio(0, 'Codex'))).toBe(true);
   });
 
-  it('«+ Add agent»: провайдер последней строки, модель Default, усилие Medium', async () => {
+  it('«+ Add agent»: провайдер последней строки, модель Default, effort Default', async () => {
     await renderDialog();
     fireEvent.click(providerRadio(0, 'Codex'));
     await addAgent();
     expect(rows()).toHaveLength(2);
     expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
-    const model = within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Model' });
-    expect(model.textContent).toBe('Default');
-    expect(within(effortGroup(1)).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('true');
+    expect(modelSelect(1).textContent).toBe('Default');
+    expect(effortSelect(1).textContent).toBe('Default');
   });
 
   it('удалить агента: недоступно при одном; удаление возвращает заголовок New session; ведущий, которого убрали, — первый', async () => {
@@ -264,7 +270,7 @@ describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
     const { onOpenChange } = await renderDialog();
     fireEvent.click(providerRadio(0, 'Codex'));
     await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GPT-6 Astra');
-    fireEvent.click(within(effortGroup(0)).getByRole('radio', { name: 'High' }));
+    await chooseOption(effortSelect(0), 'High');
     fireEvent.change(screen.getByPlaceholderText('Optional'), { target: { value: '  Auth work ' } });
     fireEvent.click(button('Start session'));
 
@@ -286,13 +292,14 @@ describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
     expect(useUiStore.getState().ui.lastProvider).toBe('codex');
   });
 
-  it('модель Default и усилие по умолчанию: model не уходит, effort — medium', async () => {
+  it('модель и effort Default: ни model, ни effort не уходят — CLI берёт своё', async () => {
     await renderDialog();
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
     const params = callsOf('sessions.create')[0] as Record<string, unknown>;
     expect(params).not.toHaveProperty('model');
-    expect(params).toMatchObject({ provider: 'claude', effort: 'medium', label: '', task: '' });
+    expect(params).not.toHaveProperty('effort');
+    expect(params).toMatchObject({ provider: 'claude', label: '', task: '' });
   });
 
   it('терминал открывается, когда снимок работ принёс сессию — не раньше', async () => {
@@ -357,7 +364,7 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
     bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
     await renderDialog();
     expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
-    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Effort' })).toBeNull();
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
     const params = callsOf('sessions.create')[0] as Record<string, unknown>;
@@ -374,20 +381,152 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
     }));
     await renderDialog();
     expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' })).toBeTruthy();
-    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Effort' })).toBeNull();
     fireEvent.click(providerRadio(0, 'Codex'));
     expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
-    expect(effortGroup(0)).toBeTruthy();
+    expect(effortSelect(0)).toBeTruthy();
   });
 
-  it('повторный клик по выбранному усилию его не снимает', async () => {
+  it('старый хост: у моделей нет efforts, effort: true — Default, Low, Medium, High; выбранный уходит', async () => {
     await renderDialog();
-    const effort = effortGroup(0);
-    fireEvent.click(within(effort).getByRole('radio', { name: 'Medium' }));
-    expect(within(effort).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(within(effort).getByRole('radio', { name: 'Low' }));
-    expect(within(effort).getByRole('radio', { name: 'Low' }).getAttribute('aria-checked')).toBe('true');
-    expect(within(effort).getByRole('radio', { name: 'Medium' }).getAttribute('aria-checked')).toBe('false');
+    expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High']);
+    fireEvent.click(screen.getByRole('option', { name: 'Low' }));
+    expect(effortSelect(0).textContent).toBe('Low');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', effort: 'low' });
+  });
+});
+
+describe('NewSessionOrRoomDialog — уровни effort по модели (нормалайзер модели и effort 2026-10-06, 5.9)', () => {
+  const FIVE = [
+    { id: 'low', label: 'Low' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high', label: 'High' },
+    { id: 'xhigh', label: 'Extra high' },
+    { id: 'max', label: 'Max' },
+  ];
+  const CODEX_LEVELS = [
+    { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+    { id: 'medium', label: 'Medium', description: 'Balances speed and reasoning depth for everyday tasks' },
+    { id: 'high', label: 'High', description: 'Greater reasoning depth for complex problems' },
+    { id: 'xhigh', label: 'Extra high', description: 'Extra high reasoning depth for complex problems' },
+    { id: 'max', label: 'Max', description: 'Maximum reasoning depth for the hardest problems' },
+  ];
+  const ULTRA = { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' };
+  const LEVELED = [
+    {
+      id: 'claude',
+      label: 'Claude',
+      available: true,
+      effort: true,
+      models: [
+        { id: 'opus', label: 'Opus', efforts: FIVE },
+        { id: 'haiku', label: 'Haiku', efforts: null },
+        { id: 'opusplan[1m]', label: 'Opus Plan (1M context)', efforts: FIVE },
+      ],
+    },
+    {
+      id: 'codex',
+      label: 'Codex',
+      available: true,
+      effort: true,
+      models: [
+        { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: [...CODEX_LEVELS, ULTRA] },
+        { id: 'gpt-6-luna', label: 'GPT-6-Luna', efforts: CODEX_LEVELS },
+      ],
+    },
+  ];
+
+  beforeEach(() => {
+    bridge.setHandler('providers.list', async () => ({ providers: LEVELED }));
+  });
+
+  it('Codex: у GPT-6.1-Sol есть Ultra с описанием второй строкой; смена на GPT-6-Luna сбрасывает Ultra в Default', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(effortSelect(0).textContent).toBe('Default');
+    await chooseOption(modelSelect(0), 'GPT-6.1-Sol');
+    expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Ultra']);
+    const ultra = screen.getByRole('option', { name: 'Ultra' });
+    expect(ultra.textContent).toContain('Maximum reasoning with automatic task delegation');
+    fireEvent.click(ultra);
+    // В кнопке — только подпись уровня, без описания.
+    expect(effortSelect(0).textContent).toBe('Ultra');
+    await chooseOption(modelSelect(0), 'GPT-6-Luna');
+    expect(effortSelect(0).textContent).toBe('Default');
+    expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+    fireEvent.click(screen.getByRole('option', { name: 'Max' }));
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'codex', model: 'gpt-6-luna', effort: 'max' });
+  });
+
+  it('уровень, который есть и у новой модели, остаётся: Opus с High → Opus Plan (1M context) с High', async () => {
+    await renderDialog();
+    await chooseOption(modelSelect(0), 'Opus');
+    await chooseOption(effortSelect(0), 'High');
+    await chooseOption(modelSelect(0), 'Opus Plan (1M context)');
+    expect(effortSelect(0).textContent).toBe('High');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', model: 'opusplan[1m]', effort: 'high' });
+  });
+
+  it('Haiku — поля effort нет и effort не уходит; снова Opus — поле на Default', async () => {
+    await renderDialog();
+    await chooseOption(effortSelect(0), 'Max');
+    await chooseOption(modelSelect(0), 'Haiku');
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Effort' })).toBeNull();
+    await chooseOption(modelSelect(0), 'Opus');
+    expect(effortSelect(0).textContent).toBe('Default');
+    await chooseOption(modelSelect(0), 'Haiku');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', model: 'haiku' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+
+  it('модель Default — общие уровни моделей провайдера: у Claude пять (Haiku не в счёт), у Codex — без Ultra', async () => {
+    await renderDialog();
+    expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+    fireEvent.click(screen.getByRole('option', { name: 'Default' }));
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
+  });
+
+  it('каталог сменился при открытом диалоге (providers.changed): выбранных модели и уровня больше нет — поля в Default, уходит без них', async () => {
+    let providers = LEVELED;
+    bridge.setHandler('providers.list', async () => ({ providers }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    await chooseOption(modelSelect(0), 'GPT-6.1-Sol');
+    await chooseOption(effortSelect(0), 'Ultra');
+    // Новый каталог Codex: GPT-6.1-Sol из него ушла, а у оставшейся модели нет Ultra.
+    providers = [LEVELED[0]!, { ...LEVELED[1]!, models: [{ id: 'gpt-6-luna', label: 'GPT-6-Luna', efforts: CODEX_LEVELS }] }];
+    act(() => bridge.emit('providers.changed', { provider: 'codex' }));
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(2));
+    await act(async () => {});
+
+    expect(modelSelect(0).textContent).toBe('Default');
+    expect(effortSelect(0).textContent).toBe('Default');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'codex' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+
+  it('смена провайдера сбрасывает и модель, и effort в Default', async () => {
+    await renderDialog();
+    await chooseOption(modelSelect(0), 'Opus');
+    await chooseOption(effortSelect(0), 'Max');
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(modelSelect(0).textContent).toBe('Default');
+    expect(effortSelect(0).textContent).toBe('Default');
+    fireEvent.click(providerRadio(0, 'Claude'));
+    expect(modelSelect(0).textContent).toBe('Default');
+    expect(effortSelect(0).textContent).toBe('Default');
   });
 });
 
@@ -403,9 +542,9 @@ describe('NewSessionOrRoomDialog — несколько агентов: комн
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(callsOf('sessions.create')).toEqual([
-      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, model: 'sonnet', effort: 'medium' },
-      { projectPath: PROJECT, workId: 'w-01', provider: 'codex', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
-      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, effort: 'medium' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false, model: 'sonnet' },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'codex', label: '', task: '', parent: null, worktree: false },
+      { projectPath: PROJECT, workId: 'w-01', provider: 'claude', label: '', task: '', parent: null, worktree: false },
     ]);
     expect(callsOf('rooms.create')).toEqual([
       { projectPath: PROJECT, workId: 'w-01', title: 'Room 1', members: ['s-01', 's-02', 's-03'], lead: 's-03', quiet: true },
@@ -976,7 +1115,7 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     await waitFor(() => expect(document.querySelector('[data-provider-card]')).toBeNull());
     fireEvent.click(providerRadio(0, 'GLM'));
     expect(isChecked(providerRadio(0, 'GLM'))).toBe(true);
-    expect(within(rows()[0] as HTMLElement).queryByRole('radiogroup', { name: 'Effort' })).toBeNull();
+    expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Effort' })).toBeNull();
     await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GLM-5.3 Flash');
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));

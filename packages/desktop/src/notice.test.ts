@@ -125,6 +125,13 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     expect(builder).toMatch(/- from: build\/node\/darwin-\$\{arch\}\n\s+to: node\n/);
   });
 
+  it('NOTICE называет whisper.cpp и Silero VAD с их MIT', () => {
+    expect(notice).toContain('whisper.cpp');
+    expect(notice).toContain('Copyright (c) 2023-2026 The ggml authors');
+    expect(notice).toContain('Silero VAD');
+    expect(notice).toContain('Copyright (c) 2020-present Silero Team');
+  });
+
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
     expect(notice).toContain('packages/desktop/src/renderer/terminal/xterm-themes.ts');
   });

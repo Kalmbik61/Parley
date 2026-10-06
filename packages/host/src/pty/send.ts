@@ -19,6 +19,7 @@ import {
   codexSubmitKey,
 } from './codex-input.js';
 import { stripEscapes } from './draft.js';
+import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
 
@@ -50,6 +51,8 @@ export function createSender(deps: {
   pty: PtyManager;
   activity: ActivityService;
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
+  /** Замок смены модели и effort этой сессии занят: клавиши смены идут в PTY, текст среди них не нужен. */
+  switching?: (ref: SessionRef) => boolean;
 }): (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult> {
   // Сессии, у которых вставка с submit ждёт своего Enter: иначе Enter первого вызова
   // отправил бы и текст второго, а тост второго сказал бы «без Enter».
@@ -60,6 +63,11 @@ export function createSender(deps: {
     if (handle === undefined) throw new HostError('not_found', 'session is not running');
     const codex = handle.provider === 'codex';
     const clean = sanitizeForSend(text);
+
+    // Ползунок `/effort`: Enter в нём сохраняет уровень умолчанием в настройках CLI, а текст стал бы его вводом. Хост
+    // закрывает ползунок сам (Esc), но поздний, открывшийся после паузы, мог остаться на экране; пока идёт смена,
+    // ползунок открыт намеренно. В обоих случаях в PTY не уходит ни одного байта.
+    if (choiceInProgress(ref, deps)) return refused('blocked');
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
     // указатель между проверками и вставкой.

@@ -8,12 +8,14 @@
  */
 
 import { refKey } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { createSender } from '../pty/send.js';
+import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 
@@ -22,6 +24,7 @@ export interface PtyMethodDeps {
   activity: ActivityService;
   works: WorksService;   // activity.seen: есть ли сессия в снимке работ хоста
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;   // pty.send: busy и пауза Enter
+  sessions?: Pick<SessionsService, 'exclusive'>;   // pty.send: пока идёт смена модели или effort, не печатает
 }
 
 export interface PtyHandlers {
@@ -46,7 +49,11 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
   const waiting = new Map<string, Set<Client>>();
   // Один отправитель на хост: «свой Enter в полёте» по сессии должен быть общим для всех
   // клиентов, иначе два окна обошли бы busy.
-  const send = createSender(deps);
+  const { sessions } = deps;
+  const send = createSender({
+    ...deps,
+    ...(sessions === undefined ? {} : { switching: (ref: SessionRef) => sessions.exclusive.held(ref) }),
+  });
 
   deps.pty.on('output', (ref, data) => {
     const key = refKey(ref);
