@@ -371,3 +371,22 @@ describe('sessions.setEffort (спека нормалайзера, 5.7)', () => 
     await model;
   });
 });
+
+describe('sessions.setModel (спека нормалайзера, 5.8)', () => {
+  it('правила и порядок — в сервисе: обработчик отдаёт ему ref и модель и возвращает ответ как есть', async () => {
+    const setModel = vi.fn(async () => ({ model: 'sonnet', effort: null, restarted: true }));
+    const { sessionsSetModel } = createSessionHandlers({
+      sessions: { setModel } as unknown as SessionsService,
+      pty: {} as unknown as SessionMethodDeps['pty'],
+      activity: {} as unknown as SessionMethodDeps['activity'],
+      wake: {} as unknown as SessionMethodDeps['wake'],
+    });
+
+    await expect(sessionsSetModel({ ref, model: 'sonnet' }, request)).resolves.toEqual({
+      model: 'sonnet',
+      effort: null,
+      restarted: true,
+    });
+    expect(setModel).toHaveBeenCalledWith(ref, 'sonnet');
+  });
+});

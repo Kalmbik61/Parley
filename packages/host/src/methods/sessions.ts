@@ -40,6 +40,7 @@ export interface SessionHandlers {
   sessionsInterrupted: Handler<'sessions.interrupted'>;
   sessionsSetMode: Handler<'sessions.setMode'>;
   sessionsSetEffort: Handler<'sessions.setEffort'>;
+  sessionsSetModel: Handler<'sessions.setModel'>;
   sessionsResumeInterrupted: Handler<'sessions.resumeInterrupted'>;
 }
 
@@ -133,6 +134,9 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
           deps.pty.setHostDraft(ref, false);
         }
       }),
+
+    // Модель — перезапуском через resume с новым `--model` (спека нормалайзера, 5.8): правила и порядок — в сервисе.
+    sessionsSetModel: async ({ ref, model }) => deps.sessions.setModel(ref, model),
 
     sessionsResumeInterrupted: async (params) => {
       await deps.sessions.resumeInterrupted(params.refs);

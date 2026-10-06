@@ -543,3 +543,30 @@ describe('sessions.setEffort (нормалайзер модели и effort, 5.7
     expectTypeOf<Result<'sessions.setEffort'>>().toEqualTypeOf<{ effort: string | null; verified: boolean }>();
   });
 });
+
+describe('sessions.setModel (нормалайзер модели и effort, 5.8)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('setModel: одно слово до 200 знаков, не с дефиса; флаг, пробелы и пустое — отказ', () => {
+    const parse = (model: unknown) => METHODS['sessions.setModel'].safeParse({ ref, model });
+    const good = ['opus', 'sonnet[1m]', 'glm-5.3-flash[1m]', 'gpt-6.1-sol', 'м'.repeat(200)];
+    for (const model of good) expect(parse(model).success, model).toBe(true);
+    // Модель уходит в argv (`--resume <id> --model <модель>`): с дефиса CLI принял бы её за флаг,
+    // пробел разорвал бы её на два аргумента.
+    const bad = ['-m', '--model', ' opus', 'op us', 'opus ', 'op\tus', 'а\nб', '', 'м'.repeat(201), undefined, null];
+    for (const model of bad) expect(parse(model).success, JSON.stringify(model)).toBe(false);
+    expect(METHODS['sessions.setModel'].safeParse({ model: 'opus' }).success).toBe(false);
+  });
+
+  it('параметры и результат: модель, уровень после смены и перезапуск', () => {
+    expectTypeOf<Params<'sessions.setModel'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      model: string;
+    }>();
+    expectTypeOf<Result<'sessions.setModel'>>().toEqualTypeOf<{
+      model: string;
+      effort: string | null;
+      restarted: boolean;
+    }>();
+  });
+});

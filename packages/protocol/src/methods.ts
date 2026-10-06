@@ -103,6 +103,9 @@ export const METHODS = {
   // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
   // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
   'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
+  // Смена модели идущей сессии из меню чата (нормалайзер модели и effort, 5.8): то же одно слово, что у
+  // `sessions.create`, но непустое. Список моделей сверяет хост (`bad_request`).
+  'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
@@ -289,6 +292,13 @@ export interface Results {
    * карту. Не совпал — карта не меняется.
    */
   'sessions.setEffort': { effort: string | null; verified: boolean };
+  /**
+   * Смена модели (нормалайзер модели и effort, 5.8). `model` — модель, записанная в карту; `effort` —
+   * уровень после смены (`null` — «по умолчанию»: прежнего уровня у новой модели нет или он не был
+   * выбран); `restarted` — живую сессию хост перезапустил через resume, спящую или ждущую запуска только
+   * переписал в карте.
+   */
+  'sessions.setModel': { model: string; effort: string | null; restarted: boolean };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'sessions.resumeInterrupted': { ok: true };

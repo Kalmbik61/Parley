@@ -29,11 +29,12 @@ import type { ActivityService, SessionLive } from '../activity/activity-service.
 import type { HostContext } from '../context.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import { createPtyManager } from '../pty/pty-manager.js';
+import type { PtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { atPrompt, busyError, createSessionsService, createSwitchLock } from './sessions-service.js';
-import type { SessionsFeedOptions } from './sessions-service.js';
+import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
 const runGit = promisify(execFile);
@@ -1530,5 +1531,195 @@ describe('atPrompt и busyError: агент у приглашения (спек�
       throw new Error('сбой');
     })).rejects.toThrow('сбой');
     await expect(lock(ref, async () => 'после сбоя')).resolves.toBe('после сбоя');
+  });
+});
+
+describe('setModel(): смена модели (спека нормалайзера, 5.8)', () => {
+  let claudeRoot = '';
+
+  beforeEach(async () => {
+    claudeRoot = await mkdtemp(path.join(tmpdir(), 'parley-sessions-claude-'));
+    // План resume ищет транскрипт Claude Code во временном корне, а не в ~/.claude.
+    setEnv('PARLEY_CLAUDE_PROJECTS_DIR', claudeRoot);
+  });
+
+  afterEach(async () => {
+    await rm(claudeRoot, { recursive: true, force: true });
+  });
+
+  /** Активность-подмена: сессия в заданном состоянии и с заданными субагентами. */
+  function activityAt(state: string, tasks: Array<{ background: boolean }> = []): ActivityService {
+    return {
+      ...fakeActivity(),
+      get: () => ({ activity: { activity: state, tasks }, metrics: null }),
+    } as unknown as ActivityService;
+  }
+
+  /** Живая сессия claude на opus · xhigh; транскрипт разговора есть — resume пойдёт через `--resume`. */
+  async function liveSession(
+    activity: ActivityService,
+  ): Promise<{ service: SessionsService; pty: PtyManager; ref: SessionRef; argsFile: string; uuid: string }> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, activity);
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: '',
+      parent: null,
+      model: 'opus',
+      effort: 'xhigh',
+    });
+    const { argv } = await readArgs(argsFile);
+    const uuid = argv[argv.indexOf('--session-id') + 1] as string;
+    await mkdir(path.join(claudeRoot, 'project'), { recursive: true });
+    await writeFile(path.join(claudeRoot, 'project', `${uuid}.jsonl`), '{"type":"user"}\n', 'utf8');
+    await rm(argsFile);
+    return { service, pty, ref, argsFile, uuid };
+  }
+
+  const sessionOf = async (ref: SessionRef) =>
+    (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+
+  it('спящая сессия: только карта, процесс не поднимается; уровень, который есть у новой модели, остаётся', async () => {
+    const { service, ref } = await liveSession(activityAt('idle'));
+    await service.stop(ref);
+
+    expect(await service.setModel(ref, 'sonnet')).toEqual({ model: 'sonnet', effort: 'xhigh', restarted: false });
+    expect(service.live(ref)).toBe(false);
+    expect(await sessionOf(ref)).toMatchObject({ model: 'sonnet', effort: 'xhigh', lifecycle: 'sleeping' });
+  });
+
+  it('сессия ещё ждёт запуска (pending) — только карта, restarted: false; у GLM своя пара моделей', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'glm',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+
+    expect(await service.setModel(ref, 'glm-5.3-flash[1m]')).toEqual({
+      model: 'glm-5.3-flash[1m]',
+      effort: null,
+      restarted: false,
+    });
+    expect(await sessionOf(ref)).toMatchObject({ model: 'glm-5.3-flash[1m]', lifecycle: 'pending' });
+    expect(service.live(ref)).toBe(false);
+  });
+
+  it('живая сессия у приглашения: карта, остановка и resume с --model и --effort из карты', async () => {
+    const { service, ref, argsFile, uuid } = await liveSession(activityAt('idle'));
+
+    expect(await service.setModel(ref, 'sonnet')).toEqual({ model: 'sonnet', effort: 'xhigh', restarted: true });
+
+    const { argv } = await readArgs(argsFile);
+    expect(argv[argv.indexOf('--resume') + 1]).toBe(uuid);
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet');
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('xhigh');
+    expect(await sessionOf(ref)).toMatchObject({ model: 'sonnet', effort: 'xhigh', lifecycle: 'active' });
+    expect(service.live(ref)).toBe(true);
+    await service.stop(ref);
+  });
+
+  it('у Haiku уровней нет: effort сброшен в карте, resume без --effort; unseen — тоже у приглашения', async () => {
+    const { service, ref, argsFile } = await liveSession(activityAt('unseen'));
+
+    expect(await service.setModel(ref, 'haiku')).toEqual({ model: 'haiku', effort: null, restarted: true });
+
+    const { argv } = await readArgs(argsFile);
+    expect(argv[argv.indexOf('--model') + 1]).toBe('haiku');
+    expect(argv).not.toContain('--effort');
+    const session = await sessionOf(ref);
+    expect(session?.model).toBe('haiku');
+    expect(Object.keys(session ?? {})).not.toContain('effort');
+    await service.stop(ref);
+  });
+
+  it('агент работает, ждёт ответа или идут фоновые задачи — conflict busy: процесс жив, карта прежняя', async () => {
+    for (const activity of [activityAt('working'), activityAt('blocked'), activityAt('idle', [{ background: true }])]) {
+      const { service, ref } = await liveSession(activity);
+
+      await expect(service.setModel(ref, 'sonnet')).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'conflict',
+        data: { reason: 'busy' },
+      });
+      expect(service.live(ref)).toBe(true);
+      expect(await sessionOf(ref)).toMatchObject({ model: 'opus', effort: 'xhigh' });
+      await service.stop(ref);
+    }
+  });
+
+  it('resume не поднялся — ошибка уходит вызывающему, а в карте уже новая модель', async () => {
+    const { service, ref } = await liveSession(activityAt('idle'));
+    setEnv('PARLEY_CLAUDE_BIN', path.join(project, 'нет-такого-claude'));
+
+    await expect(service.setModel(ref, 'sonnet')).rejects.toThrow();
+    expect(service.live(ref)).toBe(false);
+    expect(await sessionOf(ref)).toMatchObject({ model: 'sonnet', effort: 'xhigh', lifecycle: 'sleeping' });
+  });
+
+  it('сессия не Claude Code или модель не из списка — bad_request, карта не меняется', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const codex = await createPendingSession(project, work.work.id, { provider: 'codex', label: 'a', task: 't' });
+    const claude = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'b',
+      task: 't',
+      model: 'opus',
+    });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const refOf = (sessionId: string): SessionRef => ({ projectPath: project, workId: work.work.id, sessionId });
+
+    await expect(service.setModel(refOf(codex), 'gpt-6-sol')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'bad_request',
+    });
+    await expect(service.setModel(refOf(claude), 'gpt-6-sol')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'bad_request',
+    });
+    expect((await sessionOf(refOf(codex)))?.model).toBeUndefined();
+    expect((await sessionOf(refOf(claude)))?.model).toBe('opus');
+  });
+
+  it('та же модель, что уже стоит, — без записи и без перезапуска: restarted false, процесс тот же', async () => {
+    const { service, pty, ref } = await liveSession(activityAt('idle'));
+    const pid = pty.get(ref)?.pid;
+    const before = await sessionOf(ref);
+
+    expect(await service.setModel(ref, 'opus')).toEqual({ model: 'opus', effort: 'xhigh', restarted: false });
+    expect(pty.get(ref)?.pid).toBe(pid);
+    expect(await sessionOf(ref)).toEqual(before);
+    await service.stop(ref);
+  });
+
+  it('вторая смена, пока идёт первая, — conflict busy: перезапуск один; замок общий с sessions.setEffort', async () => {
+    const { service, ref, argsFile } = await liveSession(activityAt('idle'));
+
+    const first = service.setModel(ref, 'sonnet');
+    await expect(service.setModel(ref, 'haiku')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    // Обработчик sessions.setEffort идёт через тот же `exclusive` (Task 10).
+    await expect(service.exclusive(ref, async () => 'effort')).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    await expect(first).resolves.toEqual({ model: 'sonnet', effort: 'xhigh', restarted: true });
+
+    const { argv } = await readArgs(argsFile);
+    expect(argv[argv.indexOf('--model') + 1]).toBe('sonnet');
+    expect((await sessionOf(ref))?.model).toBe('sonnet');
+    await expect(service.exclusive(ref, async () => 'свободно')).resolves.toBe('свободно');
+    await service.stop(ref);
   });
 });

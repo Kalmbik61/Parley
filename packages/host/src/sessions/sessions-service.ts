@@ -22,6 +22,7 @@ import {
   deleteSession,
   DirtyWorktreeError,
   discardWorktree,
+  effortsFor,
   finishExited,
   findRunnerBinary,
   GitStateError,
@@ -121,6 +122,12 @@ export interface SessionsService {
   setChoice(ref: SessionRef, choice: { model?: string | null; effort?: string | null }): Promise<void>;
   /** Замок смены модели и effort этой сессии: через него идут `sessions.setEffort` и `sessions.setModel`. */
   exclusive: SwitchLock;
+  /**
+   * Смена модели (спека нормалайзера, 5.8): живую сессию у приглашения перезапускает через resume с новым
+   * `--model`, остальным только пишет карту. `effort` в ответе — что осталось в карте: `null` — сброшен (у новой
+   * модели такого уровня нет) или его не было. Та же модель — ни записи, ни перезапуска.
+   */
+  setModel(ref: SessionRef, model: string): Promise<{ model: string; effort: string | null; restarted: boolean }>;
 }
 
 /**
@@ -563,6 +570,53 @@ export function createSessionsService(
     });
   }
 
+  /**
+   * Модель проверяет resolver; сохранённый effort остаётся, если он есть у новой модели, иначе сбрасывается в
+   * «по умолчанию». Та же модель, что в карте, — ничего не пишется и не перезапускается. Сессия без процесса (спит,
+   * закрыта, ждёт запуска) — только запись в карту: следующий запуск или resume возьмёт новую модель. Живая — только
+   * у приглашения и без фоновых задач: запись в карту, остановка и resume с флагами из карты. Resume не поднялся —
+   * ошибка уходит окну, а карта уже с новой моделью: кнопка Resume повторит запуск. Всё — под замком `exclusive`.
+   */
+  async function setModel(
+    ref: SessionRef,
+    model: string,
+  ): Promise<{ model: string; effort: string | null; restarted: boolean }> {
+    return exclusive(ref, async () => {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+        (candidate) => candidate.id === ref.sessionId,
+      );
+      if (session === undefined) {
+        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+      }
+      const entry = (await loadProviders())[session.provider];
+      if (entry === undefined || !isClaudeCode(entry)) {
+        throw new HostError('bad_request', 'the model of a session can be changed only for Claude Code sessions');
+      }
+      const next = (await resolveModelChoice(session.provider, model)).model;
+      // Шаблон запуска без `{model}` (свои `args` в providers.json): модель до CLI не доедет — менять нечего.
+      if (next === undefined) throw new HostError('bad_request', `provider ${entry.id} does not accept a model`);
+      // Та же модель — ни записи, ни перезапуска: меню отмечает её и так.
+      if (next === session.model) return { model: next, effort: session.effort ?? null, restarted: false };
+      const effort =
+        session.effort !== undefined && (effortsFor(entry, next)?.some((level) => level.id === session.effort) ?? false)
+          ? session.effort
+          : null;
+      const live = pty.get(ref) !== undefined;
+      if (live) {
+        const state = activity.get(ref);
+        if (!atPrompt(state)) throw busyError('Wait until the agent is idle');
+        if (state?.activity.tasks.some((task) => task.background) === true) {
+          throw busyError('Wait until background tasks finish');
+        }
+      }
+      await setChoice(ref, { model: next, effort });
+      if (!live) return { model: next, effort, restarted: false };
+      await stop(ref);
+      await launch(ref, 'resume');
+      return { model: next, effort, restarted: true };
+    });
+  }
+
   async function close(ref: SessionRef): Promise<void> {
     const key = refKey(ref);
     closing.add(key);
@@ -682,6 +736,7 @@ export function createSessionsService(
     delete: del,
     setChoice,
     exclusive,
+    setModel,
     live: (ref) => pty.get(ref) !== undefined,
     async stopAll() {
       await Promise.all(
