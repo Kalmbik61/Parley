@@ -37,6 +37,20 @@ function phrase(voice: string, text: string): ArrayBuffer {
   }
 }
 
+/** Первый русский голос `say` (`ru_RU`); нет голоса — русский случай пропускается. */
+function russianVoice(): string | null {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const line = execFileSync('say', ['-v', '?'], { encoding: 'utf8' })
+      .split('\n')
+      .find((row) => /\bru_RU\b/.test(row));
+    return line === undefined ? null : (line.match(/^(.+?)\s{2,}ru_RU\b/)?.[1]?.trim() ?? null);
+  } catch {
+    return null;
+  }
+}
+const ruVoice = russianVoice();
+
 describe.skipIf(!ready)('настоящий whisper-cli (base)', () => {
   const transcribe = createTranscriber({
     engine: () => engine,
@@ -52,6 +66,13 @@ describe.skipIf(!ready)('настоящий whisper-cli (base)', () => {
     const result = await transcribe({ pcm: phrase('Samantha', 'Refactor the authentication middleware'), language: 'en', model: 'base' });
     console.log(`base en: ${Date.now() - started} ms`, result);
     expect('text' in result && /middleware/i.test(result.text)).toBe(true);
+  }, 120_000);
+
+  it.skipIf(ruVoice === null)('русская фраза — ключевое слово на месте', async () => {
+    const started = Date.now();
+    const result = await transcribe({ pcm: phrase(ruVoice ?? '', 'Исправь ошибку в модуле авторизации'), language: 'ru', model: 'base' });
+    console.log(`base ru (${String(ruVoice)}): ${Date.now() - started} ms`, result);
+    expect('text' in result && /авториз/i.test(result.text)).toBe(true);
   }, 120_000);
 
   it('тишина — no_speech', async () => {

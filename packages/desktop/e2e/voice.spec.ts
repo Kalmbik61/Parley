@@ -98,6 +98,8 @@ test.describe('голосовой ввод', () => {
     await window.waitForTimeout(500);
     await mic.getByRole('button').click();
     await expect(editor).toHaveText(VOICE_TEXT);
+    // Пока лента не показана, счёт нуля ничего не доказывает: сначала ждём саму ленту комнаты.
+    await expect(window.locator('[data-room-feed]')).toBeVisible();
     await expect(window.locator('[data-room-feed] [data-message-id]')).toHaveCount(0);
 
     // 3. Esc во время записи — отмена, поле прежнее.
