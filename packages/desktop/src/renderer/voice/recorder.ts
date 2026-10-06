@@ -56,22 +56,33 @@ export async function startRecording(onLevel: (level: number) => void, deps: Rec
     const name = error instanceof DOMException ? error.name : '';
     throw new MicError(name === 'NotAllowedError' || name === 'SecurityError' ? 'denied' : 'not_found');
   }
-  const context = deps.createContext();
-  await context.audioWorklet.addModule(await deps.workletUrl());
-  const source = context.createMediaStreamSource(stream);
-  const node = deps.createNode(context);
+  // Всё после getUserMedia может бросить: тогда микрофон нельзя оставлять открытым (спека 4.1).
+  let context: CaptureContext | undefined;
+  let source: ReturnType<CaptureContext['createMediaStreamSource']>;
+  let node: CaptureNode;
   const chunks: Int16Array[] = [];
   let samples = 0;
   let peak = 0;
-  node.port.onmessage = (event) => {
-    const frame = event.data;
-    chunks.push(floatTo16(frame));
-    samples += frame.length;
-    peak = Math.max(peak, peakOf(frame));
-    onLevel(rms(frame));
-  };
-  source.connect(node);
-  node.connect(context.destination);
+  try {
+    context = deps.createContext();
+    await context.audioWorklet.addModule(await deps.workletUrl());
+    source = context.createMediaStreamSource(stream);
+    node = deps.createNode(context);
+    node.port.onmessage = (event) => {
+      const frame = event.data;
+      chunks.push(floatTo16(frame));
+      samples += frame.length;
+      peak = Math.max(peak, peakOf(frame));
+      onLevel(rms(frame));
+    };
+    source.connect(node);
+    node.connect(context.destination);
+  } catch (error) {
+    for (const track of stream.getTracks()) track.stop();
+    await context?.close().catch(() => undefined);
+    throw error;
+  }
+  const openContext = context;
 
   let closed: Promise<void> | null = null;
   const close = (): Promise<void> => {
@@ -80,7 +91,7 @@ export async function startRecording(onLevel: (level: number) => void, deps: Rec
       source.disconnect();
       node.disconnect();
       for (const track of stream.getTracks()) track.stop();
-      await context.close();
+      await openContext.close();
     })();
     return closed;
   };

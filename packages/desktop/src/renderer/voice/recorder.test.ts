@@ -52,4 +52,13 @@ describe('startRecording', () => {
     const missing = fakeDeps({ getUserMedia: async () => Promise.reject(new DOMException('no', 'NotFoundError')) });
     await expect(startRecording(() => undefined, missing.deps)).rejects.toBeInstanceOf(MicError);
   });
+
+  it('addModule отклонён — дорожки остановлены, контекст закрыт, startRecording отклонён исходной ошибкой', async () => {
+    const failure = new Error('addModule failed');
+    const { deps, track, context } = fakeDeps();
+    context.audioWorklet.addModule = vi.fn(async () => Promise.reject(failure));
+    await expect(startRecording(() => undefined, deps)).rejects.toBe(failure);
+    expect(track.stop).toHaveBeenCalled();
+    expect(context.close).toHaveBeenCalled();
+  });
 });
