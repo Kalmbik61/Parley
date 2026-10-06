@@ -238,8 +238,8 @@ export function createDictationStore() {
       },
 
       cancel() {
-        session += 1;
         if (get().phase === 'transcribing') return;
+        session += 1;
         const current = recording;
         recording = null;
         stopListening();

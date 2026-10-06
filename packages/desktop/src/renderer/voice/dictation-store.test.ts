@@ -202,6 +202,24 @@ describe('dictation-store (спека 3.2–3.4, 6)', () => {
     await stopping;
   });
 
+  it('cancel() during transcribing leaves the result path intact and the phase returns to idle', async () => {
+    const h = harness();
+    cleanup.push(h.dispose);
+    let finish: (result: TranscribeResult) => void = () => undefined;
+    vi.mocked(h.deps.voice.transcribe).mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+    await h.store.getState().toggle('room');
+    const stopping = h.store.getState().toggle('room');
+    await vi.waitFor(() => expect(h.store.getState().phase).toBe('transcribing'));
+    h.store.getState().cancel();
+    expect(h.store.getState().phase).toBe('transcribing');
+    finish({ text: 'done' });
+    await stopping;
+    expect(h.target.insert).toHaveBeenCalledWith('done');
+    expect(h.store.getState()).toMatchObject({ phase: 'idle', targetId: null });
+    await h.store.getState().toggle('room');
+    expect(h.store.getState().phase).toBe('recording');
+  });
+
   it('уровень пишется в store не чаще раза в 50 мс (ворклет шлёт ~125 кадров в секунду)', async () => {
     const h = harness();
     cleanup.push(h.dispose);
