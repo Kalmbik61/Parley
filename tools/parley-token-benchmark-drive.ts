@@ -39,18 +39,20 @@ const squash = (text: string): string => text.replace(/\s+/g, '');
 
 /**
  * Выделенный пункт диалога доверия: строка с `❯` (Claude Code) или с `›` либо `❯` (Codex); `null` — выделения на
- * экране нет. У Claude доверие — «Yes, I trust this folder», у Codex — любой пункт, начинающийся с «Yes,»
- * (формулировка в живом CLI не проверена: незнакомый пункт — `other`, и драйвер остановится).
+ * экране нет. Берётся ПОСЛЕДНЯЯ такая строка: снимок включает прокрутку, и выше может остаться выделенный пункт
+ * прошлого экрана («› 1. Update now» после пропущенного обновления Codex). У Claude доверие — «Yes, I trust this
+ * folder», у Codex 0.160.0 — «1. Trust and continue» (выход — «2. Quit»); незнакомый пункт — `other`, и драйвер
+ * остановится.
  */
 export function selectedOption(text: string, provider: Provider = 'claude'): 'yes' | 'no' | 'other' | null {
   const marker = provider === 'codex' ? /[❯›]/ : /❯/;
-  const line = text.split(/\r?\n/).find((l) => marker.test(l));
+  const line = text.split(/\r?\n/).findLast((l) => marker.test(l));
   if (line === undefined) return null;
   const flat = squash(line);
   const tail = flat.slice(flat.search(marker));
   if (provider === 'codex') {
-    if (/^[❯›](?:\d+\.)?Yes,/i.test(tail)) return 'yes';
-    if (/^[❯›](?:\d+\.)?No,/i.test(tail)) return 'no';
+    if (/^[❯›](?:\d+\.)?Trustandcontinue/i.test(tail)) return 'yes';
+    if (/^[❯›](?:\d+\.)?Quit/i.test(tail)) return 'no';
     return 'other';
   }
   if (/^❯(?:\d+\.)?Yes,Itrustthisfolder/i.test(tail)) return 'yes';
@@ -73,11 +75,12 @@ export type Screen =
  */
 export function classifyScreen(text: string, copyPath: string, workRoot: string, provider: Provider = 'claude'): Screen {
   const flat = squash(text);
-  // Вопрос доверия у Codex — «Do you trust the contents of this directory?»; других экранов Codex драйвер не знает.
-  const trustQuestion = provider === 'codex'
-    ? /Doyoutrustthecontentsofthisdirectory|Doyoutrustthisdirectory|Doyoutrustthisfolder/i
-    : /Isthisaprojectyoucreatedoroneyoutrust|Itrustthisfolder|Quicksafetycheck/i;
-  if (trustQuestion.test(flat)) {
+  // Вопрос доверия у Codex 0.160.0: «Trust this folder?», пункт «Trust and continue» и подвал «esc quit» вместе
+  // (у предложения обновиться подвал другой, «esc skip»); других экранов Codex драйвер не знает.
+  const isTrust = provider === 'codex'
+    ? /Trustthisfolder\?/i.test(flat) && /Trustandcontinue/i.test(flat) && /escquit/i.test(flat)
+    : /Isthisaprojectyoucreatedoroneyoutrust|Itrustthisfolder|Quicksafetycheck/i.test(flat);
+  if (isTrust) {
     const ours = copyPath.startsWith(workRoot + path.sep) && flat.includes(squash(copyPath));
     return { kind: 'trust', selected: selectedOption(text, provider), ours };
   }
@@ -492,6 +495,8 @@ export async function runSession(
     const text = await client.screen(ref);
     const screen = classifyScreen(text, ctx.copy, ctx.workRoot, ctx.provider);
     if (screen.kind === 'trust') {
+      // Клавиши на вопросе доверия: Enter на пункте доверия (один раз) и стрелка вниз у Claude. Esc не уходит никогда:
+      // у Codex на этом экране он — «Quit», выход из Codex.
       if (summary.trustAnswered) {
         // Enter уже нажат: диалог мог не успеть исчезнуть; второй Enter не нажимаем.
         if (++afterAnswer <= 5) continue;
@@ -502,7 +507,8 @@ export async function runSession(
         return stop('trust-not-allowed', text);
       }
       if (screen.ours && screen.selected === 'yes') {
-        console.log('folder trust prompt for the benchmark copy: confirming "Yes, I trust this folder"');
+        const answer = ctx.provider === 'codex' ? 'Trust and continue' : 'Yes, I trust this folder';
+        console.log(`folder trust prompt for the benchmark copy: confirming "${answer}"`);
         client.notify('pty.input', { ref, data: '\r' });
         summary.trustAnswered = true;
         continue;
@@ -736,18 +742,19 @@ const HELP = `parley-token-benchmark-drive — оператор живого п�
   --home DIR           PARLEY_HOME хоста (по умолчанию <out>/home); сокет <home>/host/host.sock должен влезать
                        в предел пути хоста, иначе отказ — берите короткий путь, например /tmp/pbh
   --claude-bin PATH    закрепить версию claude: каталог со ссылкой на этот бинарь ставится первым в PATH
-  --trust-copies       отвечать «Yes, I trust this folder» на вопрос доверия к папке КОПИИ прогона (под <out>/work).
-                       Оператор ставит флаг только с разрешения человека; без флага диалог доверия — стоп
+  --trust-copies       отвечать на вопрос доверия к папке КОПИИ прогона (под <out>/work): «Yes, I trust this folder»
+                       у Claude Code, «Trust and continue» у Codex. Оператор ставит флаг только с разрешения
+                       человека; без флага диалог доверия — стоп
   --link-secrets PATH  только для прогона glm: до старта хоста поставить в доме стенда (<home>) символическую ссылку на
                        файл ключа Z.ai по этому пути, а после прогона и при любом выходе снять. Файл не читается,
                        не копируется и не печатается. Без опции прогон glm — отказ. Только с разрешения человека
   --timeout-min N      потолок времени хода (по умолчанию budget.perSession.maxMinutes)
 
 Провайдер берётся из begin.json прогона (волны wq-codex и wq-glm плана): у claude и glm экраны запуска и конец хода как
-у Claude Code; у codex драйвер отвечает только на вопрос доверия к копии (при выделенном «Yes», только с
---trust-copies) и пропускает предложение обновиться клавишей Esc («Skip», не больше двух раз; Enter там запустил бы
-установку npm), на любом другом экране, не ушедшем за срок старта, — стоп со снимком; конец хода — первая строка
-журнала Stop после отправки запроса.
+у Claude Code; у codex драйвер отвечает только на вопрос доверия к копии (Enter один раз при выделенном «1. Trust and
+continue», только с --trust-copies; Esc там — выход из Codex, его драйвер не нажимает) и пропускает предложение
+обновиться клавишей Esc («Skip», не больше двух раз; Enter там запустил бы установку npm), на любом другом экране, не
+ушедшем за срок старта, — стоп со снимком; конец хода — первая строка журнала Stop после отправки запроса.
 
 Платный ход модели: запускать только с явного разрешения человека. Последняя строка stdout — RESULT <json>;
 код выхода 0 только при outcome turn-ended.

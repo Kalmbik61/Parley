@@ -97,6 +97,11 @@ describe('selectedOption', () => {
     expect(selectedOption('❯ 3.Somethingelse')).toBe('other');
     expect(selectedOption('Yes, I trust this folder')).toBeNull();
   });
+
+  it('выделенным считается последняя строка с маркером: выше может остаться выделение прошлого экрана', () => {
+    expect(selectedOption(`❯ 1.Somethingold\n${trustScreen('yes')}`)).toBe('yes');
+    expect(selectedOption(`${trustScreen('yes')}\n❯ 3.Somethingelse`)).toBe('other');
+  });
 });
 
 describe('modelAlias', () => {
@@ -205,30 +210,58 @@ describe('findTranscript', () => {
   });
 });
 
-/** Вопрос доверия Codex как в снимке: маркер выделения `›`, пробелы между словами теряются. */
-const codexTrustScreen = (selected: 'yes' | 'no' | 'none', shownPath = COPY): string =>
-  [
-    `You are running Codex in ${shownPath}`,
-    'Doyoutrustthecontentsofthisdirectory?Workingwithuntrustedcontentscomeswithhigherriskofpromptinjection.',
-    selected === 'yes' ? '› 1.Yes,continue' : '  1.Yes,continue',
-    selected === 'no' ? '› 2.No,quit' : '  2.No,quit',
-    'Pressentertocontinue',
+/**
+ * Вопрос доверия Codex 0.160.0 как в живом снимке пробной сессии: заголовок «Folder access», путь копии переносится по
+ * ширине экрана, в тексте вопроса и у невыделенных пунктов пробелы между словами потеряны (курсорные сдвиги вместо
+ * пробелов), у выделенного пункта остались; маркер выделения `›`, подвал «enter continue · esc quit».
+ * `selected` — выделенный пункт: «1. Trust and continue» (в Codex он выделен по умолчанию), «2. Quit» или никакой.
+ */
+const codexTrustScreen = (selected: 'yes' | 'no' | 'none', shownPath = COPY): string => {
+  const cut = Math.floor(shownPath.length * 0.75);
+  return [
+    '  Folder access',
+    shownPath.slice(0, cut),
+    shownPath.slice(cut),
+    'Trustthisfolder?Codexcanread,edit,andrunfileshere,subjecttoyourpermissionsettings.Foldersettings',
+    'canruncodeautomatically,evenwithoutamodelrequest.Continueonlyifyoutrustthesefiles.Yourtrust',
+    'decisionwillbesaved.',
+    selected === 'yes' ? '› 1. Trust and continue' : '1.Trustandcontinue',
+    selected === 'no' ? '› 2. Quit' : '2.Quit',
+    'enter continue · esc quit',
   ].join('\n');
+};
 
 describe('экраны запуска Codex', () => {
-  it('вопрос доверия к копии: выделено Yes, выделено No, выделения нет', () => {
+  it('вопрос доверия к копии: выделено «Trust and continue», выделено «Quit», выделения нет', () => {
     expect(classifyScreen(codexTrustScreen('yes'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'yes', ours: true });
     expect(classifyScreen(codexTrustScreen('no'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'no', ours: true });
     expect(classifyScreen(codexTrustScreen('none'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: null, ours: true });
   });
 
-  it('чужой путь и копия вне <out>/work — не наша; незнакомый вариант под выделением — other', () => {
+  it('снимок пробы 0.160.0 узнаётся и с пробелами, и без них; это вопрос доверия, а не обновление', () => {
+    const screen = codexTrustScreen('yes');
+    expect(screen).toContain('› 1. Trust and continue');
+    expect(classifyScreen(screen, COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'yes', ours: true });
+    expect(classifyScreen(screen.replace(/ /g, ''), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'yes', ours: true });
+  });
+
+  it('нужны все три признака: «Trust this folder?», пункт «Trust and continue» и подвал «esc quit»', () => {
+    const screen = codexTrustScreen('yes');
+    expect(classifyScreen(screen.replace('Trustthisfolder?', ''), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+    expect(classifyScreen(screen.replace('Trust and continue', 'Continue'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+    expect(classifyScreen(screen.replace('esc quit', 'esc cancel'), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+  });
+
+  it('чужой путь и копия вне <out>/work — не наша; незнакомый пункт под выделением — other', () => {
     expect(classifyScreen(codexTrustScreen('yes', '/Users/someone/project'), COPY, WORK_ROOT, 'codex')).toMatchObject({ kind: 'trust', ours: false });
     const outside = '/Users/someone/project';
     expect(classifyScreen(codexTrustScreen('yes', outside), outside, WORK_ROOT, 'codex')).toMatchObject({ ours: false });
     expect(selectedOption('› 1.Allowworkwithoutasking', 'codex')).toBe('other');
-    expect(selectedOption('› 1.Yes,continue', 'codex')).toBe('yes');
-    expect(selectedOption('❯ 2.No,quit', 'codex')).toBe('no');
+    expect(selectedOption('› 1. Trust and continue', 'codex')).toBe('yes');
+    expect(selectedOption('› 1.Trustandcontinue', 'codex')).toBe('yes');
+    expect(selectedOption('❯ 2.Quit', 'codex')).toBe('no');
+    // Прежняя догадка о тексте («Yes, …») больше не «да»: Enter на неё не уйдёт.
+    expect(selectedOption('› 1.Yes,continue', 'codex')).toBe('other');
   });
 
   it('текст Claude Code у Codex не вопрос доверия, и наоборот; незнакомый экран — other', () => {
@@ -238,7 +271,7 @@ describe('экраны запуска Codex', () => {
   });
 
   it('маркер › у провайдера claude выделением не считается', () => {
-    expect(selectedOption('› 1.Yes,continue')).toBeNull();
+    expect(selectedOption('› 1. Trust and continue')).toBeNull();
   });
 });
 
@@ -263,20 +296,26 @@ describe('предложение обновления Codex: распознав�
     expect(classifyScreen(CODEX_UPDATE_SCREEN, COPY, WORK_ROOT, 'glm')).toEqual({ kind: 'other' });
   });
 
-  it('нужны оба признака: «Update available» без «esc skip» и подсказка без заголовка — other', () => {
+  it('нужны оба признака: «Update available» без «esc skip» (в том числе с подвалом «esc quit») и подсказка без заголовка — other', () => {
     expect(classifyScreen('Updateavailable·0.160.0→0.160.1\n› 1.Updatenow\n  2.Skip', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+    expect(classifyScreen('Updateavailable·0.160.0→0.160.1\n› 1.Updatenow\nentercontinue·escquit', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
     expect(classifyScreen('entercontinue·escskip', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
   });
 
   it('вопрос доверия важнее текста обновления, оставшегося в снимке выше: Esc на доверие не уходит', () => {
     const screen = `${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('yes')}`;
-    expect(classifyScreen(screen, COPY, WORK_ROOT, 'codex')).toMatchObject({ kind: 'trust' });
+    expect(classifyScreen(screen, COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'trust', selected: 'yes', ours: true });
+  });
+
+  it('над вопросом доверия осталось «› 1. Update now»: выделенным считается «Trust and continue» (последняя строка с маркером)', () => {
+    expect(selectedOption(`${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('yes')}`, 'codex')).toBe('yes');
+    expect(selectedOption(`${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('no')}`, 'codex')).toBe('no');
   });
 });
 
-describe('предложение обновления Codex: запуск сессии', () => {
+describe('запуск сессии по экранам: обновление и доверие', () => {
   const ref = { projectPath: '/p', workId: 'w1', sessionId: 's1' };
-  const ctx = { copy: COPY, workRoot: WORK_ROOT, prompt: 'запрос сценария', trustCopies: true, timeoutMin: 1, provider: 'codex' as const };
+  const ctx: Parameters<typeof runSession>[2] = { copy: COPY, workRoot: WORK_ROOT, prompt: 'запрос сценария', trustCopies: true, timeoutMin: 1, provider: 'codex' };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -308,8 +347,8 @@ describe('предложение обновления Codex: запуск сес
     return { client, inputs, sends };
   }
 
-  async function run(client: HostClient): ReturnType<typeof runSession> {
-    const finished = runSession(client, ref, ctx);
+  async function run(client: HostClient, override: Partial<typeof ctx> = {}): ReturnType<typeof runSession> {
+    const finished = runSession(client, ref, { ...ctx, ...override });
     await vi.runAllTimersAsync();
     return finished;
   }
@@ -322,12 +361,59 @@ describe('предложение обновления Codex: запуск сес
     expect(sends).toEqual([]);
   });
 
-  it('экран ушёл после Esc: дальше вопрос доверия (Enter только на нём) и запрос сценария', async () => {
-    const { client, inputs, sends } = fakeHost([CODEX_UPDATE_SCREEN, codexTrustScreen('yes'), '› Ask Codex to do anything']);
+  it('экран ушёл после Esc: дальше вопрос доверия (Enter только на нём, строки обновления выше) и запрос сценария', async () => {
+    const trustAfterUpdate = `${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('yes')}`;
+    const { client, inputs, sends } = fakeHost([CODEX_UPDATE_SCREEN, trustAfterUpdate, '› Ask Codex to do anything']);
     const summary = await run(client);
     expect(inputs).toEqual(['\x1b', '\r']);
     expect(sends).toHaveLength(1);
     expect(summary).toMatchObject({ outcome: 'send-input', updateSkipped: true, trustAnswered: true });
+  });
+
+  it('Codex, вопрос доверия к копии: ровно один Enter и ни одного Esc, диалог на следующем опросе ещё виден — второго Enter нет', async () => {
+    const { client, inputs, sends } = fakeHost([codexTrustScreen('yes'), codexTrustScreen('yes'), '› Ask Codex to do anything']);
+    const summary = await run(client);
+    expect(inputs).toEqual(['\r']);
+    expect(sends).toHaveLength(1);
+    expect(summary).toMatchObject({ outcome: 'send-input', trustAnswered: true, updateSkipped: false });
+  });
+
+  it('Codex, над вопросом доверия остались строки обновления с «› 1. Update now»: Enter один раз на «Trust and continue», Esc не уходит', async () => {
+    const { client, inputs, sends } = fakeHost([`${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('yes')}`, '› Ask Codex to do anything']);
+    const summary = await run(client);
+    expect(inputs).toEqual(['\r']);
+    expect(sends).toHaveLength(1);
+    expect(summary).toMatchObject({ outcome: 'send-input', trustAnswered: true, updateSkipped: false });
+  });
+
+  it('Codex, диалог доверия не ушёл после Enter: второй Enter не нажимается, через пять опросов стоп trust-unexpected', async () => {
+    const { client, inputs, sends } = fakeHost([codexTrustScreen('yes')]);
+    const summary = await run(client);
+    expect(summary).toMatchObject({ outcome: 'trust-unexpected', trustAnswered: true });
+    expect(inputs).toEqual(['\r']);
+    expect(sends).toEqual([]);
+  });
+
+  it.each<[string, Partial<typeof ctx>, string, string]>([
+    ['без --trust-copies', { trustCopies: false }, codexTrustScreen('yes'), 'trust-not-allowed'],
+    ['на экране чужой путь', {}, codexTrustScreen('yes', '/Users/someone/project'), 'trust-unexpected'],
+    ['копия не под <out>/work', { copy: '/Users/someone/project' }, codexTrustScreen('yes', '/Users/someone/project'), 'trust-unexpected'],
+    ['выделено «2. Quit»', {}, codexTrustScreen('no'), 'trust-unexpected'],
+    ['выделения нет', {}, codexTrustScreen('none'), 'trust-unexpected'],
+  ])('Codex, вопрос доверия: %s — стоп без единого нажатия, запрос не отправлен', async (_case, override, screen, outcome) => {
+    const { client, inputs, sends } = fakeHost([screen]);
+    const summary = await run(client, override);
+    expect(summary).toMatchObject({ outcome, trustAnswered: false, updateSkipped: false, sentAt: null });
+    expect(inputs).toEqual([]);
+    expect(sends).toEqual([]);
+  });
+
+  it('Claude, вопрос доверия как раньше: выделено «No, exit» — стрелка вниз, затем один Enter на «Yes, I trust this folder»', async () => {
+    const { client, inputs, sends } = fakeHost([trustScreen('no'), trustScreen('yes'), '? for shortcuts']);
+    const summary = await run(client, { provider: 'claude' });
+    expect(inputs).toEqual(['\x1b[B', '\r']);
+    expect(sends).toHaveLength(1);
+    expect(summary).toMatchObject({ outcome: 'send-input', trustAnswered: true });
   });
 });
 
