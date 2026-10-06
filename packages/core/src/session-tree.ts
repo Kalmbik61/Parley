@@ -139,10 +139,14 @@ export async function loadSessionTree(
   return buildSessionTree(await discoverSession(file, root), root, adapter);
 }
 
-/** Индекс всех сессий, свежие первыми — то, что показывает левая колонка. */
+/**
+ * Индекс всех сессий, свежие первыми — то, что показывает левая колонка. `signal` прерывает
+ * чтение истории: новые файлы не открываются, начатые закрываются, промис отклоняется `AbortError`.
+ */
 export async function buildIndex(
   root: string = defaultRoot(),
   adapter: SchemaAdapter = adapterV1,
+  signal?: AbortSignal,
 ): Promise<SessionIndex[]> {
   const discovered = await discoverSessions(root);
   // Не больше INDEX_READ_CONCURRENCY файлов разом: история бывает в тысячи файлов (lane-r3, п. 1).
@@ -150,6 +154,7 @@ export async function buildIndex(
     indexSessionFile(session.file, root, {
       adapter,
       subsessionCount: session.subagents.length,
+      ...(signal === undefined ? {} : { signal }),
     }),
   );
   index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));

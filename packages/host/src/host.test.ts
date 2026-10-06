@@ -16,6 +16,7 @@ import { hostPaths } from './paths.js';
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
 const mainScript = fileURLToPath(new URL('./main.ts', import.meta.url));
+const endlessHistory = new URL('../test/endless-history.mjs', import.meta.url).href;
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -336,6 +337,63 @@ describe('процесс main.ts', () => {
       }
     },
     20_000,
+  );
+
+  it(
+    'host.shutdown завершает процесс, даже пока индекс логов ещё читает историю (2026-10-06)',
+    async () => {
+      // У человека история — гигабайты, и индекс логов дочитывал её минутами уже после
+      // «хост остановлен»: процесс не выходил. Здесь история бесконечна
+      // (`test/endless-history.mjs`) — без отмены чтения процесс не вышел бы никогда.
+      const home = await tempTrackedHome();
+      const paths = hostPaths(home);
+      const claudeRoot = path.join(home, 'claude-projects');
+      const codexRoot = path.join(home, 'codex-sessions');
+      await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+      await mkdir(codexRoot, { recursive: true });
+      await writeFile(path.join(claudeRoot, '-proj', 's-01.jsonl'), '');
+
+      const args = ['--import', tsxLoader, '--import', endlessHistory, mainScript];
+      const child = spawn(process.execPath, args, {
+        env: {
+          ...process.env,
+          PARLEY_HOME: home,
+          PARLEY_CLAUDE_PROJECTS_DIR: claudeRoot,
+          PARLEY_CODEX_SESSIONS_DIR: codexRoot,
+          PARLEY_TEST_ENDLESS_HISTORY: claudeRoot,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      try {
+        // Старт дошёл до конца — индекс логов уже запущен и читает историю.
+        await waitFor(
+          async () =>
+            (await readFile(paths.log, 'utf8').catch(() => '')).includes('"msg":"хост запущен"'),
+          10_000,
+        );
+        const token = await readFile(paths.token, 'utf8');
+        const client = connectRaw(paths.socket);
+        await waitConnected(client.socket);
+        await hello(client, token);
+        client.send({ id: 900, method: 'host.shutdown', params: {} });
+        let response = await client.next();
+        while (response.id !== 900) response = await client.next();
+        expect(response.result).toEqual({ ok: true });
+
+        const exit = await Promise.race([
+          once(child, 'exit').then(([code]) => code as number | null),
+          new Promise<string>((resolve) => setTimeout(() => resolve('процесс не вышел'), 5000)),
+        ]);
+        expect(exit).toBe(0);
+        const log = await readFile(paths.log, 'utf8');
+        expect(log).toContain('"msg":"хост остановлен"');
+        // Чтение, прерванное остановкой, — не сбой индекса.
+        expect(log).not.toContain('индекс логов провайдера не построился');
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+    },
+    30_000,
   );
 });
 
