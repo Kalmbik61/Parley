@@ -416,6 +416,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           source={suggestionSource}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
+          dictationId={`chat:${sessionKey}`}
           bridge={bridge}
           busy={active}
           visible={visible}

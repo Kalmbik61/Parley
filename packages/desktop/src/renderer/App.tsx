@@ -25,6 +25,7 @@ import { useWorksStore } from './store/works.js';
 import { Toaster } from './ui/sonner.js';
 import { wireHostBuildNotice } from './update/host-build-notice.js';
 import { wireUpdateNotice } from './update/update-notice.js';
+import { wireDictation } from './voice/wire.js';
 import { toast } from 'sonner';
 
 /**
@@ -174,6 +175,8 @@ export function App(): JSX.Element {
   // Хост от другой сборки (0.2.0): одна подписка на окно, а не на подключение — тост переживает переподключение
   // и снимается, когда хост перезапущен той же сборкой (ревью 0.2.0, п. 3).
   useEffect(() => wireHostBuildNotice(), []);
+  // Диктовка (спека 2026-10-06-voice-input-design.md): от связи с хостом не зависит — мост, запись и тосты свои.
+  useEffect(() => wireDictation(bridge), []);
 
   // Хранилища и уведомления живут только пока связь с хостом есть: без неё
   // `works.list`/`settings.get` всё равно отвечать некому.

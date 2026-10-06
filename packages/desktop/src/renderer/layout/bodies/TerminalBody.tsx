@@ -12,7 +12,7 @@
  */
 
 import type { WorkSession } from '@parley/core';
-import type { SessionRef } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
@@ -54,7 +54,7 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
   }
   return (
     <div data-testid="terminal-body" className="flex h-full w-full flex-col">
-      {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} /> : null}
+      {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} micTargetId={`terminal:${refKey(sessionRef)}`} /> : null}
     </div>
   );
 }

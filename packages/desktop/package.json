@@ -19,6 +19,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "fetch-node": "node scripts/fetch-node.mjs",
+    "fetch-whisper": "node scripts/fetch-whisper.mjs",
     "dist": "pnpm build && rm -rf out/host && pnpm --filter @parley/host deploy --prod \"$PWD/out/host\" && node scripts/prune-escaping-symlinks.mjs \"$PWD/out/host\" && node ../../scripts/fix-node-pty-perms.mjs \"$PWD/out/host\" && electron-builder"
   },
   "dependencies": {

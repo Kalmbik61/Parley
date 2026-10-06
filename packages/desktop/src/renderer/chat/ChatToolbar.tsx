@@ -30,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
+import { MicButton } from '../voice/MicButton.js';
 
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
@@ -101,6 +102,8 @@ export interface ChatToolbarProps {
   choiceMenu?: ChoiceMenuProps;
   /** Сколько карточек агентов ещё работает; нет — кнопки «N agents running» нет. Клик ведёт ленту к первой из них. */
   agents?: { running: number; onShow: () => void };
+  /** Цель диктовки вида Terminal (`terminal:<refKey>`, спека 3.2); нет — кнопки нет. */
+  micTargetId?: string;
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
@@ -192,7 +195,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, choiceMenu, agents }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -270,6 +273,11 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
         )
       ) : (
         <ChoiceMenu menu={choiceMenu} />
+      )}
+      {micTargetId === undefined ? null : (
+        <span className="ml-auto">
+          <MicButton targetId={micTargetId} size="sm" />
+        </span>
       )}
     </div>
   );
