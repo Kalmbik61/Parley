@@ -52,8 +52,14 @@ export interface DictationState {
   isConfigured(): boolean;
   toggle(targetId: string): Promise<void>;
   cancel(): void;
-  toggleFocused(): boolean;
-  canToggleFocused(): boolean;
+  /** Горячая клавиша — строгий вариант (цель с фокусом или идущая запись); палитра и меню — `fallback: true`. */
+  toggleFocused(options?: FocusedOptions): boolean;
+  canToggleFocused(options?: FocusedOptions): boolean;
+}
+
+export interface FocusedOptions {
+  /** Без фокуса в цели взять последнюю сфокусированную, если она подключена к документу и видна. */
+  fallback?: boolean;
 }
 
 const IDLE = { phase: 'idle' as const, targetId: null, level: 0, startedAt: null };
@@ -180,12 +186,14 @@ export function createDictationStore() {
       }
     };
 
-    const resolveFocused = (): string | null => {
+    const resolveFocused = (fallback: boolean): string | null => {
       const active = document.activeElement;
       if (active !== null) {
         for (const target of targets.values()) if (target.element()?.contains(active) === true) return target.id;
       }
-      return lastFocusedId !== null && targets.has(lastFocusedId) ? lastFocusedId : null;
+      if (!fallback || lastFocusedId === null) return null;
+      const last = targets.get(lastFocusedId)?.element();
+      return last !== null && last !== undefined && last.isConnected && last.getClientRects().length > 0 ? lastFocusedId : null;
     };
 
     return {
@@ -247,21 +255,21 @@ export function createDictationStore() {
         set(IDLE);
       },
 
-      toggleFocused() {
+      toggleFocused(options) {
         if (!configured()) return false;
         const { phase, targetId } = get();
         if (phase === 'recording' && targetId !== null) {
           void get().toggle(targetId);
           return true;
         }
-        const id = resolveFocused();
+        const id = resolveFocused(options?.fallback === true);
         if (id === null) return false;
         void get().toggle(id);
         return true;
       },
 
-      canToggleFocused() {
-        return configured() && (get().phase === 'recording' || resolveFocused() !== null);
+      canToggleFocused(options) {
+        return configured() && (get().phase === 'recording' || resolveFocused(options?.fallback === true) !== null);
       },
     };
   });

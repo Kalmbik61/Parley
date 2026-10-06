@@ -253,4 +253,76 @@ describe('dictation-store (спека 3.2–3.4, 6)', () => {
     expect(h.store.getState().toggleFocused()).toBe(true);
     await vi.waitFor(() => expect(h.target.insert).toHaveBeenCalled());
   });
+
+  describe('горячая клавиша вне поля (спека 3.4)', () => {
+    const visible = (el: HTMLElement): void => {
+      el.getClientRects = () => [{}] as unknown as DOMRectList;
+    };
+
+    it('фокус в body: строгий вариант — false, запись не началась', () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      const input = document.createElement('textarea');
+      h.element.append(input);
+      visible(h.element);
+      input.focus();
+      input.blur();
+      expect(document.activeElement).toBe(document.body);
+      expect(h.store.getState().canToggleFocused()).toBe(false);
+      expect(h.store.getState().toggleFocused()).toBe(false);
+      expect(h.deps.record).not.toHaveBeenCalled();
+    });
+
+    it('фокус в постороннем элементе: строгий вариант — false', () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      const input = document.createElement('textarea');
+      h.element.append(input);
+      input.focus();
+      const outside = document.createElement('button');
+      document.body.append(outside);
+      outside.focus();
+      expect(h.store.getState().canToggleFocused()).toBe(false);
+      expect(h.store.getState().toggleFocused()).toBe(false);
+    });
+
+    it('fallback: видимая последняя цель — запись в неё', async () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      const input = document.createElement('textarea');
+      h.element.append(input);
+      visible(h.element);
+      input.focus();
+      input.blur();
+      expect(h.store.getState().canToggleFocused({ fallback: true })).toBe(true);
+      expect(h.store.getState().toggleFocused({ fallback: true })).toBe(true);
+      await vi.waitFor(() => expect(h.store.getState()).toMatchObject({ phase: 'recording', targetId: 'room' }));
+    });
+
+    it('fallback: скрытая или отключённая последняя цель — false', () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      const input = document.createElement('textarea');
+      h.element.append(input);
+      input.focus();
+      input.blur();
+      // jsdom не раскладывает: getClientRects пуст — элемент «скрыт».
+      expect(h.store.getState().canToggleFocused({ fallback: true })).toBe(false);
+      expect(h.store.getState().toggleFocused({ fallback: true })).toBe(false);
+      visible(h.element);
+      expect(h.store.getState().canToggleFocused({ fallback: true })).toBe(true);
+      h.element.remove();
+      expect(h.store.getState().canToggleFocused({ fallback: true })).toBe(false);
+      expect(h.store.getState().toggleFocused({ fallback: true })).toBe(false);
+    });
+
+    it('идёт запись — стоп работает и в строгом варианте', async () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      await h.store.getState().toggle('room');
+      expect(h.store.getState().canToggleFocused()).toBe(true);
+      expect(h.store.getState().toggleFocused()).toBe(true);
+      await vi.waitFor(() => expect(h.target.insert).toHaveBeenCalled());
+    });
+  });
 });

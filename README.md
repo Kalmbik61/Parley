@@ -893,7 +893,7 @@ Dictation turns speech into text in the place you are typing. It is off by defau
   fixed language.
 - **Use it:** the microphone button sits in the room composer, the chat composer, the "New
   workspace" box and the toolbar of a session's Terminal view. ⌘⇧M does the same from
-  anywhere, and it is the only way in a Codex terminal, which has no button; there the text is
+  a focused field or terminal, and it is the only way in a Codex terminal, which has no button; there the text is
   pasted into the terminal without Enter. Press once to record, press again to stop. Esc
   cancels the recording. The transcript goes to the cursor and is never sent by itself: you
   press Enter. A recording is limited to two minutes.
@@ -902,7 +902,10 @@ Dictation turns speech into text in the place you are typing. It is off by defau
   after an update and ask again.
 - **Speed:** the first dictation after installing or updating Parley can take 15–20 seconds
   while macOS compiles the engine's Metal shaders. After that, a 15–20 second phrase takes
-  about 1–2 seconds on Apple Silicon with "Large v3 Turbo".
+  about 1–2 seconds on Apple Silicon with "Large v3 Turbo". These numbers are a rough
+  guide, not a promise: they depend on the Mac, the model and the phrase.
+- **Intel Macs:** the Intel build of voice needs a processor with AVX2 (Haswell or newer).
+  Voice on Intel has not been tested on a real machine.
 - **Privacy:** speech is recognized on this Mac by a bundled whisper.cpp engine. The audio
   never leaves it; the only network traffic is the one-time model download from Hugging Face.
 - **Models** live in `~/.parley/desktop/voice/models` (under `PARLEY_HOME` when it is set).

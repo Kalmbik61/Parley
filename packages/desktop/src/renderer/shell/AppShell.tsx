@@ -185,9 +185,12 @@ function dropOnSidebar(bridge: ParleyBridge, key: string, sessionId: string, tar
     });
 }
 
-/** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
-function available(id: ActionId): boolean {
-  if (id === 'voice.toggle' && !useDictationStore.getState().canToggleFocused()) return false;
+/**
+ * Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. Клавиша диктовки
+ * строгая (спека 3.4): вне поля и терминала с фокусом она ничего не делает; меню и палитра берут последнюю цель.
+ */
+function available(id: ActionId, source: ActionSource): boolean {
+  if (id === 'voice.toggle' && !useDictationStore.getState().canToggleFocused({ fallback: source !== 'key' })) return false;
   return isActionAvailable(id, hostMethods(useHostStore.getState().status));
 }
 
@@ -510,7 +513,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     files: useFilesStore.getState(),
     voice: {
       toggle: () => {
-        useDictationStore.getState().toggleFocused();
+        useDictationStore.getState().toggleFocused({ fallback: source !== 'key' });
       },
     },
     toast: (text) => toast(text),
@@ -537,7 +540,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         pickPaletteRow: (index) => usePaletteStore.getState().pickRow(index),
         context: () => focusContext(document.activeElement),
         paletteOpen: () => usePaletteStore.getState().open,
-        available,
+        available: (id) => available(id, 'key'),
         endMruCycle: () => endMruCycleRef.current(),
       }),
     [],
@@ -570,7 +573,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   useEffect(
     () =>
       bridge.app.onMenu((id) => {
-        if (available(id)) runRef.current(id, 'menu');
+        if (available(id, 'menu')) runRef.current(id, 'menu');
       }),
     [bridge],
   );
