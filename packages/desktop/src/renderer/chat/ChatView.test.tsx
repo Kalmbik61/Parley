@@ -889,6 +889,46 @@ describe('ChatView — меню «модель · effort» (нормалайзе
     expect(paramsOf('pty.send')).toEqual([]);
   });
 
+  it('клик по отмеченному уровню — ни одного вызова sessions.setEffort', async () => {
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    expect(effortItems()[2]!.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(effortItems()[2]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setEffort')).toEqual([]);
+    expect(paramsOf('pty.send')).toEqual([]);
+  });
+
+  it('повторный выбор (другая модель или другой уровень), пока первая смена в пути, — второго вызова нет', async () => {
+    let finish: (value: { model: string; effort: string | null; restarted: boolean }) => void = () => {};
+    bridge.setHandler('sessions.setModel', () => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    bridge.setHandler('sessions.setEffort', () => ({ effort: 'low', verified: true }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(modelItems()[1]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'haiku' }]);
+
+    // Смена в пути: кнопка меню заблокирована (`busy`), меню не открывается, выбрать нечего; обработчики
+    // ChatView отдельно отказывают, пока `choiceBusy` взят.
+    expect(trigger().hasAttribute('disabled')).toBe(true);
+    openMenu();
+    expect(modelItems()).toEqual([]);
+    expect(effortItems()).toEqual([]);
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'haiku' }]);
+    expect(paramsOf('sessions.setEffort')).toEqual([]);
+
+    // Первая смена кончилась — меню снова принимает выбор.
+    await act(async () => finish({ model: 'haiku', effort: null, restarted: true }));
+    expect(trigger().hasAttribute('disabled')).toBe(false);
+    openMenu();
+    expect(modelItems()).toHaveLength(3);
+  });
+
   it('отказ хоста: conflict с причиной busy — «сессия занята», прочее — текст по коду', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     bridge.setHandler('sessions.setEffort', () => {
@@ -1163,7 +1203,6 @@ describe('ChatView — подсказки поля ввода (живая про
     expect(screen.queryByTestId('chat-suggestions')).toBeNull();
     expect(bridge.calls.filter((call) => call.method === 'capabilities.list')).toEqual([]);
   });
-
 
   it('capabilities.list не чаще раза в 60 с на проект: повторное монтирование берёт готовое', async () => {
     await renderWithCapabilities();

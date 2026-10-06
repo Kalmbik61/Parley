@@ -420,8 +420,15 @@ describe('ProviderCard: аргументы запуска из providers.json (�
   it('args заменены и в них нет {model} и {effort} — строка про providers.json и почему выбора нет', () => {
     renderCard(codex({ argsOverridden: true, models: null, effort: false }));
     expect(screen.getByText('Launch arguments come from providers.json.')).toBeTruthy();
-    expect(screen.getByText('No model choice: these arguments have no {model}.')).toBeTruthy();
+    expect(screen.getByText('No model choice: it needs {model} in these arguments and a models list.')).toBeTruthy();
     expect(screen.getByText('No effort choice: these arguments have no {effort}.')).toBeTruthy();
+  });
+
+  it('в args {model} может быть, но списка моделей нет (models null) — причина про список, а не про отсутствие {model}', () => {
+    renderCard(codex({ argsOverridden: true, models: null, effort: true }));
+    expect(screen.getByText('No model choice: it needs {model} in these arguments and a models list.')).toBeTruthy();
+    expect(screen.queryByText('No model choice: these arguments have no {model}.')).toBeNull();
+    expect(screen.queryByText(S.providerCard.noEffortChoice)).toBeNull();
   });
 
   it('args заменены, выбор есть — только строка про providers.json', () => {

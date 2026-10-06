@@ -163,7 +163,6 @@ describe('useProvidersStore.init', () => {
     dispose();
   });
 
-
   it('отказ providers.list — список пуст, остальное работает: ни падения, ни необработанного отказа', async () => {
     const bridge = createFakeBridge();
     // Обработчика нет — fake-bridge отклоняет вызов.

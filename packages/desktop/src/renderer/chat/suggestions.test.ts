@@ -22,7 +22,6 @@ describe('suggestionContext', () => {
     expect(suggestionContext('/model', 6)).toEqual({ kind: 'command', query: 'model', start: 0 });
   });
 
-
   it('@ в начале слова — упоминание, query без @; start — позиция @', () => {
     expect(suggestionContext('@', 1)).toEqual({ kind: 'mention', query: '', start: 0 });
     expect(suggestionContext('look at @src/co', 15)).toEqual({ kind: 'mention', query: 'src/co', start: 8 });
