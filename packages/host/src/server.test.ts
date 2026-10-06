@@ -169,6 +169,9 @@ describe('список методов в hello', () => {
     for (const name of ['feed.snapshot', 'feed.subscribe', 'feed.unsubscribe', 'feed.decide', 'feed.interrupt']) {
       expect(methods).toContain(name);
     }
+    // Меню «модель · effort» в чате (спека нормалайзера, 5.9): без обоих методов смены окно меню не показывает.
+    expect(methods).toContain('sessions.setEffort');
+    expect(methods).toContain('sessions.setModel');
     client.close();
   });
 });

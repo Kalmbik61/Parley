@@ -579,6 +579,33 @@ describe('parseMap', () => {
     expect(parsed.sessions[0]?.launchedBy).toBeNull();
   });
 
+  it('испорченный effort читается как «нет выбора»: ключа нет, сессия и модель на месте', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't', model: 'opus', effort: 'xhigh' });
+    const raw = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+    for (const effort of ['hi gh', 'x"', '"x', 'HIGH', '', 'a'.repeat(33), 3, null, ['low']]) {
+      raw.sessions[0]!['effort'] = effort;
+
+      const parsed = parseMap(JSON.stringify(raw), 'map.json');
+      expect(parsed.sessions, JSON.stringify(effort)).toHaveLength(1);
+      expect('effort' in (parsed.sessions[0] ?? {}), JSON.stringify(effort)).toBe(false);
+      expect(parsed.sessions[0]?.model).toBe('opus');
+    }
+  });
+
+  it('уровни каталогов в карте читаются как есть: xhigh, max, ultra', () => {
+    const map = emptyMap();
+    for (const effort of ['xhigh', 'max', 'ultra']) {
+      addSession(map, { provider: 'codex', label: effort, task: 't', effort });
+    }
+
+    expect(parseMap(JSON.stringify(map), 'map.json').sessions.map((session) => session.effort)).toEqual([
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+  });
+
   it('35: карта без kind у письма читается как note, остальные поля не тронуты', () => {
     const raw = JSON.stringify({
       ...emptyV1(),

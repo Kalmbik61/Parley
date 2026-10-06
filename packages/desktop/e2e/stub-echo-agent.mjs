@@ -97,6 +97,16 @@ const httpHook = readHttpHook();
 /** `--session-id` — id сессии у Claude Code: приёмник хоста сверяет с ним `session_id` тела (иначе 404). */
 const providerSessionId = argvValue('--session-id');
 
+// Журнал запусков (STUB_LAUNCH_LOG; нормалайзер модели и effort 2026-10-06): флаги модели и effort каждого старта процесса
+// сессии — E2E сверяет по нему перезапуск из меню чата (`sessions.setModel`: stop и resume с флагами из карты).
+const launchLog = process.env.STUB_LAUNCH_LOG;
+if (launchLog !== undefined && launchLog !== '') {
+  appendFileSync(
+    launchLog,
+    `${JSON.stringify({ sessionId: fromEnv('SESSION_ID') ?? null, model: argvValue('--model') ?? null, effort: argvValue('--effort') ?? null, resume: argvValue('--resume') !== undefined })}\n`,
+  );
+}
+
 /** Ответ хоста — в терминал (`HOOK<<json>>`) и, если задан `STUB_HOOK_LOG`, строкой в файл: в виде Chat терминала не видно. */
 function reportHook(event, status, response) {
   process.stdout.write(`HOOK<<${JSON.stringify(response)}>>\r\n`);
@@ -236,12 +246,69 @@ const bracketed = process.env.STUB_BRACKETED === '1';
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 
+// Ползунок `/effort` Claude Code (STUB_EFFORT_SLIDER=1; нормалайзер модели и effort 2026-10-06, спека 5.7). `/effort` и
+// Enter открывают его нижней строкой экрана с настоящей подсказкой «←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel»; ←/→ (CSI или SS3) двигают уровень с упором в
+// low и max, `s` применяет его «только для сессии» и пишет подвал `<знак> <уровень> · /effort` той же нижней строкой,
+// Esc закрывает без смены. Так E2E проверяет смену effort из меню чата (`sessions.setEffort`) по экрану, как у
+// настоящего CLI. Нужен сырой режим tty — вместе с STUB_BRACKETED=1.
+const effortSlider = process.env.STUB_EFFORT_SLIDER === '1';
+const SLIDER_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const SLIDER_MARKS = ['○', '◐', '●', '◉', '◈'];
+/** Индекс уровня, пока ползунок открыт; `null` — закрыт. */
+let slider = null;
+
+/** Строка внизу экрана: подвал Claude Code живёт у нижнего края, а не под последним выводом. */
+function bottomLine(text) {
+  process.stdout.write(`\x1b[999;1H\x1b[2K${text}`);
+}
+
+function openSlider() {
+  slider = 1;
+  bottomLine('←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel');
+}
+
+/** Клавиша открытого ползунка в начале `head`; ответ — сколько знаков она заняла. */
+function sliderKey(head) {
+  if (head.startsWith('\x1b[D') || head.startsWith('\x1bOD')) {
+    slider = Math.max(0, slider - 1);
+    return 3;
+  }
+  if (head.startsWith('\x1b[C') || head.startsWith('\x1bOC')) {
+    slider = Math.min(SLIDER_LEVELS.length - 1, slider + 1);
+    return 3;
+  }
+  if (head.startsWith('s')) {
+    bottomLine(`${SLIDER_MARKS[slider]} ${SLIDER_LEVELS[slider]} · /effort`);
+    slider = null;
+    return 1;
+  }
+  if (head.startsWith('\x1b')) {
+    bottomLine('Effort unchanged');
+    slider = null;
+    return 1;
+  }
+  return 1;
+}
+
 function typed(text) {
-  for (const char of text) {
+  // По индексу, а не `for…of`: открытый ползунок `/effort` забирает клавишу целиком, а стрелка — три знака.
+  const chars = Array.from(text);
+  for (let at = 0; at < chars.length; at += 1) {
+    if (slider !== null) {
+      at += sliderKey(chars.slice(at, at + 3).join('')) - 1;
+      continue;
+    }
+    const char = chars[at];
     if (char === '\r' || char === '\n') {
       // Команда выхода (раунд fix-host-resync): E2E завершает свой stub сам, без сигнала чужим
       // процессам и без поиска pid по всей машине.
       if (buffer === 'STUB_EXIT') process.exit(0);
+      // Ползунок `/effort` (STUB_EFFORT_SLIDER=1): строка не эхом, а открытым ползунком, как у настоящего CLI.
+      if (effortSlider && buffer.trim() === '/effort') {
+        openSlider();
+        buffer = '';
+        continue;
+      }
       // Вызов инструмента настоящего parley-mcp (см. выше); эхо строки при этом не печатается. Ищется не с начала
       // строки: перед ней в буфере мог оказаться чужой набор (указатель будильника хоста).
       const mcpCall = buffer.indexOf('STUB_MCP ');

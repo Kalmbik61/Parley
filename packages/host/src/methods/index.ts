@@ -4,6 +4,7 @@ import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
+import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -43,6 +44,8 @@ export interface MethodDeps {
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
   providerVersions?: ProviderVersions;
+  /** Каталог моделей Codex из пробы CLI: `providers.list` просит его обновиться, когда он устарел; без него — не просит. */
+  codexCatalog?: CodexCatalog;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
   limits?: LimitsService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
@@ -66,6 +69,8 @@ export const WORKS_GATED_METHODS = [
   'sessions.delete',
   'sessions.interrupted',
   'sessions.setMode',
+  'sessions.setEffort',
+  'sessions.setModel',
   'sessions.resumeInterrupted',
   'pty.attach',
   'pty.detach',
@@ -112,7 +117,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': worksDelete as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck) as AnyHandler,
     ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits) as AnyHandler }),
@@ -129,6 +134,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.close': sessions.sessionsClose as AnyHandler,
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
+    'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,
+    'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
     'wake.pause': wake.wakePause as AnyHandler,
     'wake.resume': wake.wakeResume as AnyHandler,

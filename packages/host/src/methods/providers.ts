@@ -15,6 +15,7 @@ import { HostError } from '../errors.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { ZaiQuotaError } from '../limits/zai-quota.js';
+import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 
 /**
@@ -30,13 +31,21 @@ import type { ProviderVersions } from '../providers/versions.js';
  *
  * `check` — исход последней явной проверки сохранённого ключа (`providers.check`), только у провайдера
  * с ключом; читается локально, без сети, и только для нынешнего ключа.
+ *
+ * `models` у `codex` — из `loadProviders`: каталог самого CLI (`codex debug models`) из `codex-models.json`, пока
+ * `providers.json` не задаёт свой список (спека нормалайзера, 5.2). Первую пробу ответ не ждёт: новый каталог
+ * придёт событием `providers.changed`, а устаревший список просит обновить в фоне (`refreshIfStale`).
+ * `argsOverridden` — `args` провайдера взяты из `providers.json`: окно объясняет этим пропавший выбор модели или
+ * effort.
  */
 export function createProvidersList(
   versions?: ProviderVersions,
   limits?: LimitsService,
   glmCheck?: GlmCheckService,
+  catalog?: Pick<CodexCatalog, 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
+    catalog?.refreshIfStale();
     const registry = await loadProviders();
     await versions?.ready;
     const providers = await Promise.all(
@@ -62,6 +71,7 @@ export function createProvidersList(
           family: entry.family ?? null,
           models: selectableModels(entry),
           effort: supportsEffort(entry),
+          argsOverridden: entry.argsOverridden === true,
           ...(entry.runner.secret === undefined || glmCheck === undefined ? {} : { check: await glmCheck.current(key) }),
         };
       }),

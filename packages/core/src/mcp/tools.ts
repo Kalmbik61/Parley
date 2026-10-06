@@ -12,14 +12,12 @@ import {
 import { DEFAULT_CONFIG } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
-  EFFORT_LEVELS,
   providerReadiness,
   providerReadinessError,
   loadProviders,
-  modelChoiceError,
+  resolveModelEffort,
   selectableModels,
   supportsEffort,
-  supportsModel,
 } from '../providers.js';
 import { agentDirs, assertAgent } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
@@ -248,7 +246,7 @@ const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The whole workspace map: sessions, their statuses, summaries and artifacts, messages — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models and effort for spawn_session). Call it first; the detailed guide is the read_guide tool',
+      'The whole workspace map: sessions, their statuses, summaries and artifacts, messages — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels, and effort, for spawn_session). Call it first; the detailed guide is the read_guide tool',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -307,9 +305,8 @@ const TOOLS: Tool[] = [
         },
         effort: {
           type: 'string',
-          enum: [...EFFORT_LEVELS],
           description:
-            "The new session's reasoning effort. A provider with effort: false in get_map drops the value. Without the field — the default effort.",
+            "The new session's reasoning effort: one of the efforts of the chosen model in get_map; with the default model, the levels shared by its provider's models. A provider with effort: false drops the value. Without the field, the default effort.",
         },
       },
       required: ['provider', 'label', 'task'],
@@ -545,13 +542,11 @@ async function spawnSession(
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
   // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
-  // необязательный параметр.
+  // необязательный параметр. Вид значений и принадлежность спискам сверяет `resolveModelEffort` ниже.
   const model =
     args['model'] === undefined || args['model'] === '' ? undefined : stringArg(args, 'model');
   const effort =
-    args['effort'] === undefined || args['effort'] === ''
-      ? undefined
-      : enumArg(args, 'effort', EFFORT_LEVELS);
+    args['effort'] === undefined || args['effort'] === '' ? undefined : stringArg(args, 'effort');
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -563,16 +558,18 @@ async function spawnSession(
   const refusal = providerReadinessError(entry, await providerReadiness(entry));
   if (refusal !== null) throw new Error(refusal);
 
-  // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
-  // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —
-  // как `sessions.create` хоста: окно узнаёт об этом из `providers.list`, агент — из `get_map`.
-  let chosenModel: string | undefined;
-  if (model !== undefined) {
-    const refusal = modelChoiceError(entry, model);
-    if (refusal !== null) throw new Error(refusal);
-    if (supportsModel(entry)) chosenModel = model;
-  }
-  const chosenEffort = effort !== undefined && supportsEffort(entry) ? effort : undefined;
+  // Пару проверяем до записи, как и роль: модель не из списка провайдера или уровень не из уровней модели
+  // (у «по умолчанию» — общих уровней моделей провайдера) — отказ, а не `pending`, который нечем
+  // запустить. Правило одно с `sessions.create` хоста — `resolveModelEffort` в core (нормалайзер, 5.3).
+  // Флаг, которого нет в шаблоне запуска провайдера, resolver отбрасывает молча — и модель, и усилие; окно
+  // узнаёт об этом из `providers.list`, агент — из `get_map`.
+  const resolved = resolveModelEffort(entry, {
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  });
+  if ('error' in resolved) throw new Error(resolved.error);
+  const chosenModel = resolved.choice.model;
+  const chosenEffort = resolved.choice.effort;
 
   // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
   // карте (спецификация 2026-09-08, раздел 7).

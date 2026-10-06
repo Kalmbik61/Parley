@@ -204,6 +204,19 @@ describe('useProvidersStore.init', () => {
     ]);
   });
 
+  it('уровни effort у моделей и argsOverridden доходят до стора как есть (нормалайзер модели и effort 2026-10-06)', async () => {
+    const bridge = createFakeBridge();
+    const models = [
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: [{ id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' }] },
+      { id: 'haiku-like', label: 'No effort', efforts: null },
+    ];
+    bridge.setHandler('providers.list', () => ({ providers: [{ id: 'codex', label: 'Codex', available: true, models, effort: true, argsOverridden: true }] }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    expect(useProvidersStore.getState().providers[0]).toMatchObject({ models, effort: true, argsOverridden: true });
+    dispose();
+  });
+
   it('отказ providers.list — список пуст, остальное работает: ни падения, ни необработанного отказа', async () => {
     const bridge = createFakeBridge();
     // Обработчика нет — fake-bridge отклоняет вызов.

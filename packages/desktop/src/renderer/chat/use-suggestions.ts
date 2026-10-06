@@ -1,12 +1,12 @@
 /**
  * Строки подсказок поля ввода «Chat» (живая проверка 2026-10-02) по контексту из `suggestions.ts`:
- * `/` — команды и скиллы CLI, `/model ` — модели провайдера, `@` — субагенты и файлы рабочей папки
- * сессии. Файлы дополняются по сегментам пути: по `src/comp` читается каталог `src` (`files.list`) и
- * берутся записи на `comp`; тот же каталог при дальнейшем наборе заново не читается. Не больше 12 строк.
+ * `/` — команды и скиллы CLI, `@` — субагенты и файлы рабочей папки сессии. Файлы дополняются по
+ * сегментам пути: по `src/comp` читается каталог `src` (`files.list`) и берутся записи на `comp`; тот же
+ * каталог при дальнейшем наборе заново не читается. Не больше 12 строк.
  */
 
 import { useEffect, useState } from 'react';
-import type { Capabilities, ModelOption } from '@parley/protocol';
+import type { Capabilities } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { SuggestionContext } from './suggestions.js';
@@ -18,7 +18,7 @@ const MAX_AGENTS = 6;
 export interface SuggestionItem {
   /** Ключ строки. */
   id: string;
-  /** Что встанет в поле целиком (токен заменяется им): `/clear `, `/model opus`, `@notes.txt `. */
+  /** Что встанет в поле целиком (токен заменяется им): `/clear `, `@notes.txt `. */
   insert: string;
   label: string;
   description?: string;
@@ -28,7 +28,6 @@ export interface SuggestionItem {
 
 export interface SuggestionSource {
   capabilities: Capabilities | null;
-  models: readonly ModelOption[];
   /** Записи каталога корня сессии (`files.list`); `''` — корень. */
   listDir: (dir: string) => Promise<DirEntry[]>;
 }
@@ -69,13 +68,6 @@ function commandItems(capabilities: Capabilities | null, query: string): Suggest
     })),
   ];
   return rank(rows, (row) => row.label.slice(1), query);
-}
-
-function modelItems(models: readonly ModelOption[], query: string): SuggestionItem[] {
-  const wanted = query.toLowerCase();
-  return models
-    .filter((model) => model.id.toLowerCase().includes(wanted) || model.label.toLowerCase().includes(wanted))
-    .map((model) => ({ id: `model:${model.id}`, insert: `/model ${model.id}`, label: model.label, description: model.id }));
 }
 
 function agentItems(capabilities: Capabilities | null, query: string): SuggestionItem[] {
@@ -137,7 +129,6 @@ export function useSuggestions(source: SuggestionSource, context: SuggestionCont
 
   if (context === null) return [];
   if (context.kind === 'command') return commandItems(source.capabilities, context.query).slice(0, MAX_SUGGESTIONS);
-  if (context.kind === 'model') return modelItems(source.models, context.query).slice(0, MAX_SUGGESTIONS);
   const files = mentionPath !== null && listing?.dir === mentionPath.dir ? fileItems(listing.entries, mentionPath.dir, mentionPath.prefix) : [];
   return [...agentItems(source.capabilities, context.query), ...files].slice(0, MAX_SUGGESTIONS);
 }

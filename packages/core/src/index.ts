@@ -53,10 +53,15 @@ export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
+  EFFORT_DESCRIPTION_MAX,
+  EFFORT_TOKEN,
+  MODEL_LABEL_MAX,
   PROVIDERS,
   agentEnv,
+  codexModelsFile,
   commandBinary,
   commandInPath,
+  effortsFor,
   probeCliVersion,
   providerCompatibilityError,
   providerReadiness,
@@ -67,6 +72,7 @@ export {
   printCommand,
   providersFile,
   providersWithHistory,
+  resolveModelEffort,
   resumeCommand,
   selectableModels,
   startCommand,
@@ -74,10 +80,13 @@ export {
   supportsEffort,
   supportsModel,
 } from './providers.js';
-export type { ModelOption } from './provider-models.js';
+export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
+export type { EffortOption, ModelOption } from './provider-models.js';
 export type {
   EffortLevel,
   McpConfigKind,
+  ModelEffortChoice,
+  ModelEffortResolution,
   ProviderEntry,
   ProviderReadiness,
   ProviderReadinessOptions,

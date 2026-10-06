@@ -4,15 +4,21 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment } from '../test/toml-mini.js';
 import {
+  EFFORT_DESCRIPTION_MAX,
+  EFFORT_TOKEN,
+  MODEL_LABEL_MAX,
   PROVIDERS,
+  codexModelsFile,
   commandInPath,
   commandBinary,
+  effortsFor,
   loadProviders,
   isClaudeCode,
   modelChoiceError,
   printCommand,
   providersFile,
   providersWithHistory,
+  resolveModelEffort,
   resumeCommand,
   selectableModels,
   startCommand,
@@ -21,6 +27,7 @@ import {
   supportsModel,
   type ProviderEntry,
 } from './providers.js';
+import { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel, type ModelOption } from './provider-models.js';
 import { overrideValue, overrideVariable } from './work/find-binary.js';
 
 /**
@@ -310,11 +317,49 @@ describe('модель и усилие новой сессии (дизайн к�
     ]);
   });
 
-  it('claude при возобновлении модель и усилие не несёт: модель CLI возвращает сам', () => {
+  it('claude при возобновлении несёт модель и усилие из карты парами перед --agent; без выбора пар нет', () => {
     expect(
-      resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', model: 'opus', effort: 'high' })
-        .args,
-    ).toEqual(['--resume', 'bb2137cb']);
+      resumeCommand(PROVIDERS.claude, {
+        providerSessionId: 'bb2137cb',
+        model: 'opus',
+        effort: 'high',
+        agent: 'ревьюер',
+        prompt: 'New messages (1). Call check_inbox.',
+      }).args,
+    ).toEqual([
+      '--resume',
+      'bb2137cb',
+      '--model',
+      'opus',
+      '--effort',
+      'high',
+      '--agent',
+      'ревьюер',
+      'New messages (1). Call check_inbox.',
+    ]);
+    // Одно усилие — одна пара; без выбора модель Claude Code при --resume восстанавливает сам.
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb', effort: 'xhigh' }).args).toEqual([
+      '--resume',
+      'bb2137cb',
+      '--effort',
+      'xhigh',
+    ]);
+    expect(resumeCommand(PROVIDERS.claude, { providerSessionId: 'bb2137cb' }).args).toEqual([
+      '--resume',
+      'bb2137cb',
+    ]);
+  });
+
+  it('GLM при возобновлении несёт effort сразу за моделью; без effort пара выпадает', () => {
+    expect(
+      resumeCommand(PROVIDERS.glm, { providerSessionId: 'id-1', model: 'glm-5.3[1m]', effort: 'max' }).args,
+    ).toEqual(['--resume', 'id-1', '--model', 'glm-5.3[1m]', '--effort', 'max']);
+    expect(resumeCommand(PROVIDERS.glm, { providerSessionId: 'id-1', model: 'glm-5.3[1m]' }).args).toEqual([
+      '--resume',
+      'id-1',
+      '--model',
+      'glm-5.3[1m]',
+    ]);
   });
 
   it('codex: модель — флагом --model, усилие — переопределением конфига -c model_reasoning_effort', () => {
@@ -362,7 +407,7 @@ describe('модель и усилие новой сессии (дизайн к�
     ]);
   });
 
-  it('codex при возобновлении модель и усилие тоже не несёт', () => {
+  it('codex при возобновлении модель и усилие не несёт: тред помнит их сам', () => {
     expect(
       resumeCommand(PROVIDERS.codex, {
         providerSessionId: 'uuid-1',
@@ -449,33 +494,79 @@ describe('модель и усилие новой сессии (дизайн к�
     });
   });
 
-  describe('списки моделей встроенных провайдеров (открытая документация, проверено 2026-09-29)', () => {
-    // Литералы, а не импорт констант: тест держит таблицу из отчёта куска 3b. Порядок — как в источнике.
-    const CLAUDE = [
-      { id: 'best', label: 'Best' },
-      { id: 'fable', label: 'Fable' },
-      { id: 'sonnet', label: 'Sonnet' },
-      { id: 'opus', label: 'Opus' },
-      { id: 'haiku', label: 'Haiku' },
-      { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
-      { id: 'opus[1m]', label: 'Opus (1M context)' },
-      { id: 'opusplan', label: 'Opus Plan' },
-      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
+  describe('каталог моделей встроенных провайдеров (спека нормалайзера модели и effort, 5.1)', () => {
+    // Литералы, а не импорт констант: тест держит таблицы источников. Порядок — как в источнике.
+    /** Уровни Claude Code (code.claude.com/docs/en/model-config, 2026-10-06), без описаний. */
+    const CLAUDE_LEVELS = [
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium' },
+      { id: 'high', label: 'High' },
+      { id: 'xhigh', label: 'Extra high' },
+      { id: 'max', label: 'Max' },
     ];
+    const CLAUDE = [
+      { id: 'best', label: 'Best', efforts: CLAUDE_LEVELS },
+      { id: 'fable', label: 'Fable', efforts: CLAUDE_LEVELS },
+      { id: 'sonnet', label: 'Sonnet', efforts: CLAUDE_LEVELS },
+      { id: 'opus', label: 'Opus', efforts: CLAUDE_LEVELS },
+      { id: 'haiku', label: 'Haiku', efforts: null },
+      { id: 'sonnet[1m]', label: 'Sonnet (1M context)', efforts: CLAUDE_LEVELS },
+      { id: 'opus[1m]', label: 'Opus (1M context)', efforts: CLAUDE_LEVELS },
+      { id: 'opusplan', label: 'Opus Plan', efforts: CLAUDE_LEVELS },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)', efforts: CLAUDE_LEVELS },
+    ];
+    /** Уровни Codex с описаниями — снимок `codex debug models` 2026-10-06 (спека, раздел 3, п. 11–12). */
+    const CODEX_LEVELS = [
+      { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+      { id: 'medium', label: 'Medium', description: 'Balances speed and reasoning depth for everyday tasks' },
+      { id: 'high', label: 'High', description: 'Greater reasoning depth for complex problems' },
+      { id: 'xhigh', label: 'Extra high', description: 'Extra high reasoning depth for complex problems' },
+      { id: 'max', label: 'Max', description: 'Maximum reasoning depth for the hardest problems' },
+    ];
+    const CODEX_ULTRA_LEVELS = [
+      ...CODEX_LEVELS,
+      { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' },
+    ];
+    /** Видимые модели каталога Codex в порядке `priority`, подписи — `display_name`; у двух Luna нет Ultra. */
     const CODEX = [
-      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
-      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-astra', label: 'GPT-6-Astra', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-sol', label: 'GPT-6-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-luna', label: 'GPT-6-Luna', efforts: CODEX_LEVELS },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', efforts: CODEX_LEVELS },
     ];
 
-    it('встроенные списки моделей совпадают с подтверждёнными таблицами', () => {
+    it('встроенные списки совпадают с таблицами источников: модели, подписи и уровни', () => {
       expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
       expect(selectableModels(PROVIDERS.codex)).toEqual(CODEX);
       expect(selectableModels(PROVIDERS.glm)).toEqual([
-        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)' },
-        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)' },
+        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)', efforts: CLAUDE_LEVELS },
+        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)', efforts: CLAUDE_LEVELS },
       ]);
+    });
+
+    it('уровни Claude Code и прежние три уровня — общие константы каталога', () => {
+      expect(CLAUDE_EFFORTS).toEqual(CLAUDE_LEVELS);
+      expect(LEGACY_EFFORTS).toEqual(CLAUDE_LEVELS.slice(0, 3));
+    });
+
+    it('effortLabel: подписи по таблице спеки, незнакомый id — с заглавной буквы', () => {
+      expect(['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'minimal', 'none'].map(effortLabel)).toEqual([
+        'Low',
+        'Medium',
+        'High',
+        'Extra high',
+        'Max',
+        'Ultra',
+        'Minimal',
+        'None',
+      ]);
+      expect(effortLabel('turbo')).toBe('Turbo');
+      expect(effortLabel('x_2')).toBe('X_2');
+      // Имя свойства объекта — такой же незнакомый id, а не подпись из прототипа.
+      expect(effortLabel('constructor')).toBe('Constructor');
     });
 
     /** Список провайдера; его отсутствие — провал теста, а не пустой обход, который прошёл бы впустую. */
@@ -516,13 +607,20 @@ describe('модель и усилие новой сессии (дизайн к�
       }
     });
 
-    it('окну отдаётся копия: правка ответа встроенный реестр не меняет', () => {
+    it('окну отдаётся копия вместе с уровнями: правка ответа встроенный реестр не меняет', () => {
       const list = selectableModels(PROVIDERS.claude);
-      if (list === null || list[0] === undefined) throw new Error('у claude нет списка');
+      const levels = list?.[0]?.efforts;
+      if (list === null || list[0] === undefined || levels === undefined || levels === null || levels[0] === undefined) {
+        throw new Error('у claude нет списка с уровнями');
+      }
       list[0].label = 'испорчено';
+      levels[0].label = 'испорчено';
+      levels.pop();
       list.pop();
 
       expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
+      // Массив уровней у моделей каталога общий: правка копии не должна дойти и до него.
+      expect(CLAUDE_EFFORTS).toEqual(CLAUDE_LEVELS);
     });
   });
 
@@ -731,11 +829,29 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       hasHistory: false,
       linkBy: 'cwd+time',
       runner: { command: 'opencode', args: ['{prompt}'] },
+      argsOverridden: true,
     });
     expect(startCommand(opencode, { prompt: 'бриф' })).toEqual({
       command: 'opencode',
       args: ['бриф'],
     });
+  });
+
+  it('argsOverridden — только у записи, чьи args пришли из providers.json', async () => {
+    await write({
+      codex: { args: ['{prompt}'] },
+      claude: { command: '/opt/claude/bin/claude', resumeArgs: ['--resume', '{providerSessionId}'] },
+    });
+    const registry = await loadProviders();
+
+    expect(registry['codex']?.argsOverridden).toBe(true);
+    // Команда и resumeArgs — не args: выбор модели и effort по-прежнему решает встроенный шаблон.
+    expect('argsOverridden' in (registry['claude'] ?? {})).toBe(false);
+    expect('argsOverridden' in (registry['glm'] ?? {})).toBe(false);
+    expect('argsOverridden' in PROVIDERS.codex).toBe(false);
+    // Свой шаблон без {model} и {effort} выключает выбор — это окно и объясняет по argsOverridden.
+    expect(supportsModel(registry['codex'] as ProviderEntry)).toBe(false);
+    expect(supportsEffort(registry['codex'] as ProviderEntry)).toBe(false);
   });
 
   it('встроенный реестр не мутируется переопределениями', async () => {
@@ -782,10 +898,13 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       // Прочее у записи не тронуто, а встроенный реестр и соседи остались при своих списках.
       expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
       expect(selectableModels(PROVIDERS.codex)?.map((model) => model.id)).toEqual([
-        'gpt-6-astra',
         'gpt-6.1-sol',
+        'gpt-6-astra',
         'gpt-6-sol',
         'gpt-6-luna',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
       ]);
       expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
     });
@@ -857,6 +976,51 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       expect(registry['claude']?.models?.map((model) => model.id)).toEqual(rightIds);
     });
 
+    it('efforts: уровни модели id-ами, подписи выводятся; null — effort у модели нет; без поля — прежнее правило', async () => {
+      await write({
+        codex: {
+          models: [
+            { id: 'my-sol', label: 'Моя Sol', efforts: ['low', 'xhigh', 'ultra', 'turbo'] },
+            { id: 'my-mini', label: 'Моя мини', efforts: null },
+            { id: 'my-old', label: 'Моя старая' },
+          ],
+        },
+      });
+      const codex = (await loadProviders())['codex'] as ProviderEntry;
+
+      expect(selectableModels(codex)).toStrictEqual([
+        {
+          id: 'my-sol',
+          label: 'Моя Sol',
+          efforts: [
+            { id: 'low', label: 'Low' },
+            { id: 'xhigh', label: 'Extra high' },
+            { id: 'ultra', label: 'Ultra' },
+            { id: 'turbo', label: 'Turbo' },
+          ],
+        },
+        { id: 'my-mini', label: 'Моя мини', efforts: null },
+        { id: 'my-old', label: 'Моя старая' },
+      ]);
+      expect(effortsFor(codex, 'my-mini')).toBeNull();
+      expect(effortsFor(codex, 'my-old')?.map((level) => level.id)).toEqual(['low', 'medium', 'high']);
+      // «Default» — общее у моделей с уровнями: у my-sol и прежних трёх my-old общий только low.
+      expect(effortsFor(codex, undefined)?.map((level) => level.id)).toEqual(['low']);
+      expect(resolveModelEffort(codex, { model: 'my-sol', effort: 'turbo' })).toStrictEqual({
+        choice: { model: 'my-sol', effort: 'turbo' },
+      });
+    });
+
+    it('неверные efforts — loadProviders падает с причиной: провайдер, файл, модель и что не так', async () => {
+      const wrong: unknown[] = [[], ['low', 'low'], ['hi gh'], ['High'], ['x"'], [''], ['a'.repeat(33)], 'low', [1], {}, [null]];
+      for (const efforts of wrong) {
+        await write({ codex: { models: [{ id: 'my-sol', label: 'Моя Sol', efforts }] } });
+        await expect(loadProviders(), JSON.stringify(efforts)).rejects.toThrow(
+          /^provider codex in .*providers\.json: model my-sol: efforts must be null or a non-empty list of unique levels/,
+        );
+      }
+    });
+
     it('повтор id в одном списке — ошибка: окно не различило бы две строки, а хост принял бы любую', async () => {
       await write({
         codex: {
@@ -868,6 +1032,156 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
         },
       });
       await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
+    });
+  });
+
+  describe('каталог Codex из файла хоста (спека нормалайзера модели и effort, 5.2)', () => {
+    /** Модели, как их пишет хост из `codex debug models`: подписи — `display_name`, описания уровней — каталога. */
+    const LIVE = [
+      {
+        id: 'gpt-7-sol',
+        label: 'GPT-7-Sol',
+        efforts: [
+          { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+          { id: 'ultra', label: 'Ultra' },
+        ],
+      },
+      { id: 'gpt-7-mini', label: 'GPT-7-Mini', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> =>
+      writeFile(codexModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('файл лежит в доме Parley; нет файла — запасной список', async () => {
+      expect(codexModelsFile()).toBe(path.join(home, 'codex-models.json'));
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toEqual(
+        selectableModels(PROVIDERS.codex),
+      );
+    });
+
+    it('модели из файла хоста заменяют запасной список Codex — тот же список видят окно и MCP; соседи не тронуты', async () => {
+      await writeLive({ fetchedAt: '2026-10-06T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      const codex = registry['codex'] as ProviderEntry;
+
+      expect(selectableModels(codex)).toStrictEqual(LIVE);
+      expect(resolveModelEffort(codex, { model: 'gpt-7-sol', effort: 'ultra' })).toStrictEqual({
+        choice: { model: 'gpt-7-sol', effort: 'ultra' },
+      });
+      expect(resolveModelEffort(codex, { model: 'gpt-6.1-sol' })).toMatchObject({ error: expect.stringContaining('gpt-7-sol') });
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+      expect(selectableModels(PROVIDERS.codex)?.[0]?.id).toBe('gpt-6.1-sol');
+    });
+
+    it('models из providers.json важнее файла хоста', async () => {
+      await writeLive({ fetchedAt: '2026-10-06T10:00:00.000Z', models: LIVE });
+      await write({ codex: { models: [{ id: 'mine', label: 'Моя' }] } });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        { id: 'mine', label: 'Моя' },
+      ]);
+    });
+
+    it('в запись ложатся только известные поля: лишнее из файла до окна не доходит', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [{ id: 'a', label: 'A', priority: 1, efforts: [{ id: 'low', label: 'Low', effort: 'low' }] }],
+      });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        { id: 'a', label: 'A', efforts: [{ id: 'low', label: 'Low' }] },
+      ]);
+    });
+
+    it('подпись уровня строится по id (effortLabel), а не берётся из файла: ручная правка кэша не растягивает окно', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [
+          {
+            id: 'gpt-7-sol',
+            label: 'GPT-7-Sol',
+            efforts: [
+              { id: 'xhigh', label: 'Очень длинная подпись, которую кто-то вписал в кэш руками, чтобы растянуть окно '.repeat(5) },
+              { id: 'turbo', label: 'TURBO!!!' },
+            ],
+          },
+        ],
+      });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        {
+          id: 'gpt-7-sol',
+          label: 'GPT-7-Sol',
+          efforts: [
+            { id: 'xhigh', label: effortLabel('xhigh') },
+            { id: 'turbo', label: effortLabel('turbo') },
+          ],
+        },
+      ]);
+    });
+
+    it('испорченный или пустой файл молча игнорируется: остаётся запасной список, loadProviders не падает', async () => {
+      const broken = [
+        '{не json',
+        '[]',
+        '{}',
+        JSON.stringify({ models: [] }),
+        JSON.stringify({ models: 'gpt-7-sol' }),
+        JSON.stringify({ models: [{ id: '-x', label: 'X' }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A' }, { id: 'a', label: 'Б' }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'hi gh', label: 'X' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'low' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'low', label: 'L' }, { id: 'low', label: 'L' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: 'low' }] }),
+      ];
+      for (const raw of broken) {
+        await writeFile(codexModelsFile(), raw, 'utf8');
+        expect(selectableModels((await loadProviders())['codex'] as ProviderEntry), raw).toEqual(
+          selectableModels(PROVIDERS.codex),
+        );
+      }
+    });
+
+    it('внешний ввод: подпись длиннее 100 и описание длиннее 300 знаков обрезаются; незнакомый уровень-токен идёт как есть', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [
+          {
+            id: 'gpt-7-sol',
+            label: 'S'.repeat(150),
+            efforts: [{ id: 'turbo', label: 'Turbo', description: 'd'.repeat(400) }],
+          },
+        ],
+      });
+      const codex = (await loadProviders())['codex'] as ProviderEntry;
+
+      expect([MODEL_LABEL_MAX, EFFORT_DESCRIPTION_MAX]).toEqual([100, 300]);
+      expect(selectableModels(codex)).toStrictEqual([
+        {
+          id: 'gpt-7-sol',
+          label: 'S'.repeat(100),
+          efforts: [{ id: 'turbo', label: 'Turbo', description: 'd'.repeat(300) }],
+        },
+      ]);
+      // Уровень-токен, которого Parley не знает, не отвергается: и проверка, и подстановка — по EFFORT_TOKEN.
+      expect(resolveModelEffort(codex, { model: 'gpt-7-sol', effort: 'turbo' })).toStrictEqual({
+        choice: { model: 'gpt-7-sol', effort: 'turbo' },
+      });
+      expect(startCommand(codex, { model: 'gpt-7-sol', effort: 'turbo', prompt: 'p' }).args).toContain(
+        'model_reasoning_effort="turbo"',
+      );
+    });
+
+    it('id модели, который стал бы флагом или двумя аргументами `--model`, — файл не читается целиком', async () => {
+      for (const id of ['-gpt', '--model', 'gpt 7', 'gpt\t7', 'x'.repeat(201)]) {
+        await writeLive({
+          fetchedAt: '2026-10-06T10:00:00.000Z',
+          models: [{ id, label: 'X' }, { id: 'gpt-7-sol', label: 'GPT-7-Sol' }],
+        });
+        expect(selectableModels((await loadProviders())['codex'] as ProviderEntry), JSON.stringify(id)).toEqual(
+          selectableModels(PROVIDERS.codex),
+        );
+      }
     });
   });
 
@@ -1104,5 +1418,230 @@ describe('codex: запуск и возобновление (спека комн
       'notify=["a"]',
     ]);
     expect(PROVIDERS.claude.runner.args).not.toContain('{notify}');
+  });
+});
+
+describe('токен effort (спека нормалайзера модели и effort, 5.3)', () => {
+  it('EFFORT_TOKEN принимает уровни каталогов и отвергает всё, что разорвало бы argv или TOML', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'minimal', 'none', 'a', 'x_y-1', `a${'b'.repeat(31)}`]) {
+      expect(EFFORT_TOKEN.test(level), level).toBe(true);
+    }
+    for (const level of ['hi gh', '"x', 'x"', 'High', 'HIGH', '', `a${'b'.repeat(32)}`, '1low', '-low', '_low', 'low\n', 'lo\\w', "lo'w"]) {
+      expect(EFFORT_TOKEN.test(level), JSON.stringify(level)).toBe(false);
+    }
+  });
+
+  it('уровни встроенного каталога — токены: их можно подставить и в кавычки TOML', () => {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
+      for (const model of selectableModels(entry) ?? []) {
+        for (const level of model.efforts ?? []) {
+          expect(EFFORT_TOKEN.test(level.id), `${entry.id} ${model.id}: ${level.id}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('substituteArgs не пускает значение, не прошедшее токен: ни в строку -c, ни целым элементом', () => {
+    for (const effort of ['hi gh', '"x', 'x"', 'high" -c x="y', 'HIGH', '', `a${'b'.repeat(32)}`]) {
+      const name = JSON.stringify(effort);
+      expect(() => substituteArgs(['-c', 'model_reasoning_effort="{effort}"'], { effort }), name).toThrow(/effort/);
+      expect(() => startCommand(PROVIDERS.codex, { effort, prompt: 'p' }), name).toThrow(/effort/);
+      expect(() => startCommand(PROVIDERS.claude, { effort, prompt: 'p' }), name).toThrow(/effort/);
+    }
+    // Шаблон без {effort} не спасает: проверка идёт до любой подстановки.
+    expect(() => substituteArgs(['{prompt}'], { effort: 'x"', prompt: 'p' })).toThrow(/effort/);
+  });
+
+  it('уровень-токен подставляется как есть, и новые уровни тоже: xhigh у Claude Code, ultra у Codex', () => {
+    const claude = startCommand(PROVIDERS.claude, { effort: 'xhigh', prompt: 'p' }).args;
+    expect(claude[claude.indexOf('--effort') + 1]).toBe('xhigh');
+    expect(startCommand(PROVIDERS.codex, { effort: 'ultra', prompt: 'p' }).args).toContain(
+      'model_reasoning_effort="ultra"',
+    );
+  });
+});
+
+describe('effortsFor: уровни для выбора модели (спека нормалайзера модели и effort, 5.1 и 5.3)', () => {
+  const ids = (levels: { id: string }[] | null): string[] | null =>
+    levels === null ? null : levels.map((level) => level.id);
+  const FIVE = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+  /** Свой провайдер с `{model}` и `{effort}` в шаблоне и данным списком моделей. */
+  const custom = (models: readonly ModelOption[] | null): ProviderEntry => ({
+    id: 'мой',
+    label: 'Мой',
+    mark: 'Мо',
+    hasHistory: false,
+    linkBy: 'cwd+time',
+    runner: { command: 'мой', args: ['--m', '{model}', '--e', '{effort}', '{prompt}'] },
+    models,
+  });
+
+  it('Claude: у моделей пять уровней low…max, у Haiku — null', () => {
+    for (const model of ['best', 'fable', 'sonnet', 'opus', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'opusplan[1m]']) {
+      expect(ids(effortsFor(PROVIDERS.claude, model)), model).toEqual(FIVE);
+    }
+    expect(effortsFor(PROVIDERS.claude, 'haiku')).toBeNull();
+  });
+
+  it('Codex: у Sol и Astra есть Ultra, у Luna — нет; уровни несут описания каталога', () => {
+    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
+      expect(ids(effortsFor(PROVIDERS.codex, model)), model).toEqual([...FIVE, 'ultra']);
+    }
+    for (const model of ['gpt-6-luna', 'gpt-5.6-luna']) {
+      expect(ids(effortsFor(PROVIDERS.codex, model)), model).toEqual(FIVE);
+    }
+    expect(effortsFor(PROVIDERS.codex, 'gpt-6.1-sol')?.at(-1)).toEqual({
+      id: 'ultra',
+      label: 'Ultra',
+      description: 'Maximum reasoning with automatic task delegation',
+    });
+  });
+
+  it('«Default» — общие уровни моделей провайдера в порядке первой: Claude и GLM — low…max, Codex — без Ultra', () => {
+    expect(ids(effortsFor(PROVIDERS.claude, undefined))).toEqual(FIVE);
+    expect(ids(effortsFor(PROVIDERS.glm, undefined))).toEqual(FIVE);
+    expect(ids(effortsFor(PROVIDERS.codex, undefined))).toEqual(FIVE);
+  });
+
+  it('список только из моделей без уровней (одна Haiku) или с пустым списком уровней — null', () => {
+    const haikuOnly = custom([{ id: 'haiku', label: 'Haiku', efforts: null }]);
+    expect(effortsFor(haikuOnly, undefined)).toBeNull();
+    expect(effortsFor(haikuOnly, 'haiku')).toBeNull();
+    // Пустой список — как null: явного уровня у такой модели не выбрать, окно поле прячет (`effortChoices`).
+    const bare = custom([{ id: 'bare', label: 'Bare', efforts: [] }]);
+    expect(effortsFor(bare, 'bare')).toBeNull();
+    expect(effortsFor(bare, undefined)).toBeNull();
+  });
+
+  it('модель без поля efforts (свой список) — прежние три уровня; в пересечении «Default» — тоже они', () => {
+    const entry = custom([
+      { id: 'a', label: 'А' },
+      { id: 'b', label: 'Б', efforts: [{ id: 'high', label: 'High' }, { id: 'max', label: 'Max' }] },
+    ]);
+    expect(ids(effortsFor(entry, 'a'))).toEqual(['low', 'medium', 'high']);
+    expect(ids(effortsFor(entry, undefined))).toEqual(['high']);
+  });
+
+  it('общих уровней нет — у «Default» null', () => {
+    const entry = custom([
+      { id: 'a', label: 'А', efforts: [{ id: 'low', label: 'Low' }] },
+      { id: 'b', label: 'Б', efforts: [{ id: 'high', label: 'High' }] },
+    ]);
+    expect(effortsFor(entry, undefined)).toBeNull();
+  });
+
+  it('провайдер без списка моделей и модель вне списка — прежние low, medium, high', () => {
+    expect(ids(effortsFor(custom(null), undefined))).toEqual(['low', 'medium', 'high']);
+    expect(ids(effortsFor(custom(null), 'что-угодно'))).toEqual(['low', 'medium', 'high']);
+    expect(ids(effortsFor(PROVIDERS.claude, 'claude-opus-5-5'))).toEqual(['low', 'medium', 'high']);
+  });
+
+  it('провайдер без {effort} в шаблоне — null при любой модели', () => {
+    const modelOnly: ProviderEntry = {
+      ...PROVIDERS.claude,
+      runner: { command: 'claude', args: ['--model', '{model}', '{prompt}'] },
+    };
+    expect(effortsFor(modelOnly, 'opus')).toBeNull();
+    expect(effortsFor(modelOnly, undefined)).toBeNull();
+  });
+
+  it('отдаётся копия: правка ответа каталог не меняет', () => {
+    const opus = effortsFor(PROVIDERS.claude, 'opus');
+    if (opus === null || opus[0] === undefined) throw new Error('у opus нет уровней');
+    opus[0].label = 'испорчено';
+    opus.pop();
+    const legacy = effortsFor(custom(null), undefined);
+    legacy?.pop();
+
+    expect(effortsFor(PROVIDERS.claude, 'opus')?.[0]?.label).toBe('Low');
+    expect(ids(effortsFor(PROVIDERS.claude, 'opus'))).toEqual(FIVE);
+    expect(ids(effortsFor(custom(null), undefined))).toEqual(['low', 'medium', 'high']);
+  });
+});
+
+describe('resolveModelEffort: пара модели и effort для окна и MCP (спека нормалайзера модели и effort, 5.3)', () => {
+  it('пустые строки и отсутствие полей — «Default»: в ответе полей нет вовсе', () => {
+    expect(resolveModelEffort(PROVIDERS.claude, {})).toStrictEqual({ choice: {} });
+    expect(resolveModelEffort(PROVIDERS.claude, { model: '', effort: '' })).toStrictEqual({ choice: {} });
+    expect(resolveModelEffort(PROVIDERS.codex, { model: 'gpt-6-luna', effort: '' })).toStrictEqual({
+      choice: { model: 'gpt-6-luna' },
+    });
+  });
+
+  it('пара из каталога проходит как есть; при «Default» модели — общий уровень', () => {
+    expect(resolveModelEffort(PROVIDERS.claude, { model: 'opus', effort: 'max' })).toStrictEqual({
+      choice: { model: 'opus', effort: 'max' },
+    });
+    expect(resolveModelEffort(PROVIDERS.codex, { model: 'gpt-6.1-sol', effort: 'ultra' })).toStrictEqual({
+      choice: { model: 'gpt-6.1-sol', effort: 'ultra' },
+    });
+    expect(resolveModelEffort(PROVIDERS.glm, { effort: 'xhigh' })).toStrictEqual({ choice: { effort: 'xhigh' } });
+    expect(resolveModelEffort(PROVIDERS.claude, { model: 'haiku' })).toStrictEqual({ choice: { model: 'haiku' } });
+  });
+
+  it('модель — по правилу modelChoiceError: та же причина со списком допустимых', () => {
+    expect(resolveModelEffort(PROVIDERS.claude, { model: 'gpt-6-sol', effort: 'high' })).toEqual({
+      error: modelChoiceError(PROVIDERS.claude, 'gpt-6-sol'),
+    });
+    expect(resolveModelEffort(PROVIDERS.claude, { model: '--effort' })).toEqual({
+      error: modelChoiceError(PROVIDERS.claude, '--effort'),
+    });
+  });
+
+  it('effort не токен — ошибка, с уровнями модели, если они есть; даже у провайдера без {effort}', () => {
+    for (const effort of ['hi gh', '"x', 'x"', 'High', 'x'.repeat(33)]) {
+      expect(resolveModelEffort(PROVIDERS.claude, { model: 'opus', effort }), effort).toEqual({
+        error: `effort ${JSON.stringify(effort)} is not a level name; allowed: low, medium, high, xhigh, max`,
+      });
+    }
+    const plain: ProviderEntry = { ...PROVIDERS.claude, runner: { command: 'claude', args: ['{prompt}'] } };
+    expect(resolveModelEffort(plain, { effort: 'x"' })).toEqual({
+      error: `effort ${JSON.stringify('x"')} is not a level name`,
+    });
+  });
+
+  it('провайдер без {effort} в шаблоне отбрасывает уровень молча, без {model} — и модель', () => {
+    const plain: ProviderEntry = { ...PROVIDERS.claude, runner: { command: 'claude', args: ['{prompt}'] } };
+    expect(resolveModelEffort(plain, { model: 'anything', effort: 'high' })).toStrictEqual({ choice: {} });
+    const modelOnly: ProviderEntry = {
+      ...PROVIDERS.claude,
+      runner: { command: 'claude', args: ['--model', '{model}', '{prompt}'] },
+    };
+    expect(resolveModelEffort(modelOnly, { model: 'opus', effort: 'ultra' })).toStrictEqual({
+      choice: { model: 'opus' },
+    });
+  });
+
+  it('у модели без уровней — «omit effort», и у «Default», когда уровней нет ни у одной модели', () => {
+    expect(resolveModelEffort(PROVIDERS.claude, { model: 'haiku', effort: 'low' })).toEqual({
+      error: 'haiku has no effort levels; omit effort',
+    });
+    const haikuOnly: ProviderEntry = { ...PROVIDERS.claude, models: [{ id: 'haiku', label: 'Haiku', efforts: null }] };
+    expect(resolveModelEffort(haikuOnly, { effort: 'low' })).toEqual({
+      error: 'the default model has no effort levels; omit effort',
+    });
+  });
+
+  it('уровень не из списка модели — ошибка с её уровнями; у «Default» — с общими', () => {
+    expect(resolveModelEffort(PROVIDERS.codex, { model: 'gpt-6-luna', effort: 'ultra' })).toEqual({
+      error: 'ultra is not a level of gpt-6-luna; allowed: low, medium, high, xhigh, max',
+    });
+    expect(resolveModelEffort(PROVIDERS.codex, { effort: 'ultra' })).toEqual({
+      error: 'ultra is not a level of the default model; allowed: low, medium, high, xhigh, max',
+    });
+    expect(resolveModelEffort(PROVIDERS.claude, { model: 'opus', effort: 'minimal' })).toEqual({
+      error: 'minimal is not a level of opus; allowed: low, medium, high, xhigh, max',
+    });
+  });
+
+  it('свой список без уровней — прежние low, medium, high', () => {
+    const mine: ProviderEntry = { ...PROVIDERS.claude, models: [{ id: 'mine', label: 'Моя' }] };
+    expect(resolveModelEffort(mine, { model: 'mine', effort: 'medium' })).toStrictEqual({
+      choice: { model: 'mine', effort: 'medium' },
+    });
+    expect(resolveModelEffort(mine, { model: 'mine', effort: 'xhigh' })).toEqual({
+      error: 'xhigh is not a level of mine; allowed: low, medium, high',
+    });
   });
 });
