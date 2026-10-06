@@ -325,4 +325,18 @@ describe('dictation-store (спека 3.2–3.4, 6)', () => {
       await vi.waitFor(() => expect(h.target.insert).toHaveBeenCalled());
     });
   });
+
+  it('сбой IPC при проверке микрофона — тост «failed», фаза idle, следующий toggle снова запускает запись', async () => {
+    const h = harness();
+    cleanup.push(h.dispose);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    cleanup.push(() => warn.mockRestore());
+    vi.mocked(h.deps.voice.micStatus).mockRejectedValueOnce(new Error('ipc down'));
+    await h.store.getState().toggle('room');
+    expect(h.deps.toast).toHaveBeenCalledWith(S.voice.failed);
+    expect(h.store.getState().phase).toBe('idle');
+    expect(h.deps.record).not.toHaveBeenCalled();
+    await h.store.getState().toggle('room');
+    expect(h.store.getState()).toMatchObject({ phase: 'recording', targetId: 'room' });
+  });
 });

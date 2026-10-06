@@ -145,6 +145,9 @@ export function createDictationStore() {
         set({ phase: 'recording', targetId: id, level: 0, startedAt: d.now() });
         capTimer = d.setTimeout(() => void finish(), MAX_RECORDING_MS);
         window.addEventListener('keydown', onEscape, true);
+      } catch (error) {
+        console.warn('[parley] voice', error);
+        d.toast(S.voice.failed);
       } finally {
         starting = false;
       }
