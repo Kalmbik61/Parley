@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addSession,
+  codexModelsFile,
   createPendingSession,
   createWork,
   createWorktree,
@@ -271,7 +272,7 @@ describe('create(): модель и усилие из диалога (дизай
   /** Запускает сессию провайдера и отдаёт argv стаба; `task: ''` — тихий старт, как у комнат. */
   async function launched(
     provider: string,
-    choice: { model?: string; effort?: 'low' | 'medium' | 'high' },
+    choice: { model?: string; effort?: string },
     task = '',
   ): Promise<string[]> {
     const work = await createWork(project, { title: 'Работа', goal: '' });
@@ -429,6 +430,75 @@ describe('create(): модель и усилие из диалога (дизай
 
   it('GLM rejects an unsupported model before launch', async () => {
     await expect(launched('glm', { model: 'glm-4', effort: 'high' })).rejects.toThrow();
+  });
+
+  it('уровень сверх прежних трёх доезжает до команды: claude --effort xhigh', async () => {
+    const argv = await launched('claude', { model: 'opus', effort: 'xhigh' });
+
+    expect(argv[argv.indexOf('--effort') + 1]).toBe('xhigh');
+  });
+
+  it('codex с каталогом из файла хоста: модель и уровень из каталога CLI доезжают до команды', async () => {
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    // Свой дом: файл каталога не должен достаться другим тестам процесса.
+    const home = await mkdtemp(path.join(tmpdir(), 'parley-sessions-home-'));
+    setEnv('PARLEY_HOME', home);
+    try {
+      const models = [{ id: 'gpt-7-nova', label: 'GPT-7-Nova', efforts: [{ id: 'ultra', label: 'Ultra' }] }];
+      await writeFile(codexModelsFile(), JSON.stringify({ fetchedAt: '2026-10-06T10:00:00.000Z', models }), 'utf8');
+
+      const argv = await launched('codex', { model: 'gpt-7-nova', effort: 'ultra' });
+
+      expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-7-nova');
+      expect(argv).toContain('model_reasoning_effort="ultra"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('все пути создания пишут разрешённые model и effort в запись сессии (спека нормалайзера, 5.5); без выбора полей нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'родитель', task: 'т' });
+    const base = { projectPath: project, provider: 'claude', label: '' };
+    const choice = { model: 'opus', effort: 'xhigh' };
+
+    // Тихий старт, новая работа под быструю сессию, дочерняя без задачи и `pending` с задачей.
+    const refs = [
+      await service.create({ ...base, workId: work.work.id, task: '', parent: null, ...choice }),
+      await service.create({ ...base, workId: null, task: '', parent: null, ...choice }),
+      await service.create({ ...base, workId: work.work.id, task: '', parent, ...choice }),
+      await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null, ...choice }),
+    ];
+    for (const ref of refs) {
+      const map = await readMap(ref.projectPath, ref.workId);
+      expect(map.sessions.find((candidate) => candidate.id === ref.sessionId), ref.sessionId).toMatchObject(choice);
+      await service.stop(ref);
+    }
+
+    const plain = await service.create({ ...base, workId: work.work.id, task: '', parent: null });
+    const session = (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === plain.sessionId);
+    expect(session).toBeDefined();
+    expect(Object.keys(session ?? {})).not.toContain('model');
+    expect(Object.keys(session ?? {})).not.toContain('effort');
+    await service.stop(plain);
+  });
+
+  it('пара не из каталога — bad_request до первой записи: ни сессии, ни процесса', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const create = (task: string, choice: { model?: string; effort: string }) =>
+      service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: '', task, parent: null, ...choice });
+
+    await expect(create('', { model: 'haiku', effort: 'high' })).rejects.toThrow(/haiku has no effort levels/);
+    await expect(create('сделай штуку', { model: 'opus', effort: 'ultra' })).rejects.toThrow(/ultra is not a level of opus/);
+    await expect(create('', { effort: 'ultra' })).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+
+    expect(existsSync(argsFile)).toBe(false);
+    expect((await readMap(project, work.work.id)).sessions).toEqual([]);
   });
 });
 
