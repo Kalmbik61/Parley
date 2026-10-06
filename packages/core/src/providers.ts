@@ -2,7 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, type ModelOption } from './provider-models.js';
+import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, type EffortOption, type ModelOption } from './provider-models.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -336,14 +336,23 @@ export function providersWithHistory(): ProviderInfo[] {
 }
 
 /**
- * Усилие рассуждений, которое окно предлагает при запуске. Три уровня — общее подмножество
- * того, что документируют Claude Code (`low`…`max`) и Codex (`low`…`ultra`, набор зависит от
- * модели). Уровень, которого модель Claude не знает, Claude Code сам опускает до ближайшего
- * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
+ * Токен уровня effort: безопасен и в argv, и в кавычках TOML (`-c model_reasoning_effort="…"`) — ни
+ * пробела, ни кавычки, ни обратной косой черты. Тем же правилом проверяют `substituteArgs` (до любой
+ * подстановки), `resolveModelEffort`, уровни из `providers.json` и `parseMap`.
  */
-export type EffortLevel = 'low' | 'medium' | 'high';
+export const EFFORT_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** Те же уровни списком: по нему проверяет `effort` `spawn_session`, а схема окна держит свой набор. */
+/**
+ * Уровень effort — id из каталога модели (`ModelOption.efforts`): у Claude Code `low…max`, у моделей
+ * Codex свои наборы, вплоть до `ultra`. Набор открыт, поэтому тип — строка; годится только значение,
+ * проходящее `EFFORT_TOKEN`.
+ */
+export type EffortLevel = string;
+
+/**
+ * Прежние три уровня, которыми `spawn_session` проверяет `effort`.
+ * @deprecated Уровни для выбора даёт `effortsFor`, проверку пары — `resolveModelEffort`.
+ */
 export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'];
 
 /** Значения подстановок в шаблоны аргументов реестра. */
@@ -365,8 +374,8 @@ export interface RunnerSubstitutions {
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
-   * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
-   * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
+   * Усилие: `--effort` у claude, `-c model_reasoning_effort` у codex. У codex значение встаёт в
+   * кавычки строки шаблона без экранирования, поэтому `substituteArgs` пускает только `EFFORT_TOKEN`.
    */
   effort?: EffortLevel;
 }
@@ -377,7 +386,7 @@ const PLACEHOLDER =
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
  * Codex принимает его только значением TOML в `-c`. Остальным подстановкам это не нужно —
- * и не позволено: усилие берётся из закрытого набора, и его можно вставить в кавычки без
+ * и не позволено: усилие проходит `EFFORT_TOKEN`, и его можно вставить в кавычки без
  * экранирования, а модель — произвольная строка.
  */
 const INLINE_EFFORT = /\{effort\}/g;
@@ -391,8 +400,14 @@ const INLINE_EFFORT = /\{effort\}/g;
  * предыдущим аргументом, если он пришёл из шаблона литералом и начинается с
  * `-`. Иначе от `--mcp-config {mcpConfig}` остался бы висячий флаг. Значение,
  * само похожее на флаг, соседа не уносит: оно литералом шаблона не было.
+ *
+ * Усилие, не прошедшее `EFFORT_TOKEN`, — исключение до любой подстановки: кавычка или пробел
+ * разорвали бы TOML строки `model_reasoning_effort="{effort}"` или ушли бы в CLI лишним словом.
  */
 export function substituteArgs(template: readonly string[], subs: RunnerSubstitutions): string[] {
+  if (subs.effort !== undefined && !EFFORT_TOKEN.test(subs.effort)) {
+    throw new Error(`effort ${JSON.stringify(subs.effort)} is not an effort level`);
+  }
   const args: string[] = [];
   const fromTemplate: boolean[] = [];
 
@@ -703,6 +718,85 @@ export function modelChoiceError(entry: ProviderEntry, model: string): string | 
     return `model ${model} is not in the list of provider ${entry.id}; allowed: ${allowed}`;
   }
   return null;
+}
+
+/**
+ * Уровни effort, из которых можно выбрать при этой модели: `model` — id из списка провайдера,
+ * `undefined` — «Default» (без флага модели). `null` — effort выбрать нельзя: провайдер его не
+ * принимает (нет `{effort}` в шаблоне) или у модели его нет (Haiku, пустой список). Правила (спека
+ * нормалайзера, 5.1 и 5.3; окно повторяет их в `effortChoices`):
+ * - провайдер без списка моделей, модель вне списка и модель без поля `efforts` (свой список из
+ *   `providers.json` без уровней) — прежние `low|medium|high` (`LEGACY_EFFORTS`);
+ * - «Default» — уровни, общие для всех моделей провайдера с уровнями, в порядке первой из них: какую
+ *   модель возьмёт CLI, Parley не знает (настройки CLI рамка читать не даёт), а общий уровень годится
+ *   любой. Общих нет — `null`.
+ * Отдаётся копия, как у `selectableModels`.
+ */
+export function effortsFor(entry: ProviderEntry, model: string | undefined): EffortOption[] | null {
+  if (!supportsEffort(entry)) return null;
+  const legacy = (): EffortOption[] => LEGACY_EFFORTS.map((level) => ({ ...level }));
+  const list = selectableModels(entry);
+  if (list === null) return legacy();
+  if (model !== undefined) {
+    const option = list.find((candidate) => candidate.id === model);
+    if (option === undefined || option.efforts === undefined) return legacy();
+    return option.efforts === null || option.efforts.length === 0 ? null : option.efforts;
+  }
+  const lists = list.flatMap((option) => {
+    const levels = option.efforts === undefined ? legacy() : option.efforts;
+    return levels === null || levels.length === 0 ? [] : [levels];
+  });
+  const [first, ...rest] = lists;
+  if (first === undefined) return null;
+  const shared = first.filter((level) =>
+    rest.every((levels) => levels.some((other) => other.id === level.id)),
+  );
+  return shared.length === 0 ? null : shared;
+}
+
+/** Выбор модели и effort; поля нет — «Default», без флага. */
+export interface ModelEffortChoice {
+  model?: string;
+  effort?: string;
+}
+
+/** Итог `resolveModelEffort`: что ляжет в карту и в команду, или причина отказа. */
+export type ModelEffortResolution = { choice: ModelEffortChoice } | { error: string };
+
+/**
+ * Проверка пары «модель + effort» — одна для окна (`sessions.create` хоста) и MCP (`spawn_session`),
+ * до записи в карту (спека нормалайзера, 5.3). Пустая строка и отсутствие поля — «Default»: в ответе
+ * поля нет. Модель проверяет `modelChoiceError`. Effort должен проходить `EFFORT_TOKEN` и быть
+ * уровнем из `effortsFor` для выбранной модели (или для «Default»). Флаг, которого нет в шаблоне
+ * запуска, выбор отбрасывает молча, как и прежде: в ответ и в карту ложится только то, что дойдёт
+ * до CLI. Ошибка — текст причины со списком допустимого.
+ */
+export function resolveModelEffort(
+  entry: ProviderEntry,
+  choice: ModelEffortChoice,
+): ModelEffortResolution {
+  const model = choice.model === '' ? undefined : choice.model;
+  const effort = choice.effort === '' ? undefined : choice.effort;
+  if (model !== undefined) {
+    const refusal = modelChoiceError(entry, model);
+    if (refusal !== null) return { error: refusal };
+  }
+  const kept = model !== undefined && supportsModel(entry) ? model : undefined;
+  const resolved: ModelEffortChoice = kept === undefined ? {} : { model: kept };
+  if (effort === undefined) return { choice: resolved };
+
+  const levels = effortsFor(entry, kept);
+  const allowed = levels === null ? '' : `; allowed: ${levels.map((level) => level.id).join(', ')}`;
+  if (!EFFORT_TOKEN.test(effort)) {
+    return { error: `effort ${JSON.stringify(effort)} is not a level name${allowed}` };
+  }
+  if (!supportsEffort(entry)) return { choice: resolved };
+  const subject = kept ?? 'the default model';
+  if (levels === null) return { error: `${subject} has no effort levels; omit effort` };
+  if (!levels.some((level) => level.id === effort)) {
+    return { error: `${effort} is not a level of ${subject}${allowed}` };
+  }
+  return { choice: { ...resolved, effort } };
 }
 
 const isModelEntry = (value: unknown): value is ModelOption =>
