@@ -12,7 +12,7 @@
 - Задачи: [очередь агентов](2026-10-03-parley-agent-tasks.md).
 - Переход к зависимой задаче — после независимого ревью и проверки результата.
 - Документационный стартовый коммит: 1acc937.
-- Текущая фаза: workflow остановлен при30% недельного остатка по указанию человека. P00–P24, P27/P29/P39 accepted (28/40); P25/P36 pending для продолжения, P28 подготовлена без реализации.
+- Текущая фаза (2026-10-06): работа продолжена в ветке `feat/parley-upgrade` (worktree `.claude/worktrees/parley-upgrade`, исполнители — Opus 5.5 через Workflow); остановка 2026-10-04 при 30 % недельного остатка записана ниже как история. Принятых ведущим 28 из 40 (P00–P24, P27, P29, P39); P25, P26, P28, P30, P31, P34–P38 выполнены коммитами и ждут приёмки (`review`); P32 идёт, живая часть открыта; P33 написана.
 - Установка зависимостей: `pnpm install --frozen-lockfile`, exit 0; lockfile сохранён.
 - Базовая сборка: `pnpm --filter '@parley/host...' build`, exit 0 (core, protocol, host).
 - Базовые проверки: `pnpm --filter @parley/core exec vitest run src/capabilities src/work/launch.test.ts src/work/guidance.test.ts` — 5 файлов, 132 теста passed.
@@ -45,20 +45,20 @@
 | P22 | Реализовать режимы, планы, ревизии и снимки | done | cec588d; independent /root/p01_claude_probe accepted;168fixtures +4probes/lint/types,11SHA,coherentbuild0 |
 | P23 | Подключить инструменты планов и будильник | done | 6a3635f helper + b511fda integration21; correction peer9/root lifecycle peer19, actual257GREEN |
 | P24 | Показать план и итог в комнате | done | 1d76601; peer /root/p01_review |
-| P25 | Реализовать рецепты и плейбук ведущего | pending | /root/p01_review; TMP recipes foundation, shared seams locked |
-| P26 | Подключить рецепты к диалогу и Save as recipe | pending | — |
+| P25 | Реализовать рецепты и плейбук ведущего | review | fbdcf95 (основа), 80b30a3; независимая приёмка ведущим не записана |
+| P26 | Подключить рецепты к диалогу и Save as recipe | review | 2c42dc6; Save as recipe открывает системный редактор |
 | P27 | Реализовать журнал принятых версий и историю | done | commit 37f7511; /root/p01_review; independent /root/p02_codex_probe accepted22/18GREEN; root lifecycle/types GREEN |
-| P28 | Подключить Decisions и Share history | pending | — |
+| P28 | Подключить Decisions и Share history | review | d3133d1, 615dfab |
 | P29 | Реализовать память проекта и её слой | done | 127367e; /root/p01_claude_probe accepted; original Unicode9 GREEN,54affected/probes,16exact staged SHA,corebuild0 |
-| P30 | Реализовать search_history по записям проекта | pending | — |
-| P31 | Подключить память, поиск и UI | pending | — |
-| P32 | Провести сквозную проверку и сравнение навигатора | pending | — |
-| P33 | Обновить документацию по фактическому результату | pending | — |
-| P34 | Ограничить bootstrap и повторение контекста | pending | audit-token track; dependencies P25, P29 |
-| P35 | Ввести компактные map/snapshots и страницы | pending | audit-token track; dependencies P27, P31 |
-| P36 | Исправить свежесть usage и cache ledger | pending | /root/p01_claude_probe; TMP usage/cache/freshness foundation |
-| P37 | Ограничить launches/fanout и лишний старт | pending | audit-token track; dependencies P23, P26 |
-| P38 | Подготовить benchmark принятого результата | pending | audit-token track; dependencies P34, P35, P36, P37, P14, P31, P39 |
+| P30 | Реализовать search_history по записям проекта | review | b55c9c1 |
+| P31 | Подключить память, поиск и UI | review | 60c5fe5, e2c3617 (Q2) |
+| P32 | Провести сквозную проверку и сравнение навигатора | running | офлайн-часть идёт: стенд P38 готов, e2e и сценарий — P32a; живая часть открыта (разметка человека, платный пилот, Linux) |
+| P33 | Обновить документацию по фактическому результату | review | документация по фактическому результату; сверка повторяется после P32 |
+| P34 | Ограничить bootstrap и повторение контекста | review | af5d951 |
+| P35 | Ввести компактные map/snapshots и страницы | review | a1fb045 |
+| P36 | Исправить свежесть usage и cache ledger | review | ef57e3b, 91e1249 (P36b), 1b09ed6 (P36c) |
+| P37 | Ограничить launches/fanout и лишний старт | review | e87d125 |
+| P38 | Подготовить benchmark принятого результата | review | dde7dbf; платных ходов нет |
 | P39 | Доставлять внутренний навык minimal-development | done | 50a878f; author /root/p01_claude_probe; independent /root/p01_review accepted; 84core/17host, ownership/failure probes, builds0 |
 
 ## Текущая разведка — ещё до независимой приёмки
@@ -282,3 +282,40 @@ P25 foundation acceptedfbdcf95: exact7 source stagedSHA; author24/type/lint0, in
 ОСТАНОВКА ПО КВОТЕ 2026-10-04: toolusedPercent70/week10080min =>30%remaining, порог достигнут. /root/p01_review interrupted; два остальных active agents уже completed, все агенты остановлены; новые задачи/проверки/реализация не запускались. Последние source commits37f7511(P27full),fbdcf95(P25foundation),28/40fullaccepted. Осталось12pending,0running. Final recovery `.parley/upgrade-checkpoints/20261004T002508Z` содержит337files/3.46MB с SHA, включаяP25frozen+peer5 иP36frozen21/separate5groups+partialpeer+P28preparation+workflowhelpers; предыдущий P27 archive —20261004T001852Z. Все ignored/0700directories/0600files, sourceTMPpaths в manifest восстанавливаются из сохранённых одноимённых папок перед resume.
 
 Следующее после возобновления: P36 finish bounded independentreview; confirmed source raw binding exposure innew LiveMetrics.usage requires narrow public projection, not generic legacy WorkMap rewrite. Interrupted peer review.log contains9GREEN/1RED; that specific regex falsely matches safe descendantsObserved and is not accepted defect evidence; actual public privacy probe is separateprivacy.log, no aggregate acceptance. Frozen21 NOT applied. P25 next room/Lead immutable snapshot integration proposal318words awaits serialized grants preserving optionalusage/indexseams; P28 interface preparation546words awaits implementation. Native/model/visual/economic gates P32/P38 remain open. Workflow stays stopped until human resume; no automatic wakeup.
+
+## Продолжение в ветке feat/parley-upgrade — 2026-10-05…06
+
+Ветка `feat/parley-upgrade` ведётся от `62b7efb` («docs: stop upgrade workflow at thirty percent weekly remaining»). Ниже — коммиты по порядку. Это evidence исполнителей по сообщениям коммитов; независимую приёмку ведущего каждая задача получит отдельно, чекбоксы в очереди не отмечены.
+
+| Дата | Коммит | Задача | Что |
+|---|---|---|---|
+| 2026-10-05 | 9f0fd5c | тесты | ожидания тестов догнаны до кода ветки, рамочные исключения перечислены поимённо |
+| 2026-10-05 | b55c9c1 | P30 | `search_history` по журналу, памяти, планам, бэклогу, истории комнат и итогам сессий |
+| 2026-10-05 | 80b30a3 | P25 | рецепты комнат: снимок, плейбук только ведущему, каталог |
+| 2026-10-05 | d3133d1, 615dfab | P28 | вкладка Decisions, Share и Unshare истории комнаты; меню History поверх ленты |
+| 2026-10-05 | ef57e3b | P36 | свежесть usage и учёт кеша с происхождением |
+| 2026-10-05 | 91e1249 | P36b | отсутствующие поля usage Claude — `null`, а не 0 |
+| 2026-10-05 | 2c42dc6 | P26 | рецепты в диалоге новой комнаты, Save as recipe, чип рецепта |
+| 2026-10-06 | 60c5fe5 | P31 | память проекта, поиск по истории и их вкладки |
+| 2026-10-06 | f551c43 | Q1 | Codex без выдуманного нуля в usage, видимая потеря рецепта, устойчивые тесты хоста |
+| 2026-10-06 | 7f66e07 | N1 | сокращение родного каталога скиллов при включённом навигаторе |
+| 2026-10-06 | 3ca9901 | N2 | рабочий каталог Claude для `find_skill`, сокращение Claude включено вместе с навигатором |
+| 2026-10-06 | 1b09ed6 | P36c | токены нативных потомков в учёте |
+| 2026-10-06 | af5d951 | P34 | бюджет стартового контекста, ревизия брифа, точнее `find_skill` |
+| 2026-10-06 | e87d125 | P37 | бюджет запусков, возобновлений и писем работы и комнаты |
+| 2026-10-06 | e2c3617 | Q2 | файлы памяти и поиска открываются и в проекте-worktree |
+| 2026-10-06 | a1fb045 | P35 | компактная карта и постраничная выдача |
+| 2026-10-06 | c35c404 | Q3 | дочитывание после включения fs-наблюдателя, устойчивые тесты под нагрузкой |
+| 2026-10-06 | dde7dbf | P38 | офлайн-стенд замера экономии навигатора и бюджета |
+
+**Что зафиксировано в ходе работы.**
+
+- Сокращение родного списка включается вместе с навигатором (переключатель `skillNavigator` по умолчанию выключен): у Claude `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` и выключение мода jev через `enabledPlugins`, у Codex `-c skills.include_instructions=false`. Доступность скиллов Claude берётся из вложения `skill_listing` транскрипта сессии.
+- Живая проба 2026-10-05 на Claude Code 2.1.289 и Codex 0.160.0 подтвердила оба механизма (спека навигатора, раздел 9); GLM в ветке нет, его пункты ждут слияния с master.
+- Бюджеты P37 — это счёт сессий и писем, а не токенов; токены нативных потомков учитываются один раз (P36c), неподтверждаемое перекрытие в сумму не входит.
+
+**Открыто.**
+
+- P32: живая часть — разметка человека около 15 промптов, платный пилот на принятой задаче команды, живые сессии Claude и Codex, Linux. Сценарий e2e и `docs/research/2026-10-03-parley-integration-spike.md` ведёт P32a.
+- Независимая приёмка ведущим для P25, P26, P28, P30, P31, P34–P38 и повтор сверки P33 после P32.
+- Хвосты из сообщений коммитов собраны в `TODOS.md`, раздел 20.

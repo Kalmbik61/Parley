@@ -4,6 +4,40 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+Written in the branch `feat/parley-upgrade`; no version is announced. It is checked by tests, and the live checks with real `claude` and `codex` sessions are still open (see "What is not proven yet").
+
+### Added
+
+- **Team rules in `PARLEY.md`.** A file in the project root with the rules for agents that work together. Every session gets it on top of its own instructions: Claude through `--append-system-prompt`, Codex through a new `-c developer_instructions=…` (placeholder `{developerInstructions}`). Codex also reads `CLAUDE.md` where there is no `AGENTS.md` (`project_doc_fallback_filenames`). The host creates a template once, before the first session of the window in a project, and the window says so; "Open PARLEY.md" and "Create PARLEY.md" are in the project menu. A launch whose whole layer is over 96 KiB stops with `session-layer-too-large`.
+- **Roles.** Eight built-in roles (planner, architect, critic, executor, reviewer, verifier, debugger, researcher) and the native agents of Claude and Codex, chosen per agent row in "New session or room" or with `role` in `spawn_session` (`list_roles` lists them). A read-only role is enforced by the CLI (`--disallowedTools`, `sandbox_mode="read-only"`); a runner that cannot deliver a role does not start the session.
+- **Plans and a backlog.** Rooms get a mode — Free, Checklist or Verified — with plans of items, owners, dependencies and independent verification; Parley wakes owners in turn. Tools: `set_room_mode`, `plan_update`, `plan_submit`, `plan_verify`, `propose_completion`, and `propose_decision` with a plan. The project backlog (`.parley/backlog.md`) has a tab; agents propose findings with `backlog_suggest` and read with `backlog_list`.
+- **Recipes.** "Plan & build", "Review" and "Debug", and your own in `.parley/recipes/`: a recipe fills the roles, the mode and the lead of a new room, and only the lead gets its playbook. "Save as recipe" writes a project recipe and opens it in your system editor.
+- **Decisions, room histories, memory and search.** Accepted decisions are written to `.parley/decisions/`; the room's "History" menu shares a snapshot to git on request; `.parley/memory.md` keeps facts, lessons and agreements that agents propose (`remember`) and you accept; `search_history` and the Search tab look through all of it without an index. The project panel has the tabs Capabilities, Backlog, Decisions, Memory and Search.
+- **Capabilities.** The panel shows the skills, MCP servers and plugins that Claude and Codex see in a project and runs the agents' own CLI to add and remove MCP servers, manage plugins and share a skill with the other agent. Secrets are never shown.
+- **Skill navigator, off by default.** Settings → Agents → "Skill navigator" (or `PARLEY_SKILL_NAVIGATOR=1`) adds `find_skill` and shortens the native skill list: for Claude `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` and the `jev-skill-suggestion` mod switched off for the session, for Codex `-c skills.include_instructions=false`.
+- **Limits of a workspace and a room.** Ten counters (running sessions, agent-created sessions, spawn depth, starts and wake-ups per hour, agent messages, deliveries) in Settings → Agents. They count sessions and messages, not tokens or money; subagents a CLI starts inside its own session are not counted.
+- **Usage with its origin.** The numbers the host sends to the window carry their source and freshness; a field a CLI does not report stays unknown instead of 0, and the usage of subagents is counted once.
+- **A bench for measuring the navigator.** `tools/parley-token-benchmark.ts` prepares paired runs and builds a report from the logs; it makes no paid model calls.
+
+### Changed
+
+- `get_map` for an agent is now compact (about 3 KB); history, summaries, artifacts, messages and long texts come as bounded pages (`get_map` with `session`, `room`, `field`, `cursor`), and `read_room` is limited. The window gets a compact snapshot and loads earlier messages with "Show earlier messages".
+- The `.parley/.gitignore` of a new project is a whitelist: the backlog, plan snapshots, decisions, memory, shared histories and recipes can be committed, everything else stays local. An existing file that is exactly the former `*` is rewritten the first time a shared file is written; a file you edited is left alone.
+- The system prompt insert keeps its fourteen lines and has stable rules first, the session line last; the brief of a session carries a revision.
+- The "Share" action on a user-level skill ("Share with Claude" or "Share with Codex") creates one symlink in the other agent's user skills folder on your click. This is the only exception to "nothing is written to `~/.claude`, `~/.codex` or `~/.agents`" and is described in the README.
+
+### Updating
+
+The window and the host must be updated together: restart the host when the window asks ("Restart host…"); a window built before the compact snapshot, talking to a new host, shows an error for the `client-upgrade-required` conflict. New tools and flags reach an agent when its session is launched or resumed; a running session keeps what it started with. Existing projects get the `PARLEY.md` template with their first session in the window.
+
+### What is not proven yet
+
+- No live run of real sessions: Codex launch and resume with the new `-c` flags, the read-only flags, the jev mod switched off while the hooks stay alive, argument limits on Linux. The paid measurement and the human-labelled prompts for the skill navigator have not been done; nothing is claimed about a saving of tokens, and the navigator stays off by default.
+- Claude's MCP and plugin actions in the Capabilities panel run only with the audited Claude Code build (2.1.287, macOS on Apple silicon).
+- Known gaps: after the shortening Codex offers only user and project skills; skills that the jev mod hid stay hidden until you run `/jev-skill-suggestion:setup restore` (a personal setting that Parley does not touch — do it before relying on the navigator); skills synced from claude.ai appear by name only; `check_inbox` has no limit and no way to read earlier mail; the window has no "Show full message" button; the notice `provider-override-gap` speaks only about instructions; GLM is not covered.
+
 ## 0.4.0
 
 ### Added

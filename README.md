@@ -14,7 +14,9 @@ In the window: a sidebar of project workspaces with a tree of their sessions and
 tabs for the terminal, rooms (a conversation of several agents and a decision that waits
 for you), files, "Changes" (diffs, commit, merge) and the embedded browser; a command
 palette on ⌘J; and a status bar with providers, CLI versions and subscription limits.
-See "The window" for details.
+See "The window" for details. On top of the coordination there is a project layer: team rules in
+`PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, a
+Capabilities panel and an optional skill navigator; see "The project layer".
 
 https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
 
@@ -184,9 +186,9 @@ only through data:
    │ schema adapters → session index → watcher  map store (lock,          │
    │ metrics: tokens, duration, tools           .bak, status transitions) │
    │ hook log → activity, liveness by pid       parley-core CLI (JSON)    │
-   │ parley-mcp — 12 tools: get_map, report, spawn_session,               │
-   │ wait_for, send_message, check_inbox, create_room, read_room,         │
-   │ propose_decision, add_to_room, close_session, read_guide             │
+   │ parley-mcp — 23 tools (24 with find_skill): get_map, report,         │
+   │ spawn_session, wait_for, send_message, check_inbox, rooms,           │
+   │ decisions and plans, backlog, memory, search_history, read_guide     │
    └────────────────────────────────────────────────────────────────────┬─┘
                                                                         │ stdio MCP
                                                                         ▼
@@ -234,7 +236,7 @@ The project rests on one boundary, and it is not up for discussion:
   `~/.codex/auth.json` are never opened, under any circumstances;
 - history directories (`~/.claude/projects`, `~/.codex/sessions`) are opened **read-only**;
   Parley writes nothing to `~/.claude` — hooks are passed with the `--settings` flag from a
-  file in the workspace directory;
+  file in the workspace directory (the one exception is below);
 - there is no API client of its own and no wrapper around subscription tokens;
 - `--dangerously-load-development-channels` is a documented flag of Claude Code itself
   (research preview, `code.claude.com/docs/en/channels`): it turns on a built-in client
@@ -249,9 +251,10 @@ The window (`packages/desktop`) and its host add six more rules to the boundary 
   the `rate_limits` field of the Claude Code status line (a `statusLine` script in the
   `--settings` file, like the hooks) and `rate_limits` in Codex session logs;
 - nothing is written to `~/.claude.json`, folder trust included;
-- the agent skill (`.agents/skills/parley` and the symlink `.claude/skills/parley`) is
-  installed only into the project folder and into session worktrees; nothing is written to
-  `~/.claude`, `~/.codex` or `~/.agents` (details in "The `parley` skill in the project");
+- the agent skills (`parley` and `minimal-development`, in `.agents/skills` with a symlink in
+  `.claude/skills`) are installed only into the project folder and into session worktrees;
+  nothing is written to `~/.claude`, `~/.codex` or `~/.agents` (details in "The `parley` skill
+  in the project");
 - there are no hidden launches: every agent process is visible in the window as a session;
 - the host does not answer an agent's dialogs. The only thing it prints itself is a pointer
   to messages, and only after the `Stop` hook (for Codex, at the prompt; a busy agent gets it
@@ -282,6 +285,17 @@ and 3.5) add two more:
   `PARLEY_SKIP_VERSION_PROBE=1`;
 - the status line script only reads the human's and the project's `settings.json` and
   writes nothing.
+
+One explicit exception to "nothing is written to `~/.claude`, `~/.codex` or `~/.agents`" is
+recorded in `docs/specs/2026-10-02-capabilities-design.md`, section 6.4. (The boundary test
+`packages/core/test/frame-check.test.ts` lists the few lines that only read the agents'
+folders; it was not weakened.) When you click "Share with Claude" or "Share with
+Codex" on a user-level skill in the Capabilities tab, Parley creates one symlink to the
+original in the other agent's user skills folder (`~/.claude/skills` or `$CODEX_HOME/skills`);
+"Unshare from Claude" or "Unshare from Codex" removes only that symlink, and only when
+Parley's own receipt matches it. Nothing else is written there. The MCP and plugin actions of
+that tab are executed by the agent's own CLI, which writes its own config: Parley edits no CLI
+config file itself, and `~/.claude.json` and `~/.codex/config.toml` are only read.
 
 This matches Anthropic's policy (re-read on 2026-09-02): the binary must not be modified,
 and an end user signing in to an unmodified Claude Code with their own subscription is
@@ -781,8 +795,9 @@ The window has Settings (⌘,), with five tabs:
 - **Appearance** — "System" / "Dark" / "Light".
 - **Terminal** — "Terminal font", "Terminal font size (8…32)".
 - **Agents** — "Silence threshold, ms", "Message cap per hour", "Session wake-ups per hour
-  (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Worktree
-  root".
+  (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Skill
+  navigator", "Worktree root", and the "Work limits" block (see "Limits of a workspace and a
+  room").
 - **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound"; if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
@@ -802,6 +817,7 @@ restarting the window. A field that is set by an environment variable is labeled
   "resumeRate": 6,
   "autoLaunch": true,
   "agentSkills": true,
+  "skillNavigator": false,
   "fontFamily": "'SF Mono', Menlo, monospace",
   "fontSize": 14,
   "worktreeRoot": "~/parley/worktrees"
@@ -810,7 +826,9 @@ restarting the window. A field that is set by an environment variable is labeled
 
 The values above are the defaults. Environment variables override the file:
 `PARLEY_SILENCE_MS`, `PARLEY_MESSAGE_RATE`, `PARLEY_RESUME_RATE`, `PARLEY_AUTO_LAUNCH`,
-`PARLEY_AGENT_SKILLS`, `PARLEY_FONT_FAMILY`, `PARLEY_FONT_SIZE`, `PARLEY_WORKTREE_ROOT`.
+`PARLEY_AGENT_SKILLS`, `PARLEY_SKILL_NAVIGATOR`, `PARLEY_FONT_FAMILY`, `PARLEY_FONT_SIZE`,
+`PARLEY_WORKTREE_ROOT`, and the limit variables of the table in "Limits of a workspace and a
+room".
 
 `resumeRate` is how many times per hour a message may wake a sleeping session
 (`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` (on by
@@ -824,6 +842,10 @@ setting.
 whether to install the `parley` skill into the project folder and into the session's worktree
 at launch. What exactly is written to disk and how to turn it off are described in "The
 `parley` skill in the project". The host reads the setting on every session launch.
+
+`skillNavigator` (off by default; the toggle is "Skill navigator", "Applies to new and resumed
+sessions") turns on the `find_skill` tool and the shortening of the native skill list; see
+"Skill navigator". The ten limit keys of "Work limits" live in the same `config.json`.
 
 `channelPush` (and the `PARLEY_CHANNEL_PUSH` variable) is the setting for a channel push when
 a session is started from the `parley-core` CLI (see "Core CLI"); the window does not read it
@@ -948,12 +970,26 @@ writes the map; agents read it and report through the MCP server.
   map.json            the workspace map: sessions, statuses, metrics, summaries, messages
   map.json.bak        the previous version — updated on every write
   settings.json       Claude Code hooks for all sessions of the workspace (--settings)
+  settings/<id>.json  the same for one session, only while the skill navigator is on
   events/<id>.jsonl   the session's hook log: the agent's state is derived from it
                       (for Codex — Stop lines from its notify script)
   briefs/<id>.md      the session's starting prompt; edited in your own editor
   mcp/<id>.json       the MCP server config for this session
   limits/<id>.json    subscription limits from the Claude Code status line (written by its script)
   artifacts/          plans, reports and the rest that agents put there
+
+<project>/.parley/    the project-level files next to works/ (the "shared" ones go to git)
+  .gitignore          a whitelist: only the shared files below are let through
+  backlog.md          shared: the project backlog
+  plans/              shared: snapshots of accepted plans
+  decisions/          shared: one file per accepted decision or completion
+  memory.md           shared: facts, lessons and agreements of the project
+  history-shared/     shared: room histories that you chose to share
+  recipes/            shared: room recipes of the project
+  history/            local: readable history of each room
+  backlog-suggestions.json, memory-suggestions.json, preferences.json
+                      local: waiting proposals of agents, the proposal rule
+  *-receipt.json      local: receipts of installed skills and of PARLEY.md
 
 ~/.parley/
   host/               host.sock, host.token, host.pid, host.log, host.err
@@ -965,9 +1001,14 @@ writes the map; agents read it and report through the MCP server.
 
 `PARLEY_HOME` moves `~/.parley` to another place — `host/`, `desktop/` and the Electron
 window's userData move with it; this is also how tests stay away from your real directory. The
-project's `.parley/` directory hides itself from git: when Parley creates it, it gets a
-`.gitignore` with the line `*`, so in someone else's repository it is in neither `git status`
-nor commits. If you want to commit it, remove that `.gitignore`; it will not come back.
+project's `.parley/` directory hides itself from git except for the shared files: when Parley
+creates it, it gets a `.gitignore` that is a whitelist (`*`, then `!backlog.md`, `!plans/`,
+`!decisions/`, `!memory.md`, `!history-shared/`, `!recipes/` and the like), so maps, logs and
+receipts stay out of `git status` and commits, while the backlog, plan snapshots, decisions,
+memory, shared histories and recipes can be committed. In a project that already has a
+`.parley/.gitignore` that is exactly the former `*`, Parley rewrites it the first time it
+writes a shared file; a file you edited is never touched. If you want everything out of git,
+change that `.gitignore` yourself; it will not come back. See "Plans, modes and the backlog".
 
 In the window a session is created with ⌘T ("New session or room") in the active workspace,
 with the new workspace dialog (⌘N or "New workspace"), and with the menu items of a card
@@ -1000,15 +1041,23 @@ to introduce itself; the server knows who is calling. The tools:
 
 | Tool | What it does |
 | --- | --- |
-| `get_map()` | the whole map, plus the registry's providers with an availability mark, a list of models (`models`) and an effort flag (`effort`) |
+| `get_map(session?, room?, field?, id?, kind?, cursor?, maxBytes?)` | without arguments, the compact map (sessions, rooms, live plan revisions, unread counters, cursors), plus the registry's providers with an availability mark, a list of models (`models`) and an effort flag (`effort`); with arguments, one session or room or one field as a bounded page (see "Compact map and pages") |
 | `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
-| `spawn_session(provider, label, task, contextFrom?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is `low`, `medium` or `high`; a provider without the flag discards the choice |
+| `spawn_session(label, task, provider?, contextFrom?, role?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `role` is an id from `list_roles` (`agent` is the older alias for a Claude agent), `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is `low`, `medium` or `high`; a provider without the flag discards the choice. Over a limit of "Work limits" the call is refused |
+| `list_roles()` | the built-in and native roles available in the participant's folder, with source, provider, default model and effort and the read-only mark; no prompts or file paths |
 | `wait_for(target, timeoutSec)` | wait for a session to finish or for a message; on timeout it returns `running` |
 | `send_message(to?, text, kind?, room?, replyTo?)` | a message to a session or to a room: `note`, `question` or `decision`; `replyTo` — the id of the room message it answers, and the window shows a quote of it |
-| `check_inbox()` | unread incoming messages with their kinds; marks them as read |
+| `check_inbox()` | unread incoming messages with their kinds; marks them as read (it returns all of them at once, with no limit on their number yet) |
 | `create_room(title, members, lead?)` | creates a conversation room for several sessions; the lead is `lead`, and without it the caller; the caller and the members leave the workspace's other rooms (one room per session) |
 | `read_room(room, limit?)` | the room's feed for context, without touching read marks |
-| `propose_decision(room, text)` | the lead proposes a decision to the human; a repeated call before the answer replaces the text |
+| `propose_decision(room, text, plan?, …)` | the lead proposes a decision to the human (in Checklist and Verified with a plan); a repeated call before the answer replaces the text |
+| `set_room_mode(room, mode, reason)` | the lead raises the mode of the room (`free` → `checklist` → `verified`); only the human lowers it |
+| `plan_update`, `plan_submit`, `plan_verify` | an owner marks a plan item `in_progress` or `blocked` and submits evidence; a verifier verifies or returns it — all with the exact `planId` and `rev` |
+| `propose_completion(planId, rev, summary)` | the lead brings the fully verified plan for the human to accept |
+| `backlog_list(filter?, text?)`, `backlog_suggest(kind, title, details?, why)` | read the project backlog; propose one finding. Agents cannot edit, close or remove items |
+| `remember(kind, fact, details?, why, onHumanRequest?)`, `memory_read(ids?)` | propose one lasting fact, lesson or agreement of the project (it waits for the human) and read the memory with details |
+| `search_history(query, scope?, limit?)` | search the accepted decisions, memory, plans, backlog, room histories and session results |
+| `find_skill(query, for?, limit?)` | only while the skill navigator is on: skills the participant's own CLI can load, with descriptions |
 | `add_to_room(room, session)` | the lead brings a live session of the workspace into their room; it leaves its other rooms (one room per session), and the feed shows "@s04 joined the room" |
 | `close_session(target)` | closes a session for good; only after the human's explicit consent |
 | `read_guide(topic?)` | a detailed guide to Parley: without `topic` — all of it, with `topic` — one section |
@@ -1017,7 +1066,8 @@ Artifact paths are always relative to the project root. A session started with o
 without `PARLEY_SESSION_ID` gets only `get_map` and `read_guide`.
 
 The tools carry MCP annotations, checked against the code: `get_map`, `read_room`,
-`read_guide` and `wait_for` are `readOnlyHint: true`; the others, except `close_session`,
+`read_guide`, `wait_for`, `list_roles`, `backlog_list`, `memory_read`, `search_history` and
+`find_skill` are `readOnlyHint: true`; the others, except `close_session`,
 write to the map but delete no sessions, rooms or messages (`readOnlyHint: false`,
 `destructiveHint: false`, `openWorldHint: false`); `close_session` is `destructiveHint: true`.
 Codex uses them to decide whether to ask the human before a call: without annotations it asks
@@ -1025,21 +1075,28 @@ before every one (so its sources say), with them — only before `close_session`
 
 The guide is given to the agent in two layers, from the cheap one to the detailed one.
 
-The first layer is a short system prompt insert (`--append-system-prompt`, at most fourteen
-lines). It says which workspace and which session the agent is in, the goal of the workspace,
-eleven tools (a line for each; the room tools take one line together with the lead and member
-roles; the twelfth, `add_to_room`, did not fit into the insert — it is described in the tool
-itself and in `read_guide`) and a rule: hand a subtask of this topic that lives longer than
-one turn or must run in parallel over to `spawn_session`, and keep the agent's own subagents
-for short exploration tasks and edits. All Parley launches and the
-`parley-core work session new` command receive it. The system prompt is not stored in the
+The first layer is a short system prompt insert (`--append-system-prompt` for Claude,
+`-c developer_instructions` for Codex; at most fourteen lines and 8 KiB, of which the stable
+part is at most 4 KiB). The stable rules come first and carry no session id, so they do not
+change from session to session; the last line names the workspace, the session and the goal of
+the workspace (the goal is left out when the brief of the same launch already has it, and a
+title or goal that does not fit becomes a reference to the exact `get_map` call, with its size).
+The rules say which tools exist (a line for each group; the room tools take one line together
+with the lead and member roles; `add_to_room` and the details of plans are in the tool itself
+and in `read_guide`), how to use the backlog, memory and search, and a rule: hand a subtask of
+this topic that lives longer than one turn or must run in parallel over to `spawn_session`, and
+keep the agent's own subagents for short exploration tasks and edits. All Parley launches and
+the `parley-core work session new` command receive it. The system prompt is not stored in the
 transcript, so the insert is sent again on `--resume` as well. A provider with no such flag
-does not get it: the substitution is dropped silently, like the settings file.
+does not get it: the substitution is dropped silently, like the settings file. The brief of a
+session carries a revision (`Brief revision: <hash>`); it is refreshed from the map on launch
+and resume unless you edited it by hand, and a field that does not fit its byte limit becomes a
+reference with a size and a `sha256` instead of being cut silently.
 
 The second layer is `read_guide(topic?)`: the entities and the lifecycle of a session, what to
 put into the summary and the artifacts, how the brief is built, how to wait for a subordinate
 session, and what not to do. Without `topic` it returns the whole guide, with `topic` one
-section: `overview`, `lifecycle`, `tools`, `rooms`, `lead`, `member`, `brief`, `window`,
+section: `plans`, `overview`, `lifecycle`, `tools`, `rooms`, `lead`, `member`, `brief`, `window`,
 `worktrees`, `letters`, `rules`; an unknown topic is an error with a list. It is a tool, not
 an MCP resource: the model in Claude Code has no tool for reading resources, and a resource
 would have remained a dead layer. For a session in its own worktree the brief names the
@@ -1214,6 +1271,280 @@ stock `claude` launched with it sees the map, reports, and can spawn its own ses
 of such a session does not belong to the host, and the window's terminal cannot be attached
 to it.
 
+## The project layer
+
+This part of Parley is written in the branch `feat/parley-upgrade` and is not part of a
+released version yet. It is checked by tests; the live checks with real `claude` and `codex`
+sessions are still open (see "Known limitations"). The skill navigator is off by default; the
+rest works as soon as the version is installed.
+
+### PARLEY.md: team rules
+
+`PARLEY.md` in the project root holds the rules for agents that work together in Parley: who
+leads rooms, who reviews, what git actions are forbidden, when to stop and ask you. You write
+it. Every session Parley launches in the project gets it on top of the agent's own
+instructions (`CLAUDE.md`, `AGENTS.md`), also in a session's worktree: the file is read from
+the project root, so an uncommitted edit applies to all sessions.
+
+- **Delivery.** Claude gets the session layer through `--append-system-prompt`, Codex through
+  `-c developer_instructions=…` (a placeholder `{developerInstructions}` in the launch
+  template). The layer is assembled in this order: Parley's built-in rules, the bridge line
+  (Codex only), the session's role, the recipe playbook (the room lead only), the brief of a
+  quiet session, `PARLEY.md`, the project memory. A new session reads the current file from its
+  first turn; a resumed one sees an edit after its context is compacted; a running one only
+  after a restart.
+- **Bridge.** Codex does not read `CLAUDE.md` by default, so every Codex launch carries
+  `-c project_doc_fallback_filenames=["CLAUDE.md"]`: Codex reads `CLAUDE.md` only in folders that
+  have neither `AGENTS.md` nor `AGENTS.override.md`. In such a folder (and only there) the
+  layer also gets one line telling Codex that those instructions were written for Claude Code.
+  When both files exist, each agent reads its own; Claude Code reads `AGENTS.md` by itself
+  only when there is no `CLAUDE.md` (Claude Code 2.1.277 or newer).
+- **Not sent.** HTML comments and sections with an empty body are dropped, so the untouched
+  template costs nothing. The processed text is cut at 32 KB with a warning. The whole layer
+  of a launch may not exceed 96 KiB after escaping: a larger one stops the launch with
+  `session-layer-too-large` and the sizes of the blocks, nothing is trimmed silently.
+- **Creation.** Before the first session of the window in a project, the host puts the
+  template in the project root once and the window says so with an "Open" button. A file you
+  deleted does not come back; the project menu ("⋯" of the section) has "Open PARLEY.md" and,
+  when it is missing, "Create PARLEY.md". Sessions of the `parley-core` CLI read the file but
+  never create it.
+- **A custom runner.** An entry for `codex` in `~/.parley/providers.json` with its own `args`
+  replaces the built-in template entirely. Without `{developerInstructions}` it gets neither the
+  layer nor the bridge, and the window shows the `provider-override-gap` notice once per host;
+  the same notice is shown when `{skillCatalog}` is missing and the navigator is on (the text
+  of the notice speaks only about the instructions setting).
+
+### Roles
+
+A session can have a role, chosen in each agent row of "New session or room" or with the
+`role` argument of `spawn_session` (the `list_roles` tool shows what is available). A role is
+named with its source: `builtin:reviewer`, `claude:<name>`, `codex:<name>`. It is set when the
+session is created and does not change.
+
+| Built-in role | Provider | Model tier | Effort | Read-only |
+| --- | --- | --- | --- | --- |
+| `planner` | Claude | strong (`opus`) | high | yes |
+| `architect` | Claude | strong | high | yes |
+| `critic` | Codex | strong (`gpt-6-astra`) | high | yes |
+| `executor` | Claude | standard (`sonnet`) | medium | no |
+| `reviewer` | Codex | strong | high | yes |
+| `verifier` | Codex | standard (`gpt-6.1-sol`) | medium | no |
+| `debugger` | Claude | strong | high | no |
+| `researcher` | Claude | light (`haiku`) | low | yes |
+
+A built-in role is a text in the session layer plus a default provider, model and effort; what
+you change in the dialog wins over the role, and the role's defaults are computed at every
+launch, not stored. Native roles are the agents of the CLI itself — `.claude/agents` and
+`$CLAUDE_CONFIG_DIR/agents` for Claude (identified by the `name` in the frontmatter, not the
+file name), `agents/*.toml` in the config layers for Codex — and only work in their own CLI;
+their prompt, model and tools are applied by the CLI.
+
+"Read-only" is enforced by the CLI: for Claude `--disallowedTools Edit,Write,NotebookEdit`
+(Bash stays, the ban on writing through the shell is only in the role text), for Codex
+`-c sandbox_mode="read-only"` with approvals on request. A runner that cannot deliver the role
+text or the read-only flag does not start the session: `spawn_session` and the window answer
+with an error naming the custom runner (`role-delivery-unavailable`). If a role file disappears
+later, the session starts without the role and the window shows a `role-missing` notice.
+
+### Plans, modes and the backlog
+
+A room has a mode, switched in the room: **Free** (the default; a decision is text, parts are
+handed out with mentions), **Checklist** (a decision carries a plan: items with owners, scopes
+and dependencies; Parley wakes owners in turn and closes the plan when all items are done) and
+**Verified** (also criteria and an independent verifier per item, and a summary that you
+accept). You can switch the mode in any direction; the lead can only raise it
+(`set_room_mode(room, mode, reason)`). The plan tools carry the exact `planId` and `rev`:
+`propose_decision` (with a plan), `plan_update`, `plan_submit`, `plan_verify`,
+`propose_completion`. The letters that hand out the work come from `parley`, not from an agent, so they are not
+counted against the agents' message limits (see "Limits of a workspace and a room").
+
+The project backlog is `.parley/backlog.md`: the project panel has a Backlog tab (add, edit,
+mark done, "Take into room…", "Open file"), and agents can only read it (`backlog_list`) and
+propose a finding (`backlog_suggest(kind, title, details?, why)`). Whether a proposal is
+written at once or waits for you in "Suggested" depends on the project rule (`ask`,
+`problems` by default — bugs and debts at once, ideas wait — or `everything`; the switch on the
+Backlog tab reads "Ask before adding", "Add bugs and debt", "Add everything"), kept locally in
+`.parley/preferences.json`.
+
+**What is shared through git.** `.parley/` is no longer all hidden: a new project's
+`.parley/.gitignore` is a whitelist that lets `backlog.md`, `plans/` (snapshots of accepted
+plans), `memory.md`, `decisions/`, `history-shared/` and `recipes/` into git and keeps
+everything else (maps, logs, receipts, suggestions, `history/`) local. An existing
+`.parley/.gitignore` that is exactly Parley's former `*` is rewritten the first time a shared
+file is written; one you edited is left alone and the window says so once
+(`parley-gitignore-custom`). If the repository's own `.gitignore` hides `.parley/`, nothing
+inside is shared and the window says that once (`parley-dir-ignored`).
+
+### Recipes
+
+A recipe is a room preset: roles, providers, the mode, worktrees, which row leads, and a short
+playbook for the lead. The "New session or room" dialog has a "Recipe" field with three
+built-in recipes — **Plan & build** (Verified), **Review** (Free, read-only roles) and
+**Debug** (Checklist) — and the recipes of the project, files in `.parley/recipes/<name>.md`
+(YAML frontmatter, the body is the playbook). Choosing a recipe fills the rows, the mode and
+the lead; everything stays editable, and what you changed by hand is not overwritten. A recipe
+needs two or more agents: with one row the recipe and the mode are not applied and the dialog
+says so.
+
+The room keeps a snapshot of the recipe taken at creation, so a later edit of the file does
+not change it. Only the lead gets the playbook (in its layer, or as one letter from `parley`
+when the lead is already running or changes); agents see only the recipe's id and name in
+`get_map`. A broken recipe file is listed with the reason and cannot be chosen. **Save as
+recipe** writes the agents, the mode and a playbook template to `.parley/recipes/<name>.md`
+(a name that is already taken is replaced only if you choose "Replace") and opens the file in
+your **system editor** — the window's own editor does not open files in `.parley`. The room
+header has a chip with the recipe; a click shows the playbook read-only.
+
+### Decisions, room history, memory and search
+
+The project panel (project menu → "Capabilities…", or the palette) has five tabs.
+
+- **Decisions.** Every decision or completion you accept is written to
+  `.parley/decisions/<date>-<work>-<room>-<decision>-rev-<N>.md`; a returned one is not. A
+  record shows its state (accepted, retained, edited, unverified, pending) and opens the exact
+  accepted revision.
+- **Room history.** The host keeps a readable file per room in `.parley/history/` (local,
+  rewritten two seconds after the last change). The "History" menu of the room header can
+  **Share** a snapshot to `.parley/history-shared/` — after an explicit warning that the text
+  goes to git — and **Unshare** it (earlier commits keep it). Deleting a workspace deletes its
+  local histories, not the shared ones.
+- **Memory.** `.parley/memory.md` holds facts, lessons and agreements of the project. Agents
+  call `remember(kind, fact, details?, why, onHumanRequest?)`: by default the proposal waits in
+  the Memory tab under "Suggested" for Add, Edit & add or Dismiss; with `onHumanRequest` the
+  entry is written at once, listed under "Remembered on request" and removable with Undo
+  (Undo removes only the line it added, and refuses if you edited it since). That flag is the
+  agent's word, the host cannot verify that you asked. `memory_read` returns the entries with
+  details (up to 64 KB). The phrases of all entries, without details, are the last block of
+  the session layer, up to 12 KiB.
+- **Search.** `search_history(query, scope?, limit?)` — and the Search tab — looks through the
+  decisions, memory, plans, backlog, room histories and the results of sessions without an
+  index: every word of the query must be in one entry, the answer has an excerpt of up to 240
+  characters, the file and the line. A message that exists in both the local and the shared
+  history is shown once, as the local one, marked "Also shared". It never reads skill folders
+  or the CLIs' own memory. A click opens the file, the room or the session; in a session's
+  worktree these files open in your external editor without a line number.
+
+### Capabilities: skills, MCP and plugins
+
+The "Capabilities" tab shows what each agent sees in the project: skills, MCP servers and
+plugins of Claude and Codex, with scope, source and state. The window reads their files and
+asks the CLIs themselves; there is no catalog of its own. Actions go through the agents' own
+CLI with a fixed argument list (no shell), one at a time per provider, and secrets are never
+shown: only an allowlisted summary (`npx figma-developer-mcp · +2 args`, names of variables
+without values).
+
+- **MCP:** add (a form or a pasted `mcpServers` block) and remove, with an explicit scope for
+  Claude; a connection check ("Check") for Claude only.
+- **Plugins:** the catalog of connected marketplaces, details, install, uninstall, enable,
+  disable and "Add marketplace" for Claude; install, uninstall and "Add marketplace" for
+  Codex (its CLI has no enable, disable or update).
+- **Share a skill with the other agent:** a symlink to the original in the other agent's
+  skills folder ("Share with Claude" or "Share with Codex"); "Unshare from Claude" or "Unshare from Codex" removes only that symlink.
+
+Two limits to know. First, Claude's MCP and plugin actions run only with the Claude Code
+build that was audited for them (2.1.287, macOS on Apple silicon, matched by size and hash);
+with any other build or platform they show as unavailable, and `/mcp` and `/plugin` in the
+session's terminal remain. Second, nothing restarts a running session: the panel says
+"Applies to new sessions" and how many live sessions of that provider are affected.
+
+### Skill navigator
+
+Off by default. Turn it on in Settings → Agents ("Skill navigator"), with
+`"skillNavigator": true` in `config.json` or with `PARLEY_SKILL_NAVIGATOR=1`. It applies to
+new and resumed sessions: the setting is read once per launch.
+
+When it is on, the `parley` MCP server gets one more tool, `find_skill(query, for?, limit?)`:
+a local search by words (BM25 over the name and the description, the name weighs three times
+more, no network, no model) that returns up to `limit` skills (5 by default, at most 10) the
+agent's own CLI can load, each with its name, description, source and how to load it. `for`
+is a session id: the lead of a room looks for skills of a participant, in that participant's
+folder and CLI. After two empty searches in a row the tool tells the agent to stop searching.
+Skills of the other CLI, and skills that you or the CLI hid (`disable-model-invocation`,
+`skillOverrides`, `allow_implicit_invocation: false`, `enabled = false`), are not returned.
+
+Turning the navigator on also shortens the agent's native skill list, so that descriptions come
+through `find_skill` instead:
+
+- **Claude:** `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` in the agent's environment (the list keeps names
+  only) and the `jev-skill-suggestion` mod switched off for this session with an
+  `enabledPlugins` entry in the session's own settings file `settings/<session>.json` (the
+  hooks and the status line stay). What the model can load is read from the `skill_listing`
+  attachment in the session's own transcript.
+- **Codex:** `-c skills.include_instructions=false` (the placeholder `{skillCatalog}`) removes
+  the native catalog, and the names of the available skills go into the description of
+  `find_skill`.
+
+The list stays full, and the launch carries a warning, when the shortening cannot be confirmed:
+a session with a native Claude role (`--agent`), a runner without `{mcpConfig}`, Codex without
+a known binary or with a template that has unknown parts, the jev mod installed while the
+template has no `{settingsFile}`, or a custom Codex runner without `{skillCatalog}`.
+
+What is known and what is not. A probe on 2026-10-05 (Claude Code 2.1.289, Codex 0.160.0)
+confirmed that both mechanisms work: Claude's list shrank from 7,977 to 3,048 characters for 102
+skills on a small model, and Codex's launch input dropped by about 8,600 tokens. **Not
+measured:** how well agents choose a skill through `find_skill`, and the real saving of tokens
+on an accepted task. The paid paired measurement has not been run; the offline bench for it is
+`tools/parley-token-benchmark.ts` (see `docs/research/2026-10-04-parley-token-benchmark.md`),
+and it makes no paid model calls. Known limits: after the shortening, Codex does not offer
+plugin, system, admin or extra skills at all (only the user and project ones are confirmed);
+a skill that the jev mod made `user-invocable-only` is not offered either. **Run
+`/jev-skill-suggestion:setup restore` before relying on the navigator:** it returns the skills
+that mod hid to the model everywhere. It is your personal setting, Parley does not change it.
+GLM is not covered in this branch.
+
+### Limits of a workspace and a room
+
+Settings → Agents has a "Work limits" block. They count sessions and messages, not tokens or
+money. A room is limited more tightly than its workspace, because it spends from the workspace's
+budget. A limit applies to new starts only: running sessions are not stopped, and when one is
+reached the agent is told to report and wait for you.
+
+| Key | Settings label | Default | Range | Variable |
+| --- | --- | --- | --- | --- |
+| `workConcurrent` | Running sessions, workspace | 10 | 1…64 | `PARLEY_WORK_CONCURRENT` |
+| `roomConcurrent` | Running sessions, room | 6 | 1…64 | `PARLEY_ROOM_CONCURRENT` |
+| `workNewSessions` | Agent-created sessions, workspace | 30 | 0…1000 | `PARLEY_WORK_NEW_SESSIONS` |
+| `roomNewSessions` | Agent-created sessions, room | 12 | 0…1000 | `PARLEY_ROOM_NEW_SESSIONS` |
+| `spawnDepth` | Spawn depth | 3 | 1…8 | `PARLEY_SPAWN_DEPTH` |
+| `workLaunches` | Starts and wake-ups per hour, workspace | 40 | 1…1000 | `PARLEY_WORK_LAUNCHES` |
+| `roomLaunches` | Starts and wake-ups per hour, room | 20 | 1…1000 | `PARLEY_ROOM_LAUNCHES` |
+| `workMessages` | Agent messages per hour, workspace | 200 | 1…10000 | `PARLEY_WORK_MESSAGES` |
+| `roomMessages` | Agent messages per hour, room | 100 | 1…10000 | `PARLEY_ROOM_MESSAGES` |
+| `fanout` | Message deliveries per hour, workspace | 400 | 1…100000 | `PARLEY_FANOUT` |
+
+Every path that can start a session goes through these limits: `spawn_session`, invitations of
+`create_room`, `send_message`, a start from the window, auto-launch, resume and a wake-up by
+mail. Stop, close, `report`, reading, and messages from you, from Parley itself and from the
+host are never blocked. The count lives in the workspace map, so a host restart does not give a
+new budget. What it does **not** count: subagents or forks that a CLI starts inside its own
+session, sessions started in a terminal outside Parley, and tokens. The "New session or room"
+dialog shows the busy sessions and the remaining starts and does not begin a start that would
+not fit.
+
+### Compact map and pages
+
+`get_map` returns a compact topology of the workspace — sessions with their state, rooms with
+their lead, mode, recipe and current decision, the live plans with their exact revision, unread
+counters and message cursors, about 3 KB however many messages there are. Long texts, history,
+summaries, artifacts and messages come as pages: `get_map {session, room, field, id, kind,
+cursor, maxBytes}` with a byte limit (64 KiB by default, 2…256 KiB) and a cursor that
+neither skips nor repeats messages when new ones arrive; a cut field names its full size.
+`read_room` is limited the same way. The window gets a compact snapshot too (the fresh tail of
+messages per room, the exact unread count) and loads earlier messages with "Show earlier
+messages". A window built before this change that meets a snapshot it cannot take gets a
+`client-upgrade-required` conflict, and a window that receives a line over 8 MiB stops
+reconnecting and shows a status. The map's storage did not change, and the 8 MiB frame limit
+was not raised.
+
+### Token numbers
+
+The usage that the host sends to the window carries its origin and freshness (`source`,
+`observedAt`, `stale`, `completeness`, `coverage`). A fresh live index of the same conversation
+wins over a frozen snapshot; a field a CLI does not report (for example Codex's cache write)
+stays unknown rather than 0; the usage of a subagent of Claude or a spawned thread of Codex
+is counted once, and an overlap that cannot be proven is left out of the sum and marked
+`partial`. Token totals are never called money or a share of your subscription limit.
+
 ## What lives where
 
 - `packages/core` — reading history: streaming `.jsonl` parsing, versioned schema adapters,
@@ -1225,6 +1556,16 @@ to it.
     pid, rooms and decisions (`rooms.ts`, `proposals.ts`), on-demand summaries, the guide by
     topic (`guide.ts`), the agent skill (`skill.ts` — the stub, `skill-install.ts` — the
     installation), the Codex `notify` script (`codex-notify.ts`).
+  - `src/work/` also holds the project layer: the session layer and PARLEY.md (`session-layer.ts`,
+    `parley-md.ts`), the byte budgets and the compact map (`context-budget.ts`,
+    `context-pages.ts`), plans and rooms' modes (`plans.ts`, `plan-effects.ts`,
+    `plan-snapshots.ts`), the backlog, memory and decision journal (`backlog.ts`,
+    `project-memory.ts`, `decision-journal.ts`, `room-history.ts`), `history-search.ts`, the
+    limits (`resource-policy.ts`), the usage ledger (`usage-ledger.ts`) and the skill
+    shortening (`skill-reduction.ts`).
+  - `src/skills/` — discovery, catalog and search of native skills for `find_skill`;
+    `src/roles/` — built-in and native roles; `src/recipes/` — room recipes;
+    `src/capabilities/` — the scanner of the input field's hints, built on `skills/`.
   - `src/config.ts` — `config.json` and `PARLEY_*`, with defaults and validation.
   - `src/names.ts` — the single source of names: the home and project directories, the
     variable prefixes, the MCP server and skill names, the branch prefix, the worktree root.
@@ -1245,7 +1586,8 @@ to it.
     (`strings.ts`).
   - `e2e/` — end-to-end Playwright tests against a real host.
 - `packages/host` — `parley-host`: a server on a unix socket, PTYs and screen snapshots,
-  sessions, auto-wake, rooms, subscription limits, worktrees and "Changes". It lives in
+  sessions, auto-wake, rooms, plan delivery, room histories, the Capabilities snapshot and
+  its native actions, subscription limits, worktrees and "Changes". It lives in
   `~/.parley/host/` (`host.sock`, `host.token`, `host.pid`, `host.log`, `host.err`).
 - `packages/protocol` — the types of the methods and events between the window and the host,
   the protocol version, message framing.
@@ -1257,6 +1599,13 @@ to it.
   `2026-09-26-desktop-plan*.md`, `2026-09-26-desktop-orca-ui-plan*.md` and
   `2026-09-29-desktop-rooms-organic-plan.md`. The source of the rooms design (a prototype,
   screenshots) is `docs/design/2026-09-29-rooms-organic/`.
+- `docs/specs/` also holds the specifications of the project layer: `2026-10-02-parley-md-design.md`,
+  `2026-10-02-agent-roles-design.md`, `2026-10-02-plans-backlog-design.md`,
+  `2026-10-02-room-recipes-design.md`, `2026-10-03-memory-journal-design.md`,
+  `2026-10-03-skill-navigator-design.md` and `2026-10-02-capabilities-design.md`; each ends with
+  a section on what was actually built and how it differs. The plans and the log of the work are
+  in `docs/plans/`, the probes of the CLIs and the measurement bench in `docs/research/` and
+  `tools/`.
 - `.ralph/specs/` — the specifications for v0–v2: the data layer, the old UI, PTY, runners.
 - `docs/schema/` — snapshots of the real schemas of both providers, which the parser is
   checked against.
@@ -1287,6 +1636,43 @@ title (it is stuck on a sign-in or folder trust screen) — answers a send from 
 note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
 answer — text not inserted" with the buttons "Copy" and "Open S02"; auto-wake does not wake it
 either. The provider adapters and the registry stay in core and work from the CLI.
+
+### Launch templates and placeholders
+
+The registry entry of a provider has `args` (a new session) and `resumeArgs` (a resume), lists of
+words in which these placeholders are replaced. A placeholder with no value drops itself and
+the flag before it, so a launch without a model, an effort, a role and so on carries no empty
+flags. An entry in `~/.parley/providers.json` with its own `args` replaces the built-in list
+entirely, and then only its own placeholders work.
+
+| Placeholder | What it becomes |
+| --- | --- |
+| `{sessionUuid}` / `{providerSessionId}` | the id Parley gave to a new Claude session / the id to resume |
+| `{mcpConfig}` | the `parley` MCP server: a file for Claude (`--mcp-config`), a `-c mcp_servers.parley=…` value for Codex |
+| `{settingsFile}` | the file with the hooks and the status line (`--settings`); one per session while the skill navigator is on |
+| `{systemPrompt}` | the session layer for Claude (`--append-system-prompt`) |
+| `{developerInstructions}` | the session layer for Codex (`-c developer_instructions=…`) |
+| `{channel}` | the call channel (`--dangerously-load-development-channels`), only in sessions started with channel push (see "Core CLI") |
+| `{model}`, `{effort}` | the choice from the dialog; its presence in the template tells the window the provider accepts it |
+| `{agent}` | the name of a native Claude role (`--agent`) |
+| `{disallowedTools}` | `Edit,Write,NotebookEdit` for a read-only Claude role (`--disallowedTools`) |
+| `{sandbox}` | `sandbox_mode="read-only"` for a read-only Codex role |
+| `{notify}` | the Codex `notify` script |
+| `{skillCatalog}` | `skills.include_instructions=false` for Codex, only while the skill navigator is on and confirmed |
+| `{prompt}` | the starting brief, or on resume the pointer to messages |
+
+The built-in Claude launch is `claude --session-id <uuid> --mcp-config <file> --settings <file>
+--append-system-prompt <layer> [--dangerously-load-development-channels server:parley] [--model …]
+[--effort …] [--agent …] [--disallowedTools …] <brief>`; a resume swaps `--session-id <uuid>` for
+`--resume <id>` and leaves out the model and the effort. A role that cannot be delivered by the
+chosen template (no `{systemPrompt}` or `{developerInstructions}`, no `{disallowedTools}` or
+`{sandbox}` for a read-only role) stops the launch with an error instead of starting the
+session without it. After editing a custom runner, check the window's notices: a missing
+`{developerInstructions}` or `{skillCatalog}` gives `provider-override-gap`.
+
+The built-in GLM entry in this branch runs `glm` with no arguments, so it receives none of
+these: no layer, no roles, no navigator. GLM as a Claude Code session belongs to a later
+version of `master` and is not covered here.
 
 ### Models
 
@@ -1343,11 +1729,15 @@ substituted per session; `--model` and the effort only if chosen in the dialog):
 ```
 codex --no-daemon -a on-request \
   -c 'mcp_servers.parley={command="<node>",args=["<core>/dist/mcp/server.js"],env={PARLEY_WORK_DIR="<work-dir>",PARLEY_SESSION_ID="<id>",…},startup_timeout_sec=30,tool_timeout_sec=1860}' \
+  -c 'developer_instructions="<the session layer>"' \
+  [-c 'sandbox_mode="read-only"'] \
+  -c 'project_doc_fallback_filenames=["CLAUDE.md"]' \
   -c 'tui.terminal_title=["spinner","status","session-id"]' \
   -c 'tui.notifications=["approval-requested","agent-turn-complete"]' \
   -c 'tui.notification_method="osc9"' \
   -c 'tui.notification_condition="always"' \
   -c 'notify=["<node>","<core>/dist/work/codex-notify-bin.js"]' \
+  [-c 'skills.include_instructions=false'] \
   [--model <model>] [-c 'model_reasoning_effort="<effort>"'] "<brief>"
 ```
 
@@ -1376,6 +1766,15 @@ the `-c notify`, which a session started by hand needs too. Why each flag:
   `startup_timeout_sec` leaves headroom for a slow `node` start, and `tool_timeout_sec` is
   longer than the longest `wait_for`: otherwise Codex would cut off the wait for a message
   after a minute.
+- `developer_instructions` — the session layer (see "PARLEY.md: team rules"): the value is the
+  layer serialized as a TOML string, so quotes, backslashes and line breaks do not break the
+  flag. It is passed on launch and on `resume`, but an already running conversation sees a
+  changed text only after its context is compacted.
+- `sandbox_mode="read-only"` — only for a read-only role (see "Roles"); a native Codex role may
+  bring its own `sandbox_mode`.
+- `project_doc_fallback_filenames=["CLAUDE.md"]` — the `CLAUDE.md` bridge.
+- `skills.include_instructions=false` — only while the skill navigator is on and the launch is
+  confirmed (see "Skill navigator"); otherwise the pair is dropped and the full list stays.
 - `tui.terminal_title`, `tui.notifications`, `tui.notification_method` and
   `tui.notification_condition` — the state in the terminal (see below). By default
   notifications are silent while the terminal is "in focus", and for Codex in the host's pty
@@ -1513,6 +1912,30 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
 - Codex state parsing relies on the terminal title strings and terminal notifications, which
   are not a public Codex interface and have not been checked against a live Codex; what to
   check is in "Codex — a room agent".
+- **The project layer** (see "The project layer") is checked by tests only. Not yet run with
+  real sessions: a Codex launch and resume with the new `-c` flags, the read-only role flags
+  on real Claude and Codex sessions, the jev mod switched off while the hooks stay alive, the
+  argument and environment limits on Linux (checked on macOS only), and the human-labelled and
+  paid measurements of the skill navigator. Nothing about a saving of tokens is claimed.
+- **Skill navigator.** Off by default. Codex, once its list is shortened, offers only user and
+  project skills (plugin, system, admin and extra skills are not confirmed and are missing from
+  both the list and `find_skill`); if Codex cannot confirm its native inventory, the list is
+  already removed and `find_skill` answers with an empty list and a reason. Skills that the
+  jev mod made `user-invocable-only` are not offered; run `/jev-skill-suggestion:setup
+  restore` to give them back (a personal setting that Parley never touches). Skills synced from
+  claude.ai appear by name only: their descriptions are not on disk and Parley has no manifest
+  to read them from. GLM is not covered in this branch.
+- **Claude's MCP and plugin actions in the Capabilities tab** run only with the audited Claude
+  Code build (2.1.287, macOS on Apple silicon); other builds and platforms show them as
+  unavailable.
+- **Mail and long texts.** `check_inbox` returns every unread message at once, with no limit and
+  no way to ask for earlier ones. The window's compact snapshot cuts a long message and names
+  its full size, but has no "Show full message" button yet; an agent reads it whole with
+  `get_map {field: "message", id}`. A window built before the compact snapshot, talking to a new
+  host, shows only a general error text for the `client-upgrade-required` conflict: update the
+  app.
+- **The notice `provider-override-gap`** is shown once per host and its text speaks only about
+  the instructions setting, even when the missing piece is `{skillCatalog}`.
 - **The window:**
   - the host reads `silenceThresholdMs` at start: after editing it, the host must be restarted;
   - "Changes" does not see edits made by anyone but the agent until "Refresh";
