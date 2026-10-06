@@ -3729,7 +3729,9 @@ export function cmakeArgs(arch, sourceDir, buildDir) {
   ];
   return arch === 'arm64'
     ? [...common, '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DGGML_METAL=ON', '-DGGML_METAL_EMBED_LIBRARY=ON']
-    : [...common, '-DCMAKE_OSX_ARCHITECTURES=x86_64', '-DGGML_METAL=OFF', '-DGGML_AVX=ON', '-DGGML_AVX2=ON', '-DGGML_FMA=ON', '-DGGML_F16C=ON'];
+    : // x64: AVX2, FMA, F16C, а по умолчанию ggml и BMI2 — нужен Haswell или новее; macOS 12 и так требует Mac 2015+.
+      // Rosetta такой бинарь не исполняет (этап 0, SIGILL) — x64 проверяется только на настоящем Intel Mac.
+      [...common, '-DCMAKE_OSX_ARCHITECTURES=x86_64', '-DGGML_METAL=OFF', '-DGGML_AVX=ON', '-DGGML_AVX2=ON', '-DGGML_FMA=ON', '-DGGML_F16C=ON'];
 }
 
 export function isUpToDate(stamp, expected) {
@@ -3850,11 +3852,18 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   [ -s "$resources/whisper/LICENSE" ] || fail "$app has no Contents/Resources/whisper/LICENSE"
 ```
 
-    и в `run_app` после строки про node-pty:
+    и в `run_app` после строки про node-pty — запуск только без префикса, то есть у родной архитектуры раннера:
 
 ```bash
-  "$@" "$resources/whisper/bin/whisper-cli" --help >/dev/null 2>&1 || fail "$out: whisper-cli does not start"
+  # whisper-cli x64 собран с AVX2, а Rosetta его не исполняет (этап 0: SIGILL, сборки без AVX там зависают): x64 под
+  # `arch -x86_64` не запускаем — у него проверка заголовка (lipo выше) и библиотек (otool), а не запуск.
+  if [ "$#" -eq 0 ]; then
+    "$resources/whisper/bin/whisper-cli" --help >/dev/null 2>&1 || fail "$out: whisper-cli does not start"
+  fi
+  ! otool -L "$resources/whisper/bin/whisper-cli" | grep -q '@rpath' || fail "$out: whisper-cli links libraries from the build (@rpath)"
 ```
+
+  Под это — тест в `verify-packaged-apps.test.ts`: x64-приложение при запуске под фейковым `arch -x86_64` не вызывает `whisper-cli`. Журнал `FAKE_LOG` не содержит строки с `whisper-cli`. Подставной `otool` по образцу `lipo` печатает только системные библиотеки.
 
   - **`NOTICE`**: в конец добавить два раздела в формате файла:
     - `whisper.cpp` — источник `https://github.com/ggml-org/whisper.cpp`, тег v1.9.4, полный текст MIT из `LICENSE` архива с «Copyright (c) 2023-2026 The ggml authors»; пометка «едет как Contents/Resources/whisper/bin/whisper-cli»;
@@ -4130,7 +4139,7 @@ git commit -m "test(desktop): E2E голосового ввода и проба 
   4. Окно 800×500 с длинным путём проекта и названием комнаты: вкладка Voice (шесть вкладок в 32rem) и кнопка в тулбаре не вылезают за края.
   5. Замер: 10–15-секундная русская фраза на turbo, время от стопа до текста — критерий 4 спеки, не больше 3 с.
   6. Порог тишины: пустая запись и тихая речь. Если тихую речь режет «No speech detected», снизить `SILENCE_PEAK` и закоммитить отдельно.
-  7. x64-сборку (`dist/mac/Parley.app`) запустить под Rosetta, распознать фразу на small.
+  7. x64-сборку проверить на этой машине нельзя: Rosetta не исполняет AVX2 (этап 0). Если есть Intel Mac, распознать на нём фразу на small. Если нет — записать в TODOS «голос на Intel Mac не проверен вживую», а в README не обещать Intel.
 
 - [ ] **Шаг 5. Закоммитить.**
 
