@@ -225,6 +225,13 @@ export const S = {
     installationGuide: 'Installation guide',
     signInGuide: 'Sign-in guide',
     checkAgain: 'Check again',
+    /**
+     * Аргументы запуска провайдера заменены из `providers.json` (`argsOverridden`, нормалайзер модели и effort 2026-10-06):
+     * без `{model}` или `{effort}` в них выбора модели или effort нет — карточка объясняет почему.
+     */
+    argsOverridden: 'Launch arguments come from providers.json.',
+    noModelChoice: 'No model choice: these arguments have no {model}.',
+    noEffortChoice: 'No effort choice: these arguments have no {effort}.',
     signIn: "Sign-in happens in the agent's terminal on the first session — Parley does not sign you in.",
     path: 'Installed it into a new folder? Quit Parley (⌘Q) and open it again: the app reads PATH once at launch.',
     account: (command: string): string => `To change your account, run ${command} in the agent's terminal.`,

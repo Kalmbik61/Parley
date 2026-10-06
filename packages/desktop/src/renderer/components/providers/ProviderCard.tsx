@@ -239,6 +239,14 @@ export function ProviderCard({
       {provider.version == null ? null : (
         <p className="font-mono text-xs text-muted-foreground">{provider.version}</p>
       )}
+      {provider.argsOverridden === true ? (
+        // `args` из providers.json заменили встроенные: выбор модели и effort есть, только если в них `{model}`/`{effort}`.
+        <div data-testid="provider-args" className="space-y-0.5 text-xs text-muted-foreground">
+          <p>{S.providerCard.argsOverridden}</p>
+          {(provider.models ?? []).length === 0 ? <p>{S.providerCard.noModelChoice}</p> : null}
+          {provider.effort === true ? null : <p>{S.providerCard.noEffortChoice}</p>}
+        </div>
+      ) : null}
       {isGlm ? (
         <>
           <p>{S.providerCard.glmDescription}</p>

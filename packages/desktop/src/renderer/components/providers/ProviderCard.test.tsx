@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ProviderCheck, Result } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
+import { S } from '../../../shared/strings.js';
 import { useHostStore } from '../../store/host.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
@@ -408,4 +409,38 @@ it('GLM показывает подтверждённую квоту Z.ai в с�
     source: 'zai', fiveHour: { usedPercent: 42.9, resetsAt: null }, week: null, at: '2026-10-03T00:00:00Z',
   } })} onReload={async () => {}} onRestartHost={() => {}} />);
   expect(screen.getByText('42% 5h')).toBeTruthy();
+});
+
+describe('ProviderCard: аргументы запуска из providers.json (нормалайзер модели и effort 2026-10-06, 5.9)', () => {
+  const codex = (patch: Partial<Provider> = {}): Provider => ({ id: 'codex', label: 'Codex', available: true, version: 'codex-cli 0.160.0', ...patch });
+  const renderCard = (provider: Provider): void => {
+    render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  };
+
+  it('args заменены и в них нет {model} и {effort} — строка про providers.json и почему выбора нет', () => {
+    renderCard(codex({ argsOverridden: true, models: null, effort: false }));
+    expect(screen.getByText('Launch arguments come from providers.json.')).toBeTruthy();
+    expect(screen.getByText('No model choice: these arguments have no {model}.')).toBeTruthy();
+    expect(screen.getByText('No effort choice: these arguments have no {effort}.')).toBeTruthy();
+  });
+
+  it('args заменены, выбор есть — только строка про providers.json', () => {
+    renderCard(codex({ argsOverridden: true, models: [{ id: 'gpt-6-luna', label: 'GPT-6-Luna' }], effort: true }));
+    expect(screen.getByText(S.providerCard.argsOverridden)).toBeTruthy();
+    expect(screen.queryByText(S.providerCard.noModelChoice)).toBeNull();
+    expect(screen.queryByText(S.providerCard.noEffortChoice)).toBeNull();
+  });
+
+  it('модель есть, effort нет — объяснение только про effort', () => {
+    renderCard(codex({ argsOverridden: true, models: [{ id: 'gpt-6-luna', label: 'GPT-6-Luna' }], effort: false }));
+    expect(screen.queryByText(S.providerCard.noModelChoice)).toBeNull();
+    expect(screen.getByText(S.providerCard.noEffortChoice)).toBeTruthy();
+  });
+
+  it('встроенные args (поля нет — и у старого хоста) — ни строки, ни объяснений, даже без выбора', () => {
+    renderCard(codex({ models: null, effort: false }));
+    expect(screen.queryByTestId('provider-args')).toBeNull();
+    expect(screen.queryByText(S.providerCard.noModelChoice)).toBeNull();
+    expect(screen.queryByText(S.providerCard.noEffortChoice)).toBeNull();
+  });
 });
