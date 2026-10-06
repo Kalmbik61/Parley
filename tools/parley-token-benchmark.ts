@@ -1389,6 +1389,12 @@ export interface CodexTranscript {
 /** Чтение файла навыка копии: `.agents/skills/<имя>/SKILL.md` или `.claude/skills/<имя>/SKILL.md`; имя навыка — из пути. */
 const SKILL_FILE = /\.(?:agents|claude)\/skills\/([^/\s"'`\\]+)\/SKILL\.md/g;
 
+/** Вызов `find_skill` в коде `exec` Codex (code mode): `tools.mcp__<сервер>__find_skill(`, сервер — любое имя. */
+const FIND_SKILL_CALL = /\btools\.mcp__\w+__find_skill\s*\(/g;
+
+/** Любое обращение к `tools` в коде: одно такое вхождение — вывод `exec` целиком принадлежит одному вызову. */
+const TOOLS_ACCESS = /\btools\s*[.[]/g;
+
 /** Разобранный JSON-объект или массив из строки; обычный текст и скаляры — `null`. */
 function parsedJson(value: string): object | null {
   try {
@@ -1424,18 +1430,24 @@ function resultTexts(value: unknown): string[] {
 
 /**
  * Один rollout-журнал Codex (`response_item` и `event_msg`, формат — `indexCodexSession` ядра): вызовы `find_skill`,
- * загрузки навыков и первый запрос. Имя MCP-инструмента в живом журнале Codex не проверено, поэтому `find_skill` —
- * любое имя вызова со словом `find_skill`; загрузка навыка — вызов (оболочки, чтения файла), в аргументах которого
- * есть путь к `SKILL.md` навыка копии (при непустом `knownSkills` — навыка из списка). Результат `find_skill`
- * сопоставляется по `call_id`. Первый запрос — первая запись `token_count` с `last_token_usage` (это запрос, а не
- * накопитель; ядро берёт тот же `info`): `input_tokens` у Codex уже включает кеш. Байты списка навыков, писем,
- * результатов инструментов и сжатия в журнале Codex не размечены надёжно: `null`.
+ * загрузки навыков и первый запрос. Codex 0.160 («code mode») зовёт все инструменты записью `custom_tool_call` с
+ * именем `exec`, а в `input` лежит JS-код с вызовами `tools.<имя>(...)`, поэтому `find_skill` — каждое вхождение
+ * `tools.mcp__<сервер>__find_skill(` в код (считается вхождение, а не исполнение: вызов в цикле посчитан один раз) или,
+ * как в других версиях, запись с именем со словом `find_skill`. Загрузка навыка — вызов (оболочки, чтения файла,
+ * `exec_command` в коде), в аргументах которого есть путь к `SKILL.md` навыка копии (при непустом `knownSkills` —
+ * навыка из списка). Результат `find_skill` сопоставляется по `call_id`, но вывод `exec` общий для всех вызовов в
+ * коде: его читают (байты, «ничего не найдено», предложенные навыки), только если `find_skill` — единственное
+ * обращение к `tools` в коде; иначе байты результата неизвестны (`null`), остальное по такому вызову не собирается.
+ * Первый запрос — первая запись `token_count` с `last_token_usage` (это запрос, а не накопитель; ядро берёт тот же
+ * `info`): `input_tokens` у Codex уже включает кеш. Байты списка навыков, писем, результатов инструментов и сжатия
+ * в журнале Codex не размечены надёжно: `null`.
  */
 export async function collectCodexTranscript(file: string, knownSkills: readonly string[] = []): Promise<CodexTranscript> {
   const findCalls = new Set<string>();
   const loaded: string[] = [];
   const offered = new Set<string>();
-  let [lookups, noMatch, reformulations, findBytes, lookupsSinceLoad] = [0, 0, 0, 0, 0];
+  let [lookups, noMatch, reformulations, lookupsSinceLoad] = [0, 0, 0, 0];
+  let findBytes: number | null = 0;
   let firstRequest: FirstRequest | null = null;
   await forEachJsonlRecord(file, (record: RawRecord) => {
     const payload = asRecord(record['payload']);
@@ -1449,20 +1461,30 @@ export async function collectCodexTranscript(file: string, knownSkills: readonly
     if (record['type'] !== 'response_item') return;
     const callId = isString(payload['call_id']) ? payload['call_id'] : null;
     if (kind === 'function_call' || kind === 'custom_tool_call') {
-      if (isString(payload['name']) && payload['name'].includes('find_skill')) {
+      const text = textsOf(kind === 'function_call' ? payload['arguments'] : payload['input']).join('\n');
+      const named = isString(payload['name']) && payload['name'].includes('find_skill');
+      const inCode = [...text.matchAll(FIND_SKILL_CALL)].length;
+      const found = named ? 1 : inCode;
+      for (let i = 0; i < found; i += 1) {
         lookups += 1;
         if (lookupsSinceLoad > 0) reformulations += 1;
         lookupsSinceLoad += 1;
-        if (callId !== null) findCalls.add(callId);
       }
-      const text = textsOf(kind === 'function_call' ? payload['arguments'] : payload['input']).join('\n');
+      if (found > 0) {
+        // Вывод принадлежит find_skill, если запись — сам вызов или он единственное обращение к `tools` в коде.
+        if (named || text.match(TOOLS_ACCESS)?.length === 1) {
+          if (callId !== null) findCalls.add(callId);
+        } else {
+          findBytes = null;
+        }
+      }
       const names = new Set([...text.matchAll(SKILL_FILE)].map((match) => match[1]!).filter((name) => knownSkills.length === 0 || knownSkills.includes(name)));
       loaded.push(...names);
       if (names.size > 0) lookupsSinceLoad = 0;
     }
     if ((kind === 'function_call_output' || kind === 'custom_tool_call_output') && callId !== null && findCalls.has(callId)) {
       const texts = resultTexts(payload['output']);
-      findBytes += Buffer.byteLength(texts.join(''));
+      if (findBytes !== null) findBytes += Buffer.byteLength(texts.join(''));
       if (texts.some((text) => text.startsWith('No skill matched'))) noMatch += 1;
       for (const name of knownSkills) if (texts.some((text) => text.includes(name))) offered.add(name);
     }

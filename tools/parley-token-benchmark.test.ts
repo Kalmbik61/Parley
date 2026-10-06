@@ -1187,6 +1187,11 @@ describe('сбор из журнала Codex', () => {
     rec('event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output }, last_token_usage: { input_tokens: lastInput, cached_input_tokens: lastCached, output_tokens: 7 } } }, s);
   const call = (name: string, callId: string, args: unknown, s: number) => rec('response_item', { type: 'function_call', name, call_id: callId, arguments: typeof args === 'string' ? args : JSON.stringify(args) }, s);
   const output = (callId: string, value: unknown, s: number, type = 'function_call_output') => rec('response_item', { type, call_id: callId, output: value }, s);
+  // Codex 0.160 (code mode): вызов — `custom_tool_call` с именем `exec` и JS-кодом в `input`; вывод — блоки `input_text`,
+  // в первом служебная строка, в следующем то, что код напечатал (результат MCP-вызова после `text(r)` — JSON-строкой).
+  const exec = (callId: string, code: string, s: number) => rec('response_item', { type: 'custom_tool_call', name: 'exec', call_id: callId, input: code }, s);
+  const SCRIPT = { type: 'input_text', text: 'Script completed\nWall time 1.0 seconds\nOutput:\n' };
+  const execOutput = (callId: string, text: string, s: number) => output(callId, [SCRIPT, { type: 'input_text', text }], s, 'custom_tool_call_output');
   const rollout = async (name: string, records: Record<string, unknown>[]): Promise<string> => {
     const file = path.join(tmp, `${name}.jsonl`);
     await writeFile(file, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -1238,7 +1243,52 @@ describe('сбор из журнала Codex', () => {
     const collected = await collectCodexTranscript(file);
     expect(collected.skillUse).toMatchObject({ lookups: 0, loads: 1, noMatch: 0, reformulations: 0 });
     expect(collected.loaded).toEqual(['anything']);
+    expect(collected.bytes['findSkillResultBytes']).toBe(0);
     expect(collected.firstRequest).toBeNull();
+  });
+
+  it('Codex 0.160 зовёт инструменты кодом exec: find_skill — вхождение tools.mcp__<сервер>__find_skill( в input; get_map, report и упоминание имени поиском не считаются', async () => {
+    const found = JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ provider: 'codex', skills: [{ name: 'bench-changelog' }] }, null, 2) }] });
+    const file = await rollout('code-mode', [
+      meta('thr-cm'),
+      exec('e1', 'const a=await tools.mcp__parley__get_map({}); text(a);', 1),
+      exec('e2', 'const r=await tools.mcp__parley__find_skill({query:"changelog entry"}); text(r);', 2),
+      execOutput('e2', found, 2),
+      exec('e3', 'const r=await tools.mcp__parley__report({status:"done",summary:"no find_skill needed"});', 3),
+      exec('e4', 'const names=ALL_TOOLS.filter(x=>/find_skill/.test(x.name)); text(names);', 4),
+      // Загрузка навыка копии вызовом exec_command в коде — как раньше, по пути SKILL.md.
+      exec('e5', 'const r=await tools.exec_command({cmd:"cat .agents/skills/bench-changelog/SKILL.md",yield_time_ms:10000}); text(r.output);', 5),
+      // Прежний вид (запись названа find_skill) и другой сервер с пробелом перед скобкой — тот же счётчик.
+      call('mcp__parley__find_skill', 'c6', { query: 'again' }, 6),
+      exec('e7', 'const r=await tools.mcp__other_srv__find_skill ({query:"x"}); text(r);', 7),
+    ]);
+
+    const collected = await collectCodexTranscript(file, KNOWN);
+    expect(collected.skillUse).toEqual({ lookups: 3, loads: 1, noMatch: 0, reformulations: 1, duplicateLoads: 0, forbiddenOffered: null });
+    expect(collected.loaded).toEqual(['bench-changelog']);
+    // find_skill — единственный вызов в своём exec: байты — все текстовые блоки вывода, навык из результата предложен.
+    expect(collected.bytes['findSkillResultBytes']).toBe(Buffer.byteLength(SCRIPT.text) + Buffer.byteLength(found));
+    expect(collected.offered).toEqual(['bench-changelog']);
+  });
+
+  it('в одном exec несколько вызовов: каждый find_skill считается, но вывод общий — байты результата null, предложенные навыки по нему не собираются', async () => {
+    const file = await rollout('shared-exec', [
+      meta('thr-sh'),
+      // Два find_skill подряд: две попытки, вторая — переформулировка.
+      exec('e1', 'const a=await tools.mcp__parley__find_skill({query:"a"}); const b=await tools.mcp__parley__find_skill({query:"b"}); text(a); text(b);', 1),
+      execOutput('e1', 'bench-error-codes', 1),
+      // find_skill рядом с get_map: вывод тоже общий.
+      exec('e2', 'const m=await tools.mcp__parley__get_map({}); const r=await tools.mcp__parley__find_skill({query:"c"}); text(m); text(r);', 2),
+      execOutput('e2', 'minimal-development', 2),
+      // Одиночный поиск после них: имя навыка собирается, а байты остаются неизвестными.
+      exec('e3', 'const r=await tools.mcp__parley__find_skill({query:"d"}); text(r);', 3),
+      execOutput('e3', 'bench-changelog', 3),
+    ]);
+
+    const collected = await collectCodexTranscript(file, KNOWN);
+    expect(collected.skillUse).toMatchObject({ lookups: 4, reformulations: 3, noMatch: 0 });
+    expect(collected.bytes['findSkillResultBytes']).toBeNull();
+    expect(collected.offered).toEqual(['bench-changelog']);
   });
 
   it('прогон codex: счётчики, версия CLI из session_meta сверяется с begin (cli-version-mismatch), первый запрос ведущего треда, jevFired — null', async () => {
