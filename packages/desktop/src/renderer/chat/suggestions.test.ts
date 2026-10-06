@@ -16,11 +16,12 @@ describe('suggestionContext', () => {
     expect(suggestionContext('/cl', 2)).toEqual({ kind: 'command', query: 'c', start: 0 });
   });
 
-  it('«/model » и «/model son» — выбор модели', () => {
-    expect(suggestionContext('/model ', 7)).toEqual({ kind: 'model', query: '', start: 0 });
-    expect(suggestionContext('/model son', 10)).toEqual({ kind: 'model', query: 'son', start: 0 });
-    expect(suggestionContext('/model a b', 10)).toBeNull();
+  it('«/model » — не подсказка: модель меняет меню тулбара (нормалайзер 2026-10-06); «/model» без пробела — команда', () => {
+    expect(suggestionContext('/model ', 7)).toBeNull();
+    expect(suggestionContext('/model son', 10)).toBeNull();
+    expect(suggestionContext('/model', 6)).toEqual({ kind: 'command', query: 'model', start: 0 });
   });
+
 
   it('@ в начале слова — упоминание, query без @; start — позиция @', () => {
     expect(suggestionContext('@', 1)).toEqual({ kind: 'mention', query: '', start: 0 });
@@ -39,11 +40,6 @@ describe('applySuggestion', () => {
   it('команда: «/cl» → «/clear », каретка после пробела', () => {
     const context = suggestionContext('/cl', 3)!;
     expect(applySuggestion('/cl', 3, context, '/clear ')).toEqual({ text: '/clear ', caret: 7 });
-  });
-
-  it('модель: без пробела — человек жмёт Enter сам', () => {
-    const context = suggestionContext('/model ', 7)!;
-    expect(applySuggestion('/model ', 7, context, '/model opus')).toEqual({ text: '/model opus', caret: 11 });
   });
 
   it('упоминание в середине текста: токен заменён, остальное сохранено', () => {

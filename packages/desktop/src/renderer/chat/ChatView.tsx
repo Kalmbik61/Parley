@@ -27,8 +27,15 @@
  * терминале» (решение Н) — когда активность сессии `blocked`, а карточки `pending` в ленте нет (диалог
  * без хука) и так держится 300 мс подряд; с карточкой ждёт человека сама карточка.
  *
+ * Меню «модель · effort» (нормалайзер модели и effort 2026-10-06, 5.9): подпись модели — из ленты, иначе из карты
+ * (`WorkSession.model` подписью каталога), уровень — из карты; пункты — модели провайдера и уровни модели из карты
+ * (`effortChoices`). Выбор уходит `sessions.setModel` (хост перезапускает живую сессию через resume) и
+ * `sessions.setEffort` (ползунок `/effort` с клавишей `s`): ни текста `/model`, ни записи в настройки CLI. Хост без
+ * обоих методов — меню нет. Пункты неактивны, пока агент работает или его держат фоновые задачи, уровни — ещё и у
+ * неживой сессии.
+ *
  * Подсказки и вложения поля ввода (живая проверка 2026-10-02): команды, скиллы и субагенты берутся у хоста
- * (`capabilities-store.ts`), модели — из провайдера, файлы — из рабочей папки сессии (`files.list`). Файлы,
+ * (`capabilities-store.ts`), файлы — из рабочей папки сессии (`files.list`). Файлы,
  * брошенные на вид, скриншот из буфера и скрепка встают чипами над полем (`Composer`; список путей — в
  * `ui-store.ts`), а при отправке уходят упоминаниями `@"путь"` после текста (`attachments.ts`) — отправляет
  * их только человек. Серый элемент очереди хранит уже собранный текст; промпт ленты (`PromptItem`) снова
@@ -41,7 +48,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
-import { refKey, type ModelOption, type SessionRef } from '@parley/protocol';
+import { HOST_ERROR_REASONS, refKey, type ModelOption, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -50,7 +57,8 @@ import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { defaultRoot } from '../files/store.js';
 import { cn } from '../lib/cn.js';
-import { activityFor, useActivityStore } from '../store/activity.js';
+import { effortChoices } from '../lib/effort-choices.js';
+import { activityFor, useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -81,8 +89,12 @@ export interface ChatViewProps {
   bridge: ParleyBridge;
   /** `SendWithToastDeps` окна (из `AppShell` через раскладку). */
   sendDeps: SendWithToastDeps;
-  /** Провайдер сессии: по нему берётся список моделей для меню. */
+  /** Провайдер сессии: по нему берутся модели и уровни для меню «модель · effort». */
   provider: string;
+  /** Модель из карты (`WorkSession.model`); `null` — «Default», без флага. */
+  storedModel: string | null;
+  /** Уровень effort из карты (`WorkSession.effort`); `null` — «Default», без флага. */
+  storedEffort: string | null;
 }
 
 /**
@@ -110,6 +122,34 @@ const NO_QUEUED: readonly Queued[] = [];
 const NO_MODELS: readonly ModelOption[] = [];
 const NO_PATHS: readonly string[] = [];
 
+/** Подпись модели по каталогу провайдера; нет в каталоге или подпись пустая — сам id. */
+function modelCaption(models: readonly ModelOption[], id: string): string {
+  const label = models.find((option) => option.id === id)?.label;
+  return label === undefined || label === '' ? id : label;
+}
+
+/**
+ * Чем занята сессия для меню «модель · effort» — по тем же признакам хост ответит отказом (спека 5.7, 5.8): агент
+ * работает сам или ждёт человека — `agent`; ход окончен, а держат фоновые задачи — `background`; иначе (`idle`,
+ * `unseen`, активность ещё неизвестна) — `idle`.
+ */
+function occupation(activity: ActivityEntry['activity'] | undefined): 'idle' | 'agent' | 'background' {
+  if (activity === undefined) return 'idle';
+  if (activity.activity === 'blocked' || (activity.activity === 'working' && !activity.heldByBackground)) return 'agent';
+  return activity.heldByBackground || activity.tasks.some((task) => task.background) ? 'background' : 'idle';
+}
+
+/**
+ * Отказ смены модели или уровня. `conflict` с причиной `busy` — сессия занята (так отвечает хост: агент работает, держат
+ * фоновые задачи, в поле терминала черновик, открыт ползунок, идёт другая смена); прочее — общий текст по коду.
+ */
+function choiceFailed(method: string, action: string, error: unknown): void {
+  const { code, message, data } = decodeIpcError(error);
+  console.warn(`[parley] ${method}`, message);
+  const busy = code === 'conflict' && data?.['reason'] === HOST_ERROR_REASONS.busy;
+  toast.error(busy ? S.chat.choice.sessionBusy : errorText(code, action));
+}
+
 /** Номер серого элемента — общий на окно: элементы разных сессий живут в одном сторе. */
 let nextQueuedId = 0;
 
@@ -124,19 +164,32 @@ function noteOf(feed: FeedEntry | null): string | null {
   return S.chat.empty;
 }
 
-export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, sendDeps, provider }: ChatViewProps): JSX.Element {
+export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, sendDeps, provider, storedModel, storedEffort }: ChatViewProps): JSX.Element {
   const feed = useFeed(sessionRef);
   const items = feed?.items ?? NO_ITEMS;
   const active = live && turnActive(items);
-  const model = currentModel(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
   const waiting = blocked && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
   const canSetMode = useHostSupports('sessions.setMode');
   const canInterrupt = useHostSupports('feed.interrupt');
+  const canSetModel = useHostSupports('sessions.setModel');
+  const canSetEffort = useHostSupports('sessions.setEffort');
   const [modeBusy, setModeBusy] = useState(false);
-  const [modelBusy, setModelBusy] = useState(false);
-  const modelOptions = useProvidersStore((state) => state.providers.find((item) => item.id === provider)?.models) ?? NO_MODELS;
+  const [choiceBusy, setChoiceBusy] = useState(false);
+  const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
+  const models = providerInfo?.models ?? NO_MODELS;
+  // Уровни модели из карты — тот же список, по которому хост проверит выбор; модели в карте нет — уровни «Default».
+  const efforts = effortChoices(providerInfo, storedModel);
+  // Подпись модели: что CLI запустил на деле (лента), иначе выбор из карты подписью каталога.
+  const modelLabel = currentModel(items) ?? (storedModel === null ? null : modelCaption(models, storedModel));
+  const occupied = useActivityStore((state) => occupation(activityFor(state.byRef, sessionRef)?.activity));
+  const busyReason = occupied === 'agent' ? S.chat.choice.agentWorking : occupied === 'background' ? S.chat.choice.backgroundTasks : null;
+  // Модель неживой сессии меняется только в карте (хост ответит `restarted: false`), уровень — только у живой: его ставит
+  // ползунок самого CLI.
+  const modelDisabled = live ? busyReason : null;
+  const effortDisabled = live ? busyReason : S.chat.choice.notLive;
+  const showChoice = canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
   // Карточка неживой сессии — то же правило, что у `TerminalSurface`.
   const showCard = useWorksStore((state) => {
     const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
@@ -159,10 +212,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     (dir: string) => (filesRoot === null ? Promise.resolve([]) : bridge.files.list(filesRoot, dir)),
     [bridge, filesRoot],
   );
-  const suggestionSource = useMemo<SuggestionSource>(
-    () => ({ capabilities, models: modelOptions, listDir }),
-    [capabilities, modelOptions, listDir],
-  );
+  const suggestionSource = useMemo<SuggestionSource>(() => ({ capabilities, listDir }), [capabilities, listDir]);
   const [dropping, setDropping] = useState(false);
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
   const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
@@ -223,10 +273,34 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       .finally(() => setModeBusy(false));
   };
 
+  // Модель: хост пишет её в карту и, если сессия живая, перезапускает её через resume с флагами из карты (спека 5.8).
   const selectModel = (id: string): void => {
-    if (modelBusy || !live) return;
-    setModelBusy(true);
-    void sendWithToast(sendDeps, sessionRef, `/model ${id}`, true, { silentSuccess: true }).finally(() => setModelBusy(false));
+    if (choiceBusy || modelDisabled !== null || id === storedModel) return;
+    setChoiceBusy(true);
+    bridge
+      .call('sessions.setModel', { ref: sessionRef, model: id })
+      .then((result) => {
+        // Уровня из карты у новой модели нет — хост вернул «Default»; человек выбирал уровень сам и должен об этом узнать.
+        if (storedEffort !== null && result.effort === null) {
+          const level = efforts?.find((option) => option.id === storedEffort)?.label ?? storedEffort;
+          toast(S.chat.choice.effortReset(modelCaption(models, id), level));
+        }
+      })
+      .catch((error: unknown) => choiceFailed('sessions.setModel', S.errors.actions.switchModel, error))
+      .finally(() => setChoiceBusy(false));
+  };
+
+  // Уровень: хост ставит его ползунком `/effort` с клавишей `s` — «только для этой сессии» — и сверяет подвал (спека 5.7).
+  const selectEffort = (id: string): void => {
+    if (choiceBusy || effortDisabled !== null || id === storedEffort) return;
+    setChoiceBusy(true);
+    bridge
+      .call('sessions.setEffort', { ref: sessionRef, effort: id })
+      .then((result) => {
+        if (!result.verified) toast(S.chat.choice.openTerminal);
+      })
+      .catch((error: unknown) => choiceFailed('sessions.setEffort', S.errors.actions.switchEffort, error))
+      .finally(() => setChoiceBusy(false));
   };
 
   // Скриншот из буфера → drops/ (main) → путь; отказы — теми же тостами, что у терминала.
@@ -308,9 +382,24 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           tabId={tab.id}
           view="chat"
           available
-          model={model}
+          model={modelLabel}
           {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
-          {...(modelOptions.length > 0 ? { modelMenu: { options: modelOptions, busy: modelBusy || !live, onSelect: selectModel } } : {})}
+          {...(showChoice
+            ? {
+                choiceMenu: {
+                  models,
+                  model: storedModel,
+                  modelLabel: modelLabel ?? S.chat.choice.default,
+                  efforts,
+                  effort: storedEffort,
+                  modelDisabled,
+                  effortDisabled,
+                  busy: choiceBusy,
+                  onSelectModel: selectModel,
+                  onSelectEffort: selectEffort,
+                },
+              }
+            : {})}
           {...(agents.length > 0 ? { agents: { running: agents.length, onShow: showAgent } } : {})}
         />
         <FeedList

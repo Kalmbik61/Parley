@@ -771,7 +771,7 @@ export const S = {
       attach: 'Attach a file',
       removeAttachment: (name: string): string => `Remove ${name}`,
     },
-    /** Подсказки поля ввода: команды, скиллы, модели, `@`-файлы и субагенты (живая проверка 2026-10-02). */
+    /** Подсказки поля ввода: команды, скиллы, `@`-файлы и субагенты (живая проверка 2026-10-02). */
     suggestions: {
       label: 'Suggestions',
       terminal: 'opens in the terminal',
@@ -779,8 +779,26 @@ export const S = {
       source: { user: 'user skill', project: 'project skill', plugin: 'plugin skill' },
     },
     model: 'Model',
-    /** Меню моделей в тулбаре: выбор уходит в CLI текстом `/model <id>` (живая проверка 2026-10-02). */
-    modelMenu: { label: 'Switch model' },
+    /**
+     * Кнопка «модель · effort» в тулбаре и её меню (нормалайзер модели и effort 2026-10-06, 5.9): выбор уходит
+     * `sessions.setModel` / `sessions.setEffort` и не пишется в настройки CLI. Причина неактивных пунктов — строкой под
+     * заголовком раздела: у неактивного пункта нет событий указателя, тултип не всплыл бы.
+     */
+    choice: {
+      label: 'Model and effort',
+      default: 'Default',
+      model: 'Model',
+      effort: 'Effort',
+      agentWorking: 'Wait until the agent is idle',
+      backgroundTasks: 'Wait until the background tasks finish',
+      /** Хост отказал `conflict` с причиной `busy`: агент занят, в поле терминала черновик, идёт другая смена. */
+      sessionBusy: 'The session is busy: try again when the agent is idle and the terminal input is empty',
+      notLive: 'Effort changes only while the session runs',
+      /** Хост не увидел выбранный уровень в подвале: поставить его может только человек в терминале. */
+      openTerminal: 'Open the terminal to change the effort',
+      /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
+      effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
+    },
     /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
     mode: {
       label: 'Permission mode',
@@ -1107,6 +1125,8 @@ export const S = {
       merge: 'merge',
       assignToAgent: 'send to agent',
       switchMode: 'switch the mode',
+      switchModel: 'switch the model',
+      switchEffort: 'change the effort',
       createRoom: 'create room',
       loadSettings: 'load settings',
       saveSettings: 'save settings',

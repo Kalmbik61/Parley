@@ -47,6 +47,8 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
         bridge={bridge}
         sendDeps={sendDeps}
         provider={session.provider}
+        storedModel={session.model ?? null}
+        storedEffort={session.effort ?? null}
       />
     );
   }
