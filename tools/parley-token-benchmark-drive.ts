@@ -62,12 +62,14 @@ export type Screen =
   | { kind: 'trust'; selected: 'yes' | 'no' | 'other' | null; ours: boolean }
   | { kind: 'mcp' }
   | { kind: 'channel' }
+  | { kind: 'update' }
   | { kind: 'other' };
 
 /**
  * Распознавание экрана запуска по снимку. В снимке пропадают пробелы между словами (курсорные сдвиги вместо
  * пробелов), поэтому текст сверяется без пробелов. `ours` — в диалоге доверия показан путь копии, и копия лежит под
- * `workRoot` (`<out>/work`): только такие копии пилот разрешает доверять.
+ * `workRoot` (`<out>/work`): только такие копии пилот разрешает доверять. `update` — предложение обновиться у Codex
+ * (оба признака сразу: «Update available» и подсказка «esc skip»); у других провайдеров этого экрана драйвер не знает.
  */
 export function classifyScreen(text: string, copyPath: string, workRoot: string, provider: Provider = 'claude'): Screen {
   const flat = squash(text);
@@ -81,6 +83,9 @@ export function classifyScreen(text: string, copyPath: string, workRoot: string,
   }
   if (/newMCPservers?foundinthisproject/i.test(flat) && /Esctorejectall/i.test(flat)) return { kind: 'mcp' };
   if (/developmentchannel/i.test(flat)) return { kind: 'channel' };
+  // Предложение обновиться у Codex: по умолчанию выделено «Update now», и Enter запустил бы глобальную установку npm.
+  // Вопрос доверия проверен выше и важнее: он идёт после этого экрана, а текст прежнего экрана мог остаться в снимке.
+  if (provider === 'codex' && /Updateavailable/i.test(flat) && /escskip/i.test(flat)) return { kind: 'update' };
   return { kind: 'other' };
 }
 
@@ -398,6 +403,7 @@ export type Outcome =
   | 'trust-unexpected'
   | 'mcp-prompt-stuck'
   | 'channel-dialog'
+  | 'update-prompt-stuck'
   | `send-${string}`;
 
 interface BeginJson {
@@ -449,15 +455,19 @@ interface SessionSummary {
   endedAt: number | null;
   trustAnswered: boolean;
   mcpRejected: boolean;
+  updateSkipped: boolean;
 }
 
-/** Запуск и ход одной сессии: диалоги запуска по снимку экрана, один запрос, ожидание `Stop` в журнале хуков. */
-async function runSession(
+/**
+ * Запуск и ход одной сессии: диалоги запуска по снимку экрана, один запрос, ожидание `Stop` в журнале хуков.
+ * Экспорт — для теста цикла запуска на подставном клиенте хоста.
+ */
+export async function runSession(
   client: HostClient,
   ref: Ref,
   ctx: { copy: string; workRoot: string; prompt: string; trustCopies: boolean; timeoutMin: number; provider: Provider },
 ): Promise<SessionSummary> {
-  const summary: SessionSummary = { providerSessionId: null, outcome: 'start-timeout', sentAt: null, endedAt: null, trustAnswered: false, mcpRejected: false };
+  const summary: SessionSummary = { providerSessionId: null, outcome: 'start-timeout', sentAt: null, endedAt: null, trustAnswered: false, mcpRejected: false, updateSkipped: false };
   const stop = async (outcome: Outcome, text: string | null): Promise<SessionSummary> => {
     if (text !== null) dump(text);
     summary.outcome = outcome;
@@ -472,6 +482,7 @@ async function runSession(
   let trustMoves = 0;
   let afterAnswer = 0;
   let mcpRejects = 0;
+  let updateSkips = 0;
   while (summary.sentAt === null) {
     if (Date.now() > startDeadline) {
       console.log('start timeout');
@@ -521,6 +532,19 @@ async function runSession(
     if (screen.kind === 'channel') {
       console.log('development channel dialog — not answering');
       return stop('channel-dialog', text);
+    }
+    if (screen.kind === 'update') {
+      if (updateSkips >= 2) {
+        console.log('Codex update prompt did not go away');
+        return stop('update-prompt-stuck', text);
+      }
+      // Только Esc («Skip»): ничего не устанавливает и не записывает. Enter и выбор пунктов — никогда: по умолчанию
+      // выделено «Update now», то есть глобальная установка npm.
+      console.log('Codex update prompt: skipping (Esc)');
+      client.notify('pty.input', { ref, data: '\x1b' });
+      updateSkips += 1;
+      summary.updateSkipped = true;
+      continue;
     }
     stopsBefore = stopCount(rows());
     const sent = await client.call<{ inserted: boolean; submitted: boolean; reason: string | null }>('pty.send', { ref, text: ctx.prompt, submit: true });
@@ -690,7 +714,7 @@ export async function drive(options: DriveOptions): Promise<{ result: Record<str
       outcome: summary.outcome,
       turnSeconds: summary.sentAt === null || summary.endedAt === null ? null : Math.round((summary.endedAt - summary.sentAt) / 1000),
       changedFiles: changedFiles(status.stdout),
-      dialogs: { trustAnswered: summary.trustAnswered, mcpRejected: summary.mcpRejected },
+      dialogs: { trustAnswered: summary.trustAnswered, mcpRejected: summary.mcpRejected, updateSkipped: summary.updateSkipped },
     };
     return { result, code: summary.outcome === 'turn-ended' ? 0 : 1 };
   } finally {
@@ -721,7 +745,8 @@ const HELP = `parley-token-benchmark-drive — оператор живого п�
 
 Провайдер берётся из begin.json прогона (волны wq-codex и wq-glm плана): у claude и glm экраны запуска и конец хода как
 у Claude Code; у codex драйвер отвечает только на вопрос доверия к копии (при выделенном «Yes», только с
---trust-copies), на любом другом экране, не ушедшем за срок старта, — стоп со снимком; конец хода — первая строка
+--trust-copies) и пропускает предложение обновиться клавишей Esc («Skip», не больше двух раз; Enter там запустил бы
+установку npm), на любом другом экране, не ушедшем за срок старта, — стоп со снимком; конец хода — первая строка
 журнала Stop после отправки запроса.
 
 Платный ход модели: запускать только с явного разрешения человека. Последняя строка stdout — RESULT <json>;

@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, mkdtemp, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildHostEnv,
   changedFiles,
@@ -14,10 +14,12 @@ import {
   modelAlias,
   parseJournal,
   providerProblem,
+  runSession,
   selectedOption,
   sessionModel,
   stopCount,
   turnEnded,
+  type HostClient,
 } from './parley-token-benchmark-drive.js';
 
 let tmp: string;
@@ -237,6 +239,95 @@ describe('экраны запуска Codex', () => {
 
   it('маркер › у провайдера claude выделением не считается', () => {
     expect(selectedOption('› 1.Yes,continue')).toBeNull();
+  });
+});
+
+/**
+ * Предложение обновиться у Codex 0.160.0 как в снимке пробной сессии: по умолчанию выделено «Update now»
+ * (`npm install -g`), в подвале «esc skip». В настоящем снимке пробелы между словами теряются.
+ */
+const CODEX_UPDATE_SCREEN = [
+  'Update available · 0.160.0 → 0.160.1',
+  'Release notes: https://github.com/openai/codex/releases/latest',
+  '› 1. Update now (runs `npm install -g @openai/codex`)',
+  '2.Skip',
+  '3.Skipuntilnextversion',
+  'enter continue · esc skip',
+].join('\n');
+
+describe('предложение обновления Codex: распознавание', () => {
+  it('экран из снимка, с пробелами и без, — update; у claude и glm тот же текст — other', () => {
+    expect(classifyScreen(CODEX_UPDATE_SCREEN, COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'update' });
+    expect(classifyScreen(CODEX_UPDATE_SCREEN.replace(/ /g, ''), COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'update' });
+    expect(classifyScreen(CODEX_UPDATE_SCREEN, COPY, WORK_ROOT)).toEqual({ kind: 'other' });
+    expect(classifyScreen(CODEX_UPDATE_SCREEN, COPY, WORK_ROOT, 'glm')).toEqual({ kind: 'other' });
+  });
+
+  it('нужны оба признака: «Update available» без «esc skip» и подсказка без заголовка — other', () => {
+    expect(classifyScreen('Updateavailable·0.160.0→0.160.1\n› 1.Updatenow\n  2.Skip', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+    expect(classifyScreen('entercontinue·escskip', COPY, WORK_ROOT, 'codex')).toEqual({ kind: 'other' });
+  });
+
+  it('вопрос доверия важнее текста обновления, оставшегося в снимке выше: Esc на доверие не уходит', () => {
+    const screen = `${CODEX_UPDATE_SCREEN}\n${codexTrustScreen('yes')}`;
+    expect(classifyScreen(screen, COPY, WORK_ROOT, 'codex')).toMatchObject({ kind: 'trust' });
+  });
+});
+
+describe('предложение обновления Codex: запуск сессии', () => {
+  const ref = { projectPath: '/p', workId: 'w1', sessionId: 's1' };
+  const ctx = { copy: COPY, workRoot: WORK_ROOT, prompt: 'запрос сценария', trustCopies: true, timeoutMin: 1, provider: 'codex' as const };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Подставной клиент хоста: экраны выдаются по очереди (последний повторяется), отправленное записывается. */
+  function fakeHost(screens: string[]) {
+    const inputs: string[] = [];
+    const sends: unknown[] = [];
+    let shown = 0;
+    const client = {
+      lastActivity: null,
+      screen: () => Promise.resolve(screens[Math.min(shown++, screens.length - 1)]!),
+      notify: (method: string, params: { data: string }) => {
+        if (method === 'pty.input') inputs.push(params.data);
+      },
+      call: (method: string, params: unknown) => {
+        if (method !== 'pty.send') return Promise.reject(new Error(`неожиданный вызов ${method}`));
+        sends.push(params);
+        // Дальше сценарий не нужен: хост вставил текст, но Enter не нажал — драйвер выходит с `send-input`.
+        return Promise.resolve({ inserted: true, submitted: false, reason: 'input' });
+      },
+    } as unknown as HostClient;
+    return { client, inputs, sends };
+  }
+
+  async function run(client: HostClient): ReturnType<typeof runSession> {
+    const finished = runSession(client, ref, ctx);
+    await vi.runAllTimersAsync();
+    return finished;
+  }
+
+  it('экран не уходит: Esc дважды, Enter никогда, на третьем показе стоп update-prompt-stuck, запрос не отправлен', async () => {
+    const { client, inputs, sends } = fakeHost([CODEX_UPDATE_SCREEN]);
+    const summary = await run(client);
+    expect(summary).toMatchObject({ outcome: 'update-prompt-stuck', updateSkipped: true, trustAnswered: false, sentAt: null });
+    expect(inputs).toEqual(['\x1b', '\x1b']);
+    expect(sends).toEqual([]);
+  });
+
+  it('экран ушёл после Esc: дальше вопрос доверия (Enter только на нём) и запрос сценария', async () => {
+    const { client, inputs, sends } = fakeHost([CODEX_UPDATE_SCREEN, codexTrustScreen('yes'), '› Ask Codex to do anything']);
+    const summary = await run(client);
+    expect(inputs).toEqual(['\x1b', '\r']);
+    expect(sends).toHaveLength(1);
+    expect(summary).toMatchObject({ outcome: 'send-input', updateSkipped: true, trustAnswered: true });
   });
 });
 
