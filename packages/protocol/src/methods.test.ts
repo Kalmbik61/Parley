@@ -1,4 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { EFFORT_TOKEN_RE, PROTOCOL_VERSION } from './index.js';
+import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
@@ -266,12 +268,24 @@ describe('модель, усилие и поля providers.list (дизайн к
     expect(parse({}).success).toBe(true);
     expect(parse({ model: 'opus', effort: 'high' }).success).toBe(true);
     expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | null | undefined>();
-    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<'low' | 'medium' | 'high' | null | undefined>();
+    // Уровень — строка-токен: набор уровней у каждой модели свой (нормалайзер модели и effort, 5.6);
+    // null — явное «по умолчанию» (снимает умолчание роли).
+    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<string | null | undefined>();
   });
 
-  it('effort — low, medium или high; уровни, которых нет у обоих CLI, схема не пропускает', () => {
-    for (const effort of ['low', 'medium', 'high']) expect(parse({ effort }).success).toBe(true);
-    for (const effort of ['xhigh', 'max', 'minimal', 'HIGH', '', 3]) expect(parse({ effort }).success).toBe(false);
+  it('effort — токен уровня: прежние low, medium, high старого окна и новые xhigh, max, ultra проходят', () => {
+    const good = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'minimal', 'none', 'a'.repeat(32)];
+    for (const effort of good) expect(parse({ effort }).success, effort).toBe(true);
+  });
+
+  it('effort: заглавные, пробел, кавычка, пустое, 33 знака и не строка (кроме null) — отказ схемы: токен уходит в argv и в кавычки TOML', () => {
+    // Принадлежность уровня модели проверяет хост (`bad_request`); схема держит только вид токена.
+    const bad = ['HIGH', 'High', 'hi gh', '"max', 'max"', '', 'a'.repeat(33), '-high', '1high', 'high\n', 3];
+    for (const effort of bad) expect(parse({ effort }).success, JSON.stringify(effort)).toBe(false);
+  });
+
+  it('effort: null — явный «по умолчанию» (снимает умолчание роли), схема его пропускает', () => {
+    expect(parse({ effort: null }).success).toBe(true);
   });
 
   it('model — одно слово: алиас или полное имя, без пробелов и не похожее на флаг', () => {
@@ -292,7 +306,7 @@ describe('модель, усилие и поля providers.list (дизайн к
     expect(parse({ model: '', effort: 'high' }).success).toBe(true);
   });
 
-  it('providers.list: models, effort, version, limits и check необязательны — хост, переживший окно, их не знает', () => {
+  it('providers.list: models, effort, argsOverridden, version, limits и check необязательны — хост, переживший окно, их не знает', () => {
     expectTypeOf<Result<'providers.list'>['providers'][number]>().toEqualTypeOf<{
       id: string;
       label: string;
@@ -300,8 +314,13 @@ describe('модель, усилие и поля providers.list (дизайн к
       needs?: 'cli' | 'key' | null;
       keyHint?: string | null;
       family?: 'claude' | null;
-      models?: Array<{ id: string; label: string }> | null;
+      models?: Array<{
+        id: string;
+        label: string;
+        efforts?: Array<{ id: string; label: string; description?: string }> | null;
+      }> | null;
       effort?: boolean;
+      argsOverridden?: boolean;
       version?: string | null;
       limits?: ProviderLimits | null;
       check?: ProviderCheck | null;
@@ -309,10 +328,78 @@ describe('модель, усилие и поля providers.list (дизайн к
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
     expect(legacy.providers[0]).not.toHaveProperty('effort');
+    expect(legacy.providers[0]).not.toHaveProperty('argsOverridden');
+  });
+
+  it('providers.list: у модели efforts — уровни по порядку, null — уровней нет (Haiku), поля нет — хост до нормалайзера', () => {
+    const shapes: Result<'providers.list'> = {
+      providers: [
+        {
+          id: 'claude',
+          label: 'Claude',
+          available: true,
+          effort: true,
+          models: [
+            {
+              id: 'opus',
+              label: 'Opus',
+              efforts: [
+                { id: 'low', label: 'Low' },
+                { id: 'xhigh', label: 'Extra high' },
+              ],
+            },
+            { id: 'haiku', label: 'Haiku', efforts: null },
+          ],
+        },
+        {
+          id: 'codex',
+          label: 'Codex',
+          available: true,
+          effort: true,
+          models: [
+            {
+              id: 'gpt-6.1-sol',
+              label: 'GPT-6.1-Sol',
+              efforts: [
+                { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' },
+              ],
+            },
+            // Хост до нормалайзера: у модели нет efforts — окно читает прежние три уровня.
+            { id: 'gpt-6-sol', label: 'GPT-6-Sol' },
+          ],
+        },
+        // args из providers.json без {model} и {effort}: выбора нет, карточка объясняет почему.
+        {
+          id: 'custom',
+          label: 'Custom',
+          available: true,
+          models: null,
+          effort: false,
+          argsOverridden: true,
+        },
+      ],
+    };
+    const levels = shapes.providers
+      .flatMap((provider) => provider.models ?? [])
+      .map((model) =>
+        model.efforts === undefined ? 'нет поля' : (model.efforts?.map((effort) => effort.id) ?? null),
+      );
+
+    expect(levels).toEqual([['low', 'xhigh'], null, ['ultra'], 'нет поля']);
+    expect(shapes.providers.map((provider) => provider.argsOverridden ?? false)).toEqual([
+      false,
+      false,
+      true,
+    ]);
   });
 
   it('providers.list: models — пары id и label; «списка нет» — null, а у хоста без поля его вовсе нет', () => {
-    expectTypeOf<ModelOption>().toEqualTypeOf<{ id: string; label: string }>();
+    expectTypeOf<ModelOption>().toEqualTypeOf<{
+      id: string;
+      label: string;
+      efforts?: EffortOption[] | null;
+    }>();
+    expectTypeOf<EffortOption>().toEqualTypeOf<{ id: string; label: string; description?: string }>();
     const shapes: Result<'providers.list'> = {
       providers: [
         { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }] },
@@ -462,5 +549,67 @@ describe('session role protocol compatibility', () => {
   it('accepts current participant scope for safe role listings', () => {
     expect(METHODS['roles.list'].safeParse({ projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' } }).success).toBe(true);
     expect(METHODS['roles.list'].safeParse({ projectPath: '/p' }).success).toBe(true);
+  });
+});
+
+describe('EFFORT_TOKEN_RE и совместимость (нормалайзер модели и effort, 5.3, 5.6)', () => {
+  it('шаблон — как EFFORT_TOKEN в core: строчная буква, затем до 31 знака из строчных букв, цифр, _ и -; без флагов', () => {
+    expect(EFFORT_TOKEN_RE.source).toBe('^[a-z][a-z0-9_-]{0,31}$');
+    expect(EFFORT_TOKEN_RE.flags).toBe('');
+  });
+
+  it('протокол меняется только добавлениями: PROTOCOL_VERSION остаётся 1', () => {
+    expect(PROTOCOL_VERSION).toBe(1);
+  });
+});
+
+describe('sessions.setEffort (нормалайзер модели и effort, 5.7)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('setEffort: ref и токен уровня обязательны; xhigh, max и ultra проходят', () => {
+    const parse = (effort: unknown) => METHODS['sessions.setEffort'].safeParse({ ref, effort });
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+      expect(parse(effort).success, effort).toBe(true);
+    }
+    // «По умолчанию» в идущей сессии не выбирается (5.7): пустого уровня нет и здесь.
+    for (const effort of ['', 'HIGH', 'hi gh', '"max', 'a'.repeat(33), undefined, null, 3]) {
+      expect(parse(effort).success, JSON.stringify(effort)).toBe(false);
+    }
+    expect(METHODS['sessions.setEffort'].safeParse({ effort: 'high' }).success).toBe(false);
+  });
+
+  it('параметры и результат: уровень, который показал подвал, и сверка', () => {
+    expectTypeOf<Params<'sessions.setEffort'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      effort: string;
+    }>();
+    expectTypeOf<Result<'sessions.setEffort'>>().toEqualTypeOf<{ effort: string | null; verified: boolean }>();
+  });
+});
+
+describe('sessions.setModel (нормалайзер модели и effort, 5.8)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('setModel: одно слово до 200 знаков, не с дефиса; флаг, пробелы и пустое — отказ', () => {
+    const parse = (model: unknown) => METHODS['sessions.setModel'].safeParse({ ref, model });
+    const good = ['opus', 'sonnet[1m]', 'glm-5.3-flash[1m]', 'gpt-6.1-sol', 'м'.repeat(200)];
+    for (const model of good) expect(parse(model).success, model).toBe(true);
+    // Модель уходит в argv (`--resume <id> --model <модель>`): с дефиса CLI принял бы её за флаг,
+    // пробел разорвал бы её на два аргумента.
+    const bad = ['-m', '--model', ' opus', 'op us', 'opus ', 'op\tus', 'а\nб', '', 'м'.repeat(201), undefined, null];
+    for (const model of bad) expect(parse(model).success, JSON.stringify(model)).toBe(false);
+    expect(METHODS['sessions.setModel'].safeParse({ model: 'opus' }).success).toBe(false);
+  });
+
+  it('параметры и результат: модель, уровень после смены и перезапуск', () => {
+    expectTypeOf<Params<'sessions.setModel'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      model: string;
+    }>();
+    expectTypeOf<Result<'sessions.setModel'>>().toEqualTypeOf<{
+      model: string;
+      effort: string | null;
+      restarted: boolean;
+    }>();
   });
 });

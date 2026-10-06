@@ -92,4 +92,19 @@ describe('упаковка macOS (V2)', () => {
       /^publish:\n {2}provider: github\n {2}owner: Kalmbik61\n {2}repo: Parley\n {2}releaseType: draft\n/m,
     );
   });
+
+  it('движок голоса: build/whisper/darwin-${arch} → Resources/whisper; текст запроса микрофона', () => {
+    expect(builder).toMatch(/- from: build\/whisper\/darwin-\$\{arch\}\n\s+to: whisper\n/);
+    expect(builder).toMatch(
+      /NSMicrophoneUsageDescription: Parley uses the microphone for voice dictation\. Audio is transcribed on this Mac and never leaves it\./,
+    );
+  });
+
+  it('релиз собирает движок обеих архитектур до упаковки', () => {
+    const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');
+    expect(release.indexOf('fetch-whisper arm64 x64')).toBeGreaterThan(-1);
+    expect(release.indexOf('fetch-whisper arm64 x64')).toBeLessThan(
+      release.indexOf('Package for macOS'),
+    );
+  });
 });

@@ -51,6 +51,7 @@ import { focusTab } from '../layout/tree.js';
 import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
 import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
@@ -396,6 +397,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     if (paths.length > 0) void sendWithToast(sendDeps, sessionRef, pathsToInput(paths), false);
   };
 
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const sessionKey = refKey(sessionRef);
   useEffect(() => {
     terminalSurfaces.set(sessionKey, handle);
@@ -404,8 +406,24 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     };
   }, [sessionKey, handle]);
 
+  // Диктовка в терминал (спека 3.3): текст уходит вставкой без Enter — отправляет человек.
+  const sendDepsRef = useRef(sendDeps);
+  sendDepsRef.current = sendDeps;
+  const sessionRefRef = useRef(sessionRef);
+  sessionRefRef.current = sessionRef;
+  useEffect(
+    () =>
+      useDictationStore.getState().register({
+        id: `terminal:${sessionKey}`,
+        element: () => wrapperRef.current,
+        insert: (text) => void sendWithToast(sendDepsRef.current, sessionRefRef.current, text, false),
+      }),
+    [sessionKey],
+  );
+
   return (
     <div
+      ref={wrapperRef}
       className="relative flex h-full min-w-0 flex-col"
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}

@@ -473,7 +473,8 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await options.nth(2).click();
     await expect(window.locator('[data-sonner-toast]').filter({ hasText: 'Open the terminal to switch the mode' })).toBeVisible({ timeout: 20_000 });
 
-    // j) Подсказки поля ввода (живая проверка 2026-10-02): скилл проекта по «/», файл проекта по «@», модели по «/model ».
+    // j) Подсказки поля ввода (живая проверка 2026-10-02): скилл проекта по «/», файл проекта по «@»; по «/model » подсказок
+    // нет — модель меняет меню тулбара (нормалайзер модели и effort 2026-10-06).
     const composer = chat.getByTestId('chat-composer');
     const field = composer.locator('textarea');
     const suggestions = window.getByTestId('chat-suggestions');
@@ -492,7 +493,7 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await expect(suggestions).toHaveCount(0);
     await field.fill('');
     await field.pressSequentially('/model ');
-    expect(await suggestions.getByTestId('chat-suggestion').count()).toBeGreaterThanOrEqual(1);
+    await expect(suggestions).toHaveCount(0);
     await field.fill('');
 
     expect(errors).toEqual([]);

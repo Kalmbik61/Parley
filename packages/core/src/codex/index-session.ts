@@ -87,9 +87,9 @@ function parentThreadId(payload: RawRecord): string | null {
  * Формат другой во всём (см. specs/runners.md): вся мета в одной записи
  * `session_meta`, модель в `turn_context`, инструменты в `function_call`.
  * Наружу при этом отдаётся ровно тот же SessionIndex, что и у Claude Code, —
- * UI о различиях не знает.
+ * UI о различиях не знает. `signal` прерывает чтение (`forEachJsonlRecord`).
  */
-export async function indexCodexSession(file: string): Promise<SessionIndex> {
+export async function indexCodexSession(file: string, signal?: AbortSignal): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
   const roles = new Counter();
@@ -110,7 +110,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let parentId: string | null = null;
   let forkedFrom: string | null = null;
 
-  const stats = await forEachJsonlRecord(file, (raw) => {
+  const onRecord = (raw: RawRecord): void => {
     const type = str(raw, 'type');
     const payload = asRecord(raw['payload']);
     recordTypes.add(type);
@@ -184,7 +184,8 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
       default:
         break;
     }
-  });
+  };
+  const stats = await forEachJsonlRecord(file, onRecord, signal);
 
   const durationMs =
     startedAt !== null && endedAt !== null
@@ -241,11 +242,16 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   };
 }
 
-/** Индекс всех сессий Codex, свежие первыми. */
-export async function buildCodexIndex(root: string = defaultCodexRoot()): Promise<SessionIndex[]> {
+/** Индекс всех сессий Codex, свежие первыми. `signal` прерывает чтение — как у `buildIndex`. */
+export async function buildCodexIndex(
+  root: string = defaultCodexRoot(),
+  signal?: AbortSignal,
+): Promise<SessionIndex[]> {
   const discovered = await discoverCodexSessions(root);
   // Не больше INDEX_READ_CONCURRENCY файлов разом — как у истории Claude (lane-r3, п. 1).
-  const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) => indexCodexSession(session.file));
+  const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
+    indexCodexSession(session.file, signal),
+  );
   index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
   return index;
 }

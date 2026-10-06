@@ -38,6 +38,61 @@ The window and the host must be updated together: restart the host when the wind
 - Claude's MCP and plugin actions in the Capabilities panel run only with the audited Claude Code build (2.1.287, macOS on Apple silicon).
 - Known gaps: `find_skill` does not cover Codex plugin, system, admin or extra skills, so while Codex has any, its native list stays (with the notice `codex-skill-list-kept`); every Codex launch with the navigator reads its inventory once (up to 8 seconds); if the `jev-skill-suggestion` mod is installed, the skills it hid stay hidden until you run `/jev-skill-suggestion:setup restore` (a personal setting that Parley does not touch); skills synced from claude.ai appear by name only; `check_inbox` has no limit and no way to read earlier mail; the window has no "Show full message" button; the notice `provider-override-gap` speaks only about instructions.
 
+## 0.6.0
+
+### Added
+
+- **Voice input.** Dictation turns speech into text where you type: the microphone button in the
+  room and chat composers, the "New workspace" box and a session's Terminal view, or ⌘⇧M from a
+  focused field or terminal (the only way in a Codex terminal). Speech is recognized on this Mac
+  by a bundled whisper.cpp engine; the audio never leaves it, and the only network traffic is the
+  one-time model download. Voice is off by default: download a model in Settings → Voice, then
+  switch it on. The transcript is never sent by itself, and a recording is limited to two
+  minutes. The Intel build of voice needs AVX2 and has not been tested on an Intel Mac.
+- **Real effort levels for every model.** The New session or room dialog lists the effort
+  levels of the chosen model instead of a fixed Low / Medium / High: Low to Max for Claude
+  (Haiku has none) and for both GLM models, and each Codex model's own levels up to Ultra,
+  with Codex's descriptions. "Default" now comes first in both the model and the effort list
+  and sends no flag, so the level you saved in the CLI applies. Agents get the same levels in
+  `get_map`, and `spawn_session` accepts only them.
+- **Codex's own model list.** The host asks Codex for the models of your account
+  (`codex debug models`) and shows them in Codex's order. If the probe fails, Parley keeps the
+  last list it got (stored in `codex-models.json`); the built-in list of current models applies
+  only until the first successful probe. Without a network or a sign-in Codex prints the catalog
+  built into it; Parley takes that as a successful probe and keeps it until the next one. Probes
+  after the first one are lazy: they start when the window asks for the providers and the last
+  probe began six or more hours ago, successful or not.
+- **Model and effort in Chat.** The toolbar shows "model · effort", and its menu changes either
+  one for this session only: the effort through Claude Code's `/effort` slider, confirmed in the
+  footer, the model by restarting the session with `--resume`. Claude Code's saved defaults stay
+  untouched, and it works for GLM sessions too.
+
+### Changed
+
+- **The chosen model and effort stay with the session.** A session started from the dialog keeps
+  them in the workspace map, and resuming a Claude or GLM session passes both again: resume
+  starts with the model and effort saved for the session (dialog, MCP or the Chat menu). A model
+  switched in the terminal with `/model` is not saved; a model changed from the Chat menu
+  restarts the CLI process, and the conversation goes on from the log.
+- **No `/model ` suggestions in Chat.** Claude Code saves a typed `/model` as the default for new
+  sessions; the toolbar menu changes the model without that.
+- **Launch arguments from `providers.json`.** A provider whose `args` come from `providers.json`
+  says so in its card and explains why the model or effort choice is off.
+
+### Fixed
+
+- **Chat no longer changes your Claude Code default model.** The Chat model menu typed
+  `/model <id>`, and Claude Code saves a typed `/model` as the default for new sessions. For GLM
+  this put a Z.ai model into the local settings GLM shares with Claude, so plain Claude sessions
+  then failed. The menu now switches only the session.
+- After Resume or a model switch, a session shows idle right away instead of working until Claude Code's idle notice.
+- **Terminal output survives a reconnect to the host.** Since 0.5.0, after "Restart host…" or a
+  host crash the window rebuilt the terminals of Claude and GLM sessions empty, so a session that
+  was not running lost its last output under the "asleep" card.
+- **Stopping the host ends its process right away.** After "Restart host…" the old host process
+  could stay alive for minutes with a large session history, until its log index finished reading
+  every Claude Code and Codex session log.
+
 ## 0.5.2
 
 ### Added

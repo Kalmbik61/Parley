@@ -8,6 +8,7 @@ import type {
   SessionRef,
 } from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
+import type { VoiceApi } from './voice-types.js';
 import type {
   DiffFile,
   DirEntry,
@@ -245,6 +246,8 @@ export interface ParleyBridge {
    * раздела `BROWSER_PARTITION`, иначе отказ `bad_request`.
    */
   browser: BrowserApi;
+  /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, 4.2): модели, распознавание, микрофон. */
+  voice: VoiceApi;
 }
 
 declare global {

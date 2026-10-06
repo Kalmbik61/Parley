@@ -19,6 +19,7 @@ describe('testSwitches', () => {
       drops: true,
       shell: true,
       loginShell: true,
+      voice: false,
     });
   });
 
@@ -30,6 +31,7 @@ describe('testSwitches', () => {
       drops: false,
       shell: false,
       loginShell: false,
+      voice: false,
     });
   });
 
@@ -41,7 +43,15 @@ describe('testSwitches', () => {
       drops: true,
       shell: true,
       loginShell: true,
+      voice: false,
     });
+  });
+
+  it('voice: fake — только в неупакованном окне или с PARLEY_E2E=1', () => {
+    expect(testSwitches({ PARLEY_VOICE: 'fake' }, false).voice).toBe(true);
+    expect(testSwitches({ PARLEY_VOICE: 'fake' }, true).voice).toBe(false);
+    expect(testSwitches({ PARLEY_VOICE: 'fake', PARLEY_E2E: '1' }, true).voice).toBe(true);
+    expect(testSwitches({}, false).voice).toBe(false);
   });
 
   it('PARLEY_E2E с другим значением не открывает переключатели в сборке', () => {
@@ -57,7 +67,7 @@ describe('testSwitches', () => {
       HARNAS_SHELL: 'log',
       HARNAS_LOGIN_SHELL: 'skip',
     };
-    const all = { downloads: true, dialogs: true, notifications: true, drops: true, shell: true, loginShell: true };
+    const all = { downloads: true, dialogs: true, notifications: true, drops: true, shell: true, loginShell: true, voice: false };
     expect(testSwitches(legacy, false)).toEqual(all);
     // В собранном приложении — только с явным HARNAS_E2E=1, как и с PARLEY_E2E=1.
     expect(testSwitches(legacy, true).notifications).toBe(false);
@@ -85,6 +95,7 @@ describe('testSwitches', () => {
       drops: false,
       shell: false,
       loginShell: false,
+      voice: false,
     });
     expect(testSwitches({ PARLEY_DROPS: 'log', PARLEY_SHELL: '1', PARLEY_LOGIN_SHELL: '1' }, false)).toMatchObject({
       drops: false,

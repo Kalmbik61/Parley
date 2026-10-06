@@ -87,6 +87,28 @@ describe('проверка новой версии в ui.json', () => {
   });
 });
 
+describe('раздел voice (спека 4.1)', () => {
+  it('по умолчанию выключен, модели нет, язык auto', () => {
+    expect(normalizeUi({}).voice).toEqual({ enabled: false, model: null, language: 'auto' });
+  });
+
+  it('верные значения сохраняются', () => {
+    expect(normalizeUi({ voice: { enabled: true, model: 'small', language: 'ru' } }).voice).toEqual({
+      enabled: true,
+      model: 'small',
+      language: 'ru',
+    });
+  });
+
+  it('чужая модель и язык — по умолчанию; включённый голос без модели — выключен', () => {
+    expect(normalizeUi({ voice: { enabled: true, model: 'huge', language: 'xx' } }).voice).toEqual({
+      enabled: false,
+      model: null,
+      language: 'auto',
+    });
+  });
+});
+
 // Размеры Organic (спека окна 2026-09-29, 1.1): сайдбар 288, правый 320; ресайз 220–500 прежний.
 describe('размеры сайдбаров по умолчанию', () => {
   it('левый 288, правый 320 — и в DEFAULT_UI, и в константах `initial`', () => {

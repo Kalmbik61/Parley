@@ -89,4 +89,15 @@ describe('preload: последний статус и тема', () => {
     emit('app:appearance', false);
     expect(seen).toEqual([true, false]);
   });
+
+  it('voice: прогресс скачивания приходит подписчику, отписка снимает его', async () => {
+    const bridge = await loadPreload();
+    const listener = vi.fn();
+    const off = bridge.voice.onProgress(listener);
+    emit('voice:progress', { id: 'base', receivedBytes: 1, totalBytes: 2 });
+    off();
+    emit('voice:progress', { id: 'base', receivedBytes: 2, totalBytes: 2 });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
+  });
 });

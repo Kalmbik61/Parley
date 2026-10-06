@@ -1,33 +1,37 @@
 /**
- * Модель из диалога запуска против списка провайдера (дизайн комнат, 3.2, решение 5).
+ * Модель и effort из диалога запуска против каталога провайдера (дизайн комнат, 3.2; спека нормалайзера, 5.3).
  *
- * Окно предлагает только значения списка (`providers.list.models`), а хост не пускает в команду
- * ничего сверх него: выбор вне списка — `bad_request`, CLI такое значение не получает. Пустая
- * модель, как и её отсутствие, — «по умолчанию»: без флага, модель CLI по умолчанию.
+ * Окно предлагает только значения каталога (`providers.list.models` и их `efforts`), а хост не пускает в команду
+ * ничего сверх него: пара вне каталога — `bad_request`, CLI такое значение не получает. Пустое значение, как и
+ * его отсутствие, — «по умолчанию»: без флага, CLI берёт своё.
  *
- * Провайдер без списка (у `glm`, у своего в `providers.json` без поля `models`) — прежнее правило:
- * значение идёт в команду, если шаблон запуска принимает `{model}`, иначе шаблон отбрасывает его
- * сам. Неизвестный провайдер здесь не ловится: об этом скажет сам запуск. Саму проверку ведёт core
- * (`modelChoiceError`): её же зовёт `spawn_session` агента, и два входа не расходятся.
+ * Правило одно с `spawn_session` MCP — `resolveModelEffort` в core: провайдер без своего списка, флаг без
+ * подстановки в шаблоне, модель без уровней — всё решает он. Каталог Codex из `codex-models.json` подставляет
+ * `loadProviders`, поэтому окно, хост и MCP проверяют выбор по одному списку. Неизвестный провайдер здесь не
+ * ловится: об этом скажет сам запуск.
  */
 
-import { loadProviders, modelChoiceError } from '@parley/core';
+import { loadProviders, resolveModelEffort, type ModelEffortChoice } from '@parley/core';
 import { HostError } from '../errors.js';
 
 /**
- * Возвращает модель для команды: `undefined` — «по умолчанию» (пусто или не выбрано). Зовётся до
- * создания записи в карте: отказ не должен оставлять `pending`-сессию, которую нечем запустить.
+ * Разрешённый выбор для карты и команды: полей «по умолчанию» в нём нет. Зовётся до создания записи в карте:
+ * отказ не должен оставлять `pending`-сессию, которую нечем запустить.
  */
 export async function resolveModelChoice(
   provider: string,
-  model: string | undefined,
-): Promise<string | undefined> {
-  if (model === undefined || model === '') return undefined;
+  model?: string,
+  effort?: string,
+): Promise<ModelEffortChoice> {
+  const choice: ModelEffortChoice = {
+    ...(model === undefined || model === '' ? {} : { model }),
+    ...(effort === undefined || effort === '' ? {} : { effort }),
+  };
+  if (choice.model === undefined && choice.effort === undefined) return choice;
 
   const entry = (await loadProviders())[provider];
-  if (entry === undefined) return model;
-  // Правило одно с `spawn_session` MCP: оно живёт в core рядом со списками (`modelChoiceError`).
-  const refusal = modelChoiceError(entry, model);
-  if (refusal !== null) throw new HostError('bad_request', refusal);
-  return model;
+  if (entry === undefined) return choice;
+  const resolved = resolveModelEffort(entry, choice);
+  if ('error' in resolved) throw new HostError('bad_request', resolved.error);
+  return resolved.choice;
 }

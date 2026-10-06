@@ -38,6 +38,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
+import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
 import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
@@ -83,6 +84,11 @@ const BUDGET_RETRY_MS = 30_000;
  */
 const PASTE_MODE_RETRY_MS = 200;
 const PASTE_MODE_RETRIES = 15;
+/**
+ * Идёт смена модели или effort, либо на экране ползунок `/effort`: указатель не печатается. Смена занимает секунды —
+ * пересчёт каждые 200 мс, до 30 с; дальше — до следующего события сессии.
+ */
+const CHOICE_RETRIES = 150;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 /** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
@@ -137,6 +143,8 @@ interface AttemptState {
   pasteRetry: NodeJS.Timeout | undefined;
   /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
   pasteRetries: number;
+  /** Повторов пересчёта, пока идёт смена модели или effort (`CHOICE_RETRIES`); без смены счёт начинается заново. */
+  choiceRetries: number;
 }
 
 
@@ -159,7 +167,8 @@ export function createWakeService(
   works: WorksService,
   activity: ActivityService,
   pty: PtyManager,
-  sessions: Pick<SessionsService, 'launch'>,
+  // `exclusive` — замок смены модели и effort: пока он взят, указатель не печатается.
+  sessions: Pick<SessionsService, 'launch'> & Partial<Pick<SessionsService, 'exclusive'>>,
   options: WakeServiceOptions = {},
 ): WakeService {
   const enterDelayMs = options.enterDelayMs ?? DEFAULT_ENTER_DELAY_MS;
@@ -202,6 +211,7 @@ export function createWakeService(
         budgetDeniedAt: null,
         pasteRetry: undefined,
         pasteRetries: 0,
+        choiceRetries: 0,
       };
       attempts.set(key, state);
     }
@@ -224,15 +234,25 @@ export function createWakeService(
     }
   }
 
-  /** У Codex ещё нет режима вставки: пересчёт через короткий срок, но не бесконечно. */
-  function waitForPasteMode(ref: SessionRef, state: AttemptState): void {
-    if (state.pasteRetry !== undefined || state.pasteRetries >= PASTE_MODE_RETRIES) return;
-    state.pasteRetries += 1;
+  /** Пересчёт через короткий срок, но не бесконечно: у Codex ещё нет режима вставки либо идёт смена модели. */
+  function retryLater(ref: SessionRef, state: AttemptState, kind: 'paste' | 'choice'): void {
+    if (state.pasteRetry !== undefined) return;
+    if (kind === 'paste') {
+      if (state.pasteRetries >= PASTE_MODE_RETRIES) return;
+      state.pasteRetries += 1;
+    } else {
+      if (state.choiceRetries >= CHOICE_RETRIES) return;
+      state.choiceRetries += 1;
+    }
     state.pasteRetry = setTimeout(() => {
       state.pasteRetry = undefined;
       recompute(ref);
     }, PASTE_MODE_RETRY_MS);
   }
+
+  /** Идёт смена модели или effort, либо открыт ползунок `/effort` (общая проверка с `pty.send`). */
+  const choiceNow = (ref: SessionRef): boolean =>
+    choiceInProgress(ref, { pty, switching: (target) => sessions.exclusive?.held(target) === true });
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {
     // И в лог: уведомление видит только открытое окно, а разбирать «сессия не ответила» приходится позже.
@@ -407,7 +427,8 @@ export function createWakeService(
       codex ? codexPaste(action.text) : action.text,
       true,
       {
-        beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked',
+        // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
+        beforeEnter: () => activity.get(ref)?.activity.activity !== 'blocked' && !choiceNow(ref),
         ...(codex
           ? {
               delayMs: CODEX_SUBMIT_DELAY_MS,
@@ -456,7 +477,9 @@ export function createWakeService(
         notice(
           'pointer-cancelled',
           ref,
-          `the pointer for session ${ref.sessionId} was left without Enter — the session is waiting for an answer`,
+          choiceNow(ref)
+            ? `the pointer for session ${ref.sessionId} was left without Enter — a model or effort change is in progress`
+            : `the pointer for session ${ref.sessionId} was left without Enter — the session is waiting for an answer`,
         );
       }
     }, (error: unknown) => {
@@ -572,12 +595,19 @@ export function createWakeService(
       // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
       // повторяется сам.
       if (!handle.bracketedPaste()) {
-        waitForPasteMode(ref, state);
+        retryLater(ref, state, 'paste');
         publishWaiting(ref, state, 'busy');
         return;
       }
       state.pasteRetries = 0;
     }
+    // Идёт смена модели или effort, либо открыт ползунок: ни текста, ни Enter. Пересчёт повторится сам.
+    if (choiceNow(ref)) {
+      retryLater(ref, state, 'choice');
+      publishWaiting(ref, state, 'busy');
+      return;
+    }
+    state.choiceRetries = 0;
     beginAttempt(ref, state, action, codex);
     // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
     publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');

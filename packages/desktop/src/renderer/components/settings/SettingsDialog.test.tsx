@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
+import { S } from '../../../shared/strings.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { useUiStore } from '../../store/ui.js';
 import { SettingsDialog } from './SettingsDialog.js';
@@ -492,5 +493,14 @@ describe('SettingsDialog — пороги бюджета работы (P37)', ()
     switchTo('Agents');
     await screen.findByText('Worktree root');
     expect(screen.queryByRole('region', { name: 'Work limits' })).toBeNull();
+  });
+});
+
+describe('SettingsDialog — вкладка Voice', () => {
+  it('openSettingsDialog("voice") — диалог открывается на вкладке Voice', async () => {
+    const bridge = createFakeBridge();
+    useUiStore.getState().openSettingsDialog('voice');
+    openSettings(bridge);
+    expect(await screen.findByRole('switch', { name: S.voice.settings.enable })).toBeTruthy();
   });
 });

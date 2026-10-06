@@ -20,6 +20,7 @@ import { claudeProjectRoots } from '../discover.js';
 import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
+  EFFORT_TOKEN,
   loadProviders,
   providerCompatibilityError,
   isClaudeCode,
@@ -64,13 +65,13 @@ export interface LaunchOptions {
    */
   prompt?: string;
   /**
-   * Явный выбор модели и усилия для нового запуска перекрывает сохранённый выбор сессии.
-   * Нет выбора — текущий default роли; null — явное очищение до default CLI.
-   * Host сохраняет только явный выбор из окна или MCP, без вычисленных defaults роли.
+   * Явный выбор модели и усилия для запуска перекрывает выбор, записанный в карте
+   * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`. Нет выбора — умолчание
+   * текущей роли, без роли — умолчание CLI; `null` — явный «Default»: снимает умолчание роли, флага
+   * нет. Хост сохраняет в карте только явный выбор из окна или MCP, без вычисленных умолчаний роли.
    * Доезжает только до провайдера, у которого в шаблоне запуска есть подстановки (`supportsModel`,
-   * `supportsEffort`). На resume native CLI Claude/Codex восстанавливает прежнюю модель и усилие: новых флагов
-   * нет; GLM resume явно берёт настроенную модель, поскольку tier aliases подавляют восстановление модели CLI.
-   * Выбор Chat /model отдельно не сохраняется.
+   * `supportsEffort`). У GLM без модели берётся настроенная модель: tier aliases не дают Claude
+   * Code восстановить её самому. Выбор Chat /model отдельно не сохраняется.
    */
   model?: string | null;
   roleCatalog?: RoleCatalog;
@@ -402,8 +403,16 @@ async function plan(
     if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
   }
 
-  if (entry.runner.settingsModel !== undefined) {
-    subs.model = options.model ?? session.model ?? entry.runner.settingsModel;
+  // Модель и усилие считает роль (`prepareSessionRole` выше): явный выбор запуска, иначе записанный в
+  // карте, иначе умолчание роли; `null` — явный «Default», флага нет. Ставятся во всех режимах, включая
+  // `resume`: Claude Code при `--resume` effort не восстанавливает (спека нормалайзера, 5.4). Нет
+  // значения — подстановки нет, флаг выпадает, и CLI берёт своё. GLM без модели берёт настроенную:
+  // tier aliases не дают Claude Code восстановить её самому.
+  const model = role.model ?? entry.runner.settingsModel;
+  if (model !== undefined && model !== null) subs.model = model;
+  if (role.effort !== null) {
+    if (!EFFORT_TOKEN.test(role.effort)) throw new Error('invalid-role-effort');
+    subs.effort = role.effort;
   }
 
   if (resuming) {
@@ -430,11 +439,6 @@ async function plan(
     const pointer = mode === 'resume' ? (options.prompt ?? '') : '';
     const first = [brief, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
-    if (role.model !== null) subs.model = role.model;
-    if (role.effort !== null) {
-      if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(role.effort)) throw new Error('invalid-role-effort');
-      subs.effort = role.effort as NonNullable<RunnerSubstitutions['effort']>;
-    }
     if (entry.linkBy === 'session-id') {
       providerSessionId = session.providerSessionId ?? randomUUID();
       subs.sessionUuid = providerSessionId;

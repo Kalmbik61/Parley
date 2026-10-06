@@ -75,7 +75,62 @@ describe('useProvidersStore — подключение ключа и покол�
     dispose();
   });
 
-  it('новое подключение сбрасывает loaded; старый ответ и старые события не меняют новый хост', async () => {
+  it('новое подключение держит прежний снимок и loaded до своего ответа: вид вкладок не становится «неизвестным»', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    oldDispose();
+    const pending = deferred();
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => pending.promise);
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    await flush();
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: true, keyHint: '••••1234' });
+    pending.resolve(snapshot(false));
+    await vi.waitFor(() => expect(useProvidersStore.getState().providers[0]).toMatchObject({ available: false, keyHint: null }));
+    nextDispose();
+  });
+
+  it('отказ до первого ответа и у запроса, вытеснившего первый, — снимок прежнего хоста не остаётся', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    oldDispose();
+    const first = deferred();
+    const second = deferred();
+    let count = 0;
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => (++count === 1 ? first.promise : second.promise));
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    // Check again или providers.changed до первого ответа вытесняет первый запрос.
+    const newer = useProvidersStore.getState().reload();
+    second.reject(new Error('отказ'));
+    await expect(newer).rejects.toThrow('отказ');
+    expect(useProvidersStore.getState().providers).toEqual([]);
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    nextDispose();
+  });
+
+  it('отказ первого ответа нового подключения — прежнего снимка нет, список пуст', async () => {
+    const oldBridge = createFakeBridge();
+    oldBridge.setHandler('providers.list', () => snapshot(true));
+    const oldDispose = useProvidersStore.getState().init(oldBridge);
+    await flush();
+    oldDispose();
+    const pending = deferred();
+    const nextBridge = createFakeBridge();
+    nextBridge.setHandler('providers.list', () => pending.promise);
+    const nextDispose = useProvidersStore.getState().init(nextBridge);
+    pending.reject(new Error('отказ'));
+    await vi.waitFor(() => expect(useProvidersStore.getState().providers).toEqual([]));
+    expect(useProvidersStore.getState().loaded).toBe(true);
+    nextDispose();
+  });
+
+  it('новое подключение: старый ответ и старые события не меняют новый хост', async () => {
     const oldBridge = createFakeBridge();
     const pending = deferred();
     oldBridge.setHandler('providers.list', () => pending.promise);
@@ -83,7 +138,6 @@ describe('useProvidersStore — подключение ключа и покол�
     const nextBridge = createFakeBridge();
     nextBridge.setHandler('providers.list', () => snapshot(false));
     const nextDispose = useProvidersStore.getState().init(nextBridge);
-    expect(useProvidersStore.getState().loaded).toBe(false);
     await flush();
     pending.resolve(snapshot(true));
     oldBridge.emit('providers.changed', { provider: 'glm' });
@@ -148,6 +202,19 @@ describe('useProvidersStore.init', () => {
     expect(useProvidersStore.getState().providers).toEqual([
       { id: 'claude', label: 'Claude', available: true, version: null, limits: null },
     ]);
+  });
+
+  it('уровни effort у моделей и argsOverridden доходят до стора как есть (нормалайзер модели и effort 2026-10-06)', async () => {
+    const bridge = createFakeBridge();
+    const models = [
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: [{ id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' }] },
+      { id: 'haiku-like', label: 'No effort', efforts: null },
+    ];
+    bridge.setHandler('providers.list', () => ({ providers: [{ id: 'codex', label: 'Codex', available: true, models, effort: true, argsOverridden: true }] }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    expect(useProvidersStore.getState().providers[0]).toMatchObject({ models, effort: true, argsOverridden: true });
+    dispose();
   });
 
   it('отказ providers.list — список пуст, остальное работает: ни падения, ни необработанного отказа', async () => {

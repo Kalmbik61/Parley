@@ -1,24 +1,23 @@
 /**
  * Подсказки поля ввода «Chat» — чистая логика без React (живая проверка 2026-10-02): по тексту и
- * каретке понять, что человек сейчас набирает (слеш-команду, `/model <id>`, `@`-упоминание), и вставить
- * выбранное. Окно только подставляет текст в поле — разбирает его сам CLI, автоответов нет.
+ * каретке понять, что человек сейчас набирает (слеш-команду или `@`-упоминание), и вставить
+ * выбранное. Окно только подставляет текст в поле — разбирает его сам CLI, автоответов нет. Подсказок
+ * `/model <id>` нет (нормалайзер модели и effort 2026-10-06): набранный `/model` Claude Code сохраняет
+ * моделью по умолчанию для новых сессий, а меню тулбара меняет модель только этой сессии.
  */
 
 export type SuggestionContext =
   | { kind: 'command'; query: string; start: number }
-  | { kind: 'model'; query: string; start: number }
   | { kind: 'mention'; query: string; start: number };
 
 /**
  * Что набирает человек перед кареткой: `null` — подсказок нет. Слеш-команда — только когда весь текст
- * до каретки это `/слово`; `/model <часть id>` — выбор модели; `@` в начале слова — субагент или файл.
+ * до каретки это `/слово`; `@` в начале слова — субагент или файл.
  */
 export function suggestionContext(text: string, caret: number): SuggestionContext | null {
   const before = text.slice(0, caret);
   const command = /^\/([\w:.-]*)$/.exec(before);
   if (command !== null) return { kind: 'command', query: command[1] ?? '', start: 0 };
-  const model = /^\/model\s+(\S*)$/.exec(before);
-  if (model !== null) return { kind: 'model', query: model[1] ?? '', start: 0 };
   const mention = /(^|\s)@(\S*)$/.exec(before);
   if (mention !== null) {
     const query = mention[2] ?? '';

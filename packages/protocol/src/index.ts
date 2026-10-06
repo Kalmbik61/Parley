@@ -1,6 +1,7 @@
 export { PROTOCOL_VERSION } from './version.js';
 export { HOST_ERROR_REASONS, PROVIDER_CHECK_REASONS, refKey } from './types.js';
 export type {
+  EffortOption,
   ErrorCode,
   FeedCardState,
   FeedDecision,
@@ -27,7 +28,7 @@ export type {
   SessionRef,
   WorksSnapshot,
 } from './types.js';
-export { METHODS, NOTIFICATIONS, permissionModeChoice, sessionRef } from './methods.js';
+export { EFFORT_TOKEN_RE, METHODS, NOTIFICATIONS, permissionModeChoice, sessionRef } from './methods.js';
 export {
   FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,

@@ -468,6 +468,13 @@ export const S = {
     installationGuide: 'Installation guide',
     signInGuide: 'Sign-in guide',
     checkAgain: 'Check again',
+    /**
+     * Аргументы запуска провайдера заменены из `providers.json` (`argsOverridden`, нормалайзер модели и effort 2026-10-06):
+     * без `{model}` (и списка моделей) или `{effort}` в них выбора модели или effort нет — карточка объясняет почему.
+     */
+    argsOverridden: 'Launch arguments come from providers.json.',
+    noModelChoice: 'No model choice: it needs {model} in these arguments and a models list.',
+    noEffortChoice: 'No effort choice: these arguments have no {effort}.',
     signIn: "Sign-in happens in the agent's terminal on the first session — Parley does not sign you in.",
     path: 'Installed it into a new folder? Quit Parley (⌘Q) and open it again: the app reads PATH once at launch.',
     account: (command: string): string => `To change your account, run ${command} in the agent's terminal.`,
@@ -552,6 +559,9 @@ export const S = {
       /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
       modelDefault: 'Default',
       effortField: 'Effort',
+      /** Первый пункт списка уровней: без флага `--effort` — CLI берёт уровень, сохранённый у себя (нормалайзер 2026-10-06). */
+      effortDefault: 'Default',
+      /** Прежние три уровня: старый хост и свои списки без уровней (`LEGACY_EFFORTS`, `lib/effort-choices.ts`). */
       effortLow: 'Low',
       effortMedium: 'Medium',
       effortHigh: 'High',
@@ -735,6 +745,7 @@ export const S = {
       agents: 'Agents',
       notifications: 'Notifications',
       browser: 'Browser',
+      voice: 'Voice',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1047,7 +1058,7 @@ export const S = {
       attach: 'Attach a file',
       removeAttachment: (name: string): string => `Remove ${name}`,
     },
-    /** Подсказки поля ввода: команды, скиллы, модели, `@`-файлы и субагенты (живая проверка 2026-10-02). */
+    /** Подсказки поля ввода: команды, скиллы, `@`-файлы и субагенты (живая проверка 2026-10-02). */
     suggestions: {
       label: 'Suggestions',
       terminal: 'opens in the terminal',
@@ -1055,8 +1066,26 @@ export const S = {
       source: { user: 'user skill', project: 'project skill', plugin: 'plugin skill' },
     },
     model: 'Model',
-    /** Меню моделей в тулбаре: выбор уходит в CLI текстом `/model <id>` (живая проверка 2026-10-02). */
-    modelMenu: { label: 'Switch model' },
+    /**
+     * Кнопка «модель · effort» в тулбаре и её меню (нормалайзер модели и effort 2026-10-06, 5.9): выбор уходит
+     * `sessions.setModel` / `sessions.setEffort` и не пишется в настройки CLI. Причина неактивных пунктов — строкой под
+     * заголовком раздела: у неактивного пункта нет событий указателя, тултип не всплыл бы.
+     */
+    choice: {
+      label: 'Model and effort',
+      default: 'Default',
+      model: 'Model',
+      effort: 'Effort',
+      agentWorking: 'Wait until the agent is idle',
+      backgroundTasks: 'Wait until the background tasks finish',
+      /** Хост отказал `conflict` с причиной `busy`: агент занят, в поле терминала черновик, идёт другая смена. */
+      sessionBusy: 'The session is busy: try again when the agent is idle and the terminal input is empty',
+      notLive: 'Effort changes only while the session runs',
+      /** Хост не увидел выбранный уровень в подвале: поставить его может только человек в терминале. */
+      openTerminal: 'Open the terminal to change the effort',
+      /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
+      effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
+    },
     /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
     mode: {
       label: 'Permission mode',
@@ -1278,6 +1307,7 @@ export const S = {
   actions: {
     capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
+    toggleDictation: 'Toggle dictation',
     goToFile: 'Go to file',
     findInFiles: 'Find in files',
     newWorkspace: 'New workspace',
@@ -1388,6 +1418,8 @@ export const S = {
       merge: 'merge',
       assignToAgent: 'send to agent',
       switchMode: 'switch the mode',
+      switchModel: 'switch the model',
+      switchEffort: 'change the effort',
       createRoom: 'create room',
       saveRecipe: 'save recipe',
       loadSettings: 'load settings',
@@ -1519,6 +1551,47 @@ export const S = {
     sidebarError: "Couldn't show workspace sidebar",
     rightSidebarError: "Couldn't show right sidebar",
     layoutError: "Couldn't show layout",
+  },
+
+  /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */
+  voice: {
+    setUp: 'Set up voice input',
+    dictate: 'Dictate (⌘⇧M)',
+    stop: 'Stop dictation (⌘⇧M)',
+    transcribing: 'Transcribing…',
+    noSpeech: 'No speech detected',
+    micDenied: 'Microphone access denied',
+    openSystemSettings: 'Open System Settings',
+    noMicrophone: 'No microphone found',
+    engineMissing: 'Voice engine not found',
+    modelMissing: 'Voice model is missing',
+    openSettings: 'Open settings',
+    failed: 'Transcription failed',
+    copied: 'Transcript copied to clipboard',
+    diskFull: (mb: number): string => `Not enough disk space (need ${mb} MB)`,
+    downloadFailed: 'Download failed',
+    downloadCorrupted: 'Download corrupted. Try again.',
+    settings: {
+      enable: 'Voice input',
+      downloadFirst: 'Download a model first',
+      model: 'Model',
+      language: 'Language',
+      auto: 'Auto',
+      shortcut: 'Shortcut',
+      shortcutKeys: '⌘⇧M',
+      download: 'Download',
+      cancel: 'Cancel',
+      remove: 'Delete',
+      sizeMb: (mb: number): string => `${mb} MB`,
+      progress: (received: number, total: number): string =>
+        `${Math.floor((received / total) * 100)}% · ${Math.round(received / 1_000_000)} of ${Math.round(total / 1_000_000)} MB`,
+      hint: 'Audio is transcribed on this Mac and never leaves it.',
+    },
+    models: {
+      base: { name: 'Base', hint: 'Fastest. Weak for Russian.' },
+      small: { name: 'Small', hint: 'Good balance.' },
+      'large-v3-turbo-q5_0': { name: 'Large v3 Turbo (Q5)', hint: 'Best quality. Recommended on Apple Silicon.' },
+    },
   },
 };
 

@@ -292,6 +292,22 @@ describe('openEvents: поля агента и фоновых задач', () =>
     expect(oldEnd?.waitId).toBeNull();
     expect(bad?.waitId).toBeNull();
   });
+
+  it('source у SessionStart доходит до события; пустой и не строка — null', async () => {
+    const [startup, resume, empty, none, bad] = await read(
+      raw({ hook_event_name: 'SessionStart', source: 'startup' }) +
+        raw({ hook_event_name: 'SessionStart', source: 'resume' }) +
+        raw({ hook_event_name: 'SessionStart', source: '' }) +
+        raw({ hook_event_name: 'SessionStart' }) +
+        raw({ hook_event_name: 'SessionStart', source: 3 }),
+    );
+
+    expect(startup?.source).toBe('startup');
+    expect(resume?.source).toBe('resume');
+    expect(empty?.source).toBeNull();
+    expect(none?.source).toBeNull();
+    expect(bad?.source).toBeNull();
+  });
 });
 
 describe('watchEvents', () => {

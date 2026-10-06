@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { forEachJsonlRecord } from './jsonl.js';
+import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
@@ -126,6 +126,8 @@ export interface IndexSessionOptions {
   subagents?: DiscoveredSubagent[];
   /** Число подсессий, если известно без чтения файлов; по умолчанию — число `subagents`. */
   subsessionCount?: number;
+  /** Прерывает чтение файла: промис отклоняется `AbortError` (`forEachJsonlRecord`). */
+  signal?: AbortSignal;
 }
 
 /** Счётчики записи ответа Claude: `input_tokens` — вход без кэша, полный вход — сумма трёх частей. */
@@ -147,7 +149,7 @@ function claudeCounters({ input, output, cacheRead, cacheWrite }: NonNullable<Se
 export async function indexSessionFile(
   file: string,
   root: string,
-  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length }: IndexSessionOptions = {},
+  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, signal }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
@@ -176,7 +178,7 @@ export async function indexSessionFile(
   let lastPrompt: string | null = null;
   let firstText: string | null = null;
 
-  const stats = await forEachJsonlRecord(file, (raw, lineNo) => {
+  const onRecord = (raw: RawRecord, lineNo: number): void => {
     const record: SessionRecord = adapter.toSessionRecord(raw);
 
     recordTypes.add(record.type);
@@ -247,7 +249,8 @@ export async function indexSessionFile(
         lastWorkRecordAt = at;
       }
     }
-  });
+  };
+  const stats = await forEachJsonlRecord(file, onRecord, signal);
 
   const durationMs =
     startedAt !== null && endedAt !== null
@@ -286,7 +289,7 @@ export async function indexSessionFile(
         at: record.timestamp,
         child: true,
       });
-    });
+    }, signal);
   }
 
   const usage = ledger.summary();

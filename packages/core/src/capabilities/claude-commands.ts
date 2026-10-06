@@ -14,7 +14,12 @@ const COMMANDS: readonly CapabilityCommand[] = [
   { name: 'context', description: 'Show how the context window is used', terminal: false },
   { name: 'cost', description: 'Show token usage and cost of the session', terminal: false },
   { name: 'doctor', description: 'Check the health of the Claude Code installation', terminal: true },
-  { name: 'effort', description: 'Set the reasoning effort level', terminal: false },
+  {
+    name: 'effort',
+    description:
+      'Set the reasoning effort: without an argument it opens a slider in the terminal, and Claude Code saves a level set here as the default for new sessions; for this session only, the chat toolbar menu is better',
+    terminal: false,
+  },
   { name: 'exit', description: 'Exit Claude Code', terminal: false },
   { name: 'export', description: 'Export the conversation to a file or the clipboard', terminal: false },
   { name: 'fast', description: 'Toggle fast mode', terminal: false },

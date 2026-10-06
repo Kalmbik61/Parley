@@ -13,6 +13,8 @@ describe('HOST_ERROR_REASONS', () => {
       worksUnreadable: 'works-unreadable',
       clientUpgradeRequired: 'client-upgrade-required',
       snapshotTooLarge: 'snapshot-too-large',
+      // Нормалайзер модели и effort (5.7–5.8): «сессия занята» у `sessions.setEffort` и `sessions.setModel`.
+      busy: 'busy',
     });
   });
 });

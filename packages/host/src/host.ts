@@ -28,6 +28,8 @@ import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
+import { startCodexCatalog } from './providers/codex-catalog.js';
+import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
@@ -53,6 +55,12 @@ export interface HostOptions {
    * пробы или с подменой.
    */
   probeVersion?: VersionProbe;
+  /**
+   * Проба каталога моделей Codex на старте (`codex debug models`, спека нормалайзера, 5.2). Без неё каталога нет и
+   * действует встроенный список: подключает её только `main.ts`, а тесты, где настоящий codex запускать нельзя,
+   * зовут `startHost` без пробы или с подменой.
+   */
+  probeCodexCatalog?: CatalogProbe;
   /**
    * Лимиты подписок (спека комнат Organic, 3.5): корень логов Codex, часы и период опроса. Боевой хост
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
@@ -227,6 +235,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // запуск сессии — для порога ленты (`feedSupported`), поэтому проба заводится до сервиса сессий.
   const providerVersions = startProviderVersions(options.probeVersion, log);
 
+  // Каталог моделей Codex (спека нормалайзера, 5.2) — проба на старте, в фоне: `providers.list` её не ждёт, а
+  // новый каталог хост пишет в `codex-models.json` (его читает `loadProviders` — и окно, и MCP агента) и сообщает
+  // окну событием `providers.changed`.
+  const codexCatalog = startCodexCatalog(options.probeCodexCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'codex' });
+  });
+
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
   // адрес приёмника и свой токен (подкусок 2c).
@@ -292,6 +307,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     history,
     worksReady,
     providerVersions,
+    codexCatalog,
     limits: limitsService,
     glmCheck,
     works: worksService,

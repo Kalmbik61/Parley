@@ -142,13 +142,15 @@ async function rig(
   workId: string,
   launchEnv: NodeJS.ProcessEnv = {},
   wakeOptions: WakeServiceOptions = {},
+  /** Замок смены модели и effort сессии (`SessionsService.exclusive`); по умолчанию — не взят никогда. */
+  lock: { held: (ref: SessionRef) => boolean } = { held: () => false },
 ): Promise<Rig> {
   const host = fakeHost();
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
   const pty = createPtyManager(host);
   // Подъёма в этих тестах нет: все сессии живые, и `launch` будильнику не нужен.
-  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, {
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {}, exclusive: lock as never }, {
     enterDelayMs: 30,
     ...wakeOptions,
   });
@@ -351,6 +353,109 @@ describe('WakeService', () => {
   });
 });
 
+describe('WakeService: смена модели или effort и открытый ползунок /effort', () => {
+  const SLIDER = ['Effort', '←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel'];
+
+  /** Запись в PTY сессии: всё, что хост печатает, и отдельно Enter. */
+  function spyWrites(pty: Rig['pty']): string[] {
+    const writes: string[] = [];
+    const original = pty.write.bind(pty);
+    pty.write = (ref, data) => {
+      writes.push(data);
+      original(ref, data);
+    };
+    return writes;
+  }
+
+  it('замок смены взят — указатель не печатается и Enter не уходит; замок снят — уходит сам', async () => {
+    const { workId, sessionId } = await activeSession();
+    let held = true;
+    const { stream, pty } = await rig(sessionId, workId, {}, {}, { held: () => held });
+    const writes = spyWrites(pty);
+
+    await sendLetter(workId, sessionId);
+    await settle(400);
+    expect(writes).toEqual([]);
+    expect(stream()).not.toContain(pointer(1));
+
+    held = false;
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+
+  it('ползунок /effort на экране — указатель не печатается и Enter не уходит; ползунок закрыт — уходит сам', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty } = await rig(sessionId, workId);
+    const writes = spyWrites(pty);
+    const real = pty.screenText.bind(pty);
+    let open = true;
+    pty.screenText = (ref) => (open ? SLIDER : real(ref));
+
+    await sendLetter(workId, sessionId);
+    await settle(400);
+    expect(writes).toEqual([]);
+
+    open = false;
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+
+  it('замок взят за паузу между текстом и Enter — Enter не уходит, приходит pointer-cancelled', async () => {
+    const { workId, sessionId } = await activeSession();
+    let held = false;
+    const { stream, pty, ref } = await rig(sessionId, workId, {}, { enterDelayMs: 300 }, { held: () => held });
+    const original = pty.write.bind(pty);
+    const writes: string[] = [];
+    pty.write = (target, data) => {
+      writes.push(data);
+      original(target, data);
+      // Указатель напечатан — смена начинается до Enter.
+      if (data === pointer(1)) held = true;
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => writes.includes(pointer(1)), 3000);
+    await settle(600);
+    expect(writes).toEqual([pointer(1)]);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+    const cancelled = broadcasts.find(
+      (b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'pointer-cancelled',
+    );
+    expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+    expect((cancelled?.data as { text: string }).text).toContain('model or effort');
+  });
+
+  it('ползунок открылся за паузу между текстом и Enter — Enter не уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { pty } = await rig(sessionId, workId, {}, { enterDelayMs: 300 });
+    const real = pty.screenText.bind(pty);
+    let open = false;
+    pty.screenText = (ref) => (open ? SLIDER : real(ref));
+    const original = pty.write.bind(pty);
+    const writes: string[] = [];
+    pty.write = (target, data) => {
+      writes.push(data);
+      original(target, data);
+      if (data === pointer(1)) open = true;
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => writes.includes(pointer(1)), 3000);
+    await settle(600);
+    expect(writes).toEqual([pointer(1)]);
+  });
+
+  it('без замка и ползунка — указатель и Enter, как раньше', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty } = await rig(sessionId, workId);
+    const writes = spyWrites(pty);
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+});
+
 describe('WakeService: процесс без хуков и диалог перед Enter (fix-final-b)', () => {
   it('ни одного хука с запуска — указатель не печатается; первый хук — уходит', async () => {
     const { workId, sessionId } = await activeSession();
@@ -405,6 +510,46 @@ describe('WakeService: процесс без хуков и диалог пере
     expect(noticeTexts('pointer-cancelled')).toEqual([
       `the pointer for session ${sessionId} was left without Enter — the session is waiting for an answer`,
     ]);
+  });
+
+  // SessionStart ход не открывает (activity.ts): первый хук нового процесса — признак готовности поля ввода,
+  // живая проба Claude Code 2.1.289 (хук через ~0,2-0,35 с после запуска, набранный в тот миг текст не теряется).
+  it('человек поднял сессию (Resume): журнал после запуска — только SessionStart(resume) — указатель уходит сразу, без idle_prompt', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, activity, ref } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume' })}\n`,
+    );
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Ни Stop, ни idle_prompt не было, а ход SessionStart не открыл — сессия у приглашения.
+    expect(activity.get(ref)?.activity.activity).not.toBe('working');
+  });
+
+  it('прежний процесс оборвал ход (UserPromptSubmit без Stop): SessionStart(resume) ход оканчивает — указатель уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    // Каталог `events/` — до старта наблюдения активности, как при настоящем запуске (см. тест 2): иначе
+    // хост узнал бы о хуке только с письмом. Журнал заведён нейтральным StubReady.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, activity, ref } = await rig(sessionId, workId);
+    const journal = path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
+
+    await writeFile(journal, `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`, { flag: 'a' });
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    await sendLetter(workId, sessionId);
+    // Ход открыт и не кончается — указатель ждёт.
+    await settle(400);
+    expect(stream()).not.toContain(pointer(1));
+
+    await writeFile(journal, `${JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume' })}\n`, {
+      flag: 'a',
+    });
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
   });
 });
 
@@ -668,7 +813,7 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(argv.slice(-2)).toEqual(['--resume', providerSessionId]);
     await waitFor(() => stream().includes('STUB READY'), 5000);
 
-    // Хода ещё не было (SessionStart — работа): указателя нет.
+    // Хода ещё не было (SessionStart ход не открывает и не кончает): указателя нет.
     await settle(400);
     expect(stream()).not.toContain(pointer(1));
 

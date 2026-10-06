@@ -2,7 +2,7 @@ import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { validateResources } from './resource-policy.js';
-import type { EffortLevel } from '../providers.js';
+import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
   Message,
@@ -447,7 +447,7 @@ function migrateRoom(room: unknown): void {
   if (isRecord(room['proposal'])) room['proposal']['kind'] ??= 'decision';
 }
 
-/** Полей процесса в старых картах просто не было. */
+/** Полей процесса в старых картах просто не было; испорченный effort читается как «нет выбора». */
 function migrateSession(session: Record<string, unknown>): void {
   session['pid'] ??= null;
   session['startedAtProcess'] ??= null;
@@ -463,4 +463,15 @@ function migrateSession(session: Record<string, unknown>): void {
   delete session['agent'];
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
+  // Effort уходит в команду, у Codex — в кавычки TOML: значение, не прошедшее токен, не уходит никуда.
+  // Ключ убирается из прочитанной карты, и следующая её запись его уже не несёт. `null` — явный
+  // «Default» (снимает умолчание роли) — остаётся.
+  const effort = session['effort'];
+  if (
+    effort !== undefined &&
+    effort !== null &&
+    (typeof effort !== 'string' || !EFFORT_TOKEN.test(effort))
+  ) {
+    delete session['effort'];
+  }
 }

@@ -293,8 +293,10 @@ The Organic rooms (spec `docs/specs/2026-09-29-desktop-rooms-organic-design.md`,
 and 3.5) add two more:
 
 - the only CLI launches outside sessions are `claude --version` / `codex --version` probes
-  for availability and the status bar. The startup probe can be turned off with
-  `PARLEY_SKIP_VERSION_PROBE=1`; GLM still requires a verified supported version before launch;
+  for availability and the status bar, and `codex debug models` — Codex's own command that
+  prints the models of your account — at host start and no more often than every six hours
+  (see "Models"). The startup probes can be turned off with `PARLEY_SKIP_VERSION_PROBE=1`;
+  GLM still requires a verified supported version before launch;
 - the status line script only reads the human's and the project's `settings.json` and
   writes nothing.
 
@@ -454,8 +456,12 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   card, "New session or room" and "New room" in the palette, "New session" and "New room" in
   the card menu. It is one dialog: "Workspace" (the active workspaces), a name, agent rows
   — the provider, a model from the list ("Default" first — no flag; the list comes from the
-  provider's public documentation or from `providers.json`) and the effort "Low / Medium /
-  High" (only if the provider accepts it) — and "In its own worktree". With one agent the
+  provider's public documentation, from Codex's own catalog or from `providers.json`) and the
+  effort ("Default" first — no flag, so the CLI uses the level saved in it; then the levels of
+  the chosen model, with Codex's descriptions on a second line; with the "Default" model, the
+  levels all the provider's models share; no field when the provider or the model has no
+  levels) — and "In its own worktree". A new model resets a level it does not have to
+  "Default", and a new provider resets both. With one agent the
   button is "Start session": a session without a task, and its terminal. "Add agent" makes it
   two or more, and the button becomes "Create room": the star picks the lead, the room's
   sessions start without a task and without invitation messages (you write the task into the
@@ -763,9 +769,11 @@ interrupts the turn with Esc. A turn stopped before any reply leaves no trace in
 which also puts the prompt back into its terminal input: the host closes such a turn in the
 feed itself and erases that text, so the next message is not glued to it. If the host refuses
 a message (the session is not running, is busy or waits for an answer), the text and the
-attachments return to the field. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
-and `@` lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab
-insert, Esc closes. The window only inserts the text — Claude Code parses it.
+attachments return to the field. Typing `/` lists Claude Code's commands and your skills, and `@`
+lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab insert,
+Esc closes. The window only inserts the text — Claude Code parses it. There are no model
+suggestions after `/model `: Claude Code saves a typed `/model` as your default for new
+sessions, so change the model with the toolbar menu instead.
 
 **Attachments.** A screenshot pasted from the clipboard, files dropped onto the chat and files
 picked with the paperclip become attachments: chips above the field, with a thumbnail for
@@ -781,12 +789,20 @@ for you.
 **Which view opens.** A new session opens in the terminal until Claude Code has started, then
 switches to the chat once. Your own choice of view is remembered per tab and wins over this.
 
-**Mode and model.** The toolbar's mode menu sets Manual, Accept edits, Plan or Auto. The host
-presses Shift+Tab in the hidden terminal until the footer of the screen shows the chosen mode;
-if it cannot confirm the change, it asks you to open the terminal. Bypass mode is set in the
-terminal only. The model menu lists the provider's models and sends `/model <id>` to the
-session. For GLM, this Chat model choice is not saved separately and may reset on resume to
-the session's configured launch model (GLM-5.3 by default).
+**Mode, model and effort.** The toolbar's mode menu sets Manual, Accept edits, Plan or Auto.
+The host presses Shift+Tab in the hidden terminal until the footer of the screen shows the
+chosen mode; if it cannot confirm the change, it asks you to open the terminal. Bypass mode is
+set in the terminal only. The button next to it reads "model · effort": the model the session
+reports, otherwise the one chosen for it, and the effort chosen for it — "Default" when none
+was chosen. Its menu, for Claude and GLM alike, lists the provider's models and the effort
+levels of the session's model. A level is applied by Claude Code's `/effort` slider in the
+hidden terminal "for this session only": the host checks the level in the footer, and if it
+cannot confirm it, asks you to open the terminal. A model is changed by restarting the session
+with `--resume` and the new model, so the conversation goes on; a level the new model does not
+have goes back to "Default", and the window tells you. Neither choice changes Claude Code's
+saved defaults. While the agent works or background tasks hold the session, both sections are
+disabled and say why; a level also needs a running session. With an older host the
+button is plain text.
 
 **Version.** Chat view needs Claude Code 2.1.286 or newer; GLM needs 2.1.287 or newer to
 launch at all. Codex and older versions of Claude Code stay terminal-only: the segment is
@@ -809,7 +825,7 @@ indexed the transcript — without streamed text.
 
 ## Settings
 
-The window has Settings (⌘,), with five tabs:
+The window has Settings (⌘,), with six tabs:
 
 - **Appearance** — "System" / "Dark" / "Light".
 - **Terminal** — "Terminal font", "Terminal font size (8…32)".
@@ -821,6 +837,8 @@ The window has Settings (⌘,), with five tabs:
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
+- **Voice** — dictation: the on/off switch, "Model", "Language" and the model downloads (see
+  "Voice input").
 
 The fields from "Terminal" and "Agents" are written through the host to `~/.parley/config.json`
 (or to `config.json` in the home directory given by `PARLEY_HOME`) and apply without
@@ -880,11 +898,11 @@ Other variables:
   available.
 - `PARLEY_HOST_IDLE_MS` — how long the host waits with no windows and no live sessions before
   it exits; 300,000 ms by default.
-- `PARLEY_SKIP_VERSION_PROBE=1` — do not ask the providers' CLIs for their version
-  (`<command> --version`) at host start. Without the variable the host makes one probe per
-  registry command, with a timeout; the version goes to the window (`providers.list`) and is
-  read nowhere else. The window's E2E tests set it so as not to launch the real claude and
-  codex.
+- `PARLEY_SKIP_VERSION_PROBE=1` — turn off both startup probes of the providers' CLIs: the
+  versions (`<command> --version`) and the Codex model catalog (`codex debug models`). Without
+  the variable the host makes one version probe per registry command, with a timeout; the
+  version goes to the window (`providers.list`) and is read nowhere else. The window's E2E
+  tests set it so as not to launch the real claude and codex.
 - `PARLEY_LIMITS_POLL_MS` — how often the host rereads subscription limits (the Claude Code
   status line files and the Codex logs), in ms; 30,000 by default. The number is clamped to
   the range 200…2,147,483,647 (`1` gives 200); a non-numeric value (empty, garbage) is
@@ -905,6 +923,34 @@ Other variables:
   release at all — a window started from source does not — and the E2E tests set the variable
   anyway.
 
+### Voice input
+
+Dictation turns speech into text in the place you are typing. It is off by default.
+
+- **Turn it on:** Settings → Voice. Pick a model, press "Download", then switch "Voice input"
+  on. The switch stays unavailable until a model is downloaded. "Language" is "Auto" or a
+  fixed language.
+- **Use it:** the microphone button sits in the room composer, the chat composer, the "New
+  workspace" box and the toolbar of a session's Terminal view. ⌘⇧M does the same from
+  a focused field or terminal, and it is the only way in a Codex terminal, which has no button; there the text is
+  pasted into the terminal without Enter. Press once to record, press again to stop. Esc
+  cancels the recording. The transcript goes to the cursor and is never sent by itself: you
+  press Enter. A recording is limited to two minutes.
+- **First macOS prompt:** the first recording asks for microphone access in the name of
+  Parley. Parley is not signed with an Apple certificate, so macOS may forget the permission
+  after an update and ask again.
+- **Speed:** the first dictation after installing or updating Parley can take 15–20 seconds
+  while macOS compiles the engine's Metal shaders. After that, a 15–20 second phrase takes
+  about 1–2 seconds on Apple Silicon with "Large v3 Turbo". These numbers are a rough
+  guide, not a promise: they depend on the Mac, the model and the phrase.
+- **Intel Macs:** the Intel build of voice needs a processor with AVX2 (Haswell or newer).
+  Voice on Intel has not been tested on a real machine.
+- **Privacy:** speech is recognized on this Mac by a bundled whisper.cpp engine. The audio
+  never leaves it; the only network traffic is the one-time model download from Hugging Face.
+- **Models** live in `~/.parley/desktop/voice/models` (under `PARLEY_HOME` when it is set).
+  Delete one with "Delete" in Settings, or just remove the file by hand; if the selected model
+  is gone, dictation points you back to Settings.
+
 ## Agent state: hooks and liveness
 
 For each session Parley passes `--settings <work-dir>/settings.json` — a file with eight
@@ -920,7 +966,9 @@ The path comes from the agent's environment: the shell reads `PARLEY_WORK_DIR` a
 `PARLEY_SESSION_ID`.
 
 The log is read incrementally, from a remembered offset, and is folded into `working` /
-`blocked` / end of turn by a pure function of core. `--settings` is merged with your settings,
+`blocked` / end of turn by a pure function of core. Only `UserPromptSubmit` starts a turn:
+`SessionStart` does not, so a session restarted by Resume or a model switch is idle until its
+first prompt. `--settings` is merged with your settings,
 leaves other people's hooks alone, and nothing is written to `~/.claude`. If the binary did
 not accept this flag or the directory is not writable, a fallback keeps the state: the same
 history jsonl watcher as before. A new assistant entry means "working", and silence longer
@@ -1020,6 +1068,7 @@ writes the map; agents read it and report through the MCP server.
   desktop/            ui.json, layouts.json, notes/, drops/ — the window's data
   config.json         Parley settings (optional)
   providers.json      optional overrides of the provider registry
+  codex-models.json   the Codex model catalog the host last got from `codex debug models`
   works-index.json    the global index of workspaces: project, id, title, status
 ```
 
@@ -1065,9 +1114,9 @@ to introduce itself; the server knows who is calling. The tools:
 
 | Tool | What it does |
 | --- | --- |
-| `get_map(session?, room?, field?, id?, kind?, cursor?, maxBytes?)` | without arguments, the compact map (sessions, rooms, live plan revisions, unread counters, cursors), plus the registry's providers with an availability mark, a list of models (`models`) and an effort flag (`effort`); with arguments, one session or room or one field as a bounded page (see "Compact map and pages") |
+| `get_map(session?, room?, field?, id?, kind?, cursor?, maxBytes?)` | without arguments, the compact map (sessions, rooms, live plan revisions, unread counters, cursors), plus the registry's providers with an availability mark, a list of models (`models`, each with its effort levels `efforts`) and an effort flag (`effort`); with arguments, one session or room or one field as a bounded page (see "Compact map and pages") |
 | `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
-| `spawn_session(label, task, provider?, contextFrom?, role?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `role` is an id from `list_roles` (`agent` is the older alias for a Claude agent), `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is `low`, `medium` or `high`; a provider without the flag discards the choice. Over a limit of "Work limits" the call is refused |
+| `spawn_session(label, task, provider?, contextFrom?, role?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `role` is an id from `list_roles` (`agent` is the older alias for a Claude agent), `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is one of the chosen model's `efforts` there — with the default model, the levels all the provider's models share (a value outside them is an error, and the session is not created); a provider without the effort flag discards the choice. Over a limit of "Work limits" the call is refused |
 | `list_roles()` | the built-in and native roles available in the participant's folder, with source, provider, default model and effort and the read-only mark; no prompts or file paths |
 | `wait_for(target, timeoutSec)` | wait for a session to finish or for a message; on timeout it returns `running` |
 | `send_message(to?, text, kind?, room?, replyTo?)` | a message to a session or to a room: `note`, `question` or `decision`; `replyTo` — the id of the room message it answers, and the window shows a quote of it |
@@ -1606,7 +1655,7 @@ is counted once, and an overlap that cannot be proven is left out of the sum and
   - `src/mcp/` — the `parley-mcp` server and its tools.
   - `src/providers.ts` — the provider registry: what to launch with, how to pass the id, the
     MCP config, the settings file, the prompt, the model and the effort;
-    `src/provider-models.ts` — the built-in model lists.
+    `src/provider-models.ts` — the built-in model lists with each model's effort levels.
   - `src/secrets.ts` — the only reader and writer of Parley's locally saved Z.ai key.
 - `packages/desktop` — the Electron window.
   - `src/main/` — the main process: the window and the menu, the IPC allowlist (`ipc.ts`,
@@ -1718,41 +1767,69 @@ Claude. Roles for GLM are not covered yet.
 
 ### Models
 
-The host gives the window the providers' model lists (`providers.list`), and
-`sessions.create` accepts a model only from its provider's list: a value that is not in the
-list gives `bad_request`, the CLI does not get it, and no record appears in the map. If no
-model is chosen (the field is omitted or empty), it means "default": Claude Code and Codex
-use their own model without `--model`; GLM uses `glm-5.3[1m]`. The built-in lists are taken
-from the providers' public documentation, in the same order as there:
+The host gives the window the providers' model lists (`providers.list`), each model with its
+effort levels. `sessions.create` accepts a model only from its provider's list and an effort
+only from the levels of that model: a value outside them gives `bad_request` with the allowed
+values, the CLI does not get it, and no record appears in the map. The chosen model and effort
+are kept in the session's map, and resume passes them again: it starts the session with the
+model and effort saved for it (from the dialog, MCP or the Chat menu). A model switched in the
+terminal with `/model` is not saved, so resume does not bring it back; a model changed from
+the Chat menu restarts the CLI process, and the conversation goes on from the log. If no model
+is chosen (the field is omitted or empty), it means "default": Claude Code and Codex use their
+own model without `--model`; GLM uses `glm-5.3[1m]`. No effort means "default" too: the CLI
+uses the level saved for the model, or the model's own default. With the "default" model, the
+levels on offer are those all the provider's models share. The lists:
 
 - Claude Code — the `--model` aliases from `code.claude.com/docs/en/model-config`: `best`,
   `fable`, `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`, `opusplan`, `opusplan[1m]`.
   The aliases themselves point at the current version, so pinned versions (`claude-opus-5-5`
-  and the like) are not in the list;
-- Codex — the recommended models from `developers.openai.com/codex/models`: `gpt-6-astra`,
-  `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`. `gpt-6-sol` is the previous Sol: the documentation
-  has not retired it, and `gpt-6.1-sol` is not available in every plan. Models that the
-  documentation retires from Codex (`gpt-5.5` and older) are not taken into the list;
+  and the like) are not in the list. Every model except `haiku` takes the efforts `low`,
+  `medium`, `high`, `xhigh` and `max`; Haiku has no effort;
+- Codex — the list comes from Codex itself. At start the host runs `codex debug models`, Codex's
+  own command that prints the models of your account, and takes the visible ones in Codex's
+  order, each with its effort levels and their descriptions (up to `ultra`). Later it probes
+  lazily: when the window asks for the providers and the last probe began six or more hours
+  ago, successful or not, the host probes again in the background. So the list can be older than
+  six hours if no one asks, and after a failure or an offline answer the next probe comes no
+  sooner than six hours after the previous one. It keeps the list in `codex-models.json` in
+  Parley's home, so agents' `get_map` and `spawn_session` offer the same models. Codex may
+  refresh its catalog from its server while answering; Parley reads neither Codex's files nor
+  its sign-in. Without a network or a sign-in Codex still answers with the catalog built into
+  it; Parley takes that answer as a successful probe and keeps it in `codex-models.json` until
+  the next probe. If the command itself fails (a non-zero exit, a timeout, output that is not
+  JSON or lists no visible models), Parley keeps the last list it got, the one in
+  `codex-models.json`; the built-in list applies only until the first successful probe: the
+  visible models of 2026-10-06 — `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`,
+  `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`, each with `low` to `max` and, except the
+  two Luna models, `ultra`;
 - GLM — `glm-5.3[1m]` and `glm-5.3-flash[1m]`, shown as GLM-5.3 and GLM-5.3 Flash with
   1M context. The official Opus and Sonnet tiers map to GLM-5.3; Haiku maps to GLM-5.3 Flash.
+  Both take Claude Code's five efforts, `low` to `max`.
 
 For custom providers with no list, the model goes into the command unchecked — if
-`args` contains `{model}`.
+`args` contains `{model}`; the effort is then one of `low`, `medium` and `high`.
 
 If a model comes out that is not in the list yet, do not wait for a Parley update: set the
 list in `~/.parley/providers.json` with the `models` field. An element is a pair of `id` (the
 `--model` value) and `label` (the caption in the window); `id` is a single word, does not
 start with a hyphen, is at most 200 characters, and has no repeats in the list, otherwise the
-file will not load. The list replaces the built-in one entirely (like `args`), so the built-in
-models you need are listed again; `[]` removes the list altogether. It takes effect only if
-the provider's `args` contains `{model}` (the built-in `claude`, `codex` and `glm` have it).
+file will not load. An element may also carry `efforts`: the model's effort ids (lowercase
+words such as `low` or `xhigh`, no repeats), or `null` for a model without effort; without
+the field the model offers `low`, `medium` and `high`. The list replaces the built-in one
+entirely (like `args`), so the built-in models you need are listed again; `[]` removes the
+list altogether. For Codex it also wins over Codex's own catalog. It takes effect only if the
+provider's `args` contains `{model}`, and the effort only if they contain `{effort}` (the
+built-in `claude`, `codex` and `glm` have both). `args` set in `providers.json` replace the
+built-in ones without a migration: if they lack `{model}` or `{effort}`, there is no model or
+effort choice, and the provider's card says "Launch arguments come from providers.json" and
+why the choice is off.
 
 ```json
 {
   "codex": {
     "models": [
-      { "id": "gpt-6-sol", "label": "GPT-6 Sol" },
-      { "id": "my-new-model", "label": "My new model" }
+      { "id": "gpt-6-sol", "label": "GPT-6-Sol" },
+      { "id": "my-new-model", "label": "My new model", "efforts": ["low", "medium", "high", "xhigh"] }
     ]
   }
 }
@@ -1818,9 +1895,13 @@ not isolate the key from a malicious local process that can read your files or p
 
 GLM shares Claude Code's transcript format and Chat view. The first launch stays in Terminal
 until the first activity hook; answer trust, onboarding and permission questions there.
-Resume starts with the session's configured launch model, GLM-5.3 by default; a `/model`
-choice made in Chat is not separately persisted and may reset. Avoid `/logout` in GLM:
-it can change the shared local Claude Code sign-in used by your Claude sessions.
+Resume starts with the session's model and effort from the workspace map (GLM-5.3 when none
+was chosen). GLM offers Claude Code's five effort levels, Low to Max, for both models, and
+Z.ai takes them into account. Chat's model and effort menu works for GLM as for Claude and
+never touches the settings GLM shares with Claude. Avoid typing `/model` and `/logout` in a
+GLM terminal: Claude Code saves a `/model` choice as the default model of the local Claude
+Code settings shared with your Claude sessions, and `/logout` can change their shared
+sign-in.
 
 GLM-5.3 is text-only; choose **GLM-5.3 Flash** for screenshots and other images. GLM has no
 Claude channel and never shows Claude subscription limits; its Z.ai quota is read only on
@@ -1840,7 +1921,7 @@ Codex itself writes to the terminal and from the `notify` script.
 **How Parley launches Codex.** Its own settings are passed only with `-c` flags in its own
 sessions: `~/.codex/config.toml` is neither read nor written, and the human's personal
 `notify` is not called in these sessions. A new session in full (what is in angle brackets is
-substituted per session; `--model` and the effort only if chosen in the dialog):
+substituted per session; `--model` and the effort only if chosen in the dialog or by `spawn_session`):
 
 ```
 codex --no-daemon -a on-request \
@@ -2067,9 +2148,8 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
     removes them): the host does not roll back the record when a launch fails;
   - a room from already running sessions can be assembled only by dragging (a session onto a
     session or onto a room row): there is no menu item and no keyboard path;
-  - `claude --resume` gets neither the session's model nor its effort: they are in the map,
-    but the resume command does not carry them (Claude Code takes the model from the session
-    itself; the effort is not restored on resume).
+  - the model and the effort of a running Codex session cannot be changed from the window:
+    Codex sessions have no Chat yet, so choose both when you start the session.
 
 ## Development
 

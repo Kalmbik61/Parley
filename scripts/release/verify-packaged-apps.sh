@@ -48,6 +48,13 @@ check_app() {
   # Бинарь Node раздаётся вместе с текстом его лицензии (MIT, V8, OpenSSL, ICU): fetch-node кладёт LICENSE рядом.
   [ -s "$resources/node/LICENSE" ] ||
     fail "$app has no Contents/Resources/node/LICENSE: the license text of the embedded node must ship with it"
+  # Движок голосового ввода своей архитектуры, модель VAD и LICENSE whisper.cpp (fetch-whisper).
+  [ -x "$resources/whisper/bin/whisper-cli" ] ||
+    fail "$app has no voice engine (Contents/Resources/whisper/bin/whisper-cli): fetch-whisper must run before electron-builder"
+  [ "$(lipo -archs "$resources/whisper/bin/whisper-cli")" = "$lipo_arch" ] ||
+    fail "$app: whisper-cli is not a $lipo_arch binary"
+  [ -s "$resources/whisper/ggml-silero-v6.2.0.bin" ] || fail "$app has no VAD model (Contents/Resources/whisper/ggml-silero-v6.2.0.bin)"
+  [ -s "$resources/whisper/LICENSE" ] || fail "$app has no Contents/Resources/whisper/LICENSE"
   [ -f "$resources/host/dist/main.js" ] || fail "$app has no host entry (Contents/Resources/host/dist/main.js)"
 
   # Нативные файлы node-pty — своей архитектуры: проверка по заголовку Mach-O, а не только по имени каталога.
@@ -81,6 +88,16 @@ run_app() {
     fail "$out: the embedded node is not v$node_version"
   (cd "$resources/host" && "$@" "$resources/node/bin/node" -e "require('node-pty')") ||
     fail "$out: node-pty does not load under the embedded node"
+  # whisper-cli x64 собран с AVX2, а Rosetta его не исполняет (этап 0: SIGILL, сборки без AVX там зависают): x64 под
+  # `arch -x86_64` не запускаем — у него проверка заголовка (lipo выше) и библиотек (otool), а не запуск.
+  if [ "$#" -eq 0 ]; then
+    "$resources/whisper/bin/whisper-cli" --help >/dev/null 2>&1 || fail "$out: whisper-cli does not start"
+  fi
+  # Вывод otool — в переменную, а не в `grep -q`: под pipefail SIGPIPE от otool превращал находку в успех.
+  deps="$(otool -L "$resources/whisper/bin/whisper-cli")"
+  case "$deps" in
+    *@rpath*) fail "$out: whisper-cli links libraries from the build (@rpath)" ;;
+  esac
   echo "$out: embedded node v$node_version runs and loads node-pty"
 }
 

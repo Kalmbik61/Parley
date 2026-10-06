@@ -30,6 +30,7 @@ import {
   deleteSession,
   DirtyWorktreeError,
   discardWorktree,
+  effortsFor,
   finishExited,
   findRunnerBinary,
   GitStateError,
@@ -68,9 +69,9 @@ import {
   type WorkEntry,
   type ProviderEntry,
 } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
-import type { ActivityService } from '../activity/activity-service.js';
+import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { HookServer } from '../hooks/hook-server.js';
@@ -96,13 +97,13 @@ export interface CreateSessionInput {
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
   worktree?: boolean;
   /**
-   * Модель и усилие из диалога запуска (дизайн комнат, 3.2). До команды они доезжают через
-   * реестр провайдеров: тот, у кого в шаблоне нет их подстановок, выбор молча отбрасывает.
-   * Модель — значение из списка провайдера, если список есть (`resolveModelChoice`: вне списка —
-   * `bad_request`); пустая — «по умолчанию», без флага.
+   * Модель и усилие из диалога запуска (дизайн комнат, 3.2; спека нормалайзера, 5.3). Пару проверяет
+   * `resolveModelChoice`: вне каталога провайдера — `bad_request`, пустое значение — «по умолчанию», без флага.
+   * Разрешённый выбор ложится в запись сессии (`WorkSession.model`, `.effort`): его берут и повторный запуск,
+   * и resume.
    */
   model?: string | null;
-  effort?: EffortLevel | null;
+  effort?: string | null;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
@@ -123,7 +124,7 @@ export interface LaunchChoice {
 
 export interface SessionsService {
   create(input: CreateSessionInput): Promise<SessionRef>;
-  /** `prompt` — указатель первым ходом `resume`; `model` и `effort` — только у новой сессии. */
+  /** `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. */
   launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<void>;
   stop(ref: SessionRef): Promise<void>;
   /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
@@ -138,6 +139,19 @@ export interface SessionsService {
   interrupted(): SessionRef[];
   /** Поднимает прерванных без промпта — только с согласия человека (спека 10). */
   resumeInterrupted(refs: readonly SessionRef[]): Promise<void>;
+  /**
+   * Выбор модели и effort в записи сессии (спека нормалайзера, 5.5): `null` — явный «Default» (снимает и умолчание
+   * роли), `undefined` оставляет как было. Процесс не трогает.
+   */
+  setChoice(ref: SessionRef, choice: { model?: string | null; effort?: string | null }): Promise<void>;
+  /** Замок смены модели и effort этой сессии: через него идут `sessions.setEffort` и `sessions.setModel`. */
+  exclusive: SwitchLock;
+  /**
+   * Смена модели (спека нормалайзера, 5.8): живую сессию у приглашения перезапускает через resume с новым
+   * `--model`, остальным только пишет карту. `effort` в ответе — что осталось в карте: `null` — сброшен (у новой
+   * модели такого уровня нет) или его не было. Та же модель — ни записи, ни перезапуска.
+   */
+  setModel(ref: SessionRef, model: string): Promise<{ model: string; effort: string | null; restarted: boolean }>;
 }
 
 /**
@@ -155,6 +169,47 @@ export interface SessionsFeedOptions {
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/**
+ * Агент у своего приглашения (спека нормалайзера, 5.7–5.8): ход окончен — `idle` или ещё не просмотренный
+ * `unseen`, как у доставки писем (`delivery.ts` в core). `working` и `blocked` — занят; сведений нет — тоже занят:
+ * печатать и перезапускать вслепую хост не станет.
+ */
+export function atPrompt(live: SessionLive | undefined): boolean {
+  const state = live?.activity.activity;
+  return state === 'idle' || state === 'unseen';
+}
+
+/** Отказ «агент занят»: `conflict` с причиной `busy` — окно по ней выбирает свой текст. */
+export function busyError(message: string): HostError {
+  return new HostError('conflict', message, { reason: HOST_ERROR_REASONS.busy });
+}
+
+/** Замок смены модели и effort: вторая смена той же сессии, пока идёт первая, — `busy`. */
+export type SwitchLock = (<T>(ref: SessionRef, run: () => Promise<T>) => Promise<T>) & {
+  /** Идёт ли сейчас смена этой сессии: `pty.send` в это время не печатает — клавиши смены идут в открытый ползунок. */
+  held(ref: SessionRef): boolean;
+};
+
+/**
+ * Одна смена модели или effort на сессию за раз (спека нормалайзера, 5.7–5.8): двойной клик или `setEffort` во время
+ * `setModel` получают `busy` до первой клавиши — клавиши двух смен не смешиваются, перезапуск один. Ключ ставится
+ * синхронно, до первого `await`, и снимается и после сбоя.
+ */
+export function createSwitchLock(): SwitchLock {
+  const running = new Set<string>();
+  const lock = async <T>(ref: SessionRef, run: () => Promise<T>): Promise<T> => {
+    const key = refKey(ref);
+    if (running.has(key)) throw busyError('Another model or effort change of this session is in progress');
+    running.add(key);
+    try {
+      return await run();
+    } finally {
+      running.delete(key);
+    }
+  };
+  return Object.assign(lock, { held: (ref: SessionRef): boolean => running.has(refKey(ref)) });
+}
 
 export function createSessionsService(
   host: HostContext,
@@ -184,6 +239,9 @@ export function createSessionsService(
       host.broadcast('host.notice', { kind: warning.code, ref, text: warning.message, at: new Date().toISOString() });
     }
   }
+
+  // Одна смена модели или effort на сессию за раз — общий замок `sessions.setEffort` и `sessions.setModel`.
+  const exclusive = createSwitchLock();
 
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
@@ -554,7 +612,8 @@ export function createSessionsService(
    * Быстрая и дочерняя сессии core заводит с ярлыком `NEW_LABEL` и
    * провайдером claude. Ярлык и провайдер из диалога окна должны остаться —
    * иначе выбор человека молча терялся бы. Пустой ярлык оставляет `NEW_LABEL`,
-   * и тогда сессию переименует заголовок Claude Code (автозаголовок).
+   * и тогда сессию переименует заголовок Claude Code (автозаголовок). Модель и
+   * усилие ложатся в запись так же, как их пишет `spawn_session`: без выбора полей нет.
    */
   async function applyChoice(ref: SessionRef, label: string, provider: string, role: SessionRole | null, choice: LaunchChoice): Promise<void> {
     const trimmed = label.trim();
@@ -608,24 +667,25 @@ export function createSessionsService(
   }
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
-    const { projectPath, workId, provider, label, task, parent, worktree, effort } = input;
+    const { projectPath, workId, provider, label, task, parent, worktree } = input;
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
     if ((await loadProviders())[provider]?.runner.secret !== undefined) await readyProvider(provider);
-    // Модель — раньше всего: значение не из списка провайдера отвергается до первой записи в карте
-    // (иначе осталась бы `pending`-сессия, которую нечем запустить). Пустая строка — отсутствие
-    // выбора; только явный null очищает default роли до default CLI.
+    // Модель и усилие — раньше всего: пара не из каталога провайдера отвергается до первой записи в карте (иначе
+    // осталась бы `pending`-сессия, которую нечем запустить), а пустое значение — «по умолчанию». Разрешённый выбор
+    // пишется в запись сессии на всех путях ниже: повторный запуск и resume берут его оттуда (спека нормалайзера, 5.5).
+    // Пустая строка — отсутствие выбора; только явный null очищает default роли до default CLI.
     if (input.agent !== undefined && input.role !== undefined) throw new HostError('bad_request', 'agent-and-role-conflict');
     const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
     const registry = await loadProviders();
     const entry = registry[provider];
     if (!entry) throw new HostError('bad_request', 'unknown provider');
     await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
-    const model = input.model === null ? null : await resolveModelChoice(provider, input.model);
+    const resolved = await resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined);
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
-      ...(model === undefined ? {} : { model }),
-      ...(effort === undefined ? {} : { effort }),
+      ...(input.model === null ? { model: null } : resolved.model === undefined ? {} : { model: resolved.model }),
+      ...(input.effort === null ? { effort: null } : resolved.effort === undefined ? {} : { effort: resolved.effort }),
     };
 
     // Проверка до создания сессии, а не после (как и в `spawn_session` core,
@@ -678,6 +738,80 @@ export function createSessionsService(
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё
     // пишется, дожидаемся её, чтобы вызывающая сторона не читала гонку.
     await finalizing.get(refKey(ref));
+  }
+
+  async function setChoice(
+    ref: SessionRef,
+    choice: { model?: string | null; effort?: string | null },
+  ): Promise<void> {
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) {
+        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+      }
+      // `null` — явный «Default» из меню чата: пишется как `null`, а не удаляет поле, иначе после смены
+      // вернулось бы умолчание роли.
+      if (choice.model !== undefined) session.model = choice.model;
+      if (choice.effort !== undefined) session.effort = choice.effort;
+    });
+  }
+
+  /**
+   * Модель проверяет resolver; сохранённый effort остаётся, если он есть у новой модели, иначе сбрасывается в
+   * «по умолчанию». Та же модель, что в карте, — ничего не пишется и не перезапускается. Сессия без процесса (спит,
+   * закрыта, ждёт запуска) — только запись в карту: следующий запуск или resume возьмёт новую модель. Живая — только
+   * у приглашения и без фоновых задач: запись в карту, остановка и resume с флагами из карты. Resume не поднялся —
+   * ошибка уходит окну, а карта уже с новой моделью: кнопка Resume повторит запуск. Всё — под замком `exclusive`.
+   */
+  async function setModel(
+    ref: SessionRef,
+    model: string,
+  ): Promise<{ model: string; effort: string | null; restarted: boolean }> {
+    return exclusive(ref, async () => {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+        (candidate) => candidate.id === ref.sessionId,
+      );
+      if (session === undefined) {
+        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+      }
+      const entry = (await loadProviders())[session.provider];
+      if (entry === undefined || !isClaudeCode(entry)) {
+        throw new HostError('bad_request', 'the model of a session can be changed only for Claude Code sessions');
+      }
+      const next = (await resolveModelChoice(session.provider, model)).model;
+      // Шаблон запуска без `{model}` (свои `args` в providers.json): модель до CLI не доедет — менять нечего.
+      if (next === undefined) throw new HostError('bad_request', `provider ${entry.id} does not accept a model`);
+      // Та же модель — ни записи, ни перезапуска: меню отмечает её и так.
+      if (next === session.model) return { model: next, effort: session.effort ?? null, restarted: false };
+      // Нет выбора effort — его нет и после смены (умолчание роли не вытесняется); выбор, которого у новой модели
+      // нет, становится явным «Default» (`null`).
+      const effort =
+        session.effort === undefined
+          ? undefined
+          : session.effort !== null && (effortsFor(entry, next)?.some((level) => level.id === session.effort) ?? false)
+            ? session.effort
+            : null;
+      // Сессия сейчас поднимается: процесса ещё нет, но он уже прочитал старую модель из карты — запись «для неживой»
+      // и следующий запуск молча остались бы с ней.
+      if (launching.has(refKey(ref))) throw busyError('The session is starting; try again in a moment');
+      const live = pty.get(ref) !== undefined;
+      if (live) {
+        const state = activity.get(ref);
+        if (!atPrompt(state)) throw busyError('Wait until the agent is idle');
+        if (state?.activity.tasks.some((task) => task.background) === true) {
+          throw busyError('Wait until background tasks finish');
+        }
+        // Остановка и resume потеряли бы неотправленный текст; `hasDraft` включает и указатель будильника.
+        if (pty.get(ref)?.hasDraft() === true) {
+          throw busyError('The input field has unsent text; send or clear it first');
+        }
+      }
+      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) });
+      if (!live) return { model: next, effort: effort ?? null, restarted: false };
+      await stop(ref);
+      await launch(ref, 'resume');
+      return { model: next, effort: effort ?? null, restarted: true };
+    });
   }
 
   async function close(ref: SessionRef): Promise<void> {
@@ -797,6 +931,9 @@ export function createSessionsService(
     stop,
     close,
     delete: del,
+    setChoice,
+    exclusive,
+    setModel,
     live: (ref) => pty.get(ref) !== undefined,
     async stopAll() {
       await Promise.all(

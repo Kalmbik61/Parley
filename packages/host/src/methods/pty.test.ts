@@ -17,6 +17,7 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import { createSwitchLock } from '../sessions/sessions-service.js';
 import { createPtyHandlers } from './pty.js';
 
 type EventMessage = { event: EventName; data: unknown };
@@ -79,6 +80,7 @@ function fakePtyManager() {
     input: vi.fn(),
     resize: vi.fn(),
     snapshot: () => snapshotResult,
+    screenText: () => [],
     stop: async () => ({ exitCode: 0, signal: null }),
     setHostDraft: vi.fn(),
     on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: never): () => void {
@@ -398,6 +400,34 @@ describe('createPtyHandlers', () => {
     handlers.ptyResize({ ref: sessionRef, cols: 100, rows: 30 }, requestOf(fakeClient()));
 
     expect(pty.manager.resize).toHaveBeenCalledWith(sessionRef, 100, 30);
+  });
+});
+
+describe('pty.send и замок смены модели и effort', () => {
+  it('пока замок сессии взят (sessions.exclusive), pty.send отказывает blocked и ничего не пишет; соседняя сессия не страдает', async () => {
+    const pty = fakePtyManager();
+    pty.markLive(ref());
+    const lock = createSwitchLock();
+    const handlers = createPtyHandlers({
+      wake: fakeWake(),
+      pty: pty.manager,
+      activity: fakeActivity(),
+      works: fakeWorks(),
+      sessions: { exclusive: lock },
+    });
+    let release: () => void = () => {};
+    const holding = lock(ref(), () => new Promise<void>((resolve) => {
+      release = resolve;
+    }));
+
+    await expect(handlers.ptySend({ ref: ref(), text: 'hi', submit: true }, requestOf(fakeClient()))).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'blocked',
+    });
+    expect(pty.manager.write).not.toHaveBeenCalled();
+    release();
+    await holding;
   });
 });
 

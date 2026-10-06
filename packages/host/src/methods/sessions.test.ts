@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPendingSession, createWork } from '@parley/core';
+import type { SessionRef } from '@parley/protocol';
+import { fakeEffortScreen } from '../../test/fake-effort-screen.js';
+import type { FakeEffortScreen } from '../../test/fake-effort-screen.js';
 import type { RequestInfo } from '../context.js';
-import type { SessionsService } from '../sessions/sessions-service.js';
+import { createSwitchLock } from '../sessions/sessions-service.js';
+import type { SessionsService, SwitchLock } from '../sessions/sessions-service.js';
 import { createSessionHandlers } from './sessions.js';
 import type { SessionMethodDeps } from './sessions.js';
 
@@ -120,5 +128,275 @@ describe('sessions.create role and explicit clear wire delivery', () => {
     const input = { ...params, role: { source: 'builtin' as const, name: 'planner' }, model: null, effort: null };
     await sessionsCreate(input, request);
     expect(create).toHaveBeenCalledWith(input);
+  });
+});
+
+describe('sessions.setEffort (спека нормалайзера, 5.7)', () => {
+  let project = '';
+
+  beforeEach(async () => {
+    project = await mkdtemp(path.join(tmpdir(), 'parley-set-effort-'));
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(project, { recursive: true, force: true });
+  });
+
+  /** Сессия в карте временного проекта: провайдер и сохранённая модель — то, по чему хост берёт уровни. */
+  async function sessionOf(provider: string, model?: string): Promise<SessionRef> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider,
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      ...(model === undefined ? {} : { model }),
+    });
+    return { projectPath: project, workId: work.work.id, sessionId };
+  }
+
+  /**
+   * Обработчик поверх экрана-подмены; `activity` — состояние агента, которое видит хост. По умолчанию после старта
+   * процесса (у экрана `startedAt: 0`) уже был хук, будильник молчит, замок свой.
+   */
+  function setup(
+    screen: FakeEffortScreen,
+    activity = 'idle',
+    options: { lastEventAt?: string | null; wakeInFlight?: boolean; lock?: SwitchLock } = {},
+  ) {
+    const setChoice = vi.fn(async () => {});
+    const lastEventAt = options.lastEventAt === undefined ? '2026-10-06T10:00:00.000Z' : options.lastEventAt;
+    const { sessionsSetEffort } = createSessionHandlers({
+      sessions: { setChoice, exclusive: options.lock ?? createSwitchLock() } as unknown as SessionsService,
+      pty: screen.pty,
+      activity: {
+        get: () => ({ activity: { activity, tasks: [], lastEventAt }, metrics: null }),
+      } as unknown as SessionMethodDeps['activity'],
+      wake: { inFlight: () => options.wakeInFlight === true },
+    });
+    return { sessionsSetEffort, setChoice };
+  }
+
+  /** Фальшивые часы только для таймеров: `setImmediate` остаётся настоящим (им `settle` отдаёт ввод-вывод). */
+  const fakeClock = (): void => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  };
+
+  /**
+   * Ответ обработчика под фальшивыми часами: карта и реестр читаются с настоящего диска, поэтому часы крутятся
+   * шагами, а между шагами настоящий цикл событий успевает отдать ввод-вывод.
+   */
+  async function settle<T>(promise: Promise<T>): Promise<T> {
+    let done = false;
+    void promise.then(
+      () => {
+        done = true;
+      },
+      () => {
+        done = true;
+      },
+    );
+    for (let step = 0; step < 2_000 && !done; step += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    return promise;
+  }
+
+  it('Claude, GLM и модель «по умолчанию»: подвал подтвердил уровень — карта обновлена, ответ verified true', async () => {
+    const cases = [
+      ['claude', 'opus'],
+      ['glm', 'glm-5.3[1m]'],
+      ['claude', undefined],
+    ] as const;
+    for (const [provider, model] of cases) {
+      const ref = await sessionOf(provider, model);
+      const screen = fakeEffortScreen('medium');
+      const { sessionsSetEffort, setChoice } = setup(screen);
+      fakeClock();
+      await expect(settle(sessionsSetEffort({ ref, effort: 'xhigh' }, request))).resolves.toEqual({
+        effort: 'xhigh',
+        verified: true,
+      });
+      vi.useRealTimers();
+      expect(setChoice).toHaveBeenCalledWith(ref, { effort: 'xhigh' });
+      expect(screen.writes.slice(0, 2)).toEqual(['/effort', '\r']);
+      // Пока ползунок открыт, будильник не печатает: черновик хоста поставлен на время смены и снят.
+      expect(screen.hostDrafts).toEqual([true, false]);
+    }
+  });
+
+  it('ползунок не открылся — Esc, verified false, карта не тронута', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen(null);
+    screen.opens = false;
+    const { sessionsSetEffort, setChoice } = setup(screen);
+    fakeClock();
+
+    await expect(settle(sessionsSetEffort({ ref, effort: 'high' }, request))).resolves.toEqual({
+      effort: null,
+      verified: false,
+    });
+    expect(screen.writes.at(-1)).toBe('\x1b');
+    expect(setChoice).not.toHaveBeenCalled();
+  });
+
+  it('подвал показал другой уровень (предел CLI) — verified false с увиденным, карта не тронута', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    screen.cap = 'high';
+    const { sessionsSetEffort, setChoice } = setup(screen);
+    fakeClock();
+
+    await expect(settle(sessionsSetEffort({ ref, effort: 'max' }, request))).resolves.toEqual({
+      effort: 'high',
+      verified: false,
+    });
+    expect(setChoice).not.toHaveBeenCalled();
+  });
+
+  it('агент работает или ждёт ответа — conflict с причиной busy, в PTY ничего не напечатано', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    for (const activity of ['working', 'blocked']) {
+      const screen = fakeEffortScreen('medium');
+      const { sessionsSetEffort, setChoice } = setup(screen, activity);
+      await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'conflict',
+        data: { reason: 'busy' },
+      });
+      expect(screen.writes).toEqual([]);
+      expect(setChoice).not.toHaveBeenCalled();
+    }
+  });
+
+  it('в поле ввода неотправленный текст — conflict busy: `/effort` и Enter ушли бы агенту вместе с ним', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    screen.draft = true;
+    const { sessionsSetEffort } = setup(screen);
+
+    await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    expect(screen.writes).toEqual([]);
+  });
+
+  it('уровня нет у модели или сессия не Claude Code — bad_request, ничего не напечатано', async () => {
+    const screen = fakeEffortScreen('medium');
+    const { sessionsSetEffort } = setup(screen);
+
+    await expect(
+      sessionsSetEffort({ ref: await sessionOf('claude', 'haiku'), effort: 'high' }, request),
+    ).rejects.toThrow(/haiku has no effort levels/);
+    await expect(
+      sessionsSetEffort({ ref: await sessionOf('claude', 'opus'), effort: 'ultra' }, request),
+    ).rejects.toThrow(/ultra is not a level of opus/);
+    await expect(
+      sessionsSetEffort({ ref: await sessionOf('codex', 'gpt-6-sol'), effort: 'high' }, request),
+    ).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+    expect(screen.writes).toEqual([]);
+  });
+
+  it('нет живого PTY — not_found', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    screen.live = false;
+    const { sessionsSetEffort } = setup(screen);
+
+    await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'not_found',
+    });
+  });
+
+  it('с запуска процесса не было ни одного хука — conflict busy, ничего не напечатано: Enter мог бы ответить на вопрос доверия к папке', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    const { sessionsSetEffort } = setup(screen, 'idle', { lastEventAt: null });
+
+    await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    expect(screen.writes).toEqual([]);
+  });
+
+  it('будильник печатает указатель на письма — conflict busy: клавиши указателя и ползунка не смешаются', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    const { sessionsSetEffort } = setup(screen, 'idle', { wakeInFlight: true });
+
+    await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    expect(screen.writes).toEqual([]);
+    expect(screen.hostDrafts).toEqual([]);
+  });
+
+  it('два выбора подряд по одной сессии (двойной клик) — второй conflict busy, клавиши первого не перемешаны', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    const { sessionsSetEffort, setChoice } = setup(screen);
+    fakeClock();
+
+    const first = sessionsSetEffort({ ref, effort: 'high' }, request);
+    await expect(sessionsSetEffort({ ref, effort: 'max' }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    await expect(settle(first)).resolves.toEqual({ effort: 'high', verified: true });
+    vi.useRealTimers();
+
+    // Одна последовательность клавиш: `/effort`, Enter, 6 × ←, 2 × →, `s`.
+    expect(screen.writes).toEqual([
+      '/effort',
+      '\r',
+      ...Array.from({ length: 6 }, () => '\x1b[D'),
+      '\x1b[C',
+      '\x1b[C',
+      's',
+    ]);
+    expect(setChoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('идёт смена модели той же сессии (общий замок с sessions.setModel) — conflict busy, ничего не напечатано', async () => {
+    const ref = await sessionOf('claude', 'opus');
+    const screen = fakeEffortScreen('medium');
+    const lock = createSwitchLock();
+    const { sessionsSetEffort } = setup(screen, 'idle', { lock });
+    let release: () => void = () => {};
+    const model = lock(ref, () => new Promise<void>((resolve) => {
+      release = resolve;
+    }));
+
+    await expect(sessionsSetEffort({ ref, effort: 'high' }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    expect(screen.writes).toEqual([]);
+    release();
+    await model;
+  });
+});
+
+describe('sessions.setModel (спека нормалайзера, 5.8)', () => {
+  it('правила и порядок — в сервисе: обработчик отдаёт ему ref и модель и возвращает ответ как есть', async () => {
+    const setModel = vi.fn(async () => ({ model: 'sonnet', effort: null, restarted: true }));
+    const { sessionsSetModel } = createSessionHandlers({
+      sessions: { setModel } as unknown as SessionsService,
+      pty: {} as unknown as SessionMethodDeps['pty'],
+      activity: {} as unknown as SessionMethodDeps['activity'],
+      wake: {} as unknown as SessionMethodDeps['wake'],
+    });
+
+    await expect(sessionsSetModel({ ref, model: 'sonnet' }, request)).resolves.toEqual({
+      model: 'sonnet',
+      effort: null,
+      restarted: true,
+    });
+    expect(setModel).toHaveBeenCalledWith(ref, 'sonnet');
   });
 });

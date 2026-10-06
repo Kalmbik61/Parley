@@ -20,12 +20,11 @@ import {
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
-  EFFORT_LEVELS,
   isClaudeCode,
   providerReadiness,
   providerReadinessError,
   loadProviders,
-  modelChoiceError,
+  resolveModelEffort,
   selectableModels,
   supportsEffort,
   supportsModel,
@@ -341,7 +340,7 @@ const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models and effort for spawn_session). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels, and effort, for spawn_session). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
     inputSchema: {
       type: 'object',
       properties: {
@@ -420,9 +419,8 @@ const TOOLS: Tool[] = [
         },
         effort: {
           type: ['string', 'null'],
-          enum: [...EFFORT_LEVELS, null],
           description:
-            "The new session's reasoning effort. A provider with effort: false in get_map drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
+            "The new session's reasoning effort: one of the efforts of the chosen model in get_map; with the default model, the levels shared by its provider's models. A provider with effort: false drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
         },
       },
       required: ['label', 'task'],
@@ -788,11 +786,12 @@ async function spawnSession(
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
   // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
-  // необязательный параметр. Только явный null очищает default роли до default CLI.
+  // необязательный параметр. Только явный null очищает умолчание роли до умолчания CLI. Вид значений
+  // и принадлежность спискам сверяет `resolveModelEffort` ниже.
   const model =
     args['model'] === undefined || args['model'] === '' ? undefined : args['model'] === null ? null : stringArg(args, 'model');
   const effort =
-    args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : enumArg(args, 'effort', EFFORT_LEVELS);
+    args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : stringArg(args, 'effort');
 
   const registry = await loadProviders();
   const entry = registry[provider];
@@ -804,16 +803,20 @@ async function spawnSession(
   const refusal = providerReadinessError(entry, await providerReadiness(entry));
   if (refusal !== null) throw new Error(refusal);
 
-  // Модель проверяем до записи, как и роль: значение не из списка провайдера — отказ, а не `pending`,
-  // который нечем запустить. Провайдер, чей шаблон запуска не принимает флаг, выбор отбрасывает молча —
-  // как `sessions.create` хоста: окно узнаёт об этом из `providers.list`, агент — из `get_map`.
-  let chosenModel: string | null | undefined = model === null && supportsModel(entry) ? null : undefined;
-  if (model !== undefined && model !== null) {
-    const refusal = modelChoiceError(entry, model);
-    if (refusal !== null) throw new Error(refusal);
-    if (supportsModel(entry)) chosenModel = model;
-  }
-  const chosenEffort = effort !== undefined && supportsEffort(entry) ? effort : undefined;
+  // Пару проверяем до записи, как и роль: модель не из списка провайдера или уровень не из уровней модели
+  // (у «по умолчанию» — общих уровней моделей провайдера) — отказ, а не `pending`, который нечем
+  // запустить. Правило одно с `sessions.create` хоста — `resolveModelEffort` в core (нормалайзер, 5.3).
+  // Флаг, которого нет в шаблоне запуска провайдера, resolver отбрасывает молча — и модель, и усилие; окно
+  // узнаёт об этом из `providers.list`, агент — из `get_map`. Явный `null` — «Default» без проверки:
+  // он снимает умолчание роли и доезжает до карты, только если провайдер принимает флаг; effort-строка
+  // рядом с `model: null` проверяется по уровням «Default».
+  const resolved = resolveModelEffort(entry, {
+    ...(typeof model === 'string' ? { model } : {}),
+    ...(typeof effort === 'string' ? { effort } : {}),
+  });
+  if ('error' in resolved) throw new Error(resolved.error);
+  const chosenModel = model === null ? (supportsModel(entry) ? null : undefined) : resolved.choice.model;
+  const chosenEffort = effort === null ? (supportsEffort(entry) ? null : undefined) : resolved.choice.effort;
 
   await prepareSessionRole(context.projectPath, entry, { roleId: roleId(savedRole), provider, mode: 'create' }, catalog);
 

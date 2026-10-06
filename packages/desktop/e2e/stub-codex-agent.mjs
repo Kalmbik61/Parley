@@ -24,12 +24,21 @@
 //   STUB_CODEX_THREAD=<id> — id треда в заголовке и в JSON notify
 
 import { spawn } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { clearInterval, setInterval } from 'node:timers';
+import { URL } from 'node:url';
 
 // Проба версий хоста (`<команда> --version`): ответ как у настоящего Codex, выход сразу.
 if (process.argv[2] === '--version') {
   process.stdout.write('codex-cli 0.44.0\n');
+  process.exit(0);
+}
+
+// Каталог моделей (`codex debug models`; нормалайзер модели и effort 2026-10-06, спека 5.2): хост спрашивает его на
+// старте, как версию. Ответ — урезанный каталог в форме настоящего (`fixtures/codex-debug-models.json`): две видимые
+// модели не в порядке `priority` и одна скрытая — по ним E2E видит, что список пришёл от CLI, а не встроенный.
+if (process.argv[2] === 'debug' && process.argv[3] === 'models') {
+  process.stdout.write(readFileSync(new URL('./fixtures/codex-debug-models.json', import.meta.url), 'utf8'));
   process.exit(0);
 }
 

@@ -55,9 +55,12 @@ describe('createSender', () => {
   /** Последнее событие хуков; по умолчанию — после запуска процесса (fake: startedAt 0). */
   let lastEventAt: string | null;
   let wakeInFlight: boolean;
+  /** Замок смены модели и effort этой сессии занят (`SessionsService.exclusive.held`). */
+  let switching: boolean;
 
   beforeEach(() => {
     vi.useFakeTimers();
+    switching = false;
     pty = fakePty();
     activityState = 'idle';
     lastEventAt = new Date(1000).toISOString();
@@ -76,6 +79,7 @@ describe('createSender', () => {
       pty: pty.manager,
       activity,
       wake: { inFlight: () => wakeInFlight, enterDelayMs: 500 },
+      switching: () => switching,
     });
   }
 
@@ -95,6 +99,41 @@ describe('createSender', () => {
       reason: 'blocked',
     });
     expect(pty.writes).toEqual([]);
+  });
+
+  it('на экране открытый ползунок /effort (поздний, после Esc хоста) — blocked, ни одной записи: Enter сохранил бы уровень умолчанием', async () => {
+    pty.screen = ['  ◐ Effort', '  ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel'];
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'blocked',
+    });
+    await expect(sender()({ ref, text: 'hi', submit: false })).resolves.toMatchObject({ reason: 'blocked' });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('фраза ползунка в ответе агента выше поля ввода — не ползунок: отправка идёт', async () => {
+    // Цитата подсказки стоит выше последних восьми непустых строк экрана.
+    pty.screen = ['● В коде: s for this session only · Esc to cancel', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '> ', '? for shortcuts'];
+    await expect(sender()({ ref, text: 'hi', submit: false })).resolves.toEqual({ inserted: true, submitted: false, reason: null });
+    expect(pty.writes).toEqual(['hi']);
+  });
+
+  it('замок смены модели и effort взят — blocked, ни одной записи: текст попал бы в открытый ползунок', async () => {
+    switching = true;
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({
+      inserted: false,
+      submitted: false,
+      reason: 'blocked',
+    });
+    expect(pty.writes).toEqual([]);
+  });
+
+  it('без подсказки ползунка на экране и без замка отправка идёт как раньше', async () => {
+    pty.screen = ['● Готово', '> '];
+    const sent = sender()({ ref, text: 'hi', submit: false });
+    await expect(sent).resolves.toEqual({ inserted: true, submitted: false, reason: null });
+    expect(pty.writes).toEqual(['hi']);
   });
 
   it('ни одного хука с запуска процесса (вопрос доверия к папке) — blocked, ни одной записи (fix-final-b)', async () => {

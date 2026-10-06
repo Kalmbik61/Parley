@@ -188,6 +188,10 @@ jobs:
       - name: Fetch the embedded Node
         run: pnpm --filter @parley/desktop fetch-node arm64 x64
 
+      # Движок голосового ввода обеих архитектур: sha256 исходника whisper.cpp и модели VAD закреплены в скрипте.
+      - name: Build the voice engine
+        run: pnpm --filter @parley/desktop fetch-whisper arm64 x64
+
       # `dist` — сборка окна, раскладка хоста (pnpm deploy) и electron-builder; аргументы уходят ему. Токена у этой
       # цепочки нет, и `--publish never` — всегда: electron-builder ничего не выкладывает, а в релиз файлы кладёт
       # шаг ниже, после проверки. Без пользователя Apple: подпись ad-hoc, нотаризации нет (electron-builder.yml).

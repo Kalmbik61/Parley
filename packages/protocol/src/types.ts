@@ -55,9 +55,11 @@ export interface ProviderCheck {
 
 /**
  * Модель в списке провайдера (`providers.list`, дизайн комнат, 3.2): `id` — значение `--model`,
- * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
+ * `label` — подпись для окна, `efforts` — её уровни effort (нормалайзер модели и effort, 5.1). Уровень
+ * (`EffortOption`): `id` — значение флага, `label` — подпись, `description` — пояснение каталога CLI.
+ * Типы живут в core рядом с реестром, откуда список и берётся.
  */
-export type { ModelOption } from '@parley/core';
+export type { EffortOption, ModelOption } from '@parley/core';
 /** Подсказки поля ввода вида «Chat» (`capabilities.list`): команды, скиллы и субагенты CLI провайдера. */
 export type { Capabilities, CapabilityAgent, CapabilityCommand, CapabilitySkill, CapabilitySource } from '@parley/core';
 
@@ -235,6 +237,9 @@ export type ErrorCode =
  *   обновите окно (P35);
  * - `snapshot-too-large` (`internal`) — даже компактный снимок работ не влезает в кадр (тысячи сессий или комнат):
  *   хост его не шлёт, окну остаётся сказать об этом человеку (P35).
+ * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
+ *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
+ *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
  */
 export const HOST_ERROR_REASONS = {
   gitMissing: 'git-missing',
@@ -245,6 +250,7 @@ export const HOST_ERROR_REASONS = {
   worksUnreadable: 'works-unreadable',
   clientUpgradeRequired: 'client-upgrade-required',
   snapshotTooLarge: 'snapshot-too-large',
+  busy: 'busy',
 } as const;
 
 export type HostErrorReason = (typeof HOST_ERROR_REASONS)[keyof typeof HOST_ERROR_REASONS];

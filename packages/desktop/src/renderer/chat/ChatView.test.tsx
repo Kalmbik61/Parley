@@ -23,9 +23,11 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
@@ -311,6 +313,20 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.change(field(), { target: { value } });
   };
   const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+
+  it('диктовка в поле чата: текст в поле, pty.send не звался', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+    const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    const mic = screen.getByTestId('mic');
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(mic.dataset.state).toBe('recording'));
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(field().value).toBe('hello from voice'));
+    expect(sends()).toEqual([]);
+    dispose();
+  });
 
   it('Enter — pty.send с submit: true, поле пустеет; Shift+Enter — не отправляет', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
@@ -711,9 +727,7 @@ describe('ChatView — меню режима (кусок 4a, решения К �
   });
 });
 
-describe('ChatView — индикатор работы, Resume и меню моделей (живая проверка 2026-10-02)', () => {
-  const model = (): HTMLElement => screen.getByTestId('chat-model');
-
+describe('ChatView — индикатор работы и Resume (живая проверка 2026-10-02)', () => {
   it('shows retry attempts with Stop available, then clears the countdown on recovery or failure', () => {
     renderBody(makeSession('s-01', 'S01'));
     const retry: FeedItem = {
@@ -779,46 +793,280 @@ describe('ChatView — индикатор работы, Resume и меню мо�
     setFeed([]);
     expect(screen.queryByTestId('terminal-not-running')).toBeNull();
   });
+});
 
-  it('у провайдера есть модели — подпись становится меню; выбор шлёт «/model <id>» с submit: true', async () => {
-    useProvidersStore.setState({
-      providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: '' }] }],
-      loaded: true,
-    });
-    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([
-      { id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'opus' } },
-    ]);
-    expect(model().textContent).toBe('opus');
-    fireEvent.keyDown(model(), { key: 'Enter' });
-    const options = screen.getAllByTestId('chat-model-option');
-    expect(options.map((option) => [option.dataset.model, option.textContent])).toEqual([
-      ['opus', 'Opus'],
-      ['sonnet', 'sonnet'],
-    ]);
-    expect(options[0]!.getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(options[1]!);
-    await act(async () => {});
-    expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
-      { ref: REF, text: '/model sonnet', submit: true },
-    ]);
+describe('ChatView — меню «модель · effort» (нормалайзер модели и effort 2026-10-06, 5.9)', () => {
+  const CHOICE_METHODS = [...FEED_METHODS, 'sessions.setModel', 'sessions.setEffort'];
+  const LEVELS = [
+    { id: 'low', label: 'Low' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high', label: 'High' },
+    { id: 'xhigh', label: 'Extra high' },
+    { id: 'max', label: 'Max' },
+  ];
+  const CLAUDE_LEVELS = {
+    ...CLAUDE_OK,
+    effort: true,
+    models: [
+      { id: 'opus', label: 'Opus', efforts: LEVELS },
+      { id: 'haiku', label: 'Haiku', efforts: null },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)', efforts: LEVELS },
+    ],
+  };
+  const trigger = (): HTMLElement => screen.getByTestId('chat-model');
+  const openMenu = (): void => {
+    fireEvent.keyDown(trigger(), { key: 'Enter' });
+  };
+  const modelItems = (): HTMLElement[] => screen.queryAllByTestId('chat-model-option');
+  const effortItems = (): HTMLElement[] => screen.queryAllByTestId('chat-effort-option');
+  const paramsOf = (method: string): unknown[] => bridge.calls.filter((call) => call.method === method).map((call) => call.params);
+  const started = (model: string): FeedItem => ({ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model } });
+  const disabled = (items: HTMLElement[]): boolean[] => items.map((item) => item.hasAttribute('data-disabled'));
+
+  beforeEach(() => {
+    hostWith(CHOICE_METHODS);
+    useProvidersStore.setState({ providers: [CLAUDE_LEVELS], loaded: true });
   });
 
-  it('модель ещё не известна — триггер с подписью «Model»', () => {
-    useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }] }], loaded: true });
-    renderBody(makeSession('s-01', 'S01'));
+  it('кнопка «модель · effort»: модель из ленты, иначе из карты подписью каталога; effort из карты; нет выбора — Default', () => {
+    const view = renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'xhigh' }));
     setFeed([]);
-    expect(model().textContent).toBe(S.chat.model);
+    expect(trigger().getAttribute('title')).toBe('Opus · Extra high');
+    setFeed([started('claude-opus-5-5')], 2);
+    expect(trigger().getAttribute('title')).toBe('claude-opus-5-5 · Extra high');
+    view.unmount();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([], 3);
+    expect(trigger().getAttribute('title')).toBe('Default · Default');
   });
 
-  it('у провайдера нет моделей (нет поля или null) — меню нет, подпись как была', () => {
+  it('разделы — модели провайдера и уровни модели из карты, без пункта Default; отмечен выбор карты', () => {
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    expect(modelItems().map((item) => [item.dataset.model, item.textContent])).toEqual([
+      ['opus', 'Opus'],
+      ['haiku', 'Haiku'],
+      ['opusplan[1m]', 'Opus Plan (1M context)'],
+    ]);
+    expect(modelItems().map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
+    expect(effortItems().map((item) => item.textContent)).toEqual(['Low', 'Medium', 'High', 'Extra high', 'Max']);
+    expect(effortItems().map((item) => item.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true', 'false', 'false']);
+    expect(screen.queryByRole('menuitemradio', { name: 'Default' })).toBeNull();
+  });
+
+  it('модели в карте нет — уровни Default (общие для моделей провайдера); Haiku в карте — раздела effort нет, на кнопке одна модель', () => {
+    const view = renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    openMenu();
+    expect(effortItems().map((item) => item.dataset.effort)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    view.unmount();
+    renderBody(makeSession('s-01', 'S01', { model: 'haiku' }));
+    expect(trigger().getAttribute('title')).toBe('Haiku');
+    openMenu();
+    expect(modelItems()).toHaveLength(3);
+    expect(effortItems()).toEqual([]);
+  });
+
+  it('выбор модели — sessions.setModel, текста /model нет; уровня из карты у новой модели нет — тост о сбросе', async () => {
+    bridge.setHandler('sessions.setModel', () => ({ model: 'haiku', effort: null, restarted: true }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(modelItems()[1]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'haiku' }]);
+    expect(paramsOf('pty.send')).toEqual([]);
+    expect(vi.mocked(toast).mock.calls.map((call) => call[0])).toEqual([S.chat.choice.effortReset('Haiku', 'High')]);
+  });
+
+  it('уровень есть и у новой модели — тоста нет; та же модель — запроса нет', async () => {
+    bridge.setHandler('sessions.setModel', () => ({ model: 'opusplan[1m]', effort: 'high', restarted: true }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(modelItems()[0]!);
+    openMenu();
+    fireEvent.click(modelItems()[2]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'opusplan[1m]' }]);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('выбор уровня — sessions.setEffort; verified: false — тост «откройте терминал»; текста в терминал нет', async () => {
+    bridge.setHandler('sessions.setEffort', () => ({ effort: 'medium', verified: false }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'medium' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(effortItems()[4]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setEffort')).toEqual([{ ref: REF, effort: 'max' }]);
+    expect(vi.mocked(toast).mock.calls.map((call) => call[0])).toEqual([S.chat.choice.openTerminal]);
+    expect(paramsOf('pty.send')).toEqual([]);
+  });
+
+  it('клик по отмеченному уровню — ни одного вызова sessions.setEffort', async () => {
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    expect(effortItems()[2]!.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(effortItems()[2]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setEffort')).toEqual([]);
+    expect(paramsOf('pty.send')).toEqual([]);
+  });
+
+  it('повторный выбор (другая модель или другой уровень), пока первая смена в пути, — второго вызова нет', async () => {
+    let finish: (value: { model: string; effort: string | null; restarted: boolean }) => void = () => {};
+    bridge.setHandler('sessions.setModel', () => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    bridge.setHandler('sessions.setEffort', () => ({ effort: 'low', verified: true }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(modelItems()[1]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'haiku' }]);
+
+    // Смена в пути: кнопка меню заблокирована (`busy`), меню не открывается, выбрать нечего; обработчики
+    // ChatView отдельно отказывают, пока `choiceBusy` взят.
+    expect(trigger().hasAttribute('disabled')).toBe(true);
+    openMenu();
+    expect(modelItems()).toEqual([]);
+    expect(effortItems()).toEqual([]);
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'haiku' }]);
+    expect(paramsOf('sessions.setEffort')).toEqual([]);
+
+    // Первая смена кончилась — меню снова принимает выбор.
+    await act(async () => finish({ model: 'haiku', effort: null, restarted: true }));
+    expect(trigger().hasAttribute('disabled')).toBe(false);
+    openMenu();
+    expect(modelItems()).toHaveLength(3);
+  });
+
+  it('отказ хоста: conflict с причиной busy — «сессия занята», прочее — текст по коду', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setHandler('sessions.setEffort', () => {
+      throw { code: 'conflict', message: 'Wait until the agent is idle', data: { reason: 'busy' } };
+    });
+    bridge.setHandler('sessions.setModel', () => {
+      throw { code: 'bad_request', message: 'not in the list' };
+    });
+    renderBody(makeSession('s-01', 'S01', { model: 'opus' }));
+    setFeed([]);
+    openMenu();
+    fireEvent.click(effortItems()[0]!);
+    await act(async () => {});
+    openMenu();
+    fireEvent.click(modelItems()[2]!);
+    await act(async () => {});
+    expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toEqual([
+      S.chat.choice.sessionBusy,
+      "Couldn't switch the model: invalid request.",
+    ]);
+    vi.restoreAllMocks();
+  });
+
+  it('агент работает — неактивны оба раздела с причиной; держат фоновые задачи — тоже; неживая сессия — только уровни', () => {
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]), loaded: true });
+    const working = renderBody(makeSession('s-01', 'S01', { model: 'opus' }));
+    setFeed([]);
+    openMenu();
+    expect(disabled(modelItems())).toEqual([true, true, true]);
+    expect(disabled(effortItems())).toEqual([true, true, true, true, true]);
+    expect(screen.getByTestId('chat-model-reason').textContent).toBe(S.chat.choice.agentWorking);
+    expect(screen.getByTestId('chat-effort-reason').textContent).toBe(S.chat.choice.agentWorking);
+    fireEvent.click(modelItems()[1]!);
+    fireEvent.click(effortItems()[0]!);
+    expect(paramsOf('sessions.setModel')).toEqual([]);
+    expect(paramsOf('sessions.setEffort')).toEqual([]);
+    working.unmount();
+
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working', { heldByBackground: true })]) }));
+    const held = renderBody(makeSession('s-01', 'S01', { model: 'opus' }));
+    openMenu();
+    expect(disabled(modelItems())).toEqual([true, true, true]);
+    expect(screen.getByTestId('chat-model-reason').textContent).toBe(S.chat.choice.backgroundTasks);
+    expect(screen.getByTestId('chat-effort-reason').textContent).toBe(S.chat.choice.backgroundTasks);
+    held.unmount();
+
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]) }));
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', lifecycle: 'sleeping' }));
+    openMenu();
+    expect(disabled(modelItems())).toEqual([false, false, false]);
+    expect(screen.queryByTestId('chat-model-reason')).toBeNull();
+    expect(disabled(effortItems())).toEqual([true, true, true, true, true]);
+    expect(screen.getByTestId('chat-effort-reason').textContent).toBe(S.chat.choice.notLive);
+  });
+
+  it('старый хост без sessions.setModel/setEffort — меню нет, подпись текстом; /model не отправляется', async () => {
+    hostWith(FEED_METHODS);
+    renderBody(makeSession('s-01', 'S01', { model: 'opus', effort: 'high' }));
+    setFeed([started('claude-opus-5-5')]);
+    expect(trigger().tagName).toBe('SPAN');
+    expect(trigger().textContent).toBe('claude-opus-5-5');
+    fireEvent.keyDown(trigger(), { key: 'Enter' });
+    expect(modelItems()).toEqual([]);
+    await act(async () => {});
+    expect(paramsOf('pty.send')).toEqual([]);
+  });
+
+  it('хост знает только один из двух методов — меню тоже нет; подпись — модель карты', () => {
+    hostWith([...FEED_METHODS, 'sessions.setModel']);
+    renderBody(makeSession('s-01', 'S01', { model: 'opus' }));
+    setFeed([]);
+    expect(trigger().tagName).toBe('SPAN');
+    expect(trigger().textContent).toBe('Opus');
+  });
+
+  it('у провайдера ни моделей, ни effort — меню нет, подпись из ленты', () => {
+    useProvidersStore.setState({ providers: [CLAUDE_OK], loaded: true });
     renderBody(makeSession('s-01', 'S01'));
-    setFeed([{ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'opus' } }]);
-    expect(model().tagName).toBe('SPAN');
-    useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: null }], loaded: true });
-    expect(model().tagName).toBe('SPAN');
-    expect(screen.queryByTestId('chat-model-option')).toBeNull();
+    setFeed([started('opus')]);
+    expect(trigger().tagName).toBe('SPAN');
+    expect(trigger().textContent).toBe('opus');
+  });
+
+  it('GLM — меню есть (хотфикс 0.5.3 снят): модели Z.ai и пять уровней; выбор — sessions.setModel', async () => {
+    const GLM_LEVELS = {
+      id: 'glm',
+      label: 'GLM',
+      available: true,
+      version: '2.1.287',
+      family: 'claude' as const,
+      limits: null,
+      effort: true,
+      models: [
+        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)', efforts: LEVELS },
+        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)', efforts: LEVELS },
+      ],
+    };
+    bridge.setHandler('sessions.setModel', () => ({ model: 'glm-5.3-flash[1m]', effort: null, restarted: true }));
+    useProvidersStore.setState({ providers: [CLAUDE_OK, GLM_LEVELS], loaded: true });
+    renderBody(makeSession('s-01', 'S01', { provider: 'glm', model: 'glm-5.3[1m]' }));
+    setFeed([]);
+    expect(trigger().getAttribute('title')).toBe('GLM-5.3 (1M context) · Default');
+    openMenu();
+    expect(modelItems().map((item) => item.dataset.model)).toEqual(['glm-5.3[1m]', 'glm-5.3-flash[1m]']);
+    expect(effortItems()).toHaveLength(5);
+    fireEvent.click(modelItems()[1]!);
+    await act(async () => {});
+    expect(paramsOf('sessions.setModel')).toEqual([{ ref: REF, model: 'glm-5.3-flash[1m]' }]);
+    expect(paramsOf('pty.send')).toEqual([]);
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('длинная модель обрезается, уровень виден целиком: правило вёрстки кнопки для окна 800 px', () => {
+    renderBody(makeSession('s-01', 'S01', { model: 'opusplan[1m]', effort: 'xhigh' }));
+    setFeed([]);
+    const label = screen.getByTestId('chat-model-label');
+    const level = screen.getByTestId('chat-effort-label');
+    expect(label.textContent).toBe('Opus Plan (1M context)');
+    expect(level.textContent).toBe('· Extra high');
+    expect(label.className.split(' ')).toEqual(expect.arrayContaining(['min-w-0', 'truncate']));
+    expect(level.className.split(' ')).toContain('shrink-0');
+    expect(trigger().className.split(' ')).toEqual(expect.arrayContaining(['min-w-0', 'max-w-[40%]']));
   });
 });
 
@@ -921,20 +1169,13 @@ describe('ChatView — подсказки поля ввода (живая про
     expect(field().value).toBe('/clear ');
   });
 
-  it('«/model » — модели провайдера; выбор вставляет «/model <id>» без пробела и без отправки', async () => {
+  it('«/model » — подсказок моделей нет (нормалайзер 2026-10-06): модель меняет меню тулбара, без записи в настройки CLI', async () => {
     await renderWithCapabilities();
     type('/model ');
-    expect(values()).toEqual(['/model opus', '/model sonnet']);
-    fireEvent.keyDown(field(), { key: 'ArrowDown' });
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(field().value).toBe('/model sonnet');
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+    type('/model op');
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
     expect(sends()).toEqual([]);
-    // Теперь попап закрыт, Enter отправляет.
-    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
-    type('/model sonnet');
-    fireEvent.keyDown(field(), { key: 'Escape' });
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(sends()).toEqual([{ ref: REF, text: '/model sonnet', submit: true }]);
   });
 
   it('«@» — субагенты и файлы корня; каталог продолжает подсказки, файл вставляется с пробелом', async () => {
@@ -967,7 +1208,7 @@ describe('ChatView — подсказки поля ввода (живая про
     expect(screen.queryByTestId('chat-suggestions')).toBeNull();
   });
 
-  it('хост без capabilities.list — метод не зовётся, команд нет, модели работают', async () => {
+  it('хост без capabilities.list — метод не зовётся, команд нет', async () => {
     useProvidersStore.setState({ providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }] }], loaded: true });
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
@@ -975,7 +1216,7 @@ describe('ChatView — подсказки поля ввода (живая про
     type('/');
     expect(screen.queryByTestId('chat-suggestions')).toBeNull();
     type('/model ');
-    expect(values()).toEqual(['/model opus']);
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
     expect(bridge.calls.filter((call) => call.method === 'capabilities.list')).toEqual([]);
   });
 

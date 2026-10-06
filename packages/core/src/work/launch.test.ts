@@ -580,41 +580,71 @@ describe('модель и усилие в плане запуска (дизай�
     expect('effort' in stored).toBe(false);
   });
 
-  it('возобновление записанный выбор не несёт: модель Claude Code возвращает сам', async () => {
+  /** Сессия с записанным выбором, которую есть что продолжать: id у провайдера, у Claude — и транскрипт. */
+  async function resumable(
+    provider: string,
+    choice: { model?: string; effort?: string },
+    providerSessionId: string,
+  ): Promise<{ workId: string; sessionId: string }> {
     const created = await createWork(project, { title: 'Авторизация', goal: '' });
-    const workId = created.work.id;
-    const sessionId = await createPendingSession(project, workId, {
-      provider: 'claude',
+    const sessionId = await createPendingSession(project, created.work.id, {
+      provider,
       label: 'тесты',
       task: 'прогнать e2e',
-      model: 'opus',
-      effort: 'high',
+      ...choice,
     });
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, created.work.id, (map) => {
       const session = map.sessions.find((item) => item.id === sessionId);
-      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+      if (session !== undefined) session.providerSessionId = providerSessionId;
     });
-    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
+    if (provider === 'claude') await claudeTranscript(providerSessionId);
+    return { workId: created.work.id, sessionId };
+  }
+
+  it('возобновление Claude несёт записанные модель и усилие: effort при --resume Claude Code сам не вернёт', async () => {
+    const id = 'c0ffee00-1111-2222-3333-444455556666';
+    const { workId, sessionId } = await resumable('claude', { model: 'opus', effort: 'low' }, id);
     const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
 
+    expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('low');
+    expect(plan.args.filter((arg) => arg === '--effort')).toHaveLength(1);
+  });
+
+  it('при возобновлении выбор запуска главнее записанного; невыбранное поле берётся из карты', async () => {
+    const { workId, sessionId } = await resumable(
+      'claude',
+      { model: 'opus', effort: 'low' },
+      'c0ffee00-1111-2222-3333-444455556666',
+    );
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), { model: 'sonnet' });
+
+    expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('low');
+  });
+
+  it('возобновление без записанного выбора — без флагов: модель Claude Code восстанавливает сам', async () => {
+    const id = 'c0ffee00-1111-2222-3333-444455556666';
+    const { workId, sessionId } = await resumable('claude', {}, id);
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+
+    expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
     expect(plan.args).not.toContain('--model');
     expect(plan.args).not.toContain('--effort');
   });
 
-  it('возобновление выбор не несёт: модель Claude Code возвращает сам', async () => {
-    const { workId, sessionId } = await pending('claude');
-    await updateMap(project, workId, (map) => {
-      const session = map.sessions.find((item) => item.id === sessionId);
-      if (session !== undefined) session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
-    });
-    await claudeTranscript('c0ffee00-1111-2222-3333-444455556666');
-    const plan = await planResume(project, workId, await sessionOf(workId, sessionId), {
-      model: 'opus',
-      effort: 'high',
-    });
+  it('codex при возобновлении ни модели, ни усилия не несёт, даже записанных: тред помнит их сам', async () => {
+    const { workId, sessionId } = await resumable(
+      'codex',
+      { model: 'gpt-6-sol', effort: 'ultra' },
+      '7fa0e1ee-cc7b-4a1e-9d4e-000000000001',
+    );
+    const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
 
+    expect(plan.args[0]).toBe('resume');
     expect(plan.args).not.toContain('--model');
-    expect(plan.args).not.toContain('--effort');
+    expect(plan.args.join(' ')).not.toContain('model_reasoning_effort');
   });
 });
 
@@ -1973,6 +2003,23 @@ describe('GLM launch plans', () => {
       expect(settings.model).toBe(model ?? 'glm-5.3[1m]');
     },
   );
+
+  it('GLM: resume несёт записанный effort сразу за моделью; без записи пара --effort выпадает', async () => {
+    const { workId, sessionId } = await pending('glm');
+    const session = await sessionOf(workId, sessionId);
+    session.providerSessionId = 'glm-conversation';
+    const dir = path.join(logs, 'project');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'glm-conversation.jsonl'), '{"type":"user"}\n');
+
+    expect((await planResume(project, workId, session)).args).not.toContain('--effort');
+
+    session.effort = 'max';
+    const plan = await planResume(project, workId, session);
+    expect(plan.args.slice(0, 2)).toEqual(['--resume', 'glm-conversation']);
+    expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('max');
+    expect(plan.args.indexOf('--effort')).toBe(plan.args.indexOf('--model') + 2);
+  });
 
   it('missing GLM transcript starts again with the assigned id', async () => {
     const { workId, sessionId } = await pending('glm');

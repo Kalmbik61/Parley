@@ -2,7 +2,7 @@ import { access, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
-import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, type ModelOption } from './provider-models.js';
+import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -58,7 +58,7 @@ export interface RunnerConfig {
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{model}`, `{notify}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{notify}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -88,13 +88,19 @@ export interface ProviderEntry {
   linkBy: SessionLink;
   runner: RunnerConfig;
   /**
-   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
-   * У встроенных `claude`, `codex` и `glm` список взят из открытой документации (`provider-models.ts`), у
+   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model`, подпись и уровни
+   * effort модели. У встроенных — из каталога `provider-models.ts` (у `codex` — из `codexModelsFile`, если он есть), у
    * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
    * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
    * списке не хранится: это отсутствие выбора, без флага.
    */
   models?: readonly ModelOption[] | null;
+  /**
+   * `args` пришли из `providers.json`: принимает ли провайдер модель и effort, решает уже шаблон
+   * человека (`supportsModel`, `supportsEffort`), и окно говорит об этом в карточке провайдера.
+   * Поля нет — шаблон встроенный.
+   */
+  argsOverridden?: true;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -194,11 +200,12 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // целиком, как у `--mcp-config`, — тогда сессия живёт по pull.
         '--dangerously-load-development-channels',
         '{channel}',
-        // Модель и усилие новой сессии из диалога окна. Оба флага документированы
+        // Модель и усилие из диалога окна или из карты сессии. Оба флага документированы
         // (code.claude.com/docs/en/cli-reference: `--model`, `--effort`), а без выбора пара
-        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. В `resumeArgs`
-        // их нет: возобновлённая сессия остаётся на прежней модели (docs/en/sessions
-        // того же сайта). В карте хранится только явный выбор, без вычисленных defaults роли.
+        // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. Те же пары стоят и в
+        // `resumeArgs`: effort возобновлённой сессии Claude Code сам не восстанавливает и без флага
+        // уходит на умолчание (спека нормалайзера модели и effort, раздел 3, п. 6).
+        // В карте хранится только явный выбор, без вычисленных defaults роли.
         '--model',
         '{model}',
         '--effort',
@@ -220,6 +227,12 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '--dangerously-load-development-channels',
         '{channel}',
+        // Выбор из карты сессии (спека нормалайзера, 5.4). Нет выбора — пары выпадают, и модель
+        // Claude Code при `--resume` восстанавливает сам.
+        '--model',
+        '{model}',
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         '--disallowedTools',
@@ -256,8 +269,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // переопределением конфига: выделенного флага у Codex нет, а ключ `model_reasoning_effort`
       // есть в справочнике конфига. `-c key=value` разбирает значение как TOML (справочник CLI
       // Codex, флаг `--config`), поэтому строка в кавычках; так же передаёт усилие SDK самого Codex
-      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают, а
-      // при `resume` не передаются.
+      // (openai/codex, sdk/typescript/src/exec.ts). Как и у claude, без выбора обе пары выпадают; при
+      // `resume` их нет, в отличие от claude: тред Codex помнит модель и усилие сам.
       args: [
         ...CODEX_PARLEY_FLAGS,
         '--model',
@@ -327,6 +340,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '--model',
         '{model}',
+        // Effort из карты: без флага возобновлённая сессия ушла бы на умолчание Claude Code.
+        '--effort',
+        '{effort}',
         '--agent',
         '{agent}',
         '{prompt}',
@@ -351,15 +367,18 @@ export function providersWithHistory(): ProviderInfo[] {
 }
 
 /**
- * Усилие рассуждений, которое окно предлагает при запуске. Три уровня — общее подмножество
- * того, что документируют Claude Code (`low`…`max`) и Codex (`low`…`ultra`, набор зависит от
- * модели). Уровень, которого модель Claude не знает, Claude Code сам опускает до ближайшего
- * ниже (code.claude.com/docs/en/model-config); про Codex документация этого не говорит.
+ * Токен уровня effort: безопасен и в argv, и в кавычках TOML (`-c model_reasoning_effort="…"`) — ни
+ * пробела, ни кавычки, ни обратной косой черты. Тем же правилом проверяют `substituteArgs` (до любой
+ * подстановки), `resolveModelEffort`, уровни из `providers.json` и `parseMap`.
  */
-export type EffortLevel = 'low' | 'medium' | 'high';
+export const EFFORT_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** Те же уровни списком: по нему проверяет `effort` `spawn_session`, а схема окна держит свой набор. */
-export const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high'];
+/**
+ * Уровень effort — id из каталога модели (`ModelOption.efforts`): у Claude Code `low…max`, у моделей
+ * Codex свои наборы, вплоть до `ultra`. Набор открыт, поэтому тип — строка; годится только значение,
+ * проходящее `EFFORT_TOKEN`.
+ */
+export type EffortLevel = string;
 
 /** Значения подстановок в шаблоны аргументов реестра. */
 export interface RunnerSubstitutions {
@@ -384,10 +403,10 @@ export interface RunnerSubstitutions {
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
-   * Усилие новой сессии: `--effort` у claude, `-c model_reasoning_effort` у codex. Тип — закрытый
-   * набор, потому что у codex значение встаёт в кавычки строки шаблона без экранирования.
+   * Усилие: `--effort` у claude, `-c model_reasoning_effort` у codex. У codex значение встаёт в
+   * кавычки строки шаблона без экранирования, поэтому `substituteArgs` пускает только `EFFORT_TOKEN`.
    */
-  effort?: EffortLevel | 'none' | 'minimal' | 'xhigh';
+  effort?: EffortLevel;
   disallowedTools?: string;
   sandbox?: string;
 }
@@ -398,7 +417,7 @@ const PLACEHOLDER =
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
  * Codex принимает его только значением TOML в `-c`. Остальным подстановкам это не нужно —
- * и не позволено: усилие берётся из закрытого набора, и его можно вставить в кавычки без
+ * и не позволено: усилие проходит `EFFORT_TOKEN`, и его можно вставить в кавычки без
  * экранирования, а модель — произвольная строка.
  */
 const INLINE_EFFORT = /\{effort\}/g;
@@ -412,8 +431,14 @@ const INLINE_EFFORT = /\{effort\}/g;
  * предыдущим аргументом, если он пришёл из шаблона литералом и начинается с
  * `-`. Иначе от `--mcp-config {mcpConfig}` остался бы висячий флаг. Значение,
  * само похожее на флаг, соседа не уносит: оно литералом шаблона не было.
+ *
+ * Усилие, не прошедшее `EFFORT_TOKEN`, — исключение до любой подстановки: кавычка или пробел
+ * разорвали бы TOML строки `model_reasoning_effort="{effort}"` или ушли бы в CLI лишним словом.
  */
 export function substituteArgs(template: readonly string[], subs: RunnerSubstitutions): string[] {
+  if (subs.effort !== undefined && !EFFORT_TOKEN.test(subs.effort)) {
+    throw new Error(`effort ${JSON.stringify(subs.effort)} is not an effort level`);
+  }
   const args: string[] = [];
   const fromTemplate: boolean[] = [];
 
@@ -440,7 +465,6 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
         continue;
       }
       const effort = subs.effort;
-      if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) throw new Error('invalid-role-effort');
       args.push(item.replace(INLINE_EFFORT, () => effort));
       fromTemplate.push(false);
       continue;
@@ -512,14 +536,19 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
  * Список моделей для окна: из записи реестра (встроенный или из `providers.json`) и только если
  * шаблон запуска вообще принимает модель. `null` — списка нет: окно контрол не показывает, а хост
  * принимает любое значение по прежнему правилу. Отдаётся копия: ответ уходит по проводу, и правка
- * получателем не должна доходить до реестра.
+ * получателем не должна доходить до реестра — в том числе правка уровней: массив уровней у моделей
+ * каталога общий.
  */
 export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
   const list = entry.models;
   if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
     return null;
   }
-  return list.map((model) => ({ ...model }));
+  return list.map((model) =>
+    model.efforts === undefined || model.efforts === null
+      ? { ...model }
+      : { ...model, efforts: model.efforts.map((effort) => ({ ...effort })) },
+  );
 }
 
 /**
@@ -665,6 +694,23 @@ export function providersFile(): string {
   return path.join(parleyHome(), 'providers.json');
 }
 
+/**
+ * Каталог моделей Codex, снятый хостом с `codex debug models` (спека нормалайзера, 5.2): файл Parley в доме,
+ * `{ "fetchedAt": "<ISO>", "models": ModelOption[] }`. Пишет его только хост, атомарно, после удачной пробы.
+ * `loadProviders` подставляет его модели в запись `codex`, поэтому окно, хост и MCP агента (отдельный
+ * процесс) видят один список.
+ */
+export function codexModelsFile(): string {
+  return path.join(parleyHome(), 'codex-models.json');
+}
+
+/**
+ * Пределы подписи модели и описания уровня из каталога CLI: длиннее обрезают и разбор `codex debug models` в хосте,
+ * и чтение `codexModelsFile` — внешний ввод не растягивает ни окно, ни ответ `get_map`.
+ */
+export const MODEL_LABEL_MAX = 100;
+export const EFFORT_DESCRIPTION_MAX = 300;
+
 /** Запись `providers.json`: плоская, все поля необязательные (спецификация, раздел 5). */
 export interface ProviderOverride {
   badge?: string;
@@ -678,9 +724,12 @@ export interface ProviderOverride {
   mcpConfig?: McpConfigKind;
   /**
    * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
-   * пара `{ id, label }`; `id` — одно слово, не с дефиса, до 200 знаков, и в списке не повторяется.
+   * `{ id, label }` и необязательные `efforts`; `id` — одно слово, не с дефиса, до 200 знаков, и в
+   * списке не повторяется. `efforts` — уровни модели (непустой список токенов `EFFORT_TOKEN` без
+   * повторов, подписи выводит `effortLabel`) или `null`, если effort у модели нет; без поля —
+   * прежние `low|medium|high` (`effortsFor`).
    */
-  models?: ModelOption[];
+  models?: Array<{ id: string; label: string; efforts?: string[] | null }>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -722,6 +771,85 @@ export function modelChoiceError(entry: ProviderEntry, model: string): string | 
   return null;
 }
 
+/**
+ * Уровни effort, из которых можно выбрать при этой модели: `model` — id из списка провайдера,
+ * `undefined` — «Default» (без флага модели). `null` — effort выбрать нельзя: провайдер его не
+ * принимает (нет `{effort}` в шаблоне) или у модели его нет (Haiku, пустой список). Правила (спека
+ * нормалайзера, 5.1 и 5.3; окно повторяет их в `effortChoices`):
+ * - провайдер без списка моделей, модель вне списка и модель без поля `efforts` (свой список из
+ *   `providers.json` без уровней) — прежние `low|medium|high` (`LEGACY_EFFORTS`);
+ * - «Default» — уровни, общие для всех моделей провайдера с уровнями, в порядке первой из них: какую
+ *   модель возьмёт CLI, Parley не знает (настройки CLI рамка читать не даёт), а общий уровень годится
+ *   любой. Общих нет — `null`.
+ * Отдаётся копия, как у `selectableModels`.
+ */
+export function effortsFor(entry: ProviderEntry, model: string | undefined): EffortOption[] | null {
+  if (!supportsEffort(entry)) return null;
+  const legacy = (): EffortOption[] => LEGACY_EFFORTS.map((level) => ({ ...level }));
+  const list = selectableModels(entry);
+  if (list === null) return legacy();
+  if (model !== undefined) {
+    const option = list.find((candidate) => candidate.id === model);
+    if (option === undefined || option.efforts === undefined) return legacy();
+    return option.efforts === null || option.efforts.length === 0 ? null : option.efforts;
+  }
+  const lists = list.flatMap((option) => {
+    const levels = option.efforts === undefined ? legacy() : option.efforts;
+    return levels === null || levels.length === 0 ? [] : [levels];
+  });
+  const [first, ...rest] = lists;
+  if (first === undefined) return null;
+  const shared = first.filter((level) =>
+    rest.every((levels) => levels.some((other) => other.id === level.id)),
+  );
+  return shared.length === 0 ? null : shared;
+}
+
+/** Выбор модели и effort; поля нет — «Default», без флага. */
+export interface ModelEffortChoice {
+  model?: string;
+  effort?: string;
+}
+
+/** Итог `resolveModelEffort`: что ляжет в карту и в команду, или причина отказа. */
+export type ModelEffortResolution = { choice: ModelEffortChoice } | { error: string };
+
+/**
+ * Проверка пары «модель + effort» — одна для окна (`sessions.create` хоста) и MCP (`spawn_session`),
+ * до записи в карту (спека нормалайзера, 5.3). Пустая строка и отсутствие поля — «Default»: в ответе
+ * поля нет. Модель проверяет `modelChoiceError`. Effort должен проходить `EFFORT_TOKEN` и быть
+ * уровнем из `effortsFor` для выбранной модели (или для «Default»). Флаг, которого нет в шаблоне
+ * запуска, выбор отбрасывает молча, как и прежде: в ответ и в карту ложится только то, что дойдёт
+ * до CLI. Ошибка — текст причины со списком допустимого.
+ */
+export function resolveModelEffort(
+  entry: ProviderEntry,
+  choice: ModelEffortChoice,
+): ModelEffortResolution {
+  const model = choice.model === '' ? undefined : choice.model;
+  const effort = choice.effort === '' ? undefined : choice.effort;
+  if (model !== undefined) {
+    const refusal = modelChoiceError(entry, model);
+    if (refusal !== null) return { error: refusal };
+  }
+  const kept = model !== undefined && supportsModel(entry) ? model : undefined;
+  const resolved: ModelEffortChoice = kept === undefined ? {} : { model: kept };
+  if (effort === undefined) return { choice: resolved };
+
+  const levels = effortsFor(entry, kept);
+  const allowed = levels === null ? '' : `; allowed: ${levels.map((level) => level.id).join(', ')}`;
+  if (!EFFORT_TOKEN.test(effort)) {
+    return { error: `effort ${JSON.stringify(effort)} is not a level name${allowed}` };
+  }
+  if (!supportsEffort(entry)) return { choice: resolved };
+  const subject = kept ?? 'the default model';
+  if (levels === null) return { error: `${subject} has no effort levels; omit effort` };
+  if (!levels.some((level) => level.id === effort)) {
+    return { error: `${effort} is not a level of ${subject}${allowed}` };
+  }
+  return { choice: { ...resolved, effort } };
+}
+
 const isModelEntry = (value: unknown): value is ModelOption =>
   isRecord(value) && isModelId(value['id']) && isNonEmptyString(value['label']);
 
@@ -730,6 +858,71 @@ const isModelList = (value: unknown): value is ModelOption[] =>
   Array.isArray(value) &&
   value.every(isModelEntry) &&
   new Set(value.map((model) => model.id)).size === value.length;
+
+/**
+ * Уровни модели в `providers.json`: `null` — effort у модели нет, иначе непустой список токенов
+ * `EFFORT_TOKEN` без повторов. Пустой список не «уровней нет» — для этого есть `null`.
+ */
+const isEffortList = (value: unknown): value is string[] | null =>
+  value === null ||
+  (Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && EFFORT_TOKEN.test(item)) &&
+    new Set(value).size === value.length);
+
+/** Уровень из каталога Codex: id — токен, подпись непустая, описание — строка или его нет. */
+const isEffortOption = (value: unknown): value is EffortOption =>
+  isRecord(value) &&
+  typeof value['id'] === 'string' &&
+  EFFORT_TOKEN.test(value['id']) &&
+  isNonEmptyString(value['label']) &&
+  (value['description'] === undefined || typeof value['description'] === 'string');
+
+/**
+ * Модели из файла каталога Codex (`codexModelsFile`). Файла нет, он не разбирается, список пуст или хоть одна
+ * модель или уровень не той формы — `null`: это кэш Parley, а не настройка человека, и тогда молча действует
+ * запасной список. В запись ложатся только известные поля; подпись модели и описание уровня — не длиннее
+ * `MODEL_LABEL_MAX` и `EFFORT_DESCRIPTION_MAX`, подпись уровня — `effortLabel(id)`, а не из файла.
+ */
+async function readCodexModels(file: string): Promise<ModelOption[] | null> {
+  let data: unknown;
+  try {
+    data = JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  const models = isRecord(data) ? data['models'] : undefined;
+  if (!isModelList(models) || models.length === 0) return null;
+  const levelsValid = models.every(
+    (model) =>
+      model.efforts === undefined ||
+      model.efforts === null ||
+      (Array.isArray(model.efforts) &&
+        model.efforts.length > 0 &&
+        model.efforts.every(isEffortOption) &&
+        new Set(model.efforts.map((level) => level.id)).size === model.efforts.length),
+  );
+  if (!levelsValid) return null;
+  return models.map((model) => ({
+    id: model.id,
+    label: model.label.slice(0, MODEL_LABEL_MAX),
+    ...(model.efforts === undefined
+      ? {}
+      : {
+          efforts:
+            model.efforts === null
+              ? null
+              : model.efforts.map((level) => ({
+                  id: level.id,
+                  // Подпись строит Parley, как для `providers.json`: ручная правка кэша не растянет окно.
+                  label: effortLabel(level.id),
+                  ...(level.description === undefined
+                    ? {}
+                    : { description: level.description.slice(0, EFFORT_DESCRIPTION_MAX) }),
+                })),
+        }),
+  }));
+}
 
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
@@ -751,6 +944,14 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
       patch['mcpConfig'] !== 'json-file' &&
       patch['mcpConfig'] !== 'codex-override');
   if (wrong) throw new Error(`provider ${id} in ${file}: unexpected entry shape`);
+  // Уровни моделей — с причиной: их правят руками, и «unexpected entry shape» не сказал бы, что не так.
+  for (const model of (patch['models'] ?? []) as Array<{ id: string; efforts?: unknown }>) {
+    if (model.efforts !== undefined && !isEffortList(model.efforts)) {
+      throw new Error(
+        `provider ${id} in ${file}: model ${model.id}: efforts must be null or a non-empty list of unique levels (lowercase letters, digits, - and _, up to 32 characters)`,
+      );
+    }
+  }
 }
 
 /** Накладывает переопределение на запись встроенного реестра (или создаёт свою). */
@@ -780,11 +981,23 @@ function applyOverride(
   if (printArgs !== undefined) runner.printArgs = printArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
-  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON.
+  // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON; уровни в файле — id,
+  // в записи — с подписями, как у встроенного каталога.
   const models =
     patch.models === undefined
       ? base?.models
-      : patch.models.map((model) => ({ id: model.id, label: model.label }));
+      : patch.models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          ...(model.efforts === undefined
+            ? {}
+            : {
+                efforts:
+                  model.efforts === null
+                    ? null
+                    : model.efforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+              }),
+        }));
   return {
     id,
     ...(base?.family === undefined ? {} : { family: base.family }),
@@ -794,6 +1007,7 @@ function applyOverride(
     linkBy: patch.linkBy ?? base?.linkBy ?? 'cwd+time',
     runner,
     ...(models === undefined ? {} : { models }),
+    ...(patch.args === undefined ? {} : { argsOverridden: true as const }),
   };
 }
 
@@ -801,10 +1015,12 @@ function applyOverride(
  * Встроенный реестр плюс необязательные переопределения из
  * `providers.json` дома (`parleyHome()`): merge по id, свои провайдеры добавляются.
  * Битый файл — ошибка: реестр пишем не мы, но догадываться о его форме нельзя,
- * иначе харнесс молча запустит не то, что просил пользователь.
+ * иначе харнесс молча запустит не то, что просил пользователь. Модели `codex` до
+ * `providers.json` берутся из каталога хоста (`codexModelsFile`), если он есть и цел.
  */
 export async function loadProviders(
   file = providersFile(),
+  codexFile = codexModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -818,6 +1034,11 @@ export async function loadProviders(
       } as ProviderEntry,
     ]),
   );
+
+  // Живой каталог Codex — раньше `providers.json`: свой список человека важнее обоих (спека нормалайзера, 5.2).
+  const codex = registry['codex'];
+  const live = await readCodexModels(codexFile);
+  if (codex !== undefined && live !== null) registry['codex'] = { ...codex, models: live };
 
   let raw: string;
   try {
