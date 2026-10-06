@@ -21,6 +21,7 @@ import {
 } from '../work/map.js';
 import { activityOf } from '../work/activity.js';
 import { openEvents } from '../work/events.js';
+import { planLaunch } from '../work/launch.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
@@ -281,19 +282,24 @@ describe('список инструментов', () => {
     expect(add?.description).toMatch(/gets no message/);
   });
 
-  it('spawn_session: model и effort необязательны, effort — три уровня, описание отсылает к get_map', async () => {
+  it('spawn_session: model и effort необязательны, у effort нет enum — уровни у каждой модели свои, описание отсылает к get_map', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
     const spawn = tools.find((tool) => tool.name === 'spawn_session');
+    const effort = spawn?.inputSchema.properties?.['effort'] as
+      | { type?: string; enum?: unknown; description?: string }
+      | undefined;
 
     expect(spawn?.inputSchema.required).toEqual(['provider', 'label', 'task']);
     expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: 'string' });
-    expect(spawn?.inputSchema.properties?.['effort']).toMatchObject({
-      type: 'string',
-      enum: ['low', 'medium', 'high'],
-    });
+    expect(effort?.type).toBe('string');
+    // Нормалайзер модели и effort (5.6): закрытого списка больше нет — у Claude пять уровней,
+    // у Codex до ultra.
+    expect(effort).not.toHaveProperty('enum');
+    expect(effort?.description).toContain('one of the efforts of the chosen model in get_map');
+    expect(effort?.description).toContain("with the default model, the levels shared by its provider's models");
+    expect(effort?.description).toContain('A provider with effort: false drops the value');
     expect(JSON.stringify(spawn?.inputSchema.properties?.['model'])).toContain('get_map');
-    expect(JSON.stringify(spawn?.inputSchema.properties?.['effort'])).toContain('get_map');
   });
 
   it('гид называет в подписи spawn_session все параметры инструмента, в том же порядке', async () => {
@@ -365,6 +371,7 @@ describe('список инструментов', () => {
     const getMap = tools.find((tool) => tool.name === 'get_map');
 
     expect(getMap?.description).toMatch(/the detailed guide is the read_guide tool$/);
+    expect(getMap?.description).toContain('models with their effort levels');
   });
 
   it('описания инструментов и параметров — по-английски: кириллицы в списке инструментов нет', async () => {
@@ -513,6 +520,34 @@ describe('get_map', () => {
     expect(byId('codex')?.models).toEqual(selectableModels(PROVIDERS.codex));
     expect(byId('codex')?.effort).toBe(true);
     expect(byId('glm')).toMatchObject({ models: selectableModels(PROVIDERS.glm), effort: true });
+  });
+
+  it('модели несут свои уровни effort (нормалайзер, 5.6): у Claude и GLM пять, у Haiku — null, у Codex свои наборы', async () => {
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map');
+    type Effort = { id: string; label: string; description?: string };
+    const providers = result['providers'] as {
+      id: string;
+      models: { id: string; efforts?: Effort[] | null }[] | null;
+    }[];
+    const model = (provider: string, id: string) =>
+      providers.find((entry) => entry.id === provider)?.models?.find((option) => option.id === id);
+    const levels = (provider: string, id: string) =>
+      model(provider, id)?.efforts?.map((effort) => effort.id);
+
+    expect(levels('claude', 'opus')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(levels('claude', 'best')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    // У Haiku effort нет: агент видит это по null и поле effort не шлёт.
+    expect(model('claude', 'haiku')?.efforts).toBeNull();
+    expect(levels('glm', 'glm-5.3-flash[1m]')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(levels('codex', 'gpt-6.1-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+    expect(levels('codex', 'gpt-6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    // Подпись и описание уровня — те же, что видит окно.
+    expect(model('codex', 'gpt-6.1-sol')?.efforts?.at(-1)).toEqual({
+      id: 'ultra',
+      label: 'Ultra',
+      description: 'Maximum reasoning with automatic task delegation',
+    });
   });
 
   it('работает без PARLEY_SESSION_ID', async () => {
@@ -975,18 +1010,131 @@ describe('spawn_session: модель и усилие', () => {
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
-  it('усилие вне трёх уровней — ошибка с перечнем, записи нет', async () => {
+  it('уровень не из уровней модели — ошибка с допустимыми, записи нет', async () => {
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
     const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
+    const cases = [
+      { provider: 'claude', model: 'opus', effort: 'ultra', allowed: 'low, medium, high, xhigh, max' },
+      { provider: 'claude', model: 'sonnet', effort: 'extreme', allowed: 'low, medium, high, xhigh, max' },
+      // У Luna нет ultra, хотя у соседних моделей Codex он есть: сверка — по уровням выбранной модели.
+      { provider: 'codex', model: 'gpt-6-luna', effort: 'ultra', allowed: 'low, medium, high, xhigh, max' },
+    ];
+    for (const { provider, model, effort, allowed } of cases) {
+      const result = await call(client, 'spawn_session', {
+        provider,
+        label: 'бэк',
+        task: 'делать',
+        model,
+        effort,
+      });
+
+      expect(result.isError, `${model}/${effort}`).toBe(true);
+      expect(result.text).toContain(`${effort} is not a level of ${model}; allowed: ${allowed}`);
+    }
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('модель по умолчанию — общие уровни моделей провайдера: xhigh у claude ложится в запись, ultra у codex — ошибка', async () => {
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    // Пустая модель — «по умолчанию», как и отсутствие поля.
+    await callOk(client, 'spawn_session', {
       provider: 'claude',
       label: 'бэк',
       task: 'делать',
-      effort: 'extreme',
+      model: '',
+      effort: 'xhigh',
+    });
+    const stored = session(await readMapFile(), 's-02');
+    expect('model' in stored).toBe(false);
+    expect(stored.effort).toBe('xhigh');
+
+    // У моделей Luna нет ultra, поэтому нет его и у «по умолчанию» Codex.
+    const refused = await call(client, 'spawn_session', {
+      provider: 'codex',
+      label: 'бэк',
+      task: 'делать',
+      effort: 'ultra',
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain(
+      'ultra is not a level of the default model; allowed: low, medium, high, xhigh, max',
+    );
+    expect((await readMapFile()).sessions).toHaveLength(2);
+  });
+
+  it('у Haiku уровней нет: effort с ним — ошибка «omit effort», записи нет; без effort — проходит', async () => {
+    const client = await connect('s-01');
+    const refused = await call(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      model: 'haiku',
+      effort: 'low',
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('haiku has no effort levels; omit effort');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+
+    await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      model: 'haiku',
+    });
+    const stored = session(await readMapFile(), 's-02');
+    expect(stored.model).toBe('haiku');
+    expect('effort' in stored).toBe(false);
+  });
+
+  it('уровень не токеном — ошибка, записи нет: значение ушло бы в argv и в кавычки TOML', async () => {
+    const client = await connect('s-01');
+    for (const effort of ['HIGH', 'hi gh', '"max', 'a'.repeat(33), 3]) {
+      const result = await call(client, 'spawn_session', {
+        provider: 'claude',
+        label: 'бэк',
+        task: 'делать',
+        effort,
+      });
+      expect(result.isError, String(effort)).toBe(true);
+    }
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+
+  it('xhigh и ultra ложатся в запись и уезжают в argv ровно одной парой флагов — как выбор из окна', async () => {
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', {
+      provider: 'claude',
+      label: 'бэк',
+      task: 'делать',
+      model: 'opus',
+      effort: 'xhigh',
+    });
+    await callOk(client, 'spawn_session', {
+      provider: 'codex',
+      label: 'тесты',
+      task: 'прогнать',
+      model: 'gpt-6.1-sol',
+      effort: 'ultra',
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('low | medium | high');
-    expect((await readMapFile()).sessions).toHaveLength(1);
+    const map = await readMapFile();
+    expect(session(map, 's-02')).toMatchObject({ model: 'opus', effort: 'xhigh' });
+    expect(session(map, 's-03')).toMatchObject({ model: 'gpt-6.1-sol', effort: 'ultra' });
+
+    // Хост поднимает pending без диалога: флаги берутся из записи (`planLaunch`).
+    const claude = (await planLaunch(project, workId, session(map, 's-02'))).args;
+    expect(claude.filter((arg) => arg === '--model')).toHaveLength(1);
+    expect(claude.filter((arg) => arg === '--effort')).toHaveLength(1);
+    expect(claude[claude.indexOf('--model') + 1]).toBe('opus');
+    expect(claude[claude.indexOf('--effort') + 1]).toBe('xhigh');
+    const codex = (await planLaunch(project, workId, session(map, 's-03'))).args;
+    expect(codex.filter((arg) => arg === '--model')).toHaveLength(1);
+    expect(codex[codex.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
+    expect(codex.filter((arg) => arg.startsWith('model_reasoning_effort='))).toEqual([
+      'model_reasoning_effort="ultra"',
+    ]);
   });
 
   it('codex: своя модель проходит, модель Claude — нет', async () => {
@@ -1028,17 +1176,23 @@ describe('spawn_session: модель и усилие', () => {
   it('провайдер без флагов в шаблоне выбор отбрасывает молча: запись заводится без него', async () => {
     await withProviders();
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'plain',
-      label: 'бэк',
-      task: 'делать',
-      model: 'anything',
-      effort: 'high',
-    });
+    // В get_map у такого провайдера effort: false: уровень не сверяется ни с чем и отбрасывается молча,
+    // даже тот, которого нет ни у одной модели (так и говорят гид и описание spawn_session).
+    for (const effort of ['high', 'ultra']) {
+      await callOk(client, 'spawn_session', {
+        provider: 'plain',
+        label: 'бэк',
+        task: 'делать',
+        model: 'anything',
+        effort,
+      });
+    }
 
-    const stored = session(await readMapFile(), 's-02');
-    expect('model' in stored).toBe(false);
-    expect('effort' in stored).toBe(false);
+    for (const id of ['s-02', 's-03']) {
+      const stored = session(await readMapFile(), id);
+      expect('model' in stored, id).toBe(false);
+      expect('effort' in stored, id).toBe(false);
+    }
   });
 });
 

@@ -105,10 +105,14 @@ worktree before the launch. The rules for working in it are in topic \`worktrees
 with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map\`: a
 value not in the list is an error, and the session is not created. A provider with
 \`models: null\` has no list — the value goes into the command as is if the provider accepts
-a model as a flag, otherwise it is dropped. \`effort\` is \`low\`, \`medium\` or \`high\`; a
-provider with \`effort: false\` in \`get_map\` does not accept it, and the value is dropped.
-Without them the session runs on the default model and effort. The choice applies to the
-launch of a new session: it does not change a sleeping session that a message woke up.
+a model as a flag, otherwise it is dropped. \`effort\` is the \`id\` of one of the \`efforts\`
+of the chosen model in \`get_map\`; with the default model, one of the levels shared by its
+provider's models. A model with \`efforts: null\` (Haiku) has no levels: omit \`effort\` for
+it. A level that does not fit is an error that names the allowed levels, and the session is
+not created. A provider with \`effort: false\` in \`get_map\` does not accept it, and the
+value is dropped. Without them the session runs on the default model and effort. The choice
+is kept in the session's record: a session that a message wakes from sleep resumes with the
+same model and effort.
 
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
 (\`target: "inbox"\`). On timeout you get \`{"state":"running"}\` — decide yourself whether to
