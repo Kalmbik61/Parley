@@ -290,8 +290,10 @@ The Organic rooms (spec `docs/specs/2026-09-29-desktop-rooms-organic-design.md`,
 and 3.5) add two more:
 
 - the only CLI launches outside sessions are `claude --version` / `codex --version` probes
-  for availability and the status bar. The startup probe can be turned off with
-  `PARLEY_SKIP_VERSION_PROBE=1`; GLM still requires a verified supported version before launch;
+  for availability and the status bar, and `codex debug models` — Codex's own command that
+  prints the models of your account — at host start and no more often than every six hours
+  (see "Models"). The startup probes can be turned off with `PARLEY_SKIP_VERSION_PROBE=1`;
+  GLM still requires a verified supported version before launch;
 - the status line script only reads the human's and the project's `settings.json` and
   writes nothing.
 
@@ -784,8 +786,8 @@ hidden terminal "for this session only": the host checks the level in the footer
 cannot confirm it, asks you to open the terminal. A model is changed by restarting the session
 with `--resume` and the new model, so the conversation goes on; a level the new model does not
 have goes back to "Default", and the window tells you. Neither choice changes Claude Code's
-saved defaults. While the agent works, the menu items are disabled and say why; a model also
-waits for background tasks, and a level needs a running session. With an older host the
+saved defaults. While the agent works or background tasks hold the session, both sections are
+disabled and say why; a level also needs a running session. With an older host the
 button is plain text.
 
 **Version.** Chat view needs Claude Code 2.1.286 or newer; GLM needs 2.1.287 or newer to
@@ -871,11 +873,11 @@ Other variables:
   available.
 - `PARLEY_HOST_IDLE_MS` — how long the host waits with no windows and no live sessions before
   it exits; 300,000 ms by default.
-- `PARLEY_SKIP_VERSION_PROBE=1` — do not ask the providers' CLIs for their version
-  (`<command> --version`) at host start. Without the variable the host makes one probe per
-  registry command, with a timeout; the version goes to the window (`providers.list`) and is
-  read nowhere else. The window's E2E tests set it so as not to launch the real claude and
-  codex.
+- `PARLEY_SKIP_VERSION_PROBE=1` — turn off both startup probes of the providers' CLIs: the
+  versions (`<command> --version`) and the Codex model catalog (`codex debug models`). Without
+  the variable the host makes one version probe per registry command, with a timeout; the
+  version goes to the window (`providers.list`) and is read nowhere else. The window's E2E
+  tests set it so as not to launch the real claude and codex.
 - `PARLEY_LIMITS_POLL_MS` — how often the host rereads subscription limits (the Claude Code
   status line files and the Codex logs), in ms; 30,000 by default. The number is clamped to
   the range 200…2,147,483,647 (`1` gives 200); a non-numeric value (empty, garbage) is
@@ -1341,7 +1343,10 @@ The host gives the window the providers' model lists (`providers.list`), each mo
 effort levels. `sessions.create` accepts a model only from its provider's list and an effort
 only from the levels of that model: a value outside them gives `bad_request` with the allowed
 values, the CLI does not get it, and no record appears in the map. The chosen model and
-effort are kept in the session's map, and resume passes them again. If no model is chosen
+effort are kept in the session's map, and resume passes them again: it starts the session with
+the model and effort saved for it (from the dialog, MCP or the Chat menu). A model switched in
+the terminal with `/model` is not saved, so resume does not bring it back; a model changed from
+the Chat menu restarts the CLI process, and the conversation goes on from the log. If no model is chosen
 (the field is omitted or empty), it means "default": Claude Code and Codex use their own model
 without `--model`; GLM uses `glm-5.3[1m]`. No effort means "default" too: the CLI uses the
 level saved for the model, or the model's own default. With the "default" model, the levels on
@@ -1359,8 +1364,11 @@ offer are those all the provider's models share. The lists:
   Parley's home, so agents' `get_map` and `spawn_session` offer the same models. Codex may
   refresh its catalog from its server while answering; Parley reads neither Codex's files nor
   its sign-in. Without a network or a sign-in Codex still answers with the catalog built into
-  it. If the command itself fails (a non-zero exit, a timeout, output that is not JSON or
-  lists no visible models), the built-in list is used: the visible models of 2026-10-06 — `gpt-6.1-sol`, `gpt-6-astra`,
+  it; Parley takes that answer as a successful probe and keeps it in `codex-models.json` until
+  the next successful probe, which is at most six hours away. If the command itself fails (a
+  non-zero exit, a timeout, output that is not JSON or lists no visible models), Parley keeps
+  the last list it got, the one in `codex-models.json`; the built-in list applies only until
+  the first successful probe: the visible models of 2026-10-06 — `gpt-6.1-sol`, `gpt-6-astra`,
   `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`, each with
   `low` to `max` and, except the two Luna models, `ultra`;
 - GLM — `glm-5.3[1m]` and `glm-5.3-flash[1m]`, shown as GLM-5.3 and GLM-5.3 Flash with
