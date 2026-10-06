@@ -1,13 +1,15 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, updateMap, workPaths } from '@parley/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PROVIDERS, addSession, createWork, selectableModels, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import type { RequestInfo } from '../context.js';
 import { startHost } from '../host.js';
 import type { HostOptions, RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import { createProvidersList } from './providers.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -31,6 +33,7 @@ interface ProviderItem {
   available: boolean;
   models: Array<{ id: string; label: string; efforts?: Array<{ id: string; label: string; description?: string }> | null }> | null;
   effort: boolean;
+  argsOverridden?: boolean;
   version: string | null;
   limits: { fiveHour: { usedPercent: number } | null; week: { usedPercent: number } | null; at: string } | null;
 }
@@ -42,6 +45,8 @@ interface ProviderItem {
 async function boot(
   options: {
     probeVersion?: (command: string) => Promise<string | null>;
+    /** Подмена пробы каталога Codex (`codex debug models`); без неё каталога нет. */
+    probeCodexCatalog?: (command: string) => Promise<string | null>;
     providersJson?: unknown;
     /** Готовит дом до старта хоста: работы, файлы лимитов. */
     prepare?: (home: string) => Promise<void>;
@@ -57,6 +62,7 @@ async function boot(
   const running = await startHost({
     home,
     ...(options.probeVersion === undefined ? {} : { probeVersion: options.probeVersion }),
+    ...(options.probeCodexCatalog === undefined ? {} : { probeCodexCatalog: options.probeCodexCatalog }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
   });
   hosts.push(running);
@@ -374,5 +380,127 @@ describe('providers.list: лимиты подписок и событие provid
     await putLimits(workDir, claude, 64, 41);
     const changed = await eventNamed(client, 'providers.limitsChanged');
     expect(changed.data).toMatchObject({ id: 'claude', limits: { fiveHour: { usedPercent: 64 } } });
+  });
+});
+
+describe('providers.list: каталог Codex от CLI и argsOverridden (спека нормалайзера, 5.2, 5.6)', () => {
+  /** Урезанный вывод `codex debug models`: модель, которой нет во встроенном списке, и одна из него. */
+  const LIVE_CATALOG = JSON.stringify({
+    models: [
+      {
+        slug: 'gpt-6.1-sol',
+        display_name: 'GPT-6.1-Sol',
+        visibility: 'list',
+        priority: 1,
+        supported_reasoning_levels: [
+          { effort: 'low', description: 'Fast responses with lighter reasoning' },
+          { effort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+      },
+      {
+        slug: 'gpt-7-nova',
+        display_name: 'GPT-7-Nova',
+        visibility: 'list',
+        priority: 0,
+        supported_reasoning_levels: [
+          { effort: 'medium', description: 'Balances speed and reasoning depth for everyday tasks' },
+        ],
+      },
+    ],
+  });
+
+  /** Проба каталога, которая отвечает, только когда тест разрешит: до того список — встроенный. */
+  function gatedProbe(): {
+    calls: string[];
+    probe: (command: string) => Promise<string | null>;
+    answer: (stdout: string | null) => void;
+  } {
+    const calls: string[] = [];
+    let release: (stdout: string | null) => void = () => {};
+    return {
+      calls,
+      probe: (command) => {
+        calls.push(command);
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+      answer: (stdout) => release(stdout),
+    };
+  }
+
+  /** Ближайшее `providers.changed`, прочие сообщения пропускаются; не пришло за 5 с — ошибка. */
+  async function providersChanged(client: TestClient): Promise<RawMessage> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('событие providers.changed не пришло за 5 с')), 5000);
+    });
+    try {
+      for (;;) {
+        const message = await Promise.race([client.next(), timeout]);
+        if (message.event === 'providers.changed') return message;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  it('сначала встроенный список; после пробы — providers.changed и каталог CLI в порядке Codex с уровнями', async () => {
+    const gate = gatedProbe();
+    const client = await boot({ probeCodexCatalog: gate.probe });
+    expect(byId(await list(client), 'codex').models).toEqual(selectableModels(PROVIDERS.codex));
+
+    await vi.waitFor(() => expect(gate.calls).toEqual(['codex']));
+    gate.answer(LIVE_CATALOG);
+    expect((await providersChanged(client)).data).toEqual({ provider: 'codex' });
+
+    const providers = await list(client);
+    expect(byId(providers, 'codex').models).toEqual([
+      {
+        id: 'gpt-7-nova',
+        label: 'GPT-7-Nova',
+        efforts: [{ id: 'medium', label: 'Medium', description: 'Balances speed and reasoning depth for everyday tasks' }],
+      },
+      {
+        id: 'gpt-6.1-sol',
+        label: 'GPT-6.1-Sol',
+        efforts: [
+          { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+          { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' },
+        ],
+      },
+    ]);
+    // Каталог Codex — только у codex.
+    expect(byId(providers, 'claude').models).toEqual(selectableModels(PROVIDERS.claude));
+  });
+
+  it('свой список codex из providers.json важнее каталога CLI', async () => {
+    const gate = gatedProbe();
+    const client = await boot({
+      probeCodexCatalog: gate.probe,
+      providersJson: { codex: { models: [{ id: 'my-codex', label: 'Мой' }] } },
+    });
+    await vi.waitFor(() => expect(gate.calls).toEqual(['codex']));
+    gate.answer(LIVE_CATALOG);
+    await providersChanged(client);
+
+    expect(byId(await list(client), 'codex').models).toEqual([{ id: 'my-codex', label: 'Мой' }]);
+  });
+
+  it('argsOverridden: args провайдера из providers.json — окно объяснит пропавший выбор', async () => {
+    const providers = await list(await boot({ providersJson: { codex: { args: ['{prompt}'] } } }));
+
+    expect(byId(providers, 'codex')).toMatchObject({ argsOverridden: true, models: null, effort: false });
+    expect(byId(providers, 'claude')).toMatchObject({ argsOverridden: false });
+  });
+
+  it('каждый providers.list просит каталог обновиться, если он устарел; ответ пробу не ждёт', async () => {
+    const refreshIfStale = vi.fn();
+    const handler = createProvidersList(undefined, undefined, undefined, { refreshIfStale });
+
+    await handler({}, {} as RequestInfo);
+    await handler({}, {} as RequestInfo);
+
+    expect(refreshIfStale).toHaveBeenCalledTimes(2);
   });
 });
