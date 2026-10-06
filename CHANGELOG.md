@@ -40,6 +40,10 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- **Chat no longer changes your Claude Code default model.** The Chat model menu typed
+  `/model <id>`, and Claude Code saves a typed `/model` as the default for new sessions. For GLM
+  this put a Z.ai model into the local settings GLM shares with Claude, so plain Claude sessions
+  then failed. The menu now switches only the session.
 - After Resume or a model switch, a session shows idle right away instead of working until Claude Code's idle notice.
 
 ## 0.5.2
