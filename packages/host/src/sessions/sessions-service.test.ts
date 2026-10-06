@@ -385,12 +385,14 @@ describe('create(): модель и усилие из диалога (дизай
     const create = (workId: string | null, provider: string, task: string, model: string) =>
       service.create({ projectPath: project, workId, provider, label: '', task, parent: null, model });
     // Все три пути создания: тихий старт, сессия с задачей (`pending`) и новая работа под быструю сессию.
+    // Каждый вызов — уже под `rejects`: промис, созданный заранее, отклоняется, пока цикл ждёт
+    // предыдущий, и vitest считает отказ необработанным (CI на медленном раннере).
     for (const attempt of [
-      create(work.work.id, 'claude', '', 'gpt-6-sol'),
-      create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
-      create(null, 'codex', '', 'opus'),
+      () => create(work.work.id, 'claude', '', 'gpt-6-sol'),
+      () => create(work.work.id, 'claude', 'сделай штуку', 'sonnet[1M]'),
+      () => create(null, 'codex', '', 'opus'),
     ]) {
-      await expect(attempt).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
+      await expect(attempt()).rejects.toMatchObject({ name: 'HostError', code: 'bad_request' });
     }
 
     expect(existsSync(argsFile)).toBe(false);
