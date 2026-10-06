@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "note": "Ceilings for the live run owned by P32. Tokens are counted from native logs; money is not computed here (no vendor price table, no subscription model). The operator multiplies the token ceilings by current vendor prices or watches the weekly limit.",
+  "conditions": {
+    "claude": {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    "codex": {
+      "model": "gpt-6-luna",
+      "effort": "low"
+    }
+  },
+  "repetitions": 1,
+  "cache": {
+    "ttlSec": 300,
+    "warmWithinSec": 240
+  },
+  "perSession": {
+    "maxTotalInputTokens": 600000,
+    "maxOutputTokens": 40000,
+    "maxMinutes": 15
+  },
+  "pilot": {
+    "scenarios": [
+      "no-skill",
+      "obvious"
+    ]
+  },
+  "maxRuns": 90,
+  "waves": [
+    {
+      "id": "w1",
+      "title": "Single-session scenarios, main axis",
+      "scenarios": [
+        "no-skill",
+        "obvious",
+        "ambiguous",
+        "russian",
+        "multiple",
+        "amendment",
+        "stop-resume",
+        "disabled",
+        "unavailable",
+        "long-skill",
+        "compaction"
+      ]
+    },
+    {
+      "id": "w2",
+      "title": "Room scenarios, main axis",
+      "scenarios": [
+        "mixed",
+        "dm",
+        "broadcast"
+      ]
+    }
+  ],
+  "axesNote": "Separate axes (jev on; minimal-development on) form wave w3 and are planned from the axes flags of the scenarios.",
+  "stopRules": [
+    "Check the weekly usage before every wave; stop the wave when the operator-set limit is reached.",
+    "Stop the wave after two consecutive runs marked overBudget.",
+    "Never start a wave without an explicit go from the human (P32)."
+  ]
+}
