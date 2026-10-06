@@ -55,9 +55,11 @@ export interface ProviderCheck {
 
 /**
  * Модель в списке провайдера (`providers.list`, дизайн комнат, 3.2): `id` — значение `--model`,
- * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
+ * `label` — подпись для окна, `efforts` — её уровни effort (нормалайзер модели и effort, 5.1). Уровень
+ * (`EffortOption`): `id` — значение флага, `label` — подпись, `description` — пояснение каталога CLI.
+ * Типы живут в core рядом с реестром, откуда список и берётся.
  */
-export type { ModelOption } from '@parley/core';
+export type { EffortOption, ModelOption } from '@parley/core';
 /** Подсказки поля ввода вида «Chat» (`capabilities.list`): команды, скиллы и субагенты CLI провайдера. */
 export type { Capabilities, CapabilityAgent, CapabilityCommand, CapabilitySkill, CapabilitySource } from '@parley/core';
 
@@ -209,7 +211,10 @@ export type ErrorCode =
  * - `worktree-corrupt` (`bad_request`) — файл `.git` worktree не ведёт в зарегистрированный worktree
  *   проекта (подменён агентом): git в нём не запускается (раунд fix-final-a, п. 1);
  * - `works-unreadable` (`internal`) — первое чтение работ хостом отказало, снимка нет до перезапуска
- *   хоста (раунд lane-r5).
+ *   хоста (раунд lane-r5);
+ * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
+ *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
+ *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
  */
 export const HOST_ERROR_REASONS = {
   gitMissing: 'git-missing',
@@ -218,6 +223,7 @@ export const HOST_ERROR_REASONS = {
   worktreeMissing: 'worktree-missing',
   worktreeCorrupt: 'worktree-corrupt',
   worksUnreadable: 'works-unreadable',
+  busy: 'busy',
 } as const;
 
 export type HostErrorReason = (typeof HOST_ERROR_REASONS)[keyof typeof HOST_ERROR_REASONS];

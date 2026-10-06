@@ -10,6 +10,8 @@ describe('HOST_ERROR_REASONS', () => {
       worktreeMissing: 'worktree-missing',
       worktreeCorrupt: 'worktree-corrupt',
       worksUnreadable: 'works-unreadable',
+      // Нормалайзер модели и effort (5.7–5.8): «сессия занята» у `sessions.setEffort` и `sessions.setModel`.
+      busy: 'busy',
     });
   });
 });

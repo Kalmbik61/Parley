@@ -24,6 +24,14 @@ const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEF
 export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan', 'auto']);
 export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
 
+/**
+ * Токен уровня effort (нормалайзер модели и effort, 5.3): строчная латинская буква, затем до 31 знака
+ * из строчных букв, цифр, `_` и `-`. Такой токен безопасен и отдельным элементом argv (`--effort <id>`),
+ * и внутри кавычек TOML (`-c model_reasoning_effort="<id>"`). Шаблон — тот же, что `EFFORT_TOKEN` в core:
+ * протокол берёт из core только типы, поэтому держит свою копию, а совпадение сверяет тест хоста.
+ */
+export const EFFORT_TOKEN_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
@@ -74,14 +82,16 @@ export const METHODS = {
     // — окно узнаёт об этом из `providers.list`. Модель — `id` из списка провайдера
     // (`providers.list.models`): одно слово, без пробелов и не с дефиса (CLI принял бы её за флаг);
     // принадлежность списку проверяет хост (`bad_request`), схема — только вид. Пустая строка, как
-    // и отсутствие поля, — «по умолчанию»: без флага, модель CLI по умолчанию. Усилие — общий для
-    // обоих CLI набор.
+    // и отсутствие поля, — «по умолчанию»: без флага, модель CLI по умолчанию. Усилие — токен уровня
+    // (`EFFORT_TOKEN_RE`, нормалайзер модели и effort, 5.6): уровни выбранной модели
+    // (`providers.list.models[].efforts`) сверяет хост (`bad_request`), схема — только вид. Прежние
+    // `low`, `medium` и `high` старого окна — тоже токены и проходят.
     model: z
       .string()
       .max(200)
       .regex(/^(?:[^\s-]\S*)?$/)
       .optional(),
-    effort: z.enum(['low', 'medium', 'high']).optional(),
+    effort: z.string().regex(EFFORT_TOKEN_RE).optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -226,11 +236,19 @@ export interface Results {
        * в порядке документации провайдера. «По умолчанию» в списке нет: это отсутствие выбора
        * (`sessions.create` без `model` или с пустой). `null` — списка нет: окно контрол не
        * показывает; хост тогда принимает любую модель, а провайдер без `{model}` в шаблоне
-       * запуска отбрасывает её сам.
+       * запуска отбрасывает её сам. `efforts` модели — её уровни effort по порядку (нормалайзер
+       * модели и effort, 5.1): `null` — уровней нет (Haiku), поля нет — хост до нормалайзера или свой
+       * список в `providers.json`; тогда действуют прежние `low`, `medium` и `high`.
        */
       models?: ModelOption[] | null;
       /** Принимает ли провайдер усилие при запуске: нет — окно прячет контрол. */
       effort?: boolean;
+      /**
+       * `args` провайдера заменены записью `providers.json` (нормалайзер модели и effort, 5.6): без
+       * `{model}` или `{effort}` в них выбор модели или усилия выключен, и карточка провайдера объясняет
+       * почему. Поля нет — замены нет или хост до нормалайзера.
+       */
+      argsOverridden?: boolean;
       /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
       version?: string | null;
       /**
