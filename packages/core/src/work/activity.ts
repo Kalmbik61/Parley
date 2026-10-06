@@ -96,6 +96,12 @@ const BLOCKING = new Set([
 /** `Notification`, которыми ожидание закончилось и агент снова работает. */
 const RESUMING = new Set(['elicitation_complete', 'elicitation_response']);
 
+/** `SessionStart.source`, с которых сессия начинается заново; пусто — прежняя версия без поля. */
+const LAUNCH_SOURCES = new Set(['startup', 'resume', 'clear']);
+
+const isLaunchSource = (source: string | null): boolean =>
+  source === null || LAUNCH_SOURCES.has(source);
+
 /** Ход: агент работает, ждёт человека или закончил. `null` — ничего не известно. */
 type Phase = 'working' | 'blocked' | 'ended';
 
@@ -249,8 +255,12 @@ export function activityOf({
         // `Stop` после перезапуска не придёт — `working` от самого старта крутился бы до `idle_prompt`.
         // Ход начинает только `UserPromptSubmit`. Если прежний процесс умер посреди хода без `Stop`,
         // этот ход окончен; иначе фаза остаётся как была — перезапуск (смена модели, Resume) нового
-        // `unseen` не создаёт. Автосжатие (`compact`) идёт внутри хода и его не трогает.
-        if (event.source !== 'compact' && (phase === 'working' || phase === 'blocked')) {
+        // `unseen` не создаёт. Запуском считаются только `startup`, `resume`, `clear` и отсутствие поля;
+        // автосжатие (`compact`) идёт внутри хода, а незнакомое (будущее) значение — тоже: фазу не трогают.
+        // Проба живого Claude Code 2.1.289 (2026-10-06): первый хук — признак готовности поля ввода,
+        // SessionStart срабатывает через ~0,2-0,35 с после запуска и набранный в этот миг текст не теряется;
+        // удерживать `working` до `idle_prompt` ради готовности ввода не нужно.
+        if (isLaunchSource(event.source) && (phase === 'working' || phase === 'blocked')) {
           end(event.at);
         }
         break;
@@ -323,7 +333,15 @@ export function activityOf({
     }
     // Ход родителя кончился давно, но его держали фоновые; это событие их отпустило — ход окончен
     // теперь. Иначе тот, кто смотрел сессию, пока лид ждал, считался бы видевшим и конец хода.
-    if (heldBefore && background.length === 0 && phase === 'ended') turnEndedAt = event.at;
+    // Само `SessionStart` обнуляет задачи не потому, что их отпустили, — это перезапуск, нового конца нет.
+    if (
+      heldBefore &&
+      background.length === 0 &&
+      phase === 'ended' &&
+      event.name !== 'SessionStart'
+    ) {
+      turnEndedAt = event.at;
+    }
   }
 
   // Страховка по логу (4.3). Из записей лога `blocked` снимает только запись

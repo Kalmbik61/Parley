@@ -88,6 +88,12 @@ describe('activityOf: таблица переходов 4.2', () => {
     expect(result.turnEndedAt).toBeNull();
   });
 
+  it('SessionStart с незнакомым source посреди хода: фаза не меняется, как у compact', () => {
+    const result = activity([event('UserPromptSubmit'), hook('SessionStart', { source: 'something-new' })]);
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+  });
+
   it('SessionStart(compact) после хода: новый ход не открывается', () => {
     const turn = [event('UserPromptSubmit'), event('Stop')];
     const result = activity([...turn, hook('SessionStart', { source: 'compact' })], true);
@@ -693,6 +699,27 @@ describe('activityOf: субагенты по id и фоновые задачи 
 
     const withOwn = activity([...before, hook('SessionStart', { backgroundTasks: [task('b')] })]);
     expect(withOwn.tasks.map((item) => item.id)).toEqual(['b']);
+  });
+
+  it('перезапуск сессии, которую держали фоновые, не даёт нового конца хода: просмотренная остаётся idle', () => {
+    const stopAt = '2026-09-05T10:00:05.000Z';
+    const restartAt = '2026-09-05T10:00:08.000Z';
+    const held = [
+      event('UserPromptSubmit', null, '2026-09-05T09:59:50.000Z'),
+      hook('Stop', { backgroundTasks: [task('a')] }, stopAt),
+    ];
+    // Контроль: пока фоновый держит, ход не окончен; освобождение снимком даёт конец хода «сейчас».
+    expect(activity(held, true).activity).toBe('working');
+    const released = activity([...held, hook('Notification', { backgroundTasks: [] }, restartAt)], true);
+    expect(released.turnEndedAt).toBe(restartAt);
+
+    const restarted = activity(
+      [...held, hook('SessionStart', { source: 'resume', backgroundTasks: [] }, restartAt)],
+      true,
+    );
+    expect(restarted.activity).toBe('idle');
+    expect(restarted.turnEndedAt).toBe(stopAt);
+    expect(restarted.heldByBackground).toBe(false);
   });
 
   it('без журнала событий задач и ожидания нет', () => {

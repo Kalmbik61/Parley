@@ -506,6 +506,46 @@ describe('WakeService: процесс без хуков и диалог пере
       `the pointer for session ${sessionId} was left without Enter — the session is waiting for an answer`,
     ]);
   });
+
+  // SessionStart ход не открывает (activity.ts): первый хук нового процесса — признак готовности поля ввода,
+  // живая проба Claude Code 2.1.289 (хук через ~0,2-0,35 с после запуска, набранный в тот миг текст не теряется).
+  it('человек поднял сессию (Resume): журнал после запуска — только SessionStart(resume) — указатель уходит сразу, без idle_prompt', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, activity, ref } = await rig(sessionId, workId, { STUB_READY_HOOK: '0' });
+
+    await sendLetter(workId, sessionId);
+    await settle(600);
+    expect(stream()).not.toContain(pointer(1));
+
+    await writeFile(
+      path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume' })}\n`,
+    );
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Ни Stop, ни idle_prompt не было, а ход SessionStart не открыл — сессия у приглашения.
+    expect(activity.get(ref)?.activity.activity).not.toBe('working');
+  });
+
+  it('прежний процесс оборвал ход (UserPromptSubmit без Stop): SessionStart(resume) ход оканчивает — указатель уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    // Каталог `events/` — до старта наблюдения активности, как при настоящем запуске (см. тест 2): иначе
+    // хост узнал бы о хуке только с письмом. Журнал заведён нейтральным StubReady.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, activity, ref } = await rig(sessionId, workId);
+    const journal = path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
+
+    await writeFile(journal, `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`, { flag: 'a' });
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    await sendLetter(workId, sessionId);
+    // Ход открыт и не кончается — указатель ждёт.
+    await settle(400);
+    expect(stream()).not.toContain(pointer(1));
+
+    await writeFile(journal, `${JSON.stringify({ hook_event_name: 'SessionStart', source: 'resume' })}\n`, {
+      flag: 'a',
+    });
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+  });
 });
 
 describe('WakeService: лид закончил ход и ждёт фоновых субагентов (Parley 0.2.0)', () => {
