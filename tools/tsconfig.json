@@ -8,5 +8,10 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["parley-token-benchmark.ts", "parley-token-benchmark.test.ts"]
+  "include": [
+    "parley-token-benchmark.ts",
+    "parley-token-benchmark.test.ts",
+    "parley-token-benchmark-drive.ts",
+    "parley-token-benchmark-drive.test.ts"
+  ]
 }
