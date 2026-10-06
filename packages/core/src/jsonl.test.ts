@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { readJsonlRecords } from './jsonl.js';
+import { forEachJsonlRecord, readJsonlRecords } from './jsonl.js';
 
 let dir: string;
 const write = async (name: string, content: string) => {
@@ -61,5 +61,37 @@ describe('readJsonlRecords', () => {
     const { records, stats } = await readJsonlRecords(file);
     expect(records).toEqual([{ a: 1 }]);
     expect(stats.malformed).toBe(3);
+  });
+});
+
+describe('forEachJsonlRecord — остановка (2026-10-06)', () => {
+  it('прерванный разбор отклоняется AbortError: записей после остановки нет', async () => {
+    const file = await write(
+      'many.jsonl',
+      Array.from({ length: 1000 }, (_, i) => `{"i":${i}}\n`).join(''),
+    );
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    const reading = forEachJsonlRecord(
+      file,
+      (record) => {
+        seen.push(record);
+        controller.abort();
+      },
+      controller.signal,
+    );
+    await expect(reading).rejects.toMatchObject({ name: 'AbortError' });
+    expect(seen).toEqual([{ i: 0 }]);
+  });
+
+  it('сигнал уже прерван — отказ сразу, колбэк не зовётся', async () => {
+    const file = await write('one.jsonl', '{"a":1}\n');
+    const seen: unknown[] = [];
+    await expect(
+      forEachJsonlRecord(file, (record) => seen.push(record), AbortSignal.abort()),
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(seen).toEqual([]);
   });
 });

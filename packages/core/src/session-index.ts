@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { forEachJsonlRecord } from './jsonl.js';
+import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 
@@ -101,6 +101,8 @@ export interface IndexSessionOptions {
   adapter?: SchemaAdapter;
   /** Известно только вызывающему, который обошёл <session-id>/subagents/. */
   subsessionCount?: number;
+  /** Прерывает чтение файла: промис отклоняется `AbortError` (`forEachJsonlRecord`). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -111,7 +113,7 @@ export interface IndexSessionOptions {
 export async function indexSessionFile(
   file: string,
   root: string,
-  { adapter = adapterV1, subsessionCount = 0 }: IndexSessionOptions = {},
+  { adapter = adapterV1, subsessionCount = 0, signal }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
@@ -137,7 +139,7 @@ export async function indexSessionFile(
   let lastPrompt: string | null = null;
   let firstText: string | null = null;
 
-  const stats = await forEachJsonlRecord(file, (raw) => {
+  const onRecord = (raw: RawRecord): void => {
     const record: SessionRecord = adapter.toSessionRecord(raw);
 
     recordTypes.add(record.type);
@@ -208,7 +210,8 @@ export async function indexSessionFile(
         lastWorkRecordAt = at;
       }
     }
-  });
+  };
+  const stats = await forEachJsonlRecord(file, onRecord, signal);
 
   const durationMs =
     startedAt !== null && endedAt !== null
