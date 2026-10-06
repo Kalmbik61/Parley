@@ -159,7 +159,7 @@ export function folderIconUrl(path: string, open: boolean, theme: IconTheme): st
 - Поправить тесты дерева, вкладок, палитры, «Изменений» и поиска, где проверяются старые lucide-значки.
 - `package-deps.test.ts` остаётся зелёным: пакет — в `devDependencies`.
 
-### 7.3 E2E (`e2e/files.spec.ts`)
+### 7.3 E2E (`e2e/files-sidebar.spec.ts`)
 У `package.json` в дереве картинка реально загрузилась (`naturalWidth > 0`). Тест ловит сразу плагин, путь и CSP.
 
 ### 7.4 Живая проверка
@@ -168,7 +168,7 @@ export function folderIconUrl(path: string, open: boolean, theme: IconTheme): st
 - обрезка «…» работает;
 - столбик значков в дереве ровный.
 
-Отдельно проверить собранное приложение (`dist --dir`): значки грузятся из `app.asar`.
+Отдельно проверить собранное приложение (`dist --dir`): весь каталог `file-icons/` лежит в `app.asar`. Само приложение локально не запускаем (запросы доступа macOS); загрузку значков подтверждает E2E 7.3 — он грузит тот же `out/renderer/index.html` через `loadFile`.
 
 ## 8. Вне рамок
 
