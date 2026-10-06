@@ -165,13 +165,18 @@ describe('NewWorkComposer — диктовка (спека 3.2)', () => {
   it('⌘⇧M в поле первого промпта внутри диалога — диктовка; Esc записи не закрывает диалог', async () => {
     useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
     const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
-    await renderComposer();
+    const onOpenChange = vi.fn();
+    await renderComposer(onOpenChange);
     const prompt = promptField();
     prompt.focus();
     fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
     await waitFor(() => expect(screen.getByTestId('mic').dataset.state).toBe('recording'));
-    fireEvent.keyDown(window, { key: 'Escape' });
+    // Radix слушает Esc на `document`: событие идёт с поля, как от настоящей клавиши.
+    fireEvent.keyDown(prompt, { key: 'Escape' });
+    // Диалог открыт «пропом», поэтому закрытие видно только по просьбе Radix закрыться.
+    expect(onOpenChange).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByTestId('mic').dataset.state).toBe('ready');
     fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
     await waitFor(() => expect(screen.getByTestId('mic').dataset.state).toBe('recording'));
     fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
