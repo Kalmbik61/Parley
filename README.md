@@ -1342,35 +1342,38 @@ either. The provider adapters and the registry stay in core and work from the CL
 The host gives the window the providers' model lists (`providers.list`), each model with its
 effort levels. `sessions.create` accepts a model only from its provider's list and an effort
 only from the levels of that model: a value outside them gives `bad_request` with the allowed
-values, the CLI does not get it, and no record appears in the map. The chosen model and
-effort are kept in the session's map, and resume passes them again: it starts the session with
-the model and effort saved for it (from the dialog, MCP or the Chat menu). A model switched in
-the terminal with `/model` is not saved, so resume does not bring it back; a model changed from
-the Chat menu restarts the CLI process, and the conversation goes on from the log. If no model is chosen
-(the field is omitted or empty), it means "default": Claude Code and Codex use their own model
-without `--model`; GLM uses `glm-5.3[1m]`. No effort means "default" too: the CLI uses the
-level saved for the model, or the model's own default. With the "default" model, the levels on
-offer are those all the provider's models share. The lists:
+values, the CLI does not get it, and no record appears in the map. The chosen model and effort
+are kept in the session's map, and resume passes them again: it starts the session with the
+model and effort saved for it (from the dialog, MCP or the Chat menu). A model switched in the
+terminal with `/model` is not saved, so resume does not bring it back; a model changed from
+the Chat menu restarts the CLI process, and the conversation goes on from the log. If no model
+is chosen (the field is omitted or empty), it means "default": Claude Code and Codex use their
+own model without `--model`; GLM uses `glm-5.3[1m]`. No effort means "default" too: the CLI
+uses the level saved for the model, or the model's own default. With the "default" model, the
+levels on offer are those all the provider's models share. The lists:
 
 - Claude Code — the `--model` aliases from `code.claude.com/docs/en/model-config`: `best`,
   `fable`, `sonnet`, `opus`, `haiku`, `sonnet[1m]`, `opus[1m]`, `opusplan`, `opusplan[1m]`.
   The aliases themselves point at the current version, so pinned versions (`claude-opus-5-5`
   and the like) are not in the list. Every model except `haiku` takes the efforts `low`,
   `medium`, `high`, `xhigh` and `max`; Haiku has no effort;
-- Codex — the list comes from Codex itself. At start, and again when the list is more than
-  six hours old, the host runs `codex debug models`, Codex's own command that prints the
-  models of your account, and takes the visible ones in Codex's order, each with its effort
-  levels and their descriptions (up to `ultra`). It keeps the list in `codex-models.json` in
+- Codex — the list comes from Codex itself. At start the host runs `codex debug models`, Codex's
+  own command that prints the models of your account, and takes the visible ones in Codex's
+  order, each with its effort levels and their descriptions (up to `ultra`). Later it probes
+  lazily: when the window asks for the providers and the last probe began six or more hours
+  ago, successful or not, the host probes again in the background. So the list can be older than
+  six hours if no one asks, and after a failure or an offline answer the next probe comes no
+  sooner than six hours after the previous one. It keeps the list in `codex-models.json` in
   Parley's home, so agents' `get_map` and `spawn_session` offer the same models. Codex may
   refresh its catalog from its server while answering; Parley reads neither Codex's files nor
   its sign-in. Without a network or a sign-in Codex still answers with the catalog built into
   it; Parley takes that answer as a successful probe and keeps it in `codex-models.json` until
-  the next successful probe, which is at most six hours away. If the command itself fails (a
-  non-zero exit, a timeout, output that is not JSON or lists no visible models), Parley keeps
-  the last list it got, the one in `codex-models.json`; the built-in list applies only until
-  the first successful probe: the visible models of 2026-10-06 — `gpt-6.1-sol`, `gpt-6-astra`,
-  `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`, each with
-  `low` to `max` and, except the two Luna models, `ultra`;
+  the next probe. If the command itself fails (a non-zero exit, a timeout, output that is not
+  JSON or lists no visible models), Parley keeps the last list it got, the one in
+  `codex-models.json`; the built-in list applies only until the first successful probe: the
+  visible models of 2026-10-06 — `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`,
+  `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna`, each with `low` to `max` and, except the
+  two Luna models, `ultra`;
 - GLM — `glm-5.3[1m]` and `glm-5.3-flash[1m]`, shown as GLM-5.3 and GLM-5.3 Flash with
   1M context. The official Opus and Sonnet tiers map to GLM-5.3; Haiku maps to GLM-5.3 Flash.
   Both take Claude Code's five efforts, `low` to `max`.

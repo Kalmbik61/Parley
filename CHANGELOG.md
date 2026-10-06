@@ -18,8 +18,9 @@ All notable changes to Parley are documented in this file.
   (`codex debug models`) and shows them in Codex's order. If the probe fails, Parley keeps the
   last list it got (stored in `codex-models.json`); the built-in list of current models applies
   only until the first successful probe. Without a network or a sign-in Codex prints the catalog
-  built into it; Parley takes that as a successful probe and keeps it until the next one, within
-  six hours.
+  built into it; Parley takes that as a successful probe and keeps it until the next one. Probes
+  after the first one are lazy: they start when the window asks for the providers and the last
+  probe began six or more hours ago, successful or not.
 - **Model and effort in Chat.** The toolbar shows "model · effort", and its menu changes either
   one for this session only: the effort through Claude Code's `/effort` slider, confirmed in the
   footer, the model by restarting the session with `--resume`. Claude Code's saved defaults stay
