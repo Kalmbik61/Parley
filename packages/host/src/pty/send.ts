@@ -19,7 +19,7 @@ import {
   codexSubmitKey,
 } from './codex-input.js';
 import { stripEscapes } from './draft.js';
-import { sliderOnScreen } from './effort-switch.js';
+import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
 
@@ -67,8 +67,7 @@ export function createSender(deps: {
     // Ползунок `/effort`: Enter в нём сохраняет уровень умолчанием в настройках CLI, а текст стал бы его вводом. Хост
     // закрывает ползунок сам (Esc), но поздний, открывшийся после паузы, мог остаться на экране; пока идёт смена,
     // ползунок открыт намеренно. В обоих случаях в PTY не уходит ни одного байта.
-    if (deps.switching?.(ref) === true) return refused('blocked');
-    if (sliderOnScreen(deps.pty.screenText(ref) ?? [])) return refused('blocked');
+    if (choiceInProgress(ref, deps)) return refused('blocked');
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
     // указатель между проверками и вставкой.

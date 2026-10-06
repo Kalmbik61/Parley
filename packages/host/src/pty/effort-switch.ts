@@ -70,6 +70,18 @@ export function sliderOnScreen(lines: readonly string[]): boolean {
   return tail.some((line, i) => hinted(line) || (i > 0 && hinted(`${tail[i - 1]} ${line}`)));
 }
 
+/**
+ * Идёт смена модели или effort либо на экране открыт ползунок `/effort`: печатать в такую сессию нельзя — текст
+ * ушёл бы в ползунок, а Enter сохранил бы его уровень умолчанием человека. Одна проверка для `pty.send` и будильника.
+ * `switching` — замок смены сессии (`SessionsService.exclusive.held`); без него смотрится только экран.
+ */
+export function choiceInProgress(
+  ref: SessionRef,
+  deps: { pty: Pick<PtyManager, 'screenText'>; switching?: (ref: SessionRef) => boolean },
+): boolean {
+  return deps.switching?.(ref) === true || sliderOnScreen(deps.pty.screenText(ref) ?? []);
+}
+
 /** Уровень по подвалу: нижняя строка с ним побеждает; нет — `null`. */
 export function effortFromFooter(lines: readonly string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i -= 1) {

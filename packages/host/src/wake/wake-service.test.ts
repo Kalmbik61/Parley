@@ -138,13 +138,15 @@ async function rig(
   workId: string,
   launchEnv: NodeJS.ProcessEnv = {},
   wakeOptions: WakeServiceOptions = {},
+  /** Замок смены модели и effort сессии (`SessionsService.exclusive`); по умолчанию — не взят никогда. */
+  lock: { held: (ref: SessionRef) => boolean } = { held: () => false },
 ): Promise<Rig> {
   const host = fakeHost();
   const works = createWorksService(host, { debounceMs: 20 });
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
   const pty = createPtyManager(host);
   // Подъёма в этих тестах нет: все сессии живые, и `launch` будильнику не нужен.
-  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, {
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {}, exclusive: lock as never }, {
     enterDelayMs: 30,
     ...wakeOptions,
   });
@@ -344,6 +346,109 @@ describe('WakeService', () => {
     expect(cancelled).toBeDefined();
     expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
     expect((cancelled?.data as { text: string }).text).toBe(`the pointer for session ${sessionId} was cancelled by human input`);
+  });
+});
+
+describe('WakeService: смена модели или effort и открытый ползунок /effort', () => {
+  const SLIDER = ['Effort', '←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel'];
+
+  /** Запись в PTY сессии: всё, что хост печатает, и отдельно Enter. */
+  function spyWrites(pty: Rig['pty']): string[] {
+    const writes: string[] = [];
+    const original = pty.write.bind(pty);
+    pty.write = (ref, data) => {
+      writes.push(data);
+      original(ref, data);
+    };
+    return writes;
+  }
+
+  it('замок смены взят — указатель не печатается и Enter не уходит; замок снят — уходит сам', async () => {
+    const { workId, sessionId } = await activeSession();
+    let held = true;
+    const { stream, pty } = await rig(sessionId, workId, {}, {}, { held: () => held });
+    const writes = spyWrites(pty);
+
+    await sendLetter(workId, sessionId);
+    await settle(400);
+    expect(writes).toEqual([]);
+    expect(stream()).not.toContain(pointer(1));
+
+    held = false;
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+
+  it('ползунок /effort на экране — указатель не печатается и Enter не уходит; ползунок закрыт — уходит сам', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty } = await rig(sessionId, workId);
+    const writes = spyWrites(pty);
+    const real = pty.screenText.bind(pty);
+    let open = true;
+    pty.screenText = (ref) => (open ? SLIDER : real(ref));
+
+    await sendLetter(workId, sessionId);
+    await settle(400);
+    expect(writes).toEqual([]);
+
+    open = false;
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+
+  it('замок взят за паузу между текстом и Enter — Enter не уходит, приходит pointer-cancelled', async () => {
+    const { workId, sessionId } = await activeSession();
+    let held = false;
+    const { stream, pty, ref } = await rig(sessionId, workId, {}, { enterDelayMs: 300 }, { held: () => held });
+    const original = pty.write.bind(pty);
+    const writes: string[] = [];
+    pty.write = (target, data) => {
+      writes.push(data);
+      original(target, data);
+      // Указатель напечатан — смена начинается до Enter.
+      if (data === pointer(1)) held = true;
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => writes.includes(pointer(1)), 3000);
+    await settle(600);
+    expect(writes).toEqual([pointer(1)]);
+    expect(stream()).not.toContain(`echo: ${pointer(1)}`);
+    const cancelled = broadcasts.find(
+      (b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'pointer-cancelled',
+    );
+    expect((cancelled?.data as { ref: SessionRef }).ref).toEqual(ref);
+    expect((cancelled?.data as { text: string }).text).toContain('model or effort');
+  });
+
+  it('ползунок открылся за паузу между текстом и Enter — Enter не уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { pty } = await rig(sessionId, workId, {}, { enterDelayMs: 300 });
+    const real = pty.screenText.bind(pty);
+    let open = false;
+    pty.screenText = (ref) => (open ? SLIDER : real(ref));
+    const original = pty.write.bind(pty);
+    const writes: string[] = [];
+    pty.write = (target, data) => {
+      writes.push(data);
+      original(target, data);
+      if (data === pointer(1)) open = true;
+    };
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => writes.includes(pointer(1)), 3000);
+    await settle(600);
+    expect(writes).toEqual([pointer(1)]);
+  });
+
+  it('без замка и ползунка — указатель и Enter, как раньше', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty } = await rig(sessionId, workId);
+    const writes = spyWrites(pty);
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
   });
 });
 
