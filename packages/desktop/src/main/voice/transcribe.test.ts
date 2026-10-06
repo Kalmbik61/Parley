@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TranscribeRequest } from '../../shared/voice-types.js';
-import { createTranscriber, removeStaleRecordings, transcribeTimeoutMs, whisperArgs, WAV_PREFIX, type RunEngine, type TranscriberDeps } from './transcribe.js';
+import { createTranscriber, killRunningEngines, removeStaleRecordings, runEngine, transcribeTimeoutMs, whisperArgs, WAV_PREFIX, type RunEngine, type TranscriberDeps } from './transcribe.js';
 
 const ENGINE = { bin: '/e/whisper-cli', vadModel: '/e/vad.bin' };
 let dir = '';
@@ -105,6 +105,24 @@ describe('createTranscriber (спека 4.2, 6.4)', () => {
     };
     await expect(createTranscriber(deps(run))(request())).resolves.toEqual({ error: 'failed' });
     expect(await readdir(dir)).toEqual([]);
+  });
+});
+
+describe('runEngine', () => {
+  it('killRunningEngines завершает запущенный движок: выход приложения не оставляет whisper-cli сиротой', async () => {
+    const started = Date.now();
+    const pending = runEngine('/bin/sleep', ['30'], 60_000);
+    killRunningEngines();
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(result.code).not.toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it('stdout ограничен хвостом, как stderr', async () => {
+    const result = await runEngine('/usr/bin/yes', ['x'.repeat(1000)], 500);
+    expect(result.timedOut).toBe(true);
+    expect(result.stdout.length).toBeLessThanOrEqual(256_000);
   });
 });
 

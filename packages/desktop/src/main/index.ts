@@ -56,7 +56,7 @@ import { registerVoiceIpc } from './voice/ipc.js';
 import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
 import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
-import { removeStaleRecordings } from './voice/transcribe.js';
+import { killRunningEngines, removeStaleRecordings } from './voice/transcribe.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -554,4 +554,7 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
+
+  // Идущее распознавание не должно пережить приложение: `whisper-cli` — дочерний процесс окна, не хоста.
+  app.on('before-quit', killRunningEngines);
 }

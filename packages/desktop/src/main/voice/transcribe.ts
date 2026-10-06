@@ -3,7 +3,7 @@
  * галлюцинаций. WAV удаляется в `finally` при любом исходе; оставшиеся после падения окна подчищает
  * `removeStaleRecordings` при старте.
  */
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -34,15 +34,25 @@ export type RunEngine = (bin: string, args: string[], timeoutMs: number) => Prom
 
 /** stderr — только хвост: журнал движка на длинной записи большой, а нужен он лишь для диагностики. */
 const MAX_STDERR = 64_000;
+/** stdout — тоже хвост: текст двухминутной записи на два порядка короче, лимит страхует от зациклившегося движка. */
+const MAX_STDOUT = 256_000;
+
+/** Запущенные движки: на выходе приложения их убивает `killRunningEngines`, чтобы они не осиротели. */
+const running = new Set<ChildProcess>();
+
+export function killRunningEngines(): void {
+  for (const child of running) child.kill('SIGKILL');
+}
 
 export const runEngine: RunEngine = (bin, args, timeoutMs) =>
   new Promise((resolve) => {
     const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    running.add(child);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-      stdout += chunk;
+      stdout = (stdout + chunk).slice(-MAX_STDOUT);
     });
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
       stderr = (stderr + chunk).slice(-MAX_STDERR);
@@ -52,10 +62,12 @@ export const runEngine: RunEngine = (bin, args, timeoutMs) =>
       child.kill('SIGKILL');
     }, timeoutMs);
     child.on('error', (error) => {
+      running.delete(child);
       clearTimeout(timer);
       resolve({ code: null, stdout, stderr: `${stderr}\n${String(error)}`, timedOut });
     });
     child.on('close', (code) => {
+      running.delete(child);
       clearTimeout(timer);
       resolve({ code, stdout, stderr, timedOut });
     });
