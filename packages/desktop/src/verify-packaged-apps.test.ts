@@ -77,6 +77,14 @@ function makeApp(arch: Arch, options: AppOptions = {}): string {
     0o755,
   );
   put(path.join(resources, 'node', 'LICENSE'), 'Node.js is licensed for use as follows: MIT\n');
+  // Движок голосового ввода: `--help` отвечает кодом 0 (запускается только у родной архитектуры).
+  put(
+    path.join(resources, 'whisper', 'bin', 'whisper-cli'),
+    `#!/bin/sh\n${marker}[ "$1" = "--help" ] && exit 0\nexit 1\n`,
+    0o755,
+  );
+  put(path.join(resources, 'whisper', 'ggml-silero-v6.2.0.bin'), 'vad\n');
+  put(path.join(resources, 'whisper', 'LICENSE'), 'MIT\n');
   put(path.join(resources, 'host', 'dist', 'main.js'), '// host\n');
   const prebuilds = path.join(
     resources,
@@ -107,6 +115,11 @@ function makeFakeTools(): void {
   tool(
     'arch',
     '[ "$1" = "-x86_64" ] || exit 2\nshift\n[ "${FAKE_ROSETTA:-1}" = "1" ] || { echo "arch: Bad CPU type in executable" >&2; exit 86; }\necho "arch -x86_64 $*" >> "$FAKE_LOG"\nexec "$@"',
+  );
+  // otool -L FILE: печатает только системные библиотеки; `FAKE_OTOOL_RPATH=1` добавляет библиотеку сборки (@rpath).
+  tool(
+    'otool',
+    'echo "$2:"\necho "\\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)"\n[ "${FAKE_OTOOL_RPATH:-0}" = "1" ] && echo "\\t@rpath/libggml.dylib (compatibility version 0.0.0)"\nexit 0',
   );
   // Настоящий node нужен самому скрипту (`node -p` для версии окна и закреплённой версии Node).
   symlinkSync(process.execPath, path.join(fakeBin, 'node'));
@@ -171,6 +184,66 @@ describe.skipIf(process.platform === 'win32')('verify-packaged-apps.sh', () => {
     );
     expect(calls).not.toContain(path.join(dist, 'mac-arm64'));
   });
+
+  it('x64 под Rosetta whisper-cli не запускает: он собран с AVX2, а Rosetta его не исполняет', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run();
+
+    expect(status, out).toBe(0);
+    expect(logged()).not.toContain('whisper-cli');
+  });
+
+  it('whisper-cli родной архитектуры не запускается — отказ', () => {
+    const resources = makeApp('arm64');
+    makeApp('x64');
+    put(
+      path.join(resources, 'whisper', 'bin', 'whisper-cli'),
+      '#!/bin/sh\n# ARCH:arm64\nexit 1\n',
+      0o755,
+    );
+
+    const { status, out } = run();
+
+    expect(status).toBe(1);
+    expect(out).toContain('mac-arm64: whisper-cli does not start');
+  });
+
+  it('whisper-cli ссылается на библиотеки сборки (@rpath) — отказ', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run({ FAKE_OTOOL_RPATH: '1' });
+
+    expect(status).toBe(1);
+    expect(out).toContain('whisper-cli links libraries from the build (@rpath)');
+  });
+
+  it('без whisper-cli — отказ с понятной причиной', () => {
+    const resources = makeApp('arm64');
+    makeApp('x64');
+    rmSync(path.join(resources, 'whisper', 'bin', 'whisper-cli'));
+
+    const { status, out } = run();
+
+    expect(status).not.toBe(0);
+    expect(out).toContain('whisper-cli');
+  });
+
+  it.each(['ggml-silero-v6.2.0.bin', 'LICENSE'])(
+    'без %s в Resources/whisper — отказ',
+    (file) => {
+      const resources = makeApp('arm64');
+      makeApp('x64');
+      rmSync(path.join(resources, 'whisper', file));
+
+      const { status, out } = run();
+
+      expect(status).toBe(1);
+      expect(out).toContain(`Contents/Resources/whisper/${file}`);
+    },
+  );
 
   it('нет Rosetta — x64 проверен по файлам, его node не запускается, скрипт предупреждает и проходит', () => {
     makeApp('arm64');

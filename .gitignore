@@ -12,5 +12,7 @@ packages/desktop/out/
 packages/desktop/out-tsc/
 # Встроенный Node для сборки: его кладёт scripts/fetch-node.mjs, в git он не нужен.
 packages/desktop/build/node/
+# Движок голосового ввода (whisper-cli и модель VAD): его кладёт scripts/fetch-whisper.mjs, в git он не нужен.
+packages/desktop/build/whisper/
 test-results/
 **/.omc/state/

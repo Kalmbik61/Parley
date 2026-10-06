@@ -49,6 +49,11 @@ extraResources:
   # `fetch-node`, например локальный `dist`) — electron-builder только предупреждает, а окно берёт node из PATH.
   - from: build/node/darwin-${arch}
     to: node
+  # Движок голосового ввода (спека 2026-10-06-voice-input-design.md, 4.3): `scripts/fetch-whisper.mjs` кладёт `whisper-cli`,
+  # модель VAD Silero и LICENSE whisper.cpp в build/whisper/darwin-<arch>. Нет каталога — electron-builder предупреждает,
+  # голосовой ввод в такой сборке скажет «Voice engine not found».
+  - from: build/whisper/darwin-${arch}
+    to: whisper
 mac:
   target:
     - target: dmg
@@ -59,6 +64,9 @@ mac:
   # Hardened runtime без сертификата Apple не нужен, а с ad-hoc он требует лишних entitlements.
   identity: '-'
   hardenedRuntime: false
+  # Текст системного запроса доступа к микрофону (голосовой ввод): без него macOS показала бы заглушку Electron.
+  extendInfo:
+    NSMicrophoneUsageDescription: Parley uses the microphone for voice dictation. Audio is transcribed on this Mac and never leaves it.
   # Один шаблон для dmg и zip, без версии: так работают ссылки `releases/latest/download/<имя>`.
   artifactName: parley-macos-${arch}.${ext}
 # Черновик: релиз становится публичным только после проверки, что все файлы на месте (release.yml).
