@@ -29,7 +29,7 @@ interface ProviderItem {
   id: string;
   label: string;
   available: boolean;
-  models: Array<{ id: string; label: string }> | null;
+  models: Array<{ id: string; label: string; efforts?: Array<{ id: string; label: string; description?: string }> | null }> | null;
   effort: boolean;
   version: string | null;
   limits: { fiveHour: { usedPercent: number } | null; week: { usedPercent: number } | null; at: string } | null;
@@ -144,10 +144,12 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(await list(client), 'claude').version).toBe('2.1.276');
   });
 
-  it('окну уходят списки из документации: claude — алиасы, codex — GPT-6; порядок и подписи как в реестре', async () => {
+  it('окну уходят списки реестра: claude — алиасы, codex — запасной список; порядок, подписи и уровни как в реестре', async () => {
     const providers = await list(await boot());
+    /** Пары id и подпись; уровни сверяются ниже, отдельно. */
+    const pairsOf = (id: string) => byId(providers, id).models?.map((model) => ({ id: model.id, label: model.label }));
 
-    expect(byId(providers, 'claude').models).toEqual([
+    expect(pairsOf('claude')).toEqual([
       { id: 'best', label: 'Best' },
       { id: 'fable', label: 'Fable' },
       { id: 'sonnet', label: 'Sonnet' },
@@ -158,12 +160,20 @@ describe('providers.list: модели, усилие и версия CLI (диз
       { id: 'opusplan', label: 'Opus Plan' },
       { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
     ]);
-    expect(byId(providers, 'codex').models).toEqual([
-      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
-      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    expect(pairsOf('codex')).toEqual([
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
+      { id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+      { id: 'gpt-6-sol', label: 'GPT-6-Sol' },
+      { id: 'gpt-6-luna', label: 'GPT-6-Luna' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' },
     ]);
+    // Уровни едут по проводу вместе с моделью: у Haiku их нет, у Luna нет Ultra.
+    const levelsOf = (provider: string, model: string) =>
+      byId(providers, provider).models?.find((option) => option.id === model)?.efforts;
+    expect(levelsOf('claude', 'haiku')).toBeNull();
+    expect(levelsOf('codex', 'gpt-6-luna')?.map((level) => level.id)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 
   it('свой список моделей из providers.json заменяет встроенный, если шаблон запуска принимает модель', async () => {

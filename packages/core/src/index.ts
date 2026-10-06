@@ -74,7 +74,8 @@ export {
   supportsEffort,
   supportsModel,
 } from './providers.js';
-export type { ModelOption } from './provider-models.js';
+export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
+export type { EffortOption, ModelOption } from './provider-models.js';
 export type {
   EffortLevel,
   McpConfigKind,

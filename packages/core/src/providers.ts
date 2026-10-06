@@ -87,8 +87,8 @@ export interface ProviderEntry {
   linkBy: SessionLink;
   runner: RunnerConfig;
   /**
-   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model` и подпись.
-   * У встроенных `claude`, `codex` и `glm` список взят из открытой документации (`provider-models.ts`), у
+   * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model`, подпись и уровни
+   * effort модели. У встроенных `claude`, `codex` и `glm` список — из каталога `provider-models.ts`, у
    * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
    * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
    * списке не хранится: это отсутствие выбора, без флага.
@@ -490,14 +490,19 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
  * Список моделей для окна: из записи реестра (встроенный или из `providers.json`) и только если
  * шаблон запуска вообще принимает модель. `null` — списка нет: окно контрол не показывает, а хост
  * принимает любое значение по прежнему правилу. Отдаётся копия: ответ уходит по проводу, и правка
- * получателем не должна доходить до реестра.
+ * получателем не должна доходить до реестра — в том числе правка уровней: массив уровней у моделей
+ * каталога общий.
  */
 export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
   const list = entry.models;
   if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
     return null;
   }
-  return list.map((model) => ({ ...model }));
+  return list.map((model) =>
+    model.efforts === undefined || model.efforts === null
+      ? { ...model }
+      : { ...model, efforts: model.efforts.map((effort) => ({ ...effort })) },
+  );
 }
 
 /**

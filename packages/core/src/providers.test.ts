@@ -21,6 +21,7 @@ import {
   supportsModel,
   type ProviderEntry,
 } from './providers.js';
+import { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
 import { overrideValue, overrideVariable } from './work/find-binary.js';
 
 /**
@@ -449,33 +450,79 @@ describe('модель и усилие новой сессии (дизайн к�
     });
   });
 
-  describe('списки моделей встроенных провайдеров (открытая документация, проверено 2026-09-29)', () => {
-    // Литералы, а не импорт констант: тест держит таблицу из отчёта куска 3b. Порядок — как в источнике.
-    const CLAUDE = [
-      { id: 'best', label: 'Best' },
-      { id: 'fable', label: 'Fable' },
-      { id: 'sonnet', label: 'Sonnet' },
-      { id: 'opus', label: 'Opus' },
-      { id: 'haiku', label: 'Haiku' },
-      { id: 'sonnet[1m]', label: 'Sonnet (1M context)' },
-      { id: 'opus[1m]', label: 'Opus (1M context)' },
-      { id: 'opusplan', label: 'Opus Plan' },
-      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)' },
+  describe('каталог моделей встроенных провайдеров (спека нормалайзера модели и effort, 5.1)', () => {
+    // Литералы, а не импорт констант: тест держит таблицы источников. Порядок — как в источнике.
+    /** Уровни Claude Code (code.claude.com/docs/en/model-config, 2026-10-06), без описаний. */
+    const CLAUDE_LEVELS = [
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium' },
+      { id: 'high', label: 'High' },
+      { id: 'xhigh', label: 'Extra high' },
+      { id: 'max', label: 'Max' },
     ];
+    const CLAUDE = [
+      { id: 'best', label: 'Best', efforts: CLAUDE_LEVELS },
+      { id: 'fable', label: 'Fable', efforts: CLAUDE_LEVELS },
+      { id: 'sonnet', label: 'Sonnet', efforts: CLAUDE_LEVELS },
+      { id: 'opus', label: 'Opus', efforts: CLAUDE_LEVELS },
+      { id: 'haiku', label: 'Haiku', efforts: null },
+      { id: 'sonnet[1m]', label: 'Sonnet (1M context)', efforts: CLAUDE_LEVELS },
+      { id: 'opus[1m]', label: 'Opus (1M context)', efforts: CLAUDE_LEVELS },
+      { id: 'opusplan', label: 'Opus Plan', efforts: CLAUDE_LEVELS },
+      { id: 'opusplan[1m]', label: 'Opus Plan (1M context)', efforts: CLAUDE_LEVELS },
+    ];
+    /** Уровни Codex с описаниями — снимок `codex debug models` 2026-10-06 (спека, раздел 3, п. 11–12). */
+    const CODEX_LEVELS = [
+      { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+      { id: 'medium', label: 'Medium', description: 'Balances speed and reasoning depth for everyday tasks' },
+      { id: 'high', label: 'High', description: 'Greater reasoning depth for complex problems' },
+      { id: 'xhigh', label: 'Extra high', description: 'Extra high reasoning depth for complex problems' },
+      { id: 'max', label: 'Max', description: 'Maximum reasoning depth for the hardest problems' },
+    ];
+    const CODEX_ULTRA_LEVELS = [
+      ...CODEX_LEVELS,
+      { id: 'ultra', label: 'Ultra', description: 'Maximum reasoning with automatic task delegation' },
+    ];
+    /** Видимые модели каталога Codex в порядке `priority`, подписи — `display_name`; у двух Luna нет Ultra. */
     const CODEX = [
-      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
-      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
-      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
-      { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-astra', label: 'GPT-6-Astra', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-sol', label: 'GPT-6-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-6-luna', label: 'GPT-6-Luna', efforts: CODEX_LEVELS },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', efforts: CODEX_ULTRA_LEVELS },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', efforts: CODEX_LEVELS },
     ];
 
-    it('встроенные списки моделей совпадают с подтверждёнными таблицами', () => {
+    it('встроенные списки совпадают с таблицами источников: модели, подписи и уровни', () => {
       expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
       expect(selectableModels(PROVIDERS.codex)).toEqual(CODEX);
       expect(selectableModels(PROVIDERS.glm)).toEqual([
-        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)' },
-        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)' },
+        { id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)', efforts: CLAUDE_LEVELS },
+        { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)', efforts: CLAUDE_LEVELS },
       ]);
+    });
+
+    it('уровни Claude Code и прежние три уровня — общие константы каталога', () => {
+      expect(CLAUDE_EFFORTS).toEqual(CLAUDE_LEVELS);
+      expect(LEGACY_EFFORTS).toEqual(CLAUDE_LEVELS.slice(0, 3));
+    });
+
+    it('effortLabel: подписи по таблице спеки, незнакомый id — с заглавной буквы', () => {
+      expect(['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'minimal', 'none'].map(effortLabel)).toEqual([
+        'Low',
+        'Medium',
+        'High',
+        'Extra high',
+        'Max',
+        'Ultra',
+        'Minimal',
+        'None',
+      ]);
+      expect(effortLabel('turbo')).toBe('Turbo');
+      expect(effortLabel('x_2')).toBe('X_2');
+      // Имя свойства объекта — такой же незнакомый id, а не подпись из прототипа.
+      expect(effortLabel('constructor')).toBe('Constructor');
     });
 
     /** Список провайдера; его отсутствие — провал теста, а не пустой обход, который прошёл бы впустую. */
@@ -516,13 +563,20 @@ describe('модель и усилие новой сессии (дизайн к�
       }
     });
 
-    it('окну отдаётся копия: правка ответа встроенный реестр не меняет', () => {
+    it('окну отдаётся копия вместе с уровнями: правка ответа встроенный реестр не меняет', () => {
       const list = selectableModels(PROVIDERS.claude);
-      if (list === null || list[0] === undefined) throw new Error('у claude нет списка');
+      const levels = list?.[0]?.efforts;
+      if (list === null || list[0] === undefined || levels === undefined || levels === null || levels[0] === undefined) {
+        throw new Error('у claude нет списка с уровнями');
+      }
       list[0].label = 'испорчено';
+      levels[0].label = 'испорчено';
+      levels.pop();
       list.pop();
 
       expect(selectableModels(PROVIDERS.claude)).toEqual(CLAUDE);
+      // Массив уровней у моделей каталога общий: правка копии не должна дойти и до него.
+      expect(CLAUDE_EFFORTS).toEqual(CLAUDE_LEVELS);
     });
   });
 
@@ -782,10 +836,13 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       // Прочее у записи не тронуто, а встроенный реестр и соседи остались при своих списках.
       expect(registry['codex']?.runner.args).toEqual(PROVIDERS.codex.runner.args);
       expect(selectableModels(PROVIDERS.codex)?.map((model) => model.id)).toEqual([
-        'gpt-6-astra',
         'gpt-6.1-sol',
+        'gpt-6-astra',
         'gpt-6-sol',
         'gpt-6-luna',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
       ]);
       expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
     });
