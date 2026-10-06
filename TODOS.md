@@ -152,12 +152,10 @@ core, нужный только ему, документы требований 
   не может. Итог: не запущенная сессия-сирота на каждый сбой и на каждый «Retry»
   диалога «New session or room» (её убирает «Delete» в меню строки). Варианты:
   откат записи в `create` или id записи в ответе об ошибке.
-- **Усилие при `resume` у Claude.** Модель и усилие теперь хранятся в
-  `WorkSession` (`spawn_session` иначе не передал бы выбор хосту), но `resumeArgs`
-  Claude их не несёт: модель Claude Code при `--resume` берёт из сессии сам,
-  усилие по документации не восстанавливает. Решить: передавать `--effort` из
-  карты при `resume`, если провайдер его принимает (у Codex `resume` восстанавливает
-  всё из треда).
+- **Усилие при `resume` у Claude.** Сделано нормалайзером модели и effort
+  (`docs/specs/2026-10-06-model-effort-normalizer-design.md`, 5.4–5.5): выбор из диалога
+  тоже пишется в карту, `resumeArgs` Claude несут `--model`/`--effort` из неё, GLM —
+  `--effort` рядом с `--model`; у Codex `resume` по-прежнему восстанавливает всё из треда.
 - **Закрыть сессию, чья папка worktree исчезла мимо хоста.** `worktrees.discard` у
   такой сессии отвечает `internal`: git не находит worktree. Из окна пункт скрыт, но
   агент может его вызвать. Нужно своё решение: `git worktree prune`, `branch -D` ветки
@@ -412,6 +410,17 @@ a room agent», «Providers»). Открыто:
   С чего начать: `packages/host/src/methods/providers.ts` (`createProvidersSetKey`),
   `packages/host/src/sessions/sessions-service.ts` (`launch(ref, 'resume')`, `stop`),
   `packages/host/src/sessions/provider-env.ts`.
+- **Модель и effort — что осталось за рамкой нормалайзера** (спека
+  `docs/specs/2026-10-06-model-effort-normalizer-design.md`, раздел 12):
+  - смена модели и effort у идущего Codex — вместе с чатом Codex (следующий подпроект);
+  - фактический effort из транскрипта Claude (`"effort"` в записях ответа) и из rollout Codex
+    (`turn_context`): кнопка чата сейчас показывает effort из карты;
+  - миграция старых `providers.json`: `args` без `{model}`/`{effort}` по-прежнему выключают
+    выбор, карточка провайдера лишь объясняет почему;
+  - показ того, во что превращается «Default»: рамка не даёт читать настройки Claude Code и
+    Codex;
+  - свои умолчания провайдера в Parley (profile defaults из плана
+    `.omx/plans/2026-10-04-provider-adapters-and-chat.md`).
 - **GLM в интерфейсе.** Запись реестра есть, значок — буква. У Z.ai нужно выяснить, есть
   ли ZCode как CLI; иначе GLM идёт через `claude` с базовым URL Z.ai — серая зона.
 - **«Агент у приглашения» для провайдеров без хуков и без сигналов терминала** (GLM). У

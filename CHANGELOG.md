@@ -6,6 +6,31 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Real effort levels for every model.** The New session or room dialog lists the effort
+  levels of the chosen model instead of a fixed Low / Medium / High: Low to Max for Claude
+  (Haiku has none) and for both GLM models, and each Codex model's own levels up to Ultra,
+  with Codex's descriptions. "Default" now comes first in both the model and the effort list
+  and sends no flag, so the level you saved in the CLI applies. Agents get the same levels in
+  `get_map`, and `spawn_session` accepts only them.
+- **Codex's own model list.** The host asks Codex for the models of your account
+  (`codex debug models`) and shows them in Codex's order; if the command fails, the built-in
+  list of current models is used.
+- **Model and effort in Chat.** The toolbar shows "model · effort", and its menu changes either
+  one for this session only: the effort through Claude Code's `/effort` slider, confirmed in the
+  footer, the model by restarting the session with `--resume`. Claude Code's saved defaults stay
+  untouched, and GLM sessions have the menu again.
+
+### Changed
+
+- **The chosen model and effort stay with the session.** A session started from the dialog keeps
+  them in the workspace map, and resuming a Claude or GLM session passes both again.
+- **No `/model ` suggestions in Chat.** Claude Code saves a typed `/model` as the default for new
+  sessions; the toolbar menu changes the model without that.
+- **Launch arguments from `providers.json`.** A provider whose `args` come from `providers.json`
+  says so in its card and explains why the model or effort choice is off.
+
 ## 0.5.2
 
 ### Added
