@@ -6,8 +6,17 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.6.0
+
 ### Added
 
+- **Voice input.** Dictation turns speech into text where you type: the microphone button in the
+  room and chat composers, the "New workspace" box and a session's Terminal view, or ⌘⇧M from a
+  focused field or terminal (the only way in a Codex terminal). Speech is recognized on this Mac
+  by a bundled whisper.cpp engine; the audio never leaves it, and the only network traffic is the
+  one-time model download. Voice is off by default: download a model in Settings → Voice, then
+  switch it on. The transcript is never sent by itself, and a recording is limited to two
+  minutes. The Intel build of voice needs AVX2 and has not been tested on an Intel Mac.
 - **Real effort levels for every model.** The New session or room dialog lists the effort
   levels of the chosen model instead of a fixed Low / Medium / High: Low to Max for Claude
   (Haiku has none) and for both GLM models, and each Codex model's own levels up to Ultra,
@@ -45,6 +54,12 @@ All notable changes to Parley are documented in this file.
   this put a Z.ai model into the local settings GLM shares with Claude, so plain Claude sessions
   then failed. The menu now switches only the session.
 - After Resume or a model switch, a session shows idle right away instead of working until Claude Code's idle notice.
+- **Terminal output survives a reconnect to the host.** Since 0.5.0, after "Restart host…" or a
+  host crash the window rebuilt the terminals of Claude and GLM sessions empty, so a session that
+  was not running lost its last output under the "asleep" card.
+- **Stopping the host ends its process right away.** After "Restart host…" the old host process
+  could stay alive for minutes with a large session history, until its log index finished reading
+  every Claude Code and Codex session log.
 
 ## 0.5.2
 
