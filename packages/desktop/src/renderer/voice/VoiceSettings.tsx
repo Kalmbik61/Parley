@@ -19,6 +19,13 @@ const LANGUAGE_OPTIONS = [
   ...WHISPER_LANGUAGES.filter((language) => language.code !== 'en' && language.code !== 'ru'),
 ];
 
+/** Копия записи без ключа `id` (линт не любит неиспользуемую переменную в деструктуризации). */
+function omitKey<T>(record: Partial<Record<VoiceModelId, T>>, id: VoiceModelId): Partial<Record<VoiceModelId, T>> {
+  const next = { ...record };
+  delete next[id];
+  return next;
+}
+
 export function VoiceSettings({ voice }: { voice: VoiceApi }): JSX.Element {
   const settings = useUiStore((state) => state.ui.voice);
   const patchUi = useUiStore((state) => state.patchUi);
@@ -45,8 +52,8 @@ export function VoiceSettings({ voice }: { voice: VoiceApi }): JSX.Element {
   const download = async (id: VoiceModelId): Promise<void> => {
     setBusy((prev) => ({ ...prev, [id]: true }));
     const result: DownloadResult = await voice.downloadModel(id).catch(() => ({ error: 'network' }) as const);
-    setBusy(({ [id]: _done, ...rest }) => rest);
-    setProgress(({ [id]: _done, ...rest }) => rest);
+    setBusy((prev) => omitKey(prev, id));
+    setProgress((prev) => omitKey(prev, id));
     if ('ok' in result) {
       await refresh();
       if (useUiStore.getState().ui.voice.model === null) patchVoice({ model: id });
