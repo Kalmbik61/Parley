@@ -6,9 +6,10 @@
  * (дизайн TUI v2, 4.2, 4.3, 5.1).
  *
  * Опроса нет: пересчёт идёт по событиям наблюдателей (журнал хуков, лог
- * провайдера, список работ) и по одному таймеру на сессию — на момент, когда
- * истечёт порог тишины, если сессия сейчас `working`. Планового `setInterval` в
- * файле нет и не должно быть (приёмка куска 1.5).
+ * провайдера, список работ), по одному таймеру на сессию — на момент, когда
+ * истечёт порог тишины, если сессия сейчас `working`, — и по разовому
+ * перечитыванию журналов после новых наблюдателей (`CATCH_UP_MS`). Планового
+ * `setInterval` в файле нет и не должно быть (приёмка куска 1.5).
  */
 
 import { existsSync } from 'node:fs';
@@ -153,6 +154,14 @@ const DEFAULT_TRUST_WAIT_MS = 20_000;
 const DEFAULT_STARTUP_WAIT_MS = 20_000;
 
 /**
+ * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
+ * новом наблюдателе: запись, сделанная в этот миг, не доходит ни до одного наблюдателя процесса (опыт
+ * 2026-10-06: 3 записи из 150, если в миг записи заводится наблюдатель другого каталога). Через этот срок
+ * после новых наблюдателей журналы перечитываются ещё раз — поток к тому времени давно пересоздан.
+ */
+const CATCH_UP_MS = 1000;
+
+/**
  * Рычаг E2E окна: `PARLEY_CODEX_STARTUP_MS` (и прежняя `HARNAS_CODEX_STARTUP_MS`) — срок экранов старта Codex в миллисекундах. Тест не может
  * ждать двадцать секунд, пока сессия на экране доверия станет «нужен ты». Не число, меньше 100 мс или
  * больше десяти минут — переменная игнорируется, срок остаётся по умолчанию.
@@ -279,6 +288,7 @@ export function createActivityService(
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
   let unsubscribeLog: (() => void) | undefined;
+  let catchUpTimer: NodeJS.Timeout | undefined;
 
   function clearSilenceTimer(key: string): void {
     const timer = silenceTimers.get(key);
@@ -649,7 +659,8 @@ export function createActivityService(
   /**
    * Наблюдение за журналами работы. `renewed` — наблюдатель только что заведён:
    * всё, что хуки успели дописать до него, никто не прочёл, журналы работы
-   * нужно перечитать.
+   * нужно перечитать. Дописанное, пока под него пересоздавался поток FSEvents,
+   * перечитает `scheduleCatchUp`.
    *
    * `createWork` каталога `events/` не заводит — его создаёт запись настроек
    * при запуске сессии, а `watchEvents` на несуществующий каталог падает один
@@ -695,6 +706,7 @@ export function createActivityService(
       return { watch, renewed: false };
     }
     watch.watcher = watcher;
+    scheduleCatchUp();
     return { watch, renewed: true };
   }
 
@@ -710,6 +722,27 @@ export function createActivityService(
     const ref: SessionRef = { projectPath, workId, sessionId };
     journals.set(refKey(ref), events);
     recompute(ref);
+  }
+
+  /**
+   * Новые наблюдатели — свои журналы и индекс логов — пересоздают поток FSEvents, и о записи этого мига
+   * не узнаёт никто (`CATCH_UP_MS`). Через срок все журналы перечитываются: чтение берёт только новые
+   * байты, а иначе потерянная строка ждала бы следующей записи того же журнала — у свежей сессии это
+   * первый хук, без которого хост не пускает отправку из окна (`hookedSince`).
+   */
+  function scheduleCatchUp(): void {
+    if (stopped) return;
+    if (catchUpTimer !== undefined) clearTimeout(catchUpTimer);
+    catchUpTimer = setTimeout(() => {
+      catchUpTimer = undefined;
+      for (const entry of works.snapshot().entries) {
+        const watch = workWatches.get(workKeyOf(entry.projectPath, entry.map.work.id));
+        if (watch === undefined) continue;
+        for (const session of entry.map.sessions) {
+          void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        }
+      }
+    }, CATCH_UP_MS);
   }
 
   /** Работы и сессии, которых в свежем снимке больше нет: состояние не копится вечно. */
@@ -794,7 +827,8 @@ export function createActivityService(
       // Не ждём: полный список сессий провайдера может читать гигабайты истории
       // (`~/.claude/projects`), а старт хоста ждать это не должен — до готовности
       // индекса activity просто не видит страховки по логу и живёт одними хуками.
-      void logIndex.start().catch((error: unknown) => {
+      // Готовый индекс заводит свои наблюдатели, и журналы перечитываются ещё раз.
+      void logIndex.start().then(scheduleCatchUp, (error: unknown) => {
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
@@ -898,6 +932,7 @@ export function createActivityService(
       stopped = true;
       unsubscribeWorks?.();
       unsubscribeLog?.();
+      if (catchUpTimer !== undefined) clearTimeout(catchUpTimer);
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
