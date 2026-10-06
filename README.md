@@ -795,7 +795,7 @@ indexed the transcript — without streamed text.
 
 ## Settings
 
-The window has Settings (⌘,), with five tabs:
+The window has Settings (⌘,), with six tabs:
 
 - **Appearance** — "System" / "Dark" / "Light".
 - **Terminal** — "Terminal font", "Terminal font size (8…32)".
@@ -806,6 +806,8 @@ The window has Settings (⌘,), with five tabs:
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
+- **Voice** — dictation: the on/off switch, "Model", "Language" and the model downloads (see
+  "Voice input").
 
 The fields from "Terminal" and "Agents" are written through the host to `~/.parley/config.json`
 (or to `config.json` in the home directory given by `PARLEY_HOME`) and apply without
@@ -881,6 +883,31 @@ Other variables:
   did not answer in time, the variable is not seen. Only a built `Parley.app` looks for a
   release at all — a window started from source does not — and the E2E tests set the variable
   anyway.
+
+### Voice input
+
+Dictation turns speech into text in the place you are typing. It is off by default.
+
+- **Turn it on:** Settings → Voice. Pick a model, press "Download", then switch "Voice input"
+  on. The switch stays unavailable until a model is downloaded. "Language" is "Auto" or a
+  fixed language.
+- **Use it:** the microphone button sits in the room composer, the chat composer, the "New
+  workspace" box and the toolbar of a session's Terminal view. ⌘⇧M does the same from
+  anywhere, and it is the only way in a Codex terminal, which has no button; there the text is
+  pasted into the terminal without Enter. Press once to record, press again to stop. Esc
+  cancels the recording. The transcript goes to the cursor and is never sent by itself: you
+  press Enter. A recording is limited to two minutes.
+- **First macOS prompt:** the first recording asks for microphone access in the name of
+  Parley. Parley is not signed with an Apple certificate, so macOS may forget the permission
+  after an update and ask again.
+- **Speed:** the first dictation after installing or updating Parley can take 15–20 seconds
+  while macOS compiles the engine's Metal shaders. After that, a 15–20 second phrase takes
+  about 1–2 seconds on Apple Silicon with "Large v3 Turbo".
+- **Privacy:** speech is recognized on this Mac by a bundled whisper.cpp engine. The audio
+  never leaves it; the only network traffic is the one-time model download from Hugging Face.
+- **Models** live in `~/.parley/desktop/voice/models` (under `PARLEY_HOME` when it is set).
+  Delete one with "Delete" in Settings, or just remove the file by hand; if the selected model
+  is gone, dictation points you back to Settings.
 
 ## Agent state: hooks and liveness
 
