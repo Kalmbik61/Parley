@@ -166,13 +166,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   const worksService = createWorksService(handle.context);
+  // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
+  // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
+  const planEffectNoticed = new Set<string>();
   const planEffects = createPlanEffectsService(worksService, {
-    onFailure: () => handle.context.broadcast('host.notice', {
-      kind: 'plan-effect-failed',
-      ref: null,
-      text: 'Plan delivery or export remains pending. Open the plan and retry after resolving the conflict.',
-      at: new Date().toISOString(),
-    }),
+    onFailure: ({ projectPath, workId }) => {
+      const key = `${projectPath}\0${workId}`;
+      if (planEffectNoticed.has(key)) return;
+      planEffectNoticed.add(key);
+      handle.context.broadcast('host.notice', {
+        kind: 'plan-effect-failed',
+        ref: null,
+        text: 'Plan delivery or export remains pending. Open the plan and retry after resolving the conflict.',
+        at: new Date().toISOString(),
+      });
+    },
   });
   const history = createHistoryService(worksService, {
     onFailure: ({ count }) => log.warn('history-write-failed', { count }),

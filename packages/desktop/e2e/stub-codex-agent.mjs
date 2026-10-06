@@ -24,12 +24,20 @@
 //   STUB_CODEX_THREAD=<id> — id треда в заголовке и в JSON notify
 
 import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { clearInterval, setInterval } from 'node:timers';
 
 // Проба версий хоста (`<команда> --version`): ответ как у настоящего Codex, выход сразу.
 if (process.argv[2] === '--version') {
   process.stdout.write('codex-cli 0.44.0\n');
   process.exit(0);
+}
+
+// STUB_ARGV_LOG=<файл>: каждый запуск дописывает строку JSON с argv и окружением Parley — так E2E сверяет
+// то, что хост передал агенту (флаги, системный слой, переменные навигатора), не читая настоящий процесс.
+if (process.env.STUB_ARGV_LOG !== undefined && process.env.STUB_ARGV_LOG !== '') {
+  const keep = Object.entries(process.env).filter(([name]) => name.startsWith('PARLEY_') || name.startsWith('HARNAS_') || name === 'SLASH_COMMAND_TOOL_CHAR_BUDGET');
+  appendFileSync(process.env.STUB_ARGV_LOG, `${JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(keep), cwd: process.cwd() })}\n`);
 }
 
 const PASTE_START = '\x1b[200~';

@@ -31,6 +31,13 @@ if (process.argv[2] === '--version') {
   process.exit(0);
 }
 
+// STUB_ARGV_LOG=<файл>: каждый запуск дописывает строку JSON с argv и окружением Parley — так E2E сверяет
+// то, что хост передал агенту (флаги, системный слой, переменные навигатора), не читая настоящий процесс.
+if (process.env.STUB_ARGV_LOG !== undefined && process.env.STUB_ARGV_LOG !== '') {
+  const keep = Object.entries(process.env).filter(([name]) => name.startsWith('PARLEY_') || name.startsWith('HARNAS_') || name === 'SLASH_COMMAND_TOOL_CHAR_BUDGET');
+  appendFileSync(process.env.STUB_ARGV_LOG, `${JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(keep), cwd: process.cwd() })}\n`);
+}
+
 // Хук при старте (fix-final-b): настоящий Claude Code в доверенной папке шлёт SessionStart, и
 // хост узнаёт, что хуки процесса доходят; без единого хука с запуска pty.send отвечает blocked
 // (вопрос доверия к папке хуков не шлёт). Нейтральное `StubReady` состояния не меняет — точка
@@ -203,6 +210,12 @@ function startMcp() {
   });
 }
 
+/** STUB_MCP_LOG=<файл>: результат каждого вызова инструмента строкой JSON — E2E читает его, не открывая терминал. */
+function logMcp(entry) {
+  const log = process.env.STUB_MCP_LOG;
+  if (log !== undefined && log !== '') appendFileSync(log, `${JSON.stringify({ session: fromEnv('SESSION_ID'), ...entry })}\n`);
+}
+
 async function callMcp(line) {
   const space = line.indexOf(' ');
   const tool = space === -1 ? line : line.slice(0, space);
@@ -210,7 +223,11 @@ async function callMcp(line) {
     const args = space === -1 ? {} : JSON.parse(line.slice(space + 1));
     mcpReady ??= startMcp();
     const request = await mcpReady;
-    const result = await request('tools/call', { name: tool, arguments: args });
+    // `STUB_MCP tools/list` — перечень инструментов сервера (имя и описание): так E2E видит, есть ли `find_skill`.
+    const result =
+      tool === 'tools/list'
+        ? { content: [{ text: JSON.stringify(((await request('tools/list', {})).tools ?? []).map(({ name, description }) => ({ name, description }))) }] }
+        : await request('tools/call', { name: tool, arguments: args });
     let text = (result.content ?? []).map((part) => part.text ?? '').join('');
     // Ответ инструмента — отформатированный JSON: в одну строку, чтобы экран терминала читался и склеивался в тесте.
     try {
@@ -219,8 +236,10 @@ async function callMcp(line) {
       // Не JSON (текст ошибки) — как есть.
     }
     process.stdout.write(`mcp: ${tool} ${result.isError === true ? 'error:' : '->'} ${text.replace(/\r?\n/g, '\r\n')}\r\n`);
+    logMcp({ tool, isError: result.isError === true, text });
   } catch (error) {
     process.stdout.write(`mcp: ${tool} failed: ${error.message}\r\n`);
+    logMcp({ tool, isError: true, text: error.message });
   }
 }
 
