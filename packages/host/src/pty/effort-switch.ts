@@ -30,7 +30,10 @@ const ESC = '\x1b';
 /** «Только для этой сессии»: уровень применяется без записи умолчания человека. */
 const SESSION_ONLY = 's';
 /** Подсказка открытого ползунка: «←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel». */
-export const SLIDER_HINT = 's for this session only';
+const HINT_SESSION = 's for this session only';
+const HINT_CANCEL = 'Esc to cancel';
+/** Сколько нижних непустых строк экрана смотрим: подсказка ползунка стоит у нижнего края. */
+const SLIDER_TAIL_LINES = 8;
 /** Сколько ждать ползунка после Enter (спека 5.7, п. 2). */
 const SLIDER_MAX_MS = 3_000;
 /** Сколько ждать подвала с уровнем после `s` (спека 5.7, п. 4). */
@@ -51,6 +54,20 @@ export interface EffortSwitchDeps {
   pty: Pick<PtyManager, 'write' | 'on' | 'get' | 'screenText'>;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
+}
+
+/**
+ * Открыт ли ползунок `/effort`: среди последних восьми непустых строк экрана — подсказка самого ползунка, обе её
+ * части сразу (`s for this session only` и `Esc to cancel`) в одной строке или в двух соседних: на узком терминале
+ * подсказка переносится. Одна фраза в тексте ответа агента (она есть в коде и тестах самого Parley) — не ползунок.
+ */
+export function sliderOnScreen(lines: readonly string[]): boolean {
+  const tail = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(-SLIDER_TAIL_LINES);
+  const hinted = (text: string): boolean => text.includes(HINT_SESSION) && text.includes(HINT_CANCEL);
+  return tail.some((line, i) => hinted(line) || (i > 0 && hinted(`${tail[i - 1]} ${line}`)));
 }
 
 /** Уровень по подвалу: нижняя строка с ним побеждает; нет — `null`. */
@@ -87,7 +104,7 @@ export async function switchEffort(
 
   // Вся видимая область, как у смены режима: у короткого разговора подвал стоит не в последней строке.
   const screen = (): readonly string[] => pty.screenText(ref) ?? [];
-  const sliderOpen = (): boolean => screen().some((line) => line.includes(SLIDER_HINT));
+  const sliderOpen = (): boolean => sliderOnScreen(screen());
   const shown = (): string | null => effortFromFooter(screen());
 
   /** Ждёт `QUIET_MS` без вывода PTY, но не дольше `QUIET_MAX_MS`: печать в разгар перерисовки теряется. */

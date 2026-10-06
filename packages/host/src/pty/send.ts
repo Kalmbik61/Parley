@@ -19,7 +19,7 @@ import {
   codexSubmitKey,
 } from './codex-input.js';
 import { stripEscapes } from './draft.js';
-import { SLIDER_HINT } from './effort-switch.js';
+import { sliderOnScreen } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
 
@@ -68,7 +68,7 @@ export function createSender(deps: {
     // закрывает ползунок сам (Esc), но поздний, открывшийся после паузы, мог остаться на экране; пока идёт смена,
     // ползунок открыт намеренно. В обоих случаях в PTY не уходит ни одного байта.
     if (deps.switching?.(ref) === true) return refused('blocked');
-    if (deps.pty.screenText(ref)?.some((line) => line.includes(SLIDER_HINT)) === true) return refused('blocked');
+    if (sliderOnScreen(deps.pty.screenText(ref) ?? [])) return refused('blocked');
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
     // указатель между проверками и вставкой.

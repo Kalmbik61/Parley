@@ -112,6 +112,13 @@ describe('createSender', () => {
     expect(pty.writes).toEqual([]);
   });
 
+  it('фраза ползунка в ответе агента выше поля ввода — не ползунок: отправка идёт', async () => {
+    // Цитата подсказки стоит выше последних восьми непустых строк экрана.
+    pty.screen = ['● В коде: s for this session only · Esc to cancel', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '> ', '? for shortcuts'];
+    await expect(sender()({ ref, text: 'hi', submit: false })).resolves.toEqual({ inserted: true, submitted: false, reason: null });
+    expect(pty.writes).toEqual(['hi']);
+  });
+
   it('замок смены модели и effort взят — blocked, ни одной записи: текст попал бы в открытый ползунок', async () => {
     switching = true;
     await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({

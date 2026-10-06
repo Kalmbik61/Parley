@@ -247,7 +247,7 @@ const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 
 // Ползунок `/effort` Claude Code (STUB_EFFORT_SLIDER=1; нормалайзер модели и effort 2026-10-06, спека 5.7). `/effort` и
-// Enter открывают его нижней строкой экрана с «s for this session only»; ←/→ (CSI или SS3) двигают уровень с упором в
+// Enter открывают его нижней строкой экрана с настоящей подсказкой «←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel»; ←/→ (CSI или SS3) двигают уровень с упором в
 // low и max, `s` применяет его «только для сессии» и пишет подвал `<знак> <уровень> · /effort` той же нижней строкой,
 // Esc закрывает без смены. Так E2E проверяет смену effort из меню чата (`sessions.setEffort`) по экрану, как у
 // настоящего CLI. Нужен сырой режим tty — вместе с STUB_BRACKETED=1.
@@ -264,7 +264,7 @@ function bottomLine(text) {
 
 function openSlider() {
   slider = 1;
-  bottomLine('Effort: ←/→ to adjust · Enter to save as default · s for this session only · Esc to cancel');
+  bottomLine('←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel');
 }
 
 /** Клавиша открытого ползунка в начале `head`; ответ — сколько знаков она заняла. */

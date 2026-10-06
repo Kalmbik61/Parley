@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionRef } from '@parley/protocol';
 import { fakeEffortScreen, footerLine, SLIDER_LINES } from '../../test/fake-effort-screen.js';
-import { effortFromFooter, switchEffort } from './effort-switch.js';
+import { effortFromFooter, sliderOnScreen, switchEffort } from './effort-switch.js';
 
 const ref: SessionRef = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -37,6 +37,32 @@ describe('effortFromFooter', () => {
     expect(effortFromFooter([...SLIDER_LINES, '> /effort'])).toBeNull();
     expect(effortFromFooter([footerLine('high'), 'мусор', footerLine('low'), ''])).toBe('low');
     expect(effortFromFooter([])).toBeNull();
+  });
+});
+
+describe('sliderOnScreen', () => {
+  const HINT = '←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel';
+
+  it('настоящий экран ползунка — ползунок', () => {
+    expect(sliderOnScreen([...SLIDER_LINES, '', ''])).toBe(true);
+  });
+
+  it('подсказка, перенесённая на две соседние строки узким терминалом, — ползунок', () => {
+    expect(sliderOnScreen(['Effort', '←/→ to adjust · Enter to confirm · s for this', 'session only · Esc to cancel', ''])).toBe(true);
+    expect(sliderOnScreen(['Effort', '←/→ to adjust · Enter to confirm · s for this session only', '· Esc to cancel'])).toBe(true);
+  });
+
+  it('фраза в тексте ответа агента выше поля ввода — не ползунок', () => {
+    // Агент цитирует свой же код: только часть подсказки у нижнего края либо вся, но выше последних восьми строк.
+    const input = ['─────────────────────────────', '> ', '─────────────────────────────', '  ? for shortcuts', ''];
+    expect(sliderOnScreen(['● Нашёл «s for this session only» в send.ts', '  Он нужен ползунку.', ...input])).toBe(false);
+    expect(sliderOnScreen([`● ${HINT}`, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', ...input])).toBe(false);
+  });
+
+  it('только одна из двух частей подсказки — не ползунок', () => {
+    expect(sliderOnScreen(['s for this session only'])).toBe(false);
+    expect(sliderOnScreen(['Esc to cancel'])).toBe(false);
+    expect(sliderOnScreen([])).toBe(false);
   });
 });
 
