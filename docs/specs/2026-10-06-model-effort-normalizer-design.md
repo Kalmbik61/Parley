@@ -134,6 +134,7 @@ export interface ModelOption {
 - **Сбой.** Ненулевой выход, таймаут, вывод не JSON или пустой список дают `null` и предупреждение в лог. Тогда действует встроенный список.
 - **Обновление.** Когда зовут `providers.list`, а кэш старше 6 часов, проба повторяется в фоне. Если каталог изменился, уходит событие `providers.changed`.
 - **Приоритет списков.** `providers.list` отдаёт для `codex` живой каталог, если он есть, иначе встроенный. Оверрайд `models` в `providers.json` важнее обоих.
+- **Общий для окна и MCP.** MCP-сервер агента — отдельный процесс, памяти хоста он не видит. Поэтому хост после удачной пробы атомарно пишет каталог в файл Parley `codex-models.json` в доме (`parleyHome()`), в форме `{ "fetchedAt": "<ISO>", "models": ModelOption[] }`. `loadProviders` в core подставляет его модели в запись `codex`, а после этого применяет `providers.json`. Испорченный или пустой файл молча игнорируется: это кэш Parley, а не настройка человека. Так окно, хост и MCP (`get_map`, `spawn_session`) видят один и тот же список (решение при планировании 2026-10-06).
 
 **Рамка.** `codex debug models` — команда самого CLI, как проба `--version`. Parley не читает ни ключей, ни файлов входа и сам в API не ходит. Исключение рамки не нужно.
 
@@ -178,7 +179,7 @@ export function resolveModelEffort(entry: ProviderEntry, choice: ModelEffortChoi
 ### 5.5 Хранение
 
 - `sessions.create` пишет разрешённые `model` и `effort` в карту, как это делает `spawn_session` (`WorkSession.model?`, `effort?`). «Default» означает, что поля нет.
-- `WorkSession.effort` становится `string`. `parseMap` читает значение, не проходящее `EFFORT_TOKEN`, как «нет выбора» и пишет предупреждение в лог.
+- `WorkSession.effort` становится `string`. `parseMap` читает значение, не проходящее `EFFORT_TOKEN`, как «нет выбора». Делает это молча: логгера у core нет, а при следующей записи карта исправится сама.
 - `sessions.setEffort` и `sessions.setModel` обновляют карту (п. 5.7, 5.8).
 
 ### 5.6 Протокол (`PROTOCOL_VERSION` остаётся 1)
@@ -267,7 +268,7 @@ export function resolveModelEffort(entry: ProviderEntry, choice: ModelEffortChoi
 | Ползунок не открылся или подвал показывает другой уровень (например, из-за `maxEffortLevel` администратора) | Esc, `verified: false` с увиденным уровнем; карта не меняется |
 | `setModel`, агент занят или идут фоновые задачи | `busy`; пункт меню неактивен |
 | `setModel`, resume не поднялся | ошибка уходит окну; в карте новая модель; Resume повторит |
-| В карте испорченный effort | читается как «нет выбора», предупреждение в лог |
+| В карте испорченный effort | читается как «нет выбора», молча; при следующей записи карта исправится |
 | Старое окно с новым хостом | шлёт `low|medium|high`, они валидны |
 | Новое окно со старым хостом | нет `efforts` — прежние три уровня; нет методов — нет меню смены |
 
@@ -315,7 +316,7 @@ export function resolveModelEffort(entry: ProviderEntry, choice: ModelEffortChoi
 | Файл | Что меняется |
 |---|---|
 | `packages/core/src/provider-models.ts` | `EffortOption`, `ModelOption.efforts`, уровни Claude/GLM, запасной список Codex |
-| `packages/core/src/providers.ts` | `EFFORT_TOKEN`, `effortsFor`, `resolveModelEffort`, токен в `substituteArgs`, resume-шаблоны claude/glm, `efforts` в `checkShape`/`applyOverride` |
+| `packages/core/src/providers.ts` | `EFFORT_TOKEN`, `effortsFor`, `resolveModelEffort`, токен в `substituteArgs`, resume-шаблоны claude/glm, `efforts` в `checkShape`/`applyOverride`, модели `codex` из `codex-models.json` в `loadProviders` |
 | `packages/core/src/work/launch.ts` | выбор из карты в ветке resume |
 | `packages/core/src/work/map.ts`, `packages/core/src/work/types.ts` | `effort: string`, проверка в `parseMap` |
 | `packages/core/src/mcp/tools.ts`, `packages/core/src/work/guide.ts` | схема и описание `effort`, `get_map` с `efforts`, resolver |
