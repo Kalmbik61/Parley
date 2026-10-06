@@ -1,9 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   cmakeArgs,
+  cmakeArgsHash,
   isUpToDate,
   VAD_MODEL,
   WHISPER_SOURCE_SHA256,
@@ -52,11 +54,44 @@ describe('fetch-whisper (спека 4.3)', () => {
     expect(x64).not.toContain('-DGGML_METAL=ON');
   });
 
-  it('повторный запуск ничего не собирает, пока версия и sha256 VAD те же', () => {
-    const expected = { version: '1.9.4', vadSha256: VAD_MODEL.sha256 };
-    expect(isUpToDate({ version: '1.9.4', vadSha256: VAD_MODEL.sha256 }, expected)).toBe(true);
-    expect(isUpToDate({ version: '1.9.3', vadSha256: VAD_MODEL.sha256 }, expected)).toBe(false);
-    expect(isUpToDate(null, expected)).toBe(false);
+  describe('повторный запуск', () => {
+    const dirs: string[] = [];
+    afterEach(() => {
+      for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** Каталог `darwin-<arch>` с движком и моделью VAD, как его оставляет сборка. */
+    function builtDir(): string {
+      const dir = mkdtempSync(path.join(tmpdir(), 'fetch-whisper-test-'));
+      dirs.push(dir);
+      mkdirSync(path.join(dir, 'bin'));
+      writeFileSync(path.join(dir, 'bin', 'whisper-cli'), '');
+      writeFileSync(path.join(dir, VAD_MODEL.file), '');
+      return dir;
+    }
+
+    const expected = { version: '1.9.4', vadSha256: VAD_MODEL.sha256, cmakeSha256: cmakeArgsHash('arm64') };
+
+    it('ничего не собирает, пока отметка и файлы на месте', () => {
+      expect(isUpToDate({ ...expected }, expected, builtDir())).toBe(true);
+      expect(isUpToDate({ ...expected, version: '1.9.3' }, expected, builtDir())).toBe(false);
+      expect(isUpToDate(null, expected, builtDir())).toBe(false);
+    });
+
+    it('пересобирает, если нет whisper-cli или файла VAD', () => {
+      const noCli = builtDir();
+      rmSync(path.join(noCli, 'bin', 'whisper-cli'));
+      expect(isUpToDate({ ...expected }, expected, noCli)).toBe(false);
+      const noVad = builtDir();
+      rmSync(path.join(noVad, VAD_MODEL.file));
+      expect(isUpToDate({ ...expected }, expected, noVad)).toBe(false);
+    });
+
+    it('пересобирает, если сменились флаги cmake', () => {
+      expect(isUpToDate({ ...expected, cmakeSha256: 'other' }, expected, builtDir())).toBe(false);
+      expect(cmakeArgsHash('arm64')).not.toBe(cmakeArgsHash('x64'));
+      expect(cmakeArgsHash('arm64')).toMatch(/^[0-9a-f]{64}$/);
+    });
   });
 
   it('build/whisper скрыт от git', () => {

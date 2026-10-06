@@ -6,17 +6,20 @@
 // `LICENSE`. electron-builder (`extraResources`) кладёт каталог в `Contents/Resources/whisper`.
 //
 // Использование: `node scripts/fetch-whisper.mjs [arm64] [x64]` — без аргументов архитектура этой машины. Повторный
-// запуск ничего не собирает, пока запись `build/whisper/darwin-<arch>.json` совпадает с версией и sha256 VAD.
+// запуск ничего не собирает, пока запись `build/whisper/darwin-<arch>.json` совпадает с версией, sha256 VAD и отпечатком флагов cmake, а
+// `bin/whisper-cli` и модель VAD на месте.
 // Нужен cmake: в релизе он есть на раннере macOS, локально — `brew install cmake`.
 
 /* global fetch, AbortSignal */
 
 import { execFile } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
 import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Buffer } from 'node:buffer';
 import { machOArch, parseArchs, sha256 } from './fetch-node.mjs';
 
@@ -50,8 +53,21 @@ export function cmakeArgs(arch, sourceDir, buildDir) {
       [...common, '-DCMAKE_OSX_ARCHITECTURES=x86_64', '-DGGML_METAL=OFF', '-DGGML_AVX=ON', '-DGGML_AVX2=ON', '-DGGML_FMA=ON', '-DGGML_F16C=ON'];
 }
 
-export function isUpToDate(stamp, expected) {
-  return stamp !== null && stamp.version === expected.version && stamp.vadSha256 === expected.vadSha256;
+/** Отпечаток флагов cmake архитектуры: смена флагов меняет его и пересобирает движок. */
+export function cmakeArgsHash(arch) {
+  return sha256(cmakeArgs(arch, '', '').join(' '));
+}
+
+/** Отметка совпадает с ожидаемой, и результат сборки на месте: без `whisper-cli` или модели VAD — пересборка. */
+export function isUpToDate(stamp, expected, outDir) {
+  return (
+    stamp !== null &&
+    stamp.version === expected.version &&
+    stamp.vadSha256 === expected.vadSha256 &&
+    stamp.cmakeSha256 === expected.cmakeSha256 &&
+    existsSync(path.join(outDir, 'bin', 'whisper-cli')) &&
+    existsSync(path.join(outDir, VAD_MODEL.file))
+  );
 }
 
 async function download(url) {
@@ -63,6 +79,7 @@ async function download(url) {
     } catch (error) {
       if (attempt >= 3) throw error;
       console.warn(`fetch-whisper: ${String(error)} — retry ${attempt + 1} of 3`);
+      await delay(2000 * attempt);
     }
   }
 }
@@ -78,8 +95,8 @@ async function readStamp(file) {
 async function buildArch(arch, outRoot) {
   const outDir = path.join(outRoot, `darwin-${arch}`);
   const stampFile = path.join(outRoot, `darwin-${arch}.json`);
-  const expected = { version: WHISPER_VERSION, vadSha256: VAD_MODEL.sha256 };
-  if (isUpToDate(await readStamp(stampFile), expected)) {
+  const expected = { version: WHISPER_VERSION, vadSha256: VAD_MODEL.sha256, cmakeSha256: cmakeArgsHash(arch) };
+  if (isUpToDate(await readStamp(stampFile), expected, outDir)) {
     console.log(`fetch-whisper: darwin-${arch} is up to date`);
     return;
   }
@@ -117,7 +134,8 @@ export async function main(args = process.argv.slice(2), outRoot = DEFAULT_OUT_R
   for (const arch of parseArchs(args)) await buildArch(arch, outRoot);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// `realpath`: `import.meta.url` — настоящий путь файла, а `argv[1]` мог прийти через символическую ссылку.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((error) => {
     console.error(`fetch-whisper: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
