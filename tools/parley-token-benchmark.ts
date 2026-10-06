@@ -1041,6 +1041,24 @@ function resultText(content: unknown): string {
   return content.map((block) => (isObject(block) && typeof block['text'] === 'string' ? block['text'] : '')).join('');
 }
 
+/** Все строки внутри значения: формат вложений не документирован, текст вставки может лежать не только в `content`. */
+const stringsIn = (value: unknown): string[] =>
+  typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn) : isObject(value) ? Object.values(value).flatMap(stringsIn) : [];
+
+const JEV_NAME = /Relevant to the current request: (\S+?)\.(?:\s|$)/;
+
+/**
+ * Выбор мода jev из записи транскрипта в настоящем виде: `attachment` типа `hook_additional_context` (ответ хука
+ * UserPromptSubmit) с фразой «Relevant to the current request: <имя навыка>.»; имя — до первой точки, может
+ * содержать двоеточие. `null` — это не вставка jev. Запись подагента (`isSidechain`), tool_result, сообщение
+ * ассистента и вложение другого типа вставкой не считаются, даже если в них та же фраза.
+ */
+function jevPickOfAttachment(record: RawRecord): string | null {
+  const attachment = asRecord(record['attachment']);
+  if (attachment?.['type'] !== 'hook_additional_context' || record['isSidechain'] === true) return null;
+  return JEV_NAME.exec(stringsIn(attachment).join('\n'))?.[1] ?? null;
+}
+
 /**
  * Разбор транскриптов Claude (главный файл и файлы подагентов): токены берёт индекс ядра с ledger, остальное —
  * одним проходом по записям. Что в логе не видно (приходит от Parley, а не от CLI), остаётся `null`.
@@ -1071,6 +1089,7 @@ export async function collectClaudeSession(file: string, knownSkills: readonly s
         sawListing = true;
         for (const name of Array.isArray(attachment['names']) ? attachment['names'] : []) if (typeof name === 'string') listed.add(name);
       }
+      if (jevPickOfAttachment(record) !== null) jevFired = true;
       const message = asRecord(record['message']);
       const content = message?.['content'];
       if (typeof content === 'string') {
@@ -1232,19 +1251,26 @@ export interface PromptCandidate {
 
 const SECRET = /sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}|Bearer\s+[A-Za-z0-9._-]{20,}|\b[0-9a-f]{40,}\b/g;
 const JEV_BLOCK = /<skill_relevance>([\s\S]*?)<\/skill_relevance>/;
-const JEV_NAME = /Relevant to the current request: (\S+?)\.(?:\s|$)/;
 export const PROMPT_MAX_CHARS = 1500;
 
 /**
- * Настоящие реплики человека из транскрипта Claude и выбор мода jev по каждой. Вставка jev (`<skill_relevance>`)
- * лежит в записи реплики или в служебных записях до ответа ассистента; выбор — имя после «Relevant to the
- * current request». Вставка из текста вырезается: размечающий её не видит.
+ * Настоящие реплики человека из транскрипта Claude и выбор мода jev по каждой. В транскриптах Claude Code вставка
+ * jev — отдельная запись `attachment` типа `hook_additional_context` (ответ хука UserPromptSubmit, обычно в блоке
+ * `<skill_relevance>`) после реплики и до ответа ассистента; выбор — имя после «Relevant to the current request».
+ * Вставка относится к последней реплике человека перед ней; тот же текст в tool_result, в сообщении ассистента или в
+ * другом вложении вставкой не считается. Прежний вид — блок `<skill_relevance>` в тексте реплики или служебной записи —
+ * тоже узнаётся; из текста реплики блок вырезается: размечающий его не видит.
  */
 export async function extractPrompts(file: string): Promise<PromptCandidate[]> {
   const found: PromptCandidate[] = [];
   let current: PromptCandidate | null = null;
   const source = sha256(file).slice(0, 12);
   await forEachJsonlRecord(file, (record) => {
+    if (asRecord(record['attachment']) !== null) {
+      const pick = jevPickOfAttachment(record);
+      if (current !== null && pick !== null) current.jevPick = pick;
+      return;
+    }
     const message = asRecord(record['message']);
     const role = message?.['role'];
     const content = message?.['content'];

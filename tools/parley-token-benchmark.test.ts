@@ -337,6 +337,28 @@ describe('сбор из логов провайдеров', () => {
     expect(collected.bytes['bootstrapBytes']).toBeNull();
   });
 
+  it('Claude: jevFired даёт вставка в настоящем виде — вложение hook_additional_context; та же фраза в другом месте и запись подагента — нет', async () => {
+    const dir = path.join(tmp, 'projects', '-bench-jev');
+    await mkdir(dir, { recursive: true });
+    const phrase = 'Relevant to the current request: bench-changelog. Ignore this if it does not fit.';
+    const hook = (content: unknown, extra: Record<string, unknown> = {}) =>
+      line({ type: 'attachment', attachment: { type: 'hook_additional_context', content, hookName: 'prompt.submit', hookEvent: 'UserPromptSubmit', toolUseID: 'h1' }, ...extra });
+    const ask = line({ type: 'user', message: { role: 'user', content: 'add changelog' } });
+    const reply = (text: string) => line({ type: 'assistant', message: { id: 'msg_1', role: 'assistant', model: 'claude-x', usage: usage(1, 1, 0, 0), content: [{ type: 'text', text }] } });
+    const fired = async (name: string, body: string): Promise<boolean> => {
+      await writeFile(path.join(dir, `${name}.jsonl`), body);
+      return (await collectClaudeSession(path.join(dir, `${name}.jsonl`), [])).jevFired;
+    };
+
+    expect(await fired('block', ask + hook([`<skill_relevance>\n${phrase}\n</skill_relevance>`]) + reply('ok'))).toBe(true);
+    expect(await fired('plain', ask + hook(phrase) + reply('ok'))).toBe(true);
+    // Те же слова в результате инструмента, ответе ассистента, другом вложении, чужом ответе хука и в записи подагента.
+    const toolResult = line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: phrase }] } });
+    const queued = line({ type: 'attachment', attachment: { type: 'queued_command', prompt: phrase } });
+    expect(await fired('elsewhere', ask + toolResult + queued + hook(['<system-reminder>hook без выбора навыка</system-reminder>']) + reply(phrase))).toBe(false);
+    expect(await fired('sidechain', ask + hook([phrase], { isSidechain: true }) + reply('ok'))).toBe(false);
+  });
+
   it('запись прогона: условия из begin, принятие и счётчики оператора; невидимое остаётся неизвестным', async () => {
     const file = await claudeTranscript();
     const { file: scenarios, budget } = await loadFixtures();
@@ -404,6 +426,79 @@ describe('лист разметки для P32', () => {
   const user = (text: string, extra: Record<string, unknown> = {}) => ({ type: 'user', message: { role: 'user', content: text }, ...extra });
   const assistant = { type: 'assistant', message: { role: 'assistant', id: 'm', content: [{ type: 'text', text: 'ok' }] } };
   const jev = (name: string) => `<skill_relevance>\nRelevant to the current request: ${name}. Ignore this if it does not fit.\n</skill_relevance>`;
+  // Настоящий вид вставки в транскриптах Claude Code: вложение хука UserPromptSubmit между репликой и ответом ассистента.
+  const hookContext = (content: unknown, extra: Record<string, unknown> = {}) => ({
+    type: 'attachment',
+    attachment: { type: 'hook_additional_context', content, hookName: 'prompt.submit', hookEvent: 'UserPromptSubmit', toolUseID: 'hook-1' },
+    ...extra,
+  });
+  const tokensReminder = { type: 'attachment', attachment: { type: 'total_tokens_reminder', content: 'служебное' } };
+
+  it('находит выбор jev во вложении hook_additional_context после реплики: массив строк, строка, без блока, имя с двоеточием', async () => {
+    const file = path.join(tmp, 'root', '-p', 's1.jsonl');
+    await writeProject('-p', 's1', [
+      user('составь план миграции базы'),
+      tokensReminder,
+      hookContext([jev('superpowers:writing-plans')]),
+      assistant,
+      user('сделай pdf из отчёта'),
+      hookContext(jev('anthropic-skills:pdf')),
+      assistant,
+      user('открой дизайн в фигме'),
+      hookContext(['Relevant to the current request: figma-use. Ignore this if it does not fit.']),
+      assistant,
+      user('просто вопрос без вставки'),
+      tokensReminder,
+      assistant,
+    ]);
+    const prompts = await extractPrompts(file);
+    expect(prompts.map((p) => [p.text, p.jevPick])).toEqual([
+      ['составь план миграции базы', 'superpowers:writing-plans'],
+      ['сделай pdf из отчёта', 'anthropic-skills:pdf'],
+      ['открой дизайн в фигме', 'figma-use'],
+      ['просто вопрос без вставки', null],
+    ]);
+  });
+
+  it('тот же текст в tool_result, ответе ассистента, другом вложении, после ответа ассистента и у подагента выбором jev не считается', async () => {
+    const file = path.join(tmp, 'root', '-p', 's2.jsonl');
+    const quoted = 'Relevant to the current request: superpowers:writing-plans. Ignore this if it does not fit.';
+    await writeProject('-p', 's2', [
+      user('первый запрос человека'),
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: quoted }] } },
+      { type: 'assistant', message: { role: 'assistant', id: 'm2', content: [{ type: 'text', text: quoted }] } },
+      // Ответ ассистента уже был: вставка принадлежит следующей реплике (например, поставленной в очередь), а не первой.
+      hookContext([jev('late-skill')]),
+      user('второй запрос человека'),
+      { type: 'attachment', attachment: { type: 'queued_command', prompt: quoted } },
+      hookContext([jev('sidechain-skill')], { isSidechain: true }),
+      assistant,
+    ]);
+    const prompts = await extractPrompts(file);
+    expect(prompts.map((p) => [p.text, p.jevPick])).toEqual([
+      ['первый запрос человека', null],
+      ['второй запрос человека', null],
+    ]);
+  });
+
+  it('лист из транскриптов в настоящем виде: есть запросы и с выбором jev, и без него', async () => {
+    for (let s = 0; s < 4; s += 1) {
+      await writeProject(`-p${s}`, `s${s}`, [
+        user(`запрос с выбором ${s} достаточно длинный`),
+        tokensReminder,
+        hookContext([jev(`skill-${s % 2}`)]),
+        assistant,
+        user(`запрос без выбора ${s} достаточно длинный`),
+        tokensReminder,
+        assistant,
+      ]);
+    }
+    const sheet = await buildLabelSheet(path.join(tmp, 'root'), 6, new Date('2026-10-06T00:00:00Z'));
+    expect(sheet.pools).toEqual({ sessions: 4, withJevPick: 4, withoutJevPick: 4 });
+    expect(sheet.items.filter((item) => item.jevPick !== null)).toHaveLength(3);
+    expect(sheet.items.filter((item) => item.jevPick === null)).toHaveLength(3);
+    expect(new Set(sheet.items.map((item) => item.jevPick).filter((pick) => pick !== null))).toEqual(new Set(['skill-0', 'skill-1']));
+  });
 
   it('находит реплики человека и выбор jev (в той же записи и в служебной после неё), вырезает вставку и секреты', async () => {
     const file = path.join(tmp, 'root', '-p', 's1.jsonl');
