@@ -15,7 +15,7 @@ export function wireDictation(bridge: ParleyBridge): () => void {
       if (action === undefined) toast(text);
       else toast(text, { action: { label: action.label, onClick: () => action.onClick() } });
     },
-    openVoiceSettings: () => useUiStore.getState().openSettingsDialog(),
+    openVoiceSettings: () => useUiStore.getState().openSettingsDialog('voice'),
     copy: (text) => navigator.clipboard.writeText(text),
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (handle) => window.clearTimeout(handle as number),
