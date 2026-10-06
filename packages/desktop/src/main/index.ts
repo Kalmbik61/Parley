@@ -49,14 +49,14 @@ import { createRootsRegistry, worktreeRootPolicy, type RootsSource } from './roo
 import { captureShellEnv } from './shell-env.js';
 import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
+import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
+import { userDataDir } from './user-data.js';
 import { isFileSync, resolveEngine } from './voice/engine.js';
 import { registerVoiceIpc } from './voice/ipc.js';
 import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
 import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
 import { removeStaleRecordings } from './voice/transcribe.js';
-import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
-import { userDataDir } from './user-data.js';
 import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));

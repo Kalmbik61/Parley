@@ -36,10 +36,10 @@ import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '.
 import { Input } from '../ui/input.js';
 import { Switch } from '../ui/switch.js';
 import { Textarea } from '../ui/textarea.js';
+import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 import { MicButton } from '../voice/MicButton.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { isVoiceShortcut, useTextareaDictation } from '../voice/targets.js';
-import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 
 export interface NewWorkDraft {
   projectPath: string | null;

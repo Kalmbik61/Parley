@@ -19,6 +19,8 @@ import type {
   WriteResult,
 } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
+import type { NotesFile } from '../shared/notes-types.js';
+import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type {
   DownloadProgress,
   DownloadResult,
@@ -27,8 +29,6 @@ import type {
   TranscribeResult,
   VoiceModelId,
 } from '../shared/voice-types.js';
-import type { NotesFile } from '../shared/notes-types.js';
-import type { Appearance, UiFile } from '../shared/ui-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
@@ -41,12 +41,9 @@ const confirmCloseListeners = new Set<() => void>();
 const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
 const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
-const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
-ipcRenderer.on('voice:progress', (_event, progress: DownloadProgress) => {
-  for (const listener of voiceProgressListeners) listener(progress);
-});
-const windowFocusListeners =new Set<(focused: boolean) => void>();
+const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
+const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
 let heldFocusTarget: FocusTarget | null = null;
 /**
@@ -125,6 +122,10 @@ ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
 
 ipcRenderer.on('app:update-available', (_event, info: UpdateInfo) => {
   for (const listener of updateListeners) listener(info);
+});
+
+ipcRenderer.on('voice:progress', (_event, progress: DownloadProgress) => {
+  for (const listener of voiceProgressListeners) listener(progress);
 });
 
 /**
