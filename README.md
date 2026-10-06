@@ -913,7 +913,9 @@ The path comes from the agent's environment: the shell reads `PARLEY_WORK_DIR` a
 `PARLEY_SESSION_ID`.
 
 The log is read incrementally, from a remembered offset, and is folded into `working` /
-`blocked` / end of turn by a pure function of core. `--settings` is merged with your settings,
+`blocked` / end of turn by a pure function of core. Only `UserPromptSubmit` starts a turn:
+`SessionStart` does not, so a session restarted by Resume or a model switch is idle until its
+first prompt. `--settings` is merged with your settings,
 leaves other people's hooks alone, and nothing is written to `~/.claude`. If the binary did
 not accept this flag or the directory is not writable, a fallback keeps the state: the same
 history jsonl watcher as before. A new assistant entry means "working", and silence longer

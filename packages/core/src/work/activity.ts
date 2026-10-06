@@ -245,7 +245,14 @@ export function activityOf({
         start();
         break;
       case 'SessionStart':
-        start();
+        // Новый процесс стоит у приглашения: хода, пока человек (или бриф) не прислал промпт, нет, и
+        // `Stop` после перезапуска не придёт — `working` от самого старта крутился бы до `idle_prompt`.
+        // Ход начинает только `UserPromptSubmit`. Если прежний процесс умер посреди хода без `Stop`,
+        // этот ход окончен; иначе фаза остаётся как была — перезапуск (смена модели, Resume) нового
+        // `unseen` не создаёт. Автосжатие (`compact`) идёт внутри хода и его не трогает.
+        if (event.source !== 'compact' && (phase === 'working' || phase === 'blocked')) {
+          end(event.at);
+        }
         break;
       case TERMINAL_WORKING_EVENT:
         // Кадр спиннера Codex: ход идёт, но это не его начало — ожидание `wait_for` остаётся.

@@ -768,7 +768,7 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(argv.slice(-2)).toEqual(['--resume', providerSessionId]);
     await waitFor(() => stream().includes('STUB READY'), 5000);
 
-    // Хода ещё не было (SessionStart — работа): указателя нет.
+    // Хода ещё не было (SessionStart ход не открывает и не кончает): указателя нет.
     await settle(400);
     expect(stream()).not.toContain(pointer(1));
 

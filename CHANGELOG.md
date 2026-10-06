@@ -38,6 +38,10 @@ All notable changes to Parley are documented in this file.
 - **Launch arguments from `providers.json`.** A provider whose `args` come from `providers.json`
   says so in its card and explains why the model or effort choice is off.
 
+### Fixed
+
+- After Resume or a model switch, a session shows idle right away instead of working until Claude Code's idle notice.
+
 ## 0.5.2
 
 ### Added
