@@ -116,7 +116,7 @@ it('new project state keeps receipts ignored while the explicit native project s
  const env={PATH:process.env.PATH,HOME:context.homeDir,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'};
  execFileSync('git',['-C',context.projectPath,'init','--quiet'],{env});const prepared=await target();expect((await shareSkill(prepared,()=>true)).outcome).toBe('ok');
  const status=execFileSync('git',['-C',context.projectPath,'status','--porcelain','--untracked-files=all'],{env,encoding:'utf8'});expect(status).toContain('.agents/skills/folder-name');expect(status).not.toContain('skill-share-receipts');expect(status).not.toContain('.parley-skill-share-');
- execFileSync('git',['-C',context.projectPath,'check-ignore','--quiet',prepared.receipt],{env});expect(await readFile(path.join(context.projectPath,'.parley/.gitignore'),'utf8')).toContain('!memory.md');
+ execFileSync('git',['-C',context.projectPath,'check-ignore','--quiet',prepared.receipt],{env});expect(await readFile(path.join(context.projectPath,'.parley/.gitignore'),'utf8')).toBe('*\n');
 });
 it.each(['custom','missing'])('existing state ignore policy %s is preserved by explicit sharing',async kind=>{
  const state=path.join(context.projectPath,'.parley');await mkdir(state);if(kind==='custom')await writeFile(path.join(state,'.gitignore'),'Human custom rules\n');

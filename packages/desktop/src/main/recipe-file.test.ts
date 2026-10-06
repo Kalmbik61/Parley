@@ -6,7 +6,7 @@
 import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseProjectRecipe, type RecipeAgent } from '@parley/core';
+import { ensureStateDir, parseProjectRecipe, type RecipeAgent } from '@parley/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RECIPE_FILE_STEM, recipeFileStem, type RecipeSaveRequest } from '../shared/recipe-save.js';
 import { parseRecipeSaveRequest, recipeFileText, writeProjectRecipe } from './recipe-file.js';
@@ -125,5 +125,30 @@ describe('writeProjectRecipe', () => {
     await expect(writeProjectRecipe(request())).rejects.toThrow();
     await expect(writeProjectRecipe(request({ replace: true }))).rejects.toThrow();
     expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+});
+
+describe('Save as recipe: .gitignore каталога состояния', () => {
+  // Белый список shared-файлов (SHARED_STATE_IGNORE в core, наружу не экспортируется).
+  const SHARED_STATE_IGNORE = '*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n';
+  const ignoreFile = (): string => path.join(project, '.parley', '.gitignore');
+
+  it('рецепт в новом проекте переключает .gitignore со строки * на белый список', async () => {
+    await ensureStateDir(project);
+    expect(await readFile(ignoreFile(), 'utf8')).toBe('*\n');
+    expect((await writeProjectRecipe(request())).status).toBe('saved');
+    expect(await readFile(ignoreFile(), 'utf8')).toBe(SHARED_STATE_IGNORE);
+  });
+
+  it('рецепт в проекте без каталога состояния: каталог заведён, .gitignore уже белый список', async () => {
+    expect((await writeProjectRecipe(request())).status).toBe('saved');
+    expect(await readFile(ignoreFile(), 'utf8')).toBe(SHARED_STATE_IGNORE);
+  });
+
+  it('написанный человеком .gitignore не переписывается', async () => {
+    const dir = await ensureStateDir(project);
+    await writeFile(path.join(dir, '.gitignore'), '*\n!mine\n');
+    expect((await writeProjectRecipe(request())).status).toBe('saved');
+    expect(await readFile(ignoreFile(), 'utf8')).toBe('*\n!mine\n');
   });
 });

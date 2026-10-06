@@ -1051,7 +1051,7 @@ writes the map; agents read it and report through the MCP server.
   artifacts/          plans, reports and the rest that agents put there
 
 <project>/.parley/    the project-level files next to works/ (the "shared" ones go to git)
-  .gitignore          a whitelist: only the shared files below are let through
+  .gitignore          `*` at first; a whitelist from the first shared write on
   backlog.md          shared: the project backlog
   plans/              shared: snapshots of accepted plans
   decisions/          shared: one file per accepted decision or completion
@@ -1075,13 +1075,14 @@ writes the map; agents read it and report through the MCP server.
 `PARLEY_HOME` moves `~/.parley` to another place — `host/`, `desktop/` and the Electron
 window's userData move with it; this is also how tests stay away from your real directory. The
 project's `.parley/` directory hides itself from git except for the shared files: when Parley
-creates it, it gets a `.gitignore` that is a whitelist (`*`, then `!backlog.md`, `!plans/`,
+creates it, its `.gitignore` is just `*`, so nothing shows up in `git status`. The first time
+Parley writes a shared file (backlog, plan snapshot, memory, decision, shared history or recipe)
+it rewrites that `.gitignore` into a whitelist (`*`, then `!backlog.md`, `!plans/`,
 `!decisions/`, `!memory.md`, `!history-shared/`, `!recipes/` and the like), so maps, logs and
 receipts stay out of `git status` and commits, while the backlog, plan snapshots, decisions,
-memory, shared histories and recipes can be committed. In a project that already has a
-`.parley/.gitignore` that is exactly the former `*`, Parley rewrites it the first time it
-writes a shared file; a file you edited is never touched. If you want everything out of git,
-change that `.gitignore` yourself; it will not come back. See "Plans, modes and the backlog".
+memory, shared histories and recipes can be committed. A file you edited is never touched. If
+you want everything out of git, change that `.gitignore` yourself; it will not come back. See
+"Plans, modes and the backlog".
 
 In the window a session is created with ⌘T ("New session or room") in the active workspace,
 with the new workspace dialog (⌘N or "New workspace"), and with the menu items of a card
@@ -1439,12 +1440,12 @@ written at once or waits for you in "Suggested" depends on the project rule (`as
 Backlog tab reads "Ask before adding", "Add bugs and debt", "Add everything"), kept locally in
 `.parley/preferences.json`.
 
-**What is shared through git.** `.parley/` is no longer all hidden: a new project's
-`.parley/.gitignore` is a whitelist that lets `backlog.md`, `plans/` (snapshots of accepted
-plans), `memory.md`, `decisions/`, `history-shared/` and `recipes/` into git and keeps
-everything else (maps, logs, receipts, suggestions, `history/`) local. An existing
-`.parley/.gitignore` that is exactly Parley's former `*` is rewritten the first time a shared
-file is written; one you edited is left alone and the window says so once
+**What is shared through git.** `.parley/` is no longer all hidden: once the first shared file
+is written, a project's `.parley/.gitignore` is a whitelist that lets `backlog.md`, `plans/`
+(snapshots of accepted plans), `memory.md`, `decisions/`, `history-shared/` and `recipes/` into
+git and keeps everything else (maps, logs, receipts, suggestions, `history/`) local. A new
+`.parley/.gitignore` starts as `*` and is rewritten the first time a shared file is written (an
+older one that is exactly `*` too); one you edited is left alone and the window says so once
 (`parley-gitignore-custom`). If the repository's own `.gitignore` hides `.parley/`, nothing
 inside is shared and the window says that once (`parley-dir-ignored`).
 

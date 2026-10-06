@@ -511,7 +511,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     expect((await stat(currentDir(project))).ino).toBe(before.ino);
     expect(await readFile(path.join(currentDir(project), 'works', workId, 'map.json'), 'utf8')).toContain('Работа shop');
     expect(await readFile(path.join(currentDir(project), 'works', workId, 'artifacts', 'note.txt'), 'utf8')).toBe('заметка\n');
-    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n');
     expect(await record(home)).toEqual({
       schemaVersion: 1,
       migrated: [{ what: 'project', from: legacyDir(project), to: currentDir(project), at: AT.toISOString() }],
@@ -731,9 +731,9 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await commitEverything(project, ['.gitignore', '.harnas/\n']);
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
-    expect((await git(project, ['status', '--porcelain', '-uall'])).stdout).toBe('?? .parley/.gitignore\n');
+    expect((await git(project, ['status', '--porcelain', '-uall'])).stdout).toBe('');
     await git(project, ['add', '-A']);
-    expect((await git(project, ['diff', '--cached', '--name-only'])).stdout).toBe('.parley/.gitignore\n');
+    expect((await git(project, ['diff', '--cached', '--name-only'])).stdout).toBe('');
   });
 
   it('пути артефактов внутри прежнего каталога переписываются на .parley; прочие пути, проза и порядок работ остаются', async () => {
@@ -875,7 +875,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
     expect(await exists(path.join(currentDir(project), 'works', workId))).toBe(false);
-    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(currentDir(project), '.gitignore'), 'utf8')).toBe('*\n');
   });
 
   it('свой .gitignore в прежнем каталоге остаётся как есть', async () => {

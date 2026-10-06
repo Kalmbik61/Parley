@@ -9,7 +9,7 @@ import { writeBrief } from './brief.js';
 import { addSession } from './map.js';
 import { writeMcpConfig } from './mcp-config.js';
 import { writeWorkSettings } from './settings-file.js';
-import { ensureStateDir, isDirectorySync, stateDir, writeSelfIgnore } from './state-dir.js';
+import { ensureStateDir, isDirectorySync, SHARED_STATE_IGNORE, stateDir, writeSelfIgnore } from './state-dir.js';
 import { addBacklogItem } from './backlog.js';
 import { prepareSharedIgnore, sharedProjectPaths, withSharedProjectLock } from './store.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
@@ -24,6 +24,27 @@ describe('stage 6 shared ignore policy', () => {
     await ensureStateDir(project); expect(await readFile(file, 'utf8')).toBe('*\n');
     await addBacklogItem(project, { title: 'Shared' });
     expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+  });
+  it('новый каталог получает *, первая запись backlog переключает его на белый список; следующая запись файл не трогает', async () => {
+    const file = path.join(project, '.parley', '.gitignore');
+    await ensureStateDir(project);
+    expect(await readFile(file, 'utf8')).toBe('*\n');
+    await addBacklogItem(project, { title: 'First' });
+    expect(await readFile(file, 'utf8')).toBe(SHARED_STATE_IGNORE);
+    await addBacklogItem(project, { title: 'Second' });
+    expect(await readFile(file, 'utf8')).toBe(SHARED_STATE_IGNORE);
+  });
+  it('новый каталог до shared-записи не показывается в git; после неё виден только белый список', async () => {
+    await git(project, 'init', '-b', 'main');
+    await ensureStateDir(project);
+    expect((await git(project, 'status', '--porcelain', '-uall')).stdout).toBe('');
+    await addBacklogItem(project, { title: 'Shared' });
+    expect((await git(project, 'status', '--porcelain', '-uall')).stdout).toBe('?? .parley/.gitignore\n?? .parley/backlog.md\n');
+  });
+  it('написанный человеком .gitignore нового каталога не переписывается первой shared-записью', async () => {
+    const dir = await ensureStateDir(project); const file = path.join(dir, '.gitignore');
+    await writeFile(file, '*\n!mine\n'); await addBacklogItem(project, { title: 'Shared' });
+    expect(await readFile(file, 'utf8')).toBe('*\n!mine\n');
   });
   it.each(['*\r\n', '\uFEFF*\n', '*\n\n', '*\n!mine\n', ''])('preserves custom signature %j', async text => {
     const dir = path.join(project, '.parley'); await mkdir(dir); const file = path.join(dir, '.gitignore');
@@ -145,11 +166,11 @@ describe('workPaths идёт за каталогом состояния', () => 
 });
 
 describe('ensureStateDir — каталог состояния сам прячет себя от git (R5)', () => {
-  it('новый .parley получает .gitignore с shared whitelist', async () => {
+  it('новый .parley получает .gitignore из одной строки *', async () => {
     const dir = await ensureStateDir(project);
 
     expect(dir).toBe(path.join(project, '.parley'));
-    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n');
   });
 
   it('повторный вызов .gitignore не переписывает', async () => {
@@ -182,13 +203,13 @@ describe('ensureStateDir — каталог состояния сам пряче
 
     await ensureStateDir(fresh);
 
-    expect(await readFile(path.join(fresh, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(fresh, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
   });
 
-  it('параллельные вызовы: один .gitignore с shared whitelist', async () => {
+  it('параллельные вызовы: один .gitignore из одной строки *', async () => {
     await Promise.all(Array.from({ length: 8 }, () => ensureStateDir(project)));
 
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
   });
 
   it('`.parley` — файл: вызов отказывает, а не молча пишет мимо', async () => {
@@ -197,7 +218,7 @@ describe('ensureStateDir — каталог состояния сам пряче
     await expect(ensureStateDir(project)).rejects.toThrow();
   });
 
-  it('git видит только shared whitelist; runtime не попадает в add -A', async () => {
+  it('git не видит новый каталог совсем: и .gitignore, и runtime спрятаны строкой *', async () => {
     await run('git', ['init', '-b', 'main', project]);
     await git(project, 'config', 'user.email', 'тест@parley');
     await git(project, 'config', 'user.name', 'тест');
@@ -207,19 +228,19 @@ describe('ensureStateDir — каталог состояния сам пряче
 
     await createWork(project, { title: 'Авторизация' });
 
-    expect((await git(project, 'status', '--porcelain', '-uall')).stdout).toBe('?? .parley/.gitignore\n');
+    expect((await git(project, 'status', '--porcelain', '-uall')).stdout).toBe('');
     await git(project, 'add', '-A');
-    expect((await git(project, 'status', '--porcelain')).stdout).toBe('A  .parley/.gitignore\n');
+    expect((await git(project, 'status', '--porcelain')).stdout).toBe('');
   });
 });
 
-describe('writeSelfIgnore — .gitignore с shared whitelist в уже существующем каталоге (перенос .harnas → .parley, R6)', () => {
-  it('кладёт .gitignore с shared whitelist; лежащий не перезаписывает', async () => {
+describe('writeSelfIgnore — .gitignore из строки * в уже существующем каталоге (перенос .harnas → .parley, R6)', () => {
+  it('кладёт .gitignore из строки *; лежащий не перезаписывает', async () => {
     const dir = path.join(project, '.parley');
     await mkdir(dir);
 
     await writeSelfIgnore(dir);
-    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(dir, '.gitignore'), 'utf8')).toBe('*\n');
 
     await writeFile(path.join(dir, '.gitignore'), '*\n!keep\n', 'utf8');
     await writeSelfIgnore(dir);
@@ -236,7 +257,7 @@ describe('работа в проекте: новый и прежний ката�
     await createWork(project, { title: 'Первая' });
 
     expect(await exists(path.join(project, '.parley', 'works', 'w-0001', 'map.json'))).toBe(true);
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
   });
 
@@ -280,7 +301,7 @@ describe('работа в проекте: новый и прежний ката�
 
 describe('любая запись в каталог состояния, которого нет, заводит его вместе с .gitignore (R5)', () => {
   const selfIgnored = async (): Promise<void> => {
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
   };
 

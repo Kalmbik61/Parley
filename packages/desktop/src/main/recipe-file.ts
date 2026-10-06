@@ -3,12 +3,13 @@
  * тем же каталогом, из которого читает `recipes.list` (`listRecipeCatalog`), поэтому сохранённый рецепт сразу виден в
  * диалоге. Основа имени файла проверяется строго (`RECIPE_FILE_STEM`), содержимое — тем же разборщиком, что читает
  * рецепты (`parseProjectRecipe`): файл, который каталог счёл бы битым, не пишется. Существующий файл без явного
- * `replace` не трогается.
+ * `replace` не трогается. Рецепты — shared-файлы: запись идёт под общим замком проекта и переключает `.gitignore`
+ * нового каталога состояния со строки `*` на белый список (`prepareSharedIgnore`), как первая запись backlog.
  */
 
 import { lstat, mkdir, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ensureStateDir, parseProjectRecipe, type RecipeAgent } from '@parley/core';
+import { ensureStateDir, parseProjectRecipe, prepareSharedIgnore, sharedProjectPaths, withSharedProjectLock, type RecipeAgent, type SharedProjectPaths } from '@parley/core';
 import { RECIPE_FILE_STEM, type RecipeSaveRequest } from '../shared/recipe-save.js';
 import { HostError } from './host-connection.js';
 
@@ -75,6 +76,20 @@ export async function writeProjectRecipe(input: RecipeSaveRequest): Promise<{ st
   if (parsed.status !== 'valid' || parsed.recipe.playbook !== input.playbook || parsed.recipe.name !== input.name) throw bad();
   const project = await realpath(input.projectPath);
   const state = await ensureStateDir(project);
+  // Общий контекст проекта недоступен — пишем как раньше, без переключения `.gitignore`. Так же, если общий каталог
+  // состояния — не тот, куда пишем (связанный worktree): чужой `.gitignore` не трогаем.
+  let shared: SharedProjectPaths | null = null;
+  try { shared = await sharedProjectPaths(project); } catch { shared = null; }
+  if (shared === null || shared.dir !== state) return saveRecipe(input, state, text, name, parsed.recipe.id);
+  const paths = shared;
+  return withSharedProjectLock(paths, async () => {
+    await prepareSharedIgnore(paths);
+    return saveRecipe(input, state, text, name, parsed.recipe.id);
+  });
+}
+
+/** Запись файла рецепта в `<state>/recipes` со всеми проверками каталога и файла. */
+async function saveRecipe(input: RecipeSaveRequest, state: string, text: string, name: string, id: string): Promise<{ status: 'saved'; file: string; id: string } | { status: 'exists' }> {
   const folder = path.join(state, 'recipes');
   await mkdir(folder, { recursive: true });
   const folderInfo = await lstat(folder);
@@ -96,5 +111,5 @@ export async function writeProjectRecipe(input: RecipeSaveRequest): Promise<{ st
     try { await writeFile(target, text, { encoding: 'utf8', flag: 'wx', mode: 0o644 }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { status: 'exists' }; throw error; }
   }
-  return { status: 'saved', file: target, id: parsed.recipe.id };
+  return { status: 'saved', file: target, id };
 }

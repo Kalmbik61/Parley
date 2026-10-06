@@ -22,7 +22,6 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installAgentSkill } from './skill-install.js';
 import { SKILL_MD } from './skill.js';
-import { SHARED_STATE_IGNORE } from './state-dir.js';
 import { MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 
 const run = promisify(execFile);
@@ -512,9 +511,9 @@ describe('скрыть от git: info/exclude', () => {
     const status = await porcelain(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
-    // The shared-state policy is trackable; owned runtime receipts and both native skills remain local.
-    expect(status).toBe('?? .parley/.gitignore\n');
-    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe(SHARED_STATE_IGNORE);
+    // A new state dir hides itself completely; the shared allowlist appears only at the first shared write.
+    expect(status).toBe('');
+    expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
   });
 
   it('файл без перевода строки в конце продолжается с новой строки, чужое не склеивается', async () => {

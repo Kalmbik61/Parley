@@ -34,12 +34,13 @@ export const PRE_RECIPES_STATE_IGNORE = `${PRE_JOURNAL_STATE_IGNORE}!decisions/\
 export const SHARED_STATE_IGNORE = `${PRE_RECIPES_STATE_IGNORE}!recipes/\n!recipes/**\n`;
 
 /**
- * Кладёт в каталог состояния `.gitignore` с белым списком shared-файлов. Уже лежащий не трогается: его положил соседний
- * процесс (это то же самое) или переписал человек.
+ * Кладёт в каталог состояния `.gitignore` из одной строки `*`: новый каталог целиком прячет себя от git. На белый список
+ * shared-файлов (`SHARED_STATE_IGNORE`) его переключает первая shared-запись (`prepareSharedIgnore`). Уже лежащий
+ * `.gitignore` не трогается: его положил соседний процесс (это то же самое) или переписал человек.
  */
 export async function writeSelfIgnore(dir: string): Promise<void> {
   try {
-    await writeFile(path.join(dir, '.gitignore'), SHARED_STATE_IGNORE, { encoding: 'utf8', flag: 'wx' });
+    await writeFile(path.join(dir, '.gitignore'), '*\n', { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
