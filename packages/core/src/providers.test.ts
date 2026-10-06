@@ -1092,6 +1092,33 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       ]);
     });
 
+    it('подпись уровня строится по id (effortLabel), а не берётся из файла: ручная правка кэша не растягивает окно', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [
+          {
+            id: 'gpt-7-sol',
+            label: 'GPT-7-Sol',
+            efforts: [
+              { id: 'xhigh', label: 'Очень длинная подпись, которую кто-то вписал в кэш руками, чтобы растянуть окно '.repeat(5) },
+              { id: 'turbo', label: 'TURBO!!!' },
+            ],
+          },
+        ],
+      });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        {
+          id: 'gpt-7-sol',
+          label: 'GPT-7-Sol',
+          efforts: [
+            { id: 'xhigh', label: effortLabel('xhigh') },
+            { id: 'turbo', label: effortLabel('turbo') },
+          ],
+        },
+      ]);
+    });
+
     it('испорченный или пустой файл молча игнорируется: остаётся запасной список, loadProviders не падает', async () => {
       const broken = [
         '{не json',

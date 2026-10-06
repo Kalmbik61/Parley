@@ -860,7 +860,7 @@ const isEffortOption = (value: unknown): value is EffortOption =>
  * Модели из файла каталога Codex (`codexModelsFile`). Файла нет, он не разбирается, список пуст или хоть одна
  * модель или уровень не той формы — `null`: это кэш Parley, а не настройка человека, и тогда молча действует
  * запасной список. В запись ложатся только известные поля; подпись модели и описание уровня — не длиннее
- * `MODEL_LABEL_MAX` и `EFFORT_DESCRIPTION_MAX`.
+ * `MODEL_LABEL_MAX` и `EFFORT_DESCRIPTION_MAX`, подпись уровня — `effortLabel(id)`, а не из файла.
  */
 async function readCodexModels(file: string): Promise<ModelOption[] | null> {
   let data: unknown;
@@ -892,7 +892,8 @@ async function readCodexModels(file: string): Promise<ModelOption[] | null> {
               ? null
               : model.efforts.map((level) => ({
                   id: level.id,
-                  label: level.label,
+                  // Подпись строит Parley, как для `providers.json`: ручная правка кэша не растянет окно.
+                  label: effortLabel(level.id),
                   ...(level.description === undefined
                     ? {}
                     : { description: level.description.slice(0, EFFORT_DESCRIPTION_MAX) }),
