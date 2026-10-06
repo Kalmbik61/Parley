@@ -33,6 +33,16 @@ const CMD_0 = cmd('0', 'Digit0');
 const CMD_W = cmd('w', 'KeyW');
 const CMD_T = cmd('t', 'KeyT');
 
+describe('resolveAction — диктовка', () => {
+  it('⌘⇧M: в поле, в терминале и вне полей — voice.toggle; в диалоге — полю', () => {
+    const event = cmd('M', 'KeyM', { shiftKey: true });
+    expect(resolveAction(event, 'input', false)).toBe('voice.toggle');
+    expect(resolveAction(event, 'terminal', false)).toBe('voice.toggle');
+    expect(resolveAction(event, 'other', false)).toBe('voice.toggle');
+    expect(resolveAction(event, 'dialog', false)).toBeNull();
+  });
+});
+
 describe('resolveAction (тест 4)', () => {
   it('⌘D: в monaco — null, в other — group.splitRight', () => {
     expect(resolveAction(CMD_D, 'monaco', false)).toBeNull();

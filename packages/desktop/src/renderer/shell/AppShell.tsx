@@ -118,6 +118,7 @@ import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { orderedWorks, useWorksStore } from '../store/works.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
 import { Landing } from './Landing.js';
@@ -186,6 +187,7 @@ function dropOnSidebar(bridge: ParleyBridge, key: string, sessionId: string, tar
 
 /** Доступность — одна для нажатия и для `menu:action` (кусок 6.1b): методы хоста в момент действия. */
 function available(id: ActionId): boolean {
+  if (id === 'voice.toggle' && !useDictationStore.getState().canToggleFocused()) return false;
   return isActionAvailable(id, hostMethods(useHostStore.getState().status));
 }
 
@@ -506,6 +508,11 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     },
     attention: { next: openNextAttention },
     files: useFilesStore.getState(),
+    voice: {
+      toggle: () => {
+        useDictationStore.getState().toggleFocused();
+      },
+    },
     toast: (text) => toast(text),
     browser: { active: activeBrowserPage },
   });
