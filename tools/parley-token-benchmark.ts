@@ -12,7 +12,8 @@
  * - токены берутся из usage-ledger ядра (`sumUsage`): запрос и потомок один раз, неизвестное — `null`,
  *   неполный итог в разности токенов не участвует; байты, секунды и счётчики — отдельные величины;
  * - «символы, делённые на 4» и размер списка не токены: запись с полем-оценкой отвергается;
- * - холодный и тёплый кеш — разные разделы отчёта; мод jev и навык minimal-development — отдельные оси;
+ * - кеш у Claude Code живёт час и общий префикс у рук один, поэтому «холодность» мерится по первому запросу прогона,
+ *   а не по доле чтения за весь прогон; мод jev и навык minimal-development — отдельные оси;
  * - процентов экономии нет нигде: офлайн-данные живую проверку не закрывают.
  *
  * Запуск: `pnpm exec tsx tools/parley-token-benchmark.ts <команда>`, список команд — `--help`.
@@ -21,7 +22,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -51,6 +52,7 @@ const MINIMAL_DEVELOPMENT_DIR = path.join(repoRoot, '.agents/skills/minimal-deve
 
 export const ARMS = ['native', 'navigator'] as const;
 export type Arm = (typeof ARMS)[number];
+/** `warm` планом больше не выдаётся (кеш живёт час, общий префикс у рук один); тип нужен, чтобы читать старые записи. */
 export type CacheTemp = 'cold' | 'warm';
 export type Toggle = 'off' | 'on';
 export type Axis = 'arm' | 'jev' | 'skill';
@@ -108,7 +110,8 @@ export interface Budget {
   perSession: { maxTotalInputTokens: number; maxOutputTokens: number; maxMinutes: number };
   pilot: { scenarios: string[] };
   maxRuns: number;
-  waves: { id: string; title: string; scenarios: string[] }[];
+  /** `repetitions` волны перекрывает общее `repetitions` бюджета (сокращённая волна с несколькими повторами). */
+  waves: { id: string; title: string; scenarios: string[]; repetitions?: number }[];
   stopRules: string[];
 }
 
@@ -197,6 +200,9 @@ export function validateBudget(raw: unknown, file: ScenarioFile): string[] {
   const ids = new Set(file.scenarios.map((s) => s.id));
   const placed = new Map<string, number>();
   for (const wave of Array.isArray(budget.waves) ? budget.waves : []) {
+    if (wave.repetitions !== undefined && (!positive(wave.repetitions) || !Number.isInteger(wave.repetitions))) {
+      problems.push(`budget.waves ${wave.id}: repetitions — целое больше 0`);
+    }
     for (const id of Array.isArray(wave.scenarios) ? wave.scenarios : []) {
       if (!ids.has(id)) problems.push(`budget.waves ${wave.id}: нет сценария ${id}`);
       placed.set(id, (placed.get(id) ?? 0) + 1);
@@ -246,17 +252,20 @@ export const runIdOf = (p: Pick<PlannedRun, 'scenario' | 'arm' | 'cache' | 'jev'
   `${p.scenario}.${p.arm}.${p.cache}.jev-${p.jev}.skill-${p.skill}.r${p.repetition}`;
 
 /**
- * Матрица прогонов. Основная ось: сценарий × рука × холодный/тёплый кеш (jev выключен, навык выключен).
- * Отдельные оси — только холодный кеш: jev включён (рука native) и minimal-development включён (обе руки).
- * Порядок рук чередуется, чтобы время суток не доставалось одной руке; тёплый прогон идёт сразу за холодным.
+ * Матрица прогонов. Основная ось: сценарий × рука × повтор (jev выключен, навык выключен), по одной ячейке:
+ * кеш у Claude Code живёт час, общий префикс у рук один, поэтому тёплый прогон от холодного не отличить, и намеренного
+ * прогрева нет (`cache` остаётся `cold` ради совместимости записей; фактическое попадание видно по первому запросу).
+ * Повторы волны — `repetitions` волны, иначе общие из бюджета. Отдельные оси: jev включён (рука native) и
+ * minimal-development включён (обе руки), повторы общие. Порядок рук чередуется, чтобы время суток не доставалось
+ * одной руке. `waveId` оставляет прогоны одной волны; номера порядка считаются заново, чередование — по всему плану.
  */
-export function planRuns(file: ScenarioFile, budget: Budget): PlannedRun[] {
+export function planRuns(file: ScenarioFile, budget: Budget, waveId?: string): PlannedRun[] {
   const byId = new Map(file.scenarios.map((s) => [s.id, s]));
-  const base = (scenario: Scenario, wave: string, repetition: number, arm: Arm, cache: CacheTemp, jev: Toggle, skill: Toggle): Omit<PlannedRun, 'order'> => {
-    const draft = { scenario: scenario.id, arm, cache, jev, skill, repetition };
+  const base = (scenario: Scenario, wave: string, repetition: number, arm: Arm, jev: Toggle, skill: Toggle): Omit<PlannedRun, 'order'> => {
+    const draft = { scenario: scenario.id, arm, cache: 'cold' as const, jev, skill, repetition };
     return {
       id: runIdOf(draft), wave, ...draft, sessions: scenario.room.length,
-      pilot: wave !== AXES_WAVE && budget.pilot.scenarios.includes(scenario.id) && cache === 'cold' && repetition === 1,
+      pilot: wave !== AXES_WAVE && budget.pilot.scenarios.includes(scenario.id) && repetition === 1,
     };
   };
   const planned: Omit<PlannedRun, 'order'>[] = [];
@@ -265,29 +274,29 @@ export function planRuns(file: ScenarioFile, budget: Budget): PlannedRun[] {
     for (const id of wave.scenarios) {
       const scenario = byId.get(id);
       if (scenario === undefined) continue;
-      for (let repetition = 1; repetition <= budget.repetitions; repetition += 1, flip += 1) {
+      for (let repetition = 1; repetition <= (wave.repetitions ?? budget.repetitions); repetition += 1, flip += 1) {
         const arms = flip % 2 === 0 ? ARMS : [...ARMS].reverse();
-        for (const arm of arms) {
-          planned.push(base(scenario, wave.id, repetition, arm, 'cold', 'off', 'off'));
-          planned.push(base(scenario, wave.id, repetition, arm, 'warm', 'off', 'off'));
-        }
+        for (const arm of arms) planned.push(base(scenario, wave.id, repetition, arm, 'off', 'off'));
       }
     }
   }
   for (const scenario of file.scenarios) {
     if (!scenario.axes.jev) continue;
     for (let repetition = 1; repetition <= budget.repetitions; repetition += 1) {
-      planned.push(base(scenario, AXES_WAVE, repetition, 'native', 'cold', 'on', 'off'));
+      planned.push(base(scenario, AXES_WAVE, repetition, 'native', 'on', 'off'));
     }
   }
   for (const scenario of file.scenarios) {
     if (!scenario.axes.skill) continue;
     for (let repetition = 1; repetition <= budget.repetitions; repetition += 1) {
-      for (const arm of ARMS) planned.push(base(scenario, AXES_WAVE, repetition, arm, 'cold', 'off', 'on'));
+      for (const arm of ARMS) planned.push(base(scenario, AXES_WAVE, repetition, arm, 'off', 'on'));
     }
   }
-  return planned.map((item, index) => ({ ...item, order: index + 1 }));
+  return planned.filter((item) => waveId === undefined || item.wave === waveId).map((item, index) => ({ ...item, order: index + 1 }));
 }
+
+/** Есть ли такая волна в плане: волны бюджета и волна отдельных осей. */
+export const hasWave = (budget: Budget, waveId: string): boolean => waveId === AXES_WAVE || budget.waves.some((wave) => wave.id === waveId);
 
 export interface BudgetEstimate {
   runs: number;
@@ -330,10 +339,12 @@ export function hostEnv(run: Pick<PlannedRun, 'arm' | 'jev'>, scenario: Scenario
   // функциональных хуков нужна при jev on, но выключить мод она не может: Claude Code накладывает `env` из файлов
   // настроек поверх окружения запуска, а у человека в `~/.claude/settings.json` она стоит в 1. Поэтому при jev off
   // мод выключает файл настроек копии проекта (`disableJevInCopy`, `enabledPlugins`), одинаково в обеих руках.
+  // DISABLE_AUTOUPDATER: Claude Code обновился сам посреди пилота (2.1.289 -> 2.1.291), и пары разошлись бы по версии.
   return [
     `PARLEY_SKILL_NAVIGATOR=${navigator}`,
     'PARLEY_AGENT_SKILLS=false',
     `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=${run.jev === 'on' ? 1 : 0}`,
+    'DISABLE_AUTOUPDATER=1',
   ];
 }
 
@@ -351,6 +362,9 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
     '',
     ...budget.stopRules.map((rule) => `- ${rule}`),
     '',
+    'Версия `claude` на всю волну одна: `DISABLE_AUTOUPDATER=1` в строке хоста, `begin` записывает версию, `collect` сверяет её с `version` записей транскрипта (расхождение — флаг `cli-version-mismatch`, пара исключается).',
+    '`begin` пишет в `.claude/settings.json` копии `disabledMcpjsonServers` из всех `.mcp.json` выше копии: диалога «N new MCP servers found in this project» быть не должно; сработает ли это на живом CLI, покажет первый прогон волны.',
+    '',
   ];
   for (const run of runs) {
     const scenario = scenarios.get(run.scenario);
@@ -360,13 +374,13 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
     lines.push(
       `## ${String(run.order).padStart(2, '0')}. ${run.id}${run.pilot ? ' (пилот)' : ''}`,
       '',
-      `- Волна ${run.wave}, рука ${run.arm}, кеш ${run.cache}, jev ${run.jev}, minimal-development ${run.skill}, сессий ${run.sessions}.`,
+      `- Волна ${run.wave}, рука ${run.arm}, jev ${run.jev}, minimal-development ${run.skill}, сессий ${run.sessions}.`,
+      '- Кеш: без намеренного прогрева (значение `cache` в записи — `cold` для совместимости); попал ли первый запрос в кеш, видно по `firstRequest` записи, а не по плану.',
       `- Начало: \`pnpm exec tsx tools/parley-token-benchmark.ts begin ${run.id} --out ${out}\``,
       `- Хост Parley: \`PARLEY_HOME=${home} ${hostEnv(run, scenario).join(' ')}\`; проект работы — \`${path.join(out, 'work', run.id, 'project')}\`.`,
       ...(setup === undefined ? [] : [`- Особенность руки: ${setup}`]),
-      ...(run.cache === 'warm' ? [`- Тёплый прогон: начать не позже ${budget.cache.warmWithinSec} с после конца холодного, того же проекта и руки; записать интервал в \`--warm-interval-sec\`.`] : []),
       run.jev === 'off'
-        ? '- jev off: мод выключает файл настроек копии (`begin` пишет `.claude/settings.json`, id мода — `jevDisabled` в `begin.json`); одной переменной хоста мало, настройки CLI человека её перекрывают. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.'
+        ? '- jev off: мод выключает файл настроек копии (`begin` пишет `.claude/settings.json`, id мода — `jevDisabled` в `begin.json`); одной переменной хоста мало, настройки CLI человека её перекрывают. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — `collect` ищет её, а отчёт исключает пару со вставкой у стороны jev off (`jev-leak`).'
         : '- jev on: мод включён настройками CLI человека, файла настроек в копии нет; переменная хоста в строке выше включает функциональные хуки. В транскрипте должна быть вставка jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.',
       `- Участники: ${scenario.room.map((member) => `${member.provider}/${member.role}`).join(', ')}.`,
       `- Запрос: ${JSON.stringify(scenario.prompt)}`,
@@ -416,8 +430,20 @@ export interface AxisEvidence {
   minimalDevelopmentListed: boolean | null;
   /** Тело навыка загружено; `null` — наблюдения нет, а не «не загружено». */
   minimalDevelopmentLoaded: boolean | null;
-  /** В транскрипте есть вставка мода jev; `null` — не замечена (мог не сработать или выбрать «ничего»). */
+  /** Вставка мода jev в транскриптах Claude: `true` — есть, `false` — нет; `null` — транскриптов Claude нет. */
   jevFired: boolean | null;
+}
+
+/** Первый запрос главного разговора: чтение кеша и полный вход; `null` у поля — в логе не видно. */
+export interface FirstRequest {
+  cacheRead: number | null;
+  totalInput: number | null;
+}
+
+/** MCP-серверы человека подключаются асинхронно: сколько ещё в ожидании и сколько упало к первому запросу. */
+export interface McpStartup {
+  pendingMcpServers: number | null;
+  failedMcpServers: number | null;
 }
 
 export interface RunRecord {
@@ -439,6 +465,9 @@ export interface RunRecord {
   loadedSkills: string[] | null;
   offeredSkills: string[] | null;
   axisEvidence: AxisEvidence;
+  /** `null` — в записи (старой или без usage у ассистента) первого запроса не видно. */
+  firstRequest: FirstRequest | null;
+  startup: McpStartup;
   flags: string[];
 }
 
@@ -555,6 +584,13 @@ export function parseRun(raw: unknown): { run: RunRecord } | { problems: string[
       minimalDevelopmentLoaded: tri(evidence['minimalDevelopmentLoaded']),
       jevFired: tri(evidence['jevFired']),
     },
+    firstRequest: isObject(raw['firstRequest'])
+      ? { cacheRead: asCount(raw['firstRequest']['cacheRead']), totalInput: asCount(raw['firstRequest']['totalInput']) }
+      : null,
+    startup: {
+      pendingMcpServers: isObject(raw['startup']) ? asCount(raw['startup']['pendingMcpServers']) : null,
+      failedMcpServers: isObject(raw['startup']) ? asCount(raw['startup']['failedMcpServers']) : null,
+    },
     flags: isStrings(raw['flags']) ? raw['flags'] : [],
   };
   return { run };
@@ -670,8 +706,8 @@ function axisProven(axis: Axis, value: string, run: RunRecord): boolean {
   return true;
 }
 
-const hitRatio = (total: UsageTotal): number | null =>
-  total.cacheRead === null || total.totalInput === null || total.totalInput === 0 ? null : total.cacheRead / total.totalInput;
+/** Числа известны у обеих сторон и различаются; неизвестное с известным не сравнивается. */
+const differs = (a: number | null, b: number | null): boolean => a !== null && b !== null && a !== b;
 
 export interface PairOptions {
   /** Тёплый прогон начат не позже этого числа секунд после холодного. */
@@ -727,8 +763,17 @@ export function pairSection(
       section.excluded.push({ pair: name, reason: `conditions-mismatch:${mismatch}` });
       continue;
     }
+    if (base.flags.includes('cli-version-mismatch') || test.flags.includes('cli-version-mismatch')) {
+      section.excluded.push({ pair: name, reason: 'cli-version-mismatch' });
+      continue;
+    }
     if (!axisProven(axis, baseValue, base) || !axisProven(axis, testValue, test)) {
       section.excluded.push({ pair: name, reason: 'axis-unverified' });
+      continue;
+    }
+    // Вставка jev у стороны с jev off — утечка условия: пара сравнивала бы не то, что заявлено.
+    if ([base, test].some((run) => run.conditions.jev === 'off' && run.axisEvidence.jevFired === true)) {
+      section.excluded.push({ pair: name, reason: 'jev-leak' });
       continue;
     }
     if (cache === 'warm') {
@@ -763,10 +808,13 @@ export function pairSection(
 
     const [baseTotal, testTotal] = [sumUsage(base.usage), sumUsage(test.usage)];
     const notes: string[] = [];
-    const [baseHit, testHit] = [hitRatio(baseTotal), hitRatio(testTotal)];
-    if (baseHit !== null && testHit !== null && Math.abs(baseHit - testHit) > 0.25) notes.push('cache-unbalanced');
-    if (cache === 'cold' && [baseHit, testHit].some((value) => value !== null && value > 0.5)) notes.push('cold-not-clean');
-    if (cache === 'warm' && [baseHit, testHit].some((value) => value === 0)) notes.push('warm-not-observed');
+    // Кеш мерится по первому запросу: дальше каждый запрос перечитывает предыдущий, и доля за прогон ничего не говорит.
+    const [baseRead, testRead] = [base.firstRequest?.cacheRead ?? null, test.firstRequest?.cacheRead ?? null];
+    if ([baseRead, testRead].some((value) => value !== null && value > 0)) notes.push('first-request-cached');
+    if (differs(baseRead, testRead)) notes.push('cache-unbalanced');
+    if (differs(base.startup.pendingMcpServers, test.startup.pendingMcpServers) || differs(base.startup.failedMcpServers, test.startup.failedMcpServers)) {
+      notes.push('mcp-startup-unbalanced');
+    }
     const diffs: Record<string, number | null> = {};
     for (const metric of METRICS) {
       const [b, t] = [metric.get(base, baseTotal), metric.get(test, testTotal)];
@@ -844,9 +892,9 @@ export function buildReport(runs: RunRecord[], file: ScenarioFile, options: Pair
     if (run.durationMs === null) why.push('duration unknown');
     return why.length === 0 ? [] : [{ run: run.id, why }];
   });
+  // Тёплые ячейки не планируются: у основной оси одна ячейка на руку.
   const cells = (scenario: string): string[] =>
-    ARMS.flatMap((arm) => (['cold', 'warm'] as const).flatMap((cache) =>
-      runs.some((r) => r.scenario === scenario && r.conditions.arm === arm && r.conditions.cache === cache && r.conditions.jev === 'off' && r.conditions.skill === 'off') ? [] : [`${arm}/${cache}`]));
+    ARMS.filter((arm) => !runs.some((r) => r.scenario === scenario && r.conditions.arm === arm && r.conditions.cache === 'cold' && r.conditions.jev === 'off' && r.conditions.skill === 'off'));
   return {
     runs: runs.length,
     origins: { 'synthetic-fixture': runs.filter((r) => r.origin === 'synthetic-fixture').length, live: runs.filter((r) => r.origin === 'live').length },
@@ -881,7 +929,7 @@ export function renderReport(report: Report): string {
     '',
     '## Покрытие сценариев',
     '',
-    '| Сценарий | Покрытие | Записей | Нет ячейки основной оси (рука/кеш) |',
+    '| Сценарий | Покрытие | Записей | Нет ячейки основной оси (рука) |',
     '|---|---|---:|---|',
     ...report.coverage.map((row) => `| ${row.scenario} | ${row.coverage} | ${row.runs} | ${row.missingCells.join(', ') || '-'} |`),
     '',
@@ -893,8 +941,13 @@ export function renderReport(report: Report): string {
       `Пар с обеими сторонами: ${section.candidates}; чистых: ${section.clean.length}; исключено: ${section.excluded.length}; без экономии из-за качества: ${section.regressions.length}; качество частично неизвестно: ${section.qualityUnknown}.`,
       '',
     );
-    const cacheNotes = section.clean.filter((pair) => pair.notes.length > 0);
-    if (cacheNotes.length > 0) lines.push(`Оговорки по кешу: ${cacheNotes.map((pair) => `${pair.test} (${pair.notes.join(', ')})`).join('; ')}.`, '');
+    const noted = section.clean.filter((pair) => pair.notes.length > 0);
+    if (noted.length > 0) {
+      lines.push(
+        `Оговорки (first-request-cached — на первом запросе было чтение кеша; cache-unbalanced — оно у сторон разное; mcp-startup-unbalanced — разный старт MCP-серверов): ${noted.map((pair) => `${pair.test} (${pair.notes.join(', ')})`).join('; ')}.`,
+        '',
+      );
+    }
     for (const group of Object.keys(GROUP_TITLES) as MetricGroup[]) {
       const rows = section.stats.filter((stat) => stat.group === group && (stat.known > 0 || stat.unknown > 0));
       if (rows.length === 0) continue;
@@ -933,10 +986,24 @@ async function treeFiles(dir: string, base = dir): Promise<string[]> {
   return found;
 }
 
-/** Хеш дерева каталога: пути и содержимое, в порядке имён. */
+/**
+ * Файлы фикстурного каталога для копии и хеша. В git-репозитории — только отслеживаемые (`git ls-files`): в пилот
+ * попал неотслеживаемый `.omc/state` от хуков сессии оператора. Вне репозитория (временные фикстуры тестов) — все.
+ */
+async function projectFiles(dir: string): Promise<string[]> {
+  const listed = spawnSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (listed.status !== 0) return treeFiles(dir);
+  const found: string[] = [];
+  for (const relative of listed.stdout.split('\0').filter((item) => item !== '')) {
+    if (await stat(path.join(dir, relative)).then((info) => info.isFile(), () => false)) found.push(relative);
+  }
+  return found.sort();
+}
+
+/** Хеш дерева каталога: пути и содержимое, в порядке имён; правило отбора файлов — `projectFiles`. */
 export async function hashTree(dir: string): Promise<string> {
   const hash = createHash('sha256');
-  for (const relative of await treeFiles(dir)) hash.update(`${relative}\0`).update(await readFile(path.join(dir, relative))).update('\0');
+  for (const relative of await projectFiles(dir)) hash.update(`${relative}\0`).update(await readFile(path.join(dir, relative))).update('\0');
   return hash.digest('hex');
 }
 
@@ -968,46 +1035,95 @@ export interface BeginRecord {
   projectDir: string;
   /** Id мода jev, выключенного в копии (`jev off`); пусто — мод не установлен или jev on. */
   jevDisabled: string[];
+  /** Имена MCP-серверов из всех `.mcp.json` от копии вверх: в копии отключены, чтобы Claude Code не спрашивал о них. */
+  mcpServersDisabled: string[];
+  /** Нечитаемые или битые `.mcp.json`, пропущенные при поиске. */
+  warnings: string[];
   startedAt: string;
 }
 
 /**
- * Выключение мода jev в копии проекта для руки с `jev off`: файл `.claude/settings.json` с `enabledPlugins: false`.
+ * Id мода jev, который надо выключить в копии проекта руки с `jev off` (файл настроек пишет `writeCopySettings`).
  * Переменной хоста мало (см. `hostEnv`), а проектный уровень настроек Claude Code выше пользовательского. Id мода
  * ищется как у Parley (`work/launch.ts`): тем же `findJevPluginIds` и в той же папке конфигурации Claude.
  * Пустой список — мод не установлен, выключать нечего. `null` — место установки не прочиталось, и мод мог остаться
  * включённым незаметно: прогон с `jev off`, который нельзя проверить, не начинаем.
  */
-async function disableJevInCopy(projectDir: string, findIds: typeof findJevPluginIds): Promise<string[]> {
+async function findJevToDisable(projectDir: string, findIds: typeof findJevPluginIds): Promise<string[]> {
   const configDir = process.env.CLAUDE_CONFIG_DIR ? path.resolve(projectDir, process.env.CLAUDE_CONFIG_DIR) : path.join(process.env.HOME ?? homedir(), '.claude');
   const ids = await findIds(projectDir, configDir);
   if (ids === null) throw new Error(`jev off: место установки мода в ${configDir} не прочиталось, выключение jev не проверить`);
-  if (ids.length > 0) {
-    await mkdir(path.join(projectDir, '.claude'), { recursive: true });
-    const settings = { enabledPlugins: Object.fromEntries(ids.map((id) => [id, false])) };
-    await writeFile(path.join(projectDir, '.claude/settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
-  }
   return ids;
+}
+
+export type McpServerNames = (projectDir: string) => Promise<{ names: string[]; warnings: string[] }>;
+
+/**
+ * Имена серверов из всех `.mcp.json`, найденных от копии вверх до корня файловой системы: Claude Code ищет файл выше по
+ * дереву (в пилоте — `~/.mcp.json`) и при первом запуске в копии спрашивает «N new MCP servers found in this project».
+ * Файлы только читаются; нечитаемый или битый — предупреждение, не отказ.
+ */
+export const findMcpServerNames: McpServerNames = async (projectDir) => {
+  const names = new Set<string>();
+  const warnings: string[] = [];
+  for (let dir = path.resolve(projectDir); ; dir = path.dirname(dir)) {
+    const file = path.join(dir, '.mcp.json');
+    const text = await readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') warnings.push(`${file}: не прочитан (${error.code ?? error.message})`);
+      return null;
+    });
+    if (text !== null) {
+      try {
+        const servers = (JSON.parse(text) as { mcpServers?: unknown } | null)?.mcpServers;
+        if (isObject(servers)) for (const name of Object.keys(servers)) names.add(name);
+        else warnings.push(`${file}: нет объекта mcpServers`);
+      } catch {
+        warnings.push(`${file}: не JSON`);
+      }
+    }
+    if (path.dirname(dir) === dir) break;
+  }
+  return { names: [...names].sort(), warnings };
+};
+
+/**
+ * Файл настроек копии `.claude/settings.json` до первого коммита: `enabledPlugins` выключает мод jev (`jev off`),
+ * `disabledMcpjsonServers` — серверы чужих `.mcp.json` (диалог о них прервал бы прогон). Нечего писать — файла нет.
+ */
+async function writeCopySettings(projectDir: string, jevIds: string[], mcpNames: string[]): Promise<void> {
+  const settings = {
+    ...(jevIds.length > 0 ? { enabledPlugins: Object.fromEntries(jevIds.map((id) => [id, false])) } : {}),
+    ...(mcpNames.length > 0 ? { disabledMcpjsonServers: mcpNames } : {}),
+  };
+  if (Object.keys(settings).length === 0) return;
+  await mkdir(path.join(projectDir, '.claude'), { recursive: true });
+  await writeFile(path.join(projectDir, '.claude/settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
 }
 
 /**
  * Копия фикстурного проекта для прогона: навыки лежат в родных каталогах `.agents/skills` и `.claude/skills`
- * копии (домашние каталоги CLI не трогаются), minimal-development — только на оси навыка. Копия — git-репозиторий;
- * при `jev off` в неё до коммита пишется `.claude/settings.json`, выключающий мод jev (`disableJevInCopy`).
- * `deps.jevPluginIds` подменяет поиск мода, чтобы тесты и сухой прогон не читали настоящий `~/.claude`.
+ * копии (домашние каталоги CLI не трогаются), minimal-development — только на оси навыка. Копируются только
+ * отслеживаемые git файлы фикстуры (`projectFiles`). Копия — git-репозиторий; до коммита в неё пишется
+ * `.claude/settings.json` (`writeCopySettings`): выключение мода jev при `jev off` и отключение серверов чужих `.mcp.json`.
+ * `deps.jevPluginIds` и `deps.mcpServerNames` подменяют поиск мода и `.mcp.json`, чтобы тесты и сухой прогон не читали
+ * настоящие `~/.claude` и домашнюю папку.
  */
 export async function beginRun(
   planned: PlannedRun,
   budget: Budget,
   out: string,
-  deps: { versions?: () => { claude: string; codex: string }; fixtureDir?: string; jevPluginIds?: typeof findJevPluginIds } = {},
+  deps: { versions?: () => { claude: string; codex: string }; fixtureDir?: string; jevPluginIds?: typeof findJevPluginIds; mcpServerNames?: McpServerNames } = {},
 ): Promise<BeginRecord> {
   const fixtureDir = deps.fixtureDir ?? FIXTURE_DIR;
   const workDir = path.join(out, 'work', planned.id);
   const projectDir = path.join(workDir, 'project');
   await rm(workDir, { recursive: true, force: true });
   await mkdir(workDir, { recursive: true });
-  await cp(path.join(fixtureDir, 'project'), projectDir, { recursive: true });
+  const source = path.join(fixtureDir, 'project');
+  for (const relative of await projectFiles(source)) {
+    await mkdir(path.dirname(path.join(projectDir, relative)), { recursive: true });
+    await copyFile(path.join(source, relative), path.join(projectDir, relative));
+  }
   for (const name of await readdir(path.join(projectDir, 'skills'))) {
     for (const home of ['.agents/skills', '.claude/skills']) await cp(path.join(projectDir, 'skills', name), path.join(projectDir, home, name), { recursive: true });
   }
@@ -1017,7 +1133,9 @@ export async function beginRun(
       await cp(MINIMAL_DEVELOPMENT_DIR, path.join(projectDir, home, 'minimal-development'), { recursive: true });
     }
   }
-  const jevDisabled = planned.jev === 'off' ? await disableJevInCopy(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
+  const jevDisabled = planned.jev === 'off' ? await findJevToDisable(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
+  const mcp = await (deps.mcpServerNames ?? findMcpServerNames)(projectDir);
+  await writeCopySettings(projectDir, jevDisabled, mcp.names);
   git(projectDir, 'init', '-q');
   git(projectDir, 'add', '-A');
   git(projectDir, 'commit', '-q', '-m', 'fixture');
@@ -1037,6 +1155,8 @@ export async function beginRun(
     },
     projectDir,
     jevDisabled,
+    mcpServersDisabled: mcp.names,
+    warnings: mcp.warnings,
     startedAt: new Date().toISOString(),
   };
   await writeFile(path.join(workDir, 'begin.json'), `${JSON.stringify(record, null, 2)}\n`);
@@ -1063,6 +1183,10 @@ interface SessionCollected {
   offered: string[];
   listedNames: string[] | null;
   jevFired: boolean;
+  /** Версии `version` из записей главного разговора (без подагентов). */
+  versions: string[];
+  firstRequest: FirstRequest | null;
+  startup: McpStartup | null;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (isObject(value) ? value : null);
@@ -1077,6 +1201,9 @@ function resultText(content: unknown): string {
 /** Все строки внутри значения: формат вложений не документирован, текст вставки может лежать не только в `content`. */
 const stringsIn = (value: unknown): string[] =>
   typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(stringsIn) : isObject(value) ? Object.values(value).flatMap(stringsIn) : [];
+
+/** Сколько серверов в поле вложения: список (имена или объекты) или число; иначе неизвестно. */
+const serverCount = (value: unknown): number | null => (Array.isArray(value) ? value.length : asCount(value));
 
 const JEV_NAME = /Relevant to the current request: (\S+?)\.(?:\s|$)/;
 
@@ -1110,20 +1237,37 @@ export async function collectClaudeSession(file: string, knownSkills: readonly s
   let [lookups, noMatch, reformulations, resultBytes, findBytes, messages, broadcasts, compactions] = [0, 0, 0, 0, 0, 0, 0, 0];
   let lookupsSinceLoad = 0;
   let jevFired = false;
+  // Только главный разговор: размер списка, первый запрос, старт MCP и версия CLI подагентов не описывают.
+  const versions = new Set<string>();
+  let listingBytes: number | null = null;
+  let firstRequest: FirstRequest | null = null;
+  let startup: McpStartup | null = null;
 
   const files = [file, ...discovered.subagents.map((agent) => agent.file)];
   for (const source of files) {
+    const isMain = source === file;
     // Поправка поиска считается внутри одного разговора: подагент свой поиск начинает заново.
     lookupsSinceLoad = 0;
     await forEachJsonlRecord(source, (record: RawRecord) => {
       if (record['subtype'] === 'compact_boundary' || record['isCompactSummary'] === true) compactions += 1;
+      const main = isMain && record['isSidechain'] !== true;
+      if (main && isString(record['version'])) versions.add(record['version']);
       const attachment = asRecord(record['attachment']);
+      if (main && startup === null && attachment?.['type'] === 'deferred_tools_delta') {
+        startup = { pendingMcpServers: serverCount(attachment['pendingMcpServers']), failedMcpServers: serverCount(attachment['failedMcpServers']) };
+      }
       if (attachment?.['type'] === 'skill_listing') {
+        if (main && listingBytes === null && typeof attachment['content'] === 'string') listingBytes = Buffer.byteLength(attachment['content']);
         sawListing = true;
         for (const name of Array.isArray(attachment['names']) ? attachment['names'] : []) if (typeof name === 'string') listed.add(name);
       }
       if (jevPickOfAttachment(record) !== null) jevFired = true;
       const message = asRecord(record['message']);
+      const usage = asRecord(message?.['usage']);
+      if (main && firstRequest === null && message?.['role'] === 'assistant' && usage !== null) {
+        const [input, cacheRead, cacheWrite] = [asCount(usage['input_tokens']), asCount(usage['cache_read_input_tokens']), asCount(usage['cache_creation_input_tokens'])];
+        firstRequest = { cacheRead, totalInput: input === null || cacheRead === null || cacheWrite === null ? null : input + cacheRead + cacheWrite };
+      }
       const content = message?.['content'];
       if (typeof content === 'string') {
         if (content.includes('<skill_relevance>')) jevFired = true;
@@ -1173,13 +1317,16 @@ export async function collectClaudeSession(file: string, knownSkills: readonly s
     startedAt: index.startedAt,
     endedAt: index.endedAt,
     skillUse: { lookups, loads: loaded.length, noMatch, reformulations, duplicateLoads: loaded.length - unique.size, forbiddenOffered: null },
-    bytes: { bootstrapBytes: null, listingBytes: null, findSkillResultBytes: findBytes, toolResultBytes: resultBytes },
+    bytes: { bootstrapBytes: null, listingBytes, findSkillResultBytes: findBytes, toolResultBytes: resultBytes },
     traffic: { messages, broadcasts, deliveries: null },
     compactions,
     loaded,
     offered: [...offered],
     listedNames: sawListing ? [...listed] : null,
     jevFired,
+    versions: [...versions],
+    firstRequest,
+    startup,
   };
 }
 
@@ -1222,6 +1369,12 @@ export async function collectRun(input: CollectInput): Promise<RunRecord> {
   if (claude.length + input.codex.length === 0) throw new Error('нужен хотя бы один лог сессии');
   if (codex !== null && codex.orphans > 0) flags.push(`codex-orphan-descendants:${codex.orphans}`);
   if (codex !== null) flags.push('codex-tool-counters-not-collected');
+  // Версия CLI одна на всю волну: другая в транскрипте или несколько версий — прогон нельзя сравнивать с парой.
+  const seenVersions = new Set(claude.flatMap((s) => s.versions));
+  const pinned = /^claude (\S+)/.exec(input.begin.conditions.cli)?.[1];
+  if (seenVersions.size > 1 || (seenVersions.size === 1 && pinned !== undefined && pinned !== 'unknown' && !seenVersions.has(pinned))) {
+    flags.push('cli-version-mismatch');
+  }
 
   const sum = (pick: (s: SessionCollected) => number | null): number | null =>
     codex !== null ? null : claude.reduce<number | null>((acc, s) => (acc === null || pick(s) === null ? null : acc + pick(s)!), 0);
@@ -1232,6 +1385,8 @@ export async function collectRun(input: CollectInput): Promise<RunRecord> {
   const listings = claude.map((s) => s.listedNames);
   const offered = claude.flatMap((s) => s.offered);
   const md = 'minimal-development';
+  // Первый запрос и старт MCP берутся у главного разговора: у самой ранней Claude-сессии прогона.
+  const lead = [...claude].sort((a, b) => (a.startedAt ?? '\uffff').localeCompare(b.startedAt ?? '\uffff'))[0];
   const sawListing = listings.some((names) => names !== null);
 
   const overrides: Counts = {};
@@ -1267,8 +1422,11 @@ export async function collectRun(input: CollectInput): Promise<RunRecord> {
       // Список имён Claude или ответ find_skill называют навык: иначе признаков нет, а не «отсутствует».
       minimalDevelopmentListed: !sawListing && offered.length === 0 ? null : listings.some((names) => names?.includes(md) === true) || offered.includes(md),
       minimalDevelopmentLoaded: loaded.includes(md) ? true : null,
-      jevFired: claude.some((s) => s.jevFired) ? true : null,
+      // Только по транскриптам Claude: без них (чистый Codex) наблюдения нет.
+      jevFired: claude.length === 0 ? null : claude.some((s) => s.jevFired),
     },
+    firstRequest: lead?.firstRequest ?? null,
+    startup: lead?.startup ?? { pendingMcpServers: null, failedMcpServers: null },
     flags,
   };
   return run;
@@ -1465,8 +1623,8 @@ export async function dryRun(fixtureDir = FIXTURE_DIR): Promise<DryRunResult> {
     for (const task of file.tasks) {
       if (task.accept.kind !== 'command') continue;
       const planned = runs.find((r) => file.scenarios.find((s) => s.id === r.scenario)?.task === task.id)!;
-      // Настоящий `~/.claude` сухой прогон не читает: место установки jev у него подставное, пустое.
-      const begin = await beginRun({ ...planned, id: `dry.${task.id}` }, budget, tmp, { versions: () => ({ claude: 'dry-run', codex: 'dry-run' }), fixtureDir, jevPluginIds: async () => [] });
+      // Настоящие `~/.claude` и `.mcp.json` сухой прогон не читает: место установки jev и список серверов у него подставные, пустые.
+      const begin = await beginRun({ ...planned, id: `dry.${task.id}` }, budget, tmp, { versions: () => ({ claude: 'dry-run', codex: 'dry-run' }), fixtureDir, jevPluginIds: async () => [], mcpServerNames: async () => ({ names: [], warnings: [] }) });
       const before = runAcceptance(task.accept.command, begin.projectDir);
       await cp(path.join(fixtureDir, task.solution!), begin.projectDir, { recursive: true });
       const after = runAcceptance(task.accept.command, begin.projectDir);
@@ -1505,7 +1663,9 @@ export async function assertHostSocketFits(home: string): Promise<void> {
 const HELP = `parley-token-benchmark — офлайн-стенд замера экономии (P38)
 
   validate                      проверить фикстуры сценариев и бюджет
-  plan [--out DIR] [--home DIR] план, бюджет и лист запуска в DIR (по умолчанию .parley/benchmark);
+  plan [--out DIR] [--home DIR] [--wave ID]
+                                план, бюджет и лист запуска в DIR (по умолчанию .parley/benchmark);
+                                --wave — только прогоны этой волны (без опции — все волны);
                                 --home — PARLEY_HOME хоста (по умолчанию <out>/home), сокет <home>/host/host.sock
                                 не должен выходить за предел пути хоста, иначе plan откажет
   begin ID [--out DIR]          копия фикстурного проекта и условия прогона
@@ -1534,7 +1694,7 @@ export async function main(argv: string[]): Promise<number> {
     args: argv,
     allowPositionals: true,
     options: {
-      out: { type: 'string' }, home: { type: 'string' }, runs: { type: 'string' }, count: { type: 'string' }, root: { type: 'string' },
+      out: { type: 'string' }, home: { type: 'string' }, wave: { type: 'string' }, runs: { type: 'string' }, count: { type: 'string' }, root: { type: 'string' },
       claude: { type: 'string', multiple: true }, codex: { type: 'string', multiple: true }, set: { type: 'string', multiple: true },
       accepted: { type: 'string' }, constraints: { type: 'string' }, corrections: { type: 'string' },
       'warm-interval-sec': { type: 'string' }, synthetic: { type: 'boolean' }, help: { type: 'boolean' },
@@ -1578,7 +1738,8 @@ export async function main(argv: string[]): Promise<number> {
     return problems.length === 0 ? 0 : 1;
   }
   if (problems.length > 0) throw new Error(problems.join('; '));
-  const runs = planRuns(file, budget);
+  if (values.wave !== undefined && command === 'plan' && !hasWave(budget, values.wave)) throw new Error(`нет волны ${values.wave}`);
+  const runs = planRuns(file, budget, command === 'plan' ? values.wave : undefined);
   if (command === 'plan') {
     const home = path.resolve(values.home ?? path.join(out, 'home'));
     await assertHostSocketFits(home);

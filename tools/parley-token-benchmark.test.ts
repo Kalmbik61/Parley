@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,8 @@ import {
   dryRun,
   estimateBudget,
   extractPrompts,
+  findMcpServerNames,
+  hashTree,
   hostEnv,
   loadFixtures,
   main,
@@ -27,9 +29,10 @@ import {
   planRuns,
   renderReport,
   renderRunSheet,
-  runIdOf,
   safeForPrivateData,
+  validateBudget,
   validateScenarioFile,
+  type BeginRecord,
   type RunRecord,
 } from './parley-token-benchmark.js';
 import type { UsageSummary } from '../packages/core/src/work/usage-ledger.js';
@@ -46,6 +49,9 @@ const WARM = { warmWithinSec: 240 };
 
 /** Поиск мода jev без чтения настоящего `~/.claude`: мода «нет», файл настроек в копию не пишется. */
 const noJev = async (): Promise<string[]> => [];
+
+/** Поиск `.mcp.json` без чтения файлов домашней папки: серверов «нет», `disabledMcpjsonServers` в копию не пишется. */
+const noMcp = async (): Promise<{ names: string[]; warnings: string[] }> => ({ names: [], warnings: [] });
 
 async function syntheticRuns(): Promise<RunRecord[]> {
   const raw = JSON.parse(await readFile(path.join(FIXTURE_DIR, 'runs.synthetic.json'), 'utf8')) as unknown[];
@@ -85,33 +91,78 @@ describe('фикстуры сценариев', () => {
 });
 
 describe('план и бюджет', () => {
-  it('матрица: основная ось, отдельные оси только на холодном кеше, пилот и потолки', async () => {
+  it('матрица: одна ячейка на сценарий, руку и повтор, без тёплых прогонов; отдельные оси, пилот и потолки', async () => {
     const { file, budget } = await loadFixtures();
     const runs = planRuns(file, budget);
     expect(new Set(runs.map((r) => r.id)).size).toBe(runs.length);
-    // 14 сценариев × 2 руки × (холодный, тёплый) + 5 прогонов jev + 3 сценария навыка × 2 руки.
-    expect(runs).toHaveLength(14 * 2 * 2 + 5 + 3 * 2);
-    expect(runs.filter((r) => r.wave === 'w3').every((r) => r.cache === 'cold')).toBe(true);
+    // wq: 5 сценариев × 2 руки × 3 повтора; w1: 6 × 2; w2: 3 × 2; jev: 5; навык: 3 сценария × 2 руки.
+    expect(runs).toHaveLength(5 * 2 * 3 + 6 * 2 + 3 * 2 + 5 + 3 * 2);
+    expect(runs.every((r) => r.cache === 'cold')).toBe(true);
     expect(runs.filter((r) => r.jev === 'on').every((r) => r.arm === 'native')).toBe(true);
-    // Тёплый прогон идёт сразу за холодным той же руки.
-    const warm = runs.filter((r) => r.cache === 'warm');
-    for (const run of warm) {
-      const before = runs.find((r) => r.order === run.order - 1)!;
-      expect(runIdOf({ ...before, cache: 'warm' })).toBe(run.id);
-    }
     const estimate = estimateBudget(runs, budget);
     expect(estimate.sessions).toBe(runs.reduce((acc, r) => acc + r.sessions, 0));
     expect(estimate.pilotRuns).toBe(4);
     expect(estimate.ceilings.outputTokens).toBe(estimate.sessions * budget.perSession.maxOutputTokens);
-    expect(estimate.byWave.map((w) => w.wave)).toEqual(['w1', 'w2', 'w3']);
+    expect(estimate.byWave.map((w) => w.wave)).toEqual(['wq', 'w1', 'w2', 'w3']);
+    expect(budget.cache.ttlSec).toBe(3600);
+  });
+
+  it('волна wq: пять сценариев, обе руки, jev и навык выключены, три повтора, руки чередуются; --wave оставляет только её', async () => {
+    const { file, budget } = await loadFixtures();
+    const wq = planRuns(file, budget, 'wq');
+    expect(wq).toHaveLength(30);
+    expect(wq.map((r) => r.order)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+    expect(wq.every((r) => r.wave === 'wq' && r.jev === 'off' && r.skill === 'off' && r.cache === 'cold' && !r.pilot)).toBe(true);
+    expect([...new Set(wq.map((r) => r.scenario))]).toEqual(['ambiguous', 'russian', 'multiple', 'long-skill', 'unavailable']);
+    expect(wq.filter((r) => r.scenario === 'ambiguous').map((r) => r.id)).toEqual(expect.arrayContaining([
+      'ambiguous.native.cold.jev-off.skill-off.r1', 'ambiguous.navigator.cold.jev-off.skill-off.r3',
+    ]));
+    // Порядок рук чередуется: первая в ячейке то native, то navigator.
+    const firsts = [0, 2, 4, 6].map((i) => wq[i]!.arm);
+    expect(firsts).toEqual(['native', 'navigator', 'native', 'navigator']);
+    // Повторы другой волны остаются общими из бюджета.
+    expect(planRuns(file, budget, 'w1').every((r) => r.repetition === 1)).toBe(true);
+    expect(planRuns(file, budget, 'w3').every((r) => r.wave === 'w3')).toBe(true);
+    expect(planRuns(file, budget, 'нет такой')).toEqual([]);
+  });
+
+  it('plan --wave wq пишет в план и лист только прогоны этой волны; неизвестная волна — отказ', async () => {
+    const out = path.join(tmp, 'out-wave');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await main(['plan', '--out', out, '--home', '/bench/home', '--wave', 'wq'])).toBe(0);
+      const plan = JSON.parse(await readFile(path.join(out, 'plan.json'), 'utf8')) as { runs: { wave: string }[]; estimate: { runs: number } };
+      expect(plan.runs).toHaveLength(30);
+      expect(plan.runs.every((r) => r.wave === 'wq')).toBe(true);
+      expect(plan.estimate.runs).toBe(30);
+      const sheet = await readFile(path.join(out, 'run-sheet.md'), 'utf8');
+      expect(sheet).toContain('ambiguous.native.cold.jev-off.skill-off.r3');
+      expect(sheet).not.toContain('no-skill.native');
+
+      const all = path.join(tmp, 'out-all');
+      expect(await main(['plan', '--out', all, '--home', '/bench/home'])).toBe(0);
+      expect((JSON.parse(await readFile(path.join(all, 'plan.json'), 'utf8')) as { runs: unknown[] }).runs).toHaveLength(59);
+      await expect(main(['plan', '--out', all, '--home', '/bench/home', '--wave', 'нет такой'])).rejects.toThrow('нет волны');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('повторы волны в бюджете — целое больше 0', async () => {
+    const { file, budget } = await loadFixtures();
+    const bad = { ...budget, waves: budget.waves.map((w) => (w.id === 'wq' ? { ...w, repetitions: 0 } : w)) };
+    expect(validateBudget(bad, file)).toContain('budget.waves wq: repetitions — целое больше 0');
+    expect(validateBudget(budget, file)).toEqual([]);
   });
 
   it('у руки disabled навигатор выключен в хосте, у остальных navigator включён; навыки Parley и jev задаёт хост одинаково в обеих руках', async () => {
     const { file } = await loadFixtures();
     const byId = (id: string) => file.scenarios.find((s) => s.id === id)!;
+    // DISABLE_AUTOUPDATER=1: CLI не обновляется посреди волны, версия у пар одна.
     expect(hostEnv({ arm: 'navigator', jev: 'off' }, byId('obvious'))).toEqual([
-      'PARLEY_SKILL_NAVIGATOR=true', 'PARLEY_AGENT_SKILLS=false', 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0',
+      'PARLEY_SKILL_NAVIGATOR=true', 'PARLEY_AGENT_SKILLS=false', 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0', 'DISABLE_AUTOUPDATER=1',
     ]);
+    expect(hostEnv({ arm: 'native', jev: 'on' }, byId('obvious'))).toContain('DISABLE_AUTOUPDATER=1');
     expect(hostEnv({ arm: 'navigator', jev: 'off' }, byId('disabled'))[0]).toBe('PARLEY_SKILL_NAVIGATOR=false');
     expect(hostEnv({ arm: 'native', jev: 'off' }, byId('obvious'))[0]).toBe('PARLEY_SKILL_NAVIGATOR=false');
     expect(hostEnv({ arm: 'native', jev: 'on' }, byId('obvious'))[2]).toBe('CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1');
@@ -125,6 +176,13 @@ describe('план и бюджет', () => {
     expect(sheet).toContain('node scripts/check-changelog.mjs 4711');
     expect(sheet).toContain('Принятие человеком');
     expect(sheet).toContain('явного разрешения человека');
+    // Кеш: без намеренного прогрева, тёплых прогонов в листе нет.
+    expect(sheet).toContain('без намеренного прогрева');
+    expect(sheet).toContain('`firstRequest`');
+    expect(sheet).not.toContain('Тёплый прогон');
+    expect(sheet).not.toContain('кеш warm');
+    expect(sheet).toContain('DISABLE_AUTOUPDATER=1');
+    expect(sheet).toContain('cli-version-mismatch');
   });
 });
 
@@ -336,7 +394,7 @@ describe('сбор из логов провайдеров', () => {
     expect(collected.jevFired).toBe(true);
     expect(collected.listedNames).toEqual(['bench-changelog', 'minimal-development']);
     expect(collected.bytes['findSkillResultBytes']).toBeGreaterThan(0);
-    // Размер списка и стартовой вставки в логе Claude не лежат: неизвестно, а не 0.
+    // В списке этого транскрипта нет `content`, а стартовой вставки в логе Claude нет вовсе: неизвестно, а не 0.
     expect(collected.bytes['listingBytes']).toBeNull();
     expect(collected.bytes['bootstrapBytes']).toBeNull();
   });
@@ -367,7 +425,7 @@ describe('сбор из логов провайдеров', () => {
     const file = await claudeTranscript();
     const { file: scenarios, budget } = await loadFixtures();
     const planned = planRuns(scenarios, budget).find((r) => r.id === 'obvious.navigator.cold.jev-off.skill-on.r1')!;
-    const begin = await beginRun(planned, budget, tmp, { versions: () => ({ claude: '2.1.289', codex: '0.160.0' }), jevPluginIds: noJev });
+    const begin = await beginRun(planned, budget, tmp, { mcpServerNames: noMcp, versions: () => ({ claude: '2.1.289', codex: '0.160.0' }), jevPluginIds: noJev });
     const run = await collectRun({
       begin, claude: [file], codex: [], accepted: true, constraintsKept: true, humanCorrections: 0, warmIntervalSec: null,
       set: ['launches=1', 'stops=0'], knownSkills: ['bench-changelog', 'minimal-development'], origin: 'live',
@@ -406,8 +464,8 @@ describe('копия фикстурного проекта', () => {
     const off = runs.find((r) => r.id === 'obvious.native.cold.jev-off.skill-off.r1')!;
     const on = runs.find((r) => r.id === 'obvious.native.cold.jev-off.skill-on.r1')!;
     const versions = () => ({ claude: 'x', codex: 'y' });
-    const a = await beginRun(off, budget, tmp, { versions, jevPluginIds: noJev });
-    const b = await beginRun(on, budget, tmp, { versions, jevPluginIds: noJev });
+    const a = await beginRun(off, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: noJev });
+    const b = await beginRun(on, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: noJev });
 
     const exists = async (dir: string, name: string) => readFile(path.join(dir, name, 'SKILL.md'), 'utf8').then(() => true, () => false);
     for (const home of ['.agents/skills', '.claude/skills']) {
@@ -440,7 +498,7 @@ describe('мод jev в копии проекта', () => {
   it('jev off: найденные id выключаются файлом настроек копии, и файл входит в коммит копии', async () => {
     const { run, budget } = await pickRun('off');
     const ids = [MOD, 'jev-skill-suggestion@some-market'];
-    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => ids });
+    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => ids });
 
     expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false, 'jev-skill-suggestion@some-market': false } });
     expect(begin.jevDisabled).toEqual(ids);
@@ -453,27 +511,27 @@ describe('мод jev в копии проекта', () => {
 
   it('jev off в руке navigator выключается так же: условие одно у обеих рук', async () => {
     const { run, budget } = await pickRun('off', 'navigator');
-    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => [MOD] });
+    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => [MOD] });
     expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false } });
   });
 
   it('jev on: файла настроек нет, и мод не ищется', async () => {
     const { run, budget } = await pickRun('on');
-    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => { throw new Error('при jev on мод не ищется'); } });
+    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => { throw new Error('при jev on мод не ищется'); } });
     expect(await exists(settingsOf(begin.projectDir))).toBe(false);
     expect(begin.jevDisabled).toEqual([]);
   });
 
   it('jev off, мод не установлен (пустой список): файла настроек нет', async () => {
     const { run, budget } = await pickRun('off');
-    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: noJev });
+    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: noJev });
     expect(await exists(settingsOf(begin.projectDir))).toBe(false);
     expect(begin.jevDisabled).toEqual([]);
   });
 
   it('jev off, место установки не прочиталось (null): begin отказывает и прогон не начат', async () => {
     const { run, budget } = await pickRun('off');
-    await expect(beginRun(run, budget, tmp, { versions, jevPluginIds: async () => null })).rejects.toThrow('выключение jev не проверить');
+    await expect(beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => null })).rejects.toThrow('выключение jev не проверить');
     expect(await exists(path.join(tmp, 'work', run.id, 'begin.json'))).toBe(false);
   });
 
@@ -489,15 +547,15 @@ describe('мод jev в копии проекта', () => {
     // Пустой CLAUDE_CONFIG_DIR — как незаданный.
     vi.stubEnv('CLAUDE_CONFIG_DIR', '');
     vi.stubEnv('HOME', path.join(tmp, 'user'));
-    expect((await beginRun(native.run, native.budget, tmp, { versions })).jevDisabled).toEqual([]);
+    expect((await beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([]);
     await installAt(path.join(tmp, 'user', '.claude'));
-    expect((await beginRun(native.run, native.budget, tmp, { versions })).jevDisabled).toEqual([MOD]);
+    expect((await beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([MOD]);
 
     // Копия проекта — <tmp>/work/<id>/project, поэтому `../../cfg` — это <tmp>/work/cfg.
     vi.stubEnv('HOME', path.join(tmp, 'empty-home'));
     await installAt(path.join(tmp, 'work', 'cfg'));
     vi.stubEnv('CLAUDE_CONFIG_DIR', '../../cfg');
-    expect((await beginRun(navigator.run, navigator.budget, tmp, { versions })).jevDisabled).toEqual([MOD]);
+    expect((await beginRun(navigator.run, navigator.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([MOD]);
   });
 });
 
@@ -714,6 +772,250 @@ describe('лист разметки для P32', () => {
   });
 });
 
+describe('правки по итогам пилота: сбор и пары', () => {
+  const at = (s: number): string => `2026-10-06T11:00:${String(s).padStart(2, '0')}.000Z`;
+  const reply = (id: string, u: ReturnType<typeof usage>, extra: Record<string, unknown> = {}) =>
+    ({ type: 'assistant', timestamp: at(2), ...extra, message: { id, role: 'assistant', model: 'claude-x', usage: u, content: [{ type: 'text', text: 'ok' }] } });
+  const ask = (extra: Record<string, unknown> = {}) => ({ type: 'user', timestamp: at(1), message: { role: 'user', content: 'сделай' }, ...extra });
+
+  /** Транскрипт главного разговора из готовых записей и, если нужно, файл подагента; возвращает путь главного файла. */
+  async function mini(name: string, records: Record<string, unknown>[], sub: Record<string, unknown>[] = []): Promise<string> {
+    const dir = path.join(tmp, 'projects', `-bench-${name}`);
+    await mkdir(path.join(dir, name, 'subagents'), { recursive: true });
+    await writeFile(path.join(dir, `${name}.jsonl`), records.map((r) => line(r)).join(''));
+    if (sub.length > 0) await writeFile(path.join(dir, name, 'subagents', 'agent-a1.jsonl'), sub.map((r) => line(r)).join(''));
+    return path.join(dir, `${name}.jsonl`);
+  }
+
+  async function begin(): Promise<BeginRecord> {
+    const { file, budget } = await loadFixtures();
+    const planned = planRuns(file, budget).find((r) => r.id === 'obvious.native.cold.jev-off.skill-off.r1')!;
+    return beginRun(planned, budget, tmp, { versions: () => ({ claude: '2.1.289 (Claude Code)', codex: 'codex-cli 0.160.0' }), jevPluginIds: noJev, mcpServerNames: noMcp });
+  }
+  const collect = async (files: string[], codex: string[] = []): Promise<RunRecord> =>
+    collectRun({ begin: await begin(), claude: files, codex, accepted: true, constraintsKept: true, humanCorrections: 0, warmIntervalSec: null, set: [], knownSkills: [], origin: 'live' });
+
+  async function syntheticPair(change: (base: RunRecord, test: RunRecord) => [RunRecord, RunRecord]) {
+    const runs = await syntheticRuns();
+    const pick = (id: string) => runs.find((r) => r.id === id)!;
+    const [base, test] = change(pick('no-skill.native.cold.jev-off.skill-off.r1'), pick('no-skill.navigator.cold.jev-off.skill-off.r1'));
+    return pairSection([base, test], 'arm', 'cold', { jev: 'off', skill: 'off' }, WARM);
+  }
+
+  it('версия CLI: версия записей главного разговора сверяется с begin; другая или несколько — флаг, подагент и запись без версии не в счёт', async () => {
+    const withVersion = (name: string, versions: string[], sub: Record<string, unknown>[] = []) =>
+      mini(name, [ask({ version: versions[0] }), reply('m1', usage(1, 1, 0, 0), { version: versions[versions.length - 1] })], sub);
+    const flags = async (file: string): Promise<string[]> => (await collect([file])).flags;
+
+    expect(await flags(await withVersion('same', ['2.1.289']))).toEqual([]);
+    expect(await flags(await withVersion('updated', ['2.1.291']))).toEqual(['cli-version-mismatch']);
+    // Обновился посреди прогона: в записях две версии, хотя одна из них совпадает с begin.
+    expect(await flags(await withVersion('mid', ['2.1.289', '2.1.291']))).toEqual(['cli-version-mismatch']);
+    // Нет поля `version` — сравнивать нечего; подагент с другой версией главный разговор не описывает.
+    expect(await flags(await mini('none', [ask(), reply('m1', usage(1, 1, 0, 0))]))).toEqual([]);
+    expect(await flags(await withVersion('sub', ['2.1.289'], [reply('s1', usage(1, 1, 0, 0), { isSidechain: true, version: '2.1.300' })]))).toEqual([]);
+  });
+
+  it('отчёт исключает пару с флагом cli-version-mismatch у любой стороны', async () => {
+    const section = await syntheticPair((base, test) => [base, { ...test, flags: ['cli-version-mismatch'] }]);
+    expect(section.clean).toEqual([]);
+    expect(section.excluded).toEqual([{ pair: 'no-skill r1', reason: 'cli-version-mismatch' }]);
+  });
+
+  it('первый запрос: чтение кеша и полный вход первого ответа главного разговора; один message.id — один запрос; подагент не считается', async () => {
+    const file = await mini('first', [
+      ask(),
+      reply('m1', usage(3, 5, 31654, 100)),
+      reply('m1', usage(3, 9, 31654, 100)),
+      reply('m2', usage(1, 2, 31754, 0)),
+    ], [reply('s1', usage(7, 7, 7, 7), { isSidechain: true })]);
+    const collected = await collectClaudeSession(file, []);
+    expect(collected.firstRequest).toEqual({ cacheRead: 31654, totalInput: 3 + 31654 + 100 });
+
+    // Нет счётчика создания кеша: полный вход неизвестен, чтение кеша известно. Нет usage — первого запроса не видно.
+    const partial = await mini('first-partial', [ask(), reply('m1', { input_tokens: 4, cache_read_input_tokens: 10 } as ReturnType<typeof usage>)]);
+    expect((await collectClaudeSession(partial, [])).firstRequest).toEqual({ cacheRead: 10, totalInput: null });
+    expect((await collect([file])).firstRequest).toEqual({ cacheRead: 31654, totalInput: 31757 });
+    expect(parseRun(JSON.parse(JSON.stringify(await collect([file]))))).toHaveProperty('run.firstRequest.cacheRead', 31654);
+  });
+
+  it('в записи с несколькими Claude-сессиями первый запрос и старт MCP — у самой ранней', async () => {
+    const early = await mini('early', [ask(), reply('m1', usage(1, 1, 0, 500))]);
+    const late = await mini('late', [
+      { ...ask(), timestamp: '2026-10-06T12:00:01.000Z' },
+      { ...reply('m1', usage(1, 1, 500, 0)), timestamp: '2026-10-06T12:00:02.000Z' },
+    ]);
+    expect((await collect([late, early])).firstRequest).toEqual({ cacheRead: 0, totalInput: 501 });
+  });
+
+  it('кеш в паре — по первому запросу: чтение у одной стороны, у обеих, различие; доля за весь прогон ничего не метит', async () => {
+    const withFirst = (run: RunRecord, cacheRead: number | null): RunRecord => ({ ...run, firstRequest: { cacheRead, totalInput: 40000 } });
+    const notes = async (a: number | null, b: number | null) =>
+      (await syntheticPair((base, test) => [withFirst(base, a), withFirst(test, b)])).clean[0]!.notes;
+
+    expect(await notes(0, 0)).toEqual([]);
+    // Общий префикс рук: обе стороны прочитали одно и то же — кеш был, различия нет.
+    expect(await notes(31654, 31654)).toEqual(['first-request-cached']);
+    expect(await notes(31654, 0)).toEqual(['first-request-cached', 'cache-unbalanced']);
+    expect(await notes(0, 28000)).toEqual(['first-request-cached', 'cache-unbalanced']);
+    // Неизвестное не сравнивается: старая запись без первого запроса, одна сторона неизвестна.
+    expect(await notes(null, null)).toEqual([]);
+    expect(await notes(null, 0)).toEqual([]);
+    expect(await notes(null, 31654)).toEqual(['first-request-cached']);
+    // Прежние пометки по доле за прогон (cold-not-clean, warm-not-observed) больше не ставятся.
+    const heavy = await syntheticPair((base, test) => [
+      { ...withFirst(base, 0), usage: [{ key: 'claude\u0000x\u0000', usage: summary({ cacheRead: 90000, totalInput: 100000 }) }] },
+      withFirst(test, 0),
+    ]);
+    expect(heavy.clean[0]!.notes).toEqual([]);
+    const text = renderReport(buildReport([], { schema: 1, tasks: [], scenarios: [] }, WARM));
+    expect(text).not.toContain('cold-not-clean');
+  });
+
+  it('оговорки по кешу и старту MCP попадают в отчёт', async () => {
+    const { file } = await loadFixtures();
+    const runs = (await syntheticRuns()).map((r) => (r.id === 'no-skill.navigator.cold.jev-off.skill-off.r1' ? { ...r, firstRequest: { cacheRead: 31654, totalInput: 40000 } } : r));
+    expect(renderReport(buildReport(runs, file, WARM))).toContain('no-skill.navigator.cold.jev-off.skill-off.r1 (first-request-cached)');
+  });
+
+  it('jev в отчёте: сторона с jev off и вставкой jev исключает пару (jev-leak), без вставки — нет', async () => {
+    const leaked = await syntheticPair((base, test) => [{ ...base, axisEvidence: { ...base.axisEvidence, jevFired: true } }, test]);
+    expect(leaked.clean).toEqual([]);
+    expect(leaked.excluded).toEqual([{ pair: 'no-skill r1', reason: 'jev-leak' }]);
+    const leakedTest = await syntheticPair((base, test) => [base, { ...test, axisEvidence: { ...test.axisEvidence, jevFired: true } }]);
+    expect(leakedTest.excluded).toEqual([{ pair: 'no-skill r1', reason: 'jev-leak' }]);
+    const clean = await syntheticPair((base, test) => [{ ...base, axisEvidence: { ...base.axisEvidence, jevFired: false } }, test]);
+    expect(clean.clean).toHaveLength(1);
+  });
+
+  it('collect вычисляет jevFired для каждого прогона: есть вставка — true, нет — false, без транскриптов Claude — null', async () => {
+    const hook = ({ type: 'attachment', attachment: { type: 'hook_additional_context', content: ['Relevant to the current request: bench-changelog. Ignore this if it does not fit.'], hookName: 'prompt.submit' } });
+    const plain = await mini('no-jev', [ask(), reply('m1', usage(1, 1, 0, 0))]);
+    const fired = await mini('with-jev', [ask(), hook, reply('m1', usage(1, 1, 0, 0))]);
+    expect((await collect([plain])).axisEvidence.jevFired).toBe(false);
+    expect((await collect([fired])).axisEvidence.jevFired).toBe(true);
+    expect((await collect([plain, fired])).axisEvidence.jevFired).toBe(true);
+
+    const meta = JSON.stringify({ type: 'session_meta', timestamp: '2026-10-06T10:00:00.000Z', payload: { id: 'p1', cwd: '/x' } });
+    const count = JSON.stringify({ type: 'event_msg', timestamp: '2026-10-06T10:00:09.000Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 1 } } } });
+    await writeFile(path.join(tmp, 'rollout.jsonl'), `${meta}\n${count}\n`);
+    expect((await collect([], [path.join(tmp, 'rollout.jsonl')])).axisEvidence.jevFired).toBeNull();
+  });
+
+  it('старт MCP: pendingMcpServers и failedMcpServers из первого deferred_tools_delta главного разговора; нет вложения — null', async () => {
+    const delta = (pending: unknown, failed: unknown) => ({ type: 'attachment', attachment: { type: 'deferred_tools_delta', addedNames: [], pendingMcpServers: pending, failedMcpServers: failed } });
+    const file = await mini('mcp', [
+      ask(), delta(['a', 'b', 'c'], [{ name: 'pencil', errorCode: 'CONNECTION_CLOSED' }]), delta([], []), reply('m1', usage(1, 1, 0, 0)),
+    ]);
+    expect((await collectClaudeSession(file, [])).startup).toEqual({ pendingMcpServers: 3, failedMcpServers: 1 });
+    const run = await collect([file]);
+    expect(run.startup).toEqual({ pendingMcpServers: 3, failedMcpServers: 1 });
+    expect(parseRun(JSON.parse(JSON.stringify(run)))).toHaveProperty('run.startup.pendingMcpServers', 3);
+    // Числом тоже; в подагенте вложение главный разговор не описывает.
+    const numeric = await mini('mcp-num', [ask(), delta(2, 0), reply('m1', usage(1, 1, 0, 0))]);
+    expect((await collect([numeric])).startup).toEqual({ pendingMcpServers: 2, failedMcpServers: 0 });
+    const only = await mini('mcp-sub', [ask(), reply('m1', usage(1, 1, 0, 0))], [{ ...delta(['x'], []), isSidechain: true }]);
+    expect((await collect([only])).startup).toEqual({ pendingMcpServers: null, failedMcpServers: null });
+  });
+
+  it('пара с разным стартом MCP помечается mcp-startup-unbalanced; неизвестное с известным не сравнивается', async () => {
+    const startup = (run: RunRecord, pendingMcpServers: number | null, failedMcpServers: number | null): RunRecord => ({ ...run, startup: { pendingMcpServers, failedMcpServers } });
+    const notes = async (a: [number | null, number | null], b: [number | null, number | null]) =>
+      (await syntheticPair((base, test) => [startup(base, ...a), startup(test, ...b)])).clean[0]!.notes;
+    expect(await notes([0, 0], [0, 0])).toEqual([]);
+    expect(await notes([3, 0], [0, 0])).toEqual(['mcp-startup-unbalanced']);
+    expect(await notes([0, 0], [0, 2])).toEqual(['mcp-startup-unbalanced']);
+    expect(await notes([null, null], [3, 1])).toEqual([]);
+  });
+
+  it('listingBytes: байты UTF-8 поля content первого skill_listing главного разговора; нет — null', async () => {
+    const listing = (content: unknown, extra: Record<string, unknown> = {}) => ({ type: 'attachment', attachment: { type: 'skill_listing', content, names: ['a'] }, ...extra });
+    const text = '- проверка списка: описание на русском\n';
+    const file = await mini('listing', [listing(text), listing('второй список'), ask(), reply('m1', usage(1, 1, 0, 0))], [listing('подагент', { isSidechain: true })]);
+    const collected = await collectClaudeSession(file, []);
+    expect(collected.bytes['listingBytes']).toBe(Buffer.byteLength(text));
+    expect(Buffer.byteLength(text)).toBeGreaterThan(text.length);
+    expect((await collect([file])).bytes['listingBytes']).toBe(Buffer.byteLength(text));
+    const without = await mini('no-listing', [ask(), reply('m1', usage(1, 1, 0, 0))]);
+    expect((await collectClaudeSession(without, [])).bytes['listingBytes']).toBeNull();
+  });
+});
+
+describe('копия фикстуры и диалог MCP-серверов', () => {
+  const versions = () => ({ claude: 'x', codex: 'y' });
+  async function pick(jev: 'off' | 'on') {
+    const { file, budget } = await loadFixtures();
+    return { run: planRuns(file, budget).find((r) => r.jev === jev && r.arm === 'native' && r.skill === 'off')!, budget };
+  }
+  const exists = (target: string) => readFile(target, 'utf8').then(() => true, () => false);
+
+  it('фикстура в git-репозитории: копия и хеш берут только отслеживаемые файлы, вне репозитория — все', async () => {
+    const { run, budget } = await pick('on');
+    const tracked = path.join(tmp, 'fix-git');
+    const plain = path.join(tmp, 'fix-plain');
+    await cp(FIXTURE_DIR, tracked, { recursive: true });
+    await cp(FIXTURE_DIR, plain, { recursive: true });
+    spawnSync('git', ['init', '-q'], { cwd: tracked });
+    spawnSync('git', ['add', '-A'], { cwd: tracked });
+    const run1 = async (fixtureDir: string, id: string) => beginRun({ ...run, id }, budget, tmp, { versions, fixtureDir, mcpServerNames: noMcp });
+
+    const before = await run1(tracked, 'git-before');
+    // Состояние хуков сессии оператора: в пилоте оно попало и в копию, и в хеш.
+    for (const dir of [tracked, plain]) {
+      await mkdir(path.join(dir, 'project/.omc/state'), { recursive: true });
+      await writeFile(path.join(dir, 'project/.omc/state/hook.json'), '{"leak":true}');
+    }
+    const after = await run1(tracked, 'git-after');
+    expect(await exists(path.join(after.projectDir, '.omc/state/hook.json'))).toBe(false);
+    expect(after.conditions.hashes['project']).toBe(before.conditions.hashes['project']);
+    expect(await hashTree(path.join(tracked, 'project'))).toBe(before.conditions.hashes['project']);
+    expect(spawnSync('git', ['ls-files'], { cwd: after.projectDir, encoding: 'utf8' }).stdout).not.toContain('.omc');
+
+    const everything = await run1(plain, 'plain');
+    expect(await exists(path.join(everything.projectDir, '.omc/state/hook.json'))).toBe(true);
+    expect(everything.conditions.hashes['project']).not.toBe(before.conditions.hashes['project']);
+  });
+
+  it('begin пишет disabledMcpjsonServers и сливает с enabledPlugins jev; имена и предупреждения — в begin.json', async () => {
+    const MOD = 'jev-skill-suggestion@skills-dir';
+    const off = await pick('off');
+    const both = await beginRun(off.run, off.budget, tmp, { versions, jevPluginIds: async () => [MOD], mcpServerNames: async () => ({ names: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'] }) });
+    expect(JSON.parse(await readFile(path.join(both.projectDir, '.claude/settings.json'), 'utf8'))).toEqual({
+      enabledPlugins: { [MOD]: false }, disabledMcpjsonServers: ['figma', 'pencil'],
+    });
+    expect(both.mcpServersDisabled).toEqual(['figma', 'pencil']);
+    const saved = JSON.parse(await readFile(path.join(tmp, 'work', off.run.id, 'begin.json'), 'utf8')) as BeginRecord;
+    expect(saved).toMatchObject({ mcpServersDisabled: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'], jevDisabled: [MOD] });
+    expect(spawnSync('git', ['status', '--porcelain'], { cwd: both.projectDir, encoding: 'utf8' }).stdout).toBe('');
+
+    // jev on: настроек jev нет, серверы отключаются всё равно (диалог ждал бы и там).
+    const on = await pick('on');
+    const onlyMcp = await beginRun(on.run, on.budget, tmp, { versions, mcpServerNames: async () => ({ names: ['figma'], warnings: [] }) });
+    expect(JSON.parse(await readFile(path.join(onlyMcp.projectDir, '.claude/settings.json'), 'utf8'))).toEqual({ disabledMcpjsonServers: ['figma'] });
+  });
+
+  it('поиск .mcp.json идёт от копии до корня, читает только имена; битый и нечитаемый файл — предупреждение, не отказ', async () => {
+    const deep = path.join(tmp, 'a/b/c/project');
+    await mkdir(path.join(deep, '.mcp.json'), { recursive: true });
+    await writeFile(path.join(tmp, 'a/.mcp.json'), JSON.stringify({ mcpServers: { x: {}, y: { command: 'node' } } }));
+    await writeFile(path.join(tmp, 'a/b/.mcp.json'), JSON.stringify({ mcpServers: { y: {}, z: {} } }));
+    await writeFile(path.join(tmp, 'a/b/c/.mcp.json'), '{не json');
+    const found = await findMcpServerNames(deep);
+    expect(found.names).toEqual(expect.arrayContaining(['x', 'y', 'z']));
+    expect(found.names).toEqual([...found.names].sort());
+    expect(new Set(found.names).size).toBe(found.names.length);
+    const ours = found.warnings.filter((w) => w.startsWith(tmp));
+    expect(ours).toEqual([
+      `${path.join(deep, '.mcp.json')}: не прочитан (EISDIR)`,
+      `${path.join(tmp, 'a/b/c/.mcp.json')}: не JSON`,
+    ]);
+
+    // Нет объекта mcpServers — тоже предупреждение.
+    await writeFile(path.join(tmp, 'a/b/c/.mcp.json'), '{"servers":{}}');
+    expect((await findMcpServerNames(deep)).warnings).toContain(`${path.join(tmp, 'a/b/c/.mcp.json')}: нет объекта mcpServers`);
+  });
+});
+
 describe('сухой прогон', () => {
   it('все фикстуры, листы, принятие эталонных решений, сбор и отчёт проходят без платных ходов', async () => {
     const result = await dryRun();
@@ -725,7 +1027,7 @@ describe('сухой прогон', () => {
   it('стенд не запускает модели: единственные внешние программы — git, sh и --version у CLI', async () => {
     const source = await readFile(path.join(FIXTURE_DIR, '../../../tools/parley-token-benchmark.ts'), 'utf8');
     const spawns = [...source.matchAll(/spawnSync\(([^,]+),/g)].map((m) => m[1]);
-    expect(spawns.sort()).toEqual(["'git'", "'git'", "'git'", "'sh'", 'bin']);
+    expect(spawns.sort()).toEqual(["'git'", "'git'", "'git'", "'git'", "'sh'", 'bin']);
     expect(source).toContain("spawnSync(bin, ['--version']");
   });
 });

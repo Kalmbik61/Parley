@@ -13,7 +13,7 @@
   },
   "repetitions": 1,
   "cache": {
-    "ttlSec": 300,
+    "ttlSec": 3600,
     "warmWithinSec": 240
   },
   "perSession": {
@@ -30,19 +30,26 @@
   "maxRuns": 90,
   "waves": [
     {
+      "id": "wq",
+      "title": "Skill choice by names",
+      "scenarios": [
+        "ambiguous",
+        "russian",
+        "multiple",
+        "long-skill",
+        "unavailable"
+      ],
+      "repetitions": 3
+    },
+    {
       "id": "w1",
       "title": "Single-session scenarios, main axis",
       "scenarios": [
         "no-skill",
         "obvious",
-        "ambiguous",
-        "russian",
-        "multiple",
         "amendment",
         "stop-resume",
         "disabled",
-        "unavailable",
-        "long-skill",
         "compaction"
       ]
     },
@@ -61,5 +68,7 @@
     "Check the weekly usage before every wave; stop the wave when the operator-set limit is reached.",
     "Stop the wave after two consecutive runs marked overBudget.",
     "Never start a wave without an explicit go from the human (P32)."
-  ]
+  ],
+  "cacheNote": "Claude Code keeps the cache for an hour (ephemeral_1h_input_tokens) and the tools and the unchanged system prompt are shared by both arms, so warm runs cannot be told from cold ones and are not planned: one cell per scenario, arm and repetition. The `cache` value stays cold for compatibility with old records and means no deliberate warm-up; the real cache hit is read from the first request of the run (`firstRequest`). warmWithinSec is kept only to read old warm records.",
+  "waveNote": "wq is the shortened wave: five scenarios moved out of w1 (ambiguous, russian, multiple, long-skill, unavailable), both arms, jev off, minimal-development off, `repetitions` of the wave (3) instead of the common one. Run it alone with `plan --wave wq`."
 }
