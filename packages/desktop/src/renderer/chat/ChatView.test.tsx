@@ -23,9 +23,11 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
@@ -311,6 +313,20 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.change(field(), { target: { value } });
   };
   const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+
+  it('диктовка в поле чата: текст в поле, pty.send не звался', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+    const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    const mic = screen.getByTestId('mic');
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(mic.dataset.state).toBe('recording'));
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(field().value).toBe('hello from voice'));
+    expect(sends()).toEqual([]);
+    dispose();
+  });
 
   it('Enter — pty.send с submit: true, поле пустеет; Shift+Enter — не отправляет', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));

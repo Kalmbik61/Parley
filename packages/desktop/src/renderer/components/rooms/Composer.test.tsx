@@ -8,8 +8,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useUiStore } from '../../store/ui.js';
+import { fakeDictationDeps } from '../../test-utils/dictation.js';
+import { useDictationStore } from '../../voice/dictation-store.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
 const MEMBERS: ComposerMember[] = [
@@ -831,5 +833,22 @@ describe('Composer — отказ отправки', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(editor().textContent).toBe('второе');
+  });
+});
+
+describe('диктовка в поле комнаты (спека 3.2)', () => {
+  let dispose: () => void = () => undefined;
+  afterEach(() => dispose());
+
+  it('кнопка микрофона есть; стоп — текст встал в поле, письмо не ушло', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+    dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
+    const { onSend } = renderComposer();
+    const mic = screen.getByTestId('mic');
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(mic.dataset.state).toBe('recording'));
+    fireEvent.click(within(mic).getByRole('button'));
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('hello from voice'));
+    expect(onSend).not.toHaveBeenCalled();
   });
 });

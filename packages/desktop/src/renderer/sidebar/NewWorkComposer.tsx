@@ -36,6 +36,9 @@ import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '.
 import { Input } from '../ui/input.js';
 import { Switch } from '../ui/switch.js';
 import { Textarea } from '../ui/textarea.js';
+import { MicButton } from '../voice/MicButton.js';
+import { useDictationStore } from '../voice/dictation-store.js';
+import { isVoiceShortcut, useTextareaDictation } from '../voice/targets.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 
 export interface NewWorkDraft {
@@ -119,6 +122,8 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   const [chosenFolders, setChosenFolders] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  useTextareaDictation('new-workspace', promptRef, setPrompt);
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
   const [worktree, setWorktree] = useState(false);
@@ -350,16 +355,27 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
             />
             {fieldError('title')}
           </label>
-          <label className="flex flex-col gap-1">
-            {text.promptField}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="new-work-prompt">{text.promptField}</label>
+              <MicButton targetId="new-workspace" size="sm" />
+            </div>
             <Textarea
+              id="new-work-prompt"
+              ref={promptRef}
               value={prompt}
               placeholder={text.promptPlaceholder}
               className="min-h-[96px] rounded-2xl"
               onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                // В диалоге обработчик клавиш окна молчит (`keys/handler.ts`, контекст dialog): ⌘⇧M ловит само поле.
+                if (!isVoiceShortcut(event.nativeEvent)) return;
+                event.preventDefault();
+                void useDictationStore.getState().toggle('new-workspace');
+              }}
             />
             {fieldError('prompt')}
-          </label>
+          </div>
           {worktreeAvailable ? (
             <label className="flex items-center gap-2">
               <Switch checked={worktree} onCheckedChange={setWorktree} />

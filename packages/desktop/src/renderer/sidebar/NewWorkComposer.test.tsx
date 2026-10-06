@@ -18,8 +18,10 @@ import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { recordOnInsert } from '../test-utils/dom-insert.js';
+import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { NewWorkComposer, titleFromPrompt, validateDraft, type NewWorkDraft } from './NewWorkComposer.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
@@ -158,6 +160,25 @@ function emitNewWork(): void {
     }),
   );
 }
+
+describe('NewWorkComposer — диктовка (спека 3.2)', () => {
+  it('⌘⇧M в поле первого промпта внутри диалога — диктовка; Esc записи не закрывает диалог', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, voice: { enabled: true, model: 'small', language: 'auto' } } });
+    const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
+    await renderComposer();
+    const prompt = promptField();
+    prompt.focus();
+    fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId('mic').dataset.state).toBe('recording'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
+    await waitFor(() => expect(screen.getByTestId('mic').dataset.state).toBe('recording'));
+    fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
+    await waitFor(() => expect(prompt.value).toBe('hello from voice'));
+    dispose();
+  });
+});
 
 describe('NewWorkComposer — вид (1.7)', () => {
   it('поля 1.7: Project, Agent, Title, First prompt; Cancel и Create workspace; прежних полей нет', async () => {

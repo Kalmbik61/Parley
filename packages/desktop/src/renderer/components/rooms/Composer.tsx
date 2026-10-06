@@ -25,6 +25,8 @@ import { S } from '../../../shared/strings.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
+import { MicButton } from '../../voice/MicButton.js';
+import { useEditableDictation } from '../../voice/targets.js';
 import { MentionMenu } from './MentionMenu.js';
 import { filterMentions } from './mention.js';
 import {
@@ -125,6 +127,7 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
       return { context, selected: same ? previous.selected : 0, reveal: same ? previous.reveal : true };
     });
   }, [draftKey]);
+  useEditableDictation(`room:${draftKey}`, editorRef, refresh);
 
   // Черновик комнаты — в поле при монтировании (и при смене комнаты, если поле не пересоздали).
   useLayoutEffect(() => {
@@ -262,6 +265,7 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
             className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring [overflow-wrap:anywhere]"
           />
         </div>
+        <MicButton targetId={`room:${draftKey}`} />
         <Button type="button" onClick={submit}>
           {S.rooms.send}
         </Button>
