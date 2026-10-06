@@ -30,4 +30,12 @@ describe('cleanTranscript (спека 6.1)', () => {
   it('метка рядом с речью остаётся частью текста', () => {
     expect(cleanTranscript('Fix the build [BLANK_AUDIO]')).toBe('Fix the build [BLANK_AUDIO]');
   });
+
+  it('длинная цепочка меток: с текстом в конце проходит, без текста — речи нет, быстро', () => {
+    const chain = '[a] '.repeat(5000);
+    const start = Date.now();
+    expect(cleanTranscript(`${chain}x`)).toBe(`${chain}x`);
+    expect(cleanTranscript(chain)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
 });

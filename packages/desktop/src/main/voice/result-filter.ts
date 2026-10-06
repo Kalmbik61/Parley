@@ -14,8 +14,11 @@ const HALLUCINATIONS: ReadonlySet<string> = new Set([
   'thanks for watching',
 ]);
 
-/** Только метки в квадратных или круглых скобках: `[BLANK_AUDIO]`, `(music)` и такие же по-русски. */
-const ONLY_TAGS = /^(\s*(\[[^\]]*\]|\([^)]*\))\s*)+$/;
+/**
+ * Только метки в квадратных или круглых скобках: `[BLANK_AUDIO]`, `(music)` и такие же по-русски.
+ * Пробелы стоят только после метки (и один раз в начале): без неоднозначности разбора регулярка линейна по длине.
+ */
+const ONLY_TAGS = /^\s*(?:(?:\[[^\]]*\]|\([^)]*\))\s*)+$/;
 
 function normalize(text: string): string {
   return text
