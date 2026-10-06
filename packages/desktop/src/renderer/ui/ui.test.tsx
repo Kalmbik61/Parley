@@ -185,6 +185,30 @@ describe('ui/glass — раунд исправлений 1 (находка A №
   });
 });
 
+describe('ui/select — описание пункта (нормалайзер модели и effort 2026-10-06)', () => {
+  it('description — вторая строка пункта: в имя пункта и в кнопку списка не попадает', () => {
+    render(
+      <Select defaultOpen defaultValue="ultra">
+        <SelectTrigger aria-label="Effort">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="low">Low</SelectItem>
+          <SelectItem value="ultra" description="Maximum reasoning with automatic task delegation">
+            Ultra
+          </SelectItem>
+        </SelectContent>
+      </Select>,
+    );
+    expect(screen.getByRole('option', { name: 'Ultra' }).textContent).toBe('UltraMaximum reasoning with automatic task delegation');
+    expect(screen.getByText('Maximum reasoning with automatic task delegation').className).toContain('truncate');
+    expect(screen.getByRole('option', { name: 'Low' }).textContent).toBe('Low');
+    // Открытый список прячет остальное от скринридера (`aria-hidden`) — кнопку ищем с `hidden`.
+    expect(screen.getByRole('combobox', { name: 'Effort', hidden: true }).textContent).toBe('Ultra');
+  });
+});
+
+
 describe('ui/tooltip — раунд исправлений 1 (находка B №4)', () => {
   it('один TooltipProvider на несколько тултипов — второй показывается без повторной задержки', () => {
     // Реальные таймеры тут не годятся: `findByText` сам ждёт до ~1с, поэтому

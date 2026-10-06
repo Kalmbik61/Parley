@@ -33,8 +33,11 @@
  *
  * Модель — только из списка провайдера (`providers.list.models`, решение 5 спеки): первый пункт `Default` — без
  * флага, модель CLI по умолчанию, дальше подписи списка, в `sessions.create.model` уходит `id`. Нет списка, `null`
- * или пусто — контрола нет и модель не передаётся. Усилие — сегмент `Low` / `Medium` / `High` при `effort: true`,
- * иначе скрыт. Своих списков и свободного ввода в окне нет.
+ * или пусто — контрола нет и модель не передаётся. Effort (нормалайзер модели и effort 2026-10-06, 5.9) — список
+ * `Default` и уровней выбранной модели (`lib/effort-choices.ts`; у модели `Default` — уровни, общие для моделей
+ * провайдера), описание уровня — второй строкой пункта; уровней нет — поля нет. Смена модели сбрасывает уровень,
+ * которого у новой модели нет, в `Default`, смена провайдера — и модель, и уровень. Уходят только явно выбранные
+ * значения: `Default` — без флага, CLI берёт сохранённое у себя. Своих списков и свободного ввода в окне нет.
  *
  * «In its own worktree» (спека 5.1, план worktree 4.3) остаётся: неактивен, пока `worktrees.available` не подтвердит,
  * что проект — git-репозиторий (`branches` для этого не годится: при отсоединённой голове ветки нет и у git-проекта).
@@ -59,6 +62,7 @@ import { errorText, providerName, S } from '../../../shared/strings.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { cn } from '../../lib/cn.js';
 import { defaultProvider } from '../../lib/default-provider.js';
+import { effortChoices } from '../../lib/effort-choices.js';
 import { openWhenListed } from '../../lib/open-when-listed.js';
 import { sessionTag, workTitleText } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
@@ -71,7 +75,6 @@ import { Input } from '../../ui/input.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
-import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { radioGroupKeyDown } from './radio-keys.js';
@@ -86,14 +89,7 @@ export interface NewSessionOrRoomDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type Effort = 'low' | 'medium' | 'high';
 type ProviderOption = Result<'providers.list'>['providers'][number];
-
-const EFFORTS: readonly { value: Effort; label: string }[] = [
-  { value: 'low', label: S.dialogs.newSession.effortLow },
-  { value: 'medium', label: S.dialogs.newSession.effortMedium },
-  { value: 'high', label: S.dialogs.newSession.effortHigh },
-];
 
 /**
  * Пункт `Default` списка моделей. Radix Select не берёт пустую строку как значение пункта, а `id` модели — слово без
@@ -101,20 +97,41 @@ const EFFORTS: readonly { value: Effort; label: string }[] = [
  */
 const DEFAULT_MODEL = ' default';
 
+/** Пункт `Default` списка уровней — без флага `--effort`; уровень — токен без пробелов (`EFFORT_TOKEN`), с ним не совпадёт. */
+const DEFAULT_EFFORT = ' default';
+
 /** Строка агента диалога. `provider: null` — «агент по умолчанию»: он выбирается по ответу `providers.list`. */
 interface AgentRow {
   key: number;
   provider: string | null;
   /** `id` из списка провайдера; `null` — `Default`, без флага. */
   model: string | null;
-  effort: Effort;
+  /** Уровень из списка модели; `null` — `Default`, без флага. */
+  effort: string | null;
 }
 
 /** Итог запуска по строке агента — только после первой попытки. */
 type AgentResult = { status: 'started'; sessionId: string } | { status: 'failed'; message: string };
 
 function initialRows(room: boolean): AgentRow[] {
-  return Array.from({ length: room ? 2 : 1 }, (_, index) => ({ key: index + 1, provider: null, model: null, effort: 'medium' }));
+  return Array.from({ length: room ? 2 : 1 }, (_, index) => ({ key: index + 1, provider: null, model: null, effort: null }));
+}
+
+/**
+ * Модель строки, если она есть в списке провайдера; иначе `null` — `Default`. Каталог мог смениться под открытым
+ * диалогом (`providers.changed`): исчезнувшая модель не показывается выбранной и не уходит в `sessions.create`.
+ */
+function chosenModel(row: Pick<AgentRow, 'model'>, info: ProviderOption | undefined): string | null {
+  return row.model !== null && (info?.models ?? []).some((option) => option.id === row.model) ? row.model : null;
+}
+
+/**
+ * Уровень строки, если он есть среди уровней её модели; иначе `null` — `Default`. Одно правило на подпись списка, сброс
+ * при смене модели и отправку: снимок провайдеров мог смениться под строкой (`providers.changed`).
+ */
+function chosenEffort(row: Pick<AgentRow, 'model' | 'effort'>, info: ProviderOption | undefined): string | null {
+  if (row.effort === null) return null;
+  return effortChoices(info, chosenModel(row, info))?.some((level) => level.id === row.effort) === true ? row.effort : null;
 }
 
 /** Имя папки проекта — последний сегмент пути, как в мете карточки. */
@@ -347,7 +364,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   const addAgent = (): void => {
     const last = agents[agents.length - 1];
-    setAgents((rows) => [...rows, { key: nextKey.current++, provider: last?.provider ?? null, model: null, effort: 'medium' }]);
+    setAgents((rows) => [...rows, { key: nextKey.current++, provider: last?.provider ?? null, model: null, effort: null }]);
   };
 
   const removeAgent = (key: number): void => setAgents((rows) => (rows.length <= 1 ? rows : rows.filter((row) => row.key !== key)));
@@ -389,6 +406,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         // «По умолчанию» становится явным выбором: `lastProvider` сменится, когда запустятся все, и строка не должна
         // за ним перескочить — под итогом «запущена» стояла бы пилюля не того провайдера.
         if (row.provider === null) updateAgent(row.key, { provider: providerId });
+        const model = chosenModel(row, info);
+        const effort = chosenEffort(row, info);
         try {
           const { ref } = await bridge.call('sessions.create', {
             ...target,
@@ -398,9 +417,10 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             task: '',
             parent: null,
             worktree,
-            // Модель и усилие — только когда контрол на экране: провайдер без списка или флага их не получает.
-            ...(row.model !== null && (info?.models?.length ?? 0) > 0 ? { model: row.model } : {}),
-            ...(info?.effort === true ? { effort: row.effort } : {}),
+            // Модель и effort — только явно выбранные и ещё существующие в снимке провайдеров: `Default` — без флага,
+            // провайдер без списка или флага их не получает, исчезнувший после `providers.changed` выбор не уходит.
+            ...(model === null ? {} : { model }),
+            ...(effort === null ? {} : { effort }),
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
@@ -509,6 +529,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
               {agents.map((row, index) => {
                 const info = infoOf(row);
                 const models = info?.models ?? null;
+                const efforts = effortChoices(info, chosenModel(row, info));
                 const chosenId = providerIdOf(row);
                 const result = results[row.key];
                 const rowLocked = busy || result?.status === 'started';
@@ -554,7 +575,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                                   disabled={rowLocked}
                                   onClick={() => {
                                     if (provider.available && !on) {
-                                      updateAgent(row.key, { provider: provider.id, model: null });
+                                      updateAgent(row.key, { provider: provider.id, model: null, effort: null });
                                       setError(null);
                                     }
                                   }}
@@ -592,9 +613,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       </div>
                       {models !== null && models.length > 0 ? (
                         <Select
-                          value={row.model ?? DEFAULT_MODEL}
+                          value={chosenModel(row, info) ?? DEFAULT_MODEL}
                           disabled={rowLocked}
-                          onValueChange={(value) => updateAgent(row.key, { model: value === DEFAULT_MODEL ? null : value })}
+                          onValueChange={(value) => {
+                            const model = value === DEFAULT_MODEL ? null : value;
+                            // Уровня, которого у новой модели нет, больше не выбрать — он сбрасывается в `Default` (спека 5.9).
+                            updateAgent(row.key, { model, effort: chosenEffort({ model, effort: row.effort }, info) });
+                          }}
                         >
                           <SelectTrigger aria-label={text.modelField} className="min-w-0 flex-1">
                             <SelectValue />
@@ -613,25 +638,28 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       ) : (
                         <span className="min-w-0 flex-1" />
                       )}
-                      {info?.effort === true ? (
-                        <ToggleGroup
-                          type="single"
-                          value={row.effort}
+                      {efforts === null ? null : (
+                        <Select
+                          value={chosenEffort(row, info) ?? DEFAULT_EFFORT}
                           disabled={rowLocked}
-                          aria-label={text.effortField}
-                          className="shrink-0"
-                          onValueChange={(value) => {
-                            // Повторный клик по выбранному пункту Radix сообщает пустой строкой — усилие не снимается.
-                            if (value !== '') updateAgent(row.key, { effort: value as Effort });
-                          }}
+                          onValueChange={(value) => updateAgent(row.key, { effort: value === DEFAULT_EFFORT ? null : value })}
                         >
-                          {EFFORTS.map((effort) => (
-                            <ToggleGroupItem key={effort.value} value={effort.value}>
-                              {effort.label}
-                            </ToggleGroupItem>
-                          ))}
-                        </ToggleGroup>
-                      ) : null}
+                          {/* Ширина постоянная: длинная подпись уровня не сдвигает модель и не выталкивает строку из окна 800×500. */}
+                          <SelectTrigger aria-label={text.effortField} className="w-32 shrink-0">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className={LIST_HEIGHT}>
+                            <SelectItem value={DEFAULT_EFFORT} className={ITEM_CLIP}>
+                              {text.effortDefault}
+                            </SelectItem>
+                            {efforts.map((level) => (
+                              <SelectItem key={level.id} value={level.id} description={level.description} className={ITEM_CLIP}>
+                                {level.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                       <button
                         type="button"
                         title={text.removeAgent}

@@ -307,6 +307,9 @@ export const S = {
       /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
       modelDefault: 'Default',
       effortField: 'Effort',
+      /** Первый пункт списка уровней: без флага `--effort` — CLI берёт уровень, сохранённый у себя (нормалайзер 2026-10-06). */
+      effortDefault: 'Default',
+      /** Прежние три уровня: старый хост и свои списки без уровней (`LEGACY_EFFORTS`, `lib/effort-choices.ts`). */
       effortLow: 'Low',
       effortMedium: 'Medium',
       effortHigh: 'High',
