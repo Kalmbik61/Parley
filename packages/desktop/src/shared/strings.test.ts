@@ -32,6 +32,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'parley-md-unreadable',
   'parley-md-truncated',
   'provider-override-gap',
+  'codex-skill-list-kept',
   'memory-truncated',
   'memory-unreadable',
   'plan-effect-failed',

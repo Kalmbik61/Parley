@@ -142,6 +142,8 @@ describe('GLM launch boundaries', () => {
       CLAUDE_CODE_SIMPLE: '1', CLAUDE_CONFIG_DIR: '/wrong', CLAUDE_CODE_HOST_CREDS_FILE: '/wrong',
       CLAUDE_CODE_HOST_AUTH_ENV_VAR: 'STALE_AUTH', STALE_AUTH: 'wrong', PARLEY_HOOK_TOKEN: 'stale',
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: scrub, HTTPS_PROXY: 'https://proxy.test', AWS_ACCESS_KEY_ID: 'sdk',
+      // Сценарий про окружение процесса, а не про навигатор (он включён по умолчанию с 2026-10-06): путь с общим файлом GLM.
+      PARLEY_SKILL_NAVIGATOR: '0',
     });
     const ref = await service().create(input());
     const launch = launches[0]!;

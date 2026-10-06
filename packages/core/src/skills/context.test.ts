@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { projectCodexSkillContext, readCodexSkillCatalog } from './context.js';
+import { projectCodexSkillContext, readCodexListCoverage, readCodexSkillCatalog } from './context.js';
 let root: string;
 let cwd: string;
 let home: string;
@@ -68,5 +68,61 @@ describe('native skill context projection', () => {
     native.config.layers[0]!.config = {};
     await writeFile(path.join(cwd, '.codex/skills/review/agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: false\n');
     expect((await readCodexSkillCatalog({ cwd, homeDir: home, read: async () => native }))?.skills[0]?.unavailableReason).toBe('implicit-invocation-disabled');
+  });
+});
+
+describe('покрытие родного списка Codex поиском find_skill', () => {
+  const coverage = (native: unknown) => readCodexListCoverage({ cwd, homeDir: home, read: async () => native as ReturnType<typeof response> });
+  const nativeSkill = (extra: Record<string, unknown>) => ({ name: 'extra', path: path.join(cwd, 'extra', 'SKILL.md'), scope: 'user', enabled: true, pluginId: null, ...extra });
+  const withSkills = (...extra: Array<Record<string, unknown>>) => {
+    const native = response();
+    native.skills.data[0]!.skills.push(...(extra as never[]));
+    return native;
+  };
+
+  it('только user/project и всё подтверждено — список можно убирать', async () => {
+    expect(await coverage(response())).toBe('covered');
+    expect((await projectCodexSkillContext(cwd, response()))?.uncovered).toBe(0);
+  });
+
+  it('включённый навык плагина, системный, административный — find_skill их не предложит', async () => {
+    const plugin = nativeSkill({ name: 'plug:one', pluginId: 'plug@example' });
+    const system = nativeSkill({ name: 'skill-creator', scope: 'system' });
+    const admin = nativeSkill({ name: 'corp', scope: 'admin' });
+    for (const skill of [plugin, system, admin]) {
+      expect(await coverage(withSkills(skill))).toBe('uncovered');
+      expect((await projectCodexSkillContext(cwd, withSkills(skill)))?.uncovered).toBe(1);
+    }
+  });
+
+  it('выключенный навык вне user/project родной список тоже не показывает: ничего не теряется', async () => {
+    expect(await coverage(withSkills(nativeSkill({ pluginId: 'plug@example', enabled: false }), nativeSkill({ name: 'sys', scope: 'system', enabled: false })))).toBe('covered');
+  });
+
+  it('системный навык на диске (~/.codex/skills/.system) — не покрыт', async () => {
+    await mkdir(path.join(home, '.codex/skills/.system/skill-installer'), { recursive: true });
+    await writeFile(path.join(home, '.codex/skills/.system/skill-installer/SKILL.md'), '---\nname: skill-installer\ndescription: Install skills\n---\n');
+    expect(await coverage(response())).toBe('uncovered');
+  });
+
+  it('навык на диске, которого нет в родном перечне (неподтверждён) — не покрыт', async () => {
+    await mkdir(path.join(cwd, '.codex/skills/stray'), { recursive: true });
+    await writeFile(path.join(cwd, '.codex/skills/stray/SKILL.md'), '---\nname: stray\ndescription: Not in the native list\n---\n');
+    expect(await coverage(response())).toBe('uncovered');
+  });
+
+  it('навык, выключенный человеком или с ручным запуском, родной список тоже не показывает', async () => {
+    await writeFile(path.join(cwd, '.codex/skills/review/agents/openai.yaml'), 'policy:\n  allow_implicit_invocation: false\n');
+    expect(await coverage(response())).toBe('covered');
+    const native = response();
+    native.config.layers[0]!.config = { skills: { config: [{ name: 'review', enabled: false }] } };
+    expect(await coverage(native)).toBe('covered');
+  });
+
+  it('каталог не прочитался (нет ответа, чужая рабочая папка, ошибки перечня) — unreadable', async () => {
+    expect(await readCodexListCoverage({ cwd, homeDir: home, read: async () => null })).toBe('unreadable');
+    const native = response();
+    expect(await coverage({ ...native, skills: { data: [{ ...native.skills.data[0]!, cwd: home }] } })).toBe('unreadable');
+    expect(await coverage({ ...native, skills: { data: [{ ...native.skills.data[0]!, errors: [{ message: 'x' }] }] } })).toBe('unreadable');
   });
 });

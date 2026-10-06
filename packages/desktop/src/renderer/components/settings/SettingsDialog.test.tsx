@@ -24,7 +24,8 @@ const CONFIG = {
   resumeRate: 6,
   autoLaunch: true,
   agentSkills: true,
-  skillNavigator: false,
+  // Как у хоста по умолчанию (с 2026-10-06).
+  skillNavigator: true,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -369,22 +370,22 @@ describe('SettingsDialog — тест 10 куска 9.1: секция Browser', 
 });
 
 describe('SettingsDialog — skill navigator', () => {
-  it('defaults off, saves both ways, and stays independent of agentSkills', async () => {
+  it('defaults on, saves both ways, and stays independent of agentSkills', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('settings.get', () => ({ config: { ...CONFIG, agentSkills: false }, locked: {} }));
     bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, agentSkills: false, [key]: value === 'true' } }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
     switchTo('Agents');
     const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('Applies to new and resumed sessions.')).toBeTruthy();
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
-    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'true' } });
-    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' }).getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
     expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'false' } });
+    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'true' } });
   });
 
   it.each(['PARLEY_SKILL_NAVIGATOR', 'HARNAS_SKILL_NAVIGATOR'])('shows the actual env lock %s', async variable => {
@@ -417,7 +418,8 @@ describe('SettingsDialog — skill navigator', () => {
       const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
       fireEvent.click(toggle);
       await screen.findByText(code === 'bad_request' ? "Couldn't save settings: invalid request." : "Couldn't save settings: failed.");
-      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      // Неудачное сохранение не меняет переключатель: он остался в значении по умолчанию — включён.
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
       expect(screen.queryByText(/secret-config-token/)).toBeNull();
       expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-config-token');
       expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-code-token');

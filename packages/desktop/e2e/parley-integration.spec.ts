@@ -318,10 +318,12 @@ test.describe('сквозная проверка апгрейда Parley, офл
     expect(await frameDigest(), 'Parley изменил конфиги и скиллы человека в ~/.claude, ~/.codex, ~/.agents или ~/.claude.json').toEqual(frameBefore);
   }
 
-  test('навигатор выключен по умолчанию: нет find_skill, бюджета и отдельного settings; остальное работает независимо', async () => {
+  test('навигатор выключен настройкой: нет find_skill, бюджета и отдельного settings; остальное работает независимо', async () => {
     test.setTimeout(90_000);
     await openApp();
-    expect(((await call(window, 'settings.get', {})) as { config: { skillNavigator: boolean; agentSkills: boolean } }).config).toMatchObject({ skillNavigator: false, agentSkills: true });
+    // С 2026-10-06 навигатор включён по умолчанию; этот сценарий проверяет путь без него.
+    expect(((await call(window, 'settings.get', {})) as { config: { skillNavigator: boolean; agentSkills: boolean } }).config).toMatchObject({ skillNavigator: true, agentSkills: true });
+    await setting('skillNavigator', false);
     const workId = await newWork();
     const claude = await newSession(workId);
     const codex = await newSession(workId, { provider: 'codex' });
@@ -371,8 +373,9 @@ test.describe('сквозная проверка апгрейда Parley, офл
     test.setTimeout(120_000);
     await openApp();
     await setting('agentSkills', false);
-    const workId = await newWork();
     // Сначала без навигатора: прежний файл работы — эталон хуков и строки статуса.
+    await setting('skillNavigator', false);
+    const workId = await newWork();
     const plain = await newSession(workId);
     await lastLaunch(plain);
     const legacy = JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'settings.json'), 'utf8')) as { hooks: unknown; statusLine: unknown };
@@ -471,19 +474,22 @@ test.describe('сквозная проверка апгрейда Parley, офл
     await assertFrame();
   });
 
-  test('Codex: каталог сокращён вместе с навигатором, найдена и подсказка; чужой путь до CLI — запасной полный список', async () => {
+  test('Codex: каталог не прочитался (заглушка не отвечает как codex) — родной список остаётся, find_skill рядом; чужой путь до CLI — тоже', async () => {
     test.setTimeout(90_000);
     await openApp();
-    await setting('skillNavigator', true);
+    // Навигатор включён по умолчанию с 2026-10-06. Сокращение каталога Codex — только когда find_skill покрывает все навыки
+    // (проверено юнит-тестами со швом `codexSkillRoute`): заглушка app-server не знает, каталог остаётся целым.
+    expect(((await call(window, 'settings.get', {})) as { config: { skillNavigator: boolean } }).config.skillNavigator).toBe(true);
     const workId = await newWork();
     const codex = await newSession(workId, { provider: 'codex' });
     const launch = await lastLaunch(codex);
 
-    expect(codexConfigs(launch.argv)).toContain('skills.include_instructions=false');
+    expect(codexConfigs(launch.argv)).not.toContain('skills.include_instructions=false');
     const server = codexConfig(launch.argv, 'mcp_servers.parley') ?? '';
     expect(server).toContain('PARLEY_SKILL_NAVIGATOR="1"');
-    expect(server).toContain('PARLEY_SKILL_LIST_REDUCED="1"');
-    expect(layerOf(launch)).toContain("find_skill — skills by task (no native skill list: the tool's description names yours).");
+    expect(server).not.toContain('PARLEY_SKILL_LIST_REDUCED');
+    expect(layerOf(launch)).toContain('find_skill — skills by task, if needed.');
+    expect(layerOf(launch)).not.toContain('no native skill list');
     // Нативный контекст лежит локально и не в git; запуск не записал ничего в конфиг Codex человека.
     const descriptor = JSON.parse(await readFile(path.join(project, '.parley', 'local', 'native-context', workId, `${codex}.json`), 'utf8')) as { verified: boolean };
     expect(descriptor.verified).toBe(true);
@@ -527,6 +533,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
   test('тихая сессия, запуск с задачей, возобновление и смена настройки между запусками', async () => {
     test.setTimeout(120_000);
     await openApp();
+    // Сценарий не про навигатор: он включён по умолчанию с 2026-10-06, а здесь проверяется запуск без него.
+    await setting('skillNavigator', false);
     const workId = await newWork();
     const quiet = await newSession(workId);
     const withTask = await newSession(workId, { task: 'Polish the checkout page' });
@@ -661,6 +669,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
   test('большие слои: UTF-8 в пределах argv проходит, раздутый экранированием слой Codex отвергается до spawn', async () => {
     test.setTimeout(90_000);
     await openApp();
+    // Сценарий не про навигатор: он включён по умолчанию с 2026-10-06, а здесь проверяется запуск без него.
+    await setting('skillNavigator', false);
     const workId = await newWork();
     // 32 000 байт четырёхбайтных знаков в правилах: argv Claude несёт их как есть (предел 96 КиБ на аргумент).
     await writeFile(path.join(project, 'PARLEY.md'), '\u{1F600}'.repeat(8000), 'utf8');
@@ -708,6 +718,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
   test('ревизия плана: две принятые версии — отдельные решения и снимки, старая ревизия отклонена, результат инвалидирован', async () => {
     test.setTimeout(120_000);
     await openApp();
+    // Сценарий не про навигатор: он включён по умолчанию с 2026-10-06, а здесь проверяется запуск без него.
+    await setting('skillNavigator', false);
     const workId = await newWork();
     const { lead, exec, verifier, roomId } = await verifiedRoom(workId);
     const proposed = json<{ proposalId: string; rev: number }>(await agentCalls(lead, workId, 'propose_decision', { room: roomId, plan: plan(exec, verifier, 'src'), text: 'Build it' }));
@@ -751,6 +763,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
   test('конфликт файла снимка: чужой файл цел, принятый план сохранён, человек получает уведомление без путей', async () => {
     test.setTimeout(120_000);
     await openApp();
+    // Сценарий не про навигатор: он включён по умолчанию с 2026-10-06, а здесь проверяется запуск без него.
+    await setting('skillNavigator', false);
     const workId = await newWork();
     const { lead, exec, verifier, roomId } = await verifiedRoom(workId);
     const foreign = path.join(project, '.parley', 'plans', `${workId}-${roomId}-pl-01-rev-0-accepted.md`);

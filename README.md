@@ -16,7 +16,7 @@ for you), files, "Changes" (diffs, commit, merge) and the embedded browser; a co
 palette on ⌘J; and a status bar with providers, CLI versions and subscription limits.
 See "The window" for details. On top of the coordination there is a project layer: team rules in
 `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, a
-Capabilities panel and an optional skill navigator; see "The project layer".
+Capabilities panel and a skill navigator (on by default); see "The project layer".
 
 https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
 
@@ -836,7 +836,7 @@ restarting the window. A field that is set by an environment variable is labeled
   "resumeRate": 6,
   "autoLaunch": true,
   "agentSkills": true,
-  "skillNavigator": false,
+  "skillNavigator": true,
   "fontFamily": "'SF Mono', Menlo, monospace",
   "fontSize": 14,
   "worktreeRoot": "~/parley/worktrees"
@@ -862,8 +862,9 @@ whether to install the `parley` skill into the project folder and into the sessi
 at launch. What exactly is written to disk and how to turn it off are described in "The
 `parley` skill in the project". The host reads the setting on every session launch.
 
-`skillNavigator` (off by default; the toggle is "Skill navigator", "Applies to new and resumed
-sessions") turns on the `find_skill` tool and the shortening of the native skill list; see
+`skillNavigator` (on by default; the toggle is "Skill navigator", "Applies to new and resumed
+sessions") adds the `find_skill` tool and shortens the native skill list; `false` in the file,
+the toggle, or `PARLEY_SKILL_NAVIGATOR=false` (also `0`, `no`, `off`) turns it off; see
 "Skill navigator". The ten limit keys of "Work limits" live in the same `config.json`.
 
 `channelPush` (and the `PARLEY_CHANNEL_PUSH` variable) is the setting for a channel push when
@@ -1080,7 +1081,7 @@ to introduce itself; the server knows who is calling. The tools:
 | `backlog_list(filter?, text?)`, `backlog_suggest(kind, title, details?, why)` | read the project backlog; propose one finding. Agents cannot edit, close or remove items |
 | `remember(kind, fact, details?, why, onHumanRequest?)`, `memory_read(ids?)` | propose one lasting fact, lesson or agreement of the project (it waits for the human) and read the memory with details |
 | `search_history(query, scope?, limit?)` | search the accepted decisions, memory, plans, backlog, room histories and session results |
-| `find_skill(query, for?, limit?)` | only while the skill navigator is on: skills the participant's own CLI can load, with descriptions |
+| `find_skill(query, for?, limit?)` | only while the skill navigator is on (the default): skills the participant's own CLI can load, with descriptions |
 | `add_to_room(room, session)` | the lead brings a live session of the workspace into their room; it leaves its other rooms (one room per session), and the feed shows "@s04 joined the room" |
 | `close_session(target)` | closes a session for good; only after the human's explicit consent |
 | `read_guide(topic?)` | a detailed guide to Parley: without `topic` — all of it, with `topic` — one section |
@@ -1298,7 +1299,7 @@ to it.
 
 This part of Parley is written in the branch `feat/parley-upgrade` and is not part of a
 released version yet. It is checked by tests; the live checks with real `claude` and `codex`
-sessions are still open (see "Known limitations"). The skill navigator is off by default; the
+sessions are still open (see "Known limitations"). The skill navigator is on by default; the
 rest works as soon as the version is installed.
 
 ### PARLEY.md: team rules
@@ -1472,9 +1473,10 @@ session's terminal remain. Second, nothing restarts a running session: the panel
 
 ### Skill navigator
 
-Off by default. Turn it on in Settings → Agents ("Skill navigator"), with
-`"skillNavigator": true` in `config.json` or with `PARLEY_SKILL_NAVIGATOR=1`. It applies to
-new and resumed sessions: the setting is read once per launch.
+On by default since 2026-10-06 for Claude, GLM and Codex. Turn it off in Settings → Agents
+("Skill navigator"), with `"skillNavigator": false` in `config.json` or with
+`PARLEY_SKILL_NAVIGATOR=false` (also `0`, `no`, `off`; the variable wins over the file). It
+applies to new and resumed sessions: the setting is read once per launch.
 
 When it is on, the `parley` MCP server gets one more tool, `find_skill(query, for?, limit?)`:
 a local search by words (BM25 over the name and the description, the name weighs three times
@@ -1485,35 +1487,44 @@ folder and CLI. After two empty searches in a row the tool tells the agent to st
 Skills of the other CLI, and skills that you or the CLI hid (`disable-model-invocation`,
 `skillOverrides`, `allow_implicit_invocation: false`, `enabled = false`), are not returned.
 
-Turning the navigator on also shortens the agent's native skill list, so that descriptions come
+With the navigator on, the agent's native skill list is also shortened, so that descriptions come
 through `find_skill` instead:
 
-- **Claude:** `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` in the agent's environment (the list keeps names
+- **Claude and GLM** (GLM is Claude Code with a Z.ai key): `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` in the agent's environment (the list keeps names
   only) and the `jev-skill-suggestion` mod switched off for this session with an
   `enabledPlugins` entry in the session's own settings file `settings/<session>.json` (the
   hooks and the status line stay). What the model can load is read from the `skill_listing`
   attachment in the session's own transcript.
 - **Codex:** `-c skills.include_instructions=false` (the placeholder `{skillCatalog}`) removes
   the native catalog, and the names of the available skills go into the description of
-  `find_skill`.
+  `find_skill`. This happens only when nothing is lost: at launch Parley reads Codex's own
+  inventory (up to 8 seconds), and if it contains skills that `find_skill` cannot offer (plugin,
+  system, admin or extra skills, or skills that could not be verified), or cannot be read, the
+  native list stays, `find_skill` works next to it, and the launch says so with the notice
+  `codex-skill-list-kept`.
 
 The list stays full, and the launch carries a warning, when the shortening cannot be confirmed:
 a session with a native Claude role (`--agent`), a runner without `{mcpConfig}`, Codex without
 a known binary or with a template that has unknown parts, the jev mod installed while the
 template has no `{settingsFile}`, or a custom Codex runner without `{skillCatalog}`.
 
-What is known and what is not. A probe on 2026-10-05 (Claude Code 2.1.289, Codex 0.160.0)
+What is known and what is not. The default was switched on after live checks on 2026-10-06: a
+pilot and a 30-session wave on Claude Code 2.1.291 (the navigator was accepted 15 of 15 times,
+the native list 14 of 15; fewer tokens in 11 of 14 clean pairs), and one trial session each on GLM
+(names only, a skill loaded by name) and Codex (the catalog removed, the agent called `find_skill`
+itself); see `docs/research/2026-10-04-parley-token-benchmark.md`. In the wave no agent needed
+`find_skill`: it loaded skills by name from the names-only list. A probe on 2026-10-05 (Claude Code 2.1.289, Codex 0.160.0)
 confirmed that both mechanisms work: Claude's list shrank from 7,977 to 3,048 characters for 102
 skills on a small model, and Codex's launch input dropped by about 8,600 tokens. **Not
-measured:** how well agents choose a skill through `find_skill`, and the real saving of tokens
-on an accepted task. The paid paired measurement has not been run; the offline bench for it is
-`tools/parley-token-benchmark.ts` (see `docs/research/2026-10-04-parley-token-benchmark.md`),
-and it makes no paid model calls. Known limits: after the shortening, Codex does not offer
-plugin, system, admin or extra skills at all (only the user and project ones are confirmed);
-a skill that the jev mod made `user-invocable-only` is not offered either. **Run
-`/jev-skill-suggestion:setup restore` before relying on the navigator:** it returns the skills
-that mod hid to the model everywhere. It is your personal setting, Parley does not change it.
-GLM is not covered in this branch.
+measured:** how well agents choose a skill through `find_skill` (no agent has called it on
+Claude), full waves on Codex and GLM, Linux, and a general saving of tokens. The bench is
+`tools/parley-token-benchmark.ts` (see `docs/research/2026-10-04-parley-token-benchmark.md`).
+Known limits: `find_skill` does not offer Codex plugin, system, admin or extra skills, which is
+why Codex keeps its native list while it has any; a skill that the jev mod made
+`user-invocable-only` is not offered either. **If the `jev-skill-suggestion` mod is installed,
+run `/jev-skill-suggestion:setup restore` before relying on the navigator:** it returns the
+skills that mod hid to the model everywhere. It is your personal setting, Parley does not change
+it.
 
 ### Limits of a workspace and a room
 
@@ -1690,7 +1701,7 @@ entirely, and then only its own placeholders work.
 | `{disallowedTools}` | `Edit,Write,NotebookEdit` for a read-only Claude role (`--disallowedTools`) |
 | `{sandbox}` | `sandbox_mode="read-only"` for a read-only Codex role |
 | `{notify}` | the Codex `notify` script |
-| `{skillCatalog}` | `skills.include_instructions=false` for Codex, only while the skill navigator is on and confirmed |
+| `{skillCatalog}` | `skills.include_instructions=false` for Codex, only while the skill navigator is on, the launch is confirmed and `find_skill` covers every skill of Codex's native list |
 | `{prompt}` | the starting brief, or on resume the pointer to messages |
 
 The built-in Claude launch is `claude --session-id <uuid> --mcp-config <file> --settings <file>
@@ -1702,9 +1713,8 @@ chosen template (no `{systemPrompt}` or `{developerInstructions}`, no `{disallow
 session without it. After editing a custom runner, check the window's notices: a missing
 `{developerInstructions}` or `{skillCatalog}` gives `provider-override-gap`.
 
-The built-in GLM entry in this branch runs `glm` with no arguments, so it receives none of
-these: no layer, no roles, no navigator. GLM as a Claude Code session belongs to a later
-version of `master` and is not covered here.
+The skill navigator covers the built-in GLM entry (Claude Code with a Z.ai key) the same way as
+Claude. Roles for GLM are not covered yet.
 
 ### Models
 
@@ -1879,8 +1889,9 @@ the `-c notify`, which a session started by hand needs too. Why each flag:
 - `sandbox_mode="read-only"` — only for a read-only role (see "Roles"); a native Codex role may
   bring its own `sandbox_mode`.
 - `project_doc_fallback_filenames=["CLAUDE.md"]` — the `CLAUDE.md` bridge.
-- `skills.include_instructions=false` — only while the skill navigator is on and the launch is
-  confirmed (see "Skill navigator"); otherwise the pair is dropped and the full list stays.
+- `skills.include_instructions=false` — only while the skill navigator is on, the launch is
+  confirmed and `find_skill` covers every skill of Codex's native list (see "Skill navigator");
+  otherwise the pair is dropped and the full list stays.
 - `tui.terminal_title`, `tui.notifications`, `tui.notification_method` and
   `tui.notification_condition` — the state in the terminal (see below). By default
   notifications are silent while the terminal is "in focus", and for Codex in the host's pty
@@ -2021,16 +2032,17 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
 - **The project layer** (see "The project layer") is checked by tests only. Not yet run with
   real sessions: a Codex launch and resume with the new `-c` flags, the read-only role flags
   on real Claude and Codex sessions, the jev mod switched off while the hooks stay alive, the
-  argument and environment limits on Linux (checked on macOS only), and the human-labelled and
-  paid measurements of the skill navigator. Nothing about a saving of tokens is claimed.
-- **Skill navigator.** Off by default. Codex, once its list is shortened, offers only user and
-  project skills (plugin, system, admin and extra skills are not confirmed and are missing from
-  both the list and `find_skill`); if Codex cannot confirm its native inventory, the list is
-  already removed and `find_skill` answers with an empty list and a reason. Skills that the
-  jev mod made `user-invocable-only` are not offered; run `/jev-skill-suggestion:setup
-  restore` to give them back (a personal setting that Parley never touches). Skills synced from
-  claude.ai appear by name only: their descriptions are not on disk and Parley has no manifest
-  to read them from. GLM is not covered in this branch.
+  argument and environment limits on Linux (checked on macOS only), and the human-labelled
+  prompts and full Codex and GLM waves of the skill navigator. A general saving of tokens is not
+  claimed.
+- **Skill navigator.** On by default. `find_skill` offers only the user and project skills of
+  Codex (plugin, system, admin and extra skills are not confirmed), so Codex keeps its native
+  list while it has any other skills, and also when its inventory cannot be read; every Codex
+  launch reads that inventory once. If the jev mod is installed, the skills it made
+  `user-invocable-only` are not offered; run `/jev-skill-suggestion:setup restore` to give them
+  back (a personal setting that Parley never touches). Skills synced from claude.ai appear by
+  name only: their descriptions are not on disk and Parley has no manifest to read them from.
+  Only Claude was measured in full; Codex and GLM had one trial session each.
 - **Claude's MCP and plugin actions in the Capabilities tab** run only with the audited Claude
   Code build (2.1.287, macOS on Apple silicon); other builds and platforms show them as
   unavailable.

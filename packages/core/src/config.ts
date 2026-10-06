@@ -52,7 +52,10 @@ export interface ParleyConfig extends ResourceLimits {
    * обновляет; уже поставленное не удаляется.
    */
   agentSkills: boolean;
-  /** Session-local skill navigator, disabled until native loader acceptance. */
+  /**
+   * Навигатор скиллов `find_skill` у Claude, GLM и Codex (спека навигатора). Включён по умолчанию с 2026-10-06 по
+   * итогам живых проверок; выключается настройкой, переключателем окна или `PARLEY_SKILL_NAVIGATOR=0`.
+   */
   skillNavigator: boolean;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
@@ -74,7 +77,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   resumeRate: 6,
   autoLaunch: true,
   agentSkills: true,
-  skillNavigator: false,
+  skillNavigator: true,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,

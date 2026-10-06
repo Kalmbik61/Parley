@@ -1596,6 +1596,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
   'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
   'role-missing': 'saved role is unavailable — this session starts without role defaults',
+  'codex-skill-list-kept': "Codex has skills the skill navigator can't offer (plugins, system skills) — its native skill list stays",
   'memory-truncated': 'project memory was cut at 12 KiB — clean up memory.md to include the remaining facts',
   'memory-unreadable': 'could not read project memory — resolve memory.md conflicts or access errors',
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',

@@ -15,20 +15,20 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
 
 describe('typed skill navigator settings', () => {
-  it('defaults false and persists independently of agentSkills', async () => {
-    expect((await settingsGet({}, request)).config.skillNavigator).toBe(false);
-    await settingsSet({ key: 'agentSkills', value: 'false' }, request);
-    const enabled = await settingsSet({ key: 'skillNavigator', value: 'true' }, request);
-    expect(enabled.config).toMatchObject({ skillNavigator: true, agentSkills: false });
+  it('включён по умолчанию, выключается и сохраняется независимо от agentSkills', async () => {
     expect((await settingsGet({}, request)).config.skillNavigator).toBe(true);
-    expect((await settingsSet({ key: 'skillNavigator', value: 'false' }, request)).config.skillNavigator).toBe(false);
+    await settingsSet({ key: 'agentSkills', value: 'false' }, request);
+    const disabled = await settingsSet({ key: 'skillNavigator', value: 'false' }, request);
+    expect(disabled.config).toMatchObject({ skillNavigator: false, agentSkills: false });
+    expect((await settingsGet({}, request)).config.skillNavigator).toBe(false);
+    expect((await settingsSet({ key: 'skillNavigator', value: 'true' }, request)).config.skillNavigator).toBe(true);
   });
   it.each(['PARLEY_SKILL_NAVIGATOR', 'HARNAS_SKILL_NAVIGATOR'])('reports %s and keeps env precedence over persisted settings', async variable => {
-    vi.stubEnv(variable, '1');
+    vi.stubEnv(variable, '0');
     const current = await settingsGet({}, request);
-    expect(current.config.skillNavigator).toBe(true);
+    expect(current.config.skillNavigator).toBe(false);
     expect(current.locked.skillNavigator).toBe(variable);
-    expect((await settingsSet({ key: 'skillNavigator', value: 'false' }, request)).config.skillNavigator).toBe(true);
+    expect((await settingsSet({ key: 'skillNavigator', value: 'true' }, request)).config.skillNavigator).toBe(false);
   });
   it('primary env wins and malformed values are rejected', async () => {
     vi.stubEnv('HARNAS_SKILL_NAVIGATOR', '1');

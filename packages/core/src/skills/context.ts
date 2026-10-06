@@ -3,10 +3,16 @@ import path from 'node:path';
 import { readCodexNativeContext, type CodexContextOptions, type CodexNativeContext } from '../roles/context.js';
 import type { CodexConfigLayer, CodexNativeSkillEvidence } from './codex.js';
 import { resolveSkillCatalog, type SkillCatalog } from './catalog.js';
+import type { SkillUnavailableReason } from './types.js';
 
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
-export interface CodexSkillContext { layers: CodexConfigLayer[]; evidence: CodexNativeSkillEvidence }
+export interface CodexSkillContext {
+  layers: CodexConfigLayer[];
+  evidence: CodexNativeSkillEvidence;
+  /** Включённые родные навыки вне user/repo (плагины, системные, административные): `find_skill` их не предложит. */
+  uncovered: number;
+}
 /** HIGH-to-LOW native layers are projected LOW-to-HIGH. No guessed trust/config merge. */
 export async function projectCodexSkillContext(cwd: string, response: CodexNativeContext): Promise<CodexSkillContext | null> {
   const { config, requirements, skills } = response;
@@ -20,13 +26,16 @@ export async function projectCodexSkillContext(cwd: string, response: CodexNativ
     inventory.skills.length > 20000 || !Array.isArray(inventory.errors) || inventory.errors.length > 0) return null;
   const evidence: CodexNativeSkillEvidence = { cwd: canonical, verified: true, skills: [] };
   const rows: Array<CodexNativeSkillEvidence['skills'][number]> = [];
+  let uncovered = 0;
   const identities = new Map<string, boolean>();
   for (const skill of inventory.skills) {
     if (!record(skill) || typeof skill.name !== 'string' || typeof skill.path !== 'string' ||
       !path.isAbsolute(skill.path) || typeof skill.enabled !== 'boolean' || typeof skill.scope !== 'string') return null;
     // Plugin/extra/system/admin routes remain unavailable; no blanket root promotion.
-    if (skill.pluginId !== undefined && skill.pluginId !== null) continue;
-    if (skill.scope !== 'user' && skill.scope !== 'repo') continue;
+    if ((skill.pluginId !== undefined && skill.pluginId !== null) || (skill.scope !== 'user' && skill.scope !== 'repo')) {
+      if (skill.enabled) uncovered++;
+      continue;
+    }
     let document: string;
     try { document = await realpath(skill.path); } catch { return null; }
     if (document !== skill.path) return null;
@@ -67,7 +76,7 @@ export async function projectCodexSkillContext(cwd: string, response: CodexNativ
     if (Object.hasOwn(layer.config, 'project_root_markers')) data.project_root_markers = layer.config.project_root_markers;
     layers.push({ source, ...(configFolder ? { configFolder } : {}), data, provenance: 'human', ...(disabled ? { disabled: true } : {}) });
   }
-  return { layers, evidence };
+  return { layers, evidence, uncovered };
 }
 export interface SkillContextOptions extends CodexContextOptions {
   homeDir?: string;
@@ -80,7 +89,32 @@ export async function readCodexSkillCatalog(options: SkillContextOptions): Promi
   if (response === null) return null;
   const context = await projectCodexSkillContext(options.cwd, response);
   if (context === null) return null;
-  return resolveSkillCatalog({ provider: 'codex', cwd: options.cwd,
+  return catalogOf(options, context);
+}
+const catalogOf = (options: SkillContextOptions, context: CodexSkillContext): Promise<SkillCatalog> =>
+  resolveSkillCatalog({ provider: 'codex', cwd: options.cwd,
     ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
     ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }), configLayers: context.layers, nativeEvidence: context.evidence });
+
+/** Причины, по которым родной список Codex тоже не показывает навык модели: `find_skill` его не отдаёт и ничего не теряется. */
+const HIDDEN_BY_POLICY = new Set<SkillUnavailableReason>([
+  'human-disabled', 'plugin-disabled', 'implicit-invocation-disabled', 'user-invocable-only', 'disable-model-invocation',
+]);
+const INCOMPLETE_WALK = new Set<string>(['traversal-limit', 'symlink-cycle', 'unreadable']);
+/**
+ * Покрывает ли `find_skill` всё, что показывает родной список Codex этого запуска (решение человека 2026-10-06:
+ * список убираем, только если ничего не теряем). `uncovered` — есть навык, который `find_skill` не предложит
+ * (плагин, системный, административный, неподтверждённый); `unreadable` — каталог не прочитался: безопасная сторона.
+ */
+export async function readCodexListCoverage(options: SkillContextOptions): Promise<'covered' | 'uncovered' | 'unreadable'> {
+  const response = await (options.read ?? readCodexNativeContext)(options, true);
+  if (response === null) return 'unreadable';
+  const context = await projectCodexSkillContext(options.cwd, response);
+  if (context === null) return 'unreadable';
+  if (context.uncovered > 0) return 'uncovered';
+  const catalog = await catalogOf(options, context);
+  // `partial` для этого не годится: его поднимает уже непроверенный корень проекта. Неполный обход — только эти коды.
+  const lost = catalog.diagnostics.some(item => INCOMPLETE_WALK.has(item.code)) || catalog.skills.some(skill => (skill.source !== 'user' && skill.source !== 'project') ||
+    (skill.unavailableReason !== null && !HIDDEN_BY_POLICY.has(skill.unavailableReason)));
+  return lost ? 'uncovered' : 'covered';
 }

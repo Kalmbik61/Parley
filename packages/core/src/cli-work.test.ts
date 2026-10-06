@@ -53,7 +53,11 @@ async function cliEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Resu
 }
 
 async function ok(...args: string[]): Promise<Record<string, unknown>> {
-  const result = await cli(...args);
+  return okEnv({}, ...args);
+}
+
+async function okEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Record<string, unknown>> {
+  const result = await cliEnv(extra, ...args);
   expect(result.code, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
@@ -166,9 +170,26 @@ describe('parley-core work session new', () => {
     expect(result.stderr).not.toContain('fake-zai-key');
     expect(await readMapFile('w-0001')).toEqual(before);
   });
+  it('навигатор включён по умолчанию: снимок в конфиге MCP — 1, а PARLEY_SKILL_NAVIGATOR=0 его выключает', async () => {
+    await newWork('Навигатор');
+    const mcpEnv = async (extra: NodeJS.ProcessEnv): Promise<Record<string, string>> => {
+      const result = await cliEnv(extra, 'work', 'session', 'new', '--work', 'w-0001', '--provider', 'claude', '--label', 'a', '--task', 'x');
+      expect(result.code, result.stderr).toBe(0);
+      const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+      const config = JSON.parse(await readFile(printed['mcpConfig'] as string, 'utf8')) as { mcpServers: Record<string, { env: Record<string, string> }> };
+      return config.mcpServers['parley']!.env;
+    };
+    // Переменные хозяина тестов не должны подменять значение по умолчанию.
+    const unset = { PARLEY_SKILL_NAVIGATOR: '', HARNAS_SKILL_NAVIGATOR: '' };
+    expect(await mcpEnv(unset)).toMatchObject({ PARLEY_SKILL_NAVIGATOR: '1', HARNAS_SKILL_NAVIGATOR: '1' });
+    expect(await mcpEnv({ PARLEY_SKILL_NAVIGATOR: '0' })).toMatchObject({ PARLEY_SKILL_NAVIGATOR: '0', HARNAS_SKILL_NAVIGATOR: '0' });
+  }, 60_000);
+
   it('создаёт pending, бриф, MCP-конфиг и печатает готовую команду', async () => {
     await newWork('Авторизация');
-    const printed = await ok(
+    // Базовый запуск без навигатора: один файл настроек на работу.
+    const printed = await okEnv(
+      { PARLEY_SKILL_NAVIGATOR: '0' },
       'work',
       'session',
       'new',

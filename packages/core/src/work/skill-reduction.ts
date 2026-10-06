@@ -4,11 +4,13 @@
  *
  * - Claude Code: переменная `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` в окружении процесса агента оставляет в каталоге
  *   одни имена, а мод jev выключается записью `enabledPlugins` в файле настроек сессии.
- * - Codex: `-c skills.include_instructions=false` убирает каталог целиком (подстановка `{skillCatalog}`).
+ * - Codex: `-c skills.include_instructions=false` убирает каталог целиком (подстановка `{skillCatalog}`), но только
+ *   если `find_skill` покрывает все навыки родного списка (решение человека 2026-10-06): иначе список остаётся.
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { readCodexListCoverage, type SkillContextOptions } from '../skills/context.js';
 
 /** Окружение процесса агента Claude Code при сокращённом списке: в каталоге остаются имена. */
 export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } as const;
@@ -20,6 +22,15 @@ export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } a
  * рубильник: `false` оставляет список Claude полным, переменная бюджета и мод jev не трогаются.
  */
 export const claudeSkillRoute = { catalogReady: true };
+
+/**
+ * Чтение каталога Codex запуска: покрывает ли `find_skill` весь родной список. Швом служит объект, как
+ * `claudeSkillRoute`: тесты подменяют чтение, настоящий запуск спрашивает `codex app-server`. Ошибка чтения —
+ * `unreadable`, список остаётся полным.
+ */
+export const codexSkillRoute: { coverage: (options: SkillContextOptions) => Promise<'covered' | 'uncovered' | 'unreadable'> } = {
+  coverage: (options) => readCodexListCoverage(options).catch(() => 'unreadable' as const),
+};
 
 /** Значение подстановки `{skillCatalog}`: целое присваивание TOML для `-c` Codex. */
 export const CODEX_SKILL_CATALOG_OVERRIDE = 'skills.include_instructions=false';

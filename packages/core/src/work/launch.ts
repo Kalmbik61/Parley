@@ -44,7 +44,7 @@ import { addSession, removeSession, transitionSession, type NewSession } from '.
 import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
-import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction } from './skill-reduction.js';
+import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { ensureStateDir } from './state-dir.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
@@ -100,7 +100,7 @@ export interface LaunchPlan {
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
-  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
+  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing' | 'codex-skill-list-kept'; message: string }>;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -242,6 +242,7 @@ async function plan(
   // Native context of the launch is computed before the command: the Codex reduction needs it confirmed.
   // Only the actual chosen template/environment enters the LOCAL descriptor.
   let nativeVerified = false;
+  let nativeDescriptor: NativeContextDescriptor | null = null;
   if (skillNavigator) {
     const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
     let descriptor: NativeContextDescriptor | null = null;
@@ -257,11 +258,13 @@ async function plan(
     } catch { /* Unreadable roots/binary do not invent a native context. */ }
     const written = descriptor !== null && await writeNativeContext(projectPath, workId, session.id, descriptor);
     nativeVerified = written && descriptor?.verified === true;
+    if (nativeVerified) nativeDescriptor = descriptor;
   }
 
   // Сокращение родного списка скиллов — только при навигаторе и только там, где путь загрузки подтверждён
   // (спека, 6.1): иначе список остаётся полным.
   let skillList: 'names' | 'removed' | undefined;
+  let codexListUnread = false;
   let disablePlugins: string[] = [];
   if (skillNavigator && isClaudeCode(entry)) {
     const claude = await claudeSkillReduction({
@@ -279,7 +282,21 @@ async function plan(
         code: 'provider-override-gap',
         message: 'Custom Codex runner has no {skillCatalog}; add this placeholder so the skill navigator can shorten the native skill list. The full list stays enabled.',
       });
-    } else if (nativeVerified) skillList = 'removed';
+    } else if (nativeVerified && nativeDescriptor !== null) {
+      // Родной список убирается, только если `find_skill` покрывает всё, что в нём есть (решение человека 2026-10-06);
+      // непрочитанный каталог — тоже «не убирать».
+      const { roots } = nativeDescriptor;
+      const coverage = await codexSkillRoute.coverage({ cwd: nativeDescriptor.cwd, command: nativeDescriptor.command!, configArgs: nativeDescriptor.configArgs,
+        env: { ...process.env, HOME: roots.homeDir, CODEX_HOME: roots.codexHome ?? path.join(roots.homeDir, '.codex') },
+        homeDir: roots.homeDir, ...(roots.codexHome ? { codexHome: roots.codexHome } : {}) });
+      if (coverage === 'covered') skillList = 'removed';
+      else if (coverage === 'uncovered') {
+        diagnostics.push({
+          code: 'codex-skill-list-kept',
+          message: "Codex has skills the skill navigator can't offer (plugins, system skills), so its native skill list stays.",
+        });
+      } else codexListUnread = true;
+    }
   }
 
   // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
@@ -426,7 +443,7 @@ async function plan(
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
-  if (skillNavigator && skillList === undefined && !nativeVerified) {
+  if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
     warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
   }
   warnings.push(...diagnostics.map((warning) => warning.message));

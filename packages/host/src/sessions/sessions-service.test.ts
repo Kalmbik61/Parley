@@ -137,6 +137,9 @@ beforeEach(async () => {
   // Настоящий бинарь в автотестах не запускается никогда — заглушка стоит
   // под именем claude через тот же оверрайд, что и в проде (`findRunnerBinary`).
   setEnv('PARLEY_CLAUDE_BIN', STUB);
+  // Навигатор включён по умолчанию с 2026-10-06: тесты вне его блока проверяют запуск без него, а блок про навигатор
+  // включает его сам.
+  setEnv('PARLEY_SKILL_NAVIGATOR', '0');
 });
 
 afterEach(async () => {
@@ -1653,6 +1656,10 @@ describe('participant native context launch binding', () => {
     let ref: SessionRef | undefined;
     try {
       ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'codex', label: 'Context', task: 'Review', parent: null });
+      // Навигатор при запуске читает каталог Codex тем же бинарём (`app-server`): заглушка успевает записать и этот вызов.
+      await waitFor(async () => {
+        try { return (JSON.parse(await readFile(argsFile, 'utf8')) as StubArgs).argv.some((arg) => arg.startsWith('mcp_servers.parley=')); } catch { return false; }
+      }, REAL_PROCESS_WAIT_MS);
       const args = await readArgs(argsFile);
       const value = JSON.parse(await readFile(path.join(project, '.parley/local/native-context', work.work.id, `${ref.sessionId}.json`), 'utf8'));
       const session = (await readMap(project, work.work.id)).sessions.find(item => item.id === ref!.sessionId)!;
