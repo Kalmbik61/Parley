@@ -22,6 +22,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -87,6 +88,7 @@ function FileRow({ file, onOpen, style }: { file: DiffFile; onOpen(): void; styl
         <span className="w-3 shrink-0 font-mono text-[11px] font-bold text-muted-foreground" title={FILE_STATUS[file.status] ?? file.status}>
           {file.status}
         </span>
+        <FileTypeIcon path={file.path} />
         <span className="min-w-0 flex-1 truncate">{file.path}</span>
         {/* Двоичный файл чисел не имеет (numstat `-`). `+N` — accent-2-700, `−N` — accent-700 (1.8). */}
         {file.additions === null ? null : <span className="shrink-0 text-[11px] font-semibold tabular-nums text-status-success-text">{`+${file.additions}`}</span>}

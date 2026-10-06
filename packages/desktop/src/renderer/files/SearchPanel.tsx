@@ -18,6 +18,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot, GrepHit, GrepResult } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { tabId } from '../layout/ids.js';
 import { cn } from '../lib/cn.js';
 import { useFilesStore } from './store.js';
@@ -242,6 +243,7 @@ export function SearchPanel({ bridge, root }: SearchPanelProps): JSX.Element {
                 className="flex w-full min-w-0 items-center gap-1 rounded-full px-2 py-0.5 text-left hover:bg-foreground/6 hover:[--muted-foreground:var(--foreground)]"
               >
                 {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                <FileTypeIcon path={file.path} />
                 <span className="min-w-0 flex-1 truncate">{file.path}</span>
                 <span className="shrink-0 tabular-nums text-muted-foreground">{file.hits.length}</span>
               </button>
