@@ -820,6 +820,20 @@ describe('ChatView — индикатор работы, Resume и меню мо�
     expect(model().tagName).toBe('SPAN');
     expect(screen.queryByTestId('chat-model-option')).toBeNull();
   });
+
+  it('GLM — ни меню модели, ни подсказок «/model »: Claude Code сохранил бы модель Z.ai умолчанием общего ~/.claude', () => {
+    const GLM_OK = {
+      id: 'glm', label: 'GLM', available: true, version: '2.1.287', family: 'claude' as const, limits: null,
+      models: [{ id: 'glm-5.3[1m]', label: 'GLM-5.3 (1M context)' }, { id: 'glm-5.3-flash[1m]', label: 'GLM-5.3 Flash (1M context)' }],
+    };
+    useProvidersStore.setState({ providers: [CLAUDE_OK, GLM_OK], loaded: true });
+    renderBody(makeSession('s-01', 'S01', { provider: 'glm' }));
+    setFeed([{ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model: 'glm-5.3[1m]' } }]);
+    expect(model().tagName).toBe('SPAN');
+    expect(screen.queryByTestId('chat-model-option')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: S.chat.composer.label }), { target: { value: '/model ' } });
+    expect(screen.queryByTestId('chat-suggestions')).toBeNull();
+  });
 });
 
 describe('ChatView — подсказки поля ввода (живая проверка 2026-10-02)', () => {

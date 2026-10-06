@@ -749,7 +749,7 @@ interrupts the turn with Esc. A turn stopped before any reply leaves no trace in
 which also puts the prompt back into its terminal input: the host closes such a turn in the
 feed itself and erases that text, so the next message is not glued to it. If the host refuses
 a message (the session is not running, is busy or waits for an answer), the text and the
-attachments return to the field. Typing `/` lists Claude Code's commands and your skills, `/model ` lists the models
+attachments return to the field. Typing `/` lists Claude Code's commands and your skills, `/model ` lists Claude's models
 and `@` lists subagents and the files of the session's working copy: ↑/↓ choose, Enter or Tab
 insert, Esc closes. The window only inserts the text — Claude Code parses it.
 
@@ -770,9 +770,11 @@ switches to the chat once. Your own choice of view is remembered per tab and win
 **Mode and model.** The toolbar's mode menu sets Manual, Accept edits, Plan or Auto. The host
 presses Shift+Tab in the hidden terminal until the footer of the screen shows the chosen mode;
 if it cannot confirm the change, it asks you to open the terminal. Bypass mode is set in the
-terminal only. The model menu lists the provider's models and sends `/model <id>` to the
-session. For GLM, this Chat model choice is not saved separately and may reset on resume to
-the session's configured launch model (GLM-5.3 by default).
+terminal only. The model menu lists Claude's models and sends `/model <id>` to the session;
+Claude Code also saves that model as your default for new Claude sessions. GLM has no model
+menu in Chat: Claude Code would save the Z.ai model as the default of the local Claude Code
+settings it shares with Claude, and your Claude sessions would then fail. Choose the GLM model
+when you create the session.
 
 **Version.** Chat view needs Claude Code 2.1.286 or newer; GLM needs 2.1.287 or newer to
 launch at all. Codex and older versions of Claude Code stay terminal-only: the segment is
@@ -1422,9 +1424,11 @@ not isolate the key from a malicious local process that can read your files or p
 
 GLM shares Claude Code's transcript format and Chat view. The first launch stays in Terminal
 until the first activity hook; answer trust, onboarding and permission questions there.
-Resume starts with the session's configured launch model, GLM-5.3 by default; a `/model`
-choice made in Chat is not separately persisted and may reset. Avoid `/logout` in GLM:
-it can change the shared local Claude Code sign-in used by your Claude sessions.
+Resume starts with the session's configured launch model, GLM-5.3 by default. Chat has no
+model menu for GLM: choose the model when you create the session. Avoid `/model` and
+`/logout` in a GLM terminal: Claude Code saves a `/model` choice as the default model of the
+local Claude Code settings shared with your Claude sessions, and `/logout` can change their
+shared sign-in.
 
 GLM-5.3 is text-only; choose **GLM-5.3 Flash** for screenshots and other images. GLM has no
 Claude channel and never shows Claude subscription limits; its Z.ai quota is read only on

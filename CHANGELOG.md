@@ -6,6 +6,14 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **GLM Chat no longer replaces your Claude default model.** Claude Code saves a `/model`
+  choice as the default for new sessions in the local settings that GLM shares with Claude,
+  so picking a GLM model in the Chat menu made plain Claude sessions start with a Z.ai model
+  and fail. GLM's Chat has no model menu and no `/model ` suggestions now; choose the model
+  when you create the session.
+
 ## 0.5.2
 
 ### Added

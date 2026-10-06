@@ -412,6 +412,14 @@ a room agent», «Providers»). Открыто:
   С чего начать: `packages/host/src/methods/providers.ts` (`createProvidersSetKey`),
   `packages/host/src/sessions/sessions-service.ts` (`launch(ref, 'resume')`, `stop`),
   `packages/host/src/sessions/provider-env.ts`.
+- **Смена модели и effort из чата — «только для этой сессии».** Найдено 2026-10-06 на заглушке
+  API: интерактивные `/model <id>` и `/effort <level>` Claude Code сохраняют выбор умолчанием в
+  `settings.json` («saved as your default for new sessions»), а GLM-сессии делят `~/.claude` с
+  обычным Claude, и модель Z.ai там ломает сессии Claude (`--settings` не спасает). В 0.5.3 у GLM
+  меню модели и подсказки `/model ` в чате убраны; у Claude меню по-прежнему меняет его модель
+  по умолчанию. Сделать в нормалайзере модели и effort: переключать через меню `/model` и
+  ползунок `/effort` с клавишей `s` («for this session only»), вернуть меню GLM. С чего начать:
+  `packages/desktop/src/renderer/chat/ChatView.tsx` (`selectModel`, `modelOptions`).
 - **GLM в интерфейсе.** Запись реестра есть, значок — буква. У Z.ai нужно выяснить, есть
   ли ZCode как CLI; иначе GLM идёт через `claude` с базовым URL Z.ai — серая зона.
 - **«Агент у приглашения» для провайдеров без хуков и без сигналов терминала** (GLM). У

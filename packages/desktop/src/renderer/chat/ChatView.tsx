@@ -136,7 +136,11 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const canInterrupt = useHostSupports('feed.interrupt');
   const [modeBusy, setModeBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
-  const modelOptions = useProvidersStore((state) => state.providers.find((item) => item.id === provider)?.models) ?? NO_MODELS;
+  const providerModels = useProvidersStore((state) => state.providers.find((item) => item.id === provider)?.models) ?? NO_MODELS;
+  // Смена модели из чата — текст `/model <id>`, а интерактивный Claude Code сохраняет его моделью по
+  // умолчанию в общих настройках `~/.claude`. У GLM это id Z.ai: обычные сессии Claude уйдут с ним
+  // в Anthropic и упадут. Пока нет смены «только для этой сессии», у GLM нет ни меню, ни подсказок.
+  const modelOptions = provider === 'glm' ? NO_MODELS : providerModels;
   // Карточка неживой сессии — то же правило, что у `TerminalSurface`.
   const showCard = useWorksStore((state) => {
     const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
