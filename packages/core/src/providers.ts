@@ -88,7 +88,7 @@ export interface ProviderEntry {
   runner: RunnerConfig;
   /**
    * Модели, из которых окно предлагает выбрать (`selectableModels`): значение `--model`, подпись и уровни
-   * effort модели. У встроенных `claude`, `codex` и `glm` список — из каталога `provider-models.ts`, у
+   * effort модели. У встроенных — из каталога `provider-models.ts` (у `codex` — из `codexModelsFile`, если он есть), у
    * прочих — из `providers.json`. Нет списка (`null` или поля нет — одно и то же, как и на проводе) —
    * окно контрол не показывает, а хост принимает любое значение, как и прежде. «По умолчанию» в
    * списке не хранится: это отсутствие выбора, без флага.
@@ -678,6 +678,23 @@ export function providersFile(): string {
   return path.join(parleyHome(), 'providers.json');
 }
 
+/**
+ * Каталог моделей Codex, снятый хостом с `codex debug models` (спека нормалайзера, 5.2): файл Parley в доме,
+ * `{ "fetchedAt": "<ISO>", "models": ModelOption[] }`. Пишет его только хост, атомарно, после удачной пробы.
+ * `loadProviders` подставляет его модели в запись `codex`, поэтому окно, хост и MCP агента (отдельный
+ * процесс) видят один список.
+ */
+export function codexModelsFile(): string {
+  return path.join(parleyHome(), 'codex-models.json');
+}
+
+/**
+ * Пределы подписи модели и описания уровня из каталога CLI: длиннее обрезают и разбор `codex debug models` в хосте,
+ * и чтение `codexModelsFile` — внешний ввод не растягивает ни окно, ни ответ `get_map`.
+ */
+export const MODEL_LABEL_MAX = 100;
+export const EFFORT_DESCRIPTION_MAX = 300;
+
 /** Запись `providers.json`: плоская, все поля необязательные (спецификация, раздел 5). */
 export interface ProviderOverride {
   badge?: string;
@@ -837,6 +854,59 @@ const isEffortList = (value: unknown): value is string[] | null =>
     value.every((item) => typeof item === 'string' && EFFORT_TOKEN.test(item)) &&
     new Set(value).size === value.length);
 
+/** Уровень из каталога Codex: id — токен, подпись непустая, описание — строка или его нет. */
+const isEffortOption = (value: unknown): value is EffortOption =>
+  isRecord(value) &&
+  typeof value['id'] === 'string' &&
+  EFFORT_TOKEN.test(value['id']) &&
+  isNonEmptyString(value['label']) &&
+  (value['description'] === undefined || typeof value['description'] === 'string');
+
+/**
+ * Модели из файла каталога Codex (`codexModelsFile`). Файла нет, он не разбирается, список пуст или хоть одна
+ * модель или уровень не той формы — `null`: это кэш Parley, а не настройка человека, и тогда молча действует
+ * запасной список. В запись ложатся только известные поля; подпись модели и описание уровня — не длиннее
+ * `MODEL_LABEL_MAX` и `EFFORT_DESCRIPTION_MAX`.
+ */
+async function readCodexModels(file: string): Promise<ModelOption[] | null> {
+  let data: unknown;
+  try {
+    data = JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  const models = isRecord(data) ? data['models'] : undefined;
+  if (!isModelList(models) || models.length === 0) return null;
+  const levelsValid = models.every(
+    (model) =>
+      model.efforts === undefined ||
+      model.efforts === null ||
+      (Array.isArray(model.efforts) &&
+        model.efforts.length > 0 &&
+        model.efforts.every(isEffortOption) &&
+        new Set(model.efforts.map((level) => level.id)).size === model.efforts.length),
+  );
+  if (!levelsValid) return null;
+  return models.map((model) => ({
+    id: model.id,
+    label: model.label.slice(0, MODEL_LABEL_MAX),
+    ...(model.efforts === undefined
+      ? {}
+      : {
+          efforts:
+            model.efforts === null
+              ? null
+              : model.efforts.map((level) => ({
+                  id: level.id,
+                  label: level.label,
+                  ...(level.description === undefined
+                    ? {}
+                    : { description: level.description.slice(0, EFFORT_DESCRIPTION_MAX) }),
+                })),
+        }),
+  }));
+}
+
 function checkShape(id: string, file: string, patch: Record<string, unknown>): void {
   const wrong =
     ['family', 'env', 'settingsModel', 'secret', 'minVersion', 'runner'].some(
@@ -928,10 +998,12 @@ function applyOverride(
  * Встроенный реестр плюс необязательные переопределения из
  * `providers.json` дома (`parleyHome()`): merge по id, свои провайдеры добавляются.
  * Битый файл — ошибка: реестр пишем не мы, но догадываться о его форме нельзя,
- * иначе харнесс молча запустит не то, что просил пользователь.
+ * иначе харнесс молча запустит не то, что просил пользователь. Модели `codex` до
+ * `providers.json` берутся из каталога хоста (`codexModelsFile`), если он есть и цел.
  */
 export async function loadProviders(
   file = providersFile(),
+  codexFile = codexModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -945,6 +1017,11 @@ export async function loadProviders(
       } as ProviderEntry,
     ]),
   );
+
+  // Живой каталог Codex — раньше `providers.json`: свой список человека важнее обоих (спека нормалайзера, 5.2).
+  const codex = registry['codex'];
+  const live = await readCodexModels(codexFile);
+  if (codex !== undefined && live !== null) registry['codex'] = { ...codex, models: live };
 
   let raw: string;
   try {

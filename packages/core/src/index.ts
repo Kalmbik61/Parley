@@ -53,9 +53,12 @@ export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
+  EFFORT_DESCRIPTION_MAX,
   EFFORT_TOKEN,
+  MODEL_LABEL_MAX,
   PROVIDERS,
   agentEnv,
+  codexModelsFile,
   commandBinary,
   commandInPath,
   effortsFor,

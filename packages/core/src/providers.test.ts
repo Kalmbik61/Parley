@@ -4,8 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment } from '../test/toml-mini.js';
 import {
+  EFFORT_DESCRIPTION_MAX,
   EFFORT_TOKEN,
+  MODEL_LABEL_MAX,
   PROVIDERS,
+  codexModelsFile,
   commandInPath,
   commandBinary,
   effortsFor,
@@ -1029,6 +1032,129 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
         },
       });
       await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
+    });
+  });
+
+  describe('каталог Codex из файла хоста (спека нормалайзера модели и effort, 5.2)', () => {
+    /** Модели, как их пишет хост из `codex debug models`: подписи — `display_name`, описания уровней — каталога. */
+    const LIVE = [
+      {
+        id: 'gpt-7-sol',
+        label: 'GPT-7-Sol',
+        efforts: [
+          { id: 'low', label: 'Low', description: 'Fast responses with lighter reasoning' },
+          { id: 'ultra', label: 'Ultra' },
+        ],
+      },
+      { id: 'gpt-7-mini', label: 'GPT-7-Mini', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> =>
+      writeFile(codexModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('файл лежит в доме Parley; нет файла — запасной список', async () => {
+      expect(codexModelsFile()).toBe(path.join(home, 'codex-models.json'));
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toEqual(
+        selectableModels(PROVIDERS.codex),
+      );
+    });
+
+    it('модели из файла хоста заменяют запасной список Codex — тот же список видят окно и MCP; соседи не тронуты', async () => {
+      await writeLive({ fetchedAt: '2026-10-06T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      const codex = registry['codex'] as ProviderEntry;
+
+      expect(selectableModels(codex)).toStrictEqual(LIVE);
+      expect(resolveModelEffort(codex, { model: 'gpt-7-sol', effort: 'ultra' })).toStrictEqual({
+        choice: { model: 'gpt-7-sol', effort: 'ultra' },
+      });
+      expect(resolveModelEffort(codex, { model: 'gpt-6.1-sol' })).toMatchObject({ error: expect.stringContaining('gpt-7-sol') });
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+      expect(selectableModels(PROVIDERS.codex)?.[0]?.id).toBe('gpt-6.1-sol');
+    });
+
+    it('models из providers.json важнее файла хоста', async () => {
+      await writeLive({ fetchedAt: '2026-10-06T10:00:00.000Z', models: LIVE });
+      await write({ codex: { models: [{ id: 'mine', label: 'Моя' }] } });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        { id: 'mine', label: 'Моя' },
+      ]);
+    });
+
+    it('в запись ложатся только известные поля: лишнее из файла до окна не доходит', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [{ id: 'a', label: 'A', priority: 1, efforts: [{ id: 'low', label: 'Low', effort: 'low' }] }],
+      });
+
+      expect(selectableModels((await loadProviders())['codex'] as ProviderEntry)).toStrictEqual([
+        { id: 'a', label: 'A', efforts: [{ id: 'low', label: 'Low' }] },
+      ]);
+    });
+
+    it('испорченный или пустой файл молча игнорируется: остаётся запасной список, loadProviders не падает', async () => {
+      const broken = [
+        '{не json',
+        '[]',
+        '{}',
+        JSON.stringify({ models: [] }),
+        JSON.stringify({ models: 'gpt-7-sol' }),
+        JSON.stringify({ models: [{ id: '-x', label: 'X' }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A' }, { id: 'a', label: 'Б' }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'hi gh', label: 'X' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'low' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: [{ id: 'low', label: 'L' }, { id: 'low', label: 'L' }] }] }),
+        JSON.stringify({ models: [{ id: 'a', label: 'A', efforts: 'low' }] }),
+      ];
+      for (const raw of broken) {
+        await writeFile(codexModelsFile(), raw, 'utf8');
+        expect(selectableModels((await loadProviders())['codex'] as ProviderEntry), raw).toEqual(
+          selectableModels(PROVIDERS.codex),
+        );
+      }
+    });
+
+    it('внешний ввод: подпись длиннее 100 и описание длиннее 300 знаков обрезаются; незнакомый уровень-токен идёт как есть', async () => {
+      await writeLive({
+        fetchedAt: '2026-10-06T10:00:00.000Z',
+        models: [
+          {
+            id: 'gpt-7-sol',
+            label: 'S'.repeat(150),
+            efforts: [{ id: 'turbo', label: 'Turbo', description: 'd'.repeat(400) }],
+          },
+        ],
+      });
+      const codex = (await loadProviders())['codex'] as ProviderEntry;
+
+      expect([MODEL_LABEL_MAX, EFFORT_DESCRIPTION_MAX]).toEqual([100, 300]);
+      expect(selectableModels(codex)).toStrictEqual([
+        {
+          id: 'gpt-7-sol',
+          label: 'S'.repeat(100),
+          efforts: [{ id: 'turbo', label: 'Turbo', description: 'd'.repeat(300) }],
+        },
+      ]);
+      // Уровень-токен, которого Parley не знает, не отвергается: и проверка, и подстановка — по EFFORT_TOKEN.
+      expect(resolveModelEffort(codex, { model: 'gpt-7-sol', effort: 'turbo' })).toStrictEqual({
+        choice: { model: 'gpt-7-sol', effort: 'turbo' },
+      });
+      expect(startCommand(codex, { model: 'gpt-7-sol', effort: 'turbo', prompt: 'p' }).args).toContain(
+        'model_reasoning_effort="turbo"',
+      );
+    });
+
+    it('id модели, который стал бы флагом или двумя аргументами `--model`, — файл не читается целиком', async () => {
+      for (const id of ['-gpt', '--model', 'gpt 7', 'gpt\t7', 'x'.repeat(201)]) {
+        await writeLive({
+          fetchedAt: '2026-10-06T10:00:00.000Z',
+          models: [{ id, label: 'X' }, { id: 'gpt-7-sol', label: 'GPT-7-Sol' }],
+        });
+        expect(selectableModels((await loadProviders())['codex'] as ProviderEntry), JSON.stringify(id)).toEqual(
+          selectableModels(PROVIDERS.codex),
+        );
+      }
     });
   });
 
