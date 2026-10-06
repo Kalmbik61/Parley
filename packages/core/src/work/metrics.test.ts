@@ -137,8 +137,11 @@ describe('readSessionMetrics', () => {
     expect(await readSessionMetrics('claude', 'нет-такой', { claudeRoot: FIXTURES })).toBeNull();
   });
 
-  it('провайдер без истории (glm) — null: читать нечего', async () => {
-    expect(await readSessionMetrics('glm', 'что-угодно', { claudeRoot: FIXTURES })).toBeNull();
+  it('GLM reads the Claude-family transcript adapter', async () => {
+    expect(await readSessionMetrics('glm', 'session-1', { claudeRoot: FIXTURES })).toEqual(
+      await readSessionMetrics('claude', 'session-1', { claudeRoot: FIXTURES }),
+    );
+    expect(await readSessionMetrics('glm', 'session-1', { claudeRoot: FIXTURES })).not.toBeNull();
   });
 
   it('в логе нет ни одной записи с usage — токены null, а не нули', async () => {
@@ -256,7 +259,7 @@ describe('linkProviderSession', () => {
     expect(id).toBeNull();
   });
 
-  it('провайдер без истории (glm) — null', async () => {
+  it('GLM with externally assigned session id needs no cwd/time linking', async () => {
     const id = await linkProviderSession(
       PROVIDERS.glm,
       { cwd: '/Users/dev/проект', startedAt: START },

@@ -100,6 +100,16 @@ const silentLog = (): Log & { warnings: string[] } => {
 };
 
 describe('startProviderVersions: одна проба на старте, с кэшем', () => {
+  it('fresh reuses the supplied probe after an upgrade and updates the cache', async () => {
+    let version = '2.1.286';
+    const versions = startProviderVersions(async () => version, silentLog());
+    await versions.ready;
+    expect(versions.get('claude')).toBe('2.1.286');
+    version = '2.1.287';
+    expect(await versions.fresh('claude')).toBe('2.1.287');
+    expect(versions.get('claude')).toBe('2.1.287');
+    expect(await startProviderVersions(undefined, silentLog()).fresh('claude')).toBeNull();
+  });
   it('без пробы (тесты, PARLEY_SKIP_VERSION_PROBE) версий нет и ничего не запускается', async () => {
     const versions = startProviderVersions(undefined, silentLog());
     await versions.ready;
@@ -114,12 +124,12 @@ describe('startProviderVersions: одна проба на старте, с кэ�
     }, silentLog());
     await versions.ready;
 
-    expect(calls.sort()).toEqual(['claude', 'codex', 'glm']);
+    expect(calls.sort()).toEqual(['claude', 'codex']);
     expect(versions.get('claude')).toBe('2.1.276');
     expect(versions.get('codex')).toBe('0.44.0');
     expect(versions.get('glm')).toBeNull();
     expect(versions.get('claude')).toBe('2.1.276');
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
   });
 
   it('пробуются и провайдеры из providers.json, и одна команда — один раз', async () => {
@@ -135,7 +145,7 @@ describe('startProviderVersions: одна проба на старте, с кэ�
     }, silentLog());
     await versions.ready;
 
-    expect(calls.sort()).toEqual(['claude', 'codex', 'glm', 'opencode']);
+    expect(calls.sort()).toEqual(['claude', 'codex', 'opencode']);
     expect(versions.get('opencode')).toBe('9.9.9');
   });
 

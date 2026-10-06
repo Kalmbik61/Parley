@@ -24,6 +24,8 @@ import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
+import { createGlmCheckService } from './limits/glm-check.js';
+import type { GlmCheckOptions } from './limits/glm-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startProviderVersions } from './providers/versions.js';
@@ -56,6 +58,11 @@ export interface HostOptions {
    * не задаёт ничего — опрос раз в 30 секунд, логи в `~/.codex/sessions`; тесты и E2E окна — свои.
    */
   limits?: LimitsServiceOptions;
+  /**
+   * Явная проверка ключа Z.ai (`providers.check`): сеть, часы и файл исхода. Боевой хост не задаёт ничего;
+   * тесты подменяют `fetch`, а E2E окна — исход без сети (`PARLEY_GLM_CHECK_STUB`).
+   */
+  glmCheck?: GlmCheckOptions;
   /**
    * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
    * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
@@ -273,6 +280,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // старта, когда снимок работ уже прочитан.
   const limitsService = createLimitsService(handle.context, worksService, options.limits);
   handle.context.onShutdown(async () => limitsService.stop());
+  // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
+  const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
 
   const backlogService = createBacklogService();
   handle.context.onShutdown(async () => backlogService.close());
@@ -284,6 +293,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worksReady,
     providerVersions,
     limits: limitsService,
+    glmCheck,
     works: worksService,
     activity: activityService,
     pty: ptyManager,

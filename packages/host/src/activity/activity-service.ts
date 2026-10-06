@@ -319,15 +319,27 @@ export function createActivityService(
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
     if (terminal === undefined && session.provider !== 'codex') return journal;
-    const base = journal ?? [];
+    let base = journal ?? [];
     const last = terminal?.last;
     if (last === null || last === undefined) return base;
+    const signals = [last];
+    // Codex может не прислать Ready/notify после ответа. Явное событие rollout
+    // завершает такой ход; старый конец хода не перекрывает более новый сигнал терминала.
+    const turn = logIndex.index(session)?.lastTurnEvent;
+    if (turn !== undefined && Date.parse(turn.at) >= Date.parse(last.at)) {
+      signals.push(
+        bareEvent(turn.at, turn.type === 'task_started' ? TERMINAL_WORKING_EVENT : 'Stop'),
+      );
+    }
     // Журнал идёт в порядке файла, а его время не убывает: терминальное событие встаёт после последнего
     // не более позднего — конец хода от `notify`, пришедший позже сигнала следующего хода, его не перекроет.
-    const at = Date.parse(last.at);
-    let index = base.length;
-    while (index > 0 && Date.parse(base[index - 1]?.at ?? '') > at) index -= 1;
-    return [...base.slice(0, index), last, ...base.slice(index)];
+    for (const signal of signals) {
+      const at = Date.parse(signal.at);
+      let index = base.length;
+      while (index > 0 && Date.parse(base[index - 1]?.at ?? '') > at) index -= 1;
+      base = [...base.slice(0, index), signal, ...base.slice(index)];
+    }
+    return base;
   }
 
   /**
@@ -609,9 +621,9 @@ export function createActivityService(
 
     const key = refKey(ref);
     const events = eventsFor(session, key);
-    // Под хостом живёт процесс codex — состояние ведёт его терминал, а лог только мешал бы: запись
-    // конца хода (`task_complete`, `token_count`) новее события и вернула бы `working` на порог тишины
-    // после каждого хода. Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
+    // Под хостом состояние Codex ведут сигналы терминала и явные события хода из rollout (eventsFor).
+    // Общая свежесть лога не годится: token_count после ответа снова вернул бы working.
+    // Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
     const driven = terminals.has(key);
     const log = driven ? null : logIndex.log(session);
     const now = nowFn();

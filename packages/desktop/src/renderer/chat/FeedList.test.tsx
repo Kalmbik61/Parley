@@ -27,6 +27,33 @@ vi.mock('./items/TextItem.js', () => ({
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
 const AT = '2026-10-01T00:00:00.000Z';
+
+it('shows the active retry countdown and returns to working when output resumes', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(AT));
+  try {
+    const retry = {
+      id: 'retry:6', at: AT, kind: 'error' as const,
+      error: '429', message: 'Usage limit reached for 5 hour.',
+      retry: { delayMs: 8000, attempt: 6, maxAttempts: 10 },
+    };
+    const view = render(feed([retry], { since: AT }));
+    expect(screen.getByTestId('chat-working').textContent).toContain('Retrying in 8s · attempt 6/10');
+    expect(screen.getByTestId('chat-error').textContent).toContain('429');
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByTestId('chat-working').textContent).toContain('Retrying in 5s');
+    act(() => vi.advanceTimersByTime(5000));
+    expect(screen.getByTestId('chat-working').textContent).toContain('Retrying…');
+    view.rerender(feed([retry, text('answer', 'Recovered')], { since: AT }));
+    expect(screen.getByTestId('chat-working').textContent).toContain(S.chat.working);
+    view.rerender(feed([text('answer', 'Recovered'), { ...retry, retry: { ...retry.retry, resolved: true } }], { since: AT }));
+    expect(screen.getByTestId('chat-working').textContent).toContain(S.chat.working);
+    view.rerender(feed([retry]));
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 const text = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'text', messageId: id, text: body, streaming: false });
 
 let bridge: FakeBridge;

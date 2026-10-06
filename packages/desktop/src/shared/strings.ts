@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind } from '@parley/protocol';
+import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
   plans: {
@@ -412,6 +412,15 @@ export const S = {
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
   statusBar: {
+    refreshLimits: 'Refresh provider limits',
+    refreshErrors: {
+      authentication: 'Z.ai rejected the saved key (401). Open GLM and replace it with your full Z.ai API key.',
+      unsupportedResponse: 'The current Z.ai quota response is not supported.',
+      timeout: 'The Z.ai quota request timed out. Try again.',
+      unavailable: 'Z.ai quota is temporarily unavailable. Try again.',
+    },
+    providerTitle: (name: string, available: boolean): string =>
+      `${name} — ${available ? 'connected' : 'not connected. Click to connect'}`,
     wakePaused: 'Auto-wake paused',
     wakeOn: 'Auto-wake on',
     /** Хосту не хватает методов этой сборки окна (спека 3.2, 5.9). */
@@ -437,8 +446,8 @@ export const S = {
         .join(' · '),
     /**
      * Тултип лимитов: «5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM».
-     * Окон, которых нет, в нём нет; «Updated» — всегда: числа обновляются, только пока агент работает
-     * (спека 3.5, «Свежесть»). Время и день приходят уже местными и короткими — форматирует вызывающий.
+     * Неизвестное время сброса пропускается; «Updated» — всегда. Время и день приходят уже местными
+     * и короткими — форматирует вызывающий.
      */
     limitsTooltip: (fiveHourResets: string | null, weekResets: { day: string; time: string } | null, updated: string): string =>
       [
@@ -448,6 +457,69 @@ export const S = {
       ]
         .filter((part) => part !== '')
         .join(' · '),
+  },
+
+  /** Общая карточка подключения: строка статуса и диалог новой сессии. */
+  providerCard: {
+    connected: 'Connected',
+    notConnected: 'Not connected',
+    copy: 'Copy',
+    copied: 'Copied',
+    installationGuide: 'Installation guide',
+    signInGuide: 'Sign-in guide',
+    checkAgain: 'Check again',
+    signIn: "Sign-in happens in the agent's terminal on the first session — Parley does not sign you in.",
+    path: 'Installed it into a new folder? Quit Parley (⌘Q) and open it again: the app reads PATH once at launch.',
+    account: (command: string): string => `To change your account, run ${command} in the agent's terminal.`,
+    glmDescription: 'GLM models in Claude Code, on your GLM Coding Plan (Z.ai).',
+    glmPlan: 'Requires an active GLM Coding Plan.',
+    glmCli: 'Requires the official Claude Code CLI, version 2.1.287 or newer. Check again after installing or updating it.',
+    glmUnavailable: 'This GLM runner is unavailable. Use the official Claude Code CLI and check again.',
+    glmLogout: 'Avoid /logout in GLM: it can change the shared local Claude Code sign-in used by your Claude sessions.',
+    keyLabel: 'Z.ai API key',
+    keyHint: (hint: string): string => `Key ${hint}`,
+    noKey: 'No key saved. Paste your Z.ai key and choose Save or Check again.',
+    save: 'Save',
+    replace: 'Replace',
+    remove: 'Remove',
+    getKey: 'Get a key',
+    restartRequired: 'Restart the host to manage your saved GLM key.',
+    restartHost: 'Restart host',
+    /** Явная проверка ключа GLM тестовым сообщением (`providers.check`): шапка, строка и подробности. */
+    notVerified: 'Not verified',
+    checking: 'Checking…',
+    checkingLine: 'Sending a test request to Z.ai…',
+    checkedOk: (time: string): string => `Test request OK · checked ${time}`,
+    checkDetails: (httpStatus: number | undefined, code: string | undefined, time: string): string =>
+      [httpStatus === undefined ? '' : `HTTP ${httpStatus}`, code === undefined ? '' : `code ${code}`, `checked ${time}`]
+        .filter((part) => part !== '')
+        .join(' · '),
+    checkLabel: {
+      authentication: 'Key rejected',
+      plan_expired: 'Plan expired',
+      no_plan: 'No active plan',
+      limit_reached: 'Limit reached',
+      model_unavailable: 'Model not in plan',
+      key_restricted: 'Key restricted',
+      rate_limited: 'Z.ai busy',
+      server_error: 'Z.ai error',
+      timeout: 'No answer',
+      network: 'No connection',
+      unsupported_response: 'Unexpected answer',
+    } satisfies Record<ProviderCheckReason, string>,
+    checkHint: {
+      authentication: 'Z.ai rejected the saved key. Paste the whole key again or create a new one with "Get a key".',
+      plan_expired: 'Your GLM Coding Plan has expired. Renew it on Z.ai, then check again.',
+      no_plan: 'This key has no active GLM Coding Plan or balance. Subscribe on Z.ai, then check again.',
+      limit_reached: "The key works, but your plan's 5-hour or weekly limit is used up. GLM sessions work again after the reset.",
+      model_unavailable: "Your plan doesn't include GLM-5.3, the model GLM sessions start with.",
+      key_restricted: 'Z.ai restricts this key. Use a key from your GLM Coding Plan.',
+      rate_limited: 'Z.ai is busy or limiting requests. Try again in a minute.',
+      server_error: 'Z.ai returned a server error. Try again later.',
+      timeout: "Z.ai didn't answer in time. Check your connection and try again.",
+      network: "Couldn't reach Z.ai. Check your internet connection, VPN or proxy.",
+      unsupported_response: 'Z.ai answered in an unexpected format. Try again; if it repeats, the Z.ai API may have changed.',
+    } satisfies Record<ProviderCheckReason, string>,
   },
 
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
@@ -494,6 +566,7 @@ export const S = {
       submitSession: 'Start session',
       submitRoom: 'Create room',
       selectWorkRequired: 'No workspace selected',
+      providerUnavailable: (name: string): string => `${name} is unavailable. Connect it or choose another agent.`,
       /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
       agentStarted: (tag: string): string => `${tag} started`,
       /** Бюджет работы (P37): строка в подвале — что занято и сколько запусков осталось в часе. */
@@ -936,6 +1009,10 @@ export const S = {
     turnInterrupted: (duration: string | null): string => (duration === null ? 'Interrupted' : `Interrupted · ${duration}`),
     /** Строка «агент работает» под лентой, пока текста ещё нет (живая проверка 2026-10-02). */
     working: 'Working…',
+    retrying: 'Retrying request',
+    retryAttempt: (attempt: number, maxAttempts: number): string => `attempt ${attempt}/${maxAttempts}`,
+    retryDelay: (seconds: number): string => seconds > 0 ? `Retrying in ${seconds}s` : 'Retrying…',
+    retryScheduled: (seconds: number): string => `Retry scheduled after ${seconds}s`,
     error: 'Request failed',
     agent: {
       fallbackTitle: 'Agent',
@@ -1296,6 +1373,12 @@ export const S = {
   errors: {
     actions: {
       loadProviders: 'load providers',
+      refreshProviderLimits: 'refresh provider limits',
+      saveProviderKey: 'save the provider key',
+      checkProviderKey: 'check the GLM key',
+      removeProviderKey: 'remove the provider key',
+      copyInstallCommand: 'copy the install command',
+      openProviderGuide: 'open the provider guide',
       loadWorkspaces: 'load workspaces',
       createSession: 'create session',
       createWorkspace: 'create workspace',
@@ -1452,6 +1535,8 @@ export function providerName(id: string, label: string): string {
       return 'Claude Code';
     case 'codex':
       return 'Codex';
+    case 'glm':
+      return 'GLM';
     default:
       return label === '' ? id : label;
   }

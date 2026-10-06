@@ -151,6 +151,44 @@ async function started(options: ActivityServiceOptions = {}, over = {}) {
 }
 
 describe('сигналы терминала codex → активность', () => {
+  it.each(['task_complete', 'turn_aborted'])(
+    '%s в rollout завершает ход без Ready и notify, следующий ход снова работает',
+    async (type) => {
+      const { a, ref } = await started({}, { providerSessionId: 'rollout-state' });
+      const dir = path.join(codexRoot, '2026', '10', '05');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, 'rollout-2026-10-05T10-00-00-rollout-state.jsonl');
+      const record = (type: string, timestamp: string) =>
+        `${JSON.stringify({ timestamp, type: 'event_msg', payload: { type } })}\n`;
+      a.terminalSignal(ref, WORKING);
+      await settle(40);
+      const endedAt = new Date().toISOString();
+      await writeFile(
+        file,
+        `${JSON.stringify({ timestamp: endedAt, type: 'session_meta', payload: { id: 'rollout-state', cwd: project, source: 'cli' } })}\n` +
+          record(type, endedAt),
+      );
+      await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+      expect(a.get(ref)?.activity.turnEndedAt).toBe(endedAt);
+      a.markSeen(ref);
+      expect(a.get(ref)?.activity.activity).toBe('idle');
+
+      // Служебные записи после ответа не означают новый ход.
+      await appendFile(file, record('token_count', new Date().toISOString()));
+      await settle(300);
+      expect(a.get(ref)?.activity.activity).toBe('idle');
+
+      await appendFile(file, record('task_started', new Date().toISOString()));
+      await waitFor(() => a.get(ref)?.activity.activity === 'working');
+      a.terminalSignal(ref, ACTION);
+      expect(a.get(ref)?.activity.activity).toBe('blocked');
+      await appendFile(file, record('token_count', new Date().toISOString()));
+      await settle(300);
+      expect(a.get(ref)?.activity.activity).toBe('blocked');
+    },
+    15_000,
+  );
+
   it('working → working; ready → unseen; markSeen → idle', async () => {
     const { a, ref } = await started();
 

@@ -57,7 +57,12 @@ export {
   agentEnv,
   commandBinary,
   commandInPath,
+  probeCliVersion,
+  providerCompatibilityError,
+  providerReadiness,
+  providerReadinessError,
   loadProviders,
+  isClaudeCode,
   modelChoiceError,
   printCommand,
   providersFile,
@@ -74,6 +79,9 @@ export type {
   EffortLevel,
   McpConfigKind,
   ProviderEntry,
+  ProviderReadiness,
+  ProviderReadinessOptions,
+  ProviderFamily,
   ProviderInfo,
   ProviderOverride,
   RunnerConfig,
@@ -307,6 +315,15 @@ export {
   saveConfig,
 } from './config.js';
 export type { ParleyConfig, LoadedConfig } from './config.js';
+export {
+  SecretFormatError,
+  clearSecret,
+  normalizeSecret,
+  readSecret,
+  secretHint,
+  writeSecret,
+} from './secrets.js';
+export type { SecretId } from './secrets.js';
 export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,

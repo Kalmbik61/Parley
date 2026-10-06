@@ -44,7 +44,8 @@ let logs = '';
 const saved: Record<string, string | undefined> = {};
 
 const setEnv = (name: string, value: string | undefined): void => {
-  saved[name] = process.env[name];
+  // Исходное значение — при первой подмене: повторная подмена в том же тесте не должна сохранить подменённое.
+  if (!(name in saved)) saved[name] = process.env[name];
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 };
@@ -68,6 +69,7 @@ afterEach(async () => {
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
+    delete saved[name];
   }
   await Promise.all([home, project, logs].map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -792,6 +794,15 @@ describe('план возобновления', () => {
 });
 
 describe('системная вставка гида', () => {
+  it('custom GLM command is refused before plan settings are generated', async () => {
+    const { workId, sessionId } = await pending('glm');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { command: 'wrapper' } }));
+    for (const makePlan of [planLaunch, planNew, planResume]) {
+      await expect(makePlan(project, workId, session)).rejects.toThrow(/official claude/);
+    }
+    await expect(stat(path.join(workPaths(project, workId).dir, 'settings-glm.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   /** Значение `--append-system-prompt` в плане запуска; '' — флага нет. */
   const guidanceOf = (args: string[]): string =>
     args[args.indexOf('--append-system-prompt') + 1] ?? '';
@@ -1163,10 +1174,11 @@ describe('common session layer delivery', () => {
       .rejects.toThrow('role-delivery-unavailable');
   });
 
-  it('a custom GLM system channel receives the same layer while built-in GLM stays plain', async () => {
+  it('GLM, a claude-family runner, receives the layer both built-in and through a custom template', async () => {
     const { workId, sessionId } = await pending('codex');
     const session = { ...await sessionOf(workId, sessionId), provider: 'glm' };
-    expect((await planLaunch(project, workId, session)).args).toEqual([]);
+    const builtIn = await planLaunch(project, workId, session);
+    expect(builtIn.args[builtIn.args.indexOf('--append-system-prompt') + 1]).toContain('Your workspace is');
     await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { args: ['--append-system-prompt', '{systemPrompt}', '{prompt}'] } }));
     await writeFile(path.join(project, 'PARLEY.md'), 'CUSTOM GLM RULES');
     const plan = await planLaunch(project, workId, session);
@@ -1396,16 +1408,19 @@ describe('navigator launch settings and fallback', () => {
 });
 
 describe('unsupported navigator launch', () => {
-  it.each([false, true])('GLM keeps its unchanged runner with navigator %s', async enabled => {
-    setEnv('PARLEY_GLM_BIN', STUB);
+  it.each([false, true])('GLM gets no navigator reduction with navigator %s', async enabled => {
     setEnv('PARLEY_SKILL_NAVIGATOR', enabled ? '1' : '0');
     const { workId, sessionId } = await pending('glm');
     for (const planner of [planNew, planResume]) {
       const plan = await planner(project, workId, await sessionOf(workId, sessionId));
-      expect(plan.args).not.toContain('--settings');
+      // Файл настроек у GLM свой (маршрутизация и модель), без сессионного слоя навигатора и без выключенных плагинов.
+      const settingsFile = plan.args[plan.args.indexOf('--settings') + 1]!;
+      expect(path.basename(settingsFile)).toBe('settings-glm.json');
+      expect(await readFile(settingsFile, 'utf8')).not.toContain('enabledPlugins');
       expect(plan.args.join(' ')).not.toContain('find_skill');
       expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
-      if (enabled) expect(plan.warnings.join(' ')).toContain('full native skill list');
+      expect(plan.env['PARLEY_SKILL_NAVIGATOR']).toBe('0');
+      expect(plan.warnings).toEqual([]);
     }
   });
 });
@@ -1762,5 +1777,68 @@ describe('ограниченный стартовый контекст (P34)', (
     const file = path.join(workPaths(project, workId).briefs, `${sessionId}.md`);
     await writeFile(file, `${await readFile(file, 'utf8')}${'я'.repeat(40_000)}`, 'utf8');
     await expect(planLaunch(project, workId, await sessionOf(workId, sessionId))).rejects.toThrow(/context-budget-exceeded/);
+  });
+});
+
+describe('GLM launch plans', () => {
+  it('uses separate settings, nonsensitive routing and no channels', async () => {
+    const { workId, sessionId } = await pending('glm');
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), {
+      channel: true,
+      hookUrl: 'http://127.0.0.1:53123/hooks',
+      model: 'glm-5.3-flash[1m]',
+    });
+    expect(plan.command).toBe('claude');
+    expect(plan.args).toContain('--session-id');
+    expect(plan.args).toContain('--mcp-config');
+    expect(plan.args).not.toContain('--dangerously-load-development-channels');
+    expect(plan.warnings).toEqual([]);
+    expect(plan.env).toMatchObject({
+      ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]',
+    });
+    expect(plan.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+    const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+    expect(path.basename(file)).toBe('settings-glm.json');
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ model: 'glm-5.3-flash[1m]' });
+    await expect(stat(workPaths(project, workId).settings)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it.each([undefined, 'glm-5.3-flash[1m]'])(
+    'native resume starts with configured model %s',
+    async (model) => {
+      const { workId, sessionId } = await pending('glm');
+      const session = await sessionOf(workId, sessionId);
+      session.providerSessionId = 'glm-conversation';
+      if (model !== undefined) session.model = model;
+      const dir = path.join(logs, 'project');
+      await mkdir(dir, { recursive: true });
+      // A prior Chat /model choice does not replace the configured Parley launch model.
+      await writeFile(
+        path.join(dir, 'glm-conversation.jsonl'),
+        JSON.stringify({ type: 'assistant', message: { model: 'glm-5.3-flash[1m]' } }),
+      );
+      const plan = await planResume(project, workId, session);
+      expect(plan.args.slice(0, 2)).toEqual(['--resume', 'glm-conversation']);
+      expect(plan.args[plan.args.indexOf('--model') + 1]).toBe(model ?? 'glm-5.3[1m]');
+      const settings = JSON.parse(
+        await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'),
+      );
+      expect(settings.model).toBe(model ?? 'glm-5.3[1m]');
+    },
+  );
+
+  it('missing GLM transcript starts again with the assigned id', async () => {
+    const { workId, sessionId } = await pending('glm');
+    const session = await sessionOf(workId, sessionId);
+    session.providerSessionId = 'glm-conversation';
+    const plan = await planResume(project, workId, session);
+    expect(plan.args).not.toContain('--resume');
+    expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe('glm-conversation');
+    expect(plan.providerSessionId).toBe('glm-conversation');
   });
 });

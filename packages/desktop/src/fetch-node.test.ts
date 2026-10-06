@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ARCHS,
   DEFAULT_OUT_ROOT,
@@ -82,6 +82,7 @@ describe('fetchNode', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(work, { recursive: true, force: true });
   });
 
@@ -140,7 +141,89 @@ describe('fetchNode', () => {
   }
 
   const fetchArm64 = (fetchImpl: (url: string) => Promise<Response>) =>
-    fetchNode({ arch: 'arm64', version: VERSION, baseUrl: BASE, outRoot: out, fetchImpl, log: () => undefined });
+    fetchNode({ arch: 'arm64', version: VERSION, baseUrl: BASE, outRoot: out, fetchImpl, log: () => undefined, sleep: async () => undefined });
+
+  it('retries a transient nested network cause with bounded delays and safe diagnostics', async () => {
+    const { network } = await mirror('arm64');
+    const failure = Object.assign(new TypeError('fetch failed secret-diagnostic'), {
+      cause: new AggregateError([Object.assign(new Error('secret-path'), { code: 'ETIMEDOUT' })]),
+    });
+    const fetchImpl = vi.fn().mockRejectedValueOnce(failure).mockRejectedValueOnce(failure).mockImplementation(network.fetchImpl);
+    const log = vi.fn();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    expect(await fetchNode({ arch: 'arm64', version: VERSION, baseUrl: BASE, outRoot: out, fetchImpl, log, sleep })).toBe('fetched');
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([1000, 2000]);
+    const messages = log.mock.calls.map(([message]) => message).join('\n');
+    expect(messages).toContain(`checksums ${BASE}/v${VERSION}/SHASUMS256.txt: network failure (ETIMEDOUT)`);
+    expect(messages).not.toContain('secret-');
+    const signals = fetchImpl.mock.calls.slice(0, 3).map(([, options]) => (options as RequestInit).signal);
+    expect(signals[0]).toBe(signals[1]);
+    expect(signals[0]).toBe(signals[2]);
+  });
+
+  it.each([408, 429, 500, 503, 599])('retries transient HTTP %s and still verifies the downloaded archive', async (status) => {
+    const { network } = await mirror('arm64');
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('secret-body', { status })).mockImplementation(network.fetchImpl);
+    expect(await fetchArm64(fetchImpl)).toBe('fetched');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a failed archive body read without using a partial download', async () => {
+    const { network, binary } = await mirror('arm64');
+    const fetchImpl = vi.fn().mockImplementationOnce(network.fetchImpl).mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) {
+        controller.error(Object.assign(new Error('secret-body-error'), { code: 'ECONNRESET' }));
+      },
+    }))).mockImplementation(network.fetchImpl);
+    expect(await fetchArm64(fetchImpl)).toBe('fetched');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(await readFile(path.join(out, 'darwin-arm64', 'bin', 'node'))).toEqual(binary);
+  });
+
+  it('stops after three transient failures without leaking messages or creating output', async () => {
+    const failure = Object.assign(new Error('secret-message'), { cause: Object.assign(new Error('secret-cause'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) });
+    const fetchImpl = vi.fn().mockRejectedValue(failure);
+    const error = await fetchArm64(fetchImpl).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain(`checksums ${BASE}/v${VERSION}/SHASUMS256.txt: network failure (UND_ERR_CONNECT_TIMEOUT) (attempt 3/3)`);
+    expect(String(error)).not.toContain('secret-');
+    expect(error).not.toHaveProperty('cause');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(await readdir(out).catch(() => [])).toEqual([]);
+  });
+
+  it('retries a plain fetch failure when no cause code is available', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    await expect(fetchArm64(fetchImpl)).rejects.toThrow(/network failure.*attempt 3\/3/);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry unknown or TLS errors or print their causes', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('secret-certificate-path'), { code: 'CERT_HAS_EXPIRED' }),
+    }));
+    await expect(fetchArm64(fetchImpl)).rejects.toThrow(`checksums ${BASE}/v${VERSION}/SHASUMS256.txt: network failure (attempt 1/3)`);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops on the shared deadline instead of adding another ten-minute attempt', async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw Object.assign(new Error('secret-timeout'), { code: 'ETIMEDOUT' });
+    });
+    await expect(fetchArm64(fetchImpl)).rejects.toThrow(/checksums.*download timeout.*attempt 1\/3/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(10 * 60 * 1000);
+  });
+
+  it.each([400, 401, 403, 404])('does not retry nontransient HTTP %s', async (status) => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response('secret-body', { status }));
+    await expect(fetchArm64(fetchImpl)).rejects.toThrow(`HTTP ${status} (attempt 1/3)`);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 
   it('скачивает, сверяет sha256 с SHASUMS256.txt и кладёт bin/node и LICENSE в darwin-<arch>', async () => {
     const { binary, network } = await mirror('arm64');
@@ -172,6 +255,7 @@ describe('fetchNode', () => {
     const { network } = await mirror('arm64', { license: null });
 
     await expect(fetchArm64(network.fetchImpl)).rejects.toThrow();
+    expect(network.calls).toHaveLength(2);
     expect(await readdir(out).catch(() => [])).toEqual([]);
   });
 
@@ -179,6 +263,7 @@ describe('fetchNode', () => {
     const { network } = await mirror('arm64', { license: '' });
 
     await expect(fetchArm64(network.fetchImpl)).rejects.toThrow(/LICENSE: пустой файл/);
+    expect(network.calls).toHaveLength(2);
     expect(await readdir(out).catch(() => [])).toEqual([]);
   });
 
@@ -226,6 +311,7 @@ describe('fetchNode', () => {
     const { network } = await mirror('arm64', { shasum: '0'.repeat(64) });
 
     await expect(fetchArm64(network.fetchImpl)).rejects.toThrow(/sha256.*SHASUMS256\.txt/);
+    expect(network.calls).toHaveLength(2);
     expect(await readdir(out).catch(() => [])).toEqual([]);
   });
 
@@ -240,12 +326,14 @@ describe('fetchNode', () => {
     const network = fakeNetwork({});
 
     await expect(fetchArm64(network.fetchImpl)).rejects.toThrow(/SHASUMS256\.txt: HTTP 404/);
+    expect(network.calls).toHaveLength(1);
   });
 
   it('в архиве arm64 лежит бинарь x64 — ошибка: архитектуры перепутать нельзя', async () => {
     const { network } = await mirror('arm64', { header: 'x64' });
 
     await expect(fetchArm64(network.fetchImpl)).rejects.toThrow(/Mach-O arm64.*x64/);
+    expect(network.calls).toHaveLength(2);
     expect(await readdir(out).catch(() => [])).toEqual([]);
   });
 });

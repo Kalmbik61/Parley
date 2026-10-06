@@ -43,12 +43,14 @@ async function scanRoots(roots: string[]): Promise<FrameHit[]> {
 }
 
 describe('FRAME_RULES', () => {
-  it('покрывает все четыре правила таблицы спеки 14.4', () => {
+  it('покрывает четыре правила спеки 14.4 и границы ключа GLM', () => {
     expect(FRAME_RULES.map((item) => item.rule)).toEqual([
       'учётные данные агентов',
       'запись в каталоги агентов',
       'API провайдеров',
       'YOLO-флаги',
+      'секрет GLM вне хранилища',
+      'ключ GLM вне окружения процесса',
     ]);
   });
 });
@@ -108,6 +110,95 @@ describe('scanSource', () => {
   });
 });
 
+describe('узкие исключения добровольно введённого ключа GLM (спека провайдеров, 4.2–5)', () => {
+  // Правила, которые снимают только исключения GLM; остальные исключения закреплены поимённо в тесте выше.
+  const GLM_RULES = ['API провайдеров', 'секрет GLM вне хранилища', 'ключ GLM вне окружения процесса'];
+  const approved = [
+    {
+      file: 'packages/host/src/limits/zai-quota.ts',
+      rule: 'API провайдеров',
+      line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",
+    },
+    {
+      file: 'packages/host/src/limits/zai-check.ts',
+      rule: 'API провайдеров',
+      line: "const ZAI_MESSAGES_URL = 'https://api.z.ai/api/anthropic/v1/messages';",
+    },
+    {
+      file: 'packages/core/src/providers.ts',
+      rule: 'API провайдеров',
+      line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",
+    },
+    {
+      file: 'packages/core/src/secrets.ts',
+      rule: 'секрет GLM вне хранилища',
+      line: "const secretsPath = (): string => path.join(parleyHome(), 'secrets.json');",
+    },
+    {
+      file: 'packages/host/src/sessions/provider-env.ts',
+      rule: 'ключ GLM вне окружения процесса',
+      line: 'if (key !== null) env.ANTHROPIC_AUTH_TOKEN = key;',
+    },
+  ];
+
+  it('новые исключения — только согласованные строки GLM', () => {
+    expect(
+      FRAME_EXCEPTIONS.filter((item) => GLM_RULES.includes(item.rule)).map(
+        ({ file, rule, line }) => ({ file, rule, line }),
+      ),
+    ).toEqual(approved);
+  });
+
+  it.each(approved)('разрешает только согласованную строку в $file', ({ file, rule, line }) => {
+    expect(scanSource(file, `  ${line}`)).toEqual([]);
+    expect(isFrameException(file, rule, line)).toBe(true);
+    const exception = FRAME_EXCEPTIONS.find((item) => item.file === file && item.rule === rule);
+    expect(exception?.line).toBe(line);
+    expect(exception?.reason).toMatch(/спека провайдеров/);
+    expect(exception?.reason).not.toContain('\n');
+  });
+
+  it.each(approved)('ловит ту же строку вне $file', ({ rule, line }) => {
+    for (const file of ['packages/core/src/other.ts', 'packages/host/src/other.ts']) {
+      const hits = scanSource(file, line);
+      expect(hits, file).toHaveLength(1);
+      expect(hits[0]?.rule).toBe(rule);
+    }
+  });
+
+  it.each(approved)('ловит дополненный код в разрешённом $file', ({ file, rule, line }) => {
+    const hits = scanSource(file, `${line} leak();`);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.rule).toBe(rule);
+    for (const other of FRAME_RULES.filter((item) => item.rule !== rule)) {
+      expect(isFrameException(file, other.rule, line)).toBe(false);
+    }
+  });
+
+  it('разрешение endpoint не разрешает HTTP-запрос даже из реестра', () => {
+    expect(
+      scanSource('packages/core/src/providers.ts', "fetch('https://api.z.ai/api/anthropic');"),
+    ).toMatchObject([{ rule: 'API провайдеров' }]);
+  });
+
+  it('разрешение пути не разрешает чтение хранилища из другого модуля', () => {
+    expect(
+      scanSource('packages/host/src/sessions/provider-env.ts', "readFile('secrets.json');"),
+    ).toMatchObject([{ rule: 'секрет GLM вне хранилища' }]);
+  });
+
+  it('разрешение токена не разрешает его запись в файл или план', () => {
+    for (const line of [
+      'writeFile(file, JSON.stringify({ ANTHROPIC_AUTH_TOKEN: key }));',
+      'plan.env.ANTHROPIC_AUTH_TOKEN = key;',
+    ]) {
+      expect(scanSource('packages/host/src/sessions/provider-env.ts', line)).toMatchObject([
+        { rule: 'ключ GLM вне окружения процесса' },
+      ]);
+    }
+  });
+});
+
 /**
  * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт
  * строки статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась
@@ -130,7 +221,9 @@ describe('исключение для чтения settings.json в скрипт
   // оно краснит этот тест, пока человек не прочитал строку и не добавил её сюда осознанно.
   // Все, кроме statusline.ts, — чтение: спека возможностей (2026-10-02) запрещает писать в
   // ~/.claude.json и settings.json, читать их можно; и проверка конфликтных флагов Codex в
-  // agents.ts, которая такие флаги отвергает, а не подставляет.
+  // agents.ts, которая такие флаги отвергает, а не подставляет. Исключения провайдеров
+  // (спека провайдеров, 4.2–5) — только фиксированные адреса Z.ai, хранилище ключа и финальное
+  // окружение процесса GLM.
   it('исключений ровно перечисленные: файл и правило, причина — одна строка', () => {
     expect(FRAME_EXCEPTIONS.map((item) => `${item.file} | ${item.rule}`)).toEqual([
       `${STATUSLINE} | запись в каталоги агентов`,
@@ -141,6 +234,11 @@ describe('исключение для чтения settings.json в скрипт
       'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/native-targets.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/snapshot.ts | запись в каталоги агентов',
+      'packages/host/src/limits/zai-quota.ts | API провайдеров',
+      'packages/host/src/limits/zai-check.ts | API провайдеров',
+      'packages/core/src/providers.ts | API провайдеров',
+      'packages/core/src/secrets.ts | секрет GLM вне хранилища',
+      'packages/host/src/sessions/provider-env.ts | ключ GLM вне окружения процесса',
     ]);
     for (const exception of FRAME_EXCEPTIONS) {
       expect(exception.reason, exception.file).not.toBe('');
@@ -343,8 +441,8 @@ describe('рамочный тест репозитория (тест 6)', () => 
       [
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
-        'packages/core/src/providers.ts:14',
-        'packages/core/src/providers.ts:235',
+        'packages/core/src/providers.ts:17',
+        'packages/core/src/providers.ts:251',
         'packages/core/src/work/mcp-config.ts:161',
       ].sort(),
     );

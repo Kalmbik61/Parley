@@ -1,7 +1,7 @@
 /**
  * Лимиты подписки провайдера: общие типы и разбор того, что отдают сами CLI (спека комнат
- * Organic, раздел 3.5). Учётные данные не читаются и к API никто не ходит: Claude Code сам
- * присылает `rate_limits` строке статуса, Codex сам пишет их в лог сессии.
+ * Organic, раздел 3.5). Claude Code присылает `rate_limits` строке статуса, Codex пишет их
+ * в лог сессии. Квота GLM приходит из отдельного хостового запроса к Z.ai.
  *
  * Модуль — лист без внутренних зависимостей: его тянет и скрипт строки статуса
  * (`work/statusline.ts`), а тот зовётся Claude Code часто, и лишний импорт там — лишние
@@ -15,8 +15,8 @@ import path from 'node:path';
 export interface LimitWindow {
   /** 0–100; дробное бывает (`23.5`). */
   usedPercent: number;
-  /** Когда окно сбросится, ISO 8601. */
-  resetsAt: string;
+  /** Когда окно сбросится, ISO 8601; null — источник не сообщает время. */
+  resetsAt: string | null;
 }
 
 /** Лимиты одного провайдера: пятичасовое и недельное окна, каждое может отсутствовать. */
@@ -25,6 +25,8 @@ export interface ProviderLimits {
   week: LimitWindow | null;
   /** Когда CLI отдал эти числа, ISO 8601: по нему хост выбирает самые свежие. */
   at: string;
+  /** Подтверждённая квота Z.ai, а не лимиты claude.ai из общей строки статуса. */
+  source?: 'zai';
 }
 
 /** Каталог работы, куда скрипт строки статуса кладёт файл на сессию: `limits/<session-id>.json`. */
@@ -127,8 +129,10 @@ export async function readWorkLimits(workDir: string): Promise<Map<string, Provi
  * окне не убывает, поэтому берётся большее `usedPercent`. Разный сброс — окно сменилось, берётся
  * то, что кончается позже.
  */
-function laterWindow(a: LimitWindow | null, b: LimitWindow | null): LimitWindow | null {
+function laterWindow(a: LimitWindow | null, b: LimitWindow | null, preferB: boolean): LimitWindow | null {
   if (a === null || b === null) return a ?? b;
+  // Неизвестный сброс нельзя упорядочить как дату: последнее наблюдение выбирает mergeLimits.
+  if (a.resetsAt === null || b.resetsAt === null) return preferB ? b : a;
   const byReset = Date.parse(a.resetsAt) - Date.parse(b.resetsAt);
   if (byReset !== 0) return byReset > 0 ? a : b;
   return b.usedPercent > a.usedPercent ? b : a;
@@ -146,10 +150,11 @@ export function mergeLimits(all: readonly ProviderLimits[]): ProviderLimits | nu
   if (first === undefined) return null;
   return rest.reduce<ProviderLimits>(
     (merged, next) => ({
-      fiveHour: laterWindow(merged.fiveHour, next.fiveHour),
-      week: laterWindow(merged.week, next.week),
+      fiveHour: laterWindow(merged.fiveHour, next.fiveHour, next.at >= merged.at),
+      week: laterWindow(merged.week, next.week, next.at >= merged.at),
       // `at` — ISO с миллисекундами в UTC: строки сравниваются как времена.
       at: next.at > merged.at ? next.at : merged.at,
+      ...(merged.source === 'zai' && next.source === 'zai' ? { source: 'zai' as const } : {}),
     }),
     first,
   );
@@ -165,8 +170,8 @@ export function dropExpiredWindows(
 ): ProviderLimits | null {
   if (limits === null) return null;
   const live = (window: LimitWindow | null): LimitWindow | null =>
-    window !== null && Date.parse(window.resetsAt) > nowMs ? window : null;
+    window !== null && (window.resetsAt === null || Date.parse(window.resetsAt) > nowMs) ? window : null;
   const fiveHour = live(limits.fiveHour);
   const week = live(limits.week);
-  return fiveHour === null && week === null ? null : { fiveHour, week, at: limits.at };
+  return fiveHour === null && week === null ? null : { ...limits, fiveHour, week };
 }

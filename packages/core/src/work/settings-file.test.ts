@@ -444,3 +444,21 @@ describe('writeWorkSettings', () => {
   });
 
 });
+
+describe('GLM settings', () => {
+  it('keeps model and hooks without endpoint, env or key', () => {
+    const settings = workSettings({
+      provider: 'glm',
+      model: 'glm-5.3-flash[1m]',
+      hookUrl: 'http://127.0.0.1:53123/hooks',
+    });
+    expect(settings.model).toBe('glm-5.3-flash[1m]');
+    expect(Object.keys(settings).sort()).toEqual(['hooks', 'model', 'statusLine']);
+    const http = settings.hooks['Stop']?.[0]?.hooks.find((hook) => hook.type === 'http');
+    expect(http).toMatchObject({
+      headers: { Authorization: 'Bearer $PARLEY_HOOK_CAPABILITY' },
+      allowedEnvVars: ['PARLEY_HOOK_CAPABILITY', 'PARLEY_SESSION_ID'],
+    });
+    expect(JSON.stringify(settings)).not.toContain('ANTHROPIC');
+  });
+});

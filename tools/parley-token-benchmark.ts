@@ -337,8 +337,9 @@ export function hostEnv(run: Pick<PlannedRun, 'arm' | 'jev'>, scenario: Scenario
   const navigator = run.arm === 'navigator' && scenario.coverage !== 'disabled';
   // Навыки Parley (parley и minimal-development) стенд доставляет сам: у обеих рук одно и то же. Переменная
   // функциональных хуков нужна при jev on, но выключить мод она не может: Claude Code накладывает `env` из файлов
-  // настроек поверх окружения запуска, а у человека в `~/.claude/settings.json` она стоит в 1. Поэтому при jev off
-  // мод выключает файл настроек копии проекта (`disableJevInCopy`, `enabledPlugins`), одинаково в обеих руках.
+  // настроек поверх окружения запуска, а в пользовательских настройках человека она стоит в 1. Настройки Claude Code
+  // стенд не пишет (рамка Parley), поэтому при jev off мод удаляет человек до волны, а `begin` отказывает, пока мод
+  // установлен (`beginRun`), одинаково в обеих руках.
   // DISABLE_AUTOUPDATER: Claude Code обновился сам посреди пилота (2.1.289 -> 2.1.291), и пары разошлись бы по версии.
   return [
     `PARLEY_SKILL_NAVIGATOR=${navigator}`,
@@ -363,7 +364,7 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
     ...budget.stopRules.map((rule) => `- ${rule}`),
     '',
     'Версия `claude` на всю волну одна: `DISABLE_AUTOUPDATER=1` в строке хоста, `begin` записывает версию, `collect` сверяет её с `version` записей транскрипта (расхождение — флаг `cli-version-mismatch`, пара исключается).',
-    '`begin` пишет в `.claude/settings.json` копии `disabledMcpjsonServers` из всех `.mcp.json` выше копии: диалога «N new MCP servers found in this project» быть не должно; сработает ли это на живом CLI, покажет первый прогон волны.',
+    '`begin` не пишет настройки Claude Code: имена серверов из всех `.mcp.json` выше копии он только записывает в `begin.json` (`mcpServersAbove`). При первом запуске в копии Claude Code спросит «N new MCP servers found in this project»: диалог закрывает оператор или драйвер (Esc, отклонить все), у обеих рук одинаково.',
     '',
   ];
   for (const run of runs) {
@@ -380,8 +381,8 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
       `- Хост Parley: \`PARLEY_HOME=${home} ${hostEnv(run, scenario).join(' ')}\`; проект работы — \`${path.join(out, 'work', run.id, 'project')}\`.`,
       ...(setup === undefined ? [] : [`- Особенность руки: ${setup}`]),
       run.jev === 'off'
-        ? '- jev off: мод выключает файл настроек копии (`begin` пишет `.claude/settings.json`, id мода — `jevDisabled` в `begin.json`); одной переменной хоста мало, настройки CLI человека её перекрывают. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — `collect` ищет её, а отчёт исключает пару со вставкой у стороны jev off (`jev-leak`).'
-        : '- jev on: мод включён настройками CLI человека, файла настроек в копии нет; переменная хоста в строке выше включает функциональные хуки. В транскрипте должна быть вставка jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.',
+        ? '- jev off: мод jev удаляет человек до волны: одной переменной хоста мод не выключить (настройки CLI человека её перекрывают), а стенд настройки Claude Code не пишет. `begin` ищет установку мода (id — `jevInstalled` в `begin.json`) и отказывает, пока мод установлен; отключения в настройках человека мало. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — `collect` ищет её, а отчёт исключает пару со вставкой у стороны jev off (`jev-leak`).'
+        : '- jev on: мод включён настройками CLI человека, стенд их не трогает; переменная хоста в строке выше включает функциональные хуки. В транскрипте должна быть вставка jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.',
       `- Участники: ${scenario.room.map((member) => `${member.provider}/${member.role}`).join(', ')}.`,
       `- Запрос: ${JSON.stringify(scenario.prompt)}`,
       ...(scenario.followUps ?? []).map((item) => `- Позже (${item.when}): ${JSON.stringify(item.text)}`),
@@ -1033,23 +1034,26 @@ export interface BeginRecord {
   repetition: number;
   conditions: Conditions;
   projectDir: string;
-  /** Id мода jev, выключенного в копии (`jev off`); пусто — мод не установлен или jev on. */
-  jevDisabled: string[];
-  /** Имена MCP-серверов из всех `.mcp.json` от копии вверх: в копии отключены, чтобы Claude Code не спрашивал о них. */
-  mcpServersDisabled: string[];
+  /**
+   * Id мода jev, найденные при `jev off`. Установленный мод — отказ `begin`, поэтому в записи список пуст: он говорит,
+   * что проверка прошла и мода нет. При `jev on` мод не ищется, и список пуст так же.
+   */
+  jevInstalled: string[];
+  /** Имена MCP-серверов из всех `.mcp.json` от копии вверх: о них Claude Code спросит диалогом, его закрывает оператор или драйвер. */
+  mcpServersAbove: string[];
   /** Нечитаемые или битые `.mcp.json`, пропущенные при поиске. */
   warnings: string[];
   startedAt: string;
 }
 
 /**
- * Id мода jev, который надо выключить в копии проекта руки с `jev off` (файл настроек пишет `writeCopySettings`).
- * Переменной хоста мало (см. `hostEnv`), а проектный уровень настроек Claude Code выше пользовательского. Id мода
- * ищется как у Parley (`work/launch.ts`): тем же `findJevPluginIds` и в той же папке конфигурации Claude.
- * Пустой список — мод не установлен, выключать нечего. `null` — место установки не прочиталось, и мод мог остаться
+ * Id установленного мода jev для руки с `jev off`. Переменной хоста мод не выключить (см. `hostEnv`), а настройки
+ * Claude Code стенд не пишет (рамка Parley): выключить мод может только человек, удалив его до волны. Id ищется как
+ * у Parley (`work/launch.ts`): тем же `findJevPluginIds` и в той же папке конфигурации Claude. Он находит установку
+ * мода, а не его включённость. Пустой список — мода нет. `null` — место установки не прочиталось, и мод мог остаться
  * включённым незаметно: прогон с `jev off`, который нельзя проверить, не начинаем.
  */
-async function findJevToDisable(projectDir: string, findIds: typeof findJevPluginIds): Promise<string[]> {
+async function findJevInstalled(projectDir: string, findIds: typeof findJevPluginIds): Promise<string[]> {
   const configDir = process.env.CLAUDE_CONFIG_DIR ? path.resolve(projectDir, process.env.CLAUDE_CONFIG_DIR) : path.join(process.env.HOME ?? homedir(), '.claude');
   const ids = await findIds(projectDir, configDir);
   if (ids === null) throw new Error(`jev off: место установки мода в ${configDir} не прочиталось, выключение jev не проверить`);
@@ -1087,26 +1091,12 @@ export const findMcpServerNames: McpServerNames = async (projectDir) => {
 };
 
 /**
- * Файл настроек копии `.claude/settings.json` до первого коммита: `enabledPlugins` выключает мод jev (`jev off`),
- * `disabledMcpjsonServers` — серверы чужих `.mcp.json` (диалог о них прервал бы прогон). Нечего писать — файла нет.
- */
-async function writeCopySettings(projectDir: string, jevIds: string[], mcpNames: string[]): Promise<void> {
-  const settings = {
-    ...(jevIds.length > 0 ? { enabledPlugins: Object.fromEntries(jevIds.map((id) => [id, false])) } : {}),
-    ...(mcpNames.length > 0 ? { disabledMcpjsonServers: mcpNames } : {}),
-  };
-  if (Object.keys(settings).length === 0) return;
-  await mkdir(path.join(projectDir, '.claude'), { recursive: true });
-  await writeFile(path.join(projectDir, '.claude/settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
-}
-
-/**
  * Копия фикстурного проекта для прогона: навыки лежат в родных каталогах `.agents/skills` и `.claude/skills`
  * копии (домашние каталоги CLI не трогаются), minimal-development — только на оси навыка. Копируются только
- * отслеживаемые git файлы фикстуры (`projectFiles`). Копия — git-репозиторий; до коммита в неё пишется
- * `.claude/settings.json` (`writeCopySettings`): выключение мода jev при `jev off` и отключение серверов чужих `.mcp.json`.
- * `deps.jevPluginIds` и `deps.mcpServerNames` подменяют поиск мода и `.mcp.json`, чтобы тесты и сухой прогон не читали
- * настоящие `~/.claude` и домашнюю папку.
+ * отслеживаемые git файлы фикстуры (`projectFiles`). Копия — git-репозиторий. Настроек Claude Code стенд не пишет
+ * (рамка Parley): при `jev off` и установленном моде `begin` отказывает до первой записи, имена серверов чужих
+ * `.mcp.json` только попадают в запись. `deps.jevPluginIds` и `deps.mcpServerNames` подменяют поиск мода и
+ * `.mcp.json`, чтобы тесты и сухой прогон не читали настоящие `~/.claude` и домашнюю папку.
  */
 export async function beginRun(
   planned: PlannedRun,
@@ -1117,6 +1107,14 @@ export async function beginRun(
   const fixtureDir = deps.fixtureDir ?? FIXTURE_DIR;
   const workDir = path.join(out, 'work', planned.id);
   const projectDir = path.join(workDir, 'project');
+  // Установленный мод при `jev off` — отказ до стирания прежней копии, копирования и любых записей: иначе платные
+  // сессии прошли бы со вставками jev, и отчёт исключил бы пару как `jev-leak`.
+  const jevInstalled = planned.jev === 'off' ? await findJevInstalled(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
+  if (jevInstalled.length > 0) {
+    throw new Error(
+      `jev off: мод jev установлен (${jevInstalled.join(', ')}), а прогон с выключенным jev без правки настроек человека не провести: переменной хоста мод не выключить, настройки Claude Code стенд не пишет. Удалите мод до волны (отключения в настройках мало: проверка ищет установку) и повторите begin, иначе вставки jev исключили бы пару как jev-leak.`,
+    );
+  }
   await rm(workDir, { recursive: true, force: true });
   await mkdir(workDir, { recursive: true });
   const source = path.join(fixtureDir, 'project');
@@ -1133,9 +1131,7 @@ export async function beginRun(
       await cp(MINIMAL_DEVELOPMENT_DIR, path.join(projectDir, home, 'minimal-development'), { recursive: true });
     }
   }
-  const jevDisabled = planned.jev === 'off' ? await findJevToDisable(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
   const mcp = await (deps.mcpServerNames ?? findMcpServerNames)(projectDir);
-  await writeCopySettings(projectDir, jevDisabled, mcp.names);
   git(projectDir, 'init', '-q');
   git(projectDir, 'add', '-A');
   git(projectDir, 'commit', '-q', '-m', 'fixture');
@@ -1154,8 +1150,8 @@ export async function beginRun(
       warmIntervalSec: null,
     },
     projectDir,
-    jevDisabled,
-    mcpServersDisabled: mcp.names,
+    jevInstalled,
+    mcpServersAbove: mcp.names,
     warnings: mcp.warnings,
     startedAt: new Date().toISOString(),
   };

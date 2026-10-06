@@ -7,6 +7,53 @@ import type { UsageSummary, WorkEntry } from '@parley/core';
 export type { LimitWindow, ProviderLimits } from '@parley/core';
 
 /**
+ * Почему не удалась явная проверка ключа Z.ai (`providers.check`): закрытый список, по которому окно
+ * выбирает подпись и подсказку. Сам ответ Z.ai по проводу не ходит — только HTTP-статус и код.
+ * - `authentication` — 401, коды 1000–1005: ключ неверный или истёк;
+ * - `plan_expired` — 1309, 1314: подписка кончилась;
+ * - `no_plan` — 1113: у ключа нет подписки или баланса;
+ * - `limit_reached` — 1308, 1310, 1316–1321: лимит пяти часов или недели исчерпан, ключ рабочий;
+ * - `model_unavailable` — 1311: тариф не даёт модель GLM-сессий;
+ * - `key_restricted` — 403, 1220, 1313, 1315: Z.ai ограничил ключ;
+ * - `rate_limited` — 1302, 1305 и прочие 429: частота запросов или перегрузка;
+ * - `server_error` — 5xx, 1200, 1230, 1234: сбой на стороне Z.ai;
+ * - `timeout` — ответа нет за отведённое время;
+ * - `network` — запрос не дошёл: DNS, TLS, офлайн, прокси;
+ * - `unsupported_response` — ответ незнакомого вида или Z.ai не понял наш запрос (1210–1215, 1221, 1222,
+ *   1261, 1301: неизвестная модель или способ вызова, неверные поля, снятый API).
+ */
+export const PROVIDER_CHECK_REASONS = [
+  'authentication',
+  'plan_expired',
+  'no_plan',
+  'limit_reached',
+  'model_unavailable',
+  'key_restricted',
+  'rate_limited',
+  'server_error',
+  'timeout',
+  'network',
+  'unsupported_response',
+] as const;
+export type ProviderCheckReason = (typeof PROVIDER_CHECK_REASONS)[number];
+
+/**
+ * Исход последней явной проверки сохранённого ключа Z.ai: тестовое сообщение в эндпоинт, с которым
+ * работают GLM-сессии (`providers.check`, по Check again и после сохранения ключа).
+ */
+export interface ProviderCheck {
+  state: 'ok' | 'failed';
+  /** Почему не удалось; у `state: 'ok'` поля нет. */
+  reason?: ProviderCheckReason;
+  /** HTTP-статус ответа Z.ai; нет — ответа не было (таймаут, сеть) или он был успешным. */
+  httpStatus?: number;
+  /** Код ошибки Z.ai (`error.code`), только цифры; нет — Z.ai кода не прислал. */
+  code?: string;
+  /** Когда проверка закончилась, ISO 8601. */
+  at: string;
+}
+
+/**
  * Модель в списке провайдера (`providers.list`, дизайн комнат, 3.2): `id` — значение `--model`,
  * `label` — подпись для окна. Тип живёт в core рядом с реестром, откуда список и берётся.
  */

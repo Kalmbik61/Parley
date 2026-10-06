@@ -25,7 +25,7 @@ import type { PtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createSessionsService } from './sessions-service.js';
-import type { SessionsService } from './sessions-service.js';
+import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
 vi.setConfig({ testTimeout: 30_000 });
@@ -68,9 +68,9 @@ const fakeActivity = (): ActivityService => ({
 });
 
 /** Один «хост»: свой PTY-менеджер, сервис сессий и поколение. Перезапуск — новый экземпляр на тех же файлах. */
-function host(works: WorksService = fakeWorks()): { sessions: SessionsService; pty: PtyManager } {
+function host(works: WorksService = fakeWorks(), feed: SessionsFeedOptions = {}): { sessions: SessionsService; pty: PtyManager } {
   const pty = createPtyManager(fakeHost());
-  const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
+  const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity(), feed);
   stoppers.push(() => sessions.stopAll());
   return { sessions, pty };
 }
@@ -231,7 +231,9 @@ describe('меньший лимит и управление', () => {
 describe('отмена: освобождается только свой ожидающий слот', () => {
   it('запуск не дошёл до процесса — свой резерв released, окно не потрачено, чужой ожидающий резерв остался', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
-    const { sessions } = host();
+    // Провайдер готов (проверка готовности идёт до резерва и следа в карте не оставляет), а запуск падает позже, уже с
+    // резервом: предел длины запуска не определён.
+    const { sessions } = host(undefined, { spawnLimits: async () => null });
     // Чужой ожидающий резерв другой сессии (другое поколение): запуск этой сессии его не трогает.
     await updateMap(project, work.work.id, (map) => {
       const foreign = addSession(map, { provider: 'claude', label: 'чужая', task: 'т' });
@@ -240,8 +242,7 @@ describe('отмена: освобождается только свой ожи�
       });
     });
 
-    process.env['PARLEY_CLAUDE_BIN'] = '/несуществующий/путь/до/claude';
-    await expect(create(sessions, work.work.id, 'мой')).rejects.toThrow();
+    await expect(create(sessions, work.work.id, 'мой')).rejects.toThrow('spawn-budget-unavailable');
 
     const resources = await ledger(work.work.id);
     const byOwner = Object.fromEntries((resources?.attempts ?? []).map((attempt) => [attempt.session, attempt.state]));
@@ -251,11 +252,10 @@ describe('отмена: освобождается только свой ожи�
   it('повторный запуск после отмены берёт новый резерв и проходит', async () => {
     await saveConfig({ workLaunches: 1 });
     const work = await createWork(project, { title: 'Работа', goal: '' });
+    // Первый запуск падает после резерва; повторный — тем же файлам, но уже с определённым пределом.
+    const failing = host(undefined, { spawnLimits: async () => null }).sessions;
+    await expect(create(failing, work.work.id)).rejects.toThrow('spawn-budget-unavailable');
     const { sessions } = host();
-    process.env['PARLEY_CLAUDE_BIN'] = '/несуществующий/путь/до/claude';
-    await expect(create(sessions, work.work.id)).rejects.toThrow();
-
-    process.env['PARLEY_CLAUDE_BIN'] = STUB;
     await sessions.launch({ projectPath: project, workId: work.work.id, sessionId: 's-01' }, 'launch');
     const resources = await ledger(work.work.id);
     expect(resources?.attempts.map((attempt) => attempt.state).sort()).toEqual(['released', 'spent']);

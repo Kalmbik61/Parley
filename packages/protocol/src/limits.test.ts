@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { PROTOCOL_VERSION } from './index.js';
+import { METHODS, PROTOCOL_VERSION } from './index.js';
 import type { EventData, EventName, LimitWindow, ProviderLimits, Result } from './index.js';
 
 const limits: ProviderLimits = {
@@ -21,8 +21,9 @@ describe('лимиты подписок (спека комнат, 3.5)', () => {
       fiveHour: LimitWindow | null;
       week: LimitWindow | null;
       at: string;
+      source?: 'zai';
     }>();
-    expectTypeOf<LimitWindow>().toEqualTypeOf<{ usedPercent: number; resetsAt: string }>();
+    expectTypeOf<LimitWindow>().toEqualTypeOf<{ usedPercent: number; resetsAt: string | null }>();
   });
 
   it('providers.list: limits необязательно; хост без данных отдаёт null, старый хост молчит', () => {
@@ -49,6 +50,11 @@ describe('лимиты подписок (спека комнат, 3.5)', () => {
     }>();
     const changed: EventData<'providers.limitsChanged'> = { id: 'claude', limits: null };
     expect(changed).toEqual({ id: 'claude', limits: null });
+  });
+
+  it('refresh is additive and takes no provider selector', () => {
+    expect(METHODS['providers.refreshLimits'].safeParse({}).success).toBe(true);
+    expectTypeOf<Result<'providers.refreshLimits'>>().toEqualTypeOf<{ ok: true }>();
   });
 
   it('PROTOCOL_VERSION остаётся 1: поле и событие только добавлены', () => {

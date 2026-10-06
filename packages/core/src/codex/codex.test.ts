@@ -86,6 +86,25 @@ describe('discoverCodexSessions', () => {
 });
 
 describe('indexCodexSession', () => {
+  it.each(['task_started', 'task_complete', 'turn_aborted'])(
+    'индексирует явное состояние хода %s без служебного хвоста',
+    async (type) => {
+      const at = '2026-03-12T10:00:30.000Z';
+      const file = await writeRollout(
+        '2026-03-12',
+        'turn-state',
+        meta() +
+          line({ timestamp: at, type: 'event_msg', payload: { type } }) +
+          line({
+            timestamp: '2026-03-12T10:00:31.000Z',
+            type: 'event_msg',
+            payload: { type: 'token_count' },
+          }),
+      );
+      expect(await indexCodexSession(file)).toMatchObject({ lastTurnEvent: { type, at } });
+    },
+  );
+
   it('раскладывает мету, модель, инструменты и заголовок', async () => {
     const file = await writeRollout(
       '2026-03-12',

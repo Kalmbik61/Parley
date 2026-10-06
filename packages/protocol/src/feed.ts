@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
 
 /** Версия схемы ленты: растёт с каждым добавленным полем элемента или решения. */
-export const FEED_SCHEMA_VERSION = 1;
+export const FEED_SCHEMA_VERSION = 2;
 
 /** = `FEED_RESULT_LIMIT` core: символов сводки результата инструмента. */
 export const FEED_RESULT_LIMIT = 64 * 1024;
@@ -218,6 +218,12 @@ const error = z.strictObject({
   kind: z.literal('error'),
   error: z.string(),
   message: z.string().nullable(),
+  retry: z.strictObject({
+    delayMs: z.number().finite().min(0),
+    attempt: z.number().int().min(1),
+    maxAttempts: z.number().int().min(1),
+    resolved: z.literal(true).exactOptional(),
+  }).refine((retry) => retry.attempt <= retry.maxAttempts).exactOptional(),
 });
 
 const turn = z.strictObject({

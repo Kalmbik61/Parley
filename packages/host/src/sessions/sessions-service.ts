@@ -21,7 +21,6 @@ import {
   roleId,
   type SessionRole,
   type RoleCatalog,
-  agentEnv,
   baseBranchOf,
   createChildSession,
   createNewSession,
@@ -39,6 +38,10 @@ import {
   isGitRepo,
   loadConfig,
   loadProviders,
+  isClaudeCode,
+  providerReadiness,
+  providerReadinessError,
+  readSecret,
   openEvents,
   planLaunch,
   planNew,
@@ -63,6 +66,7 @@ import {
   type LaunchPlan,
   type SpawnLimits,
   type WorkEntry,
+  type ProviderEntry,
 } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
@@ -78,6 +82,7 @@ import { createSkillInstaller } from './agent-skills.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
+import { providerLaunchEnv } from './provider-env.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -323,7 +328,7 @@ export function createSessionsService(
    * без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    if (provider !== 'claude' || hooks === undefined || providerVersions === undefined) return undefined;
+    if (!isClaudeCode(provider) || hooks === undefined || providerVersions === undefined) return undefined;
     const url = hooks.url();
     if (url === null) return undefined;
     await providerVersions.ready;
@@ -331,6 +336,17 @@ export function createSessionsService(
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
     return version !== null && feedSupported(version) ? url : undefined;
+  }
+
+  async function readyProvider(provider: string): Promise<ProviderEntry> {
+    const entry = (await loadProviders())[provider];
+    if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}`);
+    const readiness = await providerReadiness(entry, {
+      ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
+    });
+    const refusal = providerReadinessError(entry, readiness);
+    if (refusal !== null) throw new HostError('bad_request', refusal);
+    return entry;
   }
 
   async function launch(
@@ -356,6 +372,9 @@ export function createSessionsService(
         throw new Error(`session ${ref.sessionId} is closed`);
       }
 
+      // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
+      // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
+      const entry = await readyProvider(session.provider);
       // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
       attemptId = await reserveLaunch(ref, session.parent, mode, options.by ?? 'human');
 
@@ -447,11 +466,17 @@ export function createSessionsService(
       // Окружение самого хоста — окружение login-shell от окна (спека 3.2);
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
       // (П0), `plan.env` поверх добавляет свои `PARLEY_*` и `HARNAS_*`.
-      const env = { ...agentEnv(process.env), ...plan.env };
+      // Read again after async preparation: key removal/rotation applies to this exact process.
+      const secret = entry.runner.secret === undefined ? null : await readSecret(entry.runner.secret);
+      if (entry.runner.secret !== undefined && secret === null) {
+        throw new HostError('bad_request', 'GLM requires a saved Z.ai key in Providers');
+      }
+      const env = providerLaunchEnv(entry, process.env, plan.env, secret);
       // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
-        env.PARLEY_HOOK_TOKEN = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
+        const name = entry.runner.secret === 'zai' ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
+        env[name] = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
@@ -496,6 +521,13 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+    } catch (error) {
+      if (error instanceof HostError) host.broadcast('host.notice', {
+        kind: 'launch-failed', ref,
+        text: `session ${ref.sessionId} failed to launch: ${error.message}`,
+        at: new Date().toISOString(),
+      });
+      throw error;
     } finally {
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
@@ -577,6 +609,9 @@ export function createSessionsService(
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent, worktree, effort } = input;
+    // Secret-dependent GLM must refuse before every create branch. Other providers keep their
+    // existing create/launch failure behavior; all launches still use the shared preflight below.
+    if ((await loadProviders())[provider]?.runner.secret !== undefined) await readyProvider(provider);
     // Модель — раньше всего: значение не из списка провайдера отвергается до первой записи в карте
     // (иначе осталась бы `pending`-сессия, которую нечем запустить). Пустая строка — отсутствие
     // выбора; только явный null очищает default роли до default CLI.

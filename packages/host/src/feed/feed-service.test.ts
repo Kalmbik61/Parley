@@ -126,6 +126,40 @@ beforeEach(() => {
   fakes = fakeFeedDeps();
 });
 
+it('publishes live API retries from the log once and keeps the turn open', async () => {
+  const root = await tempRoot();
+  const file = path.join(root, 'log.jsonl');
+  await writeFile(file, '');
+  fakes.setLogFile(file);
+  const time = Date.parse('2026-10-05T10:00:00.000Z');
+  start({ roots: () => [root], now: () => time });
+  const client = fakeClient();
+  service.subscribe(REF, client);
+  send(prompt('hello'));
+  send(display('answer', 0, 'Partial '));
+  await writeFile(file, `${JSON.stringify({
+    type: 'system', subtype: 'api_error', uuid: 'retry-6',
+    timestamp: new Date(time + 1000).toISOString(),
+    error: { status: 429, message: 'Usage limit reached for 5 hour.' },
+    retryInMs: 8000, retryAttempt: 6, maxRetries: 10,
+  })}\n`);
+  fakes.emitLog();
+  await vi.waitFor(async () => {
+    const snapshot = await service.snapshot(REF);
+    expect(ofKind(snapshot.items, 'error')).toHaveLength(1);
+  });
+  expect(feedChanged(client).flatMap((delta) => delta.upsert)).toContainEqual(
+    expect.objectContaining({ kind: 'error', retry: { delayMs: 8000, attempt: 6, maxAttempts: 10 } }),
+  );
+  fakes.emitLog();
+  send(display('answer', 1, 'Recovered', true));
+  const snapshot = await service.snapshot(REF);
+  expect(ofKind(snapshot.items, 'error')).toHaveLength(1);
+  expect(ofKind(snapshot.items, 'turn')).toHaveLength(0);
+  expect(ofKind(snapshot.items, 'text')[0]).toMatchObject({ text: 'Partial Recovered' });
+  expect(ofKind(snapshot.items, 'error')[0]).toMatchObject({ retry: { resolved: true } });
+});
+
 afterEach(async () => {
   await service?.stop();
   vi.useRealTimers();
@@ -655,6 +689,36 @@ describe('сев из журнала', () => {
     };
     return { finished: () => finished, read };
   }
+
+  it('GLM snapshot seeds the Claude Code transcript and its subagent feed', async () => {
+    const { root, session } = await history();
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(session);
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
+    expect(agent.items.length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(2);
+  });
+
+  it('GLM transcript discovered after subscription seeds and sends a delta', async () => {
+    const { root } = await history();
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [] });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    fakes.emitLog();
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+    expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(1);
+  });
 
   it('снимок без живых событий сеет из журнала один раз: вызовы и дифф на месте', async () => {
     const { root } = await history();

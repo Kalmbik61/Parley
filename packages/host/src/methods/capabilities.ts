@@ -3,7 +3,7 @@ import { createProviderScheduler } from '../capabilities/scheduler.js';
 import { createCapabilitiesPluginActions } from '../capabilities/plugin-actions.js';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { scanClaudeCapabilities } from '@parley/core';
+import { isClaudeCode, scanClaudeCapabilities } from '@parley/core';
 import type { Capabilities } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -20,7 +20,7 @@ export function createCapabilitiesList(scan: Scan = scanClaudeCapabilities): Han
     if (!path.isAbsolute(params.projectPath)) {
       throw new HostError('bad_request', 'projectPath must be an absolute path');
     }
-    if (params.provider !== 'claude') return { commands: [], skills: [], agents: [] };
+    if (!isClaudeCode(params.provider)) return { commands: [], skills: [], agents: [] };
     return scan({ home: homedir(), projectPath: params.projectPath });
   };
 }

@@ -21,6 +21,8 @@ import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   loadProviders,
+  providerCompatibilityError,
+  isClaudeCode,
   resumeCommand,
   startCommand,
   type EffortLevel,
@@ -65,7 +67,10 @@ export interface LaunchOptions {
    * Явный выбор модели и усилия для нового запуска перекрывает сохранённый выбор сессии.
    * Нет выбора — текущий default роли; null — явное очищение до default CLI.
    * Host сохраняет только явный выбор из окна или MCP, без вычисленных defaults роли.
-   * На resume native CLI восстанавливает прежнюю модель и усилие: новых флагов нет.
+   * Доезжает только до провайдера, у которого в шаблоне запуска есть подстановки (`supportsModel`,
+   * `supportsEffort`). На resume native CLI Claude/Codex восстанавливает прежнюю модель и усилие: новых флагов
+   * нет; GLM resume явно берёт настроенную модель, поскольку tier aliases подавляют восстановление модели CLI.
+   * Выбор Chat /model отдельно не сохраняется.
    */
   model?: string | null;
   roleCatalog?: RoleCatalog;
@@ -184,9 +189,12 @@ async function plan(
 ): Promise<LaunchPlan> {
   // Immutable for this launch and its MCP child, including resume.
   const { config: launchConfig } = await loadConfig();
-  const skillNavigator = launchConfig.skillNavigator;
   const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
+  // Навигатор на GLM пока не распространяется: он идёт как есть — со своим файлом настроек, полным списком скиллов и без `find_skill`.
+  const skillNavigator = launchConfig.skillNavigator && entry.id !== 'glm';
+  const incompatibility = providerCompatibilityError(entry);
+  if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
   const cwd = session.worktree?.path ?? projectPath;
 
@@ -208,7 +216,7 @@ async function plan(
   const resuming =
     mode === 'resume' &&
     session.providerSessionId !== null &&
-    (session.provider !== 'claude' || (await claudeConversationExists(session.providerSessionId)));
+    (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -305,13 +313,15 @@ async function plan(
   if (role.readOnly && entry.id === 'claude') subs.disallowedTools = 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
-    subs.settingsFile = await writeWorkSettings(
-      projectPath,
-      workId,
-      { ...(options.hookUrl !== undefined ? { hookUrl: options.hookUrl } : {}),
-        ...(skillNavigator ? { sessionId: session.id } : {}),
-        ...(disablePlugins.length > 0 ? { disablePlugins } : {}) },
-    );
+    subs.settingsFile = await writeWorkSettings(projectPath, workId, {
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(skillNavigator ? { sessionId: session.id } : {}),
+      ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
+      ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
+      ...(entry.runner.settingsModel === undefined
+        ? {}
+        : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
+    });
   }
   // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
   // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
@@ -374,6 +384,10 @@ async function plan(
     if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
   }
 
+  if (entry.runner.settingsModel !== undefined) {
+    subs.model = options.model ?? session.model ?? entry.runner.settingsModel;
+  }
+
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
     // Бриф возобновлённой сессии заново не посылается: разговор помнит старый. Изменился он с тех пор (задача,
@@ -425,6 +439,7 @@ async function plan(
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
     env: {
+      ...entry.runner.env,
       ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(entry.id === 'claude' && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),

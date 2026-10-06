@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,10 +47,10 @@ afterEach(async () => {
 
 const WARM = { warmWithinSec: 240 };
 
-/** Поиск мода jev без чтения настоящего `~/.claude`: мода «нет», файл настроек в копию не пишется. */
+/** Поиск мода jev без чтения настоящего `~/.claude`: мода «нет». */
 const noJev = async (): Promise<string[]> => [];
 
-/** Поиск `.mcp.json` без чтения файлов домашней папки: серверов «нет», `disabledMcpjsonServers` в копию не пишется. */
+/** Поиск `.mcp.json` без чтения файлов домашней папки: серверов «нет». */
 const noMcp = async (): Promise<{ names: string[]; warnings: string[] }> => ({ names: [], warnings: [] });
 
 async function syntheticRuns(): Promise<RunRecord[]> {
@@ -479,12 +479,11 @@ describe('копия фикстурного проекта', () => {
   });
 });
 
-describe('мод jev в копии проекта', () => {
+describe('мод jev при begin', () => {
   const MOD = 'jev-skill-suggestion@skills-dir';
   const versions = () => ({ claude: 'x', codex: 'y' });
-  const exists = (file: string) => readFile(file, 'utf8').then(() => true, () => false);
-  const settingsOf = (projectDir: string) => path.join(projectDir, '.claude/settings.json');
-  const gitIn = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout;
+  /** Каталог `.claude` копии: стенд кладёт туда только навыки фикстуры, настроек Claude Code не пишет. */
+  const claudeDirOf = (projectDir: string) => readdir(path.join(projectDir, '.claude'));
   /** Холодный прогон без навыка minimal-development: рука native или navigator, jev off или on. */
   async function pickRun(jev: 'off' | 'on', arm: 'native' | 'navigator' = 'native') {
     const { file, budget } = await loadFixtures();
@@ -495,44 +494,47 @@ describe('мод jev в копии проекта', () => {
     vi.unstubAllEnvs();
   });
 
-  it('jev off: найденные id выключаются файлом настроек копии, и файл входит в коммит копии', async () => {
-    const { run, budget } = await pickRun('off');
+  it('jev off, мод установлен: begin отказывает в обеих руках до копирования и любых записей', async () => {
     const ids = [MOD, 'jev-skill-suggestion@some-market'];
-    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => ids });
-
-    expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false, 'jev-skill-suggestion@some-market': false } });
-    expect(begin.jevDisabled).toEqual(ids);
-    const saved = JSON.parse(await readFile(path.join(tmp, 'work', run.id, 'begin.json'), 'utf8')) as { jevDisabled: string[] };
-    expect(saved.jevDisabled).toEqual(ids);
-    // Файл лежит в коммите копии, а не остался неотслеженным.
-    expect(gitIn(begin.projectDir, 'show', 'HEAD:.claude/settings.json')).toBe(await readFile(settingsOf(begin.projectDir), 'utf8'));
-    expect(gitIn(begin.projectDir, 'status', '--porcelain')).toBe('');
+    for (const arm of ['native', 'navigator'] as const) {
+      const { run, budget } = await pickRun('off', arm);
+      const refusal = beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => ids });
+      await expect(refusal).rejects.toThrow(`мод jev установлен (${ids.join(', ')})`);
+      await expect(refusal).rejects.toThrow('Удалите мод до волны');
+    }
+    // До первой записи не создан ни каталог работы, ни копия, ни begin.json.
+    expect(await readdir(tmp)).toEqual([]);
   });
 
-  it('jev off в руке navigator выключается так же: условие одно у обеих рук', async () => {
-    const { run, budget } = await pickRun('off', 'navigator');
-    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => [MOD] });
-    expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false } });
+  it('отказ из-за мода не стирает прежнюю копию того же прогона', async () => {
+    const { run, budget } = await pickRun('off');
+    const first = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: noJev });
+    const marker = path.join(first.projectDir, 'marker.txt');
+    await writeFile(marker, 'прежняя копия');
+    await expect(beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => [MOD] })).rejects.toThrow('мод jev установлен');
+    expect(await readFile(marker, 'utf8')).toBe('прежняя копия');
   });
 
-  it('jev on: файла настроек нет, и мод не ищется', async () => {
-    const { run, budget } = await pickRun('on');
-    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => { throw new Error('при jev on мод не ищется'); } });
-    expect(await exists(settingsOf(begin.projectDir))).toBe(false);
-    expect(begin.jevDisabled).toEqual([]);
-  });
-
-  it('jev off, мод не установлен (пустой список): файла настроек нет', async () => {
+  it('jev off, мод не установлен (пустой список): копия без настроек Claude Code, jevInstalled пуст', async () => {
     const { run, budget } = await pickRun('off');
     const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: noJev });
-    expect(await exists(settingsOf(begin.projectDir))).toBe(false);
-    expect(begin.jevDisabled).toEqual([]);
+    expect(await claudeDirOf(begin.projectDir)).toEqual(['skills']);
+    expect(begin.jevInstalled).toEqual([]);
+    const saved = JSON.parse(await readFile(path.join(tmp, 'work', run.id, 'begin.json'), 'utf8')) as BeginRecord;
+    expect(saved.jevInstalled).toEqual([]);
   });
 
-  it('jev off, место установки не прочиталось (null): begin отказывает и прогон не начат', async () => {
+  it('jev off, место установки не прочиталось (null): begin отказывает и ничего не создаёт', async () => {
     const { run, budget } = await pickRun('off');
     await expect(beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => null })).rejects.toThrow('выключение jev не проверить');
-    expect(await exists(path.join(tmp, 'work', run.id, 'begin.json'))).toBe(false);
+    expect(await readdir(tmp)).toEqual([]);
+  });
+
+  it('jev on: мод не ищется, настроек Claude Code в копии нет', async () => {
+    const { run, budget } = await pickRun('on');
+    const begin = await beginRun(run, budget, tmp, { mcpServerNames: noMcp, versions, jevPluginIds: async () => { throw new Error('при jev on мод не ищется'); } });
+    expect(await claudeDirOf(begin.projectDir)).toEqual(['skills']);
+    expect(begin.jevInstalled).toEqual([]);
   });
 
   it('мод ищется там же, где у Parley: <HOME>/.claude по умолчанию и CLAUDE_CONFIG_DIR, относительный — от копии проекта', async () => {
@@ -547,20 +549,20 @@ describe('мод jev в копии проекта', () => {
     // Пустой CLAUDE_CONFIG_DIR — как незаданный.
     vi.stubEnv('CLAUDE_CONFIG_DIR', '');
     vi.stubEnv('HOME', path.join(tmp, 'user'));
-    expect((await beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([]);
+    expect((await beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).jevInstalled).toEqual([]);
     await installAt(path.join(tmp, 'user', '.claude'));
-    expect((await beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([MOD]);
+    await expect(beginRun(native.run, native.budget, tmp, { mcpServerNames: noMcp, versions })).rejects.toThrow(`мод jev установлен (${MOD})`);
 
     // Копия проекта — <tmp>/work/<id>/project, поэтому `../../cfg` — это <tmp>/work/cfg.
     vi.stubEnv('HOME', path.join(tmp, 'empty-home'));
     await installAt(path.join(tmp, 'work', 'cfg'));
     vi.stubEnv('CLAUDE_CONFIG_DIR', '../../cfg');
-    expect((await beginRun(navigator.run, navigator.budget, tmp, { mcpServerNames: noMcp, versions })).jevDisabled).toEqual([MOD]);
+    await expect(beginRun(navigator.run, navigator.budget, tmp, { mcpServerNames: noMcp, versions })).rejects.toThrow(`мод jev установлен (${MOD})`);
   });
 });
 
 describe('дом хоста стенда и путь сокета', () => {
-  it('лист запуска: PARLEY_HOME по умолчанию <out>/home, а с заданным home — он; jev off выключает файл настроек', async () => {
+  it('лист запуска: PARLEY_HOME по умолчанию <out>/home, а с заданным home — он; jev off требует удалить мод, диалог MCP закрывает оператор', async () => {
     const { file, budget } = await loadFixtures();
     const runs = planRuns(file, budget);
     expect(renderRunSheet(runs, file, budget, '/out')).toContain('`PARLEY_HOME=/out/home ');
@@ -568,8 +570,10 @@ describe('дом хоста стенда и путь сокета', () => {
     const sheet = renderRunSheet(runs, file, budget, '/out', '/short/home');
     expect(sheet).toContain('`PARLEY_HOME=/short/home ');
     expect(sheet).not.toContain('PARLEY_HOME=/out/home');
-    expect(sheet).toContain('- jev off: мод выключает файл настроек копии');
+    expect(sheet).toContain('- jev off: мод jev удаляет человек до волны');
     expect(sheet).toContain('- jev on: мод включён настройками CLI человека');
+    expect(sheet).toContain('диалог закрывает оператор или драйвер (Esc, отклонить все)');
+    expect(sheet).not.toContain('disabledMcpjsonServers');
     expect(sheet).toContain('hook_additional_context');
     expect(sheet).not.toContain('<skill_relevance>');
   });
@@ -976,22 +980,20 @@ describe('копия фикстуры и диалог MCP-серверов', () 
     expect(everything.conditions.hashes['project']).not.toBe(before.conditions.hashes['project']);
   });
 
-  it('begin пишет disabledMcpjsonServers и сливает с enabledPlugins jev; имена и предупреждения — в begin.json', async () => {
-    const MOD = 'jev-skill-suggestion@skills-dir';
+  it('begin записывает имена серверов .mcp.json выше копии и предупреждения в begin.json, настроек Claude Code не пишет', async () => {
     const off = await pick('off');
-    const both = await beginRun(off.run, off.budget, tmp, { versions, jevPluginIds: async () => [MOD], mcpServerNames: async () => ({ names: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'] }) });
-    expect(JSON.parse(await readFile(path.join(both.projectDir, '.claude/settings.json'), 'utf8'))).toEqual({
-      enabledPlugins: { [MOD]: false }, disabledMcpjsonServers: ['figma', 'pencil'],
-    });
-    expect(both.mcpServersDisabled).toEqual(['figma', 'pencil']);
+    const found = await beginRun(off.run, off.budget, tmp, { versions, jevPluginIds: noJev, mcpServerNames: async () => ({ names: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'] }) });
+    expect(found.mcpServersAbove).toEqual(['figma', 'pencil']);
     const saved = JSON.parse(await readFile(path.join(tmp, 'work', off.run.id, 'begin.json'), 'utf8')) as BeginRecord;
-    expect(saved).toMatchObject({ mcpServersDisabled: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'], jevDisabled: [MOD] });
-    expect(spawnSync('git', ['status', '--porcelain'], { cwd: both.projectDir, encoding: 'utf8' }).stdout).toBe('');
+    expect(saved).toMatchObject({ mcpServersAbove: ['figma', 'pencil'], warnings: ['/x/.mcp.json: не JSON'], jevInstalled: [] });
+    expect(await readdir(path.join(found.projectDir, '.claude'))).toEqual(['skills']);
+    expect(spawnSync('git', ['status', '--porcelain'], { cwd: found.projectDir, encoding: 'utf8' }).stdout).toBe('');
 
-    // jev on: настроек jev нет, серверы отключаются всё равно (диалог ждал бы и там).
+    // jev on: то же самое — имена в записи, в копии только навыки фикстуры.
     const on = await pick('on');
     const onlyMcp = await beginRun(on.run, on.budget, tmp, { versions, mcpServerNames: async () => ({ names: ['figma'], warnings: [] }) });
-    expect(JSON.parse(await readFile(path.join(onlyMcp.projectDir, '.claude/settings.json'), 'utf8'))).toEqual({ disabledMcpjsonServers: ['figma'] });
+    expect(onlyMcp.mcpServersAbove).toEqual(['figma']);
+    expect(await readdir(path.join(onlyMcp.projectDir, '.claude'))).toEqual(['skills']);
   });
 
   it('поиск .mcp.json идёт от копии до корня, читает только имена; битый и нечитаемый файл — предупреждение, не отказ', async () => {

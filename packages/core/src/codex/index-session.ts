@@ -105,6 +105,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
   let lastUserRecordAt: string | null = null;
   let lastCounters = null as ReturnType<typeof codexCounters>;
   const ledger = createUsageLedger();
+  let lastTurnEvent: SessionIndex['lastTurnEvent'];
   let spawned = false;
   let parentId: string | null = null;
   let forkedFrom: string | null = null;
@@ -152,6 +153,12 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
       }
 
       case 'event_msg': {
+        if (
+          at !== null &&
+          (kind === 'task_started' || kind === 'task_complete' || kind === 'turn_aborted')
+        ) {
+          lastTurnEvent = { type: kind, at };
+        }
         // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
         // для этого не годятся: там же едут системные инструкции и AGENTS.md.
         if (kind === 'user_message') {
@@ -214,6 +221,7 @@ export async function indexCodexSession(file: string): Promise<SessionIndex> {
     lastUserRecordAt,
     // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
     lastWorkRecordAt: endedAt,
+    ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,

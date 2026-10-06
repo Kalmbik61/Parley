@@ -714,6 +714,26 @@ describe('ChatView — меню режима (кусок 4a, решения К �
 describe('ChatView — индикатор работы, Resume и меню моделей (живая проверка 2026-10-02)', () => {
   const model = (): HTMLElement => screen.getByTestId('chat-model');
 
+  it('shows retry attempts with Stop available, then clears the countdown on recovery or failure', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    const retry: FeedItem = {
+      id: 'retry:6', at: new Date().toISOString(), kind: 'error', error: '429',
+      message: 'Usage limit reached for 5 hour.',
+      retry: { delayMs: 8000, attempt: 6, maxAttempts: 10 },
+    };
+    setFeed([prompt('p1', 'go'), retry]);
+    expect(screen.getByTestId('chat-working').textContent).toContain('attempt 6/10');
+    expect(screen.getByRole('button', { name: S.chat.stop })).toBeTruthy();
+    setFeed([prompt('p1', 'go'), retry, { ...text('answer', 'Recovered'), streaming: true }], 2);
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    setFeed([prompt('p1', 'go'), retry, {
+      id: 'failed', at: retry.at, kind: 'error', error: '429', message: 'Usage limit reached',
+    }], 3);
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    expect(screen.queryByRole('button', { name: S.chat.stop })).toBeNull();
+    expect(screen.getByText(S.chat.error)).toBeTruthy();
+  });
+
   it('ход идёт, текста нет — «Working…» со временем от последнего промпта; пишущийся текст или карточка — строки нет; конец хода — нет', () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'go')]);

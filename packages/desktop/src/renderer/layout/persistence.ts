@@ -2,8 +2,9 @@
  * Восстановление и сохранение раскладок работ (спека 5.6–5.8, кусок 2.2 плана
  * каркаса). У каждой работы своя раскладка в `layout/store.ts` — хук ведёт
  * себя как сторож между этим стором и мостом: гидрирует по требованию (когда работа впервые становится
- * активной), пишет изменения на диск с тишиной и следит за составом снимка
- * работ (пропала работа — `drop` и `removeLayout`; пришли первые работы —
+ * активной), пишет изменения на диск с тишиной и следит за снимком работ
+ * (пропала работа — `drop` и `removeLayout`; пропала сессия или комната — вкладки,
+ * на них ссылающиеся, закрываются в живых раскладках; пришли первые работы —
  * выбирает активную и зовёт `retainLayouts`).
  */
 
@@ -332,6 +333,33 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
     resolveActive.current();
     if (visibleRef.current !== null) lastVisibleRef.current = visibleRef.current;
   }, [worksLoaded, orderSig, visibleSig, archivedSig, bridge]);
+
+  // Из снимка пропала сессия или комната — ссылающиеся на неё вкладки закрываются и в ЖИВОЙ
+  // раскладке, а не только при следующем чтении с диска (`restoreLayout` выше): до этого вкладка
+  // удалённой сессии висела в строке вкладок телом «Session deleted» до перезапуска окна. Сами
+  // правила жизни — те же `isTabAlive`, что у восстановления; вопрос о правках не спрашивается:
+  // из этого окна `SessionRowMenu` спрашивает ДО `sessions.delete`, а снаружи (другое окно)
+  // worktree сессии уже удалён вместе с ней. Подпись — только состав (id сессий, наличие их
+  // worktree, id комнат): прочие события `works.changed` не должны перебирать все раскладки.
+  const aliveSig = JSON.stringify(
+    works.map((entry) => [
+      workKeyOf(entry.projectPath, entry.map.work.id),
+      entry.map.sessions.map((candidate) => [candidate.id, candidate.worktree !== null]),
+      entry.map.rooms.map((room) => room.id),
+    ]),
+  );
+  useEffect(() => {
+    if (!worksLoaded) return;
+    const store = useLayoutStore.getState();
+    for (const key of Object.keys(store.layouts)) {
+      const entry = worksRef.current.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
+      // Пропавшая работа — дело эффекта состава выше (drop); здесь только живые.
+      if (entry === undefined) continue;
+      // `pruneLayout` без мёртвых вкладок возвращает ту же ссылку — `apply` не трогает стор,
+      // и сохранение на диск не дёргается.
+      store.apply(key, (layout) => pruneLayout(layout, (tab) => isTabAlive(entry, tab)));
+    }
+  }, [worksLoaded, aliveSig]);
 
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const activeHydrated = useLayoutStore((state) =>

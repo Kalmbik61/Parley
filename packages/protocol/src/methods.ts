@@ -28,7 +28,7 @@ import type { ContextPageMethodResults } from './context-pages.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
-import type { Capabilities, ModelOption, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -67,6 +67,11 @@ export const METHODS = {
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
+  'providers.refreshLimits': z.object({}),
+  'providers.check': z.object({ provider: z.string() }),
+  // Key normalization belongs to core: trim edges before checking the length or whitespace.
+  'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
+  'providers.clearKey': z.object({ provider: z.string() }),
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
@@ -250,11 +255,25 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
+  /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
+  'providers.refreshLimits': { ok: true };
+  /**
+   * Явная проверка сохранённого ключа тестовым сообщением (только у провайдера с ключом — GLM).
+   * `null` — провайдер не готов локально (нет CLI нужной версии или ключа: см. `providers.list.needs`),
+   * и запроса в сеть не было. Исход хост запоминает: дальше он приходит полем `providers.list.check`.
+   */
+  'providers.check': { check: ProviderCheck | null };
   'providers.list': {
     providers: Array<{
       id: string;
       label: string;
       available: boolean;
+      /** Missing CLI/version, missing saved key, or ready; optional for older hosts. */
+      needs?: 'cli' | 'key' | null;
+      /** Only a masked hint is returned for providers that use a saved key. */
+      keyHint?: string | null;
+      /** Trusted built-in CLI family; older hosts omit this field. */
+      family?: 'claude' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
@@ -271,13 +290,21 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
       /** Версия CLI из пробы на старте хоста; `null` — не узнали. */
       version?: string | null;
       /**
-       * Лимиты подписки провайдера (спека комнат Organic, 3.5) — только из того, что отдают сами CLI.
+       * Лимиты подписки из CLI, для GLM — подтверждённая квота Z.ai (`source: 'zai'`).
        * `null` — данных нет или окна уже сбросились. Необязательно, как три поля выше, по той же причине.
        * Дальше числа приходят событием `providers.limitsChanged`.
        */
       limits?: ProviderLimits | null;
+      /**
+       * Исход последней явной проверки сохранённого ключа (`providers.check`), только у GLM. `null` —
+       * не проверяли или ключ с тех пор сменился. Необязательно по той же причине, что `limits`:
+       * хост, оставшийся с живыми сессиями, может не знать поля.
+       */
+      check?: ProviderCheck | null;
     }>;
   };
+  'providers.setKey': { keyHint: string };
+  'providers.clearKey': { ok: true };
   'works.list': WorksSnapshot;
   'works.create': { workId: string };
   'works.delete': { ok: true };

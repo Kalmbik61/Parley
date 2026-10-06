@@ -43,6 +43,11 @@ export interface SessionIndex {
    * письма ей всё это время ждали бы (живая проверка 2026-10-02).
    */
   lastWorkRecordAt: string | null;
+  /** Последнее явное событие хода Codex; служебные записи после ответа его не меняют. */
+  lastTurnEvent?: {
+    type: 'task_started' | 'task_complete' | 'turn_aborted';
+    at: string;
+  };
   durationMs: number | null;
   records: number;
   malformedLines: number;

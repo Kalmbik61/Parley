@@ -161,6 +161,10 @@ async function newWorkSession(argv: string[]): Promise<void> {
   if (entry === undefined) {
     throw new Error(`unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`);
   }
+  // Printed CLI commands have no host boundary for process-only secret delivery.
+  if (entry.runner.secret !== undefined) {
+    throw new Error('GLM requires launch through the Parley host; this CLI command cannot inject its saved key');
+  }
   if (!(await commandInPath(entry.runner.command))) {
     throw new Error(
       `command ${entry.runner.command} is not in PATH — provider ${provider} is unavailable`,

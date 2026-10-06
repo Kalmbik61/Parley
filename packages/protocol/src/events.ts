@@ -21,6 +21,11 @@ export interface Events {
   'host.notice': HostNotice;
   'wake.changed': { paused: boolean };
   /**
+   * Изменилось то, что окна знают о провайдере: сохранённый ключ или исход его явной проверки
+   * (`providers.list.check`). Каждое окно перечитывает `providers.list`.
+   */
+  'providers.changed': { provider: string };
+  /**
    * Лимиты подписки провайдера изменились (спека комнат Organic, 3.5): одно событие на
    * провайдера; `null` — данных больше нет или окна сбросились.
    */

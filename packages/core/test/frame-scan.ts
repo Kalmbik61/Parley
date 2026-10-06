@@ -3,7 +3,8 @@
  * попасть в исходники окна и хоста ни в каком виде: учётные данные агентов,
  * запись в их каталоги настроек, обращения к API провайдеров напрямую и
  * YOLO-флаги. Список плоский, а не по категориям: находка называет ровно то
- * правило, которое сработало.
+ * правило, которое сработало. Добровольно введённый ключ GLM допускается
+ * только через перечисленные ниже узкие исключения (спека провайдеров, 4.2–5).
  */
 
 import { readdir } from 'node:fs/promises';
@@ -33,12 +34,20 @@ export const FRAME_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
   },
   {
     rule: 'API провайдеров',
-    pattern: /api\.anthropic\.com|chatgpt\.com\/backend-api/,
+    pattern: /api\.anthropic\.com|chatgpt\.com\/backend-api|api\.z\.ai/,
   },
   {
     rule: 'YOLO-флаги',
     pattern:
       /--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|bypassPermissions/,
+  },
+  {
+    rule: 'секрет GLM вне хранилища',
+    pattern: /secrets\.json/,
+  },
+  {
+    rule: 'ключ GLM вне окружения процесса',
+    pattern: /ANTHROPIC_AUTH_TOKEN/,
   },
 ];
 
@@ -117,6 +126,41 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
     line: "claude: { ...(configDir ? { configDir, userConfigFile: path.join(configDir, '.claude.json') } : {}),",
     reason:
       'спека возможностей (2026-10-02): контекст снимка называет путь ~/.claude.json, снимок его только читает',
+  },
+  {
+    file: 'packages/host/src/limits/zai-quota.ts',
+    rule: 'API провайдеров',
+    line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",
+    reason:
+      'спека провайдеров: пользователь разрешил хостовый GET квоты Z.ai с сохранённым ключом; только фиксированный read-only endpoint',
+  },
+  {
+    file: 'packages/host/src/limits/zai-check.ts',
+    rule: 'API провайдеров',
+    line: "const ZAI_MESSAGES_URL = 'https://api.z.ai/api/anthropic/v1/messages';",
+    reason:
+      'спека провайдеров: пользователь разрешил 2026-10-05 хостовое тестовое сообщение (max_tokens 1) с сохранённым ключом Z.ai по явной проверке; только этот фиксированный адрес',
+  },
+  {
+    file: 'packages/core/src/providers.ts',
+    rule: 'API провайдеров',
+    line: "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',",
+    reason:
+      'спека провайдеров 4.2: встроенная запись GLM задаёт Coding Plan endpoint официальному CLI; Parley не делает запрос к нему',
+  },
+  {
+    file: 'packages/core/src/secrets.ts',
+    rule: 'секрет GLM вне хранилища',
+    line: "const secretsPath = (): string => path.join(parleyHome(), 'secrets.json');",
+    reason:
+      'спека провайдеров 5: только модуль хранилища читает и атомарно пишет добровольно введённый ключ Z.ai в доме Parley с правами 0600',
+  },
+  {
+    file: 'packages/host/src/sessions/provider-env.ts',
+    rule: 'ключ GLM вне окружения процесса',
+    line: 'if (key !== null) env.ANTHROPIC_AUTH_TOKEN = key;',
+    reason:
+      'спека провайдеров 4.3: свежий ключ добавляется только в финальное окружение процесса GLM после очистки, не в план или настройки',
   },
 ];
 

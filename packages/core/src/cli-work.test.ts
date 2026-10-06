@@ -156,6 +156,16 @@ describe('parley-core work map', () => {
 });
 
 describe('parley-core work session new', () => {
+  it('GLM refuses a secret-dependent command before writing the map even with a saved key', async () => {
+    await newWork('GLM');
+    await writeFile(path.join(home, 'secrets.json'), JSON.stringify({ zai: { key: 'fake-zai-key' } }));
+    const before = await readMapFile('w-0001');
+    const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'glm', '--label', 'test', '--task', 'test');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/host/i);
+    expect(result.stderr).not.toContain('fake-zai-key');
+    expect(await readMapFile('w-0001')).toEqual(before);
+  });
   it('создаёт pending, бриф, MCP-конфиг и печатает готовую команду', async () => {
     await newWork('Авторизация');
     const printed = await ok(
@@ -611,7 +621,7 @@ describe('parley-core work session new', () => {
     );
     expect(missing.code).toBe(1);
     expect(missing.stdout).toBe('');
-    expect(missing.stderr).toContain('is not in PATH — provider glm is unavailable');
+    expect(missing.stderr).toContain('requires launch through the Parley host');
 
     expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
   }, 60_000);
