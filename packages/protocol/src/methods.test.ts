@@ -519,3 +519,27 @@ describe('EFFORT_TOKEN_RE и совместимость (нормалайзер 
     expect(PROTOCOL_VERSION).toBe(1);
   });
 });
+
+describe('sessions.setEffort (нормалайзер модели и effort, 5.7)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('setEffort: ref и токен уровня обязательны; xhigh, max и ultra проходят', () => {
+    const parse = (effort: unknown) => METHODS['sessions.setEffort'].safeParse({ ref, effort });
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+      expect(parse(effort).success, effort).toBe(true);
+    }
+    // «По умолчанию» в идущей сессии не выбирается (5.7): пустого уровня нет и здесь.
+    for (const effort of ['', 'HIGH', 'hi gh', '"max', 'a'.repeat(33), undefined, null, 3]) {
+      expect(parse(effort).success, JSON.stringify(effort)).toBe(false);
+    }
+    expect(METHODS['sessions.setEffort'].safeParse({ effort: 'high' }).success).toBe(false);
+  });
+
+  it('параметры и результат: уровень, который показал подвал, и сверка', () => {
+    expectTypeOf<Params<'sessions.setEffort'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      effort: string;
+    }>();
+    expectTypeOf<Result<'sessions.setEffort'>>().toEqualTypeOf<{ effort: string | null; verified: boolean }>();
+  });
+});

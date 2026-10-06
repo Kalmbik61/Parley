@@ -25,14 +25,14 @@ import {
 } from '@parley/core';
 import type { WorkEntry, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
-import type { ActivityService } from '../activity/activity-service.js';
+import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { autoLaunchCandidates } from './auto-launch.js';
-import { createSessionsService } from './sessions-service.js';
+import { atPrompt, busyError, createSessionsService, createSwitchLock } from './sessions-service.js';
 import type { SessionsFeedOptions } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
@@ -1449,5 +1449,86 @@ describe('модель и усилие из карты: сессия, завед
     expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
 
     await service.stop(ref);
+  });
+});
+
+describe('setChoice(): выбор модели и effort в записи сессии (спека нормалайзера, 5.5)', () => {
+  it('значение пишет поле, null убирает его, undefined оставляет как было', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'т',
+      model: 'opus',
+      effort: 'high',
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const session = async () =>
+      (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === sessionId);
+
+    await service.setChoice(ref, { effort: 'xhigh' });
+    expect(await session()).toMatchObject({ model: 'opus', effort: 'xhigh' });
+
+    await service.setChoice(ref, { model: 'haiku', effort: null });
+    const cleared = await session();
+    expect(cleared?.model).toBe('haiku');
+    expect(Object.keys(cleared ?? {})).not.toContain('effort');
+
+    await service.setChoice(ref, { model: null });
+    expect(Object.keys((await session()) ?? {})).not.toContain('model');
+  });
+
+  it('сессии нет в карте — not_found', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+
+    await expect(
+      service.setChoice({ projectPath: project, workId: work.work.id, sessionId: 's-99' }, { effort: 'low' }),
+    ).rejects.toMatchObject({ name: 'HostError', code: 'not_found' });
+  });
+});
+
+describe('atPrompt и busyError: агент у приглашения (спека нормалайзера, 5.7–5.8)', () => {
+  const live = (activity: string): SessionLive =>
+    ({ activity: { activity, tasks: [] }, metrics: null }) as unknown as SessionLive;
+
+  it('idle и unseen — у приглашения; working, blocked и нет сведений — занят', () => {
+    expect(atPrompt(live('idle'))).toBe(true);
+    expect(atPrompt(live('unseen'))).toBe(true);
+    expect(atPrompt(live('working'))).toBe(false);
+    expect(atPrompt(live('blocked'))).toBe(false);
+    expect(atPrompt(undefined)).toBe(false);
+  });
+
+  it('отказ «занят» — conflict с причиной busy и текстом для окна', () => {
+    expect(busyError('Wait until the agent is idle')).toMatchObject({
+      name: 'HostError',
+      code: 'conflict',
+      message: 'Wait until the agent is idle',
+      data: { reason: 'busy' },
+    });
+  });
+
+  it('createSwitchLock: вторая смена той же сессии, пока идёт первая, — busy; соседняя не ждёт; сбой замок снимает', async () => {
+    const lock = createSwitchLock();
+    const ref: SessionRef = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+    let release: () => void = () => {};
+    const first = lock(ref, () => new Promise<string>((resolve) => {
+      release = () => resolve('первая');
+    }));
+
+    await expect(lock(ref, async () => 'вторая')).rejects.toMatchObject({
+      name: 'HostError',
+      code: 'conflict',
+      data: { reason: 'busy' },
+    });
+    await expect(lock({ ...ref, sessionId: 's-02' }, async () => 'соседняя')).resolves.toBe('соседняя');
+    release();
+    await expect(first).resolves.toBe('первая');
+    await expect(lock(ref, async () => {
+      throw new Error('сбой');
+    })).rejects.toThrow('сбой');
+    await expect(lock(ref, async () => 'после сбоя')).resolves.toBe('после сбоя');
   });
 });

@@ -100,6 +100,9 @@ export const METHODS = {
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
+  // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
+  // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
+  'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
@@ -280,6 +283,12 @@ export interface Results {
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
   'sessions.setMode': { mode: string | null; verified: boolean };
+  /**
+   * Смена effort ползунком `/effort` (нормалайзер модели и effort, 5.7). `effort` — уровень, который
+   * показал подвал CLI (`null` — подвала не нашли); `verified` — он совпал с целью, и хост записал его в
+   * карту. Не совпал — карта не меняется.
+   */
+  'sessions.setEffort': { effort: string | null; verified: boolean };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'sessions.resumeInterrupted': { ok: true };

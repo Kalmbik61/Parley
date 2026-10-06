@@ -52,9 +52,9 @@ import {
   type WorkEntry,
   type ProviderEntry,
 } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
-import type { ActivityService } from '../activity/activity-service.js';
+import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { HookServer } from '../hooks/hook-server.js';
@@ -114,6 +114,13 @@ export interface SessionsService {
   interrupted(): SessionRef[];
   /** Поднимает прерванных без промпта — только с согласия человека (спека 10). */
   resumeInterrupted(refs: readonly SessionRef[]): Promise<void>;
+  /**
+   * Выбор модели и effort в записи сессии (спека нормалайзера, 5.5): `null` убирает поле («по умолчанию»),
+   * `undefined` оставляет как было. Процесс не трогает.
+   */
+  setChoice(ref: SessionRef, choice: { model?: string | null; effort?: string | null }): Promise<void>;
+  /** Замок смены модели и effort этой сессии: через него идут `sessions.setEffort` и `sessions.setModel`. */
+  exclusive: SwitchLock;
 }
 
 /**
@@ -128,6 +135,43 @@ export interface SessionsFeedOptions {
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
+/**
+ * Агент у своего приглашения (спека нормалайзера, 5.7–5.8): ход окончен — `idle` или ещё не просмотренный
+ * `unseen`, как у доставки писем (`delivery.ts` в core). `working` и `blocked` — занят; сведений нет — тоже занят:
+ * печатать и перезапускать вслепую хост не станет.
+ */
+export function atPrompt(live: SessionLive | undefined): boolean {
+  const state = live?.activity.activity;
+  return state === 'idle' || state === 'unseen';
+}
+
+/** Отказ «агент занят»: `conflict` с причиной `busy` — окно по ней выбирает свой текст. */
+export function busyError(message: string): HostError {
+  return new HostError('conflict', message, { reason: HOST_ERROR_REASONS.busy });
+}
+
+/** Замок смены модели и effort: вторая смена той же сессии, пока идёт первая, — `busy`. */
+export type SwitchLock = <T>(ref: SessionRef, run: () => Promise<T>) => Promise<T>;
+
+/**
+ * Одна смена модели или effort на сессию за раз (спека нормалайзера, 5.7–5.8): двойной клик или `setEffort` во время
+ * `setModel` получают `busy` до первой клавиши — клавиши двух смен не смешиваются, перезапуск один. Ключ ставится
+ * синхронно, до первого `await`, и снимается и после сбоя.
+ */
+export function createSwitchLock(): SwitchLock {
+  const running = new Set<string>();
+  return async <T>(ref: SessionRef, run: () => Promise<T>): Promise<T> => {
+    const key = refKey(ref);
+    if (running.has(key)) throw busyError('Another model or effort change of this session is in progress');
+    running.add(key);
+    try {
+      return await run();
+    } finally {
+      running.delete(key);
+    }
+  };
+}
+
 export function createSessionsService(
   host: HostContext,
   works: WorksService,
@@ -136,6 +180,8 @@ export function createSessionsService(
   feed: SessionsFeedOptions = {},
 ): SessionsService {
   const { hooks, providerVersions } = feed;
+  // Одна смена модели или effort на сессию за раз — общий замок `sessions.setEffort` и `sessions.setModel`.
+  const exclusive = createSwitchLock();
 
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
@@ -501,6 +547,22 @@ export function createSessionsService(
     await finalizing.get(refKey(ref));
   }
 
+  async function setChoice(
+    ref: SessionRef,
+    choice: { model?: string | null; effort?: string | null },
+  ): Promise<void> {
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) {
+        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+      }
+      if (choice.model === null) delete session.model;
+      else if (choice.model !== undefined) session.model = choice.model;
+      if (choice.effort === null) delete session.effort;
+      else if (choice.effort !== undefined) session.effort = choice.effort;
+    });
+  }
+
   async function close(ref: SessionRef): Promise<void> {
     const key = refKey(ref);
     closing.add(key);
@@ -618,6 +680,8 @@ export function createSessionsService(
     stop,
     close,
     delete: del,
+    setChoice,
+    exclusive,
     live: (ref) => pty.get(ref) !== undefined,
     async stopAll() {
       await Promise.all(

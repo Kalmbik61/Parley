@@ -50,6 +50,7 @@ describe('методы на старте хоста ждут первого чт
         'sessions.delete',
         'sessions.interrupted',
         'sessions.setMode',
+        'sessions.setEffort',
         'sessions.resumeInterrupted',
         'pty.attach',
         'pty.detach',
