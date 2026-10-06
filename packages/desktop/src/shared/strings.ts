@@ -474,6 +474,7 @@ export const S = {
       agents: 'Agents',
       notifications: 'Notifications',
       browser: 'Browser',
+      voice: 'Voice',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -994,6 +995,7 @@ export const S = {
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
     commandPalette: 'Command palette',
+    toggleDictation: 'Toggle dictation',
     goToFile: 'Go to file',
     findInFiles: 'Find in files',
     newWorkspace: 'New workspace',
@@ -1233,6 +1235,47 @@ export const S = {
     sidebarError: "Couldn't show workspace sidebar",
     rightSidebarError: "Couldn't show right sidebar",
     layoutError: "Couldn't show layout",
+  },
+
+  /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */
+  voice: {
+    setUp: 'Set up voice input',
+    dictate: 'Dictate (⌘⇧M)',
+    stop: 'Stop dictation (⌘⇧M)',
+    transcribing: 'Transcribing…',
+    noSpeech: 'No speech detected',
+    micDenied: 'Microphone access denied',
+    openSystemSettings: 'Open System Settings',
+    noMicrophone: 'No microphone found',
+    engineMissing: 'Voice engine not found',
+    modelMissing: 'Voice model is missing',
+    openSettings: 'Open settings',
+    failed: 'Transcription failed',
+    copied: 'Transcript copied to clipboard',
+    diskFull: (mb: number): string => `Not enough disk space (need ${mb} MB)`,
+    downloadFailed: 'Download failed',
+    downloadCorrupted: 'Download corrupted. Try again.',
+    settings: {
+      enable: 'Voice input',
+      downloadFirst: 'Download a model first',
+      model: 'Model',
+      language: 'Language',
+      auto: 'Auto',
+      shortcut: 'Shortcut',
+      shortcutKeys: '⌘⇧M',
+      download: 'Download',
+      cancel: 'Cancel',
+      remove: 'Delete',
+      sizeMb: (mb: number): string => `${mb} MB`,
+      progress: (received: number, total: number): string =>
+        `${Math.floor((received / total) * 100)}% · ${Math.round(received / 1_000_000)} of ${Math.round(total / 1_000_000)} MB`,
+      hint: 'Audio is transcribed on this Mac and never leaves it.',
+    },
+    models: {
+      base: { name: 'Base', hint: 'Fastest. Weak for Russian.' },
+      small: { name: 'Small', hint: 'Good balance.' },
+      'large-v3-turbo-q5_0': { name: 'Large v3 Turbo (Q5)', hint: 'Best quality. Recommended on Apple Silicon.' },
+    },
   },
 };
 
