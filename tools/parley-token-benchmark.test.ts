@@ -2,11 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_OUT,
   FIXTURE_DIR,
   PROMPT_MAX_CHARS,
+  assertHostSocketFits,
   beginRun,
   buildLabelSheet,
   buildReport,
@@ -42,6 +43,9 @@ afterEach(async () => {
 });
 
 const WARM = { warmWithinSec: 240 };
+
+/** Поиск мода jev без чтения настоящего `~/.claude`: мода «нет», файл настроек в копию не пишется. */
+const noJev = async (): Promise<string[]> => [];
 
 async function syntheticRuns(): Promise<RunRecord[]> {
   const raw = JSON.parse(await readFile(path.join(FIXTURE_DIR, 'runs.synthetic.json'), 'utf8')) as unknown[];
@@ -363,7 +367,7 @@ describe('сбор из логов провайдеров', () => {
     const file = await claudeTranscript();
     const { file: scenarios, budget } = await loadFixtures();
     const planned = planRuns(scenarios, budget).find((r) => r.id === 'obvious.navigator.cold.jev-off.skill-on.r1')!;
-    const begin = await beginRun(planned, budget, tmp, { versions: () => ({ claude: '2.1.289', codex: '0.160.0' }) });
+    const begin = await beginRun(planned, budget, tmp, { versions: () => ({ claude: '2.1.289', codex: '0.160.0' }), jevPluginIds: noJev });
     const run = await collectRun({
       begin, claude: [file], codex: [], accepted: true, constraintsKept: true, humanCorrections: 0, warmIntervalSec: null,
       set: ['launches=1', 'stops=0'], knownSkills: ['bench-changelog', 'minimal-development'], origin: 'live',
@@ -402,8 +406,8 @@ describe('копия фикстурного проекта', () => {
     const off = runs.find((r) => r.id === 'obvious.native.cold.jev-off.skill-off.r1')!;
     const on = runs.find((r) => r.id === 'obvious.native.cold.jev-off.skill-on.r1')!;
     const versions = () => ({ claude: 'x', codex: 'y' });
-    const a = await beginRun(off, budget, tmp, { versions });
-    const b = await beginRun(on, budget, tmp, { versions });
+    const a = await beginRun(off, budget, tmp, { versions, jevPluginIds: noJev });
+    const b = await beginRun(on, budget, tmp, { versions, jevPluginIds: noJev });
 
     const exists = async (dir: string, name: string) => readFile(path.join(dir, name, 'SKILL.md'), 'utf8').then(() => true, () => false);
     for (const home of ['.agents/skills', '.claude/skills']) {
@@ -414,6 +418,141 @@ describe('копия фикстурного проекта', () => {
     expect(spawnSync('git', ['status', '--porcelain'], { cwd: a.projectDir, encoding: 'utf8' }).stdout).toBe('');
     expect(a.conditions.hashes['minimalDevelopment']).toBe(b.conditions.hashes['minimalDevelopment']);
     expect(a.conditions.hashes['project']).toBe(b.conditions.hashes['project']);
+  });
+});
+
+describe('мод jev в копии проекта', () => {
+  const MOD = 'jev-skill-suggestion@skills-dir';
+  const versions = () => ({ claude: 'x', codex: 'y' });
+  const exists = (file: string) => readFile(file, 'utf8').then(() => true, () => false);
+  const settingsOf = (projectDir: string) => path.join(projectDir, '.claude/settings.json');
+  const gitIn = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' }).stdout;
+  /** Холодный прогон без навыка minimal-development: рука native или navigator, jev off или on. */
+  async function pickRun(jev: 'off' | 'on', arm: 'native' | 'navigator' = 'native') {
+    const { file, budget } = await loadFixtures();
+    const run = planRuns(file, budget).find((r) => r.jev === jev && r.arm === arm && r.cache === 'cold' && r.skill === 'off')!;
+    return { run, budget };
+  }
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('jev off: найденные id выключаются файлом настроек копии, и файл входит в коммит копии', async () => {
+    const { run, budget } = await pickRun('off');
+    const ids = [MOD, 'jev-skill-suggestion@some-market'];
+    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => ids });
+
+    expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false, 'jev-skill-suggestion@some-market': false } });
+    expect(begin.jevDisabled).toEqual(ids);
+    const saved = JSON.parse(await readFile(path.join(tmp, 'work', run.id, 'begin.json'), 'utf8')) as { jevDisabled: string[] };
+    expect(saved.jevDisabled).toEqual(ids);
+    // Файл лежит в коммите копии, а не остался неотслеженным.
+    expect(gitIn(begin.projectDir, 'show', 'HEAD:.claude/settings.json')).toBe(await readFile(settingsOf(begin.projectDir), 'utf8'));
+    expect(gitIn(begin.projectDir, 'status', '--porcelain')).toBe('');
+  });
+
+  it('jev off в руке navigator выключается так же: условие одно у обеих рук', async () => {
+    const { run, budget } = await pickRun('off', 'navigator');
+    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => [MOD] });
+    expect(JSON.parse(await readFile(settingsOf(begin.projectDir), 'utf8'))).toEqual({ enabledPlugins: { [MOD]: false } });
+  });
+
+  it('jev on: файла настроек нет, и мод не ищется', async () => {
+    const { run, budget } = await pickRun('on');
+    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: async () => { throw new Error('при jev on мод не ищется'); } });
+    expect(await exists(settingsOf(begin.projectDir))).toBe(false);
+    expect(begin.jevDisabled).toEqual([]);
+  });
+
+  it('jev off, мод не установлен (пустой список): файла настроек нет', async () => {
+    const { run, budget } = await pickRun('off');
+    const begin = await beginRun(run, budget, tmp, { versions, jevPluginIds: noJev });
+    expect(await exists(settingsOf(begin.projectDir))).toBe(false);
+    expect(begin.jevDisabled).toEqual([]);
+  });
+
+  it('jev off, место установки не прочиталось (null): begin отказывает и прогон не начат', async () => {
+    const { run, budget } = await pickRun('off');
+    await expect(beginRun(run, budget, tmp, { versions, jevPluginIds: async () => null })).rejects.toThrow('выключение jev не проверить');
+    expect(await exists(path.join(tmp, 'work', run.id, 'begin.json'))).toBe(false);
+  });
+
+  it('мод ищется там же, где у Parley: <HOME>/.claude по умолчанию и CLAUDE_CONFIG_DIR, относительный — от копии проекта', async () => {
+    const installAt = async (config: string) => {
+      const dir = path.join(config, 'skills', 'jev-skill-suggestion', '.claude-plugin');
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, 'plugin.json'), '{"name":"jev-skill-suggestion"}');
+    };
+    const native = await pickRun('off');
+    const navigator = await pickRun('off', 'navigator');
+
+    // Пустой CLAUDE_CONFIG_DIR — как незаданный.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+    vi.stubEnv('HOME', path.join(tmp, 'user'));
+    expect((await beginRun(native.run, native.budget, tmp, { versions })).jevDisabled).toEqual([]);
+    await installAt(path.join(tmp, 'user', '.claude'));
+    expect((await beginRun(native.run, native.budget, tmp, { versions })).jevDisabled).toEqual([MOD]);
+
+    // Копия проекта — <tmp>/work/<id>/project, поэтому `../../cfg` — это <tmp>/work/cfg.
+    vi.stubEnv('HOME', path.join(tmp, 'empty-home'));
+    await installAt(path.join(tmp, 'work', 'cfg'));
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '../../cfg');
+    expect((await beginRun(navigator.run, navigator.budget, tmp, { versions })).jevDisabled).toEqual([MOD]);
+  });
+});
+
+describe('дом хоста стенда и путь сокета', () => {
+  it('лист запуска: PARLEY_HOME по умолчанию <out>/home, а с заданным home — он; jev off выключает файл настроек', async () => {
+    const { file, budget } = await loadFixtures();
+    const runs = planRuns(file, budget);
+    expect(renderRunSheet(runs, file, budget, '/out')).toContain('`PARLEY_HOME=/out/home ');
+
+    const sheet = renderRunSheet(runs, file, budget, '/out', '/short/home');
+    expect(sheet).toContain('`PARLEY_HOME=/short/home ');
+    expect(sheet).not.toContain('PARLEY_HOME=/out/home');
+    expect(sheet).toContain('- jev off: мод выключает файл настроек копии');
+    expect(sheet).toContain('- jev on: мод включён настройками CLI человека');
+    expect(sheet).toContain('hook_additional_context');
+    expect(sheet).not.toContain('<skill_relevance>');
+  });
+
+  it('plan --home пишет PARLEY_HOME из --home в лист запуска', async () => {
+    const out = path.join(tmp, 'out');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await main(['plan', '--out', out, '--home', '/bench/home'])).toBe(0);
+    } finally {
+      log.mockRestore();
+    }
+    const sheet = await readFile(path.join(out, 'run-sheet.md'), 'utf8');
+    expect(sheet).toContain('`PARLEY_HOME=/bench/home ');
+    expect(sheet).not.toContain(path.join(out, 'home'));
+  });
+
+  it('plan: слишком длинный --home или длинный <out>/home по умолчанию — отказ с подсказкой, файлы не пишутся', async () => {
+    const written = (out: string) => readFile(path.join(out, 'run-sheet.md'), 'utf8').then(() => true, () => false);
+    const outA = path.join(tmp, 'out-a');
+    await expect(main(['plan', '--out', outA, '--home', path.join(tmp, 'x'.repeat(120))])).rejects.toThrow(/байт при пределе \d+; передайте более короткий --home/);
+    expect(await written(outA)).toBe(false);
+
+    const outB = path.join(tmp, 'y'.repeat(100));
+    await expect(main(['plan', '--out', outB])).rejects.toThrow('--home');
+    expect(await written(outB)).toBe(false);
+  });
+
+  it('предел пути сокета — в байтах UTF-8 и включительно', async () => {
+    const { MAX_SOCKET_PATH_BYTES } = await import('../packages/host/src/paths.js');
+    const tail = '/host/host.sock'.length;
+    // Дом ровно на `bytes` байт: буква повторяется, остаток добивается латиницей.
+    const homeOf = (bytes: number, letter: string): string => {
+      const free = bytes - 1;
+      const size = Buffer.byteLength(letter);
+      return `/${letter.repeat(Math.floor(free / size))}${'a'.repeat(free % size)}`;
+    };
+    for (const letter of ['a', 'я']) {
+      await expect(assertHostSocketFits(homeOf(MAX_SOCKET_PATH_BYTES - tail, letter))).resolves.toBeUndefined();
+      await expect(assertHostSocketFits(homeOf(MAX_SOCKET_PATH_BYTES - tail + 1, letter))).rejects.toThrow('--home');
+    }
   });
 });
 

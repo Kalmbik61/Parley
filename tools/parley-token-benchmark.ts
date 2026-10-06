@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -30,6 +30,7 @@ import { indexCodexSession } from '../packages/core/src/codex/index-session.js';
 import { defaultRoot, discoverSession, discoverSessions } from '../packages/core/src/discover.js';
 import { forEachJsonlRecord, type RawRecord } from '../packages/core/src/jsonl.js';
 import { indexSessionFile, isServiceText } from '../packages/core/src/session-index.js';
+import { findJevPluginIds } from '../packages/core/src/work/skill-reduction.js';
 import {
   asCount,
   sumUsage,
@@ -325,8 +326,10 @@ export function estimateBudget(runs: PlannedRun[], budget: Budget): BudgetEstima
 /** Окружение запуска хоста Parley для руки и оси: всё, что отличает прогоны, кроме фикстурного проекта. */
 export function hostEnv(run: Pick<PlannedRun, 'arm' | 'jev'>, scenario: Scenario): string[] {
   const navigator = run.arm === 'navigator' && scenario.coverage !== 'disabled';
-  // Навыки Parley (parley и minimal-development) стенд доставляет сам: у обеих рук одно и то же. Мод jev
-  // включается переменной окружения хоста, а не записью в настройки человека: одинаково в обеих руках.
+  // Навыки Parley (parley и minimal-development) стенд доставляет сам: у обеих рук одно и то же. Переменная
+  // функциональных хуков нужна при jev on, но выключить мод она не может: Claude Code накладывает `env` из файлов
+  // настроек поверх окружения запуска, а у человека в `~/.claude/settings.json` она стоит в 1. Поэтому при jev off
+  // мод выключает файл настроек копии проекта (`disableJevInCopy`, `enabledPlugins`), одинаково в обеих руках.
   return [
     `PARLEY_SKILL_NAVIGATOR=${navigator}`,
     'PARLEY_AGENT_SKILLS=false',
@@ -334,8 +337,11 @@ export function hostEnv(run: Pick<PlannedRun, 'arm' | 'jev'>, scenario: Scenario
   ];
 }
 
-/** Лист запуска для человека, ведущего живой прогон: всё, что нужно сделать в Parley на каждый ход. */
-export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: Budget, out: string): string {
+/**
+ * Лист запуска для человека, ведущего живой прогон: всё, что нужно сделать в Parley на каждый ход. `home` — дом
+ * хоста Parley (`PARLEY_HOME`), по умолчанию `<out>/home`; влезает ли в него сокет хоста, проверяет `plan`.
+ */
+export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: Budget, out: string, home = path.join(out, 'home')): string {
   const scenarios = new Map(file.scenarios.map((s) => [s.id, s]));
   const tasks = new Map(file.tasks.map((t) => [t.id, t]));
   const lines = [
@@ -356,10 +362,12 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
       '',
       `- Волна ${run.wave}, рука ${run.arm}, кеш ${run.cache}, jev ${run.jev}, minimal-development ${run.skill}, сессий ${run.sessions}.`,
       `- Начало: \`pnpm exec tsx tools/parley-token-benchmark.ts begin ${run.id} --out ${out}\``,
-      `- Хост Parley: \`PARLEY_HOME=${path.join(out, 'home')} ${hostEnv(run, scenario).join(' ')}\`; проект работы — \`${path.join(out, 'work', run.id, 'project')}\`.`,
+      `- Хост Parley: \`PARLEY_HOME=${home} ${hostEnv(run, scenario).join(' ')}\`; проект работы — \`${path.join(out, 'work', run.id, 'project')}\`.`,
       ...(setup === undefined ? [] : [`- Особенность руки: ${setup}`]),
       ...(run.cache === 'warm' ? [`- Тёплый прогон: начать не позже ${budget.cache.warmWithinSec} с после конца холодного, того же проекта и руки; записать интервал в \`--warm-interval-sec\`.`] : []),
-      `- jev ${run.jev}: переменная окружения хоста в строке выше; в транскрипте вставка \`<skill_relevance>\` должна быть только при on (проверить в пилоте).`,
+      run.jev === 'off'
+        ? '- jev off: мод выключает файл настроек копии (`begin` пишет `.claude/settings.json`, id мода — `jevDisabled` в `begin.json`); одной переменной хоста мало, настройки CLI человека её перекрывают. В транскрипте не должно быть вставки jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.'
+        : '- jev on: мод включён настройками CLI человека, файла настроек в копии нет; переменная хоста в строке выше включает функциональные хуки. В транскрипте должна быть вставка jev (`attachment` типа `hook_additional_context` с «Relevant to the current request:») — проверить в пилоте.',
       `- Участники: ${scenario.room.map((member) => `${member.provider}/${member.role}`).join(', ')}.`,
       `- Запрос: ${JSON.stringify(scenario.prompt)}`,
       ...(scenario.followUps ?? []).map((item) => `- Позже (${item.when}): ${JSON.stringify(item.text)}`),
@@ -958,18 +966,41 @@ export interface BeginRecord {
   repetition: number;
   conditions: Conditions;
   projectDir: string;
+  /** Id мода jev, выключенного в копии (`jev off`); пусто — мод не установлен или jev on. */
+  jevDisabled: string[];
   startedAt: string;
 }
 
 /**
+ * Выключение мода jev в копии проекта для руки с `jev off`: файл `.claude/settings.json` с `enabledPlugins: false`.
+ * Переменной хоста мало (см. `hostEnv`), а проектный уровень настроек Claude Code выше пользовательского. Id мода
+ * ищется как у Parley (`work/launch.ts`): тем же `findJevPluginIds` и в той же папке конфигурации Claude.
+ * Пустой список — мод не установлен, выключать нечего. `null` — место установки не прочиталось, и мод мог остаться
+ * включённым незаметно: прогон с `jev off`, который нельзя проверить, не начинаем.
+ */
+async function disableJevInCopy(projectDir: string, findIds: typeof findJevPluginIds): Promise<string[]> {
+  const configDir = process.env.CLAUDE_CONFIG_DIR ? path.resolve(projectDir, process.env.CLAUDE_CONFIG_DIR) : path.join(process.env.HOME ?? homedir(), '.claude');
+  const ids = await findIds(projectDir, configDir);
+  if (ids === null) throw new Error(`jev off: место установки мода в ${configDir} не прочиталось, выключение jev не проверить`);
+  if (ids.length > 0) {
+    await mkdir(path.join(projectDir, '.claude'), { recursive: true });
+    const settings = { enabledPlugins: Object.fromEntries(ids.map((id) => [id, false])) };
+    await writeFile(path.join(projectDir, '.claude/settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
+  }
+  return ids;
+}
+
+/**
  * Копия фикстурного проекта для прогона: навыки лежат в родных каталогах `.agents/skills` и `.claude/skills`
- * копии (домашние каталоги CLI не трогаются), minimal-development — только на оси навыка. Копия — git-репозиторий.
+ * копии (домашние каталоги CLI не трогаются), minimal-development — только на оси навыка. Копия — git-репозиторий;
+ * при `jev off` в неё до коммита пишется `.claude/settings.json`, выключающий мод jev (`disableJevInCopy`).
+ * `deps.jevPluginIds` подменяет поиск мода, чтобы тесты и сухой прогон не читали настоящий `~/.claude`.
  */
 export async function beginRun(
   planned: PlannedRun,
   budget: Budget,
   out: string,
-  deps: { versions?: () => { claude: string; codex: string }; fixtureDir?: string } = {},
+  deps: { versions?: () => { claude: string; codex: string }; fixtureDir?: string; jevPluginIds?: typeof findJevPluginIds } = {},
 ): Promise<BeginRecord> {
   const fixtureDir = deps.fixtureDir ?? FIXTURE_DIR;
   const workDir = path.join(out, 'work', planned.id);
@@ -986,6 +1017,7 @@ export async function beginRun(
       await cp(MINIMAL_DEVELOPMENT_DIR, path.join(projectDir, home, 'minimal-development'), { recursive: true });
     }
   }
+  const jevDisabled = planned.jev === 'off' ? await disableJevInCopy(projectDir, deps.jevPluginIds ?? findJevPluginIds) : [];
   git(projectDir, 'init', '-q');
   git(projectDir, 'add', '-A');
   git(projectDir, 'commit', '-q', '-m', 'fixture');
@@ -1004,6 +1036,7 @@ export async function beginRun(
       warmIntervalSec: null,
     },
     projectDir,
+    jevDisabled,
     startedAt: new Date().toISOString(),
   };
   await writeFile(path.join(workDir, 'begin.json'), `${JSON.stringify(record, null, 2)}\n`);
@@ -1432,7 +1465,8 @@ export async function dryRun(fixtureDir = FIXTURE_DIR): Promise<DryRunResult> {
     for (const task of file.tasks) {
       if (task.accept.kind !== 'command') continue;
       const planned = runs.find((r) => file.scenarios.find((s) => s.id === r.scenario)?.task === task.id)!;
-      const begin = await beginRun({ ...planned, id: `dry.${task.id}` }, budget, tmp, { versions: () => ({ claude: 'dry-run', codex: 'dry-run' }), fixtureDir });
+      // Настоящий `~/.claude` сухой прогон не читает: место установки jev у него подставное, пустое.
+      const begin = await beginRun({ ...planned, id: `dry.${task.id}` }, budget, tmp, { versions: () => ({ claude: 'dry-run', codex: 'dry-run' }), fixtureDir, jevPluginIds: async () => [] });
       const before = runAcceptance(task.accept.command, begin.projectDir);
       await cp(path.join(fixtureDir, task.solution!), begin.projectDir, { recursive: true });
       const after = runAcceptance(task.accept.command, begin.projectDir);
@@ -1453,10 +1487,27 @@ export async function dryRun(fixtureDir = FIXTURE_DIR): Promise<DryRunResult> {
 
 // ---------- Командная строка ----------
 
+/**
+ * Хост кладёт сокет в `<дом>/host/host.sock` и не стартует, если путь длиннее предела `sun_path` в байтах UTF-8
+ * (`SocketPathTooLong`): лучше отказать при плане, чем на живом прогоне по уже написанному листу. Раскладку и предел
+ * берём у хоста. Его модуль тянет за собой всё ядро из `dist`, поэтому подгружается здесь, а не при старте
+ * каждой команды стенда.
+ */
+export async function assertHostSocketFits(home: string): Promise<void> {
+  const { hostPaths, MAX_SOCKET_PATH_BYTES } = await import('../packages/host/src/paths.js');
+  const socket = hostPaths(home).socket;
+  const bytes = Buffer.byteLength(socket, 'utf8');
+  if (bytes > MAX_SOCKET_PATH_BYTES) {
+    throw new Error(`${socket}: путь сокета хоста ${bytes} байт при пределе ${MAX_SOCKET_PATH_BYTES}; передайте более короткий --home DIR (например, ~/.parley-bench)`);
+  }
+}
+
 const HELP = `parley-token-benchmark — офлайн-стенд замера экономии (P38)
 
   validate                      проверить фикстуры сценариев и бюджет
-  plan [--out DIR]              план, бюджет и лист запуска в DIR (по умолчанию .parley/benchmark)
+  plan [--out DIR] [--home DIR] план, бюджет и лист запуска в DIR (по умолчанию .parley/benchmark);
+                                --home — PARLEY_HOME хоста (по умолчанию <out>/home), сокет <home>/host/host.sock
+                                не должен выходить за предел пути хоста, иначе plan откажет
   begin ID [--out DIR]          копия фикстурного проекта и условия прогона
   accept ID [--out DIR]         проверка принятия офлайн-командой задачи
   collect ID --claude F... [--codex F...] [--accepted yes|no] [--constraints yes|no]
@@ -1483,7 +1534,7 @@ export async function main(argv: string[]): Promise<number> {
     args: argv,
     allowPositionals: true,
     options: {
-      out: { type: 'string' }, runs: { type: 'string' }, count: { type: 'string' }, root: { type: 'string' },
+      out: { type: 'string' }, home: { type: 'string' }, runs: { type: 'string' }, count: { type: 'string' }, root: { type: 'string' },
       claude: { type: 'string', multiple: true }, codex: { type: 'string', multiple: true }, set: { type: 'string', multiple: true },
       accepted: { type: 'string' }, constraints: { type: 'string' }, corrections: { type: 'string' },
       'warm-interval-sec': { type: 'string' }, synthetic: { type: 'boolean' }, help: { type: 'boolean' },
@@ -1529,10 +1580,12 @@ export async function main(argv: string[]): Promise<number> {
   if (problems.length > 0) throw new Error(problems.join('; '));
   const runs = planRuns(file, budget);
   if (command === 'plan') {
+    const home = path.resolve(values.home ?? path.join(out, 'home'));
+    await assertHostSocketFits(home);
     const estimate = estimateBudget(runs, budget);
     await mkdir(out, { recursive: true });
     await writeFile(path.join(out, 'plan.json'), `${JSON.stringify({ runs, estimate }, null, 2)}\n`);
-    await writeFile(path.join(out, 'run-sheet.md'), renderRunSheet(runs, file, budget, out));
+    await writeFile(path.join(out, 'run-sheet.md'), renderRunSheet(runs, file, budget, out, home));
     console.log(JSON.stringify(estimate, null, 2));
     return 0;
   }
