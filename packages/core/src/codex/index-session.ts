@@ -3,6 +3,7 @@ import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
+import { isPointerText } from '../work/delivery.js';
 import { createUsageLedger, observedCount } from '../work/usage-ledger.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
@@ -239,6 +240,7 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
     ...(spawned ? { spawned: true } : {}),
     ...(parentId === null ? {} : { parentId }),
     ...(forkedFrom === null ? {} : { forkedFrom }),
+    ...(firstUserMessage !== null && isPointerText(firstUserMessage) ? { firstPromptPointer: true as const } : {}),
   };
 }
 

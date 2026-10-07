@@ -3,6 +3,7 @@ import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
+import { isPointerText } from './work/delivery.js';
 import { createUsageLedger, type UsageCounters, type UsageSummary } from './work/usage-ledger.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
@@ -90,6 +91,12 @@ export interface SessionIndex {
    * Базу унаследованного не отделить, поэтому перекрытие с родителем не разрешено (`overlapUnresolved`).
    */
   forkedFrom?: string;
+  /**
+   * Первая реплика пользователя в логе — указатель Parley на письма (`isPointerText`): разговор начал не человек,
+   * а доставка почты агенту комнаты, запущенному без задачи. Заголовки из такого начала — сам указатель или
+   * `ai-title`, сгенерированный по нему, — не имя сессии (`autoTitleOf`). Нет поля — начало обычное.
+   */
+  firstPromptPointer?: true;
 }
 
 /**
@@ -329,5 +336,6 @@ export async function indexSessionFile(
     tokens,
     usage,
     provider: 'claude',
+    ...(firstText !== null && isPointerText(firstText) ? { firstPromptPointer: true as const } : {}),
   };
 }

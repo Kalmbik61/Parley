@@ -492,6 +492,41 @@ describe('заголовок сессии', () => {
     expect(index.titleSource).toBeNull();
   });
 
+  it('первая реплика — указатель Parley на письма: firstPromptPointer; заголовок индекс выбирает как обычно', async () => {
+    const pointer = 'New messages (1) in r-01 "Second". Call check_inbox.';
+    const file = await writeSession(
+      '-Users-me-proj',
+      't11',
+      line({ type: 'user', message: { role: 'user', content: pointer } }) +
+        line({ type: 'last-prompt', lastPrompt: pointer }) +
+        line({ type: 'ai-title', aiTitle: 'Проверка входящих сообщений' }),
+    );
+    const index = await indexSessionFile(file, root);
+    expect(index.firstPromptPointer).toBe(true);
+    // Решает автозаголовок (`autoTitleOf`), индекс остаётся общим.
+    expect(index.title).toBe('Проверка входящих сообщений');
+    expect(index.titleSource).toBe('ai');
+  });
+
+  it('указатель не первой репликой или служебная реплика перед ним — флаг по первой настоящей', async () => {
+    const pointer = 'New messages (2). Call check_inbox.';
+    const later = await writeSession(
+      '-Users-me-proj',
+      't12',
+      line({ type: 'user', message: { role: 'user', content: 'почини парсер' } }) +
+        line({ type: 'user', message: { role: 'user', content: pointer } }),
+    );
+    expect(await indexSessionFile(later, root)).not.toHaveProperty('firstPromptPointer');
+
+    const afterMeta = await writeSession(
+      '-Users-me-proj',
+      't13',
+      line({ type: 'user', isMeta: true, message: { role: 'user', content: 'вставка Claude Code' } }) +
+        line({ type: 'user', message: { role: 'user', content: pointer } }),
+    );
+    expect((await indexSessionFile(afterMeta, root)).firstPromptPointer).toBe(true);
+  });
+
   it('длинная реплика обрезается', async () => {
     const long = 'я'.repeat(300);
     const file = await writeSession(

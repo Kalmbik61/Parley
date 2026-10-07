@@ -426,7 +426,8 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   where an agent mentioned you is marked with `@`) and the time. Below
   it are the meta line "folder · N sessions · branch" and the rows. A session row has the
   state and agent icons, `S02 backend`, the state word (`working`, `needs you`,
-  `done · unseen`, `idle`, `not started`, `done`, `failed`, `asleep`, `closed`), a branch icon
+  `done · unseen`, `idle`, `not started`, `done`, `failed`, `asleep`, `closed`), a blinking
+  envelope while the agent has messages it has not read yet ("Has new messages"), a branch icon
   for a session with its own worktree, and the time; a session that waits for you or has an
   unseen result is tinted. A room is a row (`# name`) in the place of its first member: the
   word `decision` and a tint while a decision waits for you, or `N new` for messages you have

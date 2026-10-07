@@ -257,6 +257,7 @@ export type { Thread } from './work/thread.js';
 export { buildBrief, writeBrief } from './work/brief.js';
 export {
   applyAutoTitle,
+  autoTitleOf,
   createChildSession,
   createNewSession,
   createPendingSession,
@@ -270,6 +271,7 @@ export {
   planNew,
   planResume,
   readBrief,
+  resetPointerLabel,
   startSession,
   UNTITLED_WORK,
 } from './work/launch.js';
@@ -362,7 +364,7 @@ export type {
   EventsWatcher,
   WatchEventsOptions,
 } from './work/events.js';
-export { deliveryAction, pointerText } from './work/delivery.js';
+export { deliveryAction, isPointerText, pointerText } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {
   START_TOLERANCE_MS,

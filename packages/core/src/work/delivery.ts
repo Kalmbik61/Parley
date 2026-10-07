@@ -84,6 +84,23 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
   return room === undefined ? `${head} in ${id}. ${tail}` : `${head} in ${id} "${room.title}". ${tail}`;
 }
 
+/** Указатель целиком (`pointerText`): голова со счётом, необязательное «in r-…», хвост `Call check_inbox.`. */
+const POINTER_TEXT = /^\s*New messages \(\d+\)(?: in r-[\s\S]*)?\. Call check_inbox\.\s*$/;
+/**
+ * Он же, обрезанный `oneLine` (заголовок из реплики — 200 знаков и `…`): длинное название комнаты съело хвост.
+ * Так его записывал в ярлык автозаголовок сборок до 0.7.0 включительно.
+ */
+const CUT_POINTER_TEXT = /^\s*New messages \(\d+\) in r-[\s\S]*…$/;
+
+/**
+ * Текст — указатель Parley на письма (`pointerText`), а не реплика человека: хост набирает его в терминал
+ * агента сам. Ни заголовком сессии, ни её ярлыком он быть не может — автозаголовок (`autoTitleOf`) его не берёт.
+ * Формат живёт здесь, рядом с `pointerText`: поменялся текст — меняется и распознавание (delivery.test.ts).
+ */
+export function isPointerText(text: string): boolean {
+  return POINTER_TEXT.test(text) || CUT_POINTER_TEXT.test(text);
+}
+
 /**
  * Правила по порядку, первое сработавшее решает (план, куски 1.8 и 3.4). Письма
  * к уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.

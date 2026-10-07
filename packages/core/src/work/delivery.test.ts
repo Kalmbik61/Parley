@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
-import { deliveryAction, pointerText } from './delivery.js';
+import { oneLine } from '../counters.js';
+import { deliveryAction, isPointerText, pointerText } from './delivery.js';
 import type { Message, Room, WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
@@ -95,6 +96,51 @@ describe('pointerText', () => {
   it('комнаты вместе с прямыми — «and direct»', () => {
     const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })];
     expect(pointerText(letters, rooms)).toBe('New messages (2) in r-01 and direct. Call check_inbox.');
+  });
+});
+
+describe('isPointerText', () => {
+  const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
+  const forms = [
+    [messageOf()],
+    [messageOf({ id: 'm-01', roomId: 'r-01' })],
+    [messageOf({ id: 'm-01', roomId: 'r-02' }), messageOf({ id: 'm-02', roomId: 'r-01' })],
+    [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })],
+    // Комнаты в карте нет — в указателе один id.
+    [messageOf({ id: 'm-01', roomId: 'r-09' })],
+  ];
+
+  it('узнаёт каждую форму pointerText — и ярлык, каким его записал автозаголовок (oneLine)', () => {
+    for (const letters of forms) {
+      const text = pointerText(letters, rooms);
+      expect(isPointerText(text), text).toBe(true);
+      expect(isPointerText(oneLine(text)), text).toBe(true);
+    }
+    // Ярлык из карты пользователя (w-0043, сборка 0.7.0).
+    expect(isPointerText('New messages (1) in r-01 "Second". Call check_inbox.')).toBe(true);
+  });
+
+  it('длинное название комнаты: oneLine обрезал хвост `Call check_inbox.` — всё равно указатель', () => {
+    const text = pointerText([messageOf({ roomId: 'r-01' })], [roomOf('r-01', 'очень длинное название '.repeat(10))]);
+    const cut = oneLine(text);
+    expect(cut.endsWith('…')).toBe(true);
+    expect(cut).not.toContain('check_inbox');
+    expect(isPointerText(cut)).toBe(true);
+  });
+
+  it('обычные реплики и ярлыки — не указатель, даже похожие', () => {
+    for (const text of [
+      'бэкенд',
+      'new session',
+      'New messages',
+      'New messages (1)',
+      'New messages (1). Call check_inbox. А потом почини парсер',
+      'Проверь new messages (1). Call check_inbox.',
+      'New messages (1) in the inbox…',
+      'Проверка входящих сообщений',
+    ]) {
+      expect(isPointerText(text), text).toBe(false);
+    }
   });
 });
 

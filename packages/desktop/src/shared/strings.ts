@@ -326,6 +326,8 @@ export const S = {
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     /** Тултип ⚠ строки сессии Codex, что за срок после запуска не показала статус: вход или доверие к папке — за человеком. */
     startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
+    /** Тултип и `aria-label` мигающего значка письма в строке сессии: агенту пришли письма, он их ещё не прочёл. */
+    agentUnread: 'Has new messages',
     /** Переключатель меню «⋯» заголовка секции (спека 6.1, кусок 3.4). */
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */

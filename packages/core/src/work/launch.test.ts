@@ -10,6 +10,7 @@ import type { SkillCatalog } from '../skills/catalog.js';
 import { claudeSkillRoute, codexSkillRoute } from './skill-reduction.js';
 import {
   applyAutoTitle,
+  autoTitleOf,
   createChildSession,
   createNewSession,
   createPendingSession,
@@ -22,6 +23,7 @@ import {
   planNew,
   planResume,
   readBrief,
+  resetPointerLabel,
   startSession,
   UNTITLED_WORK,
 } from './launch.js';
@@ -229,6 +231,79 @@ describe('метки быстрой сессии и автозаголовок',
     const healed = await readMap(project, created.workId);
     expect(healed.sessions[0]?.label).toBe('Orca мобильное приложение');
     expect(healed.work.title).toBe('Orca мобильное приложение');
+  });
+
+  // Ярлык агента комнаты из карты пользователя (w-0043, сборка 0.7.0): автозаголовок взял указатель на письма.
+  const POINTER = 'New messages (1) in r-01 "Second". Call check_inbox.';
+
+  it('указатель на письма вместо ярлыка и заголовка работы — не имя (сборки до 0.7.0 включительно)', () => {
+    expect(isNewLabel(POINTER)).toBe(true);
+    expect(isNewLabel('New messages (2). Call check_inbox.')).toBe(true);
+    expect(isUntitledWork(POINTER)).toBe(true);
+    // Похожее, но своё имя — имя.
+    expect(isNewLabel('New messages handling')).toBe(false);
+  });
+
+  it('applyAutoTitle указатель именем не ставит, карту не переписывает', async () => {
+    const created = await createNewSession(project, null);
+    const before = await readFile(workPaths(project, created.workId).map, 'utf8');
+
+    await applyAutoTitle(project, created.workId, created.session.id, POINTER);
+
+    expect(await readFile(workPaths(project, created.workId).map, 'utf8')).toBe(before);
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe(NEW_LABEL);
+    expect(map.work.title).toBe(UNTITLED_WORK);
+  });
+
+  it('autoTitleOf: разговор, начатый указателем, имени из лога не получает — кроме /rename человека', () => {
+    const fromPointer = { firstPromptPointer: true as const };
+    // `ai-title`, сгенерированный по указателю, и сам указатель из реплики — не имя.
+    expect(autoTitleOf({ title: 'Проверка входящих сообщений', titleSource: 'ai', ...fromPointer })).toBeNull();
+    expect(autoTitleOf({ title: POINTER, titleSource: 'last-prompt', ...fromPointer })).toBeNull();
+    expect(autoTitleOf({ title: POINTER, titleSource: 'first-text', ...fromPointer })).toBeNull();
+    // `custom-title` пишет только `/rename` человека — явный выбор имени.
+    expect(autoTitleOf({ title: 'ревьюер', titleSource: 'custom', ...fromPointer })).toBe('ревьюер');
+    // Обычное начало: указатель, пришедший последним, — не имя (ждём ai-title), прочее — как было.
+    expect(autoTitleOf({ title: POINTER, titleSource: 'last-prompt' })).toBeNull();
+    expect(autoTitleOf({ title: 'Починить сборку', titleSource: 'ai' })).toBe('Починить сборку');
+    expect(autoTitleOf({ title: 'почини парсер', titleSource: 'last-prompt' })).toBe('почини парсер');
+    expect(autoTitleOf({ title: null, titleSource: null })).toBeNull();
+    expect(autoTitleOf(undefined)).toBeNull();
+  });
+
+  it('resetPointerLabel: ярлык-указатель и такой же заголовок работы — снова метки; updatedAt не сдвигается', async () => {
+    const created = await createNewSession(project, null);
+    const other = await createNewSession(project, created.workId);
+    await updateMap(project, created.workId, (map) => {
+      map.sessions[0]!.label = POINTER;
+      map.work.title = POINTER;
+      map.sessions[1]!.label = POINTER;
+    });
+    const before = (await readMap(project, created.workId)).work.updatedAt;
+
+    await resetPointerLabel(project, created.workId, created.session.id);
+
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe(NEW_LABEL);
+    expect(map.work.title).toBe(UNTITLED_WORK);
+    // Чинится только названная сессия: соседнюю хост вернёт своим вызовом.
+    expect(map.sessions.find((item) => item.id === other.session.id)?.label).toBe(POINTER);
+    expect(map.work.updatedAt).toBe(before);
+  });
+
+  it('resetPointerLabel: настоящее имя и название не трогает', async () => {
+    const { workId } = await pending('claude');
+    const quick = await createNewSession(project, workId);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((item) => item.id === quick.session.id)!.label = 'бэкенд';
+    });
+
+    await resetPointerLabel(project, workId, quick.session.id);
+
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((item) => item.id === quick.session.id)?.label).toBe('бэкенд');
+    expect(map.work.title).toBe('Авторизация');
   });
 
   it('автозаголовок переименует быструю сессию и безымянную работу один раз', async () => {

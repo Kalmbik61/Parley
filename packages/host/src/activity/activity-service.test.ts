@@ -372,6 +372,62 @@ describe('createActivityService', () => {
     );
   }, 60_000);
 
+  // Агент комнаты без задачи: первым в его терминал пришёл указатель на письма, и автозаголовок сборок до 0.7.0
+  // включительно делал его именем сессии (карта пользователя w-0043).
+  const POINTER = 'New messages (1) in r-01 "Second". Call check_inbox.';
+  const record = (value: Record<string, unknown>, id: string): string => `${JSON.stringify({ sessionId: id, ...value })}\n`;
+  /** Лог агента, разбуженного почтой: первая реплика — указатель, `ai-title` Claude сгенерировал по нему. */
+  const pointerLog = (id: string): string =>
+    record({ type: 'user', timestamp: '2026-10-07T10:00:00.000Z', message: { role: 'user', content: POINTER } }, id) +
+    record({ type: 'last-prompt', lastPrompt: POINTER }, id) +
+    record({ type: 'ai-title', aiTitle: 'Проверка входящих сообщений' }, id) +
+    record(
+      {
+        type: 'assistant',
+        timestamp: '2026-10-07T10:00:05.000Z',
+        message: { id: 'msg-1', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ок' }] },
+      },
+      id,
+    );
+
+  it('6c: разговор, начатый указателем на письма, автозаголовка не получает; ярлык-указатель — снова метка новой сессии', async () => {
+    const { ref, workId } = await activeSession({ label: POINTER, providerSessionId: 's-pointer' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(path.join(claudeRoot, '-proj', 's-pointer.jsonl'), pointerLog('s-pointer'));
+
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await vi.waitFor(async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe(NEW_LABEL), {
+      timeout: 30_000,
+      interval: 25,
+    });
+    // Индекс лога доехал (модель из него в метриках), а `ai-title` по указателю ярлыком так и не стал.
+    await vi.waitFor(() => expect(a.get(ref)?.metrics?.model).toBe('claude-opus-5-5'), { timeout: 30_000, interval: 25 });
+    await appendFile(
+      path.join(claudeRoot, '-proj', 's-pointer.jsonl'),
+      record({ type: 'ai-title', aiTitle: 'Сообщения в r-01 «Second»' }, 's-pointer'),
+    );
+    await settle(1500);
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(NEW_LABEL);
+  }, 60_000);
+
+  it('6d: /rename человека (custom-title) в разговоре, начатом указателем, — имя', async () => {
+    const { ref, workId } = await activeSession({ label: NEW_LABEL, providerSessionId: 's-renamed' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-renamed.jsonl'),
+      pointerLog('s-renamed') + record({ type: 'custom-title', customTitle: 'ревьюер' }, 's-renamed'),
+    );
+
+    const w = await works();
+    await activity(w).start();
+    await vi.waitFor(async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('ревьюер'), {
+      timeout: 30_000,
+      interval: 25,
+    });
+  }, 60_000);
+
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
     await activeSession({ launchedBy: 'host', createEventsDir: false });
     const w = await works();
