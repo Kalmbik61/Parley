@@ -26,7 +26,7 @@ import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
-import { createHumanRoom, sendHumanLetter } from '../rooms/rooms-service.js';
+import { createHumanRoom, deleteHumanRoom, sendHumanLetter, setHumanRoomLead } from '../rooms/rooms-service.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
@@ -1089,6 +1089,35 @@ describe('WakeService: комнаты (3.5)', () => {
     const expected = `echo: ${inRoom(2, roomId, 'Созвон')}`;
     await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('New messages');
+  }, 20_000);
+
+  it('4: «Make lead» — письма parley будят нового и прежнего ведущего, прочих участников — нет', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b, c], lead: a, quiet: true });
+    const streams = await trioRig(workId, ids);
+
+    await setHumanRoomLead({ projectPath: project, workId, roomId, sessionId: b });
+
+    const expected = `echo: ${inRoom(1, roomId, 'Созвон')}`;
+    await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('New messages');
+  }, 20_000);
+
+  it('5: удалённая комната — прямое письмо parley будит её участников, сессию вне комнаты — нет', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b], quiet: true });
+    const streams = await trioRig(workId, ids);
+
+    await deleteHumanRoom({ projectPath: project, workId, roomId });
+
+    await waitFor(() => streams.get(a)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
+    await waitFor(() => streams.get(b)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
     await settle(300);
     expect(streams.get(c)?.()).not.toContain('New messages');
   }, 20_000);

@@ -7,8 +7,11 @@ import type { Handler } from '../context.js';
 import {
   addRoomMember,
   createHumanRoom,
+  deleteHumanRoom,
+  renameHumanRoom,
   resolveRoomProposal,
   sendHumanLetter,
+  setHumanRoomLead,
 } from '../rooms/rooms-service.js';
 
 import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
@@ -30,6 +33,20 @@ export const roomsSend: Handler<'rooms.send'> = async (params) => ({
 export const roomsAddMember: Handler<'rooms.addMember'> = async (params) => ({
   messageId: await addRoomMember(params),
 });
+
+export const roomsRename: Handler<'rooms.rename'> = async (params) => {
+  await renameHumanRoom(params);
+  return { ok: true };
+};
+
+export const roomsSetLead: Handler<'rooms.setLead'> = async (params) => ({
+  messageId: await setHumanRoomLead(params),
+});
+
+export const roomsDelete: Handler<'rooms.delete'> = async (params) => {
+  await deleteHumanRoom(params);
+  return { ok: true };
+};
 
 export const roomsResolveProposal: Handler<'rooms.resolveProposal'> = async (params) => ({
   messageId: await resolveRoomProposal(params),

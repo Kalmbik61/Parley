@@ -813,3 +813,140 @@ describe('rooms.resolveProposal', () => {
     expect((await readMap(dir, workId)).rooms[0]?.proposal).toBeNull();
   });
 });
+
+describe('rooms.rename / rooms.setLead / rooms.delete: управление комнатой из сайдбара', () => {
+  const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Step one.' };
+  const parleyLetters = (map: Awaited<ReturnType<typeof readMap>>) => map.messages.filter((message) => message.from === PARLEY);
+  const waitFor = async (check: () => Promise<boolean>): Promise<void> => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('не дождались условия');
+  };
+
+  /** Комната r-01 {a, b} с ведущим a и прямое письмо человека c — его ни одно действие с комнатой не трогает. */
+  async function withRoom(extra: Record<string, unknown> = {}) {
+    const context = await setup();
+    const [a, b, c] = context.ids as [string, string, string];
+    await call(context.client, 'rooms.create', { projectPath: context.dir, workId: context.workId, title: 'Возвраты', members: [a, b], lead: a, ...extra });
+    await call(context.client, 'rooms.send', { projectPath: context.dir, workId: context.workId, roomId: null, to: [c], text: 'прямое', kind: 'note' });
+    return { ...context, base: { projectPath: context.dir, workId: context.workId, roomId: 'r-01' } };
+  }
+
+  it('rooms.rename: края обрезаются, updatedAt работы стоит на месте; пустое, чужая комната и работа — bad_request', async () => {
+    const { client, dir, workId, base } = await withRoom();
+    const before = await readMap(dir, workId);
+
+    const response = await call(client, 'rooms.rename', { ...base, title: '  Платежи​ ' });
+    expect(response.result).toEqual({ ok: true });
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]?.title).toBe('Платежи');
+    expect(map.work.updatedAt).toBe(before.work.updatedAt);
+    expect(map.messages).toHaveLength(before.messages.length);
+
+    for (const extra of [{ title: '   ' }, { title: '' }, { roomId: 'r-09', title: 'x' }, { workId: 'w-9999', title: 'x' }]) {
+      const bad = await call(client, 'rooms.rename', { ...base, ...extra });
+      expect(bad.error?.code).toBe('bad_request');
+    }
+    expect((await readMap(dir, workId)).rooms[0]?.title).toBe('Платежи');
+  });
+
+  it('rooms.setLead: lead в карте, ответ — id строки «@s02 is now the lead», письма parley новому и прежнему', async () => {
+    const { client, dir, workId, ids, base } = await withRoom({ quiet: true });
+    const [a, b] = ids as [string, string];
+
+    const response = await call(client, 'rooms.setLead', { ...base, sessionId: b });
+
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]?.lead).toBe(b);
+    const line = map.messages.find((message) => message.from === SYSTEM && message.roomId === 'r-01');
+    expect(line).toMatchObject({ text: '@s02 is now the lead', to: [HUMAN] });
+    expect(response.result).toEqual({ messageId: line?.id });
+    expect(parleyLetters(map).map((letter) => [letter.to, letter.roomId, letter.text.split(':')[0]])).toEqual([
+      [[b], 'r-01', 'You now lead room r-01 "Возвраты"'],
+      [[a], 'r-01', '@s02 now leads room r-01 "Возвраты"'],
+    ]);
+    expect(unreadFor(map, b).map((message) => message.from)).toEqual([PARLEY]);
+    expect(unreadFor(map, a).map((message) => message.from)).toEqual([PARLEY]);
+  });
+
+  it('rooms.setLead в комнате с рецептом: плейбук новому ведущему — той же записью, следом за письмом о смене', async () => {
+    const { client, dir, workId, ids, base } = await withRoom({ quiet: true, recipe });
+    const [a, b] = ids as [string, string];
+    // Прежний ведущий запущен до комнаты: плейбук ему приходит письмом от будильника.
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 1);
+
+    await call(client, 'rooms.setLead', { ...base, sessionId: b });
+
+    // Без ожидания будильника: письмо с плейбуком уже в карте.
+    const map = await readMap(dir, workId);
+    const toB = parleyLetters(map).filter((letter) => letter.to[0] === b);
+    expect(toB.map((letter) => letter.text)).toEqual([
+      expect.stringMatching(/^You now lead room r-01/),
+      'Recipe: Payments — you lead this room.\nStep one.',
+    ]);
+    expect(map.rooms[0]?.recipeLeadNotified).toBe(b);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Будильник второго плейбука не пишет; прежнему ведущему — только письмо о смене.
+    const after = await readMap(dir, workId);
+    expect(parleyLetters(after).filter((letter) => letter.to[0] === b)).toHaveLength(2);
+    expect(parleyLetters(after).filter((letter) => letter.to[0] === a).map((letter) => letter.text.split(':')[0])).toEqual([
+      'Recipe',
+      '@s02 now leads room r-01 "Возвраты"',
+    ]);
+  });
+
+  it('rooms.setLead: уже ведущий, не участник, закрытая сессия, чужая комната — bad_request, карта не тронута', async () => {
+    const { client, dir, workId, ids, base } = await withRoom();
+    const [a, , c] = ids as [string, string, string];
+    const closed = await addLiveSession(dir, workId, 'закрытая');
+    await call(client, 'rooms.addMember', { ...base, sessionId: closed });
+    await updateMap(dir, workId, (map) => transitionSession(map, closed, 'closed'));
+    const before = JSON.stringify(await readMap(dir, workId));
+
+    for (const extra of [{ sessionId: a }, { sessionId: c }, { sessionId: closed }, { sessionId: HUMAN }, { roomId: 'r-09', sessionId: a }]) {
+      const response = await call(client, 'rooms.setLead', { ...base, ...extra });
+      expect(response.error?.code).toBe('bad_request');
+    }
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(before);
+  });
+
+  it('rooms.delete: комнаты и её ленты нет, прямое письмо на месте; живым участникам — прощальное письмо parley', async () => {
+    const { client, dir, workId, ids, base } = await withRoom();
+    const [a, b] = ids as [string, string];
+
+    const response = await call(client, 'rooms.delete', base);
+
+    expect(response.result).toEqual({ ok: true });
+    const map = await readMap(dir, workId);
+    expect(map.rooms).toEqual([]);
+    expect(map.messages.some((message) => message.roomId === 'r-01')).toBe(false);
+    expect(map.messages[0]?.text).toBe('прямое');
+    expect(parleyLetters(map).map((letter) => [letter.to, letter.roomId, letter.text])).toEqual([
+      [[a], null, 'The human deleted room r-01 "Возвраты": you now work as a regular session of this workspace.'],
+      [[b], null, 'The human deleted room r-01 "Возвраты": you now work as a regular session of this workspace.'],
+    ]);
+    expect(map.sessions.map((session) => session.lifecycle)).toEqual(['active', 'active', 'active']);
+
+    const again = await call(client, 'rooms.delete', base);
+    expect(again.error?.code).toBe('bad_request');
+  });
+
+  it('удаление с сессиями — как в окне: сначала sessions.delete каждой, затем rooms.delete; прощальных писем нет', async () => {
+    const { client, dir, workId, ids, base } = await withRoom();
+    const [a, b, c] = ids as [string, string, string];
+
+    for (const sessionId of [a, b]) {
+      const deleted = await call(client, 'sessions.delete', { ref: { projectPath: dir, workId, sessionId } });
+      expect(deleted.error).toBeUndefined();
+    }
+    await call(client, 'rooms.delete', base);
+
+    const map = await readMap(dir, workId);
+    expect(map.rooms).toEqual([]);
+    expect(map.sessions.map((session) => session.id)).toEqual([c]);
+    expect(parleyLetters(map)).toEqual([]);
+  });
+});

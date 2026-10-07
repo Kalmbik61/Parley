@@ -32,7 +32,16 @@ import {
   createProvidersRefreshLimits,
   createProvidersSetKey,
 } from './providers.js';
-import { createPlanHandlers, roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
+import {
+  createPlanHandlers,
+  roomsAddMember,
+  roomsCreate,
+  roomsDelete,
+  roomsRename,
+  roomsResolveProposal,
+  roomsSend,
+  roomsSetLead,
+} from './rooms.js';
 import { createRolesList } from './roles.js';
 import { createRecipesList } from './recipes.js';
 import { createSessionHandlers } from './sessions.js';
@@ -73,8 +82,8 @@ export interface MethodDeps {
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, rooms.create/addMember/send, mail.*, worktrees.*), host.*,
- * providers.*, settings.*, wake.* — снимка работ они не читают.
+ * карт с диска (works.create/delete/rename/setStatus, rooms.create/addMember/rename/setLead/delete/send, mail.*,
+ * worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
   'rooms.resolveProposal',
@@ -177,6 +186,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'wake.state': wake.wakeState as AnyHandler,
     'rooms.create': roomsCreate as AnyHandler,
     'rooms.addMember': roomsAddMember as AnyHandler,
+    'rooms.rename': roomsRename as AnyHandler,
+    'rooms.setLead': roomsSetLead as AnyHandler,
+    'rooms.delete': roomsDelete as AnyHandler,
     'rooms.resolveProposal': (async (params, request) => {
       const result = await roomsResolveProposal(params, request);
       // The decision is committed. Delivery failure retains pending effects and its safe notice.
