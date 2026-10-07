@@ -1077,7 +1077,7 @@ writes the map; agents read it and report through the MCP server.
 
 <project>/.parley/    the project-level files next to works/ (the "shared" ones go to git)
   .gitignore          `*` at first; a whitelist from the first shared write on
-  backlog.md          shared: the project backlog
+  backlog.md          shared: the project backlog (unless you chose TODOS.md)
   plans/              shared: snapshots of accepted plans
   decisions/          shared: one file per accepted decision or completion
   memory.md           shared: facts, lessons and agreements of the project
@@ -1486,6 +1486,16 @@ written at once or waits for you in "Suggested" depends on the project rule (`as
 `problems` by default — bugs and debts at once, ideas wait — or `everything`; the switch on the
 Backlog tab reads "Ask before adding", "Add bugs and debt", "Add everything"), kept locally in
 `.parley/preferences.json`.
+
+**Where the backlog lives.** By default the backlog is `.parley/backlog.md`. The Backlog tab has
+a "Backlog file" switch: pick `TODOS.md` and Parley keeps the backlog in the project's own
+`TODOS.md` (or `TODO.md`, whichever exists; a new `TODOS.md` is created on the first item).
+Switching moves the items of `.parley/backlog.md` to the end of that file, each under its
+section (notes you wrote in `.parley/backlog.md` stay there); switching back leaves `TODOS.md`
+as it is. When the project already has `TODOS.md`, the tab offers it once. Parley gives every
+`- [ ]` line of the chosen file an ID comment on its first write; other text stays byte for
+byte. The choice is local to your machine (`.parley/preferences.json`). Agents read and suggest
+through the same tools either way.
 
 **What is shared through git.** `.parley/` is no longer all hidden: once the first shared file
 is written, a project's `.parley/.gitignore` is a whitelist that lets `backlog.md`, `plans/`

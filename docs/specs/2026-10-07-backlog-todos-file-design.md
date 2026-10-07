@@ -1,6 +1,6 @@
 # Файл бэклога на выбор: `.parley/backlog.md` или `TODOS.md`
 
-Дата: 2026-10-07. Статус: дизайн согласован в чате 2026-10-07, план — `docs/specs/2026-10-07-backlog-todos-file-plan.md`.
+Дата: 2026-10-07. Статус: реализовано в ветке `feat/backlog-todos-file` (Workflow на Sonnet, группы A–B, 2026-10-07); план — `docs/specs/2026-10-07-backlog-todos-file-plan.md`.
 
 Связано:
 - спека бэклога `docs/specs/2026-10-02-plans-backlog-design.md` (разделы 2–4: где бэклог, `.parley/`, формат);
@@ -109,7 +109,7 @@
 | `TODOS.md` — ссылка или каталог | `shared-file-unreadable` |
 | Дубль ID в самом `TODOS.md` (человек скопировал строку с пометкой) | `backlog-invalid`, ничего не меняется. Пункты, чьи ID уже есть в `TODOS.md`, при переносе пропускаются, поэтому сам перенос дублей не создаёт |
 | `.parley/backlog.md` изменили во время переноса | `backlog-conflict`; `TODOS.md` уже содержит пункты, повтор их не дублирует |
-| Испорченный `preferences.json` | Бэклог читается из `.parley/backlog.md`; переключение — `preferences-invalid` |
+| Испорченный `preferences.json` | Путь бэклога — `.parley/backlog.md`: агенты (`backlog_list`, `backlog_suggest`) работают. Вкладка Backlog, как и до этой спеки, показывает ошибку (снимок читает правило строго); переключение — `preferences-invalid` |
 
 ## 9. Тесты и приёмка
 

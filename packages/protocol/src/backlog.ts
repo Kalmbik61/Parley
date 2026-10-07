@@ -39,7 +39,7 @@ export const backlogSnapshot = z.strictObject({
   projectPath: project, sharedProjectPath: project,
   file: z.strictObject({
     relativePath: z.union([z.enum(['.parley/backlog.md', '.harnas/backlog.md']), todosName]), exists: z.boolean(),
-    /** Нет у старого хоста — окно тогда прячет выбор файла. */
+    /** Absent from an older host: the window then hides the file choice. */
     choice: backlogFileChoice.nullable().optional(), todos: todosName.nullable().optional(),
   }),
   version, items: z.array(backlogItem).max(10000), suggestions: z.array(backlogSuggestion).max(10000),

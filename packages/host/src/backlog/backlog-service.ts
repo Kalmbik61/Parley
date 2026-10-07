@@ -25,7 +25,7 @@ export interface BacklogService {
   close(): void;
 }
 const unavailable = (): HostError => new HostError('internal', 'Live backlog updates are unavailable.', { code: 'backlog-watch-unavailable' });
-/** В отпечаток входит file: выбор файла и появление TODOS.md меняют снимок, даже когда version бэклога прежний. */
+/** `file` is part of the fingerprint: a new file choice or a new TODOS.md changes the snapshot while the backlog version stays. */
 const fingerprint = (snapshot: BacklogSnapshot): string => JSON.stringify({ version: snapshot.version, file: snapshot.file, suggestions: snapshot.suggestions, rule: snapshot.rule, diagnostics: snapshot.diagnostics });
 
 /** Watches only proven project/state directories. OS event names are hints, never trusted paths or data. */

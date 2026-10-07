@@ -18,6 +18,11 @@ All notable changes to Parley are documented in this file.
   dropped anywhere on the room tab are attached too. They show as chips above the field (images
   as thumbnails) and are sent at the end of the message as an "Attachments:" list of absolute
   paths that the agents open themselves.
+- **Keep the backlog in TODOS.md.** The Backlog tab has a "Backlog file" switch:
+  `.parley/backlog.md` (the default) or the project's `TODOS.md`/`TODO.md`. A project that
+  already has one is offered it once. Switching to it moves the existing items there with their
+  IDs and sections; switching back leaves the file untouched. Agents' backlog tools follow the
+  choice.
 
 ### Changed
 
