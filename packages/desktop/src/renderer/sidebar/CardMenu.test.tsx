@@ -181,8 +181,8 @@ describe('CardMenu — статус (тесты 16, 19, решение 2)', () =
     openMenu();
     fireEvent.click(screen.getByText('Archive'));
     expect(screen.getByText('Archive "Redesign"?')).toBeTruthy();
-    // Архив прячет карточку, но не гасит агентов (ревью M13): вопрос говорит об этом прямо.
-    expect(screen.getByText(/live sessions keep running while it is hidden/i)).toBeTruthy();
+    // Архив гасит агентов работы (хост, `stopRetired`): вопрос говорит об этом прямо.
+    expect(screen.getByText(/running agents will be stopped/i)).toBeTruthy();
     expect(bridge.calls).toHaveLength(1);
     fireEvent.click(screen.getAllByText('Archive')[0] as HTMLElement);
     await flush();

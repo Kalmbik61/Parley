@@ -205,11 +205,13 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(row('s-01').style.paddingLeft).toBe('8px');
   });
 
-  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием', () => {
+  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием, но не уже 5ch (номер S01…)', () => {
     const label = 'я'.repeat(40);
     renderRow(makeSession('s-01', label), { activity: 'working' });
     const name = screen.getByText(`S01 ${label}`);
-    expect(name.className).toContain('min-w-0');
+    // Не `min-w-0`: рядом с чипом роли название схлопывалось в ноль (жалоба 2026-10-07) — теперь первым сжимается чип.
+    expect(name.className).toContain('min-w-[5ch]');
+    expect(name.className).not.toMatch(/\bmin-w-0\b/);
     expect(name.className).toContain('flex-1');
     expect(name.className).toContain('truncate');
     expect(screen.getByText(S.states.working).className).toContain('shrink-0');
@@ -260,6 +262,20 @@ describe('SessionRow — участник комнаты (кусок 5)', () => 
     cleanup();
     inRoom(makeSession('s-01', 'исполнитель'), false);
     expect(row().querySelector('[data-lead]')).toBeNull();
+  });
+
+  it('времени последнего события у участника нет (жалоба 2026-10-07: у ведущего с ролью оно выходило за рамку комнаты); у обычной строки есть', () => {
+    const session = makeSession('s-01', 'исполнитель');
+    const activity = makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, 'working', {
+      lastEventAt: '2026-09-27T09:57:00.000Z',
+    });
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={session} depth={3} activity={activity} now={NOW} draggable selected={false} onOpen={() => {}} inRoom lead />,
+    );
+    expect(row().textContent).not.toContain('3m');
+    cleanup();
+    renderRow(session, { activity: 'working' });
+    expect(row().textContent).toContain('3m');
   });
 
   it('обычная строка сессии звезды не знает: lead без комнаты не рисуется, если его не просили', () => {

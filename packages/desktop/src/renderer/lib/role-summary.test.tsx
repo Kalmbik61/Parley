@@ -11,7 +11,7 @@ describe('current role presentation', () => {
       return { roles: [{ id: 'claude:planner', name: 'planner', source: 'claude', provider: 'claude', description: 'Native tools', model: null, effort: null, readOnly: false }], diagnostics: [], partial: false };
     });
     render(<RoleChip bridge={bridge} role={{ source: 'claude', name: 'planner' }} sessionRef={{ projectPath: '/project', workId: 'w-1', sessionId: 's-1' }} />);
-    await waitFor(() => expect(screen.getByText('planner · Claude').title).toBe('Native tools'));
+    await waitFor(() => expect((screen.getByText('planner · Claude').closest('[data-role-chip]') as HTMLElement).title).toBe('planner · Claude\nNative tools'));
     expect(screen.queryByLabelText('Read only')).toBeNull();
   });
   it('shows a lock only from a current role response and drops it across participant scope changes', async () => {
@@ -40,5 +40,40 @@ describe('role metadata refresh on resume', () => {
     expect(screen.queryByLabelText('Read only')).toBeNull();
     await waitFor(() => expect(bridge.calls.filter(call => call.method === 'roles.list')).toHaveLength(2));
     expect(screen.queryByLabelText('Read only')).toBeNull();
+  });
+});
+
+// Жалоба 2026-10-07: в карточке участника комнаты чип не сжимался (`shrink-0`), имя схлопывалось в ноль, а многоточия у
+// голого текста внутри inline-flex не бывает. Раскладку меряет E2E `room-participants-layout.spec.ts`; здесь — устройство чипа.
+describe('чип роли в тесной строке', () => {
+  const architect = { id: 'builtin:architect', name: 'Architect', source: 'builtin' as const, provider: 'claude', description: 'Define boundaries.', model: null, effort: null, readOnly: true };
+
+  it('чип сжимается сам: текст роли — свой элемент с многоточием, 🔒 — вне него и не сжимается', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('roles.list', async () => ({ roles: [architect], diagnostics: [], partial: false }));
+    render(<RoleChip bridge={bridge} role={{ source: 'builtin', name: 'architect' }} sessionRef={{ projectPath: '/project', workId: 'w-1', sessionId: 's-1' }} />);
+    const lock = await screen.findByLabelText('Read only');
+    const text = screen.getByText('Architect · Builtin');
+    const chip = text.closest('[data-role-chip]') as HTMLElement;
+    // Ни `shrink-0`, ни `min-w-0`: чип сжимается, но не уже полей и 🔒 (сетка `auto minmax(0, max-content)`).
+    expect(chip.className).not.toMatch(/\bshrink-0\b/);
+    expect(chip.className).not.toMatch(/\bmin-w-0\b/);
+    expect(chip.className).toContain('grid-cols-[auto_minmax(0,max-content)]');
+    expect(text.className).toMatch(/\btruncate\b/);
+    expect(text.className).toContain('col-start-2');
+    expect(text.contains(lock)).toBe(false);
+    expect(lock.parentElement).toBe(chip);
+  });
+
+  it('полная роль — первой строкой тултипа чипа, описание — второй; роли нет в ответе хоста — «Role unavailable»', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('roles.list', async params => ({ roles: params.ref?.sessionId === 's-1' ? [architect] : [], diagnostics: [], partial: false }));
+    const sessionRef = { projectPath: '/project', workId: 'w-1', sessionId: 's-1' };
+    const { rerender } = render(<RoleChip bridge={bridge} role={{ source: 'builtin', name: 'architect' }} sessionRef={sessionRef} />);
+    const chip = (): HTMLElement => document.querySelector('[data-role-chip]') as HTMLElement;
+    await waitFor(() => expect(chip().title).toBe('Architect · Builtin\nDefine boundaries.'));
+    rerender(<RoleChip bridge={bridge} role={{ source: 'builtin', name: 'architect' }} sessionRef={{ ...sessionRef, sessionId: 's-2' }} />);
+    await waitFor(() => expect(bridge.calls.filter(call => call.method === 'roles.list')).toHaveLength(2));
+    await waitFor(() => expect(chip().title).toBe('architect · Builtin\nRole unavailable'));
   });
 });

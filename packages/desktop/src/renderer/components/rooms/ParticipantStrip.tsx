@@ -1,7 +1,8 @@
 /**
  * Лента участников комнаты (спека окна 2026-09-29, 1.3): горизонтальная прокрутка, карточка 230px,
  * радиус 14, padding `9 12`. Строка 1 (12px): значок состояния, значок агента 14, `S02 бэкенд` (600),
- * `★` у ведущего, слово состояния 11px; строка 2 — чем занят участник (`doing`: субагенты, ожидание
+ * `★` у ведущего, слово состояния 11px; в тесной строке сжимается чип роли (`RoleChip`), имя — не уже `5ch`
+ * (номер сессии `S02…`), `★` и слово состояния — целиком; строка 2 — чем занят участник (`doing`: субагенты, ожидание
  * `wait_for`), а когда ничем, — задача, 12px в одну строку; подсказка строки — `doingDetail`. Фон по состоянию:
  * `blocked` — `accent-200`, `unseen` — `accent-2-200`, иначе `currentColor 6%`; наведение — рамка внутри
  * `currentColor 28%`. Тултип — `Claude Code · Opus 5.5`: провайдер и модель из живых метрик, а пока
@@ -42,7 +43,7 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
           <span className="flex items-center gap-1.5 text-xs">
             <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
             <AgentIcon provider={participant.provider} size={14} />
-            <span className="min-w-0 flex-1 truncate font-semibold">{participant.label}</span>
+            <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
             <RoleChip {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
             {participant.lead ? (
               <span title={S.rooms.lead} className="shrink-0 text-accent-700">

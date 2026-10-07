@@ -26,8 +26,9 @@
  * комнаты целиком.
  *
  * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
- * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
- * тултип `Lead`.
+ * правого поля (его даёт строка комнаты, `RoomRow.tsx`) и без времени последнего события (у ведущего с ролью оно
+ * выходило за рамку комнаты); у ведущего после названия `★` 11px `accent-700`,
+ * тултип `Lead`. В тесной строке сжимается чип роли (`RoleChip`), название — не уже `5ch` (номер сессии `S02…`).
  *
  * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером (клик по агенту ведёт в панель Agents, без места — к карточке) перед словом состояния
  * (`AgentsBadge`): строка поповера открывает сессию на карточке агента. Хост прежней версии списка не присылает —
@@ -285,7 +286,7 @@ export const SessionRow = memo(function SessionRow({
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
-          <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          <span className={cn('min-w-[5ch] flex-1 truncate', selected && 'font-bold')}>{label}</span>
           <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
@@ -339,7 +340,7 @@ export const SessionRow = memo(function SessionRow({
               <GitBranch className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
-          <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>
+          {inRoom ? null : <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>}
         </div>
       </HoverCardTrigger>
       </SessionRowMenu>

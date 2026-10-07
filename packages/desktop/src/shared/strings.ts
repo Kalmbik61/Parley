@@ -409,7 +409,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
-    archiveConfirmDescription: 'Live sessions keep running while it is hidden. Bring it back with "Show archived workspaces" in the palette.',
+    archiveConfirmDescription: 'Running agents will be stopped. Bring it back with "Show archived workspaces" in the palette, then "Reopen" it to resume them.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,

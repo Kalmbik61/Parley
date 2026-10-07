@@ -136,3 +136,21 @@ describe('ParticipantStrip — поповер агентов на строке �
     expect(within(card('s-01')).getByTitle('Lead').closest('button')).not.toBeNull();
   });
 });
+
+// Жалоба 2026-10-07 («роль сжимается первой»): в карточке 230px с ролью, `★` и `done · unseen` имя схлопывалось в ноль, а
+// слово состояния уезжало за край. Раскладку меряет E2E `room-participants-layout.spec.ts`; здесь — кто сжимается, а кто нет.
+describe('ParticipantStrip — тесная первая строка с ролью', () => {
+  it('сжимается чип роли; имя — не уже 5ch (номер S01…), ★ и слово состояния не сжимаются', () => {
+    renderStrip([
+      participant({ role: { source: 'builtin', name: 'architect' }, lead: true, word: 'done · unseen', attention: 'unseen' }),
+    ]);
+    const name = within(card('s-01')).getByText('S01 архитектор');
+    expect(name.className).toContain('min-w-[5ch]');
+    expect(name.className).toContain('truncate');
+    const chip = card('s-01').querySelector('[data-role-chip]') as HTMLElement;
+    expect(chip.className).not.toMatch(/\bshrink-0\b/);
+    expect(within(chip).getByText('architect · Builtin').className).toMatch(/\btruncate\b/);
+    expect(within(card('s-01')).getByTitle('Lead').className).toContain('shrink-0');
+    expect(within(card('s-01')).getByText('done · unseen').className).toContain('shrink-0');
+  });
+});
