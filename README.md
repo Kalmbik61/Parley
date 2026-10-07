@@ -142,7 +142,7 @@ pnpm dev:desktop
 
 `pnpm install` additionally sets the execute bit on node-pty's helper binary: pnpm unpacks
 it without permissions, and without this the PTY does not start. `pnpm build` is required:
-the window takes `@parley/core` and `@parley/protocol` from their `dist`. `pnpm dev:desktop`
+the window takes `@parley/core`, `@parley/protocol` and `@parley/file-icons` from their `dist`. `pnpm dev:desktop`
 builds the host (`@parley/host`) and launches the window (`electron-vite dev`).
 
 ### Build `Parley.app`
@@ -150,6 +150,7 @@ builds the host (`@parley/host`) and launches the window (`electron-vite dev`).
 ```bash
 pnpm build
 pnpm --filter @parley/desktop fetch-node
+pnpm --filter @parley/desktop fetch-whisper
 pnpm --filter @parley/desktop dist --dir
 ```
 
@@ -163,13 +164,16 @@ hoc and not notarized (`identity: '-'` in `electron-builder.yml`). Inside are
 `Contents/Resources/node/LICENSE` (its license text), `NOTICE`, `licenses/Figtree-OFL.txt` and
 `licenses/Caprasimo-OFL.txt`. Without `fetch-node` the app has no Node of its own: like the
 development window, the built one then needs `node` in the `PATH` of your login shell, and
-without it the window prints "node not found in login-shell PATH".
+without it the window prints "node not found in login-shell PATH". `fetch-whisper` builds the
+voice engine (`whisper-cli` from whisper.cpp and the Silero VAD model; it needs `cmake`) into
+`Contents/Resources/whisper`; without it voice input is unavailable in the built app.
 
 The files of a release — a `.dmg` and a `.zip` for each of Apple Silicon and Intel — come from:
 
 ```bash
 pnpm build
 pnpm --filter @parley/desktop fetch-node arm64 x64
+pnpm --filter @parley/desktop fetch-whisper arm64 x64
 pnpm --filter @parley/desktop dist
 ```
 
@@ -177,7 +181,7 @@ They land in `packages/desktop/dist/` as `parley-macos-arm64.*` and `parley-maco
 
 ## Architecture
 
-Four packages and an agent. Each package is tested on its own and talks to its neighbors
+Five packages and an agent. Each package is tested on its own and talks to its neighbors
 only through data:
 
 ```
@@ -221,6 +225,8 @@ only through data:
   the map through core.
 - **protocol** is the protocol version, the methods and events between the window and the
   host, and the framing of socket messages.
+- **file-icons** is the set of Material Icon Theme icons for files and folders, chosen by name
+  as in VS Code; the window takes it from its `dist`.
 - **agent** is an unmodified `claude` (or `codex`) running under your login. It learns about
   Parley only from the brief and the MCP tools. No token and no credentials file passes
   through Parley.
@@ -305,7 +311,8 @@ recorded in `docs/specs/2026-10-02-capabilities-design.md`, section 6.4. (The bo
 `packages/core/test/frame-check.test.ts` lists the few lines that only read the agents'
 folders; it was not weakened.) When you click "Share with Claude" or "Share with
 Codex" on a user-level skill in the Capabilities tab, Parley creates one symlink to the
-original in the other agent's user skills folder (`~/.claude/skills` or `$CODEX_HOME/skills`);
+original in the other agent's user skills folder (`~/.claude/skills`, or
+`$CLAUDE_CONFIG_DIR/skills` when it is set, for Claude; `~/.agents/skills` for Codex);
 "Unshare from Claude" or "Unshare from Codex" removes only that symlink, and only when
 Parley's own receipt matches it. Nothing else is written there. The MCP and plugin actions of
 that tab are executed by the agent's own CLI, which writes its own config: Parley edits no CLI
@@ -404,7 +411,8 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   toast. Closing a tab shows the toast "Tab closed — ⌘⇧T to reopen";
 - the sidebar on the left holds workspace cards. At the top is "Pinned"; above the list are
   "Search" (⌘J) and "New workspace"; then come groups by project, each with a colored dot,
-  the project name, the number of workspaces, "+" and the "⋯" menu ("Show done"). Inside a
+  the project name, the number of workspaces, "+" and the "⋯" menu ("Capabilities…", "Open
+  PARLEY.md" or "Create PARLEY.md", "Show done"). Inside a
   section, the workspace where you are needed comes first: a session waits for a permission
   or an answer, or a room waits for your decision; then unread mail to you or a result you
   have not seen; then workspaces where an agent is working. On a tie the fresher event wins,
@@ -454,13 +462,16 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   exists, and "Retry" repeats only the session start;
 - a new session or room: ⌘T, the "+ New session or room" row under the rows of the active
   card, "New session or room" and "New room" in the palette, "New session" and "New room" in
-  the card menu. It is one dialog: "Workspace" (the active workspaces), a name, agent rows
-  — the provider, a model from the list ("Default" first — no flag; the list comes from the
+  the card menu. It is one dialog: "Recipe" (see "Recipes"), "Workspace" (the active
+  workspaces), a name, agent rows — a role (see "Roles"), the provider, a model from the list ("Default" first — no flag; the list comes from the
   provider's public documentation, from Codex's own catalog or from `providers.json`) and the
   effort ("Default" first — no flag, so the CLI uses the level saved in it; then the levels of
   the chosen model, with Codex's descriptions on a second line; with the "Default" model, the
   levels all the provider's models share; no field when the provider or the model has no
-  levels) — and "In its own worktree". A new model resets a level it does not have to
+  levels), and in a room a branch icon that gives that agent its own worktree — then "In its own
+  worktree" and, in a room, "Mode" (see "Plans, modes and the backlog"). A "?" next to a field
+  explains it on hover. The footer shows how many sessions run and how many starts are left this
+  hour (see "Limits of a workspace and a room"). A new model resets a level it does not have to
   "Default", and a new provider resets both. With one agent the
   button is "Start session": a session without a task, and its terminal. "Add agent" makes it
   two or more, and the button becomes "Create room": the star picks the lead, the room's
@@ -559,7 +570,9 @@ be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. E
 - files: the right sidebar (⌘L) has the "Files" tab with the tree of the session's folder (its
   worktree) or of the project. The header has the root picker ("Project" or
   `⎇ S02 · branch`), "Refresh" (when watching fails), a search over files and the toggle
-  button "Show ignored files" (`.git` and `.parley` are never shown). A click on a file opens
+  button "Show ignored files" (`.git` and `.parley` are never shown). Files and folders show
+  Material Icon Theme icons, chosen by name as in VS Code, here and in file tabs, "Changes", the
+  diff, the ⌘P palette and file search. A click on a file opens
   it in a Monaco editor tab, and ⌘-click opens it in a new group on the right. The file menu:
   "Open", "Open to the side", "Reveal in Finder", "Copy path", "Copy relative path". A file
   from the tree can be dragged into the layout or onto a terminal — then the path lands in the
@@ -704,6 +717,7 @@ In an input field, text editing stays with the field (⌘A, ⌘C, ⌘V, ⌘X, �
 | Tab by number | ⌃1…⌃9 | — |
 | Recent tabs | ⌃Tab / ⌃⇧Tab (cycles while ⌃ is held) | — |
 | Find in the terminal, file or page | ⌘F — by focus | Edit |
+| Toggle dictation | ⌘⇧M — in a focused field or terminal | Edit |
 | Clear terminal | ⌘K — only with focus in the terminal | Terminal |
 | Save file | ⌘S — in the editor | — |
 | Wrap lines | ⌥Z — in the editor | — |
@@ -876,7 +890,7 @@ read are left alone. Sessions you create (⌘T, the new workspace dialog, the CL
 setting.
 
 `agentSkills` (on by default; the toggle is "Install agent skills into projects") decides
-whether to install the `parley` skill into the project folder and into the session's worktree
+whether to install the `parley` and `minimal-development` skills into the project folder and into the session's worktree
 at launch. What exactly is written to disk and how to turn it off are described in "The
 `parley` skill in the project". The host reads the setting on every session launch.
 
@@ -1081,7 +1095,9 @@ it rewrites that `.gitignore` into a whitelist (`*`, then `!backlog.md`, `!plans
 `!decisions/`, `!memory.md`, `!history-shared/`, `!recipes/` and the like), so maps, logs and
 receipts stay out of `git status` and commits, while the backlog, plan snapshots, decisions,
 memory, shared histories and recipes can be committed. A file you edited is never touched. If
-you want everything out of git, change that `.gitignore` yourself; it will not come back. See
+you want everything out of git, change that `.gitignore` yourself. A file that is exactly `*`
+is rewritten to the whitelist on the next shared write, so add any other line (a comment is
+enough) to keep your version. See
 "Plans, modes and the backlog".
 
 In the window a session is created with ⌘T ("New session or room") in the active workspace,
@@ -1190,7 +1206,11 @@ Claude with skills" and "Build skills"): Codex reads `.agents/skills` from the c
 up to the repository root, Claude Code reads `.claude/skills`, and a skill folder is allowed
 to be a symlink there. The skill is a stub: it says when to engage (the session has the MCP
 server `parley`) and how to load the full guide from the running app — `read_guide` by topic.
-The guide itself is not copied into a file and never falls behind the Parley version.
+The guide itself is not copied into a file and never falls behind the Parley version. Next to
+it Parley puts a second fixed skill, `minimal-development` (`SKILL.md` and its MIT `LICENSE`):
+rules for implementing, fixing and reviewing code with the smallest complete change. The CLI
+loads it on demand; it is never added to a prompt. Both skills are installed, updated and
+turned off the same way.
 
 Before every session launch — a new one, `resume`, a background `autoLaunch` — the host puts
 the following into the project root and into the session's worktree root (both CLIs look for
@@ -1199,8 +1219,10 @@ skills only up to the root of their working copy):
 ```
 <root>/.agents/skills/parley/SKILL.md    the canonical copy, read by Codex
 <root>/.claude/skills/parley             a relative symlink ../../.agents/skills/parley
-<project>/.parley/skills-receipt.json    the receipt: its own paths and the hash of SKILL.md
-<repository>/.git/info/exclude           /.agents/skills/parley and /.claude/skills/parley
+<root>/.agents/skills/minimal-development/{SKILL.md,LICENSE}
+<root>/.claude/skills/minimal-development  a relative symlink, as above
+<project>/.parley/skills-receipt.json    the receipt: its own paths and the hashes of the files
+<repository>/.git/info/exclude           the four paths above, one line each
 ```
 
 If a symlink cannot be created (file system, permissions), a copy takes its place, and this is
@@ -1222,8 +1244,9 @@ repository), nothing is written past it.
 
 **Turn off:** "Install agent skills into projects" in Settings → Agents, `"agentSkills": false`
 in `config.json`, or `PARLEY_AGENT_SKILLS=0`. When it is off, the host neither installs nor
-updates the skill; it does not delete what is already installed — remove that by hand
-(`.agents/skills/parley`, `.claude/skills/parley` and the lines in `info/exclude`).
+updates the skills; it does not delete what is already installed — remove that by hand
+(`.agents/skills/parley`, `.claude/skills/parley`, `.agents/skills/minimal-development`,
+`.claude/skills/minimal-development` and the lines in `info/exclude`).
 
 **Boundary.** Parley writes nothing to `~/.claude`, `~/.codex` and `~/.agents`. It writes only
 the skill files in the project folder and in session worktrees, the receipt in the project's
@@ -1347,10 +1370,9 @@ to it.
 
 ## The project layer
 
-This part of Parley is written in the branch `feat/parley-upgrade` and is not part of a
-released version yet. It is checked by tests; the live checks with real `claude` and `codex`
-sessions are still open (see "Known limitations"). The skill navigator is on by default; the
-rest works as soon as the version is installed.
+This part of Parley shipped in 0.7.0. It is checked by tests and by a few live sessions of
+`claude`, GLM and `codex`; most live checks are still open (see "Known limitations"). The skill
+navigator is on by default; the rest works as soon as the version is installed.
 
 ### PARLEY.md: team rules
 
@@ -1510,8 +1532,8 @@ without values).
 - **MCP:** add (a form or a pasted `mcpServers` block) and remove, with an explicit scope for
   Claude; a connection check ("Check") for Claude only.
 - **Plugins:** the catalog of connected marketplaces, details, install, uninstall, enable,
-  disable and "Add marketplace" for Claude; install, uninstall and "Add marketplace" for
-  Codex (its CLI has no enable, disable or update).
+  disable and "Add local marketplace" (a local folder) for Claude; install, uninstall and "Add
+  local marketplace" for Codex (its CLI has no enable, disable or update).
 - **Share a skill with the other agent:** a symlink to the original in the other agent's
   skills folder ("Share with Claude" or "Share with Codex"); "Unshare from Claude" or "Unshare from Codex" removes only that symlink.
 
@@ -1677,6 +1699,8 @@ is counted once, and an overlap that cannot be proven is left out of the sum and
   `~/.parley/host/` (`host.sock`, `host.token`, `host.pid`, `host.log`, `host.err`).
 - `packages/protocol` — the types of the methods and events between the window and the host,
   the protocol version, message framing.
+- `packages/file-icons` — Material Icon Theme icons for files and folders and the rules that
+  pick one by name, as in VS Code.
 - `docs/specs/` — specifications of the coordination layer (`2026-09-02-coordination-design.md`,
   `2026-09-23-agent-room-design.md`) and of the window: `2026-09-26-desktop-design.md` — the
   host, rooms, delivery, worktrees, the boundary; `2026-09-26-desktop-orca-ui-design.md` — the
@@ -1698,7 +1722,8 @@ is counted once, and an overlap that cannot be proven is left out of the sum and
 - `NOTICE` — licenses of third-party code in the app: Orca and shadcn/ui (MIT; Orca also gave
   the release scripts), Figtree and Caprasimo (OFL 1.1), Monaco Editor (MIT), PDF.js
   (Apache-2.0; its cmaps and the Foxit fonts are BSD-3-Clause), the Node.js that the app
-  carries (MIT); the origin of the Claude and Codex icons and whose marks they are.
+  carries (MIT), Material Icon Theme (MIT), whisper.cpp and Silero VAD (MIT); the origin of the
+  Claude and Codex icons and whose marks they are.
 - `LICENSE` — MIT. `CHANGELOG.md` — what each release brings: a version's section is the
   description of its release on GitHub. `.github/workflows/` — CI (`ci.yml`) and the release
   (`release.yml`); `scripts/release/` — the checks the release runs.
@@ -1758,14 +1783,15 @@ entirely, and then only its own placeholders work.
 The built-in Claude launch is `claude --session-id <uuid> --mcp-config <file> --settings <file>
 --append-system-prompt <layer> [--dangerously-load-development-channels server:parley] [--model …]
 [--effort …] [--agent …] [--disallowedTools …] <brief>`; a resume swaps `--session-id <uuid>` for
-`--resume <id>` and leaves out the model and the effort. A role that cannot be delivered by the
+`--resume <id>` and passes the model and the effort saved for the session. A role that cannot be delivered by the
 chosen template (no `{systemPrompt}` or `{developerInstructions}`, no `{disallowedTools}` or
 `{sandbox}` for a read-only role) stops the launch with an error instead of starting the
 session without it. After editing a custom runner, check the window's notices: a missing
 `{developerInstructions}` or `{skillCatalog}` gives `provider-override-gap`.
 
 The skill navigator covers the built-in GLM entry (Claude Code with a Z.ai key) the same way as
-Claude. Roles for GLM are not covered yet.
+Claude. Roles work for GLM as for Claude: built-in roles, native Claude roles (`--agent`) and
+the read-only flag.
 
 ### Models
 
@@ -2008,7 +2034,9 @@ across chunk boundaries (both kinds of sequences, with BEL and ST terminators):
   `Ready` — at the prompt, `[ ! ] Action Required` — "needs you";
 - OSC 9 notifications: `Approval requested: …` and `Codex wants to edit …` — "needs you",
   `Agent turn complete` — the end of a turn;
-- `notify` — the end of a turn from the event log (see above).
+- `notify` — the end of a turn from the event log (see above);
+- `task_started` and `task_complete` in the rollout log — the start and the end of a turn, but
+  only when the entry is newer than the last terminal signal.
 
 Everything that is not recognized (`Starting`, `Waiting`, `Thinking`, a new title) is
 "unknown": neither "working" nor "ready". The state goes to the same activity service as the
@@ -2019,8 +2047,8 @@ same path. What is important to know:
   a turn: the state stays dim (`idle`, like a fresh Claude session), but the host is aware of
   the session, so sending from the window and auto-wake are allowed. That way a background
   session (autoLaunch, `spawn_session`) does not give a false "finished" before its first
-  turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, or a `Stop`
-  from `notify`.
+  turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, a `Stop`
+  from `notify`, or a `task_complete` in the rollout log newer than the last terminal signal.
 - Under the host, the silence threshold (`silenceThresholdMs`) does not apply to a Codex
   session: the title is not written for the whole turn (a personal `tui.animations=false`, a
   long tool), and a false end of a turn means a "finished" notification in macOS and an Enter,
@@ -2029,13 +2057,11 @@ same path. What is important to know:
   corrects a mismatch: a `Stop` from `notify` written later than the last frame would override
   the terminal signal, and the next frame brings back "working" or "needs you". A repeat that
   agrees with the current state recalculates and broadcasts nothing.
-- Under the host, the rollout log does not drive the state: the end-of-turn entry in it is
-  newer than the signal and would bring back "working" after every turn. There is no
-  end-of-turn fallback by `task_complete` in the log — only `Ready`, OSC 9 and `notify`. The
-  price: the title strings and `notify` are not a public Codex interface. If the title for
-  working stops being recognized, the session stays dim ("unknown"); if `Ready` and `notify`
-  stop being recognized together, "working" remains after a turn until the process exits (a
-  check on a live Codex, item 3).
+- Codex may not send `Ready` or `notify` after an answer. Then the rollout log ends the turn: a
+  `task_complete` entry newer than the last terminal signal is a `Stop`, a newer `task_started`
+  is "working"; an older entry does not override a newer signal. The price: the title strings
+  and `notify` are not a public Codex interface. If the title for working stops being
+  recognized, the session stays dim ("unknown") (a check on a live Codex, item 3).
 
 **Input.** `pty.send` and auto-wake write into Codex's input field like this: a paste inside
 bracketed paste markers, a 60 ms pause, a key. For a busy agent the key is Tab (a queue for the
@@ -2112,8 +2138,8 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
 - Codex state parsing relies on the terminal title strings and terminal notifications, which
   are not a public Codex interface and have not been checked against a live Codex; what to
   check is in "Codex — a room agent".
-- **The project layer** (see "The project layer") is checked by tests only. Not yet run with
-  real sessions: a Codex launch and resume with the new `-c` flags, the read-only role flags
+- **The project layer** (see "The project layer") is checked by tests and a few live sessions.
+  Not yet run: a Codex resume with the new `-c` flags, the read-only role flags
   on real Claude and Codex sessions, the jev mod switched off while the hooks stay alive, the
   argument and environment limits on Linux (checked on macOS only), and the human-labelled
   prompts and full Codex and GLM waves of the skill navigator. A general saving of tokens is not
