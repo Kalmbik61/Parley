@@ -55,6 +55,8 @@ export interface RoleChoice {
   providerDefaults?: { provider: string; model?: string | null; effort?: string | null };
   /** Caller carries saved explicit human constraints, not cached permissions/defaults of a removed role. */
   requiredPermissions?: RequiredRolePermissions;
+  /** The chosen provider is in the Claude Code family (GLM too): a native Claude role fits it. Set by the caller. */
+  claudeCode?: boolean;
 }
 export interface ResolvedRoleChoice {
   role: RoleDefinition | null;
@@ -104,7 +106,12 @@ export function resolveRoleChoice(
   }
   const provider =
     choice.provider ?? role?.provider ?? choice.providerDefaults?.provider ?? 'claude';
-  if (role && role.source !== 'builtin' && role.provider !== provider)
+  if (
+    role &&
+    role.source !== 'builtin' &&
+    role.provider !== provider &&
+    !(role.source === 'claude' && choice.claudeCode === true)
+  )
     throw new RoleChoiceError('role-provider-mismatch');
   const required = choice.requiredPermissions;
   const nativeAgent = role?.source === 'claude' ? role.nativeAgent : null;

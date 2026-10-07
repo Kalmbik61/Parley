@@ -108,6 +108,20 @@ describe('role catalog and selection', () => {
       /role-provider-mismatch/,
     );
   });
+  it('a native Claude role fits any provider of the Claude Code family, named by the caller; Codex roles never', () => {
+    const catalog = buildRoleCatalog(native([claude, codex]));
+    // Без пометки семейства — прежнее правило: роль Claude только у `claude`.
+    expect(() => resolveRoleChoice(catalog, { roleId: claude.id, provider: 'glm' })).toThrow(/role-provider-mismatch/);
+    expect(resolveRoleChoice(catalog, { roleId: claude.id, provider: 'glm', claudeCode: true })).toMatchObject({
+      provider: 'glm',
+      nativeAgent: 'reviewer',
+      model: null,
+      effort: null,
+    });
+    // Пометка семейства не открывает роли Codex и не спасает от чужого CLI.
+    expect(() => resolveRoleChoice(catalog, { roleId: codex.id, provider: 'glm', claudeCode: true })).toThrow(/role-provider-mismatch/);
+    expect(() => resolveRoleChoice(catalog, { roleId: claude.id, provider: 'codex' })).toThrow(/role-provider-mismatch/);
+  });
   it('uses Claude --agent identity without copying native body/defaults into the layer', () => {
     const resolved = resolveRoleChoice(buildRoleCatalog(native([claude])), { roleId: claude.id });
     expect(resolved).toMatchObject({

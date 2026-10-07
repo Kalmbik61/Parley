@@ -20,6 +20,8 @@ import {
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
+  PROVIDERS,
+  claudeConfigDirFor,
   isClaudeCode,
   providerReadiness,
   providerReadinessError,
@@ -401,7 +403,7 @@ const TOOLS: Tool[] = [
           description: 'Ids of sessions whose summaries and artifacts go into the brief.',
           items: { type: 'string' },
         },
-        role: { type: 'string', description: 'Source-qualified role id from list_roles. Provider may override a builtin default; native provider must match.' },
+        role: { type: 'string', description: 'Source-qualified role id from list_roles. Provider may override a builtin default; a native role must match the provider (a Claude role also fits GLM).' },
         agent: {
           type: 'string',
           description:
@@ -777,7 +779,10 @@ async function spawnSession(
   if (args['agent'] !== undefined && args['role'] !== undefined) throw new Error('agent-and-role-conflict');
   const savedRole = args['role'] === undefined ? (args['agent'] === undefined ? null : { source: 'claude' as const, name: stringArg(args, 'agent') }) : roleFromId(stringArg(args, 'role'));
   if (!savedRole && args['provider'] === undefined) throw new Error('provider is required without a role');
-  const catalog = savedRole ? await (context.roleCatalog ? context.roleCatalog(context.projectPath) : sessionRoleCatalog(context.projectPath, { codex: savedRole.source === 'codex' })) : undefined;
+  const registry = await loadProviders();
+  // Каталог ролей Claude читает конфигурацию того провайдера, для которого роль берётся (у GLM — `~/.claude`).
+  const requestedEntry = args['provider'] === undefined ? undefined : registry[stringArg(args, 'provider')];
+  const catalog = savedRole ? await (context.roleCatalog ? context.roleCatalog(context.projectPath) : sessionRoleCatalog(context.projectPath, { codex: savedRole.source === 'codex', ...(requestedEntry ? { provider: requestedEntry } : {}) })) : undefined;
   const provider = args['provider'] === undefined ? (catalog?.roles.find(role => role.id === roleId(savedRole))?.provider ?? 'claude') : stringArg(args, 'provider');
   const label = stringArg(args, 'label');
   const task = stringArg(args, 'task');
@@ -793,7 +798,6 @@ async function spawnSession(
   const effort =
     args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : stringArg(args, 'effort');
 
-  const registry = await loadProviders();
   const entry = registry[provider];
   if (entry === undefined) {
     throw new Error(
@@ -1550,10 +1554,19 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
       if (context.skillCatalog) return { catalog: await context.skillCatalog(session, cwd) };
       if (isClaudeCode(session.provider)) {
         // Что модель может загрузить, пишет в транскрипт сам Claude Code: отдельная проверка роли и настроек не нужна.
-        const homeDir = descriptor?.roots.homeDir ?? process.env.HOME ?? homedir();
-        const configDir = descriptor?.roots.claudeConfigDir ?? (process.env.CLAUDE_CONFIG_DIR ? path.resolve(cwd, process.env.CLAUDE_CONFIG_DIR) : undefined);
+        // Привязанный дескриптор запуска — источник истины: нет `claudeConfigDir` — значит `~/.claude` (так живёт GLM, у
+        // которого хост срезает переменную), и окружение этого сервера (ведущего с `CLAUDE_CONFIG_DIR`) не подмешивается.
+        // Без дескриптора — окружение, но только у провайдера, который переменную не срезает (`claudeConfigDirFor`).
+        const launch = bound ? descriptor : null;
+        const homeDir = launch?.roots.homeDir ?? process.env.HOME ?? homedir();
+        const entry = Object.values(PROVIDERS).find(item => item.id === session.provider)!;
+        const fromEnv = claudeConfigDirFor(entry, process.env);
+        const configDir = launch ? launch.roots.claudeConfigDir : fromEnv ? path.resolve(cwd, fromEnv) : undefined;
+        const rootsEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete rootsEnv.CLAUDE_CONFIG_DIR;
+        if (configDir) rootsEnv.CLAUDE_CONFIG_DIR = configDir;
         const built = await readClaudeSkillCatalog({ cwd, homeDir, providerSessionId: session.providerSessionId ?? null,
-          ...(configDir ? { configDir } : {}), roots: claudeProjectRoots({ ...process.env, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }, homeDir) });
+          ...(configDir ? { configDir } : {}), roots: claudeProjectRoots(rootsEnv, homeDir) });
         // Транскрипта или вложения ещё нет: честная причина, и следующий вызов прочитает заново.
         return 'catalog' in built ? built : { catalog: null, reason: built.reason, retry: true };
       }

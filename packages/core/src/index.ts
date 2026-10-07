@@ -68,6 +68,7 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  claudeConfigDirFor,
   modelChoiceError,
   printCommand,
   providersFile,

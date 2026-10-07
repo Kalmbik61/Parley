@@ -1302,6 +1302,35 @@ describe('current role delivery on every session mode', () => {
     }
     expect(Object.hasOwn((await sessionOf(created.work.id, sessionId)), 'model')).toBe(false);
   });
+  it('GLM: «только чтение» встроенной роли и текст роли доходят при запуске и при resume', async () => {
+    const created = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'glm', label: '', task: '', role: { source: 'builtin', name: 'planner' } });
+    const session = await sessionOf(created.work.id, sessionId);
+    session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    await claudeTranscript(session.providerSessionId);
+    for (const planner of [planNew, planLaunch, planResume]) {
+      const plan = await planner(project, created.work.id, session);
+      expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit');
+      expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain('Your role in this workspace: Planner (builtin:planner)');
+      // Модель по уровню роли у GLM не подбирается: её флага нет, у GLM своя настроенная модель.
+      expect(plan.args).not.toContain('--agent');
+    }
+    // Роль без «только чтения» — без флага.
+    const writer = await createPendingSession(project, created.work.id, { provider: 'glm', label: '', task: '', role: { source: 'builtin', name: 'executor' } });
+    expect((await planLaunch(project, created.work.id, await sessionOf(created.work.id, writer))).args).not.toContain('--disallowedTools');
+  });
+  it('GLM: нативный агент Claude уезжает флагом --agent при запуске и при resume', async () => {
+    const created = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'glm', label: '', task: '', role: { source: 'claude', name: 'native-reviewer' } });
+    const session = await sessionOf(created.work.id, sessionId);
+    session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    await claudeTranscript(session.providerSessionId);
+    const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+    for (const planner of [planNew, planLaunch, planResume]) {
+      const plan = await planner(project, created.work.id, session, { roleCatalog });
+      expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('native-reviewer');
+    }
+  });
   it('current native Codex defaults use exact effort and sandbox and do not persist', async () => {
     const created = await createWork(project, { title: 'Roles', goal: '' });
     const sessionId = await createPendingSession(project, created.work.id, { provider: 'codex', label: '', task: '', role: { source: 'codex', name: 'exact' } });

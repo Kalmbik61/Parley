@@ -326,6 +326,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{effort}',
         '--agent',
         '{agent}',
+        // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       // Tier aliases suppress native restoration. Explicitly keep the configured launch model.
@@ -345,6 +348,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{effort}',
         '--agent',
         '{agent}',
+        // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       mcpConfig: 'json-file',
@@ -359,6 +365,15 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
         (provider) => provider.id === entry && provider.family === 'claude',
       )
     : entry.family === 'claude';
+}
+
+/**
+ * `CLAUDE_CONFIG_DIR`, под которым живёт процесс провайдера семейства Claude Code. У GLM хост срезает
+ * переменную (`provider-env.ts`): его конфигурация — `~/.claude`, и значение из окружения хоста или ведущего
+ * агента ему не принадлежит. Одно правило для запуска, каталога ролей и поиска скиллов.
+ */
+export function claudeConfigDirFor(entry: ProviderEntry, env: NodeJS.ProcessEnv): string | undefined {
+  return entry.runner.secret === 'zai' ? undefined : env.CLAUDE_CONFIG_DIR;
 }
 
 /** Провайдеры, чьи сессии попадают в список. */

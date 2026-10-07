@@ -46,7 +46,8 @@ describe('mandatory role delivery', () => {
     await expect(prepareSessionRole(project, PROVIDERS.claude, choice)).resolves.toMatchObject({ readOnly: true, model: 'opus' });
     const custom = { ...PROVIDERS.claude, runner: { ...PROVIDERS.claude.runner, resumeArgs: ['--resume', '{providerSessionId}', '{systemPrompt}'] } };
     await expect(prepareSessionRole(project, custom, choice)).rejects.toThrow('role-permissions-unavailable');
-    await expect(prepareSessionRole(project, PROVIDERS.glm, { ...choice, provider: 'glm' })).rejects.toThrow('role-permissions-unavailable');
+    // GLM — Claude Code: у встроенной записи «только чтение» доходит флагом `--disallowedTools` (роли GLM, 2026-10-07).
+    await expect(prepareSessionRole(project, PROVIDERS.glm, { ...choice, provider: 'glm' })).resolves.toMatchObject({ readOnly: true, provider: 'glm', model: null });
   });
   it('refuses a foreign sandbox constraint rather than silently dropping it', async () => {
     await expect(prepareSessionRole(project, PROVIDERS.claude, { requiredPermissions: { sandboxMode: 'workspace-write' } })).rejects.toThrow('role-permissions-unavailable');
@@ -55,6 +56,47 @@ describe('mandatory role delivery', () => {
     const catalog = buildRoleCatalog();
     await expect(prepareSessionRole(project, PROVIDERS.claude, { roleId: 'claude:removed', mode: 'existing', model: 'sonnet' }, catalog)).resolves.toMatchObject({ role: null, model: 'sonnet', readOnly: false });
     await expect(prepareSessionRole(project, PROVIDERS.claude, { roleId: 'claude:removed', mode: 'existing', requiredPermissions: { nativeAgentRequired: true } }, catalog)).rejects.toThrow('role-permissions-unavailable');
+  });
+});
+
+describe('роли Claude у GLM: конфигурация GLM — ~/.claude, а не CLAUDE_CONFIG_DIR хоста', () => {
+  /** Домашняя папка с агентом `from-home` и `CLAUDE_CONFIG_DIR` хоста с агентом `from-config`. */
+  async function homes(): Promise<{ homeDir: string; env: NodeJS.ProcessEnv }> {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+    await defineAgent(path.join(homeDir, '.claude', 'agents'), 'from-home');
+    await defineAgent(path.join(claudeHome, 'agents'), 'from-config');
+    return { homeDir, env: { CLAUDE_CONFIG_DIR: claudeHome } };
+  }
+  it('sessionRoleCatalog: у GLM каталог из ~/.claude, у Claude — из CLAUDE_CONFIG_DIR', async () => {
+    const { homeDir, env } = await homes();
+    try {
+      const names = async (provider?: typeof PROVIDERS.claude) =>
+        (await sessionRoleCatalog(project, { homeDir, env, ...(provider ? { provider } : {}) })).roles.filter(role => role.source === 'claude').map(role => role.name);
+      expect(await names(PROVIDERS.glm)).toEqual(['from-home']);
+      expect(await names(PROVIDERS.claude)).toEqual(['from-config']);
+      // Без провайдера — как раньше: окружение вызывающего.
+      expect(await names()).toEqual(['from-config']);
+    } finally { await rm(homeDir, { recursive: true, force: true }); }
+  });
+  it('prepareSessionRole: нативная роль Claude доходит до GLM из его конфигурации, а роль конфигурации хоста — role-missing', async () => {
+    const { homeDir } = await homes();
+    vi.stubEnv('HOME', homeDir); vi.stubEnv('CLAUDE_CONFIG_DIR', claudeHome);
+    try {
+      await expect(prepareSessionRole(project, PROVIDERS.glm, { roleId: 'claude:from-home', provider: 'glm', mode: 'create' }))
+        .resolves.toMatchObject({ provider: 'glm', nativeAgent: 'from-home', model: null, effort: null });
+      await expect(prepareSessionRole(project, PROVIDERS.glm, { roleId: 'claude:from-config', provider: 'glm', mode: 'create' })).rejects.toThrow('role-missing');
+      // Claude остаётся на CLAUDE_CONFIG_DIR.
+      await expect(prepareSessionRole(project, PROVIDERS.claude, { roleId: 'claude:from-config', provider: 'claude', mode: 'create' })).resolves.toMatchObject({ nativeAgent: 'from-config' });
+      await expect(prepareSessionRole(project, PROVIDERS.claude, { roleId: 'claude:from-home', provider: 'claude', mode: 'create' })).rejects.toThrow('role-missing');
+    } finally { await rm(homeDir, { recursive: true, force: true }); }
+  });
+  it('нативный агент у GLM нужен шаблон с парой --agent {agent}; Codex роли Claude по-прежнему отказывает', async () => {
+    const catalog = buildRoleCatalog({ roles: [{ id: 'claude:exact', source: 'claude', provider: 'claude', name: 'exact', nativeAgent: 'exact', description: '', path: '/fixture.md', readOnly: false }], diagnostics: [], partial: false });
+    await expect(prepareSessionRole(project, PROVIDERS.glm, { roleId: 'claude:exact', provider: 'glm' }, catalog)).resolves.toMatchObject({ nativeAgent: 'exact' });
+    const template = ['--append-system-prompt', '{systemPrompt}', '{prompt}'];
+    const bare = { ...PROVIDERS.glm, runner: { ...PROVIDERS.glm.runner, args: template, resumeArgs: template } };
+    await expect(prepareSessionRole(project, bare, { roleId: 'claude:exact', provider: 'glm' }, catalog)).rejects.toThrow('role-permissions-unavailable');
+    await expect(prepareSessionRole(project, PROVIDERS.codex, { roleId: 'claude:exact', provider: 'codex' }, catalog)).rejects.toThrow('role-provider-mismatch');
   });
 });
 
@@ -135,9 +177,26 @@ describe('explicit Claude-like custom role text compatibility', () => {
     const entry = { ...PROVIDERS.glm, id: provider, runner: { ...PROVIDERS.glm.runner, args: ['--append-system-prompt', '{systemPrompt}', '{prompt}'], resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}', '{prompt}'] } };
     await expect(prepareSessionRole(project, entry, { provider, roleId: 'builtin:executor' })).resolves.toMatchObject({ readOnly: false, roleText: expect.stringContaining('builtin:executor') });
   });
-  it.each(['glm', 'custom-claude'])('does not infer readonly permissions for a custom provider (%s)', async provider => {
-    const entry = { ...PROVIDERS.glm, id: provider, runner: { ...PROVIDERS.glm.runner, args: ['--append-system-prompt', '{systemPrompt}', '--disallowedTools', '{disallowedTools}', '{prompt}'], resumeArgs: ['--append-system-prompt', '{systemPrompt}', '--disallowedTools', '{disallowedTools}', '{prompt}'] } };
-    await expect(prepareSessionRole(project, entry, { provider, roleId: 'builtin:planner' })).rejects.toThrow('role-permissions-unavailable');
+  it('does not infer readonly permissions for a custom provider without the Claude Code family', async () => {
+    // Своя запись `providers.json` не может задать `family`: даже шаблон Claude не доказывает, что `--disallowedTools` понятен.
+    const custom = { ...PROVIDERS.glm };
+    delete custom.family;
+    const template = ['--append-system-prompt', '{systemPrompt}', '--disallowedTools', '{disallowedTools}', '{prompt}'];
+    const entry = { ...custom, id: 'custom-claude', runner: { ...custom.runner, args: template, resumeArgs: template } };
+    await expect(prepareSessionRole(project, entry, { provider: 'custom-claude', roleId: 'builtin:planner' })).rejects.toThrow('role-permissions-unavailable');
+  });
+  it('glm: readonly goes through --disallowedTools in start and resume; a replacement without {disallowedTools} still refuses', async () => {
+    const choice = { provider: 'glm', roleId: 'builtin:planner' };
+    for (const template of [PROVIDERS.glm.runner.args!, PROVIDERS.glm.runner.resumeArgs!])
+      expect(template.slice(template.indexOf('--disallowedTools'), template.indexOf('--disallowedTools') + 2)).toEqual(['--disallowedTools', '{disallowedTools}']);
+    await expect(prepareSessionRole(project, PROVIDERS.glm, choice)).resolves.toMatchObject({ readOnly: true });
+    const without = (template: readonly string[]) => template.filter((item, i) => item !== '--disallowedTools' && template[i - 1] !== '--disallowedTools');
+    for (const mode of ['args', 'resumeArgs'] as const) {
+      const entry = { ...PROVIDERS.glm, runner: { ...PROVIDERS.glm.runner, [mode]: without(PROVIDERS.glm.runner[mode]!) } };
+      await expect(prepareSessionRole(project, entry, choice)).rejects.toThrow('role-permissions-unavailable');
+      // Без «только чтения» та же подмена принимает встроенную роль: текстовый канал остался.
+      await expect(prepareSessionRole(project, entry, { provider: 'glm', roleId: 'builtin:executor' })).resolves.toMatchObject({ readOnly: false });
+    }
   });
 });
 

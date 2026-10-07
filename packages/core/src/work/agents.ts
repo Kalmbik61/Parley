@@ -6,7 +6,7 @@ import { buildRoleCatalog, resolveRoleChoice, RoleChoiceError, type RoleChoice, 
 import { discoverCodexRoles } from '../roles/codex.js';
 import { readCodexRoleContext, type CodexContextOptions } from '../roles/context.js';
 import { findRunnerBinary } from './find-binary.js';
-import { loadProviders, type ProviderEntry } from '../providers.js';
+import { claudeConfigDirFor, isClaudeCode, loadProviders, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
 
@@ -91,6 +91,8 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
 
 export interface SessionRoleCatalogOptions {
   codex?: boolean;
+  /** Provider the roles are for: GLM keeps its Claude config in `~/.claude`, not in the host's `CLAUDE_CONFIG_DIR`. */
+  provider?: ProviderEntry;
   homeDir?: string;
   env?: NodeJS.ProcessEnv;
   /** Internal fixture adapter, never protocol input. */
@@ -100,7 +102,8 @@ export interface SessionRoleCatalogOptions {
 export async function sessionRoleCatalog(cwd: string, options: SessionRoleCatalogOptions = {}): Promise<RoleCatalog> {
   const homeDir = options.homeDir ?? homedir();
   const env = options.env ?? process.env;
-  const claude = await discoverClaudeRoles({ cwd, homeDir, ...(env.CLAUDE_CONFIG_DIR ? { configDir: env.CLAUDE_CONFIG_DIR } : {}) });
+  const configDir = options.provider ? claudeConfigDirFor(options.provider, env) : env.CLAUDE_CONFIG_DIR;
+  const claude = await discoverClaudeRoles({ cwd, homeDir, ...(configDir ? { configDir } : {}) });
   if (!options.codex) return buildRoleCatalog(claude);
   const registry = await loadProviders();
   const entry = registry.codex;
@@ -173,20 +176,20 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
     if (template.includes('{systemPrompt}') && (entry.id === 'codex' || !singleRoleValue(pairs, '--append-system-prompt', '{systemPrompt}'))) throw new RoleChoiceError('role-permissions-unavailable');
     if (template.includes('{developerInstructions}') && (entry.id !== 'codex' || !singleRoleConfig(pairs, '{developerInstructions}', 'developer_instructions'))) throw new RoleChoiceError('role-permissions-unavailable');
     const sandbox = singleRoleConfig(pairs, '{sandbox}', 'sandbox_mode');
-    if (choice.nativeAgent !== null && (entry.id !== 'claude' || !singleRoleValue(pairs, '--agent', '{agent}'))) throw new RoleChoiceError('role-permissions-unavailable');
+    if (choice.nativeAgent !== null && (!isClaudeCode(entry) || !singleRoleValue(pairs, '--agent', '{agent}'))) throw new RoleChoiceError('role-permissions-unavailable');
     if (choice.roleText && !(entry.id === 'codex'
       ? singleRoleConfig(pairs, '{developerInstructions}', 'developer_instructions')
       : singleRoleValue(pairs, '--append-system-prompt', '{systemPrompt}'))) throw new RoleChoiceError('role-permissions-unavailable');
     if (choice.sandboxMode !== null && (entry.id !== 'codex' || !sandbox)) throw new RoleChoiceError('role-permissions-unavailable');
-    if (choice.readOnly && (entry.id === 'claude'
+    if (choice.readOnly && (isClaudeCode(entry)
       ? !singleRoleValue(pairs, '--disallowedTools', '{disallowedTools}')
       : entry.id !== 'codex' || !sandbox)) throw new RoleChoiceError('role-permissions-unavailable');
   }
 }
 export async function prepareSessionRole(cwd: string, entry: ProviderEntry, choice: RoleChoice, catalog?: RoleCatalog): Promise<ResolvedRoleChoice> {
-  const current = catalog ?? (choice.roleId?.startsWith('builtin:') || !choice.roleId ? buildRoleCatalog() : await sessionRoleCatalog(cwd, { codex: choice.roleId.startsWith('codex:') }));
+  const current = catalog ?? (choice.roleId?.startsWith('builtin:') || !choice.roleId ? buildRoleCatalog() : await sessionRoleCatalog(cwd, { codex: choice.roleId.startsWith('codex:'), provider: entry }));
   if (choice.roleId?.startsWith('codex:') && current.diagnostics.some(item => item.source === 'codex' && (item.code === 'context-unverified' || item.code === 'unsupported-config'))) throw new RoleChoiceError('role-context-unverified');
-  const resolved = resolveRoleChoice(current, choice);
+  const resolved = resolveRoleChoice(current, isClaudeCode(entry) ? { ...choice, claudeCode: true } : choice);
   assertRoleDelivery(entry, resolved);
   return resolved;
 }

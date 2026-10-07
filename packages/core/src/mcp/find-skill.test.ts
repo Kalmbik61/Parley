@@ -249,6 +249,62 @@ describe('instance-local find_skill', () => {
       // The lead is Codex without a verified native context: the old explanation stays.
       expect(JSON.parse((await find(client, { query: 'plan' })).text).reason).toContain('unverified');
     });
+
+    // Участник с привязанным дескриптором запуска; `roots` — то, что запись запуска знает о его конфигурации.
+    async function bindParticipant(provider: string, roots: { homeDir: string; claudeConfigDir?: string }) {
+      const revision = randomUUID();
+      await updateMap(project, work, map => { map.sessions[1]!.provider = provider; map.sessions[1]!.pid = 42; map.sessions[1]!.startedAtProcess = 'actual'; });
+      await writeNativeContext(project, work, 's-02', { version: 1, revision, provider, cwd: project, verified: false, configArgs: [], roots });
+      await stampNativeContext(project, work, 's-02', { pid: 42, startedAtProcess: 'actual' }, revision);
+    }
+    const skillFile = (configDir: string, description: string) =>
+      mkdir(path.join(configDir, 'skills/writing-plans'), { recursive: true })
+        .then(() => writeFile(path.join(configDir, 'skills/writing-plans/SKILL.md'), `---\ndescription: ${description}\n---\n`));
+    const transcriptIn = async (configDir: string, ...names: string[]) => {
+      await mkdir(path.join(configDir, 'projects/-proj'), { recursive: true });
+      await writeFile(path.join(configDir, 'projects/-proj', `${UUID}.jsonl`), listing(names));
+    };
+
+    it('for: ведущий Claude с CLAUDE_CONFIG_DIR ищет у участника GLM в ~/.claude, а не в папке ведущего', async () => {
+      const leadDir = path.join(home, 'lead-config');
+      // В папке ведущего: другое описание и другой транскрипт. В домашней папке участника: настоящие.
+      await skillFile(leadDir, 'LEAD folder description'); await transcriptIn(leadDir, 'lead-only');
+      await skillFile(path.join(home, '.claude'), 'GLM home description'); await transcriptIn(path.join(home, '.claude'), 'writing-plans');
+      await bindParticipant('glm', { homeDir: home });
+      delete process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+      vi.stubEnv('CLAUDE_CONFIG_DIR', leadDir);
+      const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+      const found = JSON.parse((await find(lead, { query: 'writing plans', for: 's-02' })).text);
+      expect(found).not.toHaveProperty('reason');
+      expect(found.skills).toEqual([{ name: 'writing-plans', source: 'user', description: 'GLM home description', load: 'Use the Skill tool with "writing-plans".' }]);
+    });
+
+    it('for: участник Claude с claudeConfigDir в дескрипторе читает описания и транскрипт оттуда', async () => {
+      const own = path.join(home, 'claude-own-config');
+      await skillFile(own, 'Participant config description'); await transcriptIn(own, 'writing-plans');
+      await skillFile(path.join(home, '.claude'), 'Home description');
+      await bindParticipant('claude', { homeDir: home, claudeConfigDir: own });
+      delete process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+      vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(home, 'lead-config'));
+      const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+      const found = JSON.parse((await find(lead, { query: 'writing plans', for: 's-02' })).text);
+      expect(found.skills.map((skill: { description: string }) => skill.description)).toEqual(['Participant config description']);
+    });
+
+    it('без дескриптора участника GLM окружение ведущего не подмешивается, у участника Claude — откат к окружению', async () => {
+      const leadDir = path.join(home, 'lead-config');
+      await skillFile(leadDir, 'Env folder description'); await transcriptIn(leadDir, 'writing-plans');
+      await skillFile(path.join(home, '.claude'), 'Home description'); await transcriptIn(path.join(home, '.claude'), 'writing-plans');
+      delete process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+      vi.stubEnv('CLAUDE_CONFIG_DIR', leadDir);
+      const descriptions = async (provider: string) => {
+        await updateMap(project, work, map => { map.sessions[1]!.provider = provider; });
+        const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+        return JSON.parse((await find(lead, { query: 'writing plans', for: 's-02' })).text).skills.map((skill: { description: string }) => skill.description);
+      };
+      expect(await descriptions('glm')).toEqual(['Home description']);
+      expect(await descriptions('claude')).toEqual(['Env folder description']);
+    });
   });
 });
 

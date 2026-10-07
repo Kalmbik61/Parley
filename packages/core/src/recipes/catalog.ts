@@ -3,6 +3,7 @@ import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { resolveRoleChoice, RoleChoiceError } from '../roles/catalog.js';
+import { isClaudeCode } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import { stateDir } from '../work/state-dir.js';
 import { BUILTIN_RECIPES } from './builtin.js';
@@ -17,7 +18,9 @@ export function expandRecipe(recipe: RecipeDefinition, roles: RoleCatalog): Expa
       ...(row.model === undefined ? {} : { model: row.model }),
       ...(row.effort === undefined ? {} : { effort: row.effort }) };
     try {
-      return { choice: { ...choice }, status: 'ready' as const, resolved: resolveRoleChoice(roles, { roleId: row.role, ...(row.provider === undefined ? {} : { provider: row.provider }), ...(row.model === undefined ? {} : { model: row.model }), ...(row.effort === undefined ? {} : { effort: row.effort }) }) };
+      return { choice: { ...choice }, status: 'ready' as const, resolved: resolveRoleChoice(roles, { roleId: row.role, ...(row.provider === undefined ? {} : { provider: row.provider }), ...(row.model === undefined ? {} : { model: row.model }), ...(row.effort === undefined ? {} : { effort: row.effort }),
+        // Роль Claude годится любому провайдеру семейства Claude Code (GLM), как и при создании сессии (`prepareSessionRole`).
+        ...(row.provider !== undefined && isClaudeCode(row.provider) ? { claudeCode: true } : {}) }) };
     } catch (error) {
       if (!(error instanceof RoleChoiceError)) throw error;
       return { choice: { ...choice }, status: error.code, resolved: null };

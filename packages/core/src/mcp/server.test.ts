@@ -840,6 +840,45 @@ describe('GLM readiness in MCP', () => {
   });
 });
 
+describe('роли у GLM в MCP', () => {
+  beforeEach(async () => {
+    await writeFile(process.env.PARLEY_CLAUDE_BIN!, '#!/bin/sh\necho "2.1.287"\n', { mode: 0o755 });
+    await writeSecret('zai', 'fake-key');
+  });
+  const defineAgent = async (dir: string, name: string): Promise<void> => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${name}.md`), `---\nname: ${name}\ndescription: Session role\n---\nRole body.\n`);
+  };
+  it('spawn_session: встроенная роль «только чтение» у GLM принимается и пишется в карту', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'glm', role: 'builtin:planner', label: 'Plan', task: 'Plan changes' });
+    expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'builtin', name: 'planner' } });
+  });
+  it('spawn_session: роль Claude у GLM берётся из ~/.claude, а не из CLAUDE_CONFIG_DIR ведущего', async () => {
+    const fakeHome = path.join(home, 'user-home');
+    const configDir = path.join(home, 'lead-config');
+    await defineAgent(path.join(fakeHome, '.claude', 'agents'), 'from-home');
+    await defineAgent(path.join(configDir, 'agents'), 'from-config');
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', configDir);
+    try {
+      const client = await connect('s-01');
+      expect((await call(client, 'spawn_session', { provider: 'glm', role: 'claude:from-config', label: 'A', task: 'A' })).text).toContain('role-missing');
+      expect((await readMapFile()).sessions).toHaveLength(1);
+      await callOk(client, 'spawn_session', { provider: 'glm', role: 'claude:from-home', label: 'B', task: 'B' });
+      expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'claude', name: 'from-home' } });
+      // Ведущему Claude по-прежнему видна конфигурация из его окружения.
+      await callOk(client, 'spawn_session', { provider: 'claude', role: 'claude:from-config', label: 'C', task: 'C' });
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it('spawn_session: роль Codex у GLM — role-provider-mismatch', async () => {
+    const codexRole = { id: 'codex:exact', source: 'codex' as const, provider: 'codex' as const, name: 'exact', description: '', path: '/fixture.toml', prompt: 'Native', model: null, effort: null, sandboxMode: null, readOnly: false };
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, async () => buildRoleCatalog({ roles: [codexRole], diagnostics: [], partial: false }));
+    expect((await call(client, 'spawn_session', { provider: 'glm', role: 'codex:exact', label: 'A', task: 'A' })).text).toContain('role-provider-mismatch');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+});
+
 describe('без PARLEY_SESSION_ID', () => {
   it('остальные инструменты объясняют, что сессию надо создать через харнесс', async () => {
     const client = await connect(null);

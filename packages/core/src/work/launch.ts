@@ -24,6 +24,7 @@ import {
   loadProviders,
   providerCompatibilityError,
   isClaudeCode,
+  claudeConfigDirFor,
   resumeCommand,
   startCommand,
   type EffortLevel,
@@ -194,7 +195,7 @@ async function plan(
   const entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
   // GLM — тот же Claude Code, но хост срезает у него `CLAUDE_CONFIG_DIR` (provider-env.ts): конфигурация — `~/.claude`.
-  const claudeConfigEnv = entry.runner.secret === 'zai' ? undefined : process.env.CLAUDE_CONFIG_DIR;
+  const claudeConfigEnv = claudeConfigDirFor(entry, process.env);
   const incompatibility = providerCompatibilityError(entry);
   if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
@@ -236,7 +237,7 @@ async function plan(
   }
 
   // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
-  const nativeClaudeRole = role.nativeAgent !== null || (entry.id === 'claude' && options.layer?.nativeClaudeRole === true);
+  const nativeClaudeRole = role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true);
   // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
   const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
 
@@ -324,7 +325,7 @@ async function plan(
   // агента читать нечего.
   if (role.nativeAgent !== null) subs.agent = role.nativeAgent;
   if (role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(role.sandboxMode)}`;
-  if (role.readOnly && entry.id === 'claude') subs.disallowedTools = 'Edit,Write,NotebookEdit';
+  if (role.readOnly && isClaudeCode(entry)) subs.disallowedTools = 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
