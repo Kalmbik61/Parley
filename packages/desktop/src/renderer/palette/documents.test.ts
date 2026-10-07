@@ -322,3 +322,17 @@ describe('секция files (кусок 7.4, спека 9.1, 10.2)', () => {
     expect(docs.some((doc) => doc.section === 'files')).toBe(false);
   });
 });
+
+describe('вкладка файла — путь для значка (спека значков 3.3)', () => {
+  it('filePath — полный путь вкладки, даже когда название обрезано; у прочих документов его нет (фокус ревью 5)', () => {
+    const w = makeWork('w-01', { projectPath: '/tmp/a', title: 'Файлы', sessions: [makeSession('s-01', 'main')] });
+    const path = `src/${'very-long-file-name-'.repeat(12)}index.json`;
+    const fileTab = { kind: 'file' as const, id: tabId.file({ kind: 'project' }, path), root: { kind: 'project' as const }, path };
+    const docs = build({ works: [w], layouts: { [keyOf(w)]: openTab(layoutWith('s-01'), fileTab) } });
+    const doc = docs.find((candidate) => candidate.id === `tab:${keyOf(w)}\n${fileTab.id}`);
+    expect(doc?.icon).toBe('file');
+    expect(doc?.title).not.toBe(path.slice(path.lastIndexOf('/') + 1));
+    expect(doc?.filePath).toBe(path);
+    expect(docs.filter((candidate) => candidate.icon !== 'file').every((candidate) => candidate.filePath === undefined)).toBe(true);
+  });
+});

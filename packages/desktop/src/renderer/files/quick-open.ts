@@ -21,6 +21,7 @@ export function fileDocuments(root: FileRoot, paths: string[], open: (path: stri
     recencyAt: null,
     order: index,
     icon: 'file',
+    filePath: path,
     titleWeight: FILE_NAME_WEIGHT,
     run: (mode) => open(path, mode === 'split'),
   }));
