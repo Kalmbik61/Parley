@@ -36,6 +36,11 @@ All notable changes to Parley are documented in this file.
   instead of the name changing.
 - "Rename" from a workspace card's menu now puts the cursor in the name field. The field used to
   open without focus, so typing went nowhere and Esc or a click elsewhere did not close it.
+- A room member's card and its row in the sidebar no longer spill over the edge when the agent
+  has a role: the role chip shrinks first (its text ends with "…", the 🔒 stays), the session
+  name keeps at least its number, and the ★ and the state word stay whole. The chip's tooltip
+  now starts with the full role. A member row in the sidebar no longer shows the time of the
+  last event.
 
 ## 0.7.0
 
