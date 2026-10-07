@@ -15,7 +15,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown, ChevronRight, File as FileIcon, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { DirEntry, FileRoot, GitStatusLetter } from '../../shared/files-types.js';
@@ -28,6 +28,7 @@ import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { openTab, splitGroup } from '../layout/tree.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { cn } from '../lib/cn.js';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu.js';
 import { useFilesStore } from './store.js';
@@ -170,15 +171,20 @@ const Row = memo(function Row({ row, root, rootKey, rootDir, expanded, letter, b
           )}
           onClick={onClick}
         >
+          {/* Место под шеврон есть и у файла — значки стоят ровным столбиком (спека значков 3.1). */}
           <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
-            {row.dir ? (
-              expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
-            ) : row.entry.kind === 'symlink' ? (
-              <Link2 className="size-3" />
-            ) : (
-              <FileIcon className="size-3" />
-            )}
+            {row.dir ? expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" /> : null}
           </span>
+          {row.dir ? (
+            <FileTypeIcon path={row.path} kind="folder" open={expanded} />
+          ) : row.entry.kind === 'symlink' ? (
+            // Симлинк на файл — `Link2`: значок по имени скрыл бы, что это ссылка.
+            <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+              <Link2 className="size-3" />
+            </span>
+          ) : (
+            <FileTypeIcon path={row.path} />
+          )}
           <span className="min-w-0 flex-1 truncate" style={letter === undefined ? undefined : { color: GIT_COLOR[letter] }}>
             {row.name}
           </span>

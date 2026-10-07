@@ -25,15 +25,16 @@
  */
 
 import { toast } from 'sonner';
-import { FileCode, FileImage, FileSpreadsheet, FileText, FileType, GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
+import { GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
 import type { SessionLifecycle } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useBrowserStore } from '../browser/store.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import type { DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
-import { fileKind, type FileKind } from '../files/file-kind.js';
+import { fileKind } from '../files/file-kind.js';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -55,16 +56,6 @@ export interface TabProps {
   dot: { state: DotState; lifecycle: SessionLifecycle } | null;
   isActive: boolean;
 }
-
-/** Значок вкладки файла по виду (спека 5.3): вид — по расширению, `files/file-kind.ts`. */
-const FILE_ICONS: Record<FileKind, typeof FileCode> = {
-  text: FileCode,
-  markdown: FileText,
-  csv: FileSpreadsheet,
-  tsv: FileSpreadsheet,
-  image: FileImage,
-  pdf: FileType,
-};
 
 /** Цвет значков вкладок не терминального вида — `neutral-800`, как кнопки заголовка (1.1). */
 const ICON = 'size-3 shrink-0 text-neutral-800';
@@ -88,9 +79,9 @@ function TabIcon({ tab, meta, dot }: Pick<TabProps, 'tab' | 'meta' | 'dot'>): JS
     case 'diff':
       return <GitCompare className={ICON} aria-hidden="true" />;
     case 'file': {
-      const kind = tab.kind === 'file' ? fileKind(tab.path) : 'text';
-      const Icon = FILE_ICONS[kind];
-      return <Icon data-file-kind={kind} className={ICON} aria-hidden="true" />;
+      // Значок Material по имени файла (спека значков 3.2); вид файла остаётся меткой — по нему выбирается тело вкладки.
+      const path = tab.kind === 'file' ? tab.path : '';
+      return <FileTypeIcon path={path} size={14} fileKind={fileKind(path)} />;
     }
     case 'browser':
       // Favicon — data: из main (9.2a): CSP окна внешних картинок не пускает.

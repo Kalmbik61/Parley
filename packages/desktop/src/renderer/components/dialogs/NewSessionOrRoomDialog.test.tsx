@@ -265,6 +265,32 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
     }
     expect(shown.seen).toEqual([{ name: '', agents: 1 }]);
   });
+
+  // Пилюли — снимок `providers.list` этого открытия. Сброс снимка в `useEffect` шёл после вставки: диалог показывал пилюли
+  // прошлого открытия, стрелка успевала открыть карточку на такой пилюле, а пришедший сброс снимал пилюлю из-под неё — после
+  // Escape фокус уходил на сам диалог (E2E `providers-connect.spec.ts`, 800×500, второй проход).
+  it('пилюли прошлого открытия не показываются: до ответа нового providers.list их нет', async () => {
+    const onOpenChange = vi.fn();
+    const element = (open: boolean): JSX.Element => (
+      <NewSessionOrRoomDialog open={open} bridge={bridge} work={null} room={false} onOpenChange={onOpenChange} />
+    );
+    const view = render(element(true));
+    await act(async () => {});
+    expect(providerRadio(0, 'Codex')).toBeTruthy();
+    view.rerender(element(false));
+    // Ответ нового открытия задержан: всё, что видно до него, было бы прошлым снимком.
+    bridge.setHandler('providers.list', () => new Promise(() => {}));
+    const shown = recordOnInsert((inserted) => {
+      const group = inserted.querySelector('[role="radiogroup"][aria-label="Agent 1"]');
+      return group === null ? null : group.querySelectorAll('[role="radio"]').length;
+    });
+    try {
+      view.rerender(element(true));
+    } finally {
+      shown.stop();
+    }
+    expect(shown.seen).toEqual([0]);
+  });
 });
 
 describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
@@ -1813,7 +1839,14 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it.each([1, 0.95])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s)', async (scale) => {
+  // Нужно прокрутить на 38.4, а Chromium кладёт scrollTop на сетку пикселей устройства, округляя к ближнему: при DPR 1 вышло
+  // бы 38, и низ поля остался бы на 0.4 px под краем карточки (E2E `providers-connect.spec.ts`, 800×500, экран без Retina).
+  // Поэтому цель — на сетке и с запасом в сторону раскрытия: 39 при DPR 1, 38.5 при DPR 2.
+  it.each([
+    [1, 1, 39],
+    [0.95, 1, 39],
+    [1, 2, 38.5],
+  ])('изменение размера карточки раскрывает скрытый фокус, не прокручивает видимый или чужой и отключает наблюдение (scale=%s, DPR %s)', async (scale, dpr, scrolled) => {
     const observers: ObservedResize[] = [];
     class ObservedResize implements ResizeObserver {
       target: Element | null = null;
@@ -1823,6 +1856,7 @@ describe('NewSessionOrRoomDialog — подключение провайдера
       disconnect = vi.fn();
     }
     vi.stubGlobal('ResizeObserver', ObservedResize);
+    vi.stubGlobal('devicePixelRatio', dpr);
     try {
       bridge.setHandler('providers.list', async () => ({ providers: list() }));
       await renderDialog();
@@ -1842,10 +1876,10 @@ describe('NewSessionOrRoomDialog — подключение провайдера
         contentBoxSize: [], devicePixelContentBoxSize: [], contentRect: new DOMRect(),
       }];
       act(() => observer?.callback(sizes, observer));
-      expect(content.scrollTop).toBeCloseTo(38.4);
+      expect(content.scrollTop).toBe(scrolled);
       // Повторная доставка не двигает уже видимое поле.
       act(() => observer?.callback(sizes, observer));
-      expect(content.scrollTop).toBeCloseTo(38.4);
+      expect(content.scrollTop).toBe(scrolled);
       content.scrollTop = 0;
       bounds.mockReturnValueOnce(new DOMRect(265, 12, 360, 0));
       act(() => observer?.callback(sizes, observer));

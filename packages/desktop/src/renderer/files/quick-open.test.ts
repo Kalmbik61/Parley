@@ -12,6 +12,11 @@ const ROOT: FileRoot = { workKey: '/tmp/p\nw-01', spec: { kind: 'project' } };
 const NOW = Date.parse('2026-09-28T12:00:00.000Z');
 
 describe('fileDocuments (тест 1)', () => {
+  it('документ несёт путь для значка (спека значков 3.3)', () => {
+    const [doc] = fileDocuments(ROOT, ['src/deep/package.json'], () => {});
+    expect(doc?.filePath).toBe('src/deep/package.json');
+  });
+
   it('запрос main поднимает src/main.ts выше docs/main-notes/x.md', () => {
     const docs = fileDocuments(ROOT, ['docs/main-notes/x.md', 'src/main.ts'], () => {});
     const [section] = rankDocuments('main', docs, NOW);

@@ -584,3 +584,20 @@ describe('DiffTab: предел секций (раунд fix-final-c, п. 1)', (
     expect(scrolled).toContain(section('f230.ts'));
   });
 });
+
+// Спека значков 2026-10-06, 3.4: сводный список вверху вкладки диффа — как строки «Изменений» и заголовки секций.
+describe('DiffTab: значки файлов в сводном списке', () => {
+  it('у файла — значок по пути; в дереве у папки — значок открытой папки', async () => {
+    bridge.setHandler('worktrees.diff', () => diff([file('src/a.ts'), file('package.json')]));
+    renderTab();
+    await flush();
+    const iconOf = (el: HTMLElement): string | null | undefined => el.querySelector('img[data-file-icon]')?.getAttribute('src');
+    const list = screen.getByTestId('diff-file-list');
+    expect(iconOf(within(list).getByTitle('package.json'))).toMatch(/nodejs\.svg$/);
+    expect(iconOf(within(list).getByTitle('src/a.ts'))).toMatch(/typescript\.svg$/);
+    fireEvent.click(screen.getByRole('radio', { name: 'Tree' }));
+    const tree = screen.getByTestId('diff-file-list');
+    expect(iconOf(within(tree).getByTitle('src'))).toMatch(/folder-src-open\.svg$/);
+    expect(iconOf(within(tree).getByTitle('src/a.ts'))).toMatch(/typescript\.svg$/);
+  });
+});

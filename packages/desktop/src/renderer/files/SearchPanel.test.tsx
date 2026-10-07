@@ -129,6 +129,14 @@ describe('SearchPanel (тест 2)', () => {
     expect(screen.getByText('Showing first 2000 matches')).toBeTruthy();
   });
 
+  it('заголовок группы — значок файла по пути (спека значков 3.5)', async () => {
+    bridge.setGrepResult(result([{ path: 'src/package.json', hits: [{ line: 1, column: 1, text: 'foo', ranges: [[0, 3]] }] }]));
+    render(<SearchPanel bridge={bridge} root={ROOT} />);
+    await type('foo');
+    await wait(250);
+    expect(screen.getByTitle('src/package.json').querySelector('img[data-file-icon]')?.getAttribute('src')).toMatch(/nodejs\.svg$/);
+  });
+
   it('без truncated строки о пределе нет; совпадение подсвечено, длинный путь целиком в title', async () => {
     const path = `very/${'long-directory-name/'.repeat(20)}file.ts`;
     bridge.setGrepResult(result([{ path, hits: [{ line: 7, column: 7, text: 'const foo = 1', ranges: [[6, 9]] }] }]));

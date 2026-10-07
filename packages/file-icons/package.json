@@ -1,0 +1,23 @@
+{
+  "name": "@parley/file-icons",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./vite": "./dist/vite.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "material-icon-theme": "5.39.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.21"
+  }
+}

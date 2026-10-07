@@ -217,8 +217,11 @@ function ProviderPopoverContent(props: ComponentPropsWithoutRef<typeof PopoverCo
       const bottom = Math.min(bounds.bottom - content.clientTop * scale, top + content.clientHeight * scale);
       const rect = focused.getBoundingClientRect();
       if (rect.height <= 0 || !Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
-      if (rect.bottom > bottom) content.scrollTop += (rect.bottom - bottom) / scale;
-      else if (rect.top < top) content.scrollTop += (rect.top - top) / scale;
+      // Chromium кладёт scrollTop на сетку пикселей устройства, округляя к ближнему: при DPR 1 из 78.4 выходило 78, и низ
+      // поля оставался на 0.4 px под краем карточки. Цель — сразу на сетке, с запасом в сторону раскрытия.
+      const grid = window.devicePixelRatio || 1;
+      if (rect.bottom > bottom) content.scrollTop = Math.ceil((content.scrollTop + (rect.bottom - bottom) / scale) * grid) / grid;
+      else if (rect.top < top) content.scrollTop = Math.floor((content.scrollTop + (rect.top - top) / scale) * grid) / grid;
     });
     providerResize.current = observer;
     observer.observe(content);
@@ -311,7 +314,9 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
     setProviderCard(null);
   }, [open, room, work, backlog]);
 
-  useEffect(() => {
+  // Снимок провайдеров — тоже до отрисовки, как форма: в `useEffect` диалог успевал показать пилюли прошлого открытия, и
+  // карточка, открытая на такой пилюле, теряла её из-под себя, когда сброс доходил (фокус после Escape — на диалоге).
+  useLayoutEffect(() => {
     if (!open) return;
     let stale = false;
     let generation = 0;
