@@ -433,7 +433,10 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   "Copy path" · "Mark as done" (for `done` and `archived` there is "Reopen" instead) ·
   "Archive" · "Delete…". A right click on a session row: "Open", "Open to the side", "Resume",
   "Stop", "Close…" (with the confirmation "Session will no longer receive mail"), "Changes",
-  "Copy worktree path" (for a session with its own worktree), "Delete". Collapsed projects,
+  "Copy worktree path" (for a session with its own worktree), "Delete"; a member row of an
+  expanded room also has "Make lead" (not on the lead and not on a closed session). A right
+  click on a room row: "Rename" (a field in place of the name; an empty name keeps the old
+  one) and "Delete…" (see "Session conversation"). Collapsed projects,
   pinned workspaces and "Show done" survive a window restart. ↑/↓ in the sidebar move over
   cards and over session and room rows, and Enter opens. On a card, → and ← show and hide
   closed sessions; on a room row they expand and collapse it; ← on a session row goes to its
@@ -1101,6 +1104,15 @@ marked `deleted`, and `artifacts/` and the transcript in `~/.claude` are not tou
 of a deleted session is not reused, and `wait_for` on it answers the agent with
 `state: deleted`. Agents have no delete tool — it is a human's decision.
 
+A room is removed with "Delete…" in the room row's menu: the room goes with its feed, its
+waiting decision and its plans, and its sessions keep running as regular sessions of the
+workspace — Parley writes to each live one that the room is gone. The confirmation has the
+checkbox "Also delete its N sessions", off by default: checked, the room's sessions are first
+deleted one by one exactly as with "Delete" on a session row (file tabs of their worktrees
+with the question about unsaved edits, the process, the worktree, the record), and only then
+the room; if a session cannot be deleted (a worktree with uncommitted changes), the room
+stays. Decisions, plan snapshots and room histories already written to `.parley/` stay.
+
 A whole workspace is removed with "Delete…" in the card menu. First its live sessions are
 stopped, then the whole `.parley/works/<id>` directory goes, with the artifacts, along with
 the entry in the global index; transcripts in `~/.claude` remain. If the workspace directory
@@ -1259,7 +1271,12 @@ of the room's feed as a card with the buttons "Accept" and "Return for rework". 
 the message "Returned for rework: …": the lead reworks the decision and proposes it again. The
 lead can also bring one more session into the room with `add_to_room(room, session)`, for
 example a just-spawned executor: it leaves the workspace's other rooms and does not get a
-message about being added — the lead writes to it in the room on their own. The roles of the
+message about being added — the lead writes to it in the room on their own. You change the
+lead with "Make lead" in a member row's menu in the sidebar: the feed shows "@s03 is now the
+lead", Parley writes to the new lead (collect the positions and bring you a decision; in a room
+with a recipe it also gets the playbook) and to the previous one (now a regular member), and a decision
+the previous lead brought keeps waiting for your answer. "Rename" and "Delete…" in the room
+row's menu rename and remove the room. The roles of the
 lead and of a member are described in `read_guide` (the `lead` and `member` topics), in the
 brief and in the system prompt insert.
 
