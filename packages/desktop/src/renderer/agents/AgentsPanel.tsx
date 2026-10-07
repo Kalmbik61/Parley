@@ -18,6 +18,7 @@ import { formatDuration } from '../lib/metrics-line.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useNow } from '../lib/use-now.js';
 import { useActivityStore } from '../store/activity.js';
+import { AgentDetail } from './AgentDetail.js';
 import { agentRows, type AgentRow } from './agents-model.js';
 
 export interface AgentsPanelProps {
@@ -58,12 +59,13 @@ export interface AgentsPanelViewProps {
   tasks: readonly LiveTask[];
 }
 
-export function AgentsPanelView({ sessionRef, hasFeed, tasks }: AgentsPanelViewProps): JSX.Element {
+export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPanelViewProps): JSX.Element {
   const key = refKey(sessionRef);
   const feed = useFeed(sessionRef);
   const finishedOpen = useChatUiStore((state) => state.finishedOpen[key] ?? false);
   const select = useChatUiStore((state) => state.selectAgent);
   const setFinishedOpen = useChatUiStore((state) => state.setFinishedOpen);
+  const pick = useChatUiStore((state) => state.agentPanel[key] ?? null);
 
   if (!hasFeed) {
     return (
@@ -76,6 +78,15 @@ export function AgentsPanelView({ sessionRef, hasFeed, tasks }: AgentsPanelViewP
           </div>
         ))}
         <p className="text-xs text-muted-foreground">{S.agentsPanel.needsChat}</p>
+      </div>
+    );
+  }
+
+  if (pick !== null) {
+    return (
+      <div data-testid="agents-panel" className="flex min-h-0 flex-col">
+        <FeedSubscription sessionRef={sessionRef} />
+        <AgentDetail bridge={bridge} sessionRef={sessionRef} items={feed?.items ?? []} pick={pick} onBack={() => select(key, null)} />
       </div>
     );
   }
