@@ -15,18 +15,30 @@
  * Вставка и перетаскивание берут только `text/plain`: выделение из ленты приносит HTML с `data-mention`, а
  * читатель поля считает чипом любой такой узел; чипы рождает только меню упоминаний.
  *
+ * Вложения (скрепка — системный выбор файлов, файлы, брошенные на вкладку комнаты, — `RoomPanel`) стоят чипами над полем и
+ * хранятся рядом с черновиком (`composerAttachments`); при отправке их пути уходят в конец текста списком
+ * (`attachments.ts`). Сообщение из одних вложений тоже уходит. Файлы, брошенные на само поле, оно не берёт текстом:
+ * бросок поднимается к вкладке и становится вложением.
+ *
  * Фокус — контур `--ring` 2px с отступом 2px: правило `:focus-visible` слоя base (`styles/base.css`,
  * спека 4), поле его не перекрывает; каретка цвета ring. Контур и при клике мышью — как у прочих полей окна:
  * у текстовых полей `:focus-visible` срабатывает всегда.
  */
 
 import { useCallback, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { Paperclip } from 'lucide-react';
+import type { ParleyBridge } from '../../../shared/bridge.js';
+import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S } from '../../../shared/strings.js';
+import { AttachmentChip } from '../../chat/AttachmentChip.js';
+import { addAttachments } from '../../chat/attachments.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
+import { dragHasFiles } from '../../terminal/drop.js';
 import { Button } from '../../ui/button.js';
 import { MicButton } from '../../voice/MicButton.js';
 import { useEditableDictation } from '../../voice/targets.js';
+import { composeRoomMessage } from './attachments.js';
 import { MentionMenu } from './MentionMenu.js';
 import { filterMentions } from './mention.js';
 import {
@@ -67,6 +79,8 @@ export interface ComposerSubmission {
 
 export interface ComposerProps {
   members: readonly ComposerMember[];
+  /** Системный выбор файлов скрепки и миниатюры картинок-вложений. */
+  bridge: ParleyBridge;
   /** Ключ черновика — `roomKey(workKey, roomId)` (`lib/room-view.ts`). Другая комната — другой ключ и заново смонтированное поле. */
   draftKey: string;
   /**
@@ -87,8 +101,13 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
-export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Element {
+/** Пустой список вложений — один и тот же: селектор стора не должен отдавать новый массив на каждый вызов. */
+const NO_ATTACHMENTS: readonly string[] = [];
+
+export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): JSX.Element {
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const attachments = useUiStore((state) => state.composerAttachments[draftKey] ?? NO_ATTACHMENTS);
+  const setAttachments = (paths: readonly string[]): void => useUiStore.getState().setComposerAttachments(draftKey, paths);
   const [blank, setBlank] = useState(true);
   const [to, setTo] = useState<string[]>([]);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -154,15 +173,18 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
     if (editor === null) return;
     const content = readEditor(editor);
     const trimmed = content.text.trim();
-    if (trimmed === '') return;
+    const sent = attachments;
+    if (trimmed === '' && sent.length === 0) return;
     // Поле очищается сразу, до ответа хоста: второй Enter не отправит то же письмо второй раз.
     editor.replaceChildren();
+    setAttachments([]);
     dismissedRef.current = null;
     refresh();
-    void Promise.resolve(onSend({ to: content.to, text: trimmed })).catch(() => {
+    void Promise.resolve(onSend({ to: content.to, text: composeRoomMessage(trimmed, sent) })).catch(() => {
       const current = editorRef.current;
       if (current === null || !isBlank(readEditor(current))) return;
       fillEditor(current, trimmed, chipLabel);
+      if ((useUiStore.getState().composerAttachments[draftKey] ?? []).length === 0) setAttachments(sent);
       refresh();
     });
   };
@@ -216,7 +238,16 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
     if (text !== '') insertPlainText(event.currentTarget.ownerDocument, text);
   };
 
+  const pickFiles = (): void => {
+    bridge.app
+      .chooseFiles()
+      .then((paths) => setAttachments(addAttachments(useUiStore.getState().composerAttachments[draftKey] ?? [], paths)))
+      .catch((error: unknown) => console.warn('[parley] chooseFiles', decodeIpcError(error).message));
+  };
+
   const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    // Файлы — вложения: бросок поднимается к вкладке комнаты (`RoomPanel`), текстом в поле они не идут.
+    if (dragHasFiles(event.dataTransfer)) return;
     // Перетаскивание — то же, что вставка: выделение из ленты приносит HTML с `data-mention`, а читатель
     // поля считает чипом любой такой узел — в `to[]` попал бы чужой адресат. Чипы рождает только меню.
     event.preventDefault();
@@ -238,6 +269,20 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
       <span className="truncate text-xs text-muted-foreground">
         {to.length === 0 ? S.rooms.toEveryone : S.rooms.toList(to.map(sessionTag).join(', '))}
       </span>
+      {attachments.length === 0 ? null : (
+        // Предел высоты, как у «Chat»: десятки брошенных файлов не вытесняют ленту — лишние прокручиваются.
+        <div data-room-attachments="" className="flex max-h-[124px] flex-wrap items-center gap-2 overflow-y-auto">
+          {attachments.map((path) => (
+            <AttachmentChip
+              key={path}
+              path={path}
+              bridge={bridge}
+              size="composer"
+              onRemove={() => setAttachments(attachments.filter((item) => item !== path))}
+            />
+          ))}
+        </div>
+      )}
       <div className="flex items-end gap-2">
         <div className="relative min-w-0 flex-1">
           {blank ? (
@@ -265,6 +310,17 @@ export function Composer({ members, draftKey, onSend }: ComposerProps): JSX.Elem
             className="box-border max-h-[140px] min-h-[38px] overflow-y-auto whitespace-pre-wrap rounded-[19px] border border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)] px-4 py-2 text-sm leading-5 caret-ring [overflow-wrap:anywhere]"
           />
         </div>
+        <Button
+          type="button"
+          variant="outline"
+          data-room-attach=""
+          title={S.chat.composer.attach}
+          aria-label={S.chat.composer.attach}
+          onClick={pickFiles}
+          className="size-[38px] shrink-0 rounded-full px-0"
+        >
+          <Paperclip className="size-4" aria-hidden="true" />
+        </Button>
         <MicButton targetId={`room:${draftKey}`} />
         <Button type="button" onClick={submit}>
           {S.rooms.send}

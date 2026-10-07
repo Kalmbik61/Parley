@@ -533,7 +533,11 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   everyone" or "To S02, S03"; `@` opens the member menu (a filter by label, provider and
   model; ↑/↓, Enter or Tab, Esc; mouse click), and the chosen member becomes a chip and a
   recipient. Enter sends, Shift+Enter inserts a line break, only plain text is pasted, and an
-  unfinished draft is kept per room until the window restarts;
+  unfinished draft is kept per room until the window restarts. Files are attached with the
+  paperclip ("Attach a file") or by dropping them anywhere on the room tab; they stand as chips
+  above the field (an image as a thumbnail) and go out at the end of the message as an
+  "Attachments:" list of absolute paths, which the agents open themselves; a message of
+  attachments alone is sent too;
 - the mouse, menus and ⌘ shortcuts, with no prefix key: ⌘T — a new session or room in the
   active workspace, ⌘D and ⇧⌘D — a new group on the right or below, with the content chosen
   through the palette ("Open in new group"), ⌘W — close the tab, ⌘⇧T — reopen a closed one,

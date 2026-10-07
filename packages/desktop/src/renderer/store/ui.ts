@@ -103,6 +103,11 @@ export interface UiState {
    * записи нет.
    */
   composerDrafts: Record<string, string>;
+  /**
+   * Вложения поля ввода комнаты — абсолютные пути (скрепка и файлы, брошенные на вкладку комнаты), по тому же ключу и с
+   * той же жизнью, что черновик: в памяти окна, переживают смену вкладок. Пустого списка в записи нет.
+   */
+  composerAttachments: Record<string, readonly string[]>;
 
   /** Зеркало `ui.json` (кусок 2.3, спека 3.4): до `app.loadUi()` — значения по умолчанию. */
   ui: UiFile;
@@ -140,6 +145,8 @@ export interface UiState {
   setWindowFocused: (focused: boolean) => void;
   /** Поле ввода комнаты зовёт на каждую правку; пустой текст убирает запись. */
   setComposerDraft: (draftKey: string, draft: string) => void;
+  /** Вложения поля ввода комнаты; пустой список убирает запись. */
+  setComposerAttachments: (draftKey: string, paths: readonly string[]) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
   /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
@@ -211,6 +218,7 @@ export const useUiStore = create<UiState>((set, get) => {
     settingsSection: 'appearance',
     visibleSessionRefs: {},
     composerDrafts: {},
+    composerAttachments: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
     sidebarHovering: false,
@@ -246,6 +254,15 @@ export const useUiStore = create<UiState>((set, get) => {
           return { composerDrafts: Object.fromEntries(Object.entries(state.composerDrafts).filter(([key]) => key !== draftKey)) };
         }
         return { composerDrafts: { ...state.composerDrafts, [draftKey]: draft } };
+      }),
+
+    setComposerAttachments: (draftKey, paths) =>
+      set((state) => {
+        if ((state.composerAttachments[draftKey] ?? []) === paths) return state;
+        if (paths.length === 0) {
+          return { composerAttachments: Object.fromEntries(Object.entries(state.composerAttachments).filter(([key]) => key !== draftKey)) };
+        }
+        return { composerAttachments: { ...state.composerAttachments, [draftKey]: paths } };
       }),
 
     openNewWorkDialog: (projectPath, title) =>
