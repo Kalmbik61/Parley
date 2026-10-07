@@ -691,7 +691,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 a "Backlog file" switch: pick `TODOS.md` and Parley keeps the backlog in the project's own
 `TODOS.md` (or `TODO.md`, whichever exists; a new `TODOS.md` is created on the first item).
 Switching moves the items of `.parley/backlog.md` to the end of that file, each under its
-section, and removes `.parley/backlog.md`; switching back leaves `TODOS.md` as it is. When the
+section (notes you wrote in `.parley/backlog.md` stay there); switching back leaves `TODOS.md`
+as it is. When the
 project already has `TODOS.md`, the tab offers it once. Parley gives every `- [ ]` line of the
 chosen file an ID comment on its first write; other text stays byte for byte. The choice is
 local to your machine (`.parley/preferences.json`). Agents read and suggest through the same

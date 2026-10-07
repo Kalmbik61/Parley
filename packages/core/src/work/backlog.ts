@@ -226,12 +226,20 @@ export function mergeBacklogInto(target: string, source: string): string {
   if (moving.length === 0) return target;
   if (!target) return source;
   let result = target;
+  const eol = eolOf(target);
   for (const item of moving) {
-    const raw = source.slice(item.start, item.end).replace(/^\uFEFF/, '');
-    result = insertBlock(result, /[\r\n]$/.test(raw) ? raw : raw + eolOf(target), item.section ?? undefined);
+    // Окончания строк — как у target: без смеси CRLF и LF в файле человека.
+    const raw = source.slice(item.start, item.end).replace(/^\uFEFF/, '').replace(/\r\n|\n|\r/g, eol);
+    result = insertBlock(result, raw.endsWith(eol) ? raw : raw + eol, item.section ?? undefined);
   }
   parseItems(result); // Дубль ID или маркеры конфликта — ошибка до записи.
   return result;
+}
+
+/** Текст без пунктов (строк `- [ ]` с подробностями); null — кроме заголовков и пустых строк ничего не осталось. */
+export function backlogLeftover(source: string): string | null {
+  const rest = applyReplacements(source, parseItems(source).map(item => ({ start: item.start, end: item.end, text: '' })));
+  return rest.split(/\r\n|\n|\r/).every(line => !line.trim() || /^ {0,3}#{1,6}[ \t]/.test(line.replace(/^\uFEFF/, ''))) ? null : rest;
 }
 
 /** Проверка целевого файла до любых изменений: незакрытый блок кода, маркеры конфликта, дубли ID — ошибка. */

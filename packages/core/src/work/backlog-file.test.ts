@@ -113,6 +113,15 @@ describe('switching the backlog file', () => {
     await seedState('# Backlog\n- [ ] Moved <!-- b-001 -->\n');
     await setBacklogFile(project, 'todos');
     expect((await rows(todos())).map(row => row.title)).toEqual(['Mine', 'Moved']);
+    // Перенесённые строки получают окончания строк TODOS.md, без смеси CRLF и LF.
+    expect((await readFile(todos(), 'utf8')).replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
+  });
+  it('keeps human notes of the state file there and moves only the items', async () => {
+    await writeFile(todos(), '# TODOS\n');
+    await seedState('# Backlog\nNotes: keep me.\n\n- [ ] Moved <!-- b-001 -->\n  Detail\n| A | B |\n');
+    await setBacklogFile(project, 'todos');
+    expect((await rows(todos())).map(row => row.title)).toEqual(['Moved']);
+    expect(await readFile(state(), 'utf8')).toBe('# Backlog\nNotes: keep me.\n\n| A | B |\n');
   });
   it('refuses duplicate IDs or a symlinked TODOS.md and changes nothing', async () => {
     await seedState('# Backlog\n- [ ] Stay <!-- b-001 -->\n');

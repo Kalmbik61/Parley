@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { assertBacklogReadable, backlogMode, ensureBacklogIdsInTransaction, mergeBacklogInto, raiseBacklogSeq, saveBacklogLocal, withBacklogTransaction } from './backlog.js';
+import { assertBacklogReadable, backlogLeftover, backlogMode, ensureBacklogIdsInTransaction, mergeBacklogInto, raiseBacklogSeq, saveBacklogLocal, withBacklogTransaction } from './backlog.js';
 import { MISSING_SHARED_VERSION, SharedStateError, readSharedFile, sharedProjectPaths, withSharedProjectLock, writeSharedFile } from './store.js';
 import type { BacklogFileChoice, SharedDiagnostic, SharedProjectPaths, SharedWriteOptions } from './store.js';
 
@@ -56,8 +56,12 @@ export async function setBacklogFile(projectPath: string, file: BacklogFileChoic
         const target = await readSharedFile(targetFile);
         const merged = mergeBacklogInto(target.text, source.text);
         if (merged !== target.text) await writeSharedFile(targetFile, merged, target, await backlogMode(targetFile));
-        if ((await readSharedFile(tx.paths.backlog)).version !== source.version) throw new SharedStateError('backlog-conflict');
-        await rm(tx.paths.backlog);
+        const current = await readSharedFile(tx.paths.backlog);
+        if (current.version !== source.version) throw new SharedStateError('backlog-conflict');
+        // Заметки человека в файле состояния не теряются: уходят только пункты, остальной текст остаётся.
+        const leftover = backlogLeftover(source.text);
+        if (leftover === null) await rm(tx.paths.backlog);
+        else await writeSharedFile(tx.paths.backlog, leftover, current, await backlogMode(tx.paths.backlog));
       }
     }
     // ID уникальны в обоих файлах. Нечитаемый или непонятный файл не мешает переключению.
