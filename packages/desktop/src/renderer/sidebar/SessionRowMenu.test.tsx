@@ -14,6 +14,8 @@ import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, groups, LIMITS, openTab, splitGroup } from '../layout/tree.js';
 import { useReviewStore, bindReviewToLayout } from '../review/store.js';
+import { encodeIpcError } from '../../shared/ipc-error.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession } from '../test-utils/work-fixtures.js';
@@ -25,9 +27,9 @@ vi.mock('sonner', () => ({ toast: vi.fn() }));
 let bridge: FakeBridge;
 const KEY = '/tmp/proj w-01';
 
-function renderMenu(session: WorkSession, onOpen = vi.fn()): void {
+function renderMenu(session: WorkSession, onOpen = vi.fn(), room?: { id: string; lead: boolean }): void {
   render(
-    <SessionRowMenu workKey={KEY} projectPath="/tmp/proj" workId="w-01" session={session} bridge={bridge} onOpen={onOpen}>
+    <SessionRowMenu workKey={KEY} projectPath="/tmp/proj" workId="w-01" session={session} bridge={bridge} onOpen={onOpen} {...(room === undefined ? {} : { room })}>
       <div>row</div>
     </SessionRowMenu>,
   );
@@ -221,5 +223,55 @@ describe('SessionRowMenu — Changes (тест 9 куска 8.2b)', () => {
     expect(useLayoutStore.getState().activeWorkKey).toBe(KEY);
     expect(useReviewStore.getState().changesSession).toEqual({ [KEY]: 's-01' });
     unbind();
+  });
+});
+
+describe('SessionRowMenu — Make lead (участник развёрнутой комнаты)', () => {
+  const hostWith = (methods: string[]): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods } });
+  };
+
+  beforeEach(() => hostWith(['rooms.setLead']));
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('у не ведущего живого участника — пункт; выбор зовёт rooms.setLead без подтверждения', () => {
+    bridge.setHandler('rooms.setLead', () => ({ messageId: 'm-01' }));
+    renderMenu(makeSession('s-02', 'build'), vi.fn(), { id: 'r-01', lead: false });
+    fireEvent.click(screen.getByText('Make lead'));
+    expect(bridge.calls).toEqual([
+      { method: 'rooms.setLead', params: { projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01', sessionId: 's-02' } },
+    ]);
+  });
+
+  it('у ведущего, закрытого участника, сессии вне комнаты и у хоста без rooms.setLead — пункта нет', () => {
+    const cases: Array<[WorkSession, { id: string; lead: boolean } | undefined]> = [
+      [makeSession('s-01', 'plan'), { id: 'r-01', lead: true }],
+      [makeSession('s-02', 'build', { lifecycle: 'closed' }), { id: 'r-01', lead: false }],
+      [makeSession('s-03', 'solo'), undefined],
+    ];
+    for (const [session, room] of cases) {
+      renderMenu(session, vi.fn(), room);
+      expect(screen.getByText('Open')).toBeTruthy();
+      expect(screen.queryByText('Make lead')).toBeNull();
+      cleanup();
+    }
+    hostWith([]);
+    renderMenu(makeSession('s-02', 'build'), vi.fn(), { id: 'r-01', lead: false });
+    expect(screen.queryByText('Make lead')).toBeNull();
+  });
+
+  it('отказ хоста — тост «Couldn\'t change the room lead: …», текст хоста — только в консоль', async () => {
+    bridge.setHandler('rooms.setLead', () => {
+      throw encodeIpcError({ code: 'bad_request', message: 'session s-02 is closed' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderMenu(makeSession('s-02', 'build'), vi.fn(), { id: 'r-01', lead: false });
+    fireEvent.click(screen.getByText('Make lead'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(toast).toHaveBeenCalledWith("Couldn't change the room lead: invalid request.");
+    warn.mockRestore();
   });
 });

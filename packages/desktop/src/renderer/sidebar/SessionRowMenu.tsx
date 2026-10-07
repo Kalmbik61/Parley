@@ -7,20 +7,25 @@
  * «Open to the side»: сначала работа строки становится активной, затем сплит вправо в её
  * раскладке. Группа и размеры берутся внутри операции: у ещё не гидрированной работы
  * операция ждёт в очереди `apply` до `hydrate` и должна увидеть уже её раскладку.
+ *
+ * «Make lead» — у участника развёрнутой комнаты, не ведущего (`★`) и не закрытого, когда хост знает `rooms.setLead`:
+ * сразу, без подтверждения, — смена ведущего обратима тем же пунктом у другого участника.
  */
 
 import { useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { SessionStatus, WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
-import { S } from '../../shared/strings.js';
+import { errorText, S } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { splitGroup } from '../layout/tree.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { displayStatus } from '../lib/dot-state.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { useReviewStore } from '../review/store.js';
@@ -47,15 +52,18 @@ export interface SessionRowMenuProps {
   bridge: ParleyBridge;
   /** «Open» — как клик по строке. */
   onOpen(): void;
+  /** Комната участника и ведёт ли он её (`★`): только у строки развёрнутой комнаты — для «Make lead». */
+  room?: { id: string; lead: boolean };
   /** Строка — триггер ui/context-menu. */
   children: ReactNode;
 }
 
-export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, onOpen, children }: SessionRowMenuProps): JSX.Element {
+export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, onOpen, room, children }: SessionRowMenuProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<'stop' | 'close' | 'delete' | null>(null);
   useSidebarHold(`session-menu ${workKey} ${session.id}`, open || confirm !== null);
 
+  const canSetLead = useHostSupports('rooms.setLead');
   const status = displayStatus(session);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
@@ -104,6 +112,13 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     });
   };
 
+  const makeLead = (roomId: string): void => {
+    bridge.call('rooms.setLead', { projectPath, workId, roomId, sessionId: session.id }).catch((error: unknown) => {
+      console.warn('[parley] rooms.setLead', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.makeLead));
+    });
+  };
+
   const worktree = session.worktree;
   // Подтверждение открыто пунктом меню, которого уже нет: фокус — строке (раунд 2).
   const focusRow = (event: Event): void => focusSidebarItem(event, { workKey, sessionId: session.id });
@@ -123,6 +138,9 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
           ) : null}
           {!closed ? (
             <ContextMenuItem onSelect={() => setConfirm('close')}>{S.sidebar.sessionMenu.closeEllipsis}</ContextMenuItem>
+          ) : null}
+          {room !== undefined && !room.lead && !closed && canSetLead ? (
+            <ContextMenuItem onSelect={() => makeLead(room.id)}>{S.sidebar.sessionMenu.makeLead}</ContextMenuItem>
           ) : null}
           <ContextMenuItem onSelect={openChanges}>{S.sidebar.sessionMenu.changes}</ContextMenuItem>
           {worktree !== null ? (

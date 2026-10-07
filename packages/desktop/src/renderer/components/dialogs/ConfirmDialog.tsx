@@ -8,9 +8,10 @@
  * (раунд исправлений 8, пункт 4); по умолчанию кнопка по-прежнему красная.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
+import { Checkbox } from '../../ui/checkbox.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 
 export interface ConfirmDialogProps {
@@ -20,7 +21,12 @@ export interface ConfirmDialogProps {
   confirmLabel: string;
   /** Вид кнопки подтверждения: `destructive` (по умолчанию) — необратимое, `default` — обычное действие. */
   confirmVariant?: 'destructive' | 'default';
-  onConfirm: () => void;
+  /**
+   * Флажок под описанием (удаление комнаты: «Also delete its N sessions»). Снят при каждом открытии — согласие на
+   * большее разрушение даётся явно; его значение приходит в `onConfirm`.
+   */
+  checkbox?: string;
+  onConfirm: (checked: boolean) => void;
   /**
    * Второе действие между «Отменой» и подтверждением (раунд fix-final-c, п. 4: «Commit anyway»
    * рядом с «Save all and commit»). Одно нажатие на открытие — общее с подтверждением.
@@ -37,6 +43,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   confirmVariant = 'destructive',
+  checkbox,
   onConfirm,
   secondary,
   onOpenChange,
@@ -46,8 +53,11 @@ export function ConfirmDialog({
   // остаётся в DOM на время анимации закрытия, и двойной клик слал второй вызов — у
   // удаления он получал `not_found` и показывал ложный тост после успешного удаления.
   const confirmed = useRef(false);
+  const [checked, setChecked] = useState(false);
   useEffect(() => {
-    if (open) confirmed.current = false;
+    if (!open) return;
+    confirmed.current = false;
+    setChecked(false);
   }, [open]);
 
   // `aria-describedby={undefined}` без описания — приём из `ui/ui.test.tsx`,
@@ -65,6 +75,12 @@ export function ConfirmDialog({
       >
         <DialogTitle>{title}</DialogTitle>
         {description !== undefined ? <DialogDescription>{description}</DialogDescription> : null}
+        {checkbox === undefined ? null : (
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={checked} onCheckedChange={(value) => setChecked(value === true)} />
+            {checkbox}
+          </label>
+        )}
         <DialogFooter>
           <DialogClose asChild>
             <Button type="button" variant="ghost">
@@ -91,7 +107,7 @@ export function ConfirmDialog({
             onClick={() => {
               if (confirmed.current) return;
               confirmed.current = true;
-              onConfirm();
+              onConfirm(checked);
               onOpenChange(false);
             }}
           >
