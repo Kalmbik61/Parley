@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addBacklogItem } from './backlog.js';
+import { addBacklogItem, parseBacklog } from './backlog.js';
+import { setBacklogFile } from './project-preferences.js';
 import { inspectSharedIgnore, sharedProjectPaths, withSharedProjectLock } from './store.js';
 
 const run = promisify(execFile);
@@ -67,5 +68,91 @@ describe('backlog writes under the chosen file', () => {
     await writeFile(todos(), '# TODOS\n'); await chmod(todos(), 0o755);
     await addBacklogItem(project, { title: 'Keeps mode' });
     expect((await stat(todos())).mode & 0o777).toBe(0o755);
+  });
+});
+
+async function seedState(source: string): Promise<void> {
+  await mkdir(path.join(project, '.parley'), { recursive: true }); await writeFile(state(), source);
+}
+const rows = async (file: string) => parseBacklog(await readFile(file, 'utf8'))
+  .map(({ id, title, section, details, checked }) => ({ id, title, section, details, checked }));
+
+describe('switching the backlog file', () => {
+  it('moves state items with sections, details and IDs into TODOS.md and removes the state file', async () => {
+    await writeFile(todos(), '# TODOS\n\nFree text stays.\n\n## Bugs\n- [ ] Mine\n');
+    await seedState('# Backlog\n- [ ] First <!-- b-001 · by: s-01 -->\n  Detail line\n## Bugs\n- [x] Fixed <!-- b-002 · done: 2026-10-07 -->\n- [ ] Handwritten\n');
+    await setBacklogFile(project, 'todos');
+    const text = await readFile(todos(), 'utf8');
+    expect(text.startsWith('# TODOS\n\nFree text stays.\n\n## Bugs\n- [ ] Mine')).toBe(true);
+    expect(await rows(todos())).toEqual([
+      { id: null, title: 'Mine', section: 'Bugs', details: '', checked: false },
+      { id: 'b-002', title: 'Fixed', section: 'Bugs', details: '', checked: true },
+      { id: 'b-003', title: 'Handwritten', section: 'Bugs', details: '', checked: false },
+      { id: 'b-001', title: 'First', section: 'Backlog', details: 'Detail line', checked: false },
+    ]);
+    expect(parseBacklog(text).find(item => item.id === 'b-001')).toMatchObject({ by: 's-01' });
+    expect(parseBacklog(text).find(item => item.id === 'b-002')).toMatchObject({ done: '2026-10-07' });
+    await expect(lstat(state())).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await sharedProjectPaths(project)).backlogChoice).toBe('todos');
+  });
+  it('creates TODOS.md from the state file when the project has none', async () => {
+    await seedState('# Backlog\n- [ ] Only <!-- b-001 -->\n');
+    await setBacklogFile(project, 'todos');
+    expect(await readFile(todos(), 'utf8')).toBe('# Backlog\n- [ ] Only <!-- b-001 -->\n');
+  });
+  it('a repeated move after a crash does not duplicate items', async () => {
+    // Сбой после записи TODOS.md и до удаления файла состояния.
+    await writeFile(todos(), '# TODOS\n\n## Backlog\n- [ ] Once <!-- b-001 -->\n');
+    await seedState('# Backlog\n- [ ] Once <!-- b-001 -->\n');
+    await setBacklogFile(project, 'todos');
+    expect((await rows(todos())).map(row => row.id)).toEqual(['b-001']);
+    await expect(lstat(state())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('keeps moved items on their own lines in a CRLF TODOS.md without a final newline', async () => {
+    await writeFile(todos(), '# TODOS\r\n- [ ] Mine <!-- b-009 -->');
+    await seedState('# Backlog\n- [ ] Moved <!-- b-001 -->\n');
+    await setBacklogFile(project, 'todos');
+    expect((await rows(todos())).map(row => row.title)).toEqual(['Mine', 'Moved']);
+  });
+  it('refuses duplicate IDs or a symlinked TODOS.md and changes nothing', async () => {
+    await seedState('# Backlog\n- [ ] Stay <!-- b-001 -->\n');
+    await writeFile(todos(), '- [ ] One <!-- b-007 -->\n- [ ] Two <!-- b-007 -->\n');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'backlog-invalid' });
+    await rm(todos()); await writeFile(path.join(project, 'elsewhere.md'), ''); await symlink(path.join(project, 'elsewhere.md'), todos());
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    expect(await readFile(state(), 'utf8')).toContain('Stay');
+    expect((await sharedProjectPaths(project)).backlogChoice).toBeNull();
+  });
+  it('refuses the switch over malformed preferences before touching files', async () => {
+    await seedState('# Backlog\n- [ ] Stay <!-- b-001 -->\n'); await prefs('{broken');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'preferences-invalid' });
+    expect(await readFile(state(), 'utf8')).toContain('Stay');
+    await expect(lstat(todos())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('switching back leaves TODOS.md untouched and new items go to the state file', async () => {
+    await seedState('# Backlog\n- [ ] Moved <!-- b-001 -->\n');
+    await setBacklogFile(project, 'todos');
+    const before = await readFile(todos(), 'utf8');
+    await setBacklogFile(project, 'state');
+    await addBacklogItem(project, { title: 'Back home' });
+    expect(await readFile(todos(), 'utf8')).toBe(before);
+    expect(await readFile(state(), 'utf8')).toContain('Back home');
+  });
+  it('keeps IDs unique across both files after switching back and forth, so nothing is lost on the next move', async () => {
+    await seedState('# Backlog\n- [ ] Moved <!-- b-001 -->\n');
+    await setBacklogFile(project, 'todos'); await setBacklogFile(project, 'state');
+    expect((await addBacklogItem(project, { title: 'Back home' })).id).toBe('b-002');
+    await setBacklogFile(project, 'todos');
+    expect((await rows(todos())).map(row => row.title)).toEqual(['Moved', 'Back home']);
+  });
+  it('moves into TODOS.md of the main checkout when switched from a linked worktree', async () => {
+    const main = path.join(project, 'main'); await mkdir(main);
+    await git(main, 'init', '-q', '-b', 'main'); await writeFile(path.join(main, 'a'), 'a'); await git(main, 'add', '.');
+    await git(main, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-q', '-m', 'fixture');
+    const linked = path.join(project, 'linked'); await git(main, 'worktree', 'add', '-q', '-b', 'linked', linked);
+    await addBacklogItem(linked, { title: 'From worktree' });
+    await setBacklogFile(linked, 'todos');
+    expect(await readFile(path.join(main, 'TODOS.md'), 'utf8')).toContain('From worktree');
+    await expect(lstat(path.join(linked, 'TODOS.md'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

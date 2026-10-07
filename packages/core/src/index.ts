@@ -480,7 +480,7 @@ export { parseBacklog, readBacklog, addBacklogItem, updateBacklogItem, removeBac
 export type { BacklogItem, BacklogDocument, BacklogInput, BacklogPatch, BacklogWriteResult, BacklogSuggestion, SuggestionKind } from './work/backlog.js';
 export { listBacklogSuggestions, suggestBacklog, acceptBacklogSuggestion, dismissBacklogSuggestion } from './work/backlog-suggestions.js';
 export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions } from './work/backlog-suggestions.js';
-export { readProjectPreferences, setBacklogRule } from './work/project-preferences.js';
+export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
 export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';

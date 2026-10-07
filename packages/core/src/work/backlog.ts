@@ -187,15 +187,12 @@ function allocateMissing(source: string, state: BacklogLocalState): string {
   });
   return applyReplacements(source, replacements);
 }
-function appendSource(source: string, id: string, input: BacklogInput): string {
+function insertBlock(source: string, block: string, section?: string): string {
   const eol = eolOf(source);
   if (!source) source = `# Backlog${eol}`;
-  const tokens = input.by ? [`by: ${input.by}`] : [];
-  const block = renderLine({ id, title: input.title.trim(), details: '', checked: false, section: null }, tokens, eol) +
-    (input.details ? input.details.split(/\r\n|\n|\r/).map(line => `  ${line}${eol}`).join('') : '');
   const headings = sectionHeadings(source);
-  if (input.section) {
-    const selected = headings.findIndex(heading => heading.title === input.section!.trim());
+  if (section) {
+    const selected = headings.findIndex(heading => heading.title === section.trim());
     if (selected >= 0) {
       const at = headings[selected + 1]?.start ?? source.length;
       const before = source.slice(0, at);
@@ -203,10 +200,42 @@ function appendSource(source: string, id: string, input: BacklogInput): string {
       return before + separator + block + source.slice(at);
     }
     if (!source.endsWith('\n') && !source.endsWith('\r')) source += eol;
-    source += `${eol}## ${input.section.trim()}${eol}`;
+    source += `${eol}## ${section.trim()}${eol}`;
   }
   const separator = source.endsWith('\n') || source.endsWith('\r') ? '' : eol;
   return source + separator + block;
+}
+function appendSource(source: string, id: string, input: BacklogInput): string {
+  const eol = eolOf(source);
+  const tokens = input.by ? [`by: ${input.by}`] : [];
+  const block = renderLine({ id, title: input.title.trim(), details: '', checked: false, section: null }, tokens, eol) +
+    (input.details ? input.details.split(/\r\n|\n|\r/).map(line => `  ${line}${eol}`).join('') : '');
+  return insertBlock(source, block, input.section);
+}
+
+/** Дописывает в target пункты source, чьих ID в target ещё нет: строка с пометками и подробности — как есть, в свой раздел
+ * (нет раздела — новый `## <раздел>` в конце). Пустой target — это source целиком. Повтор ничего не дублирует. */
+export function mergeBacklogInto(target: string, source: string): string {
+  const present = new Set(parseItems(target).map(item => item.id).filter(id => id !== null));
+  const moving = parseItems(source).filter(item => item.id === null || !present.has(item.id));
+  if (moving.length === 0) return target;
+  if (!target) return source;
+  let result = target;
+  for (const item of moving) {
+    const raw = source.slice(item.start, item.end).replace(/^\uFEFF/, '');
+    result = insertBlock(result, /[\r\n]$/.test(raw) ? raw : raw + eolOf(target), item.section ?? undefined);
+  }
+  parseItems(result); // Дубль ID или маркеры конфликта — ошибка до записи.
+  return result;
+}
+
+/** Счётчик ID — не ниже любого ID в тексте. Счётчик сохраняется только при записи, а у оставленного файла записей нет:
+ * без этого новый пункт повторил бы ID из него, и следующий перенос счёл бы пункт уже перенесённым. */
+export function raiseBacklogSeq(state: BacklogLocalState, source: string): void {
+  for (const item of parseItems(source)) if (item.id) {
+    const sequence = Number(item.id.slice(2)); if (!boundedSequence(sequence)) fail();
+    state.backlogSeq = Math.max(state.backlogSeq, sequence);
+  }
 }
 
 function sectionHeadings(source: string): { title: string; start: number }[] {
