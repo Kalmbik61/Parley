@@ -453,6 +453,90 @@ describe('SessionRow — метка новой сессии (раунд испр
   });
 });
 
+// Агенту комнаты пришли письма: название сессии прежнее, рядом мигает значок письма, пока агент их не прочёл.
+describe('SessionRow — значок новых писем агента', () => {
+  const REF = { projectPath: PROJECT, workId: WORK, sessionId: 's-01' };
+  const metricsOf = (unread: number): LiveMetrics => ({ tokensIn: 1, tokensOut: 1, durationMs: null, unread, subagents: 0, model: null });
+  const rowWith = (metrics: LiveMetrics | null, session = makeSession('s-01', 'new session')): JSX.Element => (
+    <SessionRow
+      workKey={KEY}
+      projectPath={PROJECT}
+      workId={WORK}
+      bridge={BRIDGE}
+      session={session}
+      depth={0}
+      activity={makeActivity(REF, 'idle', { metrics })}
+      now={NOW}
+      draggable
+      selected={false}
+      onOpen={() => {}}
+    />
+  );
+  const marker = (): HTMLElement | null => row().querySelector<HTMLElement>('[data-agent-unread]');
+
+  it('unread > 0 — мигающий значок «Has new messages» после названия; название прежнее', () => {
+    render(rowWith(metricsOf(2)));
+    const found = marker();
+    expect(found).not.toBeNull();
+    expect(found?.getAttribute('title')).toBe(S.sidebar.agentUnread);
+    expect(found?.getAttribute('aria-label')).toBe('Has new messages');
+    expect(found?.querySelector('svg.lucide-mail')?.classList.contains('size-[11px]')).toBe(true);
+    // Мигает, но не под `prefers-reduced-motion`; не сжимается — сжимается название.
+    expect(found?.className).toContain('animate-pulse');
+    expect(found?.className).toContain('motion-reduce:animate-none');
+    expect(found?.className).toContain('shrink-0');
+    expect(found?.className).toContain('text-accent-700');
+    expect(screen.getByText('S01 New session').className).toContain('truncate');
+    expect(row().textContent).not.toContain('New messages');
+  });
+
+  it('писем нет, метрик ещё нет — значка нет', () => {
+    render(rowWith(metricsOf(0)));
+    expect(marker()).toBeNull();
+    cleanup();
+    render(rowWith(null));
+    expect(marker()).toBeNull();
+  });
+
+  it('агент прочёл письма — значок ушёл, название то же', () => {
+    const view = render(rowWith(metricsOf(1), makeSession('s-01', 'ревьюер')));
+    expect(marker()).not.toBeNull();
+    view.rerender(rowWith(metricsOf(0), makeSession('s-01', 'ревьюер')));
+    expect(marker()).toBeNull();
+    expect(row().textContent).toContain('S01 ревьюер');
+  });
+
+  it('спящей и ожидающей запуска письма ждут — значок есть; закрытой не доставляются — значка нет', () => {
+    for (const lifecycle of ['sleeping', 'pending'] as const) {
+      render(rowWith(metricsOf(1), makeSession('s-01', 'a', { lifecycle })));
+      expect(marker(), lifecycle).not.toBeNull();
+      cleanup();
+    }
+    render(rowWith(metricsOf(1), makeSession('s-01', 'a', { lifecycle: 'closed' })));
+    expect(marker()).toBeNull();
+  });
+
+  it('участник развёрнутой комнаты — та же строка, тот же значок', () => {
+    render(
+      <SessionRow
+        workKey={KEY}
+        projectPath={PROJECT}
+        workId={WORK}
+        bridge={BRIDGE}
+        session={makeSession('s-01', 'new session')}
+        depth={0}
+        activity={makeActivity(REF, 'working', { metrics: metricsOf(1) })}
+        now={NOW}
+        draggable
+        selected={false}
+        onOpen={() => {}}
+        inRoom
+      />,
+    );
+    expect(marker()).not.toBeNull();
+  });
+});
+
 describe('SessionRow — тултип и перетаскивание (раунд исправлений 1 куска 3.3, ревью B)', () => {
   it('во время перетаскивания тултип закрыт, после броска у перетащенной не открывается, наведение на соседнюю — её задача', async () => {
     render(<DndRows sessions={[makeSession('s-02', 'implementer', { task: 'implementer task' }), makeSession('s-03', 'reviewer', { task: 'reviewer task' })]} />);

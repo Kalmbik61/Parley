@@ -32,10 +32,15 @@
  * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером перед словом состояния
  * (`AgentsBadge`): строка поповера открывает сессию на карточке агента. Хост прежней версии списка не присылает —
  * тогда у строки бейджа нет, а счётчик `▤N` остаётся в тултипе, как был.
+ *
+ * Непрочитанные агентом письма (`metrics.unread`) — значок Mail 11px `accent-700` после названия, мигает
+ * (`animate-pulse`, под `prefers-reduced-motion` стоит), тултип и `aria-label` `Has new messages`. Название сессии при
+ * этом прежнее: письмо — состояние, а не имя. Агент прочёл почту — значок ушёл. Закрытой сессии письма не доставляются
+ * (спецификация 7.1), а рассылки комнаты копятся ей непрочитанными — значка у неё нет.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { GitBranch } from 'lucide-react';
+import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -201,6 +206,7 @@ export const SessionRow = memo(function SessionRow({
   // Живые субагенты — бейдж с поповером (кусок 4b); хост прежней версии списка не присылает, и счётчик `▤N` остаётся в
   // тултипе. Метрики спящей и закрытой сессии — след прошлого процесса: у них агентов нет, как и на карточке участника комнаты.
   const agents = session.lifecycle === 'active' ? (activity?.metrics?.tasks ?? []) : [];
+  const unreadMail = !closed && (activity?.metrics?.unread ?? 0) > 0;
   // Последний агент закончил при открытом поповере — бейдж ушёл вместе с ним и «закрыто» не сообщил: без сброса тултип
   // строки остался бы спрятан насовсем.
   useEffect(() => {
@@ -273,6 +279,17 @@ export const SessionRow = memo(function SessionRow({
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
               ★
+            </span>
+          ) : null}
+          {unreadMail ? (
+            <span
+              data-agent-unread
+              role="img"
+              title={S.sidebar.agentUnread}
+              aria-label={S.sidebar.agentUnread}
+              className="inline-flex shrink-0 animate-pulse text-accent-700 motion-reduce:animate-none"
+            >
+              <Mail className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
           {trustWait ? (
