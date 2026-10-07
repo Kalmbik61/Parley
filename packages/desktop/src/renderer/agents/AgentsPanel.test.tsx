@@ -24,7 +24,7 @@ function agent(over: Partial<FeedAgent>): FeedAgent {
 const bash: FeedTool = { id: 'tool:c1', at: AT, kind: 'tool', toolUseId: 'c1', name: 'Bash', input: { command: 'rg FeedAgent packages' }, status: 'running', agentId: 'a1' };
 
 function withFeed(items: FeedItem[]): void {
-  useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision: 1, mode: null, status: 'ready' } } });
+  useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision: 1, mode: null, decisions: null, status: 'ready' } } });
 }
 
 beforeEach(() => resetChatUiStoreForTests());

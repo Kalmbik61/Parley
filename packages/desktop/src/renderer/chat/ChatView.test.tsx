@@ -185,7 +185,7 @@ const text = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'text'
 
 function setFeed(items: FeedItem[], revision = 1): void {
   act(() => {
-    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, mode: null, status: 'ready' } } });
+    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, mode: null, decisions: null, status: 'ready' } } });
   });
 }
 
@@ -229,7 +229,7 @@ describe('ChatView — лента', () => {
     expect(screen.getByTestId('chat-feed').textContent).toBe(S.chat.loading);
     expect(screen.queryByRole('button', { name: S.common.retry })).toBeNull();
     act(() => {
-      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, mode: null, status: 'error', error: 'boom' } } });
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, mode: null, decisions: null, status: 'error', error: 'boom' } } });
     });
     expect(screen.getByTestId('chat-feed').textContent).toBe(`${S.chat.feedUnavailable}${S.common.retry}`);
   });
@@ -646,7 +646,7 @@ describe('ChatView — меню режима (кусок 4a, решения К �
 
   function setMode(mode: string | null): void {
     act(() => {
-      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 1, mode, status: 'ready' } } });
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 1, mode, decisions: null, status: 'ready' } } });
     });
   }
 
@@ -1755,7 +1755,7 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: KEY, agentId: 'g2' });
     expect(feed.scrollTo).not.toHaveBeenCalled();
     act(() => {
-      useFeedStore.setState({ feeds: { [KEY]: { items: feedWithAgents(), revision: 1, mode: null, status: 'ready' } } });
+      useFeedStore.setState({ feeds: { [KEY]: { items: feedWithAgents(), revision: 1, mode: null, decisions: null, status: 'ready' } } });
     });
     await act(async () => {});
     // Строки только что появились и не измерены — точное смещение виртуализатор доведёт сам, здесь важно, что прокрутка была.
@@ -1864,5 +1864,40 @@ describe('ChatView — Codex', () => {
     await act(async () => {});
     const sent = bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
     expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true }]);
+  });
+
+  describe('подсказка про хуки', () => {
+    const setDecisions = (decisions: 'window' | 'terminal' | null): void => {
+      act(() => {
+        useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [started('gpt-6-astra'), prompt('p1', 'hi')], revision: 2, mode: null, decisions, status: 'ready' } } });
+      });
+    };
+
+    it('decisions terminal — строка с кнопками; «Got it» прячет её', () => {
+      setDecisions('terminal');
+      const hint = screen.getByTestId('codex-hooks-hint');
+      expect(hint.textContent).toContain(S.chat.codexHooksHint);
+      expect(screen.getByRole('button', { name: S.chat.openTerminal })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: S.chat.gotIt }));
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      expect(useChatUiStore.getState().hooksHintDismissed[refKey(REF)]).toBe(true);
+    });
+
+    it('decisions window и null — строки нет', () => {
+      setDecisions('window');
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      setDecisions(null);
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+    });
+  });
+});
+
+describe('ChatView — Claude без подсказки про хуки Codex', () => {
+  it('decisions terminal у Claude — строки нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    act(() => {
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [prompt('p1', 'hi')], revision: 1, mode: null, decisions: 'terminal', status: 'ready' } } });
+    });
+    expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
   });
 });

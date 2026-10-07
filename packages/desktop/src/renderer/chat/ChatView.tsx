@@ -20,6 +20,9 @@
  * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
  * вложения — списком путей, как в комнате.
  *
+ * Подсказка про хуки (Codex, спека 2026-10-07, 5.7): настройка `codexApprovals` включена, а Codex хуки не одобрил
+ * (`decisions: 'terminal'` ленты) — строка над полем ввода с кнопками «Open terminal» и «Got it» (прячет до закрытия окна).
+ *
  * Агенты (кусок 4b): «N agents running» в тулбаре — по карточкам `agent` ленты со статусом `running`; клик по ней и по
  * бейджу агентов в сайдбаре и комнате ведут в панель Agents правого сайдбара (`agents/open-agents.ts`); нет места — ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
  * сессию держат одни фоновые субагенты (`heldByBackground`), лента кончается `turn`: хода нет, Stop не показывается,
@@ -58,6 +61,9 @@ import { errorText, S } from '../../shared/strings.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { TerminalTab } from '../lib/feed-view.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { useLayoutStore } from '../layout/store.js';
+import { updateTab } from '../layout/tree.js';
+import { Button } from '../ui/button.js';
 import { defaultRoot } from '../files/store.js';
 import { cn } from '../lib/cn.js';
 import { effortChoices } from '../lib/effort-choices.js';
@@ -371,6 +377,11 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const agentId = agents.map((agent) => agent.agentId).find((id): id is string => id !== null) ?? null;
     openAgentsPanel(sessionKey, agentId);
   };
+  const hooksHintDismissed = useChatUiStore((state) => state.hooksHintDismissed[sessionKey] === true);
+  const showHooksHint = codex && feed?.decisions === 'terminal' && !hooksHintDismissed;
+  const showTerminal = (): void => {
+    useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tab.id, { view: 'terminal' }));
+  };
   const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
 
   return (
@@ -420,6 +431,17 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         />
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
+        {showHooksHint ? (
+          <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{S.chat.codexHooksHint}</span>
+            <Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={showTerminal}>
+              {S.chat.openTerminal}
+            </Button>
+            <Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => useChatUiStore.getState().dismissHooksHint(sessionKey)}>
+              {S.chat.gotIt}
+            </Button>
+          </div>
+        ) : null}
         <Composer
           source={suggestionSource}
           slashCommands={!codex}

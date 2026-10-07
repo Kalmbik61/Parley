@@ -320,6 +320,29 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   </>
                 ) : null}
 
+                {config.codexApprovals !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {S.settings.codexApprovals}
+                        {locked.codexApprovals !== undefined ? (
+                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.codexApprovals)}</span>
+                        ) : null}
+                      </span>
+                      <Switch
+                        aria-label={S.settings.codexApprovals}
+                        checked={config.codexApprovals}
+                        disabled={locked.codexApprovals !== undefined}
+                        onCheckedChange={checked => void save('codexApprovals', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    <span className="text-xs text-muted-foreground">{S.settings.codexApprovalsHint}</span>
+                    {errors.codexApprovals !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.codexApprovals}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
                 <FieldRow label={S.settings.worktreeRoot} lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
                   <Input
                     defaultValue={config.worktreeRoot}

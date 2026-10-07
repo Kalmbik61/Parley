@@ -24,7 +24,7 @@
 
 import { create } from 'zustand';
 import type { FeedDecision, FeedItem } from '@parley/core';
-import { refKey, type EventData, type SessionRef } from '@parley/protocol';
+import { refKey, type EventData, type FeedDecisions, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostMethods } from '../lib/capabilities.js';
@@ -38,6 +38,8 @@ export interface FeedEntry {
   revision: number;
   /** Режим разрешений сессии (сырая строка CLI) из снимка и дельт; `null` — не известен (кусок 4a, решение К). */
   mode: string | null;
+  /** Кто ответит на одобрения: `window`, `terminal` (Codex без одобренных хуков); `null` — хост не сказал (спека 2026-10-07, 5.7). */
+  decisions: FeedDecisions | null;
   status: FeedStatus;
   /** Сообщение отказа хоста — только для консоли и отладки; человеку — `S.chat.feedUnavailable`. */
   error?: string;
@@ -157,14 +159,14 @@ export const useFeedStore = create<FeedState>((set, get) => {
     const generation = feed.generation;
     const stale = (): boolean => opened.get(key) !== feed || feed.generation !== generation || bridge !== current;
     const prev = get().feeds[key];
-    patch(key, { items: prev?.items ?? [], revision: prev?.revision ?? 0, mode: prev?.mode ?? null, status: 'loading' });
+    patch(key, { items: prev?.items ?? [], revision: prev?.revision ?? 0, mode: prev?.mode ?? null, decisions: prev?.decisions ?? null, status: 'loading' });
     current
       .call('feed.subscribe', { ref: feed.ref })
       .then(() => (stale() ? null : current.call('feed.snapshot', { ref: feed.ref })))
       .then((snapshot) => {
         if (snapshot === null || stale()) return;
         feed.loading = false;
-        patch(key, { items: snapshot.items, revision: snapshot.revision, mode: snapshot.mode, status: 'ready' });
+        patch(key, { items: snapshot.items, revision: snapshot.revision, mode: snapshot.mode, decisions: snapshot.decisions ?? null, status: 'ready' });
         settleAfterSnapshot(key, snapshot.items);
       })
       .catch((error: unknown) => {
@@ -173,7 +175,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
         const { message } = decodeIpcError(error);
         console.warn('[parley] feed', message);
         const was = get().feeds[key];
-        patch(key, { items: was?.items ?? [], revision: was?.revision ?? 0, mode: was?.mode ?? null, status: 'error', error: message });
+        patch(key, { items: was?.items ?? [], revision: was?.revision ?? 0, mode: was?.mode ?? null, decisions: was?.decisions ?? null, status: 'error', error: message });
       });
   };
 
@@ -192,6 +194,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
       items: applyDelta(entry.items, delta.upsert, delta.removed),
       revision: delta.revision,
       mode: delta.mode,
+      decisions: delta.decisions === undefined ? entry.decisions : delta.decisions,
     });
     // Карточка сменила состояние или ушла — её решение, пометка и черновик своё отслужили.
     const settled = delta.upsert.filter((item) => 'cardId' in item && item.state !== 'pending').map((item) => item.id);

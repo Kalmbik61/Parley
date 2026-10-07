@@ -789,6 +789,8 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
+    codexApprovals: 'Answer Codex approvals in Parley',
+    codexApprovalsHint: 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
     worktreeRoot: 'Worktree root',
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
@@ -992,6 +994,9 @@ export const S = {
     /** Заметка ленты Codex: журнал не хранит историю до подключения Parley (`codex-history-in-terminal`). */
     codexHistoryInTerminal: 'Earlier history of this session is only in Terminal',
     openTerminal: 'Open terminal',
+    /** Строка над полем ввода Codex: хуки включены в настройках, но Codex их не одобрил (`decisions: 'terminal'`). */
+    codexHooksHint: "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks",
+    gotIt: 'Got it',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
