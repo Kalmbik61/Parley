@@ -6,6 +6,12 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
+  session or room name, Agents, In its own worktree and Mode explains the field on hover; the
+  Mode hint lists what Free, Checklist and Verified do.
+
 ## 0.7.0
 
 The project layer: team rules in `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, the Capabilities panel, and a skill navigator that is on by default for Claude, GLM and Codex. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").
