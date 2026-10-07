@@ -45,7 +45,7 @@ describe('findInterrupted', () => {
   });
 
   it('сессия codex без строк notify в журнале событий не считается прерванной', async () => {
-    // У Codex журнал `events/` пишет только notify: без него журнала нет (null) или он пуст.
+    // У Codex журнал `events/` не пишет никто (`notify` не подменяется): журнала нет (null) или он пуст.
     const entry = entryOf([{ id: 's-01', lifecycle: 'sleeping' }]);
 
     expect(await findInterrupted([entry], async () => null)).toEqual([]);

@@ -371,7 +371,6 @@ describe('create(): модель и усилие из диалога (дизай
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
-      'notify',
     ]);
     expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks/);
   });

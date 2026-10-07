@@ -49,8 +49,7 @@ export interface RunnerConfig {
    * `{channel}` — канал звонка, `{agent}` — роль, `{model}` и `{effort}` — выбор
    * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
    * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф,
-   * `{notify}` — `-c notify=[…]` Codex (скрипт харнесса, который после хода дописывает `Stop`
-   * в журнал событий сессии), `{skillCatalog}` — `-c skills.include_instructions=false` Codex: убирает родной
+   * `{skillCatalog}` — `-c skills.include_instructions=false` Codex: убирает родной
    * каталог скиллов, только при включённом навигаторе и подтверждённом пути загрузки.
    * undefined — новая сессия запускается без аргументов.
    */
@@ -58,7 +57,7 @@ export interface RunnerConfig {
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{notify}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -119,7 +118,7 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * - `tui.notifications` (`approval-requested`, `agent-turn-complete`), способ `osc9` и условие
  *   `always` — те же события уведомлениями терминала; по умолчанию они молчат, пока терминал «в фокусе»,
  *   а для Codex в pty хоста фокус всегда «есть»;
- * - `notify` — конец хода скриптом харнесса (`{notify}`);
+ * - `notify` человека не подменяется: конец хода Codex — OSC 9 и журнал (`task_complete`), спека 2026-10-07, 5.5;
  * - `skills.include_instructions` — родной каталог скиллов (`{skillCatalog}`): значение есть только при включённом
  *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
  * Хуки Codex не включаются (`hooks.*`): им нужно ревью человека, а доверие себе харнесс не выдаёт.
@@ -142,8 +141,6 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   'tui.notification_method="osc9"',
   '-c',
   'tui.notification_condition="always"',
-  '-c',
-  '{notify}',
   '-c',
   '{skillCatalog}',
 ];
@@ -411,8 +408,6 @@ export interface RunnerSubstitutions {
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;
-  /** Значение `-c notify=[…]` Codex: скрипт харнесса, который пишет конец хода в журнал событий. */
-  notify?: string;
   /** Целое присваивание TOML `skills.include_instructions=false`: Codex без родного каталога скиллов. */
   skillCatalog?: string;
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
@@ -426,6 +421,7 @@ export interface RunnerSubstitutions {
   sandbox?: string;
 }
 
+// `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
   /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|model|effort|disallowedTools|sandbox)\}$/;
 

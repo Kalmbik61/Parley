@@ -5,7 +5,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
-import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import type { SkillCatalog } from '../skills/catalog.js';
 import { claudeSkillRoute, codexSkillRoute } from './skill-reduction.js';
 import {
@@ -410,17 +409,14 @@ describe('план запуска', () => {
     });
   });
 
-  it('codex: notify — node и скрипт харнесса, а каталог events/ для его журнала заведён', async () => {
+  it('codex: notify человека не подменяется, каталог events/ запуск не заводит', async () => {
     const { workId, sessionId } = await pending('codex');
-    await expect(stat(workPaths(project, workId).events)).rejects.toThrow();
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
-    const notify = plan.args.find((arg) => arg.startsWith('notify=')) as string;
-    expect(plan.args[plan.args.indexOf(notify) - 1]).toBe('-c');
-    expect(parseTomlAssignment(notify).value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
-    // Хуков у codex нет, `--settings` не заводит каталог за него — его заводит запуск.
-    expect((await stat(workPaths(project, workId).events)).isDirectory()).toBe(true);
-    // Как и у Claude Code, сессия живёт под теми же переменными (оба имени): notify берёт адрес из них.
+    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(false);
+    expect(plan.args).not.toContain('{notify}');
+    await expect(stat(workPaths(project, workId).events)).rejects.toThrow();
+    // Как и у Claude Code, сессия живёт под теми же переменными (оба имени).
     expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
   });
 
@@ -751,13 +747,13 @@ describe('план возобновления', () => {
     // Только `-c`: `--no-daemon` и `-a` после `resume <id>` не проверены на живом Codex (спека 3.6: «те же `-c`»).
     expect(plan.args).not.toContain('--no-daemon');
     expect(plan.args).not.toContain('-a');
-    // Те же `-c`, что у запуска: MCP и notify в тред Codex не сохраняются.
+    // Те же `-c`, что у запуска: MCP в тред Codex не сохраняется; notify человека не подменяется.
     expect(plan.args.some((arg) => arg.startsWith('mcp_servers.parley='))).toBe(true);
-    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(true);
+    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(false);
     // Бриф второй раз не подставляется: сессия продолжается, а не начинается.
     expect(plan.args.join(' ')).not.toContain('прогнать e2e');
-    // Указателя нет (ручной подъём) — промпта в конце нет, последним идёт `-c notify=…`.
-    expect(plan.args.at(-1)?.startsWith('notify=')).toBe(true);
+    // Указателя нет (ручной подъём) — промпта в конце нет, последним идёт значение `-c`.
+    expect(plan.args.at(-2)).toBe('-c');
   });
 
   it('codex: указатель на письма при подъёме — последним аргументом resume', async () => {

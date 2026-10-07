@@ -10,20 +10,18 @@
 // - принимает ввод как поле Codex: вставка ESC[200~ … ESC[201~ копится в поле, Enter (\r) отправляет
 //   (`enter: <текст>`), Tab (\t) ставит в очередь занятого агента (`tab: <текст>`);
 // - по «отправленной» строке выполняет команду `STUB_*`:
-//     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTIFY
+//     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTE
 //     STUB_READY      — конец хода: `Ready`
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
-//     STUB_NOTIFY     — конец хода без заголовка `Ready`: спиннер молча замолкает, а заглушка запускает
-//                       программу из `-c notify=[…]` своего argv — так, как это делает Codex после хода
-//                       (JSON события `agent-turn-complete` последним аргументом). Программа настоящая:
-//                       скрипт харнесса, который пишет строку `Stop` в журнал событий сессии
+//     STUB_NOTE <текст> — уведомление OSC 9 с этим текстом; спиннер молча замолкает, заголовок `Ready` не
+//                       пишется. `STUB_NOTE Agent turn complete` — конец хода, как его видит хост без
+//                       подмены `notify` (спека 2026-10-07, 5.5)
 //     STUB_EXIT       — выход с кодом 0
 //
 // Окружение:
 //   STUB_CODEX_NO_TITLE=1  — заголовков нет вовсе: экран входа или доверия к папке, которого агент не покидает
-//   STUB_CODEX_THREAD=<id> — id треда в заголовке и в JSON notify
+//   STUB_CODEX_THREAD=<id> — id треда в заголовке
 
-import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { clearInterval, setInterval } from 'node:timers';
 import { URL } from 'node:url';
@@ -75,24 +73,6 @@ function stopSpinner() {
   spinner = null;
 }
 
-/** Как Codex после хода: программа из `-c notify=[…]`, JSON события — последним аргументом. */
-function runNotify() {
-  const at = process.argv.findIndex((arg) => arg.startsWith('notify=['));
-  if (at === -1) return line('notify: в argv нет -c notify');
-  const command = JSON.parse(process.argv[at].slice('notify='.length));
-  const event = JSON.stringify({
-    type: 'agent-turn-complete',
-    'thread-id': THREAD,
-    'turn-id': 'turn-1',
-    cwd: process.cwd(),
-    'last-assistant-message': 'Готово.',
-  });
-  const child = spawn(command[0], [...command.slice(1), event], { stdio: 'ignore', detached: true });
-  child.on('error', () => undefined);
-  child.unref();
-  return line('notify: запущен');
-}
-
 function submit(text, key) {
   if (key === 'tab') return line(`tab: ${text}`);
   line(`enter: ${text}`);
@@ -105,9 +85,9 @@ function submit(text, key) {
     stopSpinner();
     out('\x1b]9;Approval requested: ls -la\x07');
     title(`[ ! ] Action Required | ${THREAD}`);
-  } else if (text === 'STUB_NOTIFY') {
+  } else if (text === 'STUB_NOTE' || text.startsWith('STUB_NOTE ')) {
     stopSpinner();
-    runNotify();
+    out(`\x1b]9;${text.slice('STUB_NOTE'.length).trim()}\x07`);
   } else if (text === 'STUB_EXIT') process.exit(0);
   return undefined;
 }

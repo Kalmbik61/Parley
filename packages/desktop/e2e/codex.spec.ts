@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -8,13 +8,12 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Codex — агент комнаты (кусок 11a плана «Organic», спека окна 2026-09-29, 3.6): состояние сессии без хуков
- * Codex — из заголовка окна и уведомлений его терминала, конец хода — скриптом `notify`, письмо занятому
- * агенту — в очередь клавишей Tab.
+ * Codex — из заголовка окна и уведомлений его терминала, конец хода — уведомлением OSC 9 (`notify` человека
+ * не подменяется), письмо занятому агенту — в очередь клавишей Tab.
  *
  * Агент — заглушка `stub-codex-agent.mjs`, подмена бинаря — `PARLEY_CODEX_BIN`, как `PARLEY_CLAUDE_BIN` у
  * claude: настоящий codex в E2E не запускается даже с `--version` (проба версий отключена в
- * `global-setup.ts`). Заглушка пишет те же заголовки и OSC 9, что описывает исследование Codex, а `notify`
- * запускает по `-c notify=[…]` из своего argv — то есть настоящий скрипт харнесса с настоящими флагами запуска.
+ * `global-setup.ts`). Заглушка пишет те же заголовки и OSC 9, что описывает исследование Codex.
  *
  * Команды заглушке идут строкой `STUB_*`: отправка окна (`pty.send`, вставкой и Enter — как письмо агенту) или
  * ввод человека (`pty.input`) — там, где сессия «нужен ты» и `pty.send` честно отказывает.
@@ -138,24 +137,15 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
     await expect(dot('blocked')).toHaveCount(0);
   });
 
-  test('вызов notify — конец хода: строка Stop в журнале событий и сессия перестаёт «работать»', async () => {
+  test('OSC 9 «Agent turn complete» — конец хода: сессия перестаёт «работать» без заголовка Ready', async () => {
     await launch();
     await sendWhenReady('STUB_WORK');
     await expect(dot('working')).toHaveCount(1, { timeout: 5_000 });
 
-    // Ход кончился без заголовка Ready: заглушка молча остановила спиннер и запустила настоящий notify.
-    await humanTypes(window, ref, 'STUB_NOTIFY\r');
-    await expect.poll(() => screenText(window)).toContain('notify: запущен');
+    // Ход кончился без заголовка Ready: заглушка молча остановила спиннер и прислала уведомление терминала.
+    await humanTypes(window, ref, 'STUB_NOTE Agent turn complete\r');
+    await expect.poll(() => screenText(window)).toContain('enter: STUB_NOTE Agent turn complete');
 
-    const journal = path.join(project, '.parley', 'works', ref.workId, 'events', `${ref.sessionId}.jsonl`);
-    await expect
-      .poll(async () => readFile(journal, 'utf8').catch(() => ''), { timeout: 10_000 })
-      .toContain('"hook_event_name":"Stop"');
-    const lines = (await readFile(journal, 'utf8')).split('\n').filter((line) => line !== '');
-    const stop = JSON.parse(lines.at(-1) ?? '{}') as Record<string, unknown>;
-    expect(stop).toMatchObject({ hook_event_name: 'Stop', last_assistant_message: 'Готово.', 'thread-id': '019ce3d5-584a-7be2-922e-b8185a8d7c19' });
-
-    // Хост прочёл журнал так же, как хуки Claude Code: ход закончен.
     await expect(dot('working')).toHaveCount(0, { timeout: 10_000 });
     await expect(dot('blocked')).toHaveCount(0);
   });
