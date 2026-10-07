@@ -1350,7 +1350,7 @@ export async function collectClaudeSession(file: string, knownSkills: readonly s
           resultBytes += bytes;
           if (names.get(item['tool_use_id'])?.tool.endsWith('__find_skill') === true) {
             findBytes += bytes;
-            if (text.startsWith('No skill matched')) noMatch += 1;
+            if (isEmptyFindSkillResult(text)) noMatch += 1;
             for (const skillName of knownSkills) if (text.includes(skillName)) offered.add(skillName);
           }
         }
@@ -1428,6 +1428,29 @@ function resultTexts(value: unknown): string[] {
   return blocks.length > 0 ? blocks : stringsIn(data);
 }
 
+const NO_SKILL_MATCHED = 'No skill matched';
+/** Служебная шапка вывода `exec` Codex перед тем, что напечатал код: «Script completed / Wall time … / Output:». */
+const EXEC_HEADER = /^Script completed\b[\s\S]*?\bOutput:\s*/;
+
+/**
+ * Пустой ли ответ `find_skill`. Настоящий ответ сервера — JSON `{"provider", "skills", "message"?}`, где `message`
+ * («No skill matched: …», второй промах — «No skill matched again: …») есть, только когда ничего не нашлось. Узнаются
+ * три вида: прежний простой текст с префиксом (синтетические журналы), этот JSON и обёртка MCP
+ * `{"content":[{"type":"text","text":"<тот JSON строкой>"}]}`; у Codex перед JSON ещё шапка вывода `exec`.
+ * Вложенность строк ограничена: обёртка кладёт JSON строкой в `text`, глубже она не уходит.
+ */
+export function isEmptyFindSkillResult(text: string, depth = 0): boolean {
+  const body = text.replace(EXEC_HEADER, '').trimStart();
+  if (body.startsWith(NO_SKILL_MATCHED)) return true;
+  if (depth >= 3) return false;
+  const parsed = parsedJson(body);
+  if (!isObject(parsed)) return false;
+  const message = parsed['message'];
+  if (typeof message === 'string' && message.startsWith(NO_SKILL_MATCHED)) return true;
+  const content = parsed['content'];
+  return Array.isArray(content) && content.some((block) => isObject(block) && typeof block['text'] === 'string' && isEmptyFindSkillResult(block['text'], depth + 1));
+}
+
 /**
  * Один rollout-журнал Codex (`response_item` и `event_msg`, формат — `indexCodexSession` ядра): вызовы `find_skill`,
  * загрузки навыков и первый запрос. Codex 0.160 («code mode») зовёт все инструменты записью `custom_tool_call` с
@@ -1485,7 +1508,7 @@ export async function collectCodexTranscript(file: string, knownSkills: readonly
     if ((kind === 'function_call_output' || kind === 'custom_tool_call_output') && callId !== null && findCalls.has(callId)) {
       const texts = resultTexts(payload['output']);
       if (findBytes !== null) findBytes += Buffer.byteLength(texts.join(''));
-      if (texts.some((text) => text.startsWith('No skill matched'))) noMatch += 1;
+      if (texts.some((text) => isEmptyFindSkillResult(text))) noMatch += 1;
       for (const name of knownSkills) if (texts.some((text) => text.includes(name))) offered.add(name);
     }
   });

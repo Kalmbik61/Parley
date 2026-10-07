@@ -21,6 +21,7 @@ import {
   findMcpServerNames,
   hashTree,
   hostEnv,
+  isEmptyFindSkillResult,
   loadFixtures,
   main,
   median,
@@ -400,6 +401,44 @@ describe('сбор из логов провайдеров', () => {
     // В списке этого транскрипта нет `content`, а стартовой вставки в логе Claude нет вовсе: неизвестно, а не 0.
     expect(collected.bytes['listingBytes']).toBeNull();
     expect(collected.bytes['bootstrapBytes']).toBeNull();
+  });
+
+  it('Claude: «ничего не найдено» узнаётся и в настоящем JSON-ответе find_skill (message), включая второй промах, и по прежнему префиксу; найденное не считается', async () => {
+    const dir = path.join(tmp, 'projects', '-bench-nomatch');
+    await mkdir(dir, { recursive: true });
+    const reply = (id: string, toolId: string) => line({ type: 'assistant', message: { id, role: 'assistant', model: 'claude-x', usage: usage(1, 1, 0, 0), content: [tool(toolId, 'mcp__parley__find_skill', { query: 'q' })] } });
+    const result = (toolId: string, text: string) => line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: [{ type: 'text', text }] }] } });
+    const json = (extra: Record<string, unknown>) => JSON.stringify({ provider: 'claude', skills: [], ...extra }, null, 2);
+    const found = JSON.stringify({ provider: 'claude', skills: [{ name: 'bench-changelog', description: 'No skill matched is only a phrase here' }] }, null, 2);
+    const file = path.join(dir, 'nomatch.jsonl');
+    await writeFile(
+      file,
+      reply('m1', 't1') + result('t1', found) +
+        reply('m2', 't2') + result('t2', json({ message: 'No skill matched: work without one, or try other words once' })) +
+        reply('m3', 't3') + result('t3', json({ message: 'No skill matched again: stop searching and work without one' })) +
+        reply('m4', 't4') + result('t4', 'No skill matched: work without one, or try other words once'),
+    );
+
+    const collected = await collectClaudeSession(file, ['bench-changelog']);
+    expect(collected.skillUse).toMatchObject({ lookups: 4, noMatch: 3 });
+    expect(collected.offered).toEqual(['bench-changelog']);
+  });
+
+  it('isEmptyFindSkillResult: префикс, JSON с message, обёртка MCP, шапка exec; найденное, чужой JSON, обычный текст и слишком глубокая вложенность — нет', () => {
+    const miss = JSON.stringify({ provider: 'claude', skills: [], message: 'No skill matched: try other words once' });
+    const wrapped = (inner: string) => JSON.stringify({ content: [{ type: 'text', text: inner }] });
+    const header = 'Script completed\nWall time 1.0 seconds\nOutput:\n';
+    expect(isEmptyFindSkillResult('No skill matched: x')).toBe(true);
+    expect(isEmptyFindSkillResult(miss)).toBe(true);
+    expect(isEmptyFindSkillResult(wrapped(miss))).toBe(true);
+    expect(isEmptyFindSkillResult(header + wrapped(miss))).toBe(true);
+    expect(isEmptyFindSkillResult(JSON.stringify({ provider: 'claude', skills: [{ name: 'a' }] }))).toBe(false);
+    expect(isEmptyFindSkillResult(JSON.stringify({ message: 'something else' }))).toBe(false);
+    expect(isEmptyFindSkillResult(wrapped(JSON.stringify({ skills: [] })))).toBe(false);
+    expect(isEmptyFindSkillResult(header)).toBe(false);
+    expect(isEmptyFindSkillResult('1. bench-changelog — add an entry')).toBe(false);
+    expect(isEmptyFindSkillResult('[1,2')).toBe(false);
+    expect(isEmptyFindSkillResult(wrapped(wrapped(wrapped(wrapped(miss)))))).toBe(false);
   });
 
   it('Claude: jevFired даёт вставка в настоящем виде — вложение hook_additional_context; та же фраза в другом месте и запись подагента — нет', async () => {
@@ -1288,6 +1327,28 @@ describe('сбор из журнала Codex', () => {
     const collected = await collectCodexTranscript(file, KNOWN);
     expect(collected.skillUse).toMatchObject({ lookups: 4, reformulations: 3, noMatch: 0 });
     expect(collected.bytes['findSkillResultBytes']).toBeNull();
+    expect(collected.offered).toEqual(['bench-changelog']);
+  });
+
+  it('Codex 0.160: «ничего не найдено» узнаётся в двух слоях — обёртка MCP с JSON внутри text после служебной строки; нашёл, промах, второй промах и прежний префикс', async () => {
+    const json = (extra: Record<string, unknown>) => JSON.stringify({ provider: 'codex', skills: [], ...extra }, null, 2);
+    const wrapped = (inner: string) => JSON.stringify({ content: [{ type: 'text', text: inner }] });
+    const find = (id: string, s: number) => exec(id, 'const r=await tools.mcp__parley__find_skill({query:"q"}); text(r);', s);
+    const file = await rollout('no-match', [
+      meta('thr-nm'),
+      find('e1', 1),
+      execOutput('e1', wrapped(JSON.stringify({ provider: 'codex', skills: [{ name: 'bench-changelog' }] }, null, 2)), 1),
+      find('e2', 2),
+      execOutput('e2', wrapped(json({ message: 'No skill matched: work without one, or try other words once' })), 2),
+      find('e3', 3),
+      execOutput('e3', wrapped(json({ message: 'No skill matched again: stop searching and work without one' })), 3),
+      // Прежний вид: простая строка с префиксом.
+      find('e4', 4),
+      execOutput('e4', 'No skill matched: work without one, or try other words once', 4),
+    ]);
+
+    const collected = await collectCodexTranscript(file, KNOWN);
+    expect(collected.skillUse).toMatchObject({ lookups: 4, noMatch: 3, reformulations: 3 });
     expect(collected.offered).toEqual(['bench-changelog']);
   });
 
