@@ -6,7 +6,9 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
-Written in the branch `feat/parley-upgrade`; no version is announced. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").
+## 0.7.0
+
+The project layer: team rules in `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, the Capabilities panel, and a skill navigator that is on by default for Claude, GLM and Codex. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").
 
 ### Added
 
@@ -20,6 +22,10 @@ Written in the branch `feat/parley-upgrade`; no version is announced. It is chec
 - **Limits of a workspace and a room.** Ten counters (running sessions, agent-created sessions, spawn depth, starts and wake-ups per hour, agent messages, deliveries) in Settings → Agents. They count sessions and messages, not tokens or money; subagents a CLI starts inside its own session are not counted.
 - **Usage with its origin.** The numbers the host sends to the window carry their source and freshness; a field a CLI does not report stays unknown instead of 0, and the usage of subagents is counted once.
 - **A bench for measuring the navigator.** `tools/parley-token-benchmark.ts` prepares paired runs, drives live sessions and builds a report from the logs. A pilot and a 30-session wave on Claude measured it (accepted 15 of 15 with the navigator against 14 of 15 with the native list; fewer tokens in 11 of 14 clean pairs); the results are in `docs/research/2026-10-04-parley-token-benchmark.md`.
+- **File and folder icons.** Files and folders show Material Icon Theme icons, chosen by name
+  as in VS Code: in the file tree, file tabs, Changes, the diff header and its file list, the ⌘P
+  palette and file search. The icons ship with the app (package `@parley/file-icons`; Material
+  Icon Theme is MIT and credited in NOTICE).
 
 ### Changed
 
@@ -27,6 +33,15 @@ Written in the branch `feat/parley-upgrade`; no version is announced. It is chec
 - A new project's `.parley/.gitignore` is `*`: the directory stays out of `git status` until Parley first writes a shared file (backlog, plan snapshot, decision, memory, shared history or recipe); then the file becomes a whitelist that lets those be committed while everything else stays local. An existing file that is exactly the former `*` is rewritten the same way; a file you edited is left alone.
 - The system prompt insert keeps its fourteen lines and has stable rules first, the session line last; the brief of a session carries a revision.
 - The "Share" action on a user-level skill ("Share with Claude" or "Share with Codex") creates one symlink in the other agent's user skills folder on your click. This is the only exception to "nothing is written to `~/.claude`, `~/.codex` or `~/.agents`" and is described in the README.
+
+### Fixed
+
+- At 800×500 the status bar squeezes the limits text of Claude Code and Codex before a provider
+  segment that has only a name, so "GLM" stays whole.
+- The Z.ai API key field in the card of the New session or room dialog is fully visible on a
+  screen with a device pixel ratio of 1.
+- Reopening the New session or room dialog no longer shows the provider pills of its previous
+  opening for a moment, and Escape in a provider card returns focus to its pill.
 
 ### Updating
 
