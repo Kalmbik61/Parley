@@ -6,7 +6,7 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
-Written in the branch `feat/parley-upgrade`; no version is announced. It is checked by tests, and the live checks with real `claude` and `codex` sessions are still open (see "What is not proven yet").
+Written in the branch `feat/parley-upgrade`; no version is announced. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").
 
 ### Added
 
@@ -24,7 +24,7 @@ Written in the branch `feat/parley-upgrade`; no version is announced. It is chec
 ### Changed
 
 - `get_map` for an agent is now compact (about 3 KB); history, summaries, artifacts, messages and long texts come as bounded pages (`get_map` with `session`, `room`, `field`, `cursor`), and `read_room` is limited. The window gets a compact snapshot and loads earlier messages with "Show earlier messages".
-- The `.parley/.gitignore` of a new project is a whitelist: the backlog, plan snapshots, decisions, memory, shared histories and recipes can be committed, everything else stays local. An existing file that is exactly the former `*` is rewritten the first time a shared file is written; a file you edited is left alone.
+- A new project's `.parley/.gitignore` is `*`: the directory stays out of `git status` until Parley first writes a shared file (backlog, plan snapshot, decision, memory, shared history or recipe); then the file becomes a whitelist that lets those be committed while everything else stays local. An existing file that is exactly the former `*` is rewritten the same way; a file you edited is left alone.
 - The system prompt insert keeps its fourteen lines and has stable rules first, the session line last; the brief of a session carries a revision.
 - The "Share" action on a user-level skill ("Share with Claude" or "Share with Codex") creates one symlink in the other agent's user skills folder on your click. This is the only exception to "nothing is written to `~/.claude`, `~/.codex` or `~/.agents`" and is described in the README.
 
@@ -34,7 +34,7 @@ The window and the host must be updated together: restart the host when the wind
 
 ### What is not proven yet
 
-- No live run of real sessions: Codex launch and resume with the new `-c` flags, the read-only flags, the jev mod switched off while the hooks stay alive, argument limits on Linux. The skill navigator was measured on Claude only (a pilot and a 30-session wave, plus one trial session each on GLM and Codex); the human-labelled prompts, full waves on Codex and GLM, Linux and roles are not done, and a general saving of tokens is not claimed.
+- Few live runs of real sessions: Codex was launched with the new `-c` flags in two trial sessions, but resume with them is not checked; the read-only flags, the jev mod switched off while the hooks stay alive and argument limits on Linux are not run live. The skill navigator was measured on Claude only (a pilot and a 30-session wave, plus one trial session on GLM and two on Codex); the human-labelled prompts, full waves on Codex and GLM, Linux and roles are not done, and a general saving of tokens is not claimed.
 - Claude's MCP and plugin actions in the Capabilities panel run only with the audited Claude Code build (2.1.287, macOS on Apple silicon).
 - Known gaps: the Codex catalog built from `skills/list` is checked by tests and by one live Codex 0.160.0 session (the native list was removed with plugin and system skills present), but an agent loading a plugin or system skill through `find_skill` has not been seen live yet; every Codex launch with the navigator reads its inventory once (up to 8 seconds); if the `jev-skill-suggestion` mod is installed, the skills it hid stay hidden until you run `/jev-skill-suggestion:setup restore` (a personal setting that Parley does not touch); skills synced from claude.ai appear by name only; `check_inbox` has no limit and no way to read earlier mail; the window has no "Show full message" button; the notice `provider-override-gap` speaks only about instructions.
 
