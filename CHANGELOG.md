@@ -6,6 +6,15 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Room agents no longer get renamed to "New messages (1) in r-01 … Call check_inbox.": a
+  session whose conversation began with Parley's message pointer takes no automatic title (the
+  title Claude Code generates from that pointer is skipped too; a `/rename` still applies). A
+  name broken this way by an earlier build shows as "New session" and is reset in the map.
+- A session row shows a blinking envelope while the agent has messages it has not read yet,
+  instead of the name changing.
+
 ## 0.7.0
 
 The project layer: team rules in `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, the Capabilities panel, and a skill navigator that is on by default for Claude, GLM and Codex. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").
