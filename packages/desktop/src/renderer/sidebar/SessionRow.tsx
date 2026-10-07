@@ -29,7 +29,7 @@
  * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
  * тултип `Lead`.
  *
- * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером перед словом состояния
+ * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером (клик по агенту ведёт в панель Agents, без места — к карточке) перед словом состояния
  * (`AgentsBadge`): строка поповера открывает сессию на карточке агента. Хост прежней версии списка не присылает —
  * тогда у строки бейджа нет, а счётчик `▤N` остаётся в тултипе, как был.
  *
@@ -46,7 +46,7 @@ import type { WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
-import { openAgentCard } from '../chat/open-agent.js';
+import { openAgentInPanel } from '../agents/open-agents.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
@@ -319,7 +319,7 @@ export const SessionRow = memo(function SessionRow({
               // Tab в списке ведёт курсор строки (roving tabindex): бейдж встаёт в порядок Tab только у строки под курсором.
               tabIndex={stop ? 0 : -1}
               onOpenChange={setAgentsOpen}
-              onOpen={(task) => openAgentCard({ projectPath, workId, sessionId: session.id }, task.id)}
+              onOpen={(task) => openAgentInPanel({ projectPath, workId, sessionId: session.id }, task.id)}
               className={cn(
                 'h-[18px] shrink-0 rounded-full bg-[color-mix(in_srgb,currentColor_10%,transparent)] px-1.5 text-[10px] leading-[18px] hover:bg-[color-mix(in_srgb,currentColor_20%,transparent)]',
                 secondary,
