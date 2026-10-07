@@ -1548,10 +1548,11 @@ through `find_skill` instead:
 - **Codex:** `-c skills.include_instructions=false` (the placeholder `{skillCatalog}`) removes
   the native catalog, and the names of the available skills go into the description of
   `find_skill`. This happens only when nothing is lost: at launch Parley reads Codex's own
-  inventory (up to 8 seconds), and if it contains skills that `find_skill` cannot offer (plugin,
-  system, admin or extra skills, or skills that could not be verified), or cannot be read, the
-  native list stays, `find_skill` works next to it, and the launch says so with the notice
-  `codex-skill-list-kept`.
+  inventory (`skills/list`, up to 8 seconds) and stores it for the session, so `find_skill` offers
+  exactly what Codex lists, plugin, system, admin and extra skills included (a skill with
+  `allow_implicit_invocation: false` is not offered to the model). If the inventory cannot be read
+  or stored (an old Codex without `skills/list`, a timeout, a managed configuration), the native
+  list stays and the launch says so.
 
 The list stays full, and the launch carries a warning, when the shortening cannot be confirmed:
 a session with a native Claude role (`--agent`), a runner without `{mcpConfig}`, Codex without
@@ -1569,8 +1570,8 @@ skills on a small model, and Codex's launch input dropped by about 8,600 tokens.
 measured:** how well agents choose a skill through `find_skill` (no agent has called it on
 Claude), full waves on Codex and GLM, Linux, and a general saving of tokens. The bench is
 `tools/parley-token-benchmark.ts` (see `docs/research/2026-10-04-parley-token-benchmark.md`).
-Known limits: `find_skill` does not offer Codex plugin, system, admin or extra skills, which is
-why Codex keeps its native list while it has any; a skill that the jev mod made
+Known limits: the Codex catalog built from `skills/list` is checked by tests only, not yet with
+a live Codex that has plugin and system skills; a skill that the jev mod made
 `user-invocable-only` is not offered either. **If the `jev-skill-suggestion` mod is installed,
 run `/jev-skill-suggestion:setup restore` before relying on the navigator:** it returns the
 skills that mod hid to the model everywhere. It is your personal setting, Parley does not change
@@ -2117,14 +2118,15 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
   argument and environment limits on Linux (checked on macOS only), and the human-labelled
   prompts and full Codex and GLM waves of the skill navigator. A general saving of tokens is not
   claimed.
-- **Skill navigator.** On by default. `find_skill` offers only the user and project skills of
-  Codex (plugin, system, admin and extra skills are not confirmed), so Codex keeps its native
-  list while it has any other skills, and also when its inventory cannot be read; every Codex
-  launch reads that inventory once. If the jev mod is installed, the skills it made
-  `user-invocable-only` are not offered; run `/jev-skill-suggestion:setup restore` to give them
-  back (a personal setting that Parley never touches). Skills synced from claude.ai appear by
-  name only: their descriptions are not on disk and Parley has no manifest to read them from.
-  Only Claude was measured in full; Codex and GLM had one trial session each.
+- **Skill navigator.** On by default. For Codex `find_skill` offers the inventory that Codex
+  itself returns (`skills/list`, plugin and system skills included; checked by tests on
+  synthetic answers, not yet with a live Codex), and Codex keeps its native list only when that
+  inventory cannot be read or stored; every Codex launch reads it once. If the jev mod is
+  installed, the skills it made `user-invocable-only` are not offered; run
+  `/jev-skill-suggestion:setup restore` to give them back (a personal setting that Parley never
+  touches). Skills synced from claude.ai appear by name only: their descriptions are not on disk
+  and Parley has no manifest to read them from. Only Claude was measured in full; Codex and GLM
+  had one trial session each.
 - **Claude's MCP and plugin actions in the Capabilities tab** run only with the audited Claude
   Code build (2.1.287, macOS on Apple silicon); other builds and platforms show them as
   unavailable.

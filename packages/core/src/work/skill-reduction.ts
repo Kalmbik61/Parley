@@ -4,13 +4,14 @@
  *
  * - Claude Code: переменная `SLASH_COMMAND_TOOL_CHAR_BUDGET=1` в окружении процесса агента оставляет в каталоге
  *   одни имена, а мод jev выключается записью `enabledPlugins` в файле настроек сессии.
- * - Codex: `-c skills.include_instructions=false` убирает каталог целиком (подстановка `{skillCatalog}`), но только
- *   если `find_skill` покрывает все навыки родного списка (решение человека 2026-10-06): иначе список остаётся.
+ * - Codex: `-c skills.include_instructions=false` убирает каталог целиком (подстановка `{skillCatalog}`), когда состав
+ *   навыков прочитан у самого Codex (`skills/list`): `find_skill` отдаёт ровно его. Не прочитан — список остаётся.
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { readCodexListCoverage, type SkillContextOptions } from '../skills/context.js';
+import { readCodexSkillCatalog, type SkillContextOptions } from '../skills/context.js';
+import type { SkillCatalog } from '../skills/catalog.js';
 
 /** Окружение процесса агента Claude Code при сокращённом списке: в каталоге остаются имена. */
 export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } as const;
@@ -24,12 +25,11 @@ export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } a
 export const claudeSkillRoute = { catalogReady: true };
 
 /**
- * Чтение каталога Codex запуска: покрывает ли `find_skill` весь родной список. Швом служит объект, как
- * `claudeSkillRoute`: тесты подменяют чтение, настоящий запуск спрашивает `codex app-server`. Ошибка чтения —
- * `unreadable`, список остаётся полным.
+ * Чтение каталога Codex запуска из `skills/list` самого Codex. Швом служит объект, как `claudeSkillRoute`: тесты
+ * подменяют чтение, настоящий запуск спрашивает `codex app-server`. Не прочитан (или ошибка) — `null`, список остаётся.
  */
-export const codexSkillRoute: { coverage: (options: SkillContextOptions) => Promise<'covered' | 'uncovered' | 'unreadable'> } = {
-  coverage: (options) => readCodexListCoverage(options).catch(() => 'unreadable' as const),
+export const codexSkillRoute: { catalog: (options: SkillContextOptions) => Promise<SkillCatalog | null> } = {
+  catalog: (options) => readCodexSkillCatalog(options).catch(() => null),
 };
 
 /** Значение подстановки `{skillCatalog}`: целое присваивание TOML для `-c` Codex. */

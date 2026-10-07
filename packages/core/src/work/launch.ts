@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
 import { findRunnerBinary } from './find-binary.js';
-import { writeNativeContext, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
+import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText } from '../session-index.js';
 import { bothEnv } from '../names.js';
@@ -101,7 +101,7 @@ export interface LaunchPlan {
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
-  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing' | 'codex-skill-list-kept'; message: string }>;
+  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -284,19 +284,14 @@ async function plan(
         message: 'Custom Codex runner has no {skillCatalog}; add this placeholder so the skill navigator can shorten the native skill list. The full list stays enabled.',
       });
     } else if (nativeVerified && nativeDescriptor !== null) {
-      // Родной список убирается, только если `find_skill` покрывает всё, что в нём есть (решение человека 2026-10-06);
-      // непрочитанный каталог — тоже «не убирать».
+      // Каталог `find_skill` — состав из `skills/list` самого Codex: он и есть родной список, покрытие полное.
+      // Список убирается, только когда каталог ещё и сохранён для MCP-сервера сессии (с ревизией этого запуска):
+      // не прочитан или не сохранился — список остаётся.
       const { roots } = nativeDescriptor;
-      const coverage = await codexSkillRoute.coverage({ cwd: nativeDescriptor.cwd, command: nativeDescriptor.command!, configArgs: nativeDescriptor.configArgs,
-        env: { ...process.env, HOME: roots.homeDir, CODEX_HOME: roots.codexHome ?? path.join(roots.homeDir, '.codex') },
-        homeDir: roots.homeDir, ...(roots.codexHome ? { codexHome: roots.codexHome } : {}) });
-      if (coverage === 'covered') skillList = 'removed';
-      else if (coverage === 'uncovered') {
-        diagnostics.push({
-          code: 'codex-skill-list-kept',
-          message: "Codex has skills the skill navigator can't offer (plugins, system skills), so its native skill list stays.",
-        });
-      } else codexListUnread = true;
+      const catalog = await codexSkillRoute.catalog({ cwd: nativeDescriptor.cwd, command: nativeDescriptor.command!, configArgs: nativeDescriptor.configArgs,
+        env: { ...process.env, HOME: roots.homeDir, CODEX_HOME: roots.codexHome ?? path.join(roots.homeDir, '.codex') } });
+      if (catalog !== null && await writeNativeSkillCatalog(projectPath, workId, session.id, nativeContextRevision, catalog)) skillList = 'removed';
+      else codexListUnread = true;
     }
   }
 

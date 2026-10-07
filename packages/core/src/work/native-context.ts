@@ -5,6 +5,8 @@ import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { stateDir } from './state-dir.js';
 import { tomlString } from './mcp-config.js';
+import type { SkillCatalog } from '../skills/catalog.js';
+import type { NativeSkill, SkillUnavailableReason } from '../skills/types.js';
 
 /** LOCAL-only launch projection. No prompts, raw config, secrets or computed model defaults. */
 export interface NativeContextDescriptor {
@@ -70,9 +72,9 @@ function valid(value: unknown): value is NativeContextDescriptor {
     Number(value.process.pid) < 1 || typeof value.process.startedAtProcess !== 'string' || !value.process.startedAtProcess)) return false;
   return true;
 }
-function location(projectPath: string, workId: string, sessionId: string): string {
+function location(projectPath: string, workId: string, sessionId: string, suffix = '.json'): string {
   if (!/^w-\d+$/.test(workId) || !/^s-\d+$/.test(sessionId)) throw new Error('context-unverified');
-  return path.join(stateDir(projectPath), 'local', 'native-context', workId, `${sessionId}.json`);
+  return path.join(stateDir(projectPath), 'local', 'native-context', workId, `${sessionId}${suffix}`);
 }
 async function directory(file: string, create: boolean): Promise<void> {
   const dir = path.dirname(file);
@@ -93,37 +95,93 @@ async function directory(file: string, create: boolean): Promise<void> {
     }
   }
 }
-/** A failed descriptor write never blocks a plain provider launch. Own env revision prevents stale reuse. */
-export async function writeNativeContext(projectPath: string, workId: string, sessionId: string, value: NativeContextDescriptor): Promise<boolean> {
+/** Атомарная приватная запись (`.tmp` + `rename`, режим 0600) под проверкой родительских папок. */
+async function storePrivate(file: string, body: string): Promise<void> {
   let temporary: string | undefined;
   try {
-    if (!valid(value)) return false;
-    const body = JSON.stringify(value);
-    if (Buffer.byteLength(body) > 32768) return false;
-    const file = location(projectPath, workId, sessionId);
     await directory(file, true);
     temporary = `${file}.${randomUUID()}.tmp`;
     const handle = await open(temporary, 'wx', 0o600);
     try { await handle.writeFile(body, 'utf8'); } finally { await handle.close(); }
     await rename(temporary, file);
+  } finally { if (temporary) await unlink(temporary).catch(() => {}); }
+}
+/** Чтение приватного файла без симлинков: режим без доступа группе и прочим, размер в пределе, строгий UTF-8 и JSON. */
+async function loadPrivate(file: string, limit: number): Promise<unknown> {
+  await directory(file, false);
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > limit || (info.mode & 0o077) !== 0) throw new Error('context-unverified');
+    const bytes = Buffer.alloc(info.size + 1);
+    const read = await handle.read(bytes, 0, bytes.length, 0);
+    // Файл вырос между `stat` и чтением: целиком его уже не доверяем.
+    if (read.bytesRead > info.size) throw new Error('context-unverified');
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, read.bytesRead)));
+  } finally { await handle.close(); }
+}
+/** A failed descriptor write never blocks a plain provider launch. Own env revision prevents stale reuse. */
+export async function writeNativeContext(projectPath: string, workId: string, sessionId: string, value: NativeContextDescriptor): Promise<boolean> {
+  try {
+    if (!valid(value)) return false;
+    const body = JSON.stringify(value);
+    if (Buffer.byteLength(body) > 32768) return false;
+    await storePrivate(location(projectPath, workId, sessionId), body);
     return true;
   } catch { return false; }
-  finally { if (temporary) await unlink(temporary).catch(() => {}); }
 }
 export async function readNativeContext(projectPath: string, workId: string, sessionId: string): Promise<NativeContextDescriptor | null> {
   try {
-    const file = location(projectPath, workId, sessionId);
-    await directory(file, false);
-    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      const info = await handle.stat();
-      if (!info.isFile() || info.size > 32768 || (info.mode & 0o077) !== 0) return null;
-      const bytes = Buffer.alloc(32769);
-      const read = await handle.read(bytes, 0, bytes.length, 0);
-      if (read.bytesRead > 32768) return null;
-      const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, read.bytesRead)));
-      return valid(value) ? value : null;
-    } finally { await handle.close(); }
+    const value = await loadPrivate(location(projectPath, workId, sessionId), 32768);
+    return valid(value) ? value : null;
+  } catch { return null; }
+}
+
+/** Предел файла каталога навыков: байты и число записей. */
+const SKILLS_MAX_BYTES = 4 * 1024 * 1024;
+const SKILLS_MAX_ENTRIES = 20000;
+// Записи на `Record<…, true>`: набор значений синхронен с типами и проверяется при сборке.
+const SKILL_SOURCES: Record<Exclude<NativeSkill['source'], 'claude.ai'>, true> = { user: true, project: true, plugin: true, system: true, admin: true, extra: true };
+const SKILL_REASONS: Record<SkillUnavailableReason, true> = {
+  'human-disabled': true, 'user-invocable-only': true, 'implicit-invocation-disabled': true, 'disable-model-invocation': true,
+  'plugin-disabled': true, shadowed: true, 'availability-unverified': true, 'invalid-metadata': true, 'load-tool-unavailable': true,
+};
+const SKILL_KEYS = ['name', 'description', 'source', 'path', 'modelAvailable', 'unavailableReason'];
+/** Запись каталога строго той формы, которую пишет запуск; доступность и причина согласованы. */
+function validSkill(value: unknown): value is Omit<NativeSkill, 'provider' | 'documentKind'> {
+  if (!record(value) || Object.keys(value).length !== SKILL_KEYS.length || !SKILL_KEYS.every(key => Object.hasOwn(value, key))) return false;
+  const { name, description, source, path: file, modelAvailable, unavailableReason } = value;
+  return typeof name === 'string' && name !== '' && !name.includes('\0') && typeof description === 'string' &&
+    typeof source === 'string' && Object.hasOwn(SKILL_SOURCES, source) && typeof file === 'string' && path.isAbsolute(file) &&
+    typeof modelAvailable === 'boolean' &&
+    (unavailableReason === null || (typeof unavailableReason === 'string' && Object.hasOwn(SKILL_REASONS, unavailableReason))) &&
+    modelAvailable === (unavailableReason === null);
+}
+/**
+ * Каталог навыков Codex этого запуска рядом с дескриптором: MCP-серверу `parley` не нужно самому запускать
+ * `codex app-server`. Привязан к ревизии запуска. Неудачная запись никогда не мешает запуску — вернёт `false`.
+ */
+export async function writeNativeSkillCatalog(projectPath: string, workId: string, sessionId: string, revision: string, catalog: SkillCatalog): Promise<boolean> {
+  try {
+    if (catalog.provider !== 'codex' || !/^[a-f0-9-]{36}$/.test(revision) || catalog.skills.length > SKILLS_MAX_ENTRIES) return false;
+    const skills = catalog.skills.map(skill => ({ name: skill.name, description: skill.description, source: skill.source,
+      path: skill.path, modelAvailable: skill.modelAvailable, unavailableReason: skill.unavailableReason }));
+    if (!skills.every(validSkill)) return false;
+    const body = JSON.stringify({ version: 1, revision, skills });
+    if (Buffer.byteLength(body) > SKILLS_MAX_BYTES) return false;
+    await storePrivate(location(projectPath, workId, sessionId, '.skills.json'), body);
+    return true;
+  } catch { return false; }
+}
+/** Сохранённый каталог ровно этой ревизии запуска; чужая ревизия, не та форма или любой отказ проверки — `null`. */
+export async function readNativeSkillCatalog(projectPath: string, workId: string, sessionId: string, revision: string): Promise<SkillCatalog | null> {
+  try {
+    const value = await loadPrivate(location(projectPath, workId, sessionId, '.skills.json'), SKILLS_MAX_BYTES);
+    if (!record(value) || Object.keys(value).length !== 3 || value.version !== 1 || value.revision !== revision ||
+      !/^[a-f0-9-]{36}$/.test(revision) || !Array.isArray(value.skills) || value.skills.length > SKILLS_MAX_ENTRIES ||
+      !value.skills.every(validSkill)) return null;
+    return { provider: 'codex', diagnostics: [], partial: false,
+      skills: value.skills.map(skill => ({ provider: 'codex' as const, documentKind: 'skill' as const, ...skill })) };
   } catch { return null; }
 }
 /** Bind only a new unbound descriptor. A previous launch's stamp must never be rewritten. */

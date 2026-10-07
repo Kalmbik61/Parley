@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { readNativeContext, stampNativeContext, writeNativeContext } from '../work/native-context.js';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { readNativeContext, stampNativeContext, writeNativeContext, writeNativeSkillCatalog } from '../work/native-context.js';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,9 +12,17 @@ import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import type { WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
 import { createParleyServer } from './tools.js';
+import { readCodexSkillCatalog } from '../skills/context.js';
+
+// Живое чтение каталога Codex (запуск `codex app-server`) под наблюдением: тестам про сохранённый каталог важно, что его нет.
+vi.mock('../skills/context.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../skills/context.js')>();
+  return { ...actual, readCodexSkillCatalog: vi.fn(actual.readCodexSkillCatalog) };
+});
 let project: string; let home: string; let work: string;
 const open: Array<{ client: Client; server: ReturnType<typeof createParleyServer> }> = [];
 beforeEach(async () => {
+  vi.mocked(readCodexSkillCatalog).mockClear();
   home = await mkdtemp(path.join(tmpdir(), 'parley-search-home-'));
   project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-search-project-')));
   vi.stubEnv('PARLEY_HOME', home);
@@ -241,5 +249,101 @@ describe('instance-local find_skill', () => {
       // The lead is Codex without a verified native context: the old explanation stays.
       expect(JSON.parse((await find(client, { query: 'plan' })).text).reason).toContain('unverified');
     });
+  });
+});
+
+describe('каталог Codex, сохранённый запуском', () => {
+  const skill = (name: string, over: Partial<SkillCatalog['skills'][number]> = {}): SkillCatalog['skills'][number] => ({
+    provider: 'codex', documentKind: 'skill', name, description: `${name} for review`, source: 'user',
+    path: path.join(project, name, 'SKILL.md'), modelAvailable: true, unavailableReason: null, ...over });
+  const catalogOf = (...skills: SkillCatalog['skills']): SkillCatalog => ({ provider: 'codex', skills, diagnostics: [], partial: false });
+  const live = vi.mocked(readCodexSkillCatalog);
+  const REVISION = randomUUID();
+  /** Подтверждённый дескриптор своей сессии Codex; `command` — абсолютный путь, живое чтение им не запускается (шов подменён). */
+  async function bind(revision = REVISION): Promise<void> {
+    expect(await writeNativeContext(project, work, 's-01', { version: 1, revision, provider: 'codex', cwd: project,
+      verified: true, command: process.execPath, configArgs: [], roots: { homeDir: home } })).toBe(true);
+  }
+  const reduced = { skillNavigator: true, skillListReduced: true, nativeContextRevision: REVISION } as const;
+  const descriptionOf = async (client: Client) => (await client.listTools()).tools.find(tool => tool.name === 'find_skill')!.description!;
+  const skillsFile = () => path.join(project, '.parley/local/native-context', work, 's-01.skills.json');
+
+  it('использует сохранённый каталог той же ревизии и не запускает app-server', async () => {
+    await bind();
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf(
+      skill('review-code'), skill('plug:review', { source: 'plugin' }), skill('quiet-review', { modelAvailable: false, unavailableReason: 'implicit-invocation-disabled' })));
+    const client = await connect(reduced);
+    const description = await descriptionOf(client);
+    expect(description).toContain('native skill list is removed'); expect(description).toContain('"review-code"');
+    expect(description).toContain('"plug:review"'); expect(description).not.toContain('quiet-review');
+    const found = JSON.parse((await find(client)).text);
+    expect(found.skills.map((item: { name: string }) => item.name).sort()).toEqual(['plug:review', 'review-code']);
+    expect(found.skills.find((item: { name: string }) => item.name === 'plug:review')).toMatchObject({ source: 'plugin', load: `Read ${path.join(project, 'plug:review', 'SKILL.md')}.` });
+    expect(found).not.toHaveProperty('reason');
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it('нет файла каталога — прежнее живое чтение, один раз на описание и поиск', async () => {
+    await bind();
+    live.mockResolvedValueOnce(catalogOf(skill('review-code')));
+    const client = await connect(reduced);
+    expect(await descriptionOf(client)).toContain('"review-code"');
+    expect(JSON.parse((await find(client)).text).skills).toHaveLength(1);
+    expect(live).toHaveBeenCalledTimes(1);
+    expect(live.mock.calls[0]![0]).toMatchObject({ cwd: project, command: process.execPath, configArgs: [] });
+  });
+
+  it('файл другой ревизии или с нарушенными правами не годится — живое чтение', async () => {
+    await bind();
+    await writeNativeSkillCatalog(project, work, 's-01', randomUUID(), catalogOf(skill('stale-review')));
+    live.mockResolvedValueOnce(catalogOf(skill('review-code')));
+    const stale = await connect(reduced);
+    const description = await descriptionOf(stale);
+    expect(description).toContain('"review-code"'); expect(description).not.toContain('stale-review');
+    expect(live).toHaveBeenCalledTimes(1);
+
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf(skill('stored-review')));
+    await chmod(skillsFile(), 0o644);
+    live.mockResolvedValueOnce(catalogOf(skill('review-code')));
+    const loose = await connect(reduced);
+    const looseDescription = await descriptionOf(loose);
+    expect(looseDescription).toContain('"review-code"'); expect(looseDescription).not.toContain('stored-review');
+    expect(live).toHaveBeenCalledTimes(2);
+  });
+
+  it('запуск без привязки к этому серверу (другая ревизия в окружении) не читает ни файл, ни app-server', async () => {
+    await bind(randomUUID());
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf(skill('review-code')));
+    const client = await connect(reduced);
+    const found = JSON.parse((await find(client)).text);
+    expect(found.skills).toEqual([]); expect(found.reason).toContain('unverified');
+    expect(live).not.toHaveBeenCalled();
+  });
+
+  it('имена в описании без повторов: одноимённые навыки из разных папок — одно имя, в поиске остаются оба', async () => {
+    await bind();
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf(
+      skill('review-code', { path: '/a/review-code/SKILL.md' }), skill('review-code', { path: '/b/review-code/SKILL.md', source: 'plugin' })));
+    const client = await connect(reduced);
+    const description = await descriptionOf(client);
+    expect(description.split('"review-code"')).toHaveLength(2);
+    const found = JSON.parse((await find(client)).text);
+    expect(found.skills.map((item: { load: string }) => item.load).sort()).toEqual(['Read /a/review-code/SKILL.md.', 'Read /b/review-code/SKILL.md.']);
+  });
+
+  it('каталог прочитан, но доступных навыков нет — фразы об убранном списке нет; не прочитан — прежняя фраза без имён', async () => {
+    await bind();
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf());
+    const empty = await descriptionOf(await connect(reduced));
+    expect(empty).not.toContain('native skill list'); expect(empty).not.toContain('Available native names');
+    expect(live).not.toHaveBeenCalled();
+    // Все навыки отключены политикой — тот же случай: прочитано, доступных нет.
+    await writeNativeSkillCatalog(project, work, 's-01', REVISION, catalogOf(skill('quiet-review', { modelAvailable: false, unavailableReason: 'implicit-invocation-disabled' })));
+    expect(await descriptionOf(await connect(reduced))).not.toContain('native skill list');
+    // Файла нет и живое чтение не удалось: каталог не прочитан.
+    await rm(skillsFile());
+    live.mockResolvedValueOnce(null);
+    const unread = await descriptionOf(await connect(reduced));
+    expect(unread).toContain('names could not be read'); expect(unread).not.toContain('Available native names');
   });
 });

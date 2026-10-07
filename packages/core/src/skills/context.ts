@@ -1,120 +1,96 @@
-import { realpath } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { readCodexNativeContext, type CodexContextOptions, type CodexNativeContext } from '../roles/context.js';
-import type { CodexConfigLayer, CodexNativeSkillEvidence } from './codex.js';
-import { resolveSkillCatalog, type SkillCatalog } from './catalog.js';
-import type { SkillUnavailableReason } from './types.js';
+import { readCodexSkillPolicy, type DiscoveryDiagnostic } from './codex.js';
+import type { SkillCatalog } from './catalog.js';
+import type { NativeSkill } from './types.js';
 
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
-export interface CodexSkillContext {
-  layers: CodexConfigLayer[];
-  evidence: CodexNativeSkillEvidence;
-  /** Включённые родные навыки вне user/repo (плагины, системные, административные): `find_skill` их не предложит. */
-  uncovered: number;
+type CodexSource = Exclude<NativeSkill['source'], 'claude.ai'>;
+const MAX_NATIVE_SKILLS = 20000;
+/** Записей, которые читаются с диска одновременно: сотни навыков не должны исчерпать дескрипторы. */
+const BATCH = 32;
+
+const hasText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
+const sourceOf = (scope: string, pluginId: unknown): CodexSource =>
+  typeof pluginId === 'string' ? 'plugin' : scope === 'repo' ? 'project' : scope === 'user' ? 'user'
+    : scope === 'system' ? 'system' : scope === 'admin' ? 'admin' : 'extra';
+
+/** Одна запись `skills/list`, уже проверенная по форме. */
+interface ListedSkill { name: string; description: string; path: string; source: CodexSource }
+
+/**
+ * Документ навыка: путь записи — файл или папка с `SKILL.md`. `file` — путь, где навык нашёл Codex (рядом с ним Codex
+ * читает и `agents/openai.yaml`), `canonical` — тот же файл без симлинков; не файл или нет его — `null`.
+ */
+async function documentOf(listed: string): Promise<{ file: string; canonical: string } | null> {
+  try {
+    const file = (await stat(listed)).isDirectory() ? path.join(listed, 'SKILL.md') : listed;
+    const canonical = await realpath(file);
+    return (await stat(canonical)).isFile() ? { file, canonical } : null;
+  } catch { return null; }
 }
-/** HIGH-to-LOW native layers are projected LOW-to-HIGH. No guessed trust/config merge. */
-export async function projectCodexSkillContext(cwd: string, response: CodexNativeContext): Promise<CodexSkillContext | null> {
-  const { config, requirements, skills } = response;
+
+/**
+ * Каталог `find_skill` у Codex — это состав, который отдал сам Codex (`skills/list`): подтверждение доступности даёт
+ * он, обход диска не нужен. Любой ответ не той формы — `null` (безопасная сторона: родной список остаётся).
+ * Выключенные навыки пропускаются (родной список их тоже не показывает), непустой `errors` — навыки, которых Codex
+ * не загрузил сам, их нет и в его списке.
+ */
+export async function projectCodexListCatalog(cwd: string, response: CodexNativeContext): Promise<SkillCatalog | null> {
+  const { requirements, skills } = response;
   if (!record(requirements) || !Object.hasOwn(requirements, 'requirements') || requirements.requirements !== null ||
-    !record(config) || !Array.isArray(config.layers) || config.layers.length > 128 ||
     !record(skills) || !Array.isArray(skills.data) || skills.data.length !== 1) return null;
   let canonical: string;
   try { canonical = await realpath(cwd); } catch { return null; }
   const inventory = skills.data[0];
   if (!record(inventory) || inventory.cwd !== canonical || !Array.isArray(inventory.skills) ||
-    inventory.skills.length > 20000 || !Array.isArray(inventory.errors) || inventory.errors.length > 0) return null;
-  const evidence: CodexNativeSkillEvidence = { cwd: canonical, verified: true, skills: [] };
-  const rows: Array<CodexNativeSkillEvidence['skills'][number]> = [];
-  let uncovered = 0;
-  const identities = new Map<string, boolean>();
+    inventory.skills.length > MAX_NATIVE_SKILLS || !Array.isArray(inventory.errors)) return null;
+  const listed: ListedSkill[] = [];
   for (const skill of inventory.skills) {
-    if (!record(skill) || typeof skill.name !== 'string' || typeof skill.path !== 'string' ||
-      !path.isAbsolute(skill.path) || typeof skill.enabled !== 'boolean' || typeof skill.scope !== 'string') return null;
-    // Plugin/extra/system/admin routes remain unavailable; no blanket root promotion.
-    if ((skill.pluginId !== undefined && skill.pluginId !== null) || (skill.scope !== 'user' && skill.scope !== 'repo')) {
-      if (skill.enabled) uncovered++;
-      continue;
-    }
-    let document: string;
-    try { document = await realpath(skill.path); } catch { return null; }
-    if (document !== skill.path) return null;
-    const source = skill.scope === 'repo' ? 'project' : 'user';
-    const identity = JSON.stringify([document, skill.name, source]);
-    const previous = identities.get(identity);
-    if (previous !== undefined && previous !== skill.enabled) return null;
-    if (previous === undefined) rows.push({ path: document, name: skill.name, source, enabled: skill.enabled });
-    identities.set(identity, skill.enabled);
+    if (!record(skill) || typeof skill.name !== 'string' || skill.name === '' || skill.name.includes('\0') ||
+      typeof skill.description !== 'string' || typeof skill.path !== 'string' || !path.isAbsolute(skill.path) ||
+      typeof skill.enabled !== 'boolean' || typeof skill.scope !== 'string' ||
+      (skill.pluginId !== undefined && skill.pluginId !== null && typeof skill.pluginId !== 'string') ||
+      (skill.interface !== undefined && !record(skill.interface)) ||
+      (skill.shortDescription !== undefined && typeof skill.shortDescription !== 'string')) return null;
+    if (!skill.enabled) continue;
+    const short = [(skill.interface as Record<string, unknown> | undefined)?.shortDescription, skill.shortDescription].find(hasText);
+    listed.push({ name: skill.name, path: skill.path, source: sourceOf(skill.scope, skill.pluginId),
+      description: hasText(skill.description) ? skill.description : short ?? '' });
   }
-  evidence.skills = rows;
-  const layers: CodexConfigLayer[] = [];
-  for (const layer of [...config.layers].reverse()) {
-    if (!record(layer) || !record(layer.name)) return null;
-    const disabled = layer.disabledReason !== undefined && layer.disabledReason !== null;
-    if (disabled) {
-      if (typeof layer.disabledReason !== 'string') return null;
-      // Human selectors remain authoritative even if that native source is disabled.
-      if (layer.name.type !== 'user' && layer.name.type !== 'sessionFlags') continue;
-    }
-    if (typeof layer.version !== 'string' || !record(layer.config)) return null;
-    const type = layer.name.type;
-    let source: CodexConfigLayer['source'];
-    let configFolder: string | undefined;
-    if (type === 'user' || type === 'system') {
-      if (typeof layer.name.file !== 'string' || !path.isAbsolute(layer.name.file) ||
-        (type === 'user' && layer.name.profile !== undefined && layer.name.profile !== null)) return null;
-      source = type === 'user' ? 'User' : 'System'; configFolder = path.dirname(layer.name.file);
-    } else if (type === 'project') {
-      if (typeof layer.name.dotCodexFolder !== 'string' || !path.isAbsolute(layer.name.dotCodexFolder)) return null;
-      source = 'Project'; configFolder = layer.name.dotCodexFolder;
-    } else if (type === 'sessionFlags') source = 'SessionFlags';
-    else if (type === 'packagedDefaults') continue;
-    else return null;
-    // No raw config escapes this adapter, only human skill policy and native root markers.
-    const data: Record<string, unknown> = {};
-    if (Object.hasOwn(layer.config, 'skills')) data.skills = layer.config.skills;
-    if (Object.hasOwn(layer.config, 'project_root_markers')) data.project_root_markers = layer.config.project_root_markers;
-    layers.push({ source, ...(configFolder ? { configFolder } : {}), data, provenance: 'human', ...(disabled ? { disabled: true } : {}) });
+  const skillsOut: NativeSkill[] = [];
+  const diagnostics: DiscoveryDiagnostic[] = [];
+  const identities = new Set<string>();
+  for (let from = 0; from < listed.length; from += BATCH) {
+    const batch = listed.slice(from, from + BATCH);
+    const resolved = await Promise.all(batch.map(async item => {
+      const document = await documentOf(item.path);
+      if (document === null) return null;
+      const policy = await readCodexSkillPolicy(path.join(path.dirname(document.file), 'agents/openai.yaml'));
+      return { document: document.canonical, disabled: policy.status === 'valid' && policy.allowImplicitInvocation === false };
+    }));
+    batch.forEach((item, index) => {
+      const found = resolved[index]!;
+      if (found === null) { diagnostics.push({ provider: 'codex', source: item.source, path: item.path, code: 'unreadable' }); return; }
+      // Идентичность — пара (канонический путь, имя): точные повторы схлопываются, одноимённые из разных папок остаются.
+      const identity = JSON.stringify([found.document, item.name]);
+      if (identities.has(identity)) return;
+      identities.add(identity);
+      skillsOut.push({ provider: 'codex', documentKind: 'skill', name: item.name, description: item.description, source: item.source,
+        path: found.document, modelAvailable: !found.disabled, unavailableReason: found.disabled ? 'implicit-invocation-disabled' : null });
+    });
   }
-  return { layers, evidence, uncovered };
+  return { provider: 'codex', skills: skillsOut, diagnostics, partial: false };
 }
+
 export interface SkillContextOptions extends CodexContextOptions {
-  homeDir?: string;
-  codexHome?: string;
   /** Isolated adapter fixture only; never wire input. */
   read?: typeof readCodexNativeContext;
 }
 export async function readCodexSkillCatalog(options: SkillContextOptions): Promise<SkillCatalog | null> {
   const response = await (options.read ?? readCodexNativeContext)(options, true);
   if (response === null) return null;
-  const context = await projectCodexSkillContext(options.cwd, response);
-  if (context === null) return null;
-  return catalogOf(options, context);
-}
-const catalogOf = (options: SkillContextOptions, context: CodexSkillContext): Promise<SkillCatalog> =>
-  resolveSkillCatalog({ provider: 'codex', cwd: options.cwd,
-    ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
-    ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }), configLayers: context.layers, nativeEvidence: context.evidence });
-
-/** Причины, по которым родной список Codex тоже не показывает навык модели: `find_skill` его не отдаёт и ничего не теряется. */
-const HIDDEN_BY_POLICY = new Set<SkillUnavailableReason>([
-  'human-disabled', 'plugin-disabled', 'implicit-invocation-disabled', 'user-invocable-only', 'disable-model-invocation',
-]);
-const INCOMPLETE_WALK = new Set<string>(['traversal-limit', 'symlink-cycle', 'unreadable']);
-/**
- * Покрывает ли `find_skill` всё, что показывает родной список Codex этого запуска (решение человека 2026-10-06:
- * список убираем, только если ничего не теряем). `uncovered` — есть навык, который `find_skill` не предложит
- * (плагин, системный, административный, неподтверждённый); `unreadable` — каталог не прочитался: безопасная сторона.
- */
-export async function readCodexListCoverage(options: SkillContextOptions): Promise<'covered' | 'uncovered' | 'unreadable'> {
-  const response = await (options.read ?? readCodexNativeContext)(options, true);
-  if (response === null) return 'unreadable';
-  const context = await projectCodexSkillContext(options.cwd, response);
-  if (context === null) return 'unreadable';
-  if (context.uncovered > 0) return 'uncovered';
-  const catalog = await catalogOf(options, context);
-  // `partial` для этого не годится: его поднимает уже непроверенный корень проекта. Неполный обход — только эти коды.
-  const lost = catalog.diagnostics.some(item => INCOMPLETE_WALK.has(item.code)) || catalog.skills.some(skill => (skill.source !== 'user' && skill.source !== 'project') ||
-    (skill.unavailableReason !== null && !HIDDEN_BY_POLICY.has(skill.unavailableReason)));
-  return lost ? 'uncovered' : 'covered';
+  return projectCodexListCatalog(options.cwd, response);
 }

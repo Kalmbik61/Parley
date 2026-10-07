@@ -5,7 +5,7 @@ import { readClaudeSkillCatalog } from '../skills/claude-listing.js';
 import { readCodexSkillCatalog } from '../skills/context.js';
 import { searchSkills } from '../skills/search.js';
 import type { SkillCatalog } from '../skills/catalog.js';
-import { nativeContextMatches, readNativeContext } from '../work/native-context.js';
+import { nativeContextMatches, readNativeContext, readNativeSkillCatalog } from '../work/native-context.js';
 import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -1558,9 +1558,12 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
         return 'catalog' in built ? built : { catalog: null, reason: built.reason, retry: true };
       }
       if (!bound || !descriptor?.verified || !descriptor.command) return { catalog: null };
+      // Каталог этого запуска сохранил сам запуск (та же ревизия): app-server здесь не нужен. Нет файла (сессию запустила
+      // прежняя версия Parley, запись не удалась) или он не годится — прежнее живое чтение.
+      const stored = await readNativeSkillCatalog(context.projectPath, context.workId, session.id, descriptor.revision);
+      if (stored !== null) return { catalog: stored };
       return { catalog: await readCodexSkillCatalog({ cwd, command: descriptor.command, configArgs: descriptor.configArgs,
-        env: { ...process.env, HOME: descriptor.roots.homeDir, CODEX_HOME: descriptor.roots.codexHome ?? path.join(descriptor.roots.homeDir, '.codex') },
-        homeDir: descriptor.roots.homeDir, ...(descriptor.roots.codexHome ? { codexHome: descriptor.roots.codexHome } : {}) }) };
+        env: { ...process.env, HOME: descriptor.roots.homeDir, CODEX_HOME: descriptor.roots.codexHome ?? path.join(descriptor.roots.homeDir, '.codex') } }) };
     })().catch(() => ({ catalog: null })));
     const built = await catalogs.get(key)!;
     if (built.retry) catalogs.delete(key);
@@ -1575,8 +1578,10 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
       if (provider !== undefined && isClaudeCode(provider)) return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
       if (provider !== 'codex') return FIND_SKILL;
       const own = await target();
-      const names = own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [];
-      const lead = reduced ? (names.length ? CODEX_NO_LIST : CODEX_NO_LIST_NO_NAMES) : '';
+      // Одноимённые навыки из разных папок в перечне имён — одно имя.
+      const names = [...new Set(own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [])];
+      // Каталог прочитан, но доступных навыков нет — о «неудавшемся чтении имён» говорить нечего; фраза нужна только когда имён нет из-за непрочитанного каталога.
+      const lead = !reduced ? '' : names.length ? CODEX_NO_LIST : own.catalog === null ? CODEX_NO_LIST_NO_NAMES : '';
       return { ...FIND_SKILL, description: FIND_SKILL.description + lead + nativeNames(names) };
     },
     async find(args) {

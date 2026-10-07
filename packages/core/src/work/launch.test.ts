@@ -1,4 +1,4 @@
-import { readNativeContext } from './native-context.js';
+import { readNativeContext, readNativeSkillCatalog } from './native-context.js';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
 import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
+import type { SkillCatalog } from '../skills/catalog.js';
 import { claudeSkillRoute, codexSkillRoute } from './skill-reduction.js';
 import {
   applyAutoTitle,
@@ -68,10 +69,10 @@ beforeEach(async () => {
   setEnv('PARLEY_CLAUDE_PROJECTS_DIR', logs);
 });
 
-const defaultCoverage = codexSkillRoute.coverage;
+const defaultCatalog = codexSkillRoute.catalog;
 afterEach(async () => {
   claudeSkillRoute.catalogReady = true;
-  codexSkillRoute.coverage = defaultCoverage;
+  codexSkillRoute.catalog = defaultCatalog;
   delete process.env['PARLEY_HOME'];
   for (const [name, value] of Object.entries(saved)) {
     if (value === undefined) delete process.env[name];
@@ -1545,6 +1546,8 @@ describe('native Claude navigator permission gate', () => {
 const codexConfigValues = (args: string[]): string[] =>
   args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
 const SKILL_FLAG = 'skills.include_instructions=false';
+/** Каталог, который «прочитал» шов `codexSkillRoute.catalog`: состав навыков Codex подтверждён. */
+const codexCatalog: SkillCatalog = { provider: 'codex', skills: [], diagnostics: [], partial: false };
 
 describe('сокращение родного списка скиллов вместе с навигатором', () => {
   it.each([['claude', 'planNew'], ['claude', 'planResume'], ['codex', 'planNew'], ['codex', 'planResume']] as const)(
@@ -1681,9 +1684,9 @@ describe('сокращение родного списка скиллов вме
 
   it.each(['planNew', 'planResume'] as const)('Codex %s: -c skills.include_instructions=false through the template, names promised only now', async (which) => {
     setEnv('PARLEY_SKILL_NAVIGATOR', '1');
-    // find_skill покрывает весь родной список (только user/project): каталог можно убрать.
+    // Состав навыков прочитан у самого Codex (`skills/list`): find_skill отдаёт ровно его, родной список можно убрать.
     const asked: Array<{ cwd: string; command?: string; configArgs?: readonly string[] }> = [];
-    codexSkillRoute.coverage = async (options) => { asked.push(options); return 'covered'; };
+    codexSkillRoute.catalog = async (options) => { asked.push(options); return codexCatalog; };
     const { workId, sessionId } = await pending('codex');
     const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'native-thread' };
     const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session);
@@ -1704,37 +1707,62 @@ describe('сокращение родного списка скиллов вме
     // Каталог читается по бинарю и аргументам самого запуска, в рабочей папке сессии.
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({ command: STUB, configArgs: [] });
+    // Тот же каталог сохранён для MCP-сервера сессии, с ревизией этого запуска.
+    const revision = (await readNativeContext(project, workId, sessionId))!.revision;
+    expect(await readNativeSkillCatalog(project, workId, sessionId, revision)).toEqual(codexCatalog);
+    expect(plan.env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(revision);
   });
 
-  it.each(['planNew', 'planResume'] as const)('Codex %s: навыки, которых find_skill не предложит (плагин, системные) — родной список остаётся и одна диагностика', async (which) => {
+  it.each(['planNew', 'planResume'] as const)('Codex %s: плагинные и системные навыки в составе Codex не мешают — список убирается, без диагностики', async (which) => {
     setEnv('PARLEY_SKILL_NAVIGATOR', '1');
-    codexSkillRoute.coverage = async () => 'uncovered';
+    const catalog: SkillCatalog = { ...codexCatalog, skills: [
+      { provider: 'codex', documentKind: 'skill', name: 'plug:one', description: 'd', source: 'plugin', path: '/p/SKILL.md', modelAvailable: true, unavailableReason: null },
+      { provider: 'codex', documentKind: 'skill', name: 'skill-installer', description: 'd', source: 'system', path: '/s/SKILL.md', modelAvailable: true, unavailableReason: null },
+    ] };
+    codexSkillRoute.catalog = async () => catalog;
     const { workId, sessionId } = await pending('codex');
     const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'native-thread' };
     const plan = await (which === 'planNew' ? planNew : planResume)(project, workId, session);
-    expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
-    expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
-    const server = parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
-    expect(server.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
-    // find_skill работает рядом со списком: навигатор включён, строка об убранном списке не обещана.
-    expect(server.env.PARLEY_SKILL_NAVIGATOR).toBe('1');
-    const layer = JSON.parse(plan.args.find((arg) => arg.startsWith('developer_instructions='))!.slice('developer_instructions='.length)) as string;
-    expect(layer).toContain('find_skill — skills by task, if needed.');
-    expect(layer).not.toContain('no native skill list');
-    expect(plan.diagnostics?.map((warning) => warning.code)).toEqual(['codex-skill-list-kept']);
-    expect(plan.diagnostics?.[0]?.message).toContain('native skill list stays');
-    expect(plan.warnings.filter((warning) => warning.includes('native skill list'))).toEqual([plan.diagnostics![0]!.message]);
+    expect(codexConfigValues(plan.args)).toContain(SKILL_FLAG);
+    expect(plan.env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+    expect(plan.diagnostics?.map((warning) => warning.code)).toEqual([]);
+    expect(plan.warnings.join(' ')).not.toContain('native skill list');
+    // Плагинные и системные навыки сохранены в каталоге сессии вместе с остальными.
+    const revision = (await readNativeContext(project, workId, sessionId))!.revision;
+    expect(await readNativeSkillCatalog(project, workId, sessionId, revision)).toEqual(catalog);
   });
 
-  it('Codex: каталог не прочитался — список остаётся, без диагностики, с общим предупреждением', async () => {
+  it('Codex: каталог не прочитался (skills/list не ответил) — список остаётся, без диагностики, с общим предупреждением', async () => {
     setEnv('PARLEY_SKILL_NAVIGATOR', '1');
-    codexSkillRoute.coverage = async () => 'unreadable';
+    codexSkillRoute.catalog = async () => null;
     const { workId, sessionId } = await pending('codex');
     const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
     expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
     expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
     expect(plan.diagnostics?.map((warning) => warning.code)).toEqual([]);
     expect(plan.warnings.join(' ')).toContain('full native skill list');
+    // Нечего сохранять: файла каталога нет.
+    const revision = (await readNativeContext(project, workId, sessionId))!.revision;
+    expect(await readNativeSkillCatalog(project, workId, sessionId, revision)).toBeNull();
+  });
+
+  it('Codex: каталог прочитан, но не сохранился — список остаётся, с общим предупреждением', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId } = await pending('codex');
+    // Место файла каталога занято папкой: запись упирается в `rename`, а дескриптор уже записан.
+    codexSkillRoute.catalog = async () => {
+      await mkdir(path.join(project, '.parley/local/native-context', workId, `${sessionId}.skills.json`));
+      return codexCatalog;
+    };
+    const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
+    expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
+    expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+    expect(plan.diagnostics?.map((warning) => warning.code)).toEqual([]);
+    expect(plan.warnings.join(' ')).toContain('full native skill list');
+    const revision = (await readNativeContext(project, workId, sessionId))!.revision;
+    expect(await readNativeSkillCatalog(project, workId, sessionId, revision)).toBeNull();
+    // Дескриптор подтверждён, и MCP-серверу остаётся прежнее живое чтение.
+    expect((await readNativeContext(project, workId, sessionId))?.verified).toBe(true);
   });
 
   it('Codex: настоящее чтение каталога у заглушки, не знающей app-server, — непрочитано, список остаётся', async () => {
@@ -1790,7 +1818,7 @@ describe('сокращение родного списка скиллов вме
 
 describe('навигатор включён по умолчанию', () => {
   it.each(['claude', 'codex', 'glm'])('%s: без явного включения запуск несёт навигатор, PARLEY_SKILL_NAVIGATOR=0 его выключает', async (provider) => {
-    codexSkillRoute.coverage = async () => 'covered';
+    codexSkillRoute.catalog = async () => codexCatalog;
     await claudeConfig();
     // GLM читает настоящий `~/.claude` хозяина: подменяем дом, чтобы там не оказалось мода jev.
     setEnv('HOME', path.join(home, 'empty-home'));

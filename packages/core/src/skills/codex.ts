@@ -76,6 +76,26 @@ function absent(error: unknown): boolean {
 async function exists(file: string): Promise<boolean> {
   try { await lstat(file); return true; } catch (error) { if (absent(error)) return false; throw error; }
 }
+/** Политика навыка `agents/openai.yaml` рядом с `SKILL.md`: общее чтение для обхода диска и каталога из `skills/list`. */
+export type CodexSkillPolicy =
+  | { status: 'absent' }
+  /** Файл не читается или его форма не та: причина для диагностики (без текста файла). */
+  | { status: 'invalid'; diagnostic: MetadataDiagnostic }
+  | { status: 'valid'; allowImplicitInvocation: boolean | undefined; productsRestricted: boolean };
+export async function readCodexSkillPolicy(policyFile: string): Promise<CodexSkillPolicy> {
+  try {
+    if (!(await exists(policyFile))) return { status: 'absent' };
+    const policy = await readYamlDocument(policyFile, CONFIG_MAX_BYTES);
+    if (policy.status === 'invalid') return { status: 'invalid', diagnostic: { ...policy.diagnostic, code: 'invalid-policy' } };
+    const section = policy.data.policy;
+    if (section === undefined) return { status: 'valid', allowImplicitInvocation: undefined, productsRestricted: false };
+    if (!mapping(section) || (section.allow_implicit_invocation !== undefined && typeof section.allow_implicit_invocation !== 'boolean'))
+      return { status: 'invalid', diagnostic: { code: 'invalid-policy' } };
+    const products = section.products;
+    return { status: 'valid', allowImplicitInvocation: section.allow_implicit_invocation as boolean | undefined,
+      productsRestricted: products !== undefined && (!Array.isArray(products) || products.length > 0) };
+  } catch { return { status: 'invalid', diagnostic: { code: 'invalid-policy' } }; }
+}
 const compare = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
 const scopeOrder: Record<Source, number> = { project: 0, plugin: 0, extra: 1, user: 1, system: 2, admin: 3 };
 function validMarkers(value: unknown): value is string[] {
@@ -262,26 +282,17 @@ export async function discoverCodexSkills(options: CodexDiscoveryOptions): Promi
     for (const rule of rules) if ((rule.selector === 'name' && rule.value === name) || (rule.selector === 'path' && rule.value === canonical)) enabled = rule.enabled;
     if (reason === null && !enabled) reason = 'human-disabled';
     const policyFile = path.join(path.dirname(canonical), 'agents/openai.yaml');
-    try {
-      if (await exists(policyFile)) {
-        const policy = await readYamlDocument(policyFile, CONFIG_MAX_BYTES);
-        if (policy.status === 'invalid') {
-          report(root.source, policyFile, { ...policy.diagnostic, code: 'invalid-policy' });
-          if (reason !== 'invalid-metadata') reason = 'availability-unverified';
-        } else if (policy.data.policy !== undefined && (!mapping(policy.data.policy) ||
-          (policy.data.policy.allow_implicit_invocation !== undefined && typeof policy.data.policy.allow_implicit_invocation !== 'boolean'))) {
-          report(root.source, policyFile, { code: 'invalid-policy' });
-          if (reason !== 'invalid-metadata') reason = 'availability-unverified';
-        } else if (mapping(policy.data.policy)) {
-          // Product-filter parity is not verified; never infer an eligible native product.
-          const products = policy.data.policy.products;
-          if (products !== undefined && (!Array.isArray(products) || products.length > 0)) {
-            report(root.source, policyFile, { code: 'invalid-policy' });
-            if (reason !== 'invalid-metadata') reason = 'availability-unverified';
-          } else if (policy.data.policy.allow_implicit_invocation === false && reason === null) reason = 'implicit-invocation-disabled';
-        }
-      }
-    } catch { report(root.source, policyFile, { code: 'invalid-policy' }); if (reason !== 'invalid-metadata') reason = 'availability-unverified'; }
+    const policy = await readCodexSkillPolicy(policyFile);
+    if (policy.status === 'invalid') {
+      report(root.source, policyFile, policy.diagnostic);
+      if (reason !== 'invalid-metadata') reason = 'availability-unverified';
+    } else if (policy.status === 'valid') {
+      // Product-filter parity is not verified; never infer an eligible native product.
+      if (policy.productsRestricted) {
+        report(root.source, policyFile, { code: 'invalid-policy' });
+        if (reason !== 'invalid-metadata') reason = 'availability-unverified';
+      } else if (policy.allowImplicitInvocation === false && reason === null) reason = 'implicit-invocation-disabled';
+    }
     result.skills.push({ provider: 'codex', documentKind: 'skill', name, description, source: root.source, path: canonical, modelAvailable: reason === null, unavailableReason: reason });
   }
 

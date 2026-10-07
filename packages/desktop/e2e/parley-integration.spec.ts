@@ -477,7 +477,7 @@ test.describe('сквозная проверка апгрейда Parley, офл
   test('Codex: каталог не прочитался (заглушка не отвечает как codex) — родной список остаётся, find_skill рядом; чужой путь до CLI — тоже', async () => {
     test.setTimeout(90_000);
     await openApp();
-    // Навигатор включён по умолчанию с 2026-10-06. Сокращение каталога Codex — только когда find_skill покрывает все навыки
+    // Навигатор включён по умолчанию с 2026-10-06. Сокращение каталога Codex — только когда состав навыков прочитан у самого Codex
     // (проверено юнит-тестами со швом `codexSkillRoute`): заглушка app-server не знает, каталог остаётся целым.
     expect(((await call(window, 'settings.get', {})) as { config: { skillNavigator: boolean } }).config.skillNavigator).toBe(true);
     const workId = await newWork();

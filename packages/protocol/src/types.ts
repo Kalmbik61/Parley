@@ -167,8 +167,6 @@ export type NoticeKind =
   | 'parley-md-truncated'
   | 'provider-override-gap'
   | 'role-missing'
-  // У Codex есть навыки, которых `find_skill` не предложит (плагины, системные): родной список остаётся.
-  | 'codex-skill-list-kept'
   | 'memory-truncated'
   | 'memory-unreadable'
   | 'plan-effect-failed'
