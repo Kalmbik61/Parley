@@ -1,4 +1,3 @@
-// packages/desktop/src/renderer/agents/agents-model.test.ts
 import { describe, expect, it } from 'vitest';
 import type { FeedAgent, FeedItem, FeedTool } from '@parley/core';
 import { agentRows, agentSteps, findAgent } from './agents-model.js';

@@ -6,7 +6,7 @@
  */
 
 import { Bot, ChevronRight, LoaderCircle } from 'lucide-react';
-import type { WorkEntry } from '@parley/core';
+import type { FeedItem, WorkEntry } from '@parley/core';
 import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -64,7 +64,6 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPa
   const feed = useFeed(sessionRef);
   const finishedOpen = useChatUiStore((state) => state.finishedOpen[key] ?? false);
   const select = useChatUiStore((state) => state.selectAgent);
-  const setFinishedOpen = useChatUiStore((state) => state.setFinishedOpen);
   const pick = useChatUiStore((state) => state.agentPanel[key] ?? null);
 
   if (!hasFeed) {
@@ -82,19 +81,27 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPa
     );
   }
 
-  if (pick !== null) {
-    return (
-      <div data-testid="agents-panel" className="flex min-h-0 flex-col">
-        <FeedSubscription sessionRef={sessionRef} />
-        <AgentDetail bridge={bridge} sessionRef={sessionRef} items={feed?.items ?? []} pick={pick} onBack={() => select(key, null)} />
-      </div>
-    );
-  }
+  // Подписка — первым ребёнком при обоих видах: переход список ↔ экран агента её не пересоздаёт.
+  return (
+    <>
+      <FeedSubscription sessionRef={sessionRef} />
+      {pick !== null ? (
+        <div data-testid="agents-panel" className="flex min-h-0 flex-col">
+          <AgentDetail bridge={bridge} sessionRef={sessionRef} items={feed?.items ?? []} pick={pick} onBack={() => select(key, null)} />
+        </div>
+      ) : (
+        <AgentList feedItems={feed?.items ?? []} sessionKey={key} finishedOpen={finishedOpen} />
+      )}
+    </>
+  );
+}
 
-  const { running, finished } = agentRows(feed?.items ?? []);
+function AgentList({ feedItems, sessionKey: key, finishedOpen }: { feedItems: readonly FeedItem[]; sessionKey: string; finishedOpen: boolean }): JSX.Element {
+  const select = useChatUiStore((state) => state.selectAgent);
+  const setFinishedOpen = useChatUiStore((state) => state.setFinishedOpen);
+  const { running, finished } = agentRows(feedItems);
   return (
     <div data-testid="agents-panel" className="flex min-h-0 flex-col gap-1 overflow-y-auto px-1">
-      <FeedSubscription sessionRef={sessionRef} />
       {running.length === 0 && finished.length === 0 ? <p className="text-sm text-muted-foreground">{S.agentsPanel.empty}</p> : null}
       {running.map((row) => (
         <AgentRowButton key={row.itemId} row={row} testId="agents-row-running" onOpen={() => select(key, { by: 'item', id: row.itemId })} />

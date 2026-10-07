@@ -1,4 +1,3 @@
-// packages/desktop/src/renderer/agents/AgentDetail.test.tsx
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FeedAgent, FeedItem, FeedTool } from '@parley/core';

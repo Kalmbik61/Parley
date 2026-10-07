@@ -1,4 +1,3 @@
-// packages/desktop/src/renderer/chat/transcript.test.ts
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { FeedItem } from '@parley/core';
