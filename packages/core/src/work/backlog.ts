@@ -216,8 +216,13 @@ function appendSource(source: string, id: string, input: BacklogInput): string {
 /** Дописывает в target пункты source, чьих ID в target ещё нет: строка с пометками и подробности — как есть, в свой раздел
  * (нет раздела — новый `## <раздел>` в конце). Пустой target — это source целиком. Повтор ничего не дублирует. */
 export function mergeBacklogInto(target: string, source: string): string {
-  const present = new Set(parseItems(target).map(item => item.id).filter(id => id !== null));
-  const moving = parseItems(source).filter(item => item.id === null || !present.has(item.id));
+  const present = new Map(parseItems(target).filter(item => item.id !== null).map(item => [item.id!, item]));
+  const moving = parseItems(source).filter(item => {
+    const known = item.id === null ? undefined : present.get(item.id);
+    // Тот же ID с другим текстом — чужой пункт (ID выданы в разных клонах): пропуск потерял бы его вместе с файлом-источником.
+    if (known && (known.title !== item.title || known.details !== item.details)) throw new SharedStateError('backlog-conflict');
+    return !known;
+  });
   if (moving.length === 0) return target;
   if (!target) return source;
   let result = target;
@@ -227,6 +232,11 @@ export function mergeBacklogInto(target: string, source: string): string {
   }
   parseItems(result); // Дубль ID или маркеры конфликта — ошибка до записи.
   return result;
+}
+
+/** Проверка целевого файла до любых изменений: незакрытый блок кода, маркеры конфликта, дубли ID — ошибка. */
+export function assertBacklogReadable(source: string): void {
+  parseItems(source); sectionHeadings(source);
 }
 
 /** Счётчик ID — не ниже любого ID в тексте. Счётчик сохраняется только при записи, а у оставленного файла записей нет:

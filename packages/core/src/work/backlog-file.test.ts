@@ -123,6 +123,28 @@ describe('switching the backlog file', () => {
     expect(await readFile(state(), 'utf8')).toContain('Stay');
     expect((await sharedProjectPaths(project)).backlogChoice).toBeNull();
   });
+  it('refuses a TODOS.md item with the same ID but other text instead of losing the state item', async () => {
+    await seedState('# Backlog\n- [ ] Refactor store <!-- b-005 -->\n');
+    await writeFile(todos(), '# TODOS\n- [ ] Fix login <!-- b-005 -->\n');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(state(), 'utf8')).toContain('Refactor store');
+    expect((await sharedProjectPaths(project)).backlogChoice).toBeNull();
+  });
+  it('refuses an unreadable TODOS.md even when there is nothing to move', async () => {
+    await writeFile(todos(), '# TODOS\n```\n- [ ] Open <!-- b-001 -->\n');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'backlog-invalid' });
+    await writeFile(todos(), '<<<<<<< ours\n- [ ] A\n');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'backlog-merge-conflict' });
+    await rm(todos()); await mkdir(todos());
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    expect((await sharedProjectPaths(project)).backlogChoice).toBeNull();
+  });
+  it('refuses an unclosed code block in TODOS.md when every state ID is already there', async () => {
+    await seedState('# Backlog\n- [ ] Once <!-- b-001 -->\n');
+    await writeFile(todos(), '# TODOS\n- [ ] Once <!-- b-001 -->\n```\n');
+    await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'backlog-invalid' });
+    expect((await sharedProjectPaths(project)).backlogChoice).toBeNull();
+  });
   it('refuses the switch over malformed preferences before touching files', async () => {
     await seedState('# Backlog\n- [ ] Stay <!-- b-001 -->\n'); await prefs('{broken');
     await expect(setBacklogFile(project, 'todos')).rejects.toMatchObject({ code: 'preferences-invalid' });

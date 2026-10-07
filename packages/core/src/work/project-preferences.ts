@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { backlogMode, ensureBacklogIdsInTransaction, mergeBacklogInto, raiseBacklogSeq, saveBacklogLocal, withBacklogTransaction } from './backlog.js';
+import { assertBacklogReadable, backlogMode, ensureBacklogIdsInTransaction, mergeBacklogInto, raiseBacklogSeq, saveBacklogLocal, withBacklogTransaction } from './backlog.js';
 import { MISSING_SHARED_VERSION, SharedStateError, readSharedFile, sharedProjectPaths, withSharedProjectLock, writeSharedFile } from './store.js';
 import type { BacklogFileChoice, SharedDiagnostic, SharedProjectPaths, SharedWriteOptions } from './store.js';
 
@@ -46,11 +46,13 @@ export async function setBacklogFile(projectPath: string, file: BacklogFileChoic
     const before = await preferencesRecord(tx.paths);
     let diagnostics: SharedDiagnostic[] = [];
     if (file === 'todos' && tx.paths.backlogChoice !== 'todos') {
+      // Целевой файл проверяется до любых изменений, даже если переносить нечего.
+      const targetFile = path.join(tx.paths.context.projectPath, tx.paths.todosFile ?? 'TODOS.md');
+      assertBacklogReadable((await readSharedFile(targetFile)).text);
       // Сейчас tx.paths.backlog — файл каталога состояния. ID рукописным пунктам — чтобы перенос узнал их и при повторе.
       diagnostics = await ensureBacklogIdsInTransaction(tx, options);
       const source = await readSharedFile(tx.paths.backlog);
       if (source.version !== MISSING_SHARED_VERSION) {
-        const targetFile = path.join(tx.paths.context.projectPath, tx.paths.todosFile ?? 'TODOS.md');
         const target = await readSharedFile(targetFile);
         const merged = mergeBacklogInto(target.text, source.text);
         if (merged !== target.text) await writeSharedFile(targetFile, merged, target, await backlogMode(targetFile));
