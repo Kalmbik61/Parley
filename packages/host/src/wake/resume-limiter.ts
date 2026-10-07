@@ -34,4 +34,13 @@ export class ResumeLimiter {
     this.taken.set(key, recent);
     return allowed;
   }
+
+  /**
+   * Возвращает последний взятый подъём сессии: подъёма не было (бюджет работы отказал, поднять нечем), и час не
+   * должен платить за него. Это быстрый предварительный счётчик одного хоста: настоящий и переживающий
+   * перезапуск потолок — журнал в карте (`resource-policy.ts`), его проверка стоит в `launch()`.
+   */
+  release(ref: SessionRef): void {
+    this.taken.get(refKey(ref))?.pop();
+  }
 }

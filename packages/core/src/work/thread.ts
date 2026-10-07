@@ -1,4 +1,5 @@
 import { recipientsOf } from './letters.js';
+import { PARLEY } from './types.js';
 import type { Message, WorkMap, WorkSession } from './types.js';
 
 /**
@@ -71,11 +72,21 @@ export const decisionsOf = (thread: Thread): Message[] =>
   thread.messages.filter((message) => message.kind === 'decision');
 
 /**
+ * Последние `limit` решений треда по порядку и сколько их всего: старт агента получает текущий срез со ссылками
+ * на сообщения, а не всю историю (P34).
+ */
+export function recentDecisions(thread: Thread, limit: number): { shown: Message[]; total: number } {
+  const all = decisionsOf(thread);
+  return { shown: all.slice(-limit), total: all.length };
+}
+
+/**
  * Единственное место, где id сессии становится подписью (решение D9 ревью):
  * ярлык у живой записи, «(deleted)» у следа в `deletedSessions`, голый id у
  * чужого. Ярлыка у удалённой в карте не остаётся, поэтому подпись — её id.
  */
 export function participantLabel(map: WorkMap, id: string): string {
+  if (id === PARLEY) return 'Parley';
   const session = map.sessions.find((candidate) => candidate.id === id);
   if (session !== undefined) return session.label;
   return (map.work.deletedSessions ?? []).includes(id) ? `${id} (deleted)` : id;

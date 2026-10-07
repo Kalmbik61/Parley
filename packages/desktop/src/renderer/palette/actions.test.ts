@@ -70,6 +70,7 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
     openNewSession: vi.fn(),
     openNewRoom: vi.fn(),
     openSettings: vi.fn(),
+    openProjectPanel: vi.fn(),
     setAppearance: vi.fn(),
     toggleShowArchived: vi.fn(),
     toggleWake: vi.fn(async () => {}),
@@ -122,6 +123,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'session.new': ({ ui }) => expect(ui.openNewSession).toHaveBeenCalledTimes(1),
     'room.new': ({ ui }) => expect(ui.openNewRoom).toHaveBeenCalledTimes(1),
     'settings.open': ({ ui }) => expect(ui.openSettings).toHaveBeenCalledTimes(1),
+    'project.capabilities': ({ ui }) => expect(ui.openProjectPanel).toHaveBeenCalledWith('/tmp/p'),
     'sidebar.left.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('left'),
     'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
     'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
@@ -568,4 +570,12 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     expect(spies.toast).toHaveBeenCalledWith('Chat needs Claude Code 2.1.286 or newer');
     expect(spies.layout.apply).not.toHaveBeenCalled();
   });
+});
+
+it('capabilities uses the currently active project and cannot open without an active workspace', () => {
+ const spies = makeContext(); useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p' })] });
+ runAction('project.capabilities', spies.ctx); expect(spies.ui.openProjectPanel).toHaveBeenCalledWith('/tmp/p');
+ const missing = makeContext({ activeWorkKey: null }); runAction('project.capabilities', missing.ctx);
+ expect(missing.ui.openProjectPanel).not.toHaveBeenCalled(); expect(missing.toast).toHaveBeenCalledTimes(1);
+ resetFeedHost();
 });

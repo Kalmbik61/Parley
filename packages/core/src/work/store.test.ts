@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -22,7 +22,52 @@ import {
   WorkNotFoundError,
   workPaths,
   worksIndexPath,
+  inspectSharedIgnore,
+  prepareSharedIgnore,
+  readSharedFile,
+  sharedProjectPaths,
+  withSharedProjectLock,
+  writeSharedFile,
 } from './store.js';
+
+describe('shared storage primitives', () => {
+  it('compares content and modification identity, and removes unique temporary files on conflict', async () => {
+    const file = path.join(project, 'shared.md'); await writeFile(file, 'Before');
+    const before = await readSharedFile(file); await writeFile(file, 'Extern');
+    await expect(writeSharedFile(file, 'Stale', before)).rejects.toMatchObject({ code: 'backlog-conflict' });
+    expect(await readFile(file, 'utf8')).toBe('Extern');
+    expect((await readdir(project)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+  it('bounds regular-file reads and refuses invalid UTF-8/directories without rewriting them', async () => {
+    const file = path.join(project, 'invalid'); await writeFile(file, Buffer.from([0xff]));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await expect(readSharedFile(project)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+  });
+  it('rejects symlink/FIFO readers and symlink state directories without following them', async () => {
+    const target = path.join(project, 'target'); await writeFile(target, 'private');
+    const alias = path.join(project, 'alias'); await symlink(target, alias);
+    await expect(readSharedFile(alias)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    const fifo = path.join(project, 'fifo'); await run('mkfifo', [fifo]);
+    await expect(readSharedFile(fifo)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
+    await symlink(other, path.join(project, '.parley'));
+    await expect(sharedProjectPaths(project)).rejects.toMatchObject({ code: 'shared-state-unsafe' });
+    expect(await readdir(other)).toEqual([]);
+  });
+  it('times out on an occupied project lock, never steals it, and releases its own lock after errors', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir); await writeFile(paths.lock, 'foreign');
+    await expect(withSharedProjectLock(paths, async () => {}, { lockTimeoutMs: 0 })).rejects.toMatchObject({ code: 'backlog-lock-timeout' });
+    expect(await readFile(paths.lock, 'utf8')).toBe('foreign'); await rm(paths.lock);
+    await expect(withSharedProjectLock(paths, async () => { throw new Error('fixture'); })).rejects.toThrow('fixture');
+    expect(await exists(paths.lock)).toBe(false);
+  });
+  it('preserves an observed replacement lock during cleanup', async () => {
+    const paths = await sharedProjectPaths(project);
+    await withSharedProjectLock(paths, async () => { await rename(paths.lock, paths.lock + '.old'); await writeFile(paths.lock, 'replacement'); });
+    expect(await readFile(paths.lock, 'utf8')).toBe('replacement');
+  });
+});
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -146,7 +191,8 @@ describe('createWork', () => {
     expect(paths.dir).toBe(path.join(project, '.parley', 'works', 'w-0001'));
     expect(await isDirectory(paths.briefs)).toBe(true);
     expect(await isDirectory(paths.artifacts)).toBe(true);
-    expect(await readMap(project, 'w-0001')).toEqual(map);
+    // Omitted optional plans are normalized to an empty list by the accepted map reader.
+    expect(await readMap(project, 'w-0001')).toEqual({ ...map, plans: [] });
 
     expect(worksIndexPath()).toBe(path.join(home, 'works-index.json'));
     expect((await readWorksIndex()).works).toEqual([
@@ -637,4 +683,50 @@ describe('deleteSessionFiles', () => {
     expect(await exists(path.join(limits, 's-01.json'))).toBe(false);
     expect(await exists(path.join(limits, 's-02.json'))).toBe(true);
   });
+});
+
+
+describe('read-only shared ignore diagnostics', () => {
+  it('does not create a state directory or ignore file on an untouched GET', async () => {
+    const paths = await sharedProjectPaths(project);
+    expect(await inspectSharedIgnore(paths)).toEqual([]);
+    await expect(stat(paths.dir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('preserves custom/BOM/CRLF bytes and diagnoses an existing missing ignore file', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+    expect(await inspectSharedIgnore(paths)).toEqual([{ code: 'parley-gitignore-custom' }]);
+    const file = path.join(paths.dir, '.gitignore');
+    for (const text of ['custom\n', '\uFEFF*\n', '*\r\n']) {
+      await writeFile(file, text); expect(await inspectSharedIgnore(paths)).toContainEqual({ code: 'parley-gitignore-custom' });
+      expect(await readFile(file, 'utf8')).toBe(text);
+    }
+  });
+  it('does not migrate the old generated signature during inspection, and write preparation still migrates it', async () => {
+    const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+    const file = path.join(paths.dir, '.gitignore'); await writeFile(file, '*\n');
+    expect(await inspectSharedIgnore(paths)).toEqual([]); expect(await readFile(file, 'utf8')).toBe('*\n');
+    expect(await prepareSharedIgnore(paths)).toEqual([]);
+    expect(await readFile(file, 'utf8')).toBe('*\n!.gitignore\n!backlog.md\n!plans/\n!plans/**\n!memory.md\n!decisions/\n!decisions/**\n!history-shared/\n!history-shared/**\n!recipes/\n!recipes/**\n');
+  });
+  it('reuses the accepted bounded native ignore query without root ignore writes', async () => {
+    const paths = await sharedProjectPaths(project);
+    const calls: readonly string[][] = [];
+    const options = { readGit: async (args: readonly string[]) => { (calls as string[][]).push([...args]); return { code: 0, stdout: '.parley/backlog.md\n', stderr: '' }; } };
+    expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: paths.context.projectPath, mainRoot: paths.context.projectPath, checkoutRoot: paths.context.projectPath } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
+    expect(calls[0]).toContain('check-ignore'); expect(calls[0]).toContain('core.fsmonitor=false');
+    await expect(stat(path.join(project, '.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+it('memory diagnostics use the verified canonical path without writing a read-time migration', async () => {
+  const { PRE_MEMORY_STATE_IGNORE } = await import('./state-dir.js');
+  const paths = await sharedProjectPaths(project); await mkdir(paths.dir);
+  await writeFile(path.join(paths.dir, '.gitignore'), PRE_MEMORY_STATE_IGNORE);
+  const calls: string[][] = [];
+  const options = { readGit: async (args: readonly string[]) => {
+    calls.push([...args]); return { code: args.includes(path.relative(paths.context.projectPath, paths.memory)) ? 0 : 1, stdout: args.includes(path.relative(paths.context.projectPath, paths.memory)) ? '.parley/memory.md\n' : '', stderr: '' };
+  } };
+  expect(await inspectSharedIgnore({ ...paths, context: { kind: 'git', projectPath: paths.context.projectPath, mainRoot: paths.context.projectPath, checkoutRoot: paths.context.projectPath } }, options)).toContainEqual({ code: 'parley-dir-ignored' });
+  expect(calls.some(args => args.includes(path.relative(paths.context.projectPath, paths.memory)))).toBe(true);
+  expect(await readFile(path.join(paths.dir, '.gitignore'), 'utf8')).toBe(PRE_MEMORY_STATE_IGNORE);
 });

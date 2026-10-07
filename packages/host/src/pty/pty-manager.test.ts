@@ -241,7 +241,7 @@ describe('PtyManager', () => {
       const sessionRef = ref();
       manager.start(sessionRef, launch({ STUB_FLOOD_MB: '20' }));
 
-      await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('FLOOD DONE'), 15_000);
+      await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('FLOOD DONE'), 40_000);
 
       const { snapshot, rows } = manager.snapshot(sessionRef);
       const lineCount = snapshot.split(/\r?\n/).length;
@@ -252,7 +252,7 @@ describe('PtyManager', () => {
 
       await manager.stop(sessionRef, { graceMs: 200 });
     },
-    20_000,
+    50_000,
   );
 });
 

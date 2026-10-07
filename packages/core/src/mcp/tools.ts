@@ -1,3 +1,11 @@
+import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { claudeProjectRoots } from '../discover.js';
+import { readClaudeSkillCatalog } from '../skills/claude-listing.js';
+import { readCodexSkillCatalog } from '../skills/context.js';
+import { searchSkills } from '../skills/search.js';
+import type { SkillCatalog } from '../skills/catalog.js';
+import { nativeContextMatches, readNativeContext, readNativeSkillCatalog } from '../work/native-context.js';
 import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,29 +17,67 @@ import {
   type Request,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { DEFAULT_CONFIG } from '../config.js';
+import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
+  PROVIDERS,
+  claudeConfigDirFor,
+  isClaudeCode,
   providerReadiness,
   providerReadinessError,
   loadProviders,
   resolveModelEffort,
   selectableModels,
   supportsEffort,
+  supportsModel,
 } from '../providers.js';
-import { agentDirs, assertAgent } from '../work/agents.js';
+import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { writeBrief } from '../work/brief.js';
-import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
+import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
+import {
+  PAGE_MAX_BYTES,
+  PAGE_MAX_ITEMS,
+  PAGE_MIN_BYTES,
+  PageError,
+  clampPageBytes,
+  listPage,
+  mapTopology,
+  messagePage,
+  pageBySeq,
+  parseCursor,
+  seqOf,
+  textPage,
+} from '../work/context-pages.js';
+import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { readBacklog } from '../work/backlog.js';
+import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
+import { rememberProjectMemory } from '../work/memory-suggestions.js';
+import { HISTORY_SCOPES, HistorySearchError, MAX_SEARCH_LIMIT, searchHistory } from '../work/history-search.js';
+import type { HistoryScope } from '../work/history-search.js';
+import { readProjectMemory } from '../work/project-memory.js';
+import type { MemoryKind } from '../work/project-memory.js';
+import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
-import { PROPOSAL_TEXT_MAX, setProposal } from '../work/proposals.js';
+import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
+import {
+  admitSpawn,
+  assertMessageBudget,
+  countRecipients,
+  deniedForAgent,
+  limitsFromConfig,
+  ResourceDeniedError,
+  type ResourceLimits,
+} from '../work/resource-policy.js';
+import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
-import { readMap, updateMap, workPaths } from '../work/store.js';
-import { participantLabel } from '../work/thread.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
+import { participantLabel, threadOf } from '../work/thread.js';
 import {
   MESSAGE_KINDS,
+  SYSTEM,
   type Artifact,
   type Message,
   type Room,
@@ -204,15 +250,23 @@ const messageView = (message: Message, map: WorkMap) => {
  * этой сессии за последний час по всей карте. Скользящий час отличает петлю от
  * честной долгой работы и восстанавливается сам; состояния нет — всё в карте.
  */
-function assertRate(map: WorkMap, sessionId: string, limit: number, now: number): void {
+function assertRate(map: WorkMap, sessionId: string, limit: number, now: number, needed = 1): void {
   const recent = map.messages.filter(
     (message) => message.from === sessionId && now - Date.parse(message.at) < RATE_WINDOW_MS,
   ).length;
-  if (recent >= limit) {
+  if (recent + needed > limit) {
     throw new Error(
       `too many messages: ${recent} from this session in the last hour (limit ${limit}); call report and turn to the human`,
     );
   }
+}
+
+/**
+ * Пороги бюджета для допуска. Настройки читаются заново на каждый допуск, а не при старте сервера: изменение человека
+ * в окне действует сразу, а агент остановленный лимит сам расширить не может — у него нет ни инструмента, ни аргумента.
+ */
+async function limitsOf(context: McpContext): Promise<ResourceLimits> {
+  return context.resourceLimits ?? limitsFromConfig((await loadConfig()).config);
 }
 
 /**
@@ -242,12 +296,70 @@ const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openW
 const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const TOOLS: Tool[] = [
+  ...PLAN_TOOLS,
+  {
+    name: 'backlog_list', annotations: READS,
+    description: 'Read this project backlog before suggesting work outside your task. Reads never create files or assign IDs.',
+    inputSchema: { type: 'object', properties: {
+      filter: { type: 'string', enum: ['open', 'taken', 'done', 'all'], default: 'open' },
+      text: { type: 'string', maxLength: 4096 },
+    }, additionalProperties: false },
+  },
+  {
+    name: 'backlog_suggest', annotations: WRITES,
+    description: 'Propose one worthwhile finding outside your task with a reason. The project rule decides whether to add it or ask the human. Cannot edit, close, or remove existing items.',
+    inputSchema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['bug', 'debt', 'idea'] }, title: { type: 'string', minLength: 1, maxLength: 4096 },
+      details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
+    }, required: ['kind', 'title', 'why'], additionalProperties: false },
+  },
+  {
+    name: 'remember', annotations: WRITES,
+    description: 'Propose one lasting fact, lesson or agreement about this project, with a reason. It waits for the human to accept it, unless the human has just asked you to remember it: then set onHumanRequest. One fact per call, short; do not store what the code, git, PARLEY.md or CLAUDE.md already say.',
+    inputSchema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['fact', 'lesson', 'agreement'] }, fact: { type: 'string', minLength: 1, maxLength: 4096 },
+      details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
+      onHumanRequest: { type: 'boolean', description: 'Only when the human asked you in this conversation to remember it.' },
+    }, required: ['kind', 'fact', 'why'], additionalProperties: false },
+  },
+  {
+    name: 'memory_read', annotations: READS,
+    description: 'Read the project memory with details: all entries, or only the given ids (m-NNN). The memory phrases are already in your instructions; this adds the details. Current human instructions take precedence over memory.',
+    inputSchema: { type: 'object', properties: {
+      ids: { type: 'array', items: { type: 'string', pattern: '^m-\\d{3,}$' }, maxItems: 100 },
+    }, additionalProperties: false },
+  },
+  {
+    name: 'search_history', annotations: READS,
+    description: `Search this project's past before deciding something big: accepted decisions, memory, plans, backlog, room histories and session results. All words of the query must meet in one entry. scope: ${HISTORY_SCOPES.join(', ')} (default all). Does not search skills.`,
+    inputSchema: { type: 'object', properties: {
+      query: { type: 'string', minLength: 1, maxLength: 1000 },
+      scope: { type: 'string', enum: [...HISTORY_SCOPES], default: 'all' },
+      limit: { type: 'integer', minimum: 1, maximum: MAX_SEARCH_LIMIT, default: 10 },
+    }, required: ['query'], additionalProperties: false },
+  },
   {
     name: 'get_map',
     annotations: READS,
     description:
-      'The whole workspace map: sessions, their statuses, summaries and artifacts, messages — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels, and effort, for spawn_session). Call it first; the detailed guide is the read_guide tool',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels, and effort, for spawn_session). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Session id (s-NN): that session in detail, or with field the one field of it.' },
+        room: { type: 'string', description: 'Room id (r-NN): that room in full, or with field messages its message pages. Without field only participants read a room.' },
+        field: {
+          type: 'string',
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive'],
+          description: 'goal/title — the workspace texts; task/summary/history/artifacts/contextFrom — one field of session; messages — message pages of room (without room — your direct messages), newest first; message — the text of the message id; summaries — summaries of all sessions; archive — other workspaces of this project.',
+        },
+        id: { type: 'string', description: 'Message id (m-NN) for field message.' },
+        kind: { type: 'string', enum: [...MESSAGE_KINDS], description: 'Only messages of this kind (field messages); decision lists the decisions of a room.' },
+        cursor: { type: 'string', description: 'The `next` of the previous page: continues it without gaps or repeats. Messages: a cursor before:N goes to older ones, after:N to newer ones.' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536.' },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'report',
@@ -273,6 +385,9 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'list_roles', annotations: READS, description: 'List current builtin and native roles in the participant working folder, without prompts or file paths.', inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'spawn_session',
     annotations: WRITES,
     description:
@@ -288,10 +403,11 @@ const TOOLS: Tool[] = [
           description: 'Ids of sessions whose summaries and artifacts go into the brief.',
           items: { type: 'string' },
         },
+        role: { type: 'string', description: 'Source-qualified role id from list_roles. Provider may override a builtin default; a native role must match the provider (a Claude role also fits GLM).' },
         agent: {
           type: 'string',
           description:
-            'The session role — a Claude Code agent: the name of the file .claude/agents/<name>.md of the project or ~/.claude/agents/<name>.md. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
+            'Legacy Claude role alias: exact metadata.name from a native agent definition. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
         },
         worktree: {
           type: 'boolean',
@@ -299,17 +415,17 @@ const TOOLS: Tool[] = [
             "Isolate the session in its own git worktree — its edits do not touch the project's working copy until it is decided to merge them (the window's Changes panel). Only for a project with git; Parley itself creates it before the launch.",
         },
         model: {
-          type: 'string',
+          type: ['string', 'null'],
           description:
-            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Without the field — the default model.",
+            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
         },
         effort: {
-          type: 'string',
+          type: ['string', 'null'],
           description:
-            "The new session's reasoning effort: one of the efforts of the chosen model in get_map; with the default model, the levels shared by its provider's models. A provider with effort: false drops the value. Without the field, the default effort.",
+            "The new session's reasoning effort: one of the efforts of the chosen model in get_map; with the default model, the levels shared by its provider's models. A provider with effort: false drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
         },
       },
-      required: ['provider', 'label', 'task'],
+      required: ['label', 'task'],
     },
   },
   {
@@ -410,12 +526,14 @@ const TOOLS: Tool[] = [
     name: 'read_room',
     annotations: READS,
     description:
-      "The room's feed for context — the last limit messages, without read marks. Available only to participants.",
+      "The room's feed for context — the last limit messages within the byte limit, without read marks; `page.next` continues to older ones. Available only to participants.",
     inputSchema: {
       type: 'object',
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
         limit: { type: 'number', description: 'How many of the latest messages to return; the default is 50.' },
+        cursor: { type: 'string', description: 'The `next` of the previous page: older messages (before:N) or newer ones (after:N).' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536. A message that does not fit is cut with its full size named (textBytes); get_map with field message reads it whole.' },
       },
       required: ['room'],
     },
@@ -429,12 +547,17 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
+        plan: PLAN_DRAFT_SCHEMA,
+        kind: { type: 'string', enum: ['decision', 'completion'] },
+        planId: { type: 'string', pattern: '^pl-[0-9]+$', maxLength: 128 },
+        rev: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         text: {
           type: 'string',
           description: `The whole decision, up to ${PROPOSAL_TEXT_MAX} characters: what we do and which part each takes; name participants with @s02 mentions.`,
         },
       },
       required: ['room', 'text'],
+      additionalProperties: false,
     },
   },
   {
@@ -468,7 +591,9 @@ const TOOLS: Tool[] = [
   },
 ];
 
-async function getMap(context: McpContext): Promise<unknown> {
+async function getMap(context: McpContext, args: Record<string, unknown> = {}): Promise<unknown> {
+  const map = await readMap(context.projectPath, context.workId);
+  if (Object.keys(args).length > 0) return mapPage(context, map, args);
   const registry = await loadProviders();
   const providers = await Promise.all(
     Object.values(registry).map(async (entry) => {
@@ -483,11 +608,129 @@ async function getMap(context: McpContext): Promise<unknown> {
       };
     }),
   );
-  return {
-    sessionId: context.sessionId,
-    map: await readMap(context.projectPath, context.workId),
-    providers,
-  };
+  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
+}
+
+const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
+  const value = args[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`argument ${name}: expected a string`);
+  return value;
+};
+
+/**
+ * Прямое письмо видно сессии, если оно в её треде (родитель и дети делят письма, одинокий корень видит все) или
+ * оно её собственное; письмо комнаты — участнику комнаты, как в `read_room`. Прежний `get_map` отдавал все письма
+ * работы всем, страницы — только то, что сессии положено читать.
+ */
+function canReadMessage(map: WorkMap, message: Message, sessionId: string, thread: ReadonlySet<string>): boolean {
+  if (message.roomId === null) return thread.has(message.id) || message.from === sessionId || message.to.includes(sessionId);
+  const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+  return room !== undefined && isMember(room, sessionId);
+}
+
+/** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
+async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
+  const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
+  const field = optionalString(args, 'field');
+  const sessionId = optionalString(args, 'session');
+  const roomId = optionalString(args, 'room');
+  const cursorRaw = optionalString(args, 'cursor');
+  try {
+    if (field === undefined) {
+      if (sessionId !== undefined) {
+        const session = requireSession(map, sessionId);
+        const entry = mapTopology(map, context.sessionId).sessions.find((candidate) => candidate.id === sessionId);
+        return { session: { ...entry, artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
+      }
+      if (roomId !== undefined) {
+        const room = requireRoom(map, roomId);
+        const topology = mapTopology(map, context.sessionId).rooms.find((candidate) => candidate.id === roomId);
+        const { recipe, recipeLeadNotified, ...rest } = room;
+        void recipeLeadNotified;
+        // Решение целиком (до 10000 знаков) — здесь, а не в общей топологии.
+        return { room: { ...rest, recipe: recipe == null ? null : { id: recipe.id, name: recipe.name } }, messages: topology?.messages };
+      }
+      throw new Error('give session, room or field; without parameters get_map returns the compact map');
+    }
+    if (field === 'goal' || field === 'title') return { field, ...textPage(map.work[field], cursorRaw, maxBytes) };
+    if (field === 'archive') {
+      const index = await readWorksIndex();
+      const others = index.works.filter((work) => work.projectPath === context.projectPath && work.id !== context.workId);
+      const { items, page } = pageBySeq(others, {
+        seq: (work) => seqOf(work.id, 'w-'),
+        view: (work) => ({ id: work.id, title: work.title, status: work.status, updatedAt: work.updatedAt }),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+      });
+      return { workspaces: items, page };
+    }
+    if (field === 'summaries') {
+      const withSummary = map.sessions.filter((session) => session.summary !== null);
+      const { items, page } = pageBySeq(withSummary, {
+        seq: (session) => seqOf(session.id, 's-'),
+        view: (session) => ({ id: session.id, label: session.label, status: displayStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        shrink: (view, limit) => shrinkSummary(view, limit),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+      });
+      return { summaries: items, page };
+    }
+    if (field === 'messages' || field === 'message') {
+      const caller = context.sessionId;
+      if (caller === null) throw new Error(NO_SESSION);
+      if (field === 'message') {
+        const id = optionalString(args, 'id');
+        if (id === undefined) throw new Error('argument id is required for field message');
+        const message = map.messages.find((candidate) => candidate.id === id);
+        if (message === undefined || !canReadMessage(map, message, caller, new Set(threadOf(map, caller).messages.map((row) => row.id)))) throw new PageError('unknown-target', `message ${id} is not available to this session`);
+        return { id, from: message.from, at: message.at, roomId: message.roomId, ...textPage(message.text, cursorRaw, maxBytes) };
+      }
+      let filter: ((message: Message) => boolean) | undefined;
+      if (roomId === undefined) {
+        const thread = new Set(threadOf(map, caller).messages.map((row) => row.id));
+        filter = (message) => canReadMessage(map, message, caller, thread);
+      }
+      else if (!isMember(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
+      const kind = optionalString(args, 'kind');
+      if (kind !== undefined && !(MESSAGE_KINDS as readonly string[]).includes(kind)) throw new Error(`argument kind: one of ${MESSAGE_KINDS.join(', ')}`);
+      return messagePage(map, {
+        roomId: roomId ?? null,
+        ...(kind === undefined ? {} : { kind: kind as Message['kind'] }),
+        ...(filter === undefined ? {} : { filter }),
+        cursor: parseCursor(cursorRaw),
+        maxBytes,
+        view: (message) => messageView(message, map),
+      });
+    }
+    // Остальные поля — поля одной сессии.
+    if (sessionId === undefined) throw new Error(`field ${field} needs the session argument`);
+    const session = requireSession(map, sessionId);
+    if (field === 'task') return { session: sessionId, field, ...textPage(session.task, cursorRaw, maxBytes) };
+    if (field === 'summary') return { session: sessionId, field, ...textPage(session.summary ?? '', cursorRaw, maxBytes) };
+    if (field === 'contextFrom') return { session: sessionId, field, contextFrom: session.contextFrom };
+    if (field === 'history') {
+      const { items, page } = listPage(session.history, { view: (entry) => entry, cursor: parseCursor(cursorRaw), maxBytes });
+      return { session: sessionId, field, history: items, page };
+    }
+    if (field === 'artifacts') {
+      const { items, page } = listPage(session.artifacts, { view: (entry) => entry, cursor: parseCursor(cursorRaw), maxBytes });
+      return { session: sessionId, field, artifacts: items, page };
+    }
+    throw new Error(`unknown field ${field}`);
+  } catch (error) {
+    // Ошибка запроса страницы — для агента: код и что поправить, без внутренностей.
+    if (error instanceof PageError) throw new Error(`${error.code}: ${error.message}`);
+    throw error;
+  }
+}
+
+/** Резюме в странице `summaries`: длинное сокращается с полным размером — целиком оно читается полем summary. */
+function shrinkSummary<V extends { id: string; text: string }>(view: V, limit: number): V & { textBytes: number } {
+  const full = Buffer.byteLength(view.text, 'utf8');
+  const text = markedExcerpt(view.text, Math.max(256, limit - 1024)).text;
+  return { ...view, text: `${text} [read the whole summary: get_map {session: "${view.id}", field: "summary"}]`, textBytes: full };
 }
 
 async function report(
@@ -533,22 +776,28 @@ async function spawnSession(
   sessionId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const provider = stringArg(args, 'provider');
+  if (args['agent'] !== undefined && args['role'] !== undefined) throw new Error('agent-and-role-conflict');
+  const savedRole = args['role'] === undefined ? (args['agent'] === undefined ? null : { source: 'claude' as const, name: stringArg(args, 'agent') }) : roleFromId(stringArg(args, 'role'));
+  if (!savedRole && args['provider'] === undefined) throw new Error('provider is required without a role');
+  const registry = await loadProviders();
+  // Каталог ролей Claude читает конфигурацию того провайдера, для которого роль берётся (у GLM — `~/.claude`).
+  const requestedEntry = args['provider'] === undefined ? undefined : registry[stringArg(args, 'provider')];
+  const catalog = savedRole ? await (context.roleCatalog ? context.roleCatalog(context.projectPath) : sessionRoleCatalog(context.projectPath, { codex: savedRole.source === 'codex', ...(requestedEntry ? { provider: requestedEntry } : {}) })) : undefined;
+  const provider = args['provider'] === undefined ? (catalog?.roles.find(role => role.id === roleId(savedRole))?.provider ?? 'claude') : stringArg(args, 'provider');
   const label = stringArg(args, 'label');
   const task = stringArg(args, 'task');
   const contextFrom = stringsArg(args, 'contextFrom');
   // Роль необязательна: без неё сессия идёт обычным агентом провайдера.
-  const agent = args['agent'] === undefined ? null : stringArg(args, 'agent');
   // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
   const worktree = args['worktree'] === true;
   // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
-  // необязательный параметр. Вид значений и принадлежность спискам сверяет `resolveModelEffort` ниже.
+  // необязательный параметр. Только явный null очищает умолчание роли до умолчания CLI. Вид значений
+  // и принадлежность спискам сверяет `resolveModelEffort` ниже.
   const model =
-    args['model'] === undefined || args['model'] === '' ? undefined : stringArg(args, 'model');
+    args['model'] === undefined || args['model'] === '' ? undefined : args['model'] === null ? null : stringArg(args, 'model');
   const effort =
-    args['effort'] === undefined || args['effort'] === '' ? undefined : stringArg(args, 'effort');
+    args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : stringArg(args, 'effort');
 
-  const registry = await loadProviders();
   const entry = registry[provider];
   if (entry === undefined) {
     throw new Error(
@@ -562,23 +811,18 @@ async function spawnSession(
   // (у «по умолчанию» — общих уровней моделей провайдера) — отказ, а не `pending`, который нечем
   // запустить. Правило одно с `sessions.create` хоста — `resolveModelEffort` в core (нормалайзер, 5.3).
   // Флаг, которого нет в шаблоне запуска провайдера, resolver отбрасывает молча — и модель, и усилие; окно
-  // узнаёт об этом из `providers.list`, агент — из `get_map`.
+  // узнаёт об этом из `providers.list`, агент — из `get_map`. Явный `null` — «Default» без проверки:
+  // он снимает умолчание роли и доезжает до карты, только если провайдер принимает флаг; effort-строка
+  // рядом с `model: null` проверяется по уровням «Default».
   const resolved = resolveModelEffort(entry, {
-    ...(model === undefined ? {} : { model }),
-    ...(effort === undefined ? {} : { effort }),
+    ...(typeof model === 'string' ? { model } : {}),
+    ...(typeof effort === 'string' ? { effort } : {}),
   });
   if ('error' in resolved) throw new Error(resolved.error);
-  const chosenModel = resolved.choice.model;
-  const chosenEffort = resolved.choice.effort;
+  const chosenModel = model === null ? (supportsModel(entry) ? null : undefined) : resolved.choice.model;
+  const chosenEffort = effort === null ? (supportsEffort(entry) ? null : undefined) : resolved.choice.effort;
 
-  // Роль проверяем до записи: `pending`, который нечем запустить, — мусор в
-  // карте (спецификация 2026-09-08, раздел 7).
-  if (agent !== null) {
-    if (!(entry.runner.args ?? []).includes('{agent}')) {
-      throw new Error(`provider ${provider} does not accept agents`);
-    }
-    await assertAgent(agent, agentDirs(context.projectPath));
-  }
+  await prepareSessionRole(context.projectPath, entry, { roleId: roleId(savedRole), provider, mode: 'create' }, catalog);
 
   // База worktree — та же причина, что и роль: пропускаем до записи в карту, а
   // не после. `updateMap` мутирует карту синхронно, поэтому асинхронные проверки
@@ -593,21 +837,26 @@ async function spawnSession(
       parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
   }
 
+  const limits = await limitsOf(context);
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
     for (const id of contextFrom) requireSession(current, id);
+    // Допуск и запись сессии — одна мутация под замком карты: отказ не оставляет ни сессии, ни резерва, а параллельные
+    // вызовы разных агентов видят слоты друг друга.
+    const attempt = admitSpawn(current, { actor: sessionId, limits });
     const session = addSession(current, {
       provider,
       label,
       task,
       parent: sessionId,
       contextFrom,
-      agent,
+      role: savedRole,
       ...(chosenModel === undefined ? {} : { model: chosenModel }),
       ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
     });
     created = session.id;
+    attempt.session = session.id;
     if (worktreeBase !== null) {
       // Сам worktree на диске заводит хост перед запуском (кусок 4.2); здесь —
       // только план с `createdAt: null`.
@@ -766,6 +1015,7 @@ async function sendMessage(
   // Пустая строка — ошибка, как у `room`: `stringArg` пустое значение не пропускает.
   const replyTo = optionalStringArg(args, 'replyTo');
 
+  const limits = await limitsOf(context);
   let created = '';
   await updateMap(context.projectPath, context.workId, (current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
@@ -794,6 +1044,13 @@ async function sendMessage(
           throw new Error(`message ${replyTo} is not in room ${roomId}`);
         }
       }
+      assertMessageBudget(current, {
+        actor: sessionId,
+        room: roomId,
+        messages: 1,
+        recipients: countRecipients(current, sessionId, roomId, to),
+        limits,
+      });
       // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
       created = addMessage(current, {
         from: sessionId,
@@ -812,6 +1069,7 @@ async function sendMessage(
       }
       const target = to[0] as string;
       assertDeliverable(current, target);
+      assertMessageBudget(current, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
@@ -840,6 +1098,7 @@ async function createRoom(
   const membersInput = stringsArg(args, 'members');
   const leadInput = optionalStringArg(args, 'lead');
 
+  const limits = await limitsOf(context);
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
@@ -851,6 +1110,12 @@ async function createRoom(
       if (member.lifecycle === 'closed') {
         throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
+    }
+    // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
+    // иначе исчерпанный лимит обходился бы созданием комнаты.
+    if (members.length > 0) {
+      assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), members.length);
+      assertMessageBudget(current, { actor: sessionId, room: null, messages: members.length, recipients: members.length, limits });
     }
 
     // Без `lead` ведущий — вызывающий: агент заводит комнату для своих подчинённых и ведёт её сам
@@ -888,6 +1153,9 @@ async function addToRoom(
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
+    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
+    // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
+    // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
     messageId = addMemberByLead(current, roomId, sessionId, target).id;
   });
   return { messageId };
@@ -907,29 +1175,28 @@ async function readRoom(
     throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
   }
 
-  const inRoom = map.messages
-    .filter((message) => message.roomId === roomId)
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(-limit);
-  return { messages: inRoom.map((message) => messageView(message, map)) };
+  // Хвост комнаты в пределах байтов: письмо, которое одно не влезает, сокращается с полным размером, а старее —
+  // по `page.next`. Прежний ответ был `limit` писем любого размера.
+  try {
+    return messagePage(map, {
+      roomId,
+      cursor: parseCursor(optionalString(args, 'cursor')),
+      maxBytes: clampPageBytes(numberArg(args, 'maxBytes')),
+      maxItems: Math.min(Math.max(Math.floor(limit), 1), PAGE_MAX_ITEMS),
+      view: (message) => messageView(message, map),
+    });
+  } catch (error) {
+    if (error instanceof PageError) throw new Error(`${error.code}: ${error.message}`);
+    throw error;
+  }
 }
 
 async function proposeDecision(
   context: McpContext,
-  sessionId: string,
+  _sessionId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const roomId = stringArg(args, 'room');
-  const text = stringArg(args, 'text');
-
-  let proposed = { proposalId: '', rev: 0 };
-  await updateMap(context.projectPath, context.workId, (current) => {
-    // Правила решения — ведущий, живая комната, длина текста — держит `setProposal`, здесь их не
-    // повторяем. Его `RoomRuleError` уходит агенту текстом ошибки, как у соседних инструментов, а
-    // исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
-    proposed = setProposal(current, roomId, sessionId, text);
-  });
-  return proposed;
+  return planTool(context, 'propose_decision', args);
 }
 
 /**
@@ -937,17 +1204,29 @@ async function proposeDecision(
  * нередко шлют пустую строку на необязательный параметр. Неизвестная — ошибка со списком тем, чтобы
  * агент поправил вызов сам.
  */
-function readGuide(args: Record<string, unknown>): string {
+/**
+ * Ответ гида в пределах бюджета. Гид растёт, а агент читает его целиком: не влез — вместо обрезанного текста
+ * короткий ответ с размером и списком тем, дальше агент просит одну тему (P34).
+ */
+export function boundedGuide(text: string, what: string, limit = READ_GUIDE_MAX_BYTES): string {
+  return boundResponse(
+    text,
+    limit,
+    (bytes) => `${what} is ${bytes} bytes, over the ${limit}-byte limit for one answer. Ask for one section with the topic argument; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.\n`,
+  );
+}
+
+function readGuide(context: McpContext, args: Record<string, unknown>): string {
   const raw = args['topic'];
-  if (raw === undefined || raw === '') return GUIDE;
+  if (raw === undefined || raw === '') return boundedGuide(guide(context.skillNavigator === true), 'The whole guide');
   if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
-  const text = guideTopic(raw.trim().toLowerCase());
+  const text = guideTopic(raw.trim().toLowerCase(), context.skillNavigator === true);
   if (text === null) {
     throw new Error(
       `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
     );
   }
-  return text;
+  return boundedGuide(text, `The guide topic ${raw.trim().toLowerCase()}`);
 }
 
 async function closeSession(
@@ -972,16 +1251,157 @@ async function closeSession(
 const NO_SESSION =
   'no session is set (PARLEY_SESSION_ID is empty): only get_map and read_guide are available. Create a session through Parley or `parley-core work session new` — then the other tools work.';
 
+/** Only the immutable launched caller supplies project/work/session identity; tool arguments cannot redirect it. */
+async function backlogTool(context: McpContext, name: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const allowed = name === 'backlog_list' ? ['filter', 'text'] : ['kind', 'title', 'details', 'why'];
+    if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('backlog-invalid');
+    const sessionId = context.sessionId;
+    if (sessionId === null) throw new Error('Backlog tools require a known launched session.');
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(row => row.id === sessionId);
+    if (!caller || map.work.id !== context.workId) throw new Error('Backlog tools require a known launched session.');
+    if (name === 'backlog_list') {
+      const filter = args.filter ?? 'open'; const text = args.text ?? '';
+      if (!['open', 'taken', 'done', 'all'].includes(String(filter)) || typeof filter !== 'string' ||
+        typeof text !== 'string' || text.length > 4096 || text.includes('\0')) throw new SharedStateError('backlog-invalid');
+      const document = await readBacklog(context.projectPath);
+      const needle = text.toLowerCase();
+      const items = document.items.filter(row => (filter === 'all' || (filter === 'done' ? row.checked :
+        filter === 'taken' ? !row.checked && row.taken !== undefined : !row.checked)) &&
+        (!needle || `${row.title}\n${row.details}\n${row.section ?? ''}`.toLowerCase().includes(needle)));
+      const pending = await listBacklogSuggestions(context.projectPath);
+      const paths = await sharedProjectPaths(context.projectPath);
+      const result = { version: document.version, items, suggestions: pending.map(row => ({ id: row.id, kind: row.kind,
+        title: row.title, details: row.details, why: row.why, workId: row.workId, sessionId: row.sessionId })),
+        rule: (await readProjectPreferences(context.projectPath)).backlogRule, diagnostics: await inspectSharedIgnore(paths) };
+      if (items.length > 10_000 || pending.length > 10_000 || Buffer.byteLength(JSON.stringify(result), 'utf8') > 4 * 1024 * 1024)
+        throw new Error('The backlog snapshot is too large.');
+      return result;
+    }
+    if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to suggest backlog work.');
+    if (!['bug', 'debt', 'idea'].includes(String(args.kind)) || typeof args.kind !== 'string' ||
+        typeof args.title !== 'string' || typeof args.why !== 'string' ||
+        (args.details !== undefined && typeof args.details !== 'string')) throw new SharedStateError('suggestions-invalid');
+    const result = await suggestBacklog(context.projectPath, { kind: args.kind as 'bug' | 'debt' | 'idea', title: args.title,
+      why: args.why, ...(typeof args.details === 'string' ? { details: args.details } : {}), workId: context.workId, sessionId });
+    let feedUnavailable = false;
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+      try {
+        await updateMap(context.projectPath, context.workId, current => {
+          const label = sessionId.replace(/^s-/, 'S');
+          const text = `${label} ${result.status === 'added' ? 'added to' : 'suggested for'} the backlog: ${args.title as string}`;
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+        });
+      } catch { feedUnavailable = true; }
+    }
+    return { message: `${result.status === 'added' ? 'added' : result.status === 'pending' ? 'suggested' : 'already in backlog'}: ${result.id}`,
+      diagnostics: result.diagnostics, ...(feedUnavailable ? { feedUnavailable: true } : {}) };
+  } catch (error) {
+    if (error instanceof SharedStateError) throw new Error(`Backlog operation failed (${error.code}).`);
+    // Never return parser/filesystem/raw-input errors through the generic MCP error handler.
+    const safe = error instanceof Error && ['Backlog tools require a known launched session.',
+      'A live launched session is required to suggest backlog work.', 'The backlog snapshot is too large.'].includes(error.message);
+    throw new Error(safe ? (error as Error).message : 'Backlog operation could not be completed.');
+  }
+}
+
+/** Ответ `memory_read` ограничен: лишнее отбрасывается с пометкой, а не раздувает контекст агента. */
+const MEMORY_READ_BYTES = 64 * 1024;
+const FEED_FACT_LENGTH = 300;
+const MEMORY_KINDS: readonly string[] = ['fact', 'lesson', 'agreement'];
+const MEMORY_ID = /^m-\d{3,}$/;
+
+/** Memory and history tools: the caller is the launched session fixed by the context; arguments cannot redirect it. */
+async function memoryTool(context: McpContext, name: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const allowed = name === 'remember' ? ['kind', 'fact', 'details', 'why', 'onHumanRequest']
+      : name === 'memory_read' ? ['ids'] : ['query', 'scope', 'limit'];
+    if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('memory-invalid');
+    const sessionId = context.sessionId;
+    if (sessionId === null) throw new Error('Memory tools require a known launched session.');
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(row => row.id === sessionId);
+    if (!caller || map.work.id !== context.workId) throw new Error('Memory tools require a known launched session.');
+    if (name === 'search_history') {
+      const { query, scope, limit } = args;
+      if (typeof query !== 'string' || (scope !== undefined && typeof scope !== 'string') ||
+        (limit !== undefined && typeof limit !== 'number')) throw new HistorySearchError('search-invalid');
+      const found = await searchHistory(context.projectPath, { query, ...(scope === undefined ? {} : { scope: scope as HistoryScope }),
+        ...(limit === undefined ? {} : { limit }) });
+      return found.total === 0 ? { ...found, message: 'Nothing found: try fewer or other words.' } : found;
+    }
+    if (name === 'memory_read') {
+      const { ids } = args;
+      if (ids !== undefined && (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !MEMORY_ID.test(id))))
+        throw new SharedStateError('memory-invalid');
+      const wanted = ids === undefined ? null : new Set(ids as string[]);
+      const items = (await readProjectMemory(context.projectPath)).items.filter(row => wanted === null || (row.id !== null && wanted.has(row.id)));
+      const shown: unknown[] = []; let bytes = 0;
+      for (const row of items) {
+        const entry = { id: row.id, kind: row.kind, fact: row.fact, details: row.details,
+          state: row.state ?? row.provenance?.state ?? 'current',
+          by: row.human === true || row.provenance?.origin === 'human' ? 'human' : row.by ?? 'unknown',
+          ...(row.onHumanRequest === true || row.provenance?.claimedHumanRequest === true ? { onRequest: true } : {}) };
+        bytes += Buffer.byteLength(JSON.stringify(entry), 'utf8');
+        if (bytes > MEMORY_READ_BYTES) break;
+        shown.push(entry);
+      }
+      return { items: shown, total: items.length, ...(shown.length < items.length ? { truncated: true } : {}) };
+    }
+    if (caller.lifecycle === 'closed' || map.work.status !== 'active') throw new Error('A live launched session is required to remember.');
+    if (typeof args.kind !== 'string' || !MEMORY_KINDS.includes(args.kind) || typeof args.fact !== 'string' || typeof args.why !== 'string' ||
+      (args.details !== undefined && typeof args.details !== 'string') ||
+      (args.onHumanRequest !== undefined && typeof args.onHumanRequest !== 'boolean')) throw new SharedStateError('memory-invalid');
+    const request = args.onHumanRequest === true;
+    const result = await rememberProjectMemory(context.projectPath, { kind: args.kind as MemoryKind, fact: args.fact, why: args.why,
+      ...(typeof args.details === 'string' ? { details: args.details } : {}), ...(request ? { onHumanRequest: true } : {}),
+      workId: context.workId, sessionId });
+    let feedUnavailable = false;
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+      try {
+        await updateMap(context.projectPath, context.workId, current => {
+          const label = sessionId.replace(/^s-/, 'S');
+          const fact = args.fact as string;
+          const brief = fact.length > FEED_FACT_LENGTH ? `${fact.slice(0, FEED_FACT_LENGTH)}…` : fact;
+          // The agent only claims that the human asked: the line says so instead of vouching for it.
+          const text = result.status === 'remembered' ? `${label} remembered, saying you asked for it: ${brief}` : `${label} suggests remembering: ${brief}`;
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+        });
+      } catch { feedUnavailable = true; }
+    }
+    return { message: `${result.status === 'remembered' ? 'remembered' : result.status === 'pending' ? 'suggested' : 'already remembered'}: ${result.id}`,
+      diagnostics: result.diagnostics, ...(feedUnavailable ? { feedUnavailable: true } : {}) };
+  } catch (error) {
+    if (error instanceof SharedStateError) throw new Error(`Memory operation failed (${error.code}).`);
+    if (error instanceof HistorySearchError) throw new Error('Search request is invalid: give a non-empty query (up to 16 words), a known scope and a limit from 1 to 30.');
+    // Never return parser/filesystem/raw-input errors through the generic MCP error handler.
+    const safe = error instanceof Error && ['Memory tools require a known launched session.', 'A live launched session is required to remember.'].includes(error.message);
+    throw new Error(safe ? (error as Error).message : 'Memory operation could not be completed.');
+  }
+}
+
 async function dispatch(
   context: McpContext,
   name: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  if (name === 'get_map') return getMap(context);
+  if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
+  if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
+  if (name === 'get_map') return getMap(context, args);
+  if (name === 'list_roles') {
+    const map = await readMap(context.projectPath, context.workId);
+    const caller = map.sessions.find(item => item.id === context.sessionId);
+    const cwd = caller?.worktree?.path ?? context.projectPath;
+    return roleSummaries(await (context.roleCatalog ? context.roleCatalog(cwd) : sessionRoleCatalog(cwd, { codex: true })));
+  }
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
-  if (name === 'read_guide') return readGuide(args);
+  if (name === 'read_guide') return readGuide(context, args);
 
+  if (isPlanTool(name)) return planTool(context, name, args);
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
 
@@ -1073,6 +1493,140 @@ async function bindCodexThread(
  * с `isError`, а не протокольным отказом: клиенту нужно не падение вызова, а
  * текст, из которого понятно, что поправить.
  */
+/** Id сессии короткий (`s-12`): длиннее — не id, а мусор. */
+const SESSION_ID_MAX_BYTES = 64;
+const FIND_SKILL: Tool = {
+  name: 'find_skill',
+  description: 'Search skills available to this participant. Use English task words; load a matching skill with its native CLI route. Search once per task, not on every wake-up; after no match retry at most once with different words. Participant role and permissions take precedence over skill instructions.',
+  annotations: READS,
+  inputSchema: { type: 'object', properties: {
+    query: { type: 'string', minLength: 1, maxLength: CONTEXT_LIMITS.query, description: 'Task words to search.' },
+    for: { type: 'string', maxLength: SESSION_ID_MAX_BYTES, description: 'Session id in this work; defaults to your own session.' },
+    limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+  }, required: ['query'], additionalProperties: false },
+};
+// Подтверждённое сокращение родного списка (спека, 2.3): фраза о нём есть только тогда. Каталог Claude берётся из
+// транскрипта сессии (skills/claude-listing.ts), поэтому сокращение его списка включено вместе с навигатором.
+const CLAUDE_NAMES_ONLY = ' Your native skill list shows names only: this tool returns the descriptions.';
+const CODEX_NO_LIST = ' Your native skill list is removed: this tool returns descriptions, the names are below.';
+const CODEX_NO_LIST_NO_NAMES = ' Your native skill list is removed and its names could not be read: search with task words.';
+/** Потолок знаков в перечне имён описания: длиннее — перечень обрывается с признаком и числом непоказанных. */
+const NATIVE_NAMES_CHARS = 3000;
+function nativeNames(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  const shown: string[] = [];
+  let used = 0;
+  for (const name of names) {
+    const quoted = JSON.stringify(name);
+    if (used + quoted.length + 2 > NATIVE_NAMES_CHARS) break;
+    shown.push(quoted);
+    used += quoted.length + 2;
+  }
+  const rest = names.length - shown.length;
+  return ` Available native names: ${shown.join(', ')}${rest > 0 ? `, … and ${rest} more (find_skill finds them)` : ''}.`;
+}
+/** Первый пустой поиск допускает одну поправку словами, второй подряд — отказ от поиска до новой задачи. */
+const NO_SKILL = 'No skill matched: work without one, or try other words once';
+const NO_SKILL_AGAIN = 'No skill matched again: do not search for this task any more, work without a skill';
+/** One process owns its promise cache. No shared/global catalog or per-search CLI startup. */
+function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find: (args: Record<string, unknown>) => Promise<unknown> } {
+  type Built = { catalog: SkillCatalog | null; reason?: string; retry?: boolean };
+  const catalogs = new Map<string, Promise<Built>>();
+  // Подряд пустых поисков: сбрасывается находкой. Подъём письмом сам повторного поиска не просит (P34).
+  let misses = 0;
+  async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
+    const map = await readMap(context.projectPath, context.workId);
+    const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
+    if (!session) throw new Error('Skill search requires a session in this work.');
+    const rawCwd = session.worktree?.path ?? context.projectPath;
+    let cwd: string;
+    try { if (!(await stat(rawCwd)).isDirectory()) throw new Error(); cwd = await realpath(rawCwd); }
+    catch { return { session, cwd: rawCwd, catalog: null, reason: 'Participant working directory is unavailable.' }; }
+    if (session.provider !== 'codex' && !isClaudeCode(session.provider))
+      return { session, cwd, catalog: null, reason: 'This provider has no verified native skill route.' };
+    const descriptor = await readNativeContext(context.projectPath, context.workId, session.id);
+    const own = session.id === context.sessionId;
+    const bound = descriptor !== null && (!own || context.nativeContextRevision !== undefined) && await nativeContextMatches(descriptor, session.provider, cwd,
+      own ? context.nativeContextRevision : undefined, session);
+    const key = JSON.stringify([session.id, session.provider, cwd, descriptor?.revision ?? 'fixture', bound,
+      own ? context.nativeContextRevision : descriptor?.process ?? [session.pid, session.startedAtProcess], session.providerSessionId ?? null]);
+    if (!catalogs.has(key)) catalogs.set(key, (async (): Promise<Built> => {
+      if (context.skillCatalog) return { catalog: await context.skillCatalog(session, cwd) };
+      if (isClaudeCode(session.provider)) {
+        // Что модель может загрузить, пишет в транскрипт сам Claude Code: отдельная проверка роли и настроек не нужна.
+        // Привязанный дескриптор запуска — источник истины: нет `claudeConfigDir` — значит `~/.claude` (так живёт GLM, у
+        // которого хост срезает переменную), и окружение этого сервера (ведущего с `CLAUDE_CONFIG_DIR`) не подмешивается.
+        // Без дескриптора — окружение, но только у провайдера, который переменную не срезает (`claudeConfigDirFor`).
+        const launch = bound ? descriptor : null;
+        const homeDir = launch?.roots.homeDir ?? process.env.HOME ?? homedir();
+        const entry = Object.values(PROVIDERS).find(item => item.id === session.provider)!;
+        const fromEnv = claudeConfigDirFor(entry, process.env);
+        const configDir = launch ? launch.roots.claudeConfigDir : fromEnv ? path.resolve(cwd, fromEnv) : undefined;
+        const rootsEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete rootsEnv.CLAUDE_CONFIG_DIR;
+        if (configDir) rootsEnv.CLAUDE_CONFIG_DIR = configDir;
+        const built = await readClaudeSkillCatalog({ cwd, homeDir, providerSessionId: session.providerSessionId ?? null,
+          ...(configDir ? { configDir } : {}), roots: claudeProjectRoots(rootsEnv, homeDir) });
+        // Транскрипта или вложения ещё нет: честная причина, и следующий вызов прочитает заново.
+        return 'catalog' in built ? built : { catalog: null, reason: built.reason, retry: true };
+      }
+      if (!bound || !descriptor?.verified || !descriptor.command) return { catalog: null };
+      // Каталог этого запуска сохранил сам запуск (та же ревизия): app-server здесь не нужен. Нет файла (сессию запустила
+      // прежняя версия Parley, запись не удалась) или он не годится — прежнее живое чтение.
+      const stored = await readNativeSkillCatalog(context.projectPath, context.workId, session.id, descriptor.revision);
+      if (stored !== null) return { catalog: stored };
+      return { catalog: await readCodexSkillCatalog({ cwd, command: descriptor.command, configArgs: descriptor.configArgs,
+        env: { ...process.env, HOME: descriptor.roots.homeDir, CODEX_HOME: descriptor.roots.codexHome ?? path.join(descriptor.roots.homeDir, '.codex') } }) };
+    })().catch(() => ({ catalog: null })));
+    const built = await catalogs.get(key)!;
+    if (built.retry) catalogs.delete(key);
+    const { catalog } = built;
+    return { session, cwd, catalog, ...(catalog === null ? { reason: built.reason ?? 'Native skill availability or loading route is unverified; use the full native skill list.' } : catalog.partial ? { reason: 'Some native skill metadata or policy could not be verified.' } : {}) };
+  }
+  return {
+    async list() {
+      const map = await readMap(context.projectPath, context.workId);
+      const provider = map.sessions.find(item => item.id === context.sessionId)?.provider;
+      const reduced = context.skillListReduced === true;
+      if (provider !== undefined && isClaudeCode(provider)) return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
+      if (provider !== 'codex') return FIND_SKILL;
+      const own = await target();
+      // Одноимённые навыки из разных папок в перечне имён — одно имя.
+      const names = [...new Set(own.catalog?.skills.filter(skill => skill.modelAvailable).map(skill => skill.name) ?? [])];
+      // Каталог прочитан, но доступных навыков нет — о «неудавшемся чтении имён» говорить нечего; фраза нужна только когда имён нет из-за непрочитанного каталога.
+      const lead = !reduced ? '' : names.length ? CODEX_NO_LIST : own.catalog === null ? CODEX_NO_LIST_NO_NAMES : '';
+      return { ...FIND_SKILL, description: FIND_SKILL.description + lead + nativeNames(names) };
+    },
+    async find(args) {
+      if (typeof args.query !== 'string' || !args.query.trim()) throw new Error('Skill search query must not be empty.');
+      const queryBytes = contextBytes(args.query);
+      if (queryBytes > CONTEXT_LIMITS.query)
+        throw new Error(`Skill search query is ${queryBytes} bytes, the limit is ${CONTEXT_LIMITS.query}: use a few task words.`);
+      if (args.for !== undefined && (typeof args.for !== 'string' || !args.for)) throw new Error('Skill search target must be a session id.');
+      if (typeof args.for === 'string' && contextBytes(args.for) > SESSION_ID_MAX_BYTES) throw new Error('Skill search target must be a session id.');
+      if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1)) throw new Error('Skill search limit must be a positive integer.');
+      const selected = await target(args.for as string | undefined);
+      const matches = selected.catalog ? searchSkills(selected.catalog.skills, args.query, (args.limit ?? 5) as number) : [];
+      misses = matches.length === 0 ? misses + 1 : 0;
+      // Описание режется с пометкой (полный текст — в файле навыка), а ответ целиком держится в бюджете: что не
+      // влезло, названо числом в `omitted`, а не пропало молча.
+      const skills: unknown[] = [];
+      let used = 0;
+      for (const { skill } of matches) {
+        const description = markedExcerpt(skill.description, CONTEXT_LIMITS.skillDescription).text;
+        const entry = { name: skill.name, ...(description ? { description } : {}), source: skill.source,
+          load: skill.provider === 'claude' ? `Use the Skill tool with ${JSON.stringify(skill.name)}.` : `Read ${skill.path}.` };
+        used += Buffer.byteLength(JSON.stringify(entry), 'utf8');
+        if (used > FIND_SKILL_MAX_BYTES) break;
+        skills.push(entry);
+      }
+      const omitted = matches.length - skills.length;
+      return { provider: selected.session.provider, skills, ...(omitted > 0 ? { omitted } : {}),
+        ...(matches.length === 0 ? { message: misses > 1 ? NO_SKILL_AGAIN : NO_SKILL } : {}), ...(selected.reason ? { reason: selected.reason } : {}) };
+    },
+  };
+}
+
 export function createParleyServer(context: McpContext): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
   // отдавать карту и гид (4.2).
@@ -1103,23 +1657,29 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
     server.onclose = () => stop?.();
   }
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
+  const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: navigator ? [...TOOLS, await navigator.list()] : TOOLS }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
   server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra): Promise<CallToolResult> => {
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+      if (request.params.name === 'find_skill' && navigator === null)
+        return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
       try {
-        const result = await dispatch(context, request.params.name, args, extra.signal);
+        const result = request.params.name === 'find_skill' ? await navigator!.find(args)
+          : await dispatch(context, request.params.name, args, extra.signal);
         // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
         // значило бы отдать агенту документ, который ему же и разбирать.
         const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
         return { content: [{ type: 'text', text }] };
       } catch (error) {
-        return { content: [{ type: 'text', text: (error as Error).message }], isError: true };
+        // Исчерпанный бюджет — безопасный исход: текст говорит, что расширяет его только человек.
+        const text = error instanceof ResourceDeniedError ? deniedForAgent(error) : (error as Error).message;
+        return { content: [{ type: 'text', text }], isError: true };
       }
     },
   );

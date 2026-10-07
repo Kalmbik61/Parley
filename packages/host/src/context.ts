@@ -12,7 +12,8 @@ export interface HostContext {
   clients(): readonly Client[];
   /** Число занятых ключей `busy()` — живые PTY появятся в куске 1.6. */
   liveSessions(): number;
-  broadcast<E extends EventName>(event: E, data: EventData<E>): void;
+  /** `only` — кому слать: разным клиентам одно событие уходит в разном виде (`works.changed`, P35). */
+  broadcast<E extends EventName>(event: E, data: EventData<E>, only?: (client: Client) => boolean): void;
   onShutdown(hook: () => Promise<void>): void;
   shutdown(reason: string): Promise<void>;
   busy(key: string, isBusy: boolean): void;
@@ -73,8 +74,8 @@ export function createHostContext(options: CreateHostContextOptions): HostContex
     log: options.log,
     clients: () => Array.from(clients),
     liveSessions: () => busyKeys.size,
-    broadcast(event, data) {
-      for (const client of clients) client.send({ event, data });
+    broadcast(event, data, only) {
+      for (const client of clients) if (only === undefined || only(client)) client.send({ event, data });
     },
     onShutdown(hook) {
       options.registerShutdownHook(hook);

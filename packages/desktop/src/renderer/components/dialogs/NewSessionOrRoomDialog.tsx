@@ -22,6 +22,12 @@
  * Провайдер «по умолчанию» при запуске фиксируется в строке: `ui.lastProvider` меняется, когда все агенты запущены, и
  * пилюля под итогом «запущена» не должна перескочить на провайдера последней строки, если `rooms.create` упал.
  *
+ * Рецепт (спека рецептов, 6.1) выбирается наверху: он заполняет строки (роль, провайдер, модель, усилие, worktree,
+ * ведущий; `count` уже развёрнут хостом), режим комнаты и дальше правится свободно. Заданное рецептом — явный выбор, как
+ * тронутое человеком: уходит в сессию поверх умолчаний роли; не заданное остаётся умолчанием роли. Комната создаётся с
+ * `mode` и снимком рецепта, взятым из `recipes.list` в момент создания. Строка с ролью, которой на машине нет, не
+ * запускается, пока её не поправят. «Save as recipe» пишет состав, режим и плейбук файлом проекта через main.
+ *
  * Закрытие диалога (Cancel, Esc, ×, клик мимо) отменяет идущий запуск: остальные агенты, комната и вкладка не создаются,
  * а форму, которую успели открыть заново (в том числе ⌘T поверх открытого диалога), запуск не трогает и не закрывает.
  * Отправленный запрос отменить нельзя — его сессия останется обычной сессией работы, как после частичного сбоя.
@@ -43,6 +49,12 @@
  * что проект — git-репозиторий (`branches` для этого не годится: при отсоединённой голове ветки нет и у git-проекта).
  * Флажок один на все сессии диалога: у каждого агента комнаты свой worktree.
  *
+ * Бюджет работы (P37): пороги читаются из настроек при открытии, занятое — из карты выбранной работы. Подвал показывает,
+ * сколько сессий идёт и сколько запусков осталось в часе; старт, который не помещается (нужные участники больше свободных
+ * слотов или запусков, комната больше своего порога), блокируется с объяснением — до первого `sessions.create`, чтобы
+ * команда не стартовала наполовину. Старт команды создаёт ровно запрошенных участников: временной одиночной сессии нет.
+ * Отказ самого хоста (бюджет исчерпал другой процесс) показывается по агенту его же текстом.
+ *
  * Агент по умолчанию — то же правило, что у диалога новой работы (`lib/default-provider.ts`); последний выбранный
  * запоминается в `ui.json.lastProvider`. Список провайдеров может прийти позже открытия — строки ждут его как
  * «агент по умолчанию», а кнопка неактивна до ответа.
@@ -53,9 +65,16 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react';
-import { Plus, X } from 'lucide-react';
-import type { WorkEntry } from '@parley/core';
-import type { Result } from '@parley/protocol';
+import { GitBranch, Plus, X } from 'lucide-react';
+import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WorkEntry } from '@parley/core';
+import {
+  RESOURCE_LIMIT_KEYS,
+  limitsFromConfig,
+  resourceStatus,
+  teamStartFits,
+  type ResourceLimits,
+} from '@parley/core/resource-policy';
+import type { BacklogMethodParams, Result, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
@@ -66,11 +85,13 @@ import { effortChoices } from '../../lib/effort-choices.js';
 import { openWhenListed } from '../../lib/open-when-listed.js';
 import { sessionTag, workTitleText } from '../../lib/participant.js';
 import { workKey } from '../../lib/tree-order.js';
+import type { BacklogTakeContext } from '../../store/ui.js';
 import { useUiStore } from '../../store/ui.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
+import { Textarea } from '../../ui/textarea.js';
 import { Input } from '../../ui/input.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
@@ -78,6 +99,7 @@ import { Switch } from '../../ui/switch.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { radioGroupKeyDown } from './radio-keys.js';
+import { RecipeSavePanel } from './RecipeSavePanel.js';
 
 export interface NewSessionOrRoomDialogProps {
   open: boolean;
@@ -86,6 +108,8 @@ export interface NewSessionOrRoomDialogProps {
   work: { projectPath: string; workId: string } | null;
   /** «New room»: диалог открывается сразу с двумя агентами. */
   room: boolean;
+  backlog?: BacklogTakeContext | null;
+  onCreated?(target: BacklogMethodParams<'backlog.take'>['target']): Promise<void>;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -108,13 +132,28 @@ interface AgentRow {
   model: string | null;
   /** Уровень из списка модели; `null` — `Default`, без флага. */
   effort: string | null;
+  role: string | null;
+  /** Роль из рецепта, которой на этой машине нет: строка не запускается, пока её не поправят. */
+  roleMissing: string | null;
+  /** Свой worktree строки; `null` — как у общего флажка. Рецепт задаёт его построчно. */
+  worktree: boolean | null;
+  providerTouched: boolean;
+  modelTouched: boolean;
+  effortTouched: boolean;
 }
 
 /** Итог запуска по строке агента — только после первой попытки. */
 type AgentResult = { status: 'started'; sessionId: string } | { status: 'failed'; message: string };
 
+type Mode = 'free' | 'checklist' | 'verified';
+const MODES: readonly Mode[] = ['free', 'checklist', 'verified'];
+/** Значение «без рецепта» в списке: Radix Select не берёт пустую строку, а id рецепта содержит двоеточие. */
+const NO_RECIPE = 'none';
+
+const blankRow = (key: number, provider: string | null = null): AgentRow => ({ key, provider, model: null, effort: null, role: null, roleMissing: null, worktree: null, providerTouched: false, modelTouched: false, effortTouched: false });
+
 function initialRows(room: boolean): AgentRow[] {
-  return Array.from({ length: room ? 2 : 1 }, (_, index) => ({ key: index + 1, provider: null, model: null, effort: null }));
+  return Array.from({ length: room ? 2 : 1 }, (_, index) => blankRow(index + 1));
 }
 
 /**
@@ -190,7 +229,7 @@ function ProviderPopoverContent(props: ComponentPropsWithoutRef<typeof PopoverCo
   return <PopoverContent {...props} ref={observeProviderContent} />;
 }
 
-export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
+export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = null, onCreated, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
   const lastProvider = useUiStore((state) => state.ui.lastProvider);
@@ -198,6 +237,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   const priorConnections = useRef(connections);
 
   /** `null` — `providers.list` этого открытия ещё не ответил. */
+  const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [providers, setProviders] = useState<ProviderOption[] | null>(null);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState<string | null>(null);
@@ -215,13 +255,23 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
    */
   const [workChoice, setWorkChoice] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [task, setTask] = useState('');
+  const [createdTarget, setCreatedTarget] = useState<BacklogMethodParams<'backlog.take'>['target'] | null>(null);
   const [agents, setAgents] = useState<AgentRow[]>(() => initialRows(room));
   const [leadKey, setLeadKey] = useState(1);
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
+  /** Каталог рецептов проекта; `null` — не загружен или хост рецептов не знает: выбора рецепта тогда нет. */
+  const [recipes, setRecipes] = useState<RecipeCatalogView | null>(null);
+  const [recipeId, setRecipeId] = useState<string | null>(null);
+  const [recipesReload, setRecipesReload] = useState(0);
+  const [mode, setMode] = useState<Mode>('free');
+  const [saving, setSaving] = useState(false);
   const [results, setResults] = useState<Record<number, AgentResult>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Пороги бюджета из настроек этого открытия; `null` — хост их не отдал (старый хост) или ответ не пришёл. */
+  const [limits, setLimits] = useState<ResourceLimits | null>(null);
   const nextKey = useRef(room ? 3 : 2);
   /** Снятия ожиданий снимка (`openWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
@@ -242,7 +292,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   // открытого): форма начинается заново, и запуск прежней, если он ещё идёт, больше не нужен.
   useEffect(() => {
     if (launchRef.current !== null) launchRef.current.cancelled = true;
-  }, [open, room, work]);
+  }, [open, room, work, backlog]);
 
   // Каждое открытие — с чистой формой и составом по умолчанию: один агент, а «New room» — два. Сброс — до отрисовки
   // (`useLayoutEffect`): в `useEffect` он шёл после неё, и диалог успевал показаться с названием и агентами прошлого открытия.
@@ -252,14 +302,17 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
     setAgents(rows);
     nextKey.current = rows.length + 1;
     setLeadKey(1);
-    setName('');
+    setName(''); setTask(backlog?.task ?? ''); setCreatedTarget(null);
     setWorkChoice(work === null ? null : workKey(work.projectPath, work.workId));
     setWorktree(false);
+    setRecipeId(null);
+    setMode('free');
+    setSaving(false);
     setResults({});
     setError(null);
     setBusy(false);
     setProviderCard(null);
-  }, [open, room, work]);
+  }, [open, room, work, backlog]);
 
   // Снимок провайдеров — тоже до отрисовки, как форма: в `useEffect` диалог успевал показать пилюли прошлого открытия, и
   // карточка, открытая на такой пилюле, теряла её из-под себя, когда сброс доходил (фокус после Escape — на диалоге).
@@ -310,6 +363,23 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   }, [open, bridge]);
 
   useEffect(() => {
+    if (!open) return;
+    let stale = false;
+    setLimits(null);
+    bridge
+      .call('settings.get', {})
+      .then(({ config }) => {
+        if (!stale && RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number')) setLimits(limitsFromConfig(config));
+      })
+      .catch(() => {
+        // Без порогов подвал бюджета не показывается, а решает хост.
+      });
+    return () => {
+      stale = true;
+    };
+  }, [open, bridge]);
+
+  useEffect(() => {
     if (priorConnections.current === connections) return;
     priorConnections.current = connections;
     // Перезапуск хоста не закрывает форму: новый ответ заменяет снимок и отменяет ответы прежнего хоста.
@@ -318,12 +388,30 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   // Работа диалога: выбор человека или та, для которой открыли, иначе активная, иначе первая из активных (не активной,
   // `done` и архивной работе новая сессия не нужна — в списке их нет).
-  const activeWorks = entries.filter((entry) => entry.map.work.status === 'active');
+  const activeWorks = entries.filter((entry) => entry.map.work.status === 'active' && (!backlog || entry.projectPath === backlog.projectPath));
   const has = (key: string | null): key is string => key !== null && activeWorks.some((entry) => keyOf(entry) === key);
   const firstKey = activeWorks[0] === undefined ? null : keyOf(activeWorks[0]);
   const selectedKey = has(workChoice) ? workChoice : has(activeWorkKey) ? activeWorkKey : firstKey;
   const selected = activeWorks.find((entry) => keyOf(entry) === selectedKey) ?? null;
   const projectPath = selected?.projectPath ?? null;
+  useEffect(() => {
+    setRoles([]);
+    if (!open || projectPath === null) return;
+    let stale = false;
+    bridge.call('roles.list', { projectPath }).then(result => { if (!stale) setRoles(result.roles); }).catch(() => {});
+    return () => { stale = true; };
+  }, [open, bridge, projectPath]);
+
+  // Рецепты выбранного проекта. Хост без `recipes.list` или отказ — просто без выбора рецепта: диалог работает как прежде.
+  useEffect(() => {
+    setRecipes(null);
+    if (!open || projectPath === null) return;
+    let stale = false;
+    bridge.call('recipes.list', { projectPath }).then((result) => { if (!stale) setRecipes(result); }).catch(() => {});
+    return () => { stale = true; };
+  }, [open, bridge, projectPath, recipesReload]);
+  // Рецепт принадлежит проекту (рецепты проекта — его файлы): другой проект — выбор сброшен, строки остаются.
+  useEffect(() => { setRecipeId(null); }, [projectPath]);
 
   useEffect(() => {
     setWorktreeAvailable(false);
@@ -344,7 +432,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   }, [open, bridge, projectPath]);
 
   const defaultId = providers === null ? null : defaultProvider(providers, lastProvider);
-  const providerIdOf = (row: AgentRow): string | null => row.provider ?? defaultId;
+  const roleOf = (row: AgentRow): RoleSummary | undefined => roles.find(role => role.id === row.role);
+  const providerIdOf = (row: AgentRow): string | null => {
+    const role = roleOf(row);
+    return role?.source !== undefined && role.source !== 'builtin' ? role.provider : row.provider ?? role?.provider ?? defaultId;
+  };
   const infoOf = (row: AgentRow): ProviderOption | undefined => {
     const id = providerIdOf(row);
     return providers?.find((provider) => provider.id === id);
@@ -362,14 +454,77 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   /** После первой попытки кнопка называется «Retry»: повторяются только не запущенные. */
   const retrying = Object.keys(results).length > 0;
   /** Общие поля и состав заперты, как только хоть одна сессия запущена: она уже принадлежит этой работе. */
-  const groupLocked = busy || anyStarted;
+  const groupLocked = busy || anyStarted || createdTarget !== null;
 
   const updateAgent = (key: number, patch: Partial<Omit<AgentRow, 'key'>>): void =>
     setAgents((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
 
   const addAgent = (): void => {
     const last = agents[agents.length - 1];
-    setAgents((rows) => [...rows, { key: nextKey.current++, provider: last?.provider ?? null, model: null, effort: null }]);
+    setAgents((rows) => [...rows, blankRow(nextKey.current++, last?.provider ?? null)]);
+  };
+
+  /** Источник роли строки: из каталога ролей, а пока он не ответил — из самого id (`claude:name`). */
+  const roleSource = (row: AgentRow): 'builtin' | 'claude' | 'codex' =>
+    roleOf(row)?.source ?? ((row.role ?? '').slice(0, (row.role ?? '').indexOf(':')) as 'builtin' | 'claude' | 'codex');
+  /** Свой worktree строки или общий флажок. */
+  const wantsWorktree = (row: AgentRow): boolean => row.worktree ?? worktree;
+  const allWorktree = agents.every(wantsWorktree);
+
+  /**
+   * Рецепт заполняет состав, режим и ведущего. Заданное им (провайдер, модель, усилие) — явный выбор, как тронутое
+   * человеком; не заданное остаётся умолчанием роли. Провайдер встроенной роли по умолчанию, которого нет на машине,
+   * заменяется агентом по умолчанию (спека рецептов, 8).
+   */
+  const applyRecipe = (entry: Extract<RecipeEntryView, { status: 'valid' }>): void => {
+    const available = (id: string | null): boolean => id === null || providers === null || providers.find((provider) => provider.id === id)?.available === true;
+    const rowsOfRecipe = entry.agents.map((agent, index): AgentRow => {
+      const choice = agent.choice;
+      const resolvedProvider = agent.resolved?.provider ?? null;
+      const missing = agent.status === 'role-missing';
+      return {
+        key: index + 1,
+        role: missing ? null : choice.role,
+        roleMissing: missing ? choice.role : null,
+        worktree: choice.worktree,
+        provider: choice.provider ?? (available(resolvedProvider) ? resolvedProvider : null),
+        providerTouched: choice.provider !== undefined,
+        model: choice.model ?? null,
+        modelTouched: choice.model !== undefined,
+        effort: choice.effort ?? null,
+        effortTouched: choice.effort !== undefined,
+      };
+    });
+    setAgents(rowsOfRecipe);
+    nextKey.current = rowsOfRecipe.length + 1;
+    setLeadKey(entry.agents.findIndex((agent) => agent.choice.lead) + 1 || 1);
+    setMode(entry.recipe.mode);
+    setResults({});
+    setError(null);
+  };
+  const chooseRecipe = (value: string): void => {
+    if (value === NO_RECIPE) { setRecipeId(null); return; }
+    const entry = recipes?.entries.find((item): item is Extract<RecipeEntryView, { status: 'valid' }> => item.status === 'valid' && item.recipe.id === value);
+    if (entry === undefined) return;
+    setRecipeId(value);
+    applyRecipe(entry);
+  };
+  const chosenRecipe = recipes?.entries.find((item): item is Extract<RecipeEntryView, { status: 'valid' }> => item.status === 'valid' && item.recipe.id === recipeId) ?? null;
+  /** Состав для файла рецепта; `null`, пока у какой-то строки нет роли — рецепт без роли разборщик не примет. */
+  const recipeAgents = (): RecipeAgent[] | null => {
+    const rowsOut: RecipeAgent[] = [];
+    for (const row of agents) {
+      if (row.role === null) return null;
+      // Тронутый, но не определившийся провайдер (null или пустая строка) в файл не идёт: пустое значение хост отвергает.
+      const providerId = providerIdOf(row);
+      rowsOut.push({
+        role: row.role, worktree: wantsWorktree(row), lead: row.key === lead, count: 1,
+        ...(row.providerTouched && providerId ? { provider: providerId } : {}),
+        ...(row.modelTouched ? { model: row.model } : {}),
+        ...(row.effortTouched ? { effort: row.effort } : {}),
+      });
+    }
+    return rowsOut;
   };
 
   const removeAgent = (key: number): void => setAgents((rows) => (rows.length <= 1 ? rows : rows.filter((row) => row.key !== key)));
@@ -380,7 +535,16 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
 
   const submit = async (): Promise<void> => {
     // Второй клик по «Retry» или «Create room» приходит уже на выключенную кнопку: `busy` включается до него.
-    if (busy || !providersReady.current) return;
+    if (busy) return;
+    if (createdTarget !== null) {
+      setBusy(true); setError(null);
+      const retry = { cancelled: false }; launchRef.current = retry;
+      try { await onCreated?.(createdTarget); if (!retry.cancelled) finish(); }
+      catch { if (!retry.cancelled) setError(S.backlog.markFailed); }
+      finally { if (launchRef.current === retry) launchRef.current = null; if (!retry.cancelled) setBusy(false); }
+      return;
+    }
+    if (!providersReady.current) return;
     if (selected === null) {
       setError(S.dialogs.newSession.selectWorkRequired);
       return;
@@ -411,26 +575,34 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         // «По умолчанию» становится явным выбором: `lastProvider` сменится, когда запустятся все, и строка не должна
         // за ним перескочить — под итогом «запущена» стояла бы пилюля не того провайдера.
         if (row.provider === null) updateAgent(row.key, { provider: providerId });
-        const model = chosenModel(row, info);
-        const effort = chosenEffort(row, info);
         try {
           const { ref } = await bridge.call('sessions.create', {
             ...target,
             provider: providerId,
             // Одиночная сессия несёт название из поля; агенты комнаты — пустой ярлык, строка покажет `S05`.
             label: multi ? '' : name.trim(),
-            task: '',
+            task: backlog ? task : '',
             parent: null,
-            worktree,
-            // Модель и effort — только явно выбранные и ещё существующие в снимке провайдеров: `Default` — без флага,
-            // провайдер без списка или флага их не получает, исчезнувший после `providers.changed` выбор не уходит.
-            ...(model === null ? {} : { model }),
-            ...(effort === null ? {} : { effort }),
+            // Рецепт задаёт worktree построчно; без него — общий флажок. Без git-проекта worktree не просят.
+            worktree: wantsWorktree(row) && worktreeAvailable,
+            ...(row.role === null ? {} : { role: { source: roleSource(row), name: row.role.slice(row.role.indexOf(':') + 1) } }),
+            // Модель и effort — только явно выбранные (тронутые) и ещё существующие в снимке провайдеров: `null` — явный
+            // `Default` (снимает умолчание роли, флага нет), провайдер без списка или уровней их не получает, исчезнувший
+            // после `providers.changed` выбор уходит как `Default`.
+            ...(row.modelTouched && (info?.models?.length ?? 0) > 0 ? { model: chosenModel(row, info) } : {}),
+            ...(row.effortTouched && effortChoices(info, chosenModel(row, info)) !== null ? { effort: chosenEffort(row, info) } : {}),
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
-          console.warn('[parley] sessions.create', err);
-          done[row.key] = { status: 'failed', message: errorText(decodeIpcError(err).code, S.errors.actions.createSession) };
+          if (!backlog) console.warn('[parley] sessions.create', err);
+          const failure = decodeIpcError(err);
+          // Бюджет исчерпал кто-то другой за время диалога: хост назвал предел сам — показываем его слова.
+          done[row.key] = {
+            status: 'failed',
+            message: failure.data?.['code'] === 'resource-budget'
+              ? S.dialogs.newSession.budgetRefused(failure.message)
+              : errorText(failure.code, S.errors.actions.createSession),
+          };
           allStarted = false;
         }
         // Диалог закрыли, пока шёл этот агент, — следующих не запускаем и итог в форму не пишем.
@@ -449,11 +621,31 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
       });
       if (!multi) {
         openWhenListed(target.projectPath, target.workId, { kind: 'session', sessionId: sessionIds[0] ?? '' }, pendingRef.current);
+        if (backlog) {
+          const created = { ...target, sessionId: sessionIds[0] ?? '' }; setCreatedTarget(created);
+          try { await onCreated?.(created); } catch { if (!launch.cancelled) setError(S.backlog.markFailed); return; }
+          if (launch.cancelled) return;
+        }
         finish();
         return;
       }
       const leadResult = done[lead];
       const trimmed = name.trim();
+      // Снимок рецепта — из каталога в момент создания комнаты: правка файла за время диалога попадает в неё, а после
+      // создания комнату уже не меняет. Рецепт исчез или стал битым — комната без него не создаётся.
+      let recipe: { id: string; name: string; playbook: string } | null = null;
+      if (recipeId !== null) {
+        try {
+          const fresh = await bridge.call('recipes.list', { projectPath: target.projectPath });
+          if (launch.cancelled) return;
+          const found = fresh.entries.find((item) => item.status === 'valid' && item.recipe.id === recipeId);
+          if (found === undefined || found.status !== 'valid') { setError(S.recipes.gone); return; }
+          recipe = { id: found.recipe.id, name: found.recipe.name, playbook: found.recipe.playbook };
+        } catch (err) {
+          if (!launch.cancelled) setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
+          return;
+        }
+      }
       try {
         const { roomId } = await bridge.call('rooms.create', {
           ...target,
@@ -461,12 +653,19 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
           members: sessionIds,
           lead: leadResult?.status === 'started' ? leadResult.sessionId : (sessionIds[0] ?? ''),
           quiet: true,
+          ...(mode === 'free' ? {} : { mode }),
+          ...(recipe === null ? {} : { recipe }),
         });
         if (launch.cancelled) return;
         openWhenListed(target.projectPath, target.workId, { kind: 'room', roomId }, pendingRef.current);
+        if (backlog) {
+          const created = { ...target, roomId }; setCreatedTarget(created);
+          try { await onCreated?.(created); } catch { if (!launch.cancelled) setError(S.backlog.markFailed); return; }
+          if (launch.cancelled) return;
+        }
         finish();
       } catch (err) {
-        console.warn('[parley] rooms.create', err);
+        if (!backlog) console.warn('[parley] rooms.create', err);
         if (launch.cancelled) return;
         setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
       }
@@ -478,6 +677,20 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
   };
 
   const text = S.dialogs.newSession;
+  /**
+   * Бюджет выбранной работы. Нужны слоты только тем строкам, что ещё не запущены (после частичного сбоя «Retry»
+   * повторяет упавших), а порог комнаты — всему составу: комната работает целиком.
+   */
+  const budget = limits === null || selected === null ? null : resourceStatus(selected.map, limits, Date.now());
+  const pendingStarts = agents.filter((row) => !started(row)).length;
+  const fit = budget === null || limits === null ? null : teamStartFits(budget, pendingStarts, multi ? limits.roomConcurrent : undefined);
+  const budgetBlocked =
+    fit === null || fit.fits ? null
+      : fit.scope === 'room' ? text.budgetBlockedRoom(agents.length, fit.remaining)
+        : fit.reason === 'launches' ? text.budgetBlockedStarts(fit.needed, fit.remaining)
+          : text.budgetBlockedSlots(fit.needed, fit.remaining);
+  const budgetText = budget === null ? null
+    : text.budgetLine(budget.work.concurrent.used + budget.work.concurrent.reserved, budget.work.concurrent.limit, budget.work.launches.remaining);
   const workTitle = selected === null ? '' : workTitleText(selected.map.work.title);
   const summary = multi ? text.summaryRoom(agents.length, workTitle) : text.summarySession(workTitle);
 
@@ -494,10 +707,37 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
         }}
       >
         <div className="flex shrink-0 flex-col gap-0.5">
-          <DialogTitle>{multi ? text.titleRoom : text.titleSession}</DialogTitle>
+          <DialogTitle>{saving ? S.recipes.saveTitle : multi ? text.titleRoom : text.titleSession}</DialogTitle>
           <DialogDescription className="text-xs text-neutral-700">{multi ? text.hintRoom : text.hintSession}</DialogDescription>
         </div>
+        {saving && projectPath !== null ? (
+          <RecipeSavePanel
+            bridge={bridge}
+            projectPath={projectPath}
+            mode={mode}
+            agents={recipeAgents()}
+            playbook={chosenRecipe?.recipe.playbook ?? S.recipes.playbookTemplate}
+            onBack={() => setSaving(false)}
+            onSaved={(id) => { setSaving(false); setRecipesReload((value) => value + 1); setRecipeId(id); }}
+          />
+        ) : (
+          <>
         <div className="flex min-w-0 flex-col gap-3 text-sm">
+          {recipes === null ? null : (
+            <div className="flex min-w-0 flex-col gap-1">
+              <span>{S.recipes.field}</span>
+              <Select value={recipeId ?? NO_RECIPE} disabled={groupLocked} onValueChange={chooseRecipe}>
+                <SelectTrigger aria-label={S.recipes.field}><SelectValue /></SelectTrigger>
+                <SelectContent className={LIST_HEIGHT}>
+                  <SelectItem value={NO_RECIPE}>{S.recipes.none}</SelectItem>
+                  {recipes.entries.map((entry) => entry.status === 'valid'
+                    ? <SelectItem key={entry.recipe.id} value={entry.recipe.id} title={entry.recipe.name} className={ITEM_CLIP}>{entry.recipe.name}</SelectItem>
+                    : <SelectItem key={entry.id} value={entry.id} disabled title={entry.file} className={ITEM_CLIP}>{S.recipes.invalidOption(entry.file, S.recipes.reason[entry.diagnostic.code] ?? entry.diagnostic.code)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {chosenRecipe === null ? null : <p data-recipe-description className="m-0 break-words text-xs text-neutral-700">{chosenRecipe.recipe.description}</p>}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex min-w-0 flex-col gap-1">
               <span>{text.workspaceField}</span>
@@ -528,20 +768,40 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             </label>
           </div>
 
+          {backlog && <label>{S.backlog.task}<Textarea aria-label={S.backlog.task} value={task} disabled={groupLocked}
+            onChange={event => setTask(event.target.value)} /></label>}
           <div className="flex min-w-0 flex-col gap-1">
             <span>{text.agentsField}</span>
             <div className="flex min-w-0 flex-col gap-2">
               {agents.map((row, index) => {
+                const role = roleOf(row);
                 const info = infoOf(row);
+                const roleModel = role?.source === 'builtin' ? (providerIdOf(row) === 'codex' ? role.models?.codex : role.models?.claude) : role?.model;
+                const displayedModel = row.modelTouched ? chosenModel(row, info) : roleModel ?? null;
                 const models = info?.models ?? null;
                 const efforts = effortChoices(info, chosenModel(row, info));
+                // Без касания показывается умолчание роли, если оно есть среди уровней модели, иначе `Default`.
+                const roleEffort = role?.effort ?? null;
+                const roleEffortListed = roleEffort !== null && efforts?.some((level) => level.id === roleEffort) === true;
+                const displayedEffort = row.effortTouched ? chosenEffort(row, info) : roleEffortListed ? roleEffort : null;
                 const chosenId = providerIdOf(row);
                 const result = results[row.key];
                 const rowLocked = busy || result?.status === 'started';
                 const isLead = row.key === lead;
                 return (
                   <div key={row.key} data-agent-row className="flex min-w-0 flex-col gap-1">
-                    <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Select value={row.role ?? 'none'} disabled={rowLocked || roles.length === 0} onValueChange={value => {
+                        const selectedRole = roles.find(item => item.id === value);
+                        updateAgent(row.key, { role: value === 'none' ? null : value, roleMissing: null,
+                          ...(selectedRole && (selectedRole.source !== 'builtin' || !row.providerTouched) ? { provider: selectedRole.provider } : {}) });
+                      }}>
+                        <SelectTrigger aria-label={text.roleField} className="min-w-[132px] max-w-[180px]"><SelectValue /></SelectTrigger>
+                        <SelectContent className={LIST_HEIGHT}>
+                          <SelectItem value="none">{text.noRole}</SelectItem>
+                          {roles.map(item => <SelectItem key={item.id} value={item.id}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(item.name, item.source)}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
                       {multi ? (
                         <button
                           type="button"
@@ -576,11 +836,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                                   role="radio"
                                   aria-checked={on}
                                   tabIndex={on ? 0 : -1}
-                                  title={providerName(provider.id, provider.label)}
-                                  disabled={rowLocked}
+                                  title={role !== undefined && role.source !== 'builtin' ? S.roles.providerLocked : providerName(provider.id, provider.label)}
+                                  disabled={rowLocked || (role !== undefined && role.source !== 'builtin')}
                                   onClick={() => {
                                     if (provider.available && !on) {
-                                      updateAgent(row.key, { provider: provider.id, model: null, effort: null });
+                                      updateAgent(row.key, { provider: provider.id, providerTouched: true, model: null, modelTouched: false, effort: null, effortTouched: false });
                                       setError(null);
                                     }
                                   }}
@@ -618,21 +878,22 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       </div>
                       {models !== null && models.length > 0 ? (
                         <Select
-                          value={chosenModel(row, info) ?? DEFAULT_MODEL}
+                          value={displayedModel ?? DEFAULT_MODEL}
                           disabled={rowLocked}
                           onValueChange={(value) => {
                             const model = value === DEFAULT_MODEL ? null : value;
                             // Уровня, которого у новой модели нет, больше не выбрать — он сбрасывается в `Default` (спека 5.9).
-                            updateAgent(row.key, { model, effort: chosenEffort({ model, effort: row.effort }, info) });
+                            updateAgent(row.key, { model, modelTouched: true, effort: chosenEffort({ model, effort: row.effort }, info) });
                           }}
                         >
-                          <SelectTrigger aria-label={text.modelField} className="min-w-0 flex-1">
+                          <SelectTrigger aria-label={text.modelField} className="min-w-[120px] flex-1">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent className={LIST_HEIGHT}>
                             <SelectItem value={DEFAULT_MODEL} className={ITEM_CLIP}>
                               {text.modelDefault}
                             </SelectItem>
+                            {displayedModel !== null && !models.some(model => model.id === displayedModel) ? <SelectItem value={displayedModel}>{displayedModel}</SelectItem> : null}
                             {models.map((model) => (
                               <SelectItem key={model.id} value={model.id} className={ITEM_CLIP}>
                                 {model.label}
@@ -643,11 +904,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       ) : (
                         <span className="min-w-0 flex-1" />
                       )}
+                      {!row.effortTouched && roleEffort !== null && !roleEffortListed ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(roleEffort)}</span> : null}
+                      <div className="ml-auto flex items-center gap-2">
                       {efforts === null ? null : (
                         <Select
-                          value={chosenEffort(row, info) ?? DEFAULT_EFFORT}
+                          value={displayedEffort ?? DEFAULT_EFFORT}
                           disabled={rowLocked}
-                          onValueChange={(value) => updateAgent(row.key, { effort: value === DEFAULT_EFFORT ? null : value })}
+                          onValueChange={(value) => updateAgent(row.key, { effort: value === DEFAULT_EFFORT ? null : value, effortTouched: true })}
                         >
                           {/* Ширина постоянная: длинная подпись уровня не сдвигает модель и не выталкивает строку из окна 800×500. */}
                           <SelectTrigger aria-label={text.effortField} className="w-32 shrink-0">
@@ -665,6 +928,22 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                           </SelectContent>
                         </Select>
                       )}
+                      {multi ? (
+                        <button
+                          type="button"
+                          title={S.recipes.worktreeField}
+                          aria-label={S.recipes.worktreeField}
+                          aria-pressed={wantsWorktree(row)}
+                          disabled={!worktreeAvailable || rowLocked}
+                          onClick={() => updateAgent(row.key, { worktree: !wantsWorktree(row) })}
+                          className={cn(
+                            'inline-flex size-7 shrink-0 items-center justify-center rounded-full hover:bg-foreground/10 disabled:pointer-events-none disabled:opacity-35',
+                            wantsWorktree(row) ? 'text-ring' : 'text-neutral-600',
+                          )}
+                        >
+                          <GitBranch className="size-[15px]" aria-hidden="true" />
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         title={text.removeAgent}
@@ -675,7 +954,11 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                       >
                         <X className="size-[15px]" aria-hidden="true" />
                       </button>
+                      </div>
                     </div>
+                    {row.roleMissing === null ? null : (
+                      <p role="status" data-role-missing className="min-w-0 break-words text-xs text-destructive">{S.recipes.roleMissing(row.roleMissing)}</p>
+                    )}
                     {result === undefined ? null : (
                       <p
                         role="status"
@@ -694,10 +977,33 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
             </div>
           </div>
 
-          <label className="flex items-center gap-2">
-            <Switch checked={worktree} disabled={!worktreeAvailable || groupLocked} onCheckedChange={setWorktree} />
-            {text.inOwnWorktree}
-          </label>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+            <label className="flex items-center gap-2">
+              <Switch
+                checked={worktreeAvailable && allWorktree}
+                disabled={!worktreeAvailable || groupLocked}
+                onCheckedChange={(on) => { setWorktree(on); setAgents((rows) => rows.map((row) => ({ ...row, worktree: null }))); }}
+              />
+              {text.inOwnWorktree}
+            </label>
+            {multi ? (
+              <label className="flex items-center gap-2">
+                {S.recipes.modeField}
+                <Select value={mode} disabled={groupLocked} onValueChange={(value) => setMode(value as Mode)}>
+                  <SelectTrigger aria-label={S.recipes.modeField} className="w-[120px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>{MODES.map((item) => <SelectItem key={item} value={item}>{S.plans.modes[item]}</SelectItem>)}</SelectContent>
+                </Select>
+              </label>
+            ) : null}
+            {multi && recipes !== null ? (
+              <Button type="button" variant="outline" disabled={groupLocked || selected === null} onClick={() => setSaving(true)} className="ml-auto">
+                {S.recipes.save}
+              </Button>
+            ) : null}
+          </div>
+          {/* Рецепт и режим живут только у комнаты (спека рецептов, 5.3: не меньше двух агентов): у одной строки они молча терялись. */}
+          {!multi && (recipeId !== null || mode !== 'free') ? <p role="status" data-recipe-dropped className="m-0 text-xs text-neutral-700">{S.recipes.singleDropsRecipe}</p> : null}
+          {multi && !worktreeAvailable && agents.some((row) => row.worktree === true) ? <p className="m-0 text-xs text-neutral-700">{S.recipes.noWorktree}</p> : null}
         </div>
         <DialogFooter className="items-center">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs">
@@ -707,19 +1013,27 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, onOpenChange 
                 {error ?? providersError ?? availabilityError}
               </p>
             ) : null}
+            {budgetBlocked !== null ? (
+              <p role="status" data-budget-blocked className="m-0 break-words text-destructive">{budgetBlocked}</p>
+            ) : null}
             <span className="truncate text-neutral-700" title={summary}>
               {summary}
             </span>
+            {budgetText !== null ? (
+              <span data-budget className="truncate text-neutral-700" title={budgetText}>{budgetText}</span>
+            ) : null}
           </div>
           <DialogClose asChild>
             <Button type="button" variant="outline">
               {S.common.cancel}
             </Button>
           </DialogClose>
-          <Button type="button" disabled={busy || providers === null || providersLoading || providersError !== null || availabilityError !== null || selected === null} onClick={() => void submit()}>
+          <Button type="button" disabled={busy || providers === null || providersLoading || providersError !== null || availabilityError !== null || selected === null || budgetBlocked !== null || agents.some((row) => row.roleMissing !== null)} onClick={() => void submit()}>
             {retrying ? S.common.retry : multi ? text.submitRoom : text.submitSession}
           </Button>
         </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

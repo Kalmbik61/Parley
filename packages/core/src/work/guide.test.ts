@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GUIDE, GUIDE_TOPICS, guideTopic } from './guide.js';
+import { GUIDE, GUIDE_TOPICS, guide, guideTopic } from './guide.js';
 
 /** Тексты тем без завершающего перевода строки — так они лежат в гиде между пустыми строками. */
 const bodies = (): string[] => GUIDE_TOPICS.map((item) => (guideTopic(item.topic) ?? '').trimEnd());
@@ -110,4 +110,27 @@ describe('язык гида', () => {
     expect(GUIDE).not.toMatch(/[А-Яа-яЁё]/);
     for (const item of GUIDE_TOPICS) expect(item.summary, item.topic).not.toMatch(/[А-Яа-яЁё]/);
   });
+});
+
+describe('optional navigator guide', () => {
+  it('preserves the off guide and only extends tools and lead topics', () => {
+    expect(guide()).toBe(GUIDE);
+    expect(guide(false)).toBe(GUIDE);
+    expect(GUIDE).not.toContain('find_skill');
+    for (const { topic } of GUIDE_TOPICS) {
+      if (topic === 'tools' || topic === 'lead') expect(guideTopic(topic, true)).toContain('find_skill');
+      else expect(guideTopic(topic, true)).toBe(guideTopic(topic));
+    }
+    expect(guideTopic('tools', true)).toContain('unverified loading route');
+    expect(guideTopic('tools', true)).toContain('full native CLI list');
+    expect(guideTopic('lead', true)).toContain('query and for (a participant session id');
+    expect(guideTopic('lead', true)).toContain('This is optional');
+    expect(guide(true)).not.toMatch(/[А-Яа-яЁё]/);
+  });
+});
+
+it('the unconditional plans topic never names a disabled skill tool; enabled full guide retains its conditional navigator hint', () => {
+  expect(guideTopic('plans', false)).not.toContain('find_skill');
+  expect(guide(false)).not.toContain('find_skill');
+  expect(guide(true)).toContain('find_skill');
 });

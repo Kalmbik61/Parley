@@ -20,6 +20,7 @@ import type {
 } from '../shared/files-types.js';
 import type { WorkLayout } from '../shared/layout-types.js';
 import type { NotesFile } from '../shared/notes-types.js';
+import type { RecipeSaveRequest, RecipeSaveResult } from '../shared/recipe-save.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import type {
   DownloadProgress,
@@ -220,6 +221,12 @@ const bridge = {
     titlebarDoubleClick: () => {
       ipcRenderer.send('app:titlebar-double-click');
     },
+    openBacklog: (projectPath: string) => ipcRenderer.invoke('app:open-backlog', projectPath),
+    openDecision: (projectPath: string, file: string) => ipcRenderer.invoke('app:open-decision', projectPath, file),
+    openSharedFile: (projectPath: string, file: string) => ipcRenderer.invoke('app:open-shared-file', projectPath, file),
+    parleyMd: (projectPath: string, create: boolean) =>
+      ipcRenderer.invoke('app:parley-md', projectPath, create) as Promise<{ exists: boolean; created: boolean }>,
+    saveRecipe: (request: RecipeSaveRequest) => ipcRenderer.invoke('app:save-recipe', request) as Promise<RecipeSaveResult>,
     revealWork: (projectPath: string, workId: string) =>
       ipcRenderer.invoke('app:reveal-work', projectPath, workId) as Promise<void>,
     openPath: (absPath: string) => ipcRenderer.invoke('app:open-path', absPath) as Promise<'opened' | 'revealed'>,

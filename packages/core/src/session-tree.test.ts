@@ -211,6 +211,25 @@ describe('buildIndex', () => {
   });
 });
 
+describe('buildIndex: токены подагентов', () => {
+  it('усыновляет usage подагентов, включая вложенные workflow, но не journal.jsonl', async () => {
+    const answer = (id: string, input: number) =>
+      line({
+        type: 'assistant',
+        timestamp: '2026-09-01T10:00:00.000Z',
+        message: { role: 'assistant', id, usage: { input_tokens: input, output_tokens: 1 } },
+      });
+    await put('-Users-me-proj/s5.jsonl', answer('msg_p', 100));
+    await put('-Users-me-proj/s5/subagents/agent-a1.jsonl', answer('msg_a1', 10));
+    await put('-Users-me-proj/s5/subagents/workflows/wf_x/agent-a2.jsonl', answer('msg_a2', 1));
+    await put('-Users-me-proj/s5/subagents/workflows/wf_x/journal.jsonl', answer('msg_journal', 1000));
+
+    const [session] = await buildIndex(root);
+    expect(session?.usage).toMatchObject({ input: 111, coverage: 'conversation-and-descendants' });
+    expect(session?.subsessionCount).toBe(2);
+  });
+});
+
 describe('задачи агентов одного workflow различимы', () => {
   /** Общее задание, которое Workflow копирует каждому агенту дословно. */
   const shared = [

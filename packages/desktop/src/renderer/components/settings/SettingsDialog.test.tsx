@@ -25,6 +25,8 @@ const CONFIG = {
   resumeRate: 6,
   autoLaunch: true,
   agentSkills: true,
+  // Как у хоста по умолчанию (с 2026-10-06).
+  skillNavigator: true,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -212,7 +214,7 @@ describe('SettingsDialog — скилл агентов (кусок 10 плана
     // Так выглядит ответ хоста, оставшегося от прежней версии: ключа agentSkills в конфиге нет.
     const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
     delete oldHost.agentSkills;
-    bridge.setHandler('settings.get', () => ({ config: oldHost, locked: {} }));
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 
     switchTo('Agents');
@@ -365,6 +367,132 @@ describe('SettingsDialog — тест 10 куска 9.1: секция Browser', 
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't clear browser data: failed."));
     warn.mockRestore();
+  });
+});
+
+describe('SettingsDialog — skill navigator', () => {
+  it('defaults on, saves both ways, and stays independent of agentSkills', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: { ...CONFIG, agentSkills: false }, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, agentSkills: false, [key]: value === 'true' } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('Applies to new and resumed sessions.')).toBeTruthy();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'false' } });
+    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'skillNavigator', value: 'true' } });
+  });
+
+  it.each(['PARLEY_SKILL_NAVIGATOR', 'HARNAS_SKILL_NAVIGATOR'])('shows the actual env lock %s', async variable => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { skillNavigator: variable });
+    switchTo('Agents');
+    await screen.findByText(new RegExp(`set by ${variable}`));
+    expect((screen.getByRole('switch', { name: 'Skill navigator' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('hides the field for an older host while keeping other agent settings', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.skillNavigator;
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Skill navigator' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Install agent skills into projects' })).toBeTruthy();
+  });
+
+  it.each(['bad_request', 'secret-code-token'])('shows a safe field error without applying failed save %s', async code => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+    bridge.setHandler('settings.set', () => { throw { code, message: 'secret-config-token' }; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      switchTo('Agents');
+      const toggle = await screen.findByRole('switch', { name: 'Skill navigator' });
+      fireEvent.click(toggle);
+      await screen.findByText(code === 'bad_request' ? "Couldn't save settings: invalid request." : "Couldn't save settings: failed.");
+      // Неудачное сохранение не меняет переключатель: он остался в значении по умолчанию — включён.
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      expect(screen.queryByText(/secret-config-token/)).toBeNull();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-config-token');
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-code-token');
+      expect(warn).toHaveBeenCalledWith('[parley] settings.set', 'skillNavigator', 'failed');
+    } finally { warn.mockRestore(); }
+  });
+});
+
+describe('SettingsDialog — пороги бюджета работы (P37)', () => {
+  const LIMITS = {
+    workConcurrent: 10, roomConcurrent: 6, workNewSessions: 30, roomNewSessions: 12, spawnDepth: 3,
+    workLaunches: 40, roomLaunches: 20, workMessages: 200, roomMessages: 100, fanout: 400,
+  };
+  const WITH_LIMITS = { ...CONFIG, ...LIMITS };
+
+  it('подраздел показывает все десять порогов с границами, а подсказка называет, что это не токены и не деньги', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const section = await screen.findByRole('region', { name: 'Work limits' });
+    expect(section.querySelectorAll('input')).toHaveLength(10);
+    expect(section.textContent).toContain('Running sessions, workspace (1…64)');
+    expect(section.textContent).toContain('Agent-created sessions, room (0…1000)');
+    expect(section.textContent).toContain('not tokens or money');
+    expect(section.textContent).toContain('Subagents a CLI starts inside its own session are not counted');
+    expect((screen.getByLabelText(/Spawn depth/) as HTMLInputElement).value).toBe('3');
+  });
+
+  it('человек меняет порог явно: blur зовёт settings.set с ключом и текстом', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...WITH_LIMITS, [key]: Number(value) } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    const input = await screen.findByLabelText(/Running sessions, room/);
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.blur(input);
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'roomConcurrent', value: '4' } }),
+    );
+  });
+
+  it('отказ хоста по порогу — безопасный текст под полем; порог из окружения заперт', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: WITH_LIMITS, locked: { fanout: 'PARLEY_FANOUT' } }));
+    bridge.setHandler('settings.set', () => {
+      throw { code: 'bad_request', message: 'fanout: expected an integer from 1 to 100000 /private/path' };
+    });
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    expect((await screen.findByLabelText(/Message deliveries per hour/) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/set by PARLEY_FANOUT/)).toBeTruthy();
+
+    const input = screen.getByLabelText(/Agent messages per hour, workspace/);
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(screen.getByText(/Couldn't save settings/)).toBeTruthy());
+    expect(document.body.textContent).not.toContain('/private/path');
+  });
+
+  it('хост прежней версии порогов не отдаёт: подраздела нет', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('region', { name: 'Work limits' })).toBeNull();
   });
 });
 

@@ -53,7 +53,7 @@ function whenOverlaps(a: ActionDef['when'], b: ActionDef['when']): boolean {
  */
 const ALL_ACTION_IDS: Record<ActionId, true> = {
   'palette.open': true, 'files.quickOpen': true, 'files.search': true,
-  'work.new': true, 'session.new': true, 'room.new': true,
+  'work.new': true, 'session.new': true, 'room.new': true, 'project.capabilities': true,
   'work.goto.1': true, 'work.goto.2': true, 'work.goto.3': true, 'work.goto.4': true, 'work.goto.5': true,
   'work.goto.6': true, 'work.goto.7': true, 'work.goto.8': true, 'work.goto.9': true,
   'work.prev': true, 'work.next': true, 'works.showArchived': true,

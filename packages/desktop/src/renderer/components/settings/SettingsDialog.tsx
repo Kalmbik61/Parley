@@ -21,6 +21,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ParleyConfig } from '@parley/core';
+import { RESOURCE_LIMIT_BOUNDS, RESOURCE_LIMIT_KEYS } from '@parley/core/resource-policy';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
@@ -124,7 +125,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         setLoadError(null);
       })
       .catch((err: unknown) => {
-        console.warn('[parley] settings.get', err);
+        console.warn('[parley] settings.get', 'failed');
         setLoadError(errorText(decodeIpcError(err).code, S.errors.actions.loadSettings));
       });
   }, [open, bridge]);
@@ -142,7 +143,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
         return next;
       });
     } catch (err) {
-      console.warn('[parley] settings.set', key, err);
+      console.warn('[parley] settings.set', key, 'failed');
       const message = errorText(decodeIpcError(err).code, S.errors.actions.saveSettings);
       setErrors((prev) => ({ ...prev, [key]: message }));
     }
@@ -296,6 +297,29 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   </>
                 ) : null}
 
+                {config.skillNavigator !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {S.settings.skillNavigator}
+                        {locked.skillNavigator !== undefined ? (
+                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.skillNavigator)}</span>
+                        ) : null}
+                      </span>
+                      <Switch
+                        aria-label={S.settings.skillNavigator}
+                        checked={config.skillNavigator}
+                        disabled={locked.skillNavigator !== undefined}
+                        onCheckedChange={checked => void save('skillNavigator', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    <span className="text-xs text-muted-foreground">{S.settings.skillNavigatorHint}</span>
+                    {errors.skillNavigator !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.skillNavigator}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
                 <FieldRow label={S.settings.worktreeRoot} lockedBy={locked.worktreeRoot ?? null} error={errors.worktreeRoot}>
                   <Input
                     defaultValue={config.worktreeRoot}
@@ -303,6 +327,31 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     onBlur={(event) => void save('worktreeRoot', event.target.value)}
                   />
                 </FieldRow>
+
+                {/* Хост прежней версии порогов не знает: подраздел показывает только то, что хост отдал. */}
+                {RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number') ? (
+                  <section aria-label={S.settings.limits.heading} className="flex flex-col gap-2 border-t pt-3">
+                    <h3 className="m-0 text-sm font-medium">{S.settings.limits.heading}</h3>
+                    <p className="m-0 text-xs text-muted-foreground">{S.settings.limits.hint}</p>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      {RESOURCE_LIMIT_KEYS.map((key) => (
+                        <FieldRow
+                          key={key}
+                          label={`${S.settings.limits[key]} (${S.settings.limits.range(RESOURCE_LIMIT_BOUNDS[key].min, RESOURCE_LIMIT_BOUNDS[key].max)})`}
+                          lockedBy={locked[key] ?? null}
+                          error={errors[key]}
+                        >
+                          <Input
+                            inputMode="numeric"
+                            defaultValue={String(config[key])}
+                            disabled={locked[key] !== undefined}
+                            onBlur={(event) => void save(key, event.target.value)}
+                          />
+                        </FieldRow>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
               </>
             ) : null}
           </TabsContent>

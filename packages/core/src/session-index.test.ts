@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { discoverSession } from './discover.js';
 import { indexSessionFile } from './session-index.js';
 
 let root: string;
@@ -221,6 +222,131 @@ describe('indexSessionFile', () => {
     });
   });
 
+  it('usage: частичные записи одного ответа не теряют и не удваивают итог, полный вход — сумма трёх частей', async () => {
+    // Первая запись ответа пришла до конца потока: выход ещё мал. Вторая — полный usage того же ответа.
+    const block = (at: string, output: number) =>
+      line({
+        type: 'assistant',
+        timestamp: at,
+        message: {
+          role: 'assistant',
+          id: 'msg_01',
+          usage: { input_tokens: 2, output_tokens: output, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 },
+        },
+      });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage1',
+      block('2026-10-04T12:00:01.000Z', 5) + block('2026-10-04T12:00:02.000Z', 240),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toEqual({
+      input: 2,
+      output: 240,
+      cacheRead: 30,
+      cacheWrite: 8,
+      totalInput: 40,
+      source: 'native-index',
+      observedAt: '2026-10-04T12:00:02.000Z',
+      stale: false,
+      completeness: 'complete',
+      coverage: 'conversation',
+    });
+    expect(index.tokens).toEqual({ input: 2, output: 240, cacheRead: 30, cacheWrite: 8 });
+  });
+
+  it('usage: запись без полей кеша даёт неизвестный кеш и полный вход, а показ получает нули', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-nocache',
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-04T12:00:01.000Z',
+        message: { role: 'assistant', id: 'msg_a', usage: { input_tokens: 4, output_tokens: 9 } },
+      }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({
+      input: 4,
+      output: 9,
+      cacheRead: null,
+      cacheWrite: null,
+      totalInput: null,
+      completeness: 'complete',
+    });
+    // Для показа (`tokens`) неизвестное — ноль, решение потребителя; в `usage` оно осталось null.
+    expect(index.tokens).toEqual({ input: 4, output: 9, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('usage: явный ноль кеша — известный ноль, полный вход считается', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-zero',
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-04T12:00:01.000Z',
+        message: {
+          role: 'assistant',
+          id: 'msg_a',
+          usage: { input_tokens: 4, output_tokens: 9, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({ input: 4, cacheRead: 0, cacheWrite: 0, totalInput: 4, completeness: 'complete' });
+  });
+
+  it('usage: поле есть не у всех ответов — сумма неизвестна, итог неполный, известные поля суммируются', async () => {
+    const answer = (id: string, usage: Record<string, number>) =>
+      line({ type: 'assistant', timestamp: '2026-10-04T12:00:01.000Z', message: { role: 'assistant', id, usage } });
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage-mixed',
+      answer('msg_a', { input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 30, cache_creation_input_tokens: 8 }) +
+        answer('msg_b', { input_tokens: 3, output_tokens: 20 }),
+    );
+
+    const index = await indexSessionFile(file, root);
+    expect(index.usage).toMatchObject({
+      input: 5,
+      output: 30,
+      cacheRead: null,
+      cacheWrite: null,
+      totalInput: null,
+      completeness: 'partial',
+    });
+  });
+
+  it('usage: в публичном итоге нет ни id ответа, ни пути лога', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage2',
+      line({
+        type: 'assistant',
+        message: { role: 'assistant', id: 'msg_secret', usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+    );
+    const json = JSON.stringify((await indexSessionFile(file, root)).usage);
+    expect(json).not.toContain('msg_secret');
+    expect(json).not.toContain('usage2');
+  });
+
+  it('usage: без записей с usage итог неизвестен', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'usage3',
+      line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5' } }),
+    );
+    expect((await indexSessionFile(file, root)).usage).toMatchObject({
+      input: null,
+      cacheRead: null,
+      completeness: 'unknown',
+    });
+  });
+
   it('без записей с usage токенов нет', async () => {
     const file = await writeSession(
       '-Users-me-proj',
@@ -383,5 +509,89 @@ describe('заголовок сессии', () => {
     const index = await indexSessionFile(file, root);
     expect(index.title).toBeNull();
     expect(index.titleSource).toBeNull();
+  });
+});
+
+describe('indexSessionFile: токены подагентов (P36c)', () => {
+  const assistant = (id: string | null, at: string, input: number, extra: Record<string, unknown> = {}) =>
+    line({
+      type: 'assistant',
+      timestamp: at,
+      ...extra,
+      message: {
+        role: 'assistant',
+        ...(id === null ? {} : { id }),
+        usage: { input_tokens: input, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    });
+
+  async function withSubagents(
+    id: string,
+    parent: string,
+    subagents: Record<string, string>,
+  ): Promise<Awaited<ReturnType<typeof indexSessionFile>>> {
+    const file = await writeSession('-Users-me-proj', id, parent);
+    for (const [agentId, lines] of Object.entries(subagents)) {
+      const dir = path.join(root, '-Users-me-proj', id, 'subagents');
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, `agent-${agentId}.jsonl`), lines);
+    }
+    const discovered = await discoverSession(file, root);
+    return indexSessionFile(file, root, { subagents: discovered.subagents });
+  }
+
+  it('родитель плюс подагент: токены складываются, охват — с потомками, tokens остаётся собственным', async () => {
+    const index = await withSubagents('sub-sum', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      a1: assistant('msg_a', '2026-10-04T12:00:09.000Z', 40),
+    });
+
+    expect(index.usage).toMatchObject({
+      input: 140,
+      output: 2,
+      coverage: 'conversation-and-descendants',
+      completeness: 'complete',
+      observedAt: '2026-10-04T12:00:09.000Z',
+    });
+    expect(index.tokens).toEqual({ input: 100, output: 1, cacheRead: 0, cacheWrite: 0 });
+    expect(index.subsessionCount).toBe(1);
+  });
+
+  it('без файлов подагентов охват прежний — только разговор', async () => {
+    const index = await withSubagents('sub-none', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {});
+    expect(index.usage).toMatchObject({ input: 100, coverage: 'conversation' });
+  });
+
+  it('тот же ответ в файле родителя (isSidechain) и в файле подагента — один раз', async () => {
+    const index = await withSubagents(
+      'sub-dup',
+      assistant('msg_p', '2026-10-04T12:00:01.000Z', 100) +
+        assistant('msg_a', '2026-10-04T12:00:02.000Z', 40, { isSidechain: true, agentId: 'a1' }),
+      { a1: assistant('msg_a', '2026-10-04T12:00:02.000Z', 40) + assistant('msg_a2', '2026-10-04T12:00:03.000Z', 5) },
+    );
+    expect(index.usage).toMatchObject({ input: 145, completeness: 'complete', coverage: 'conversation-and-descendants' });
+  });
+
+  it('запись агента у родителя и в файле агента без общего id ответа: не учитывается дважды, итог неполный', async () => {
+    const index = await withSubagents(
+      'sub-overlap',
+      assistant('msg_p', '2026-10-04T12:00:01.000Z', 100) +
+        assistant(null, '2026-10-04T12:00:02.000Z', 40, { isSidechain: true, agentId: 'a1' }),
+      { a1: assistant(null, '2026-10-04T12:00:02.000Z', 40) },
+    );
+    expect(index.usage).toMatchObject({ input: 140, completeness: 'partial' });
+  });
+
+  it('подагент без записей родителя с тем же агентом перекрытия не создаёт: записи без id считаются раздельно', async () => {
+    const index = await withSubagents('sub-noids', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      a1: assistant(null, '2026-10-04T12:00:02.000Z', 40) + assistant(null, '2026-10-04T12:00:03.000Z', 40),
+    });
+    expect(index.usage).toMatchObject({ input: 180, completeness: 'complete' });
+  });
+
+  it('в итоге нет нативных id агента и путей файлов', async () => {
+    const index = await withSubagents('sub-secret', assistant('msg_p', '2026-10-04T12:00:01.000Z', 100), {
+      'agent-secret': assistant(null, '2026-10-04T12:00:02.000Z', 40),
+    });
+    expect(JSON.stringify(index.usage)).not.toMatch(/agent-secret|\.jsonl|subagents/);
   });
 });

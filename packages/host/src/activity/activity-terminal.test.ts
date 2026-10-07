@@ -4,7 +4,7 @@
  * хуки Claude Code, и дальше — тем же путём: `activity.changed`, внимание окна, уведомления macOS.
  */
 
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -302,20 +302,46 @@ describe('сигналы терминала codex → активность', () 
   it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
     // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
     // состояние — по журналу, как у всякой, и порог тишины действует.
-    // Порог — с запасом: под нагрузкой полного прогона первое чтение журнала приходило позже 300 мс, и
-    // `working` было уже не застать (сессия сразу считалась закончившей ход).
+    // Время события — mtime журнала, а `working` держится до mtime + порог по часам сервиса. С настоящими часами
+    // и коротким порогом задержка чтения под нагрузкой могла перекрыть порог, и `working` было уже не застать.
+    // Поэтому порог большой, а часы сервиса идут по-настоящему, но со смещением: сначала застаём `working`,
+    // потом двигаем часы почти к порогу — дальше состояние меняет настоящий таймер тишины сервиса.
     const { workId, ref } = await codexSession({ eventsDir: true });
     const w = await works();
-    const a = activity(w, { silenceThresholdMs: 1500 });
+    const silenceThresholdMs = 30_000;
+    let offset = 0;
+    const a = activity(w, { silenceThresholdMs, now: () => Date.now() + offset });
     await a.start();
-    await appendFile(
-      path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`),
-      `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`,
+    const journal = path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(journal, `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
+
+    // Событие дописано один раз: если fs-наблюдатель его потерял (он включается не мгновенно), журнал
+    // перечитывается по записи карты.
+    const until = async (check: () => boolean, redo: () => Promise<void>, everyMs: number): Promise<void> => {
+      const started = Date.now();
+      for (;;) {
+        if (check()) return;
+        if (Date.now() - started > 30_000) throw new Error('не дождались условия');
+        await redo();
+        await settle(everyMs);
+      }
+    };
+    await until(
+      () => a.get(ref)?.activity.activity === 'working',
+      () => updateMap(project, workId, () => undefined),
+      100,
     );
-    await updateMap(project, workId, () => undefined);
-    await waitFor(() => a.get(ref)?.activity.activity === 'working');
-    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 6000);
-  }, 20_000);
+
+    // Часы — за 1,5 с до порога. Запись карты пересчитывает сессию и взводит таймер на оставшиеся 1,5 с;
+    // дальше карту не трогаем дольше этого срока, и `unseen` ставит именно таймер тишины.
+    const eventAt = (await stat(journal)).mtimeMs;
+    offset = eventAt + silenceThresholdMs - 1500 - Date.now();
+    await until(
+      () => a.get(ref)?.activity.activity === 'unseen',
+      () => updateMap(project, workId, () => undefined),
+      4000,
+    );
+  }, 90_000);
 
   it('Stop от notify новее сигнала работы завершает ход, но следующий кадр спиннера возвращает `working`', async () => {
     // Журнал даёт событию время файла на момент чтения; `Stop`, который скрипт notify дописал позже

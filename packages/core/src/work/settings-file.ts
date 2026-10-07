@@ -1,7 +1,7 @@
 /**
  * Файл настроек Claude Code для сессий работы — тот, что уезжает в `--settings`
- * (дизайн TUI v2, раздел 4.2). Один на работу: команда хука не зависит от
- * сессии, её адрес приходит из окружения процесса.
+ * (дизайн TUI v2, раздел 4.2). С навигатором — отдельный файл на сессию,
+ * иначе прежний файл работы. Адрес хука приходит из окружения процесса.
  *
  * Хук не содержит логики: stdin-JSON от Claude Code дописывается в журнал
  * сессии как есть, состояние выводят читатели. В `~/.claude` при этом ничего не
@@ -12,8 +12,10 @@
  * файле, а не в настройках человека.
  */
 
+import { randomUUID } from 'node:crypto';
+import { constants, type Stats } from 'node:fs';
+import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
@@ -85,6 +87,8 @@ export interface SettingsFile {
   model?: string;
   hooks: Record<string, HookMatcher[]>;
   statusLine: StatusLineSetting;
+  /** Только `false`: плагины, выключенные в этой сессии (мод jev при сокращённом списке скиллов). */
+  enabledPlugins?: Record<string, false>;
 }
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
@@ -123,6 +127,8 @@ const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
 const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
 
 export interface WorkSettingsOptions {
+  /** Optional session-local file; omitted keeps the legacy work settings path. */
+  sessionId?: string;
   /** GLM has its own settings file and broad-scrub-compatible HTTP capability name. */
   provider?: 'claude' | 'glm';
   /** Nonsecret launch model; provider routing belongs in process env. */
@@ -135,6 +141,8 @@ export interface WorkSettingsOptions {
   hookUrl?: string;
   /** Какие события слать HTTP; по умолчанию — `FEED_HOOK_EVENTS`. */
   hookEvents?: readonly string[];
+  /** Точные id плагинов, которые выключаются только в этой сессии; пусто или нет — поля в файле нет. */
+  disablePlugins?: readonly string[];
 }
 
 function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
@@ -166,6 +174,7 @@ export function workSettings({
   hookTokenEnv = provider === 'glm' ? 'PARLEY_HOOK_CAPABILITY' : HOOK_TOKEN_ENV,
   hookUrl,
   hookEvents = FEED_HOOK_EVENTS,
+  disablePlugins = [],
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -189,11 +198,92 @@ export function workSettings({
     hooks,
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
+    ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }
 
 export function workSettingsJson(options: WorkSettingsOptions = {}): string {
   return `${JSON.stringify(workSettings(options), null, 2)}\n`;
+}
+
+/**
+ * Session files never follow an existing settings symlink or truncate a hard-linked
+ * file. Directory handles and repeated identity checks bound path redirects; Node's
+ * portable rename API still has a final parent-check/rename race (no openat/renameat).
+ */
+async function writeSessionSettings(stateRoot: string, workDir: string, file: string, json: string): Promise<void> {
+  const unsafe = (): Error => new Error('unsafe-session-settings-path');
+  const same = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino;
+  const rootStat = await lstat(stateRoot);
+  if (!rootStat.isDirectory()) throw unsafe();
+  const canonicalRoot = await realpath(stateRoot);
+  const relative = path.relative(stateRoot, workDir);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw unsafe();
+  const canonicalWork = path.join(canonicalRoot, relative);
+  // Check every work-relative component, not only the final work directory.
+  let component = canonicalRoot;
+  const directories: { file: string; stat: Stats }[] = [{ file: component, stat: rootStat }];
+  for (const part of relative.split(path.sep)) {
+    component = path.join(component, part);
+    const current = await lstat(component);
+    if (!current.isDirectory()) throw unsafe();
+    directories.push({ file: component, stat: current });
+  }
+  const parent = path.join(canonicalWork, 'settings');
+  try { await mkdir(parent, { mode: 0o700 }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  const noFollow = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  const parentHandle = await open(parent, noFollow);
+  let temporary: string | undefined;
+  try {
+    const parentStat = await parentHandle.stat();
+    if (!parentStat.isDirectory()) throw unsafe();
+    directories.push({ file: parent, stat: parentStat });
+    const verifyParents = async (): Promise<void> => {
+      if (await realpath(stateRoot) !== canonicalRoot || await realpath(workDir) !== canonicalWork) throw unsafe();
+      for (const directory of directories) {
+        const current = await lstat(directory.file);
+        if (!current.isDirectory() || !same(current, directory.stat)) throw unsafe();
+      }
+      if (await realpath(parent) !== parent) throw unsafe();
+    };
+    const target = path.join(parent, path.basename(file));
+    const leaf = async (): Promise<Stats | undefined> => {
+      let current: Stats;
+      try { current = await lstat(target); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+      if (!current.isFile()) throw unsafe();
+      const handle = await open(target, noFollow);
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || !same(current, opened)) throw unsafe();
+        return opened;
+      } finally { await handle.close(); }
+    };
+    await verifyParents();
+    const before = await leaf();
+    temporary = path.join(parent, `.settings-${randomUUID()}.tmp`);
+    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await handle.writeFile(json, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+    await verifyParents();
+    const after = await leaf();
+    if (before === undefined ? after !== undefined : after === undefined || !same(before, after) || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw unsafe();
+    await rename(temporary, target);
+    temporary = undefined;
+    await verifyParents();
+  } finally {
+    // Never remove through a redirected parent, even when cleaning up a failed write.
+    try {
+      if (temporary !== undefined) {
+        const current = await lstat(parent).catch(() => undefined);
+        const opened = await parentHandle.stat();
+        if (current?.isDirectory() && same(current, opened) && await realpath(parent).catch(() => undefined) === parent) await unlink(temporary).catch(() => undefined);
+      }
+    } finally { await parentHandle.close(); }
+  }
 }
 
 /**
@@ -205,11 +295,18 @@ export async function writeWorkSettings(
   workId: string,
   options: WorkSettingsOptions = {},
 ): Promise<string> {
+  if (options.sessionId !== undefined && !/^s-\d+$/.test(options.sessionId)) throw new Error('invalid-session-id');
   const paths = workPaths(projectPath, workId);
-  await ensureStateDir(projectPath);
-  await mkdir(paths.events, { recursive: true });
+  // Файл сессии (навигатор) важнее файла провайдера: у него свой путь и безопасная запись.
   const file =
-    options.provider === 'glm' ? path.join(paths.dir, 'settings-glm.json') : paths.settings;
-  await writeFile(file, workSettingsJson(options), 'utf8');
+    options.sessionId !== undefined
+      ? path.join(paths.dir, 'settings', `${options.sessionId}.json`)
+      : options.provider === 'glm'
+        ? path.join(paths.dir, 'settings-glm.json')
+        : paths.settings;
+  const root = await ensureStateDir(projectPath);
+  if (options.sessionId !== undefined) await writeSessionSettings(root, paths.dir, file, workSettingsJson(options));
+  await mkdir(paths.events, { recursive: true });
+  if (options.sessionId === undefined) await writeFile(file, workSettingsJson(options), 'utf8');
   return file;
 }

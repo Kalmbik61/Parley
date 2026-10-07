@@ -731,7 +731,9 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await commitEverything(project, ['.gitignore', '.harnas/\n']);
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
-    expect((await git(project, ['status', '--porcelain'])).stdout).toBe('');
+    expect((await git(project, ['status', '--porcelain', '-uall'])).stdout).toBe('');
+    await git(project, ['add', '-A']);
+    expect((await git(project, ['diff', '--cached', '--name-only'])).stdout).toBe('');
   });
 
   it('пути артефактов внутри прежнего каталога переписываются на .parley; прочие пути, проза и порядок работ остаются', async () => {

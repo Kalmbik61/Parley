@@ -1,3 +1,7 @@
+import { validateDecisionJournalStorage } from './decision-journal.js';
+import { validatePlanStorage } from './plans.js';
+import { validatePlanEffects } from './plan-effects.js';
+import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type {
   HistoryEntry,
@@ -8,6 +12,7 @@ import type {
   WorkMap,
   WorkProvider,
   WorkSession,
+  SessionRole,
   WorksIndex,
 } from './types.js';
 
@@ -94,9 +99,10 @@ export interface NewSession {
   contextFrom?: string[];
   /** Роль Claude Code, которой запустится сессия; без неё — обычная сессия. */
   agent?: string | null;
+  role?: SessionRole | null;
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /** Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. */
@@ -105,6 +111,7 @@ export function addSession(
   init: NewSession,
   at = new Date().toISOString(),
 ): WorkSession {
+  if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
   const session: WorkSession = {
     id: nextSessionId(map),
     provider: init.provider,
@@ -127,7 +134,7 @@ export function addSession(
     summary: null,
     summarySource: null,
     artifacts: [],
-    agent: init.agent ?? null,
+    role: init.role ?? (init.agent == null ? null : { source: 'claude', name: init.agent }),
     worktree: null,
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
@@ -355,6 +362,11 @@ export function parseMap(raw: string, file: string): WorkMap {
   for (const room of map.rooms) {
     migrateRoom(room as unknown);
   }
+  map.plans ??= [];
+  validatePlanStorage(map);
+  validatePlanEffects(map);
+  validateDecisionJournalStorage(map);
+  validateResources(map);
   return map;
 }
 
@@ -408,6 +420,16 @@ function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
 }
 
+/** Снимок рецепта в карте: ровно три строки, без лишних полей; границы — как у файла рецепта (1 MiB). */
+function isRecipeSnapshot(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 3 || !['id', 'name', 'playbook'].every((key) => keys.includes(key))) return false;
+  const { id, name, playbook } = value;
+  return typeof id === 'string' && id !== '' && id.length <= 300 && typeof name === 'string' && name !== '' &&
+    name.length <= 300 && typeof playbook === 'string' && Buffer.byteLength(playbook, 'utf8') <= 1024 * 1024;
+}
+
 /**
  * Ведущего и решения в комнатах до 2026-09-29 не было: подставляется `null`, а ведущим
  * такой комнаты считается первый из `members` (`roomLead`). Запись, которая не объект,
@@ -417,6 +439,12 @@ function migrateRoom(room: unknown): void {
   if (!isRecord(room)) return;
   room['lead'] ??= null;
   room['proposal'] ??= null;
+  room['mode'] ??= 'free';
+  if (!['free', 'checklist', 'verified'].includes(String(room['mode']))) throw new Error('invalid room mode');
+  room['recipe'] ??= null;
+  if (room['recipe'] !== null && !isRecipeSnapshot(room['recipe'])) throw new Error('invalid room recipe');
+  if (room['recipeLeadNotified'] !== undefined && typeof room['recipeLeadNotified'] !== 'string') throw new Error('invalid room recipe');
+  if (isRecord(room['proposal'])) room['proposal']['kind'] ??= 'decision';
 }
 
 /** Полей процесса в старых картах просто не было; испорченный effort читается как «нет выбора». */
@@ -425,13 +453,25 @@ function migrateSession(session: Record<string, unknown>): void {
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
-  session['agent'] ??= null;
+  if (!Object.hasOwn(session, 'role')) {
+    session['role'] = typeof session['agent'] === 'string' && session['agent'] !== ''
+      ? { source: 'claude', name: session['agent'] } : null;
+  }
+  const role = session['role'];
+  if (role !== null && (!isRecord(role) || !['builtin', 'claude', 'codex'].includes(String(role['source'])) ||
+    typeof role['name'] !== 'string' || role['name'] === '')) throw new Error('invalid session role');
+  delete session['agent'];
   // Worktree появился в куске 4.1: до него все сессии работали прямо в проекте.
   session['worktree'] ??= null;
   // Effort уходит в команду, у Codex — в кавычки TOML: значение, не прошедшее токен, не уходит никуда.
-  // Ключ убирается из прочитанной карты, и следующая её запись его уже не несёт.
+  // Ключ убирается из прочитанной карты, и следующая её запись его уже не несёт. `null` — явный
+  // «Default» (снимает умолчание роли) — остаётся.
   const effort = session['effort'];
-  if (effort !== undefined && (typeof effort !== 'string' || !EFFORT_TOKEN.test(effort))) {
+  if (
+    effort !== undefined &&
+    effort !== null &&
+    (typeof effort !== 'string' || !EFFORT_TOKEN.test(effort))
+  ) {
     delete session['effort'];
   }
 }

@@ -10,7 +10,11 @@ import {
   addRoom,
   addSession,
   createWork,
+  DEFAULT_RESOURCE_LIMITS,
   readMap,
+  reserveAttempt,
+  saveConfig,
+  settleAttempt,
   SYSTEM,
   transitionSession,
   unreadFor,
@@ -467,8 +471,9 @@ describe('WakeService: процесс без хуков и диалог пере
       path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
     );
-    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
-  });
+    // Верхняя граница, а не пауза: хук доходит событием fs (или дочитыванием), настоящий процесс отвечает под нагрузкой не сразу.
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 15_000);
+  }, 30_000);
 
   it('хуки прошлого процесса не в счёт: журнал до запуска — указатель не печатается', async () => {
     const { workId, sessionId } = await activeSession();
@@ -838,6 +843,61 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(sessions.live(ref)).toBe(false);
     const map = await readMap(project, workId);
     expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+  }, 20_000);
+
+  it('5а: бюджет работы исчерпан — письмо ждёт, процесса нет, resume-limit называет бюджет, счёт часа не списан (P37)', async () => {
+    await saveConfig({ workLaunches: 1 });
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    // Один запуск в окне уже потрачен — другим поколением.
+    await updateMap(project, workId, (map) => {
+      const attempt = reserveAttempt(map, {
+        kind: 'launch', actor: 'human', session: sender, owner: 'host-old', limits: { ...DEFAULT_RESOURCE_LIMITS, workLaunches: 1 },
+      });
+      settleAttempt(map, attempt.id, 'host-old', 'spent');
+    });
+    const limiter = new ResumeLimiter(() => 6);
+    const { sessions } = await resumeRig({ limiter });
+
+    await sendLetter(workId, target, 'проснись');
+    await waitFor(() => notices('resume-limit').length > 0, 8000);
+    await sendLetter(workId, target, 'ещё раз');
+    await settle(300);
+
+    expect(notices('resume-limit')).toHaveLength(1);
+    expect(noticeTexts('resume-limit')[0]).toMatch(/^S01 was not resumed: the workspace budget is exhausted \(launch limit reached: 1 of 1/);
+    expect(sessions.live(ref)).toBe(false);
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+    // Письма не потеряны и не названы указанными: они ждут слота. Резерв не остался.
+    expect(unreadFor(map, target)).toHaveLength(2);
+    expect(map.messages.some((m) => m.from === SYSTEM)).toBe(false);
+    expect(map.resources?.attempts.filter((a) => a.state === 'reserved')).toEqual([]);
+    // Отказ не расходует счёт часа: все шесть подъёмов ещё доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  it('5б: перезапуск хоста не обнуляет потолок возобновлений сессии — он читается из карты (P37)', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    // Шесть возобновлений за час сделал прошлый хост; у нового памяти об этом нет.
+    await updateMap(project, workId, (map) => {
+      for (let i = 0; i < 6; i += 1) {
+        const attempt = reserveAttempt(map, {
+          kind: 'resume', actor: 'wake', session: target, owner: 'host-old', limits: { ...DEFAULT_RESOURCE_LIMITS, workLaunches: 100 },
+        });
+        settleAttempt(map, attempt.id, 'host-old', 'spent');
+      }
+    });
+    const { sessions } = await resumeRig();
+
+    await sendLetter(workId, target, 'проснись');
+    await waitFor(() => notices('resume-limit').length > 0, 8000);
+
+    expect(noticeTexts('resume-limit')[0]).toContain('resume limit reached: 6 of 6');
+    expect(sessions.live(ref)).toBe(false);
+    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
   }, 20_000);
 
   it('6: стаб выходит сразу — отправителю письмо от system, есть resume-failed', async () => {

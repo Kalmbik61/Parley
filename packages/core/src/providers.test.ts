@@ -37,6 +37,8 @@ import { overrideValue, overrideVariable } from './work/find-binary.js';
  */
 const CODEX_TUI_ARGS = [
   '-c',
+  'project_doc_fallback_filenames=["CLAUDE.md"]',
+  '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
   '-c',
   'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -1252,6 +1254,8 @@ describe('codex: запуск и возобновление (спека комн
         '-c',
         subs.mcpConfig,
         '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
+        '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
         'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -1284,6 +1288,8 @@ describe('codex: запуск и возобновление (спека комн
         '019ce3d5-584a-7be2-922e-b8185a8d7c19',
         '-c',
         subs.mcpConfig,
+        '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
         '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
@@ -1323,6 +1329,28 @@ describe('codex: запуск и возобновление (спека комн
       if (arg === '-c') expect(args[index + 1]).toBeDefined();
     });
     expect(args.at(-1)).toBe('# Работа w-0001');
+  });
+
+  it('{skillCatalog}: без значения пара выпадает и аргументы прежние, со значением — отдельное -c для запуска и resume', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{skillCatalog}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{skillCatalog}');
+    expect(PROVIDERS.claude.runner.args).not.toContain('{skillCatalog}');
+    const plain = startCommand(PROVIDERS.codex, subs).args;
+    expect(plain.join(' ')).not.toContain('skills.include_instructions');
+    const resume = { ...subs, providerSessionId: 'uuid-1' };
+    expect(resumeCommand(PROVIDERS.codex, resume).args.join(' ')).not.toContain('skills.include_instructions');
+    const off = { ...subs, skillCatalog: 'skills.include_instructions=false' };
+    for (const [without, withFlag] of [
+      [plain, startCommand(PROVIDERS.codex, off).args],
+      [resumeCommand(PROVIDERS.codex, resume).args, resumeCommand(PROVIDERS.codex, { ...resume, ...off }).args],
+    ] as const) {
+      expect(withFlag).toHaveLength(without.length + 2);
+      const at = withFlag.indexOf('skills.include_instructions=false');
+      expect(withFlag[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(withFlag[at]!).value).toBe(false);
+      expect(withFlag.filter((_, index) => index !== at && index !== at - 1)).toEqual(without);
+    }
+    expect(substituteArgs(['-c', '{skillCatalog}', 'x'], {})).toEqual(['x']);
   });
 
   it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
@@ -1418,6 +1446,26 @@ describe('codex: запуск и возобновление (спека комн
       'notify=["a"]',
     ]);
     expect(PROVIDERS.claude.runner.args).not.toContain('{notify}');
+  });
+});
+
+describe('Codex developer layer channel', () => {
+  it('the whole assignment is one argument on launch and resume and parses as TOML', () => {
+    const text = 'quote " \\\nЖ🙂';
+    const assignment = `developer_instructions=${JSON.stringify(text)}`;
+    for (const args of [startCommand(PROVIDERS.codex, { developerInstructions: assignment }).args,
+      resumeCommand(PROVIDERS.codex, { providerSessionId: 'id', developerInstructions: assignment }).args]) {
+      const at = args.indexOf(assignment);
+      expect(at).toBeGreaterThan(0);
+      expect(args[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(assignment)).toEqual({ key: ['developer_instructions'], value: text });
+      expect(args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
+    }
+  });
+
+  it('an absent developer assignment drops its introducing -c, never another supplied flag', () => {
+    expect(substituteArgs(['-c', '{developerInstructions}', '-c', '{notify}'], { notify: 'notify=[]' }))
+      .toEqual(['-c', 'notify=[]']);
   });
 });
 

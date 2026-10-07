@@ -142,6 +142,8 @@ test.describe('скилл parley в проекте', () => {
   test('чужой скилл в проекте не тронут, а в строке статуса — короткое сообщение', async () => {
     await mkdir(path.dirname(skillFile(project)), { recursive: true });
     await writeFile(skillFile(project), 'скилл команды\n', 'utf8');
+    // PARLEY.md уже есть: иначе уведомление о его создании вытеснило бы из строки статуса сообщение о скилле.
+    await writeFile(path.join(project, 'PARLEY.md'), '# Правила команды\n', 'utf8');
     const { window } = await openApp();
 
     await newSession(window, project);

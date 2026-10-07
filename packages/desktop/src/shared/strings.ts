@@ -15,6 +15,245 @@
 import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
+  plans: {
+    workClosed: 'Reopen this workspace to change the plan.',
+    title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
+    revision: (n: number) => 'Revision ' + n,
+    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
+    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.' },
+    reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
+    status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
+    itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
+    owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
+    basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
+    progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
+    markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
+    artifactHelp: 'References are plain text, one per line. They are not opened as files.',
+    cancelPlan: 'Cancel plan…', cancelWarning: 'Cancel this active plan? Its captured cancellation snapshot will be retained.', confirmCancel: 'Confirm cancellation',
+    oldHost: 'Update or restart the host to use plan actions.', changed: 'The plan changed. Review the current revision and try again.', failed: 'The plan action failed. Check the host and try again.', saved: 'The host accepted the action.',
+    pending: (queued: number, snapshots: number, backlog: number, conflicts: number) => queued + ' queued · ' + snapshots + ' pending snapshot · ' + backlog + ' pending backlog · ' + conflicts + ' conflict',
+    snapshot: (event: string, rev: number, status: string) => event + ' · revision ' + rev + ' · ' + status,
+    retry: 'Retry pending deliveries', workspaceEffects: 'Workspace delivery status',
+  },
+  capabilities: {
+    skillShare: {
+      title: 'Skills', share: (provider: string) => `Share with ${provider}`, unshare: (provider: string) => `Unshare from ${provider}`,
+      queued: 'Waiting for the skill sharing action…', unsupportedHost: 'This host does not support skill sharing. Restart or update the host.',
+      cleanup: 'Unshare removes only the owned symlink. The original skill stays in place.',
+      projectHint: 'Project shares create symlinks in this checkout. Review Git status and commit them when appropriate.',
+      userHint: 'User shares use an absolute symlink to the original folder.',
+      appliesToNew: 'Sharing changes apply to new sessions. Restart affected sessions to pick up changes.',
+      codes: {
+        ok: 'Done', unverified: 'The skill ownership or policy could not be verified',
+        'unsupported-scope': 'Only ordinary user and project skills can be shared', builtin: 'Built-in skills cannot be shared',
+        ambiguous: 'Separate copies or an ambiguous skill identity prevent sharing', occupied: 'The native destination is already occupied',
+        'context-changed': 'The skill or its native context changed. Refresh and try again.',
+        'receipt-unverified': 'The owned symlink receipt could not be verified', 'symlink-error': 'A native symlink could not be created. No copy was made.',
+        'io-error': 'The skill sharing action could not be completed', stale: 'The inventory changed. Refresh and try again.', shutdown: 'The host is shutting down',
+      },
+    },
+    plugins: {
+      title: 'Plugins', available: 'Available plugins', search: 'Search name or description',
+      loadCatalog: 'Browse available plugins', details: 'Details', install: 'Install', uninstall: 'Uninstall…',
+      enable: 'Enable', disable: 'Disable', addMarketplace: 'Add local marketplace', localPath: 'Local marketplace folder',
+      scope: 'Native scope', chooseScope: 'Choose scope', cancel: 'Cancel', confirmInstall: 'Install plugin',
+      confirmMarketplace: 'Add marketplace', confirmUninstall: 'Uninstall plugin',
+      dataLoss: 'Uninstalling may permanently delete plugin data. Reinstalling may not restore it.',
+      unknown: 'Unknown', skills: 'Skills', agents: 'Agents', hooks: 'Hooks', mcp: 'MCP servers', tokens: 'Always-on tokens (estimate)',
+      queued: 'Waiting for the native plugin action…', empty: 'No available plugins in this catalog.',
+      partial: 'The plugin catalog is partial. Missing entries are not confirmed absent.',
+      inputFailed: 'Check the local folder and selected native scope.',
+      appliesToNew: 'Applies to new sessions. Restart affected sessions to pick up changes.',
+      unsupportedHost: 'This host does not support plugin actions. Restart or update the host.',
+      claudeRecovery: 'Use /plugin in a native Claude session for unsupported sources or approval.',
+      codexRecovery: 'Use the native Codex plugin interface or configuration for unsupported actions.',
+      codes: {
+        'native-only': 'Use the native plugin interface', ambiguous: 'The native plugin identity is ambiguous',
+        conflict: 'A marketplace with this name is already registered',
+        'policy-denied': 'The native policy denied this action',
+        'confirmation-required': 'Confirm possible plugin data loss before uninstalling',
+      },
+    },
+  },
+  projectPanel: {
+    title: 'Project', capabilities: 'Capabilities', refresh: 'Refresh',
+    appliesToNew: 'Refresh updates this panel. Running sessions keep their current settings.',
+    parleyDescription: 'Team rules for agents in this project.', parleyLoading: 'Checking PARLEY.md…',
+    parleyFailed: 'PARLEY.md could not be opened. Check the project and try again.',
+    parleyMissing: 'PARLEY.md is missing. Use Create to add it.',
+    unavailable: 'This host does not support the capabilities panel. Restart or update the host and try again.',
+    disconnected: 'Reconnect to the host to load capabilities.', restartHost: 'Restart host…',
+    loadFailed: 'Capabilities could not be loaded. Try Refresh.',
+    loading: 'Loading…', partial: 'Partial snapshot', ready: 'Ready', error: 'Could not load',
+    notFound: 'Not found', notConfirmed: 'Not confirmed', empty: 'No capabilities found.',
+    unknownScope: 'Unknown scope', unknownPolicy: 'Policy unknown', enabled: 'Enabled', disabled: 'Disabled',
+    available: 'Available to the model', hidden: 'Unavailable to the model', installed: 'Installed',
+    notInstalled: 'Not installed', builtin: 'Built-in · managed by Parley', separateCopies: 'Separate copies',
+    shared: (provider: string): string => `Shared from ${provider}`,
+    kinds: { skill: 'Skills', mcp: 'MCP servers', plugin: 'Plugins' },
+    scopes: { user: 'User', project: 'Project', local: 'Local', plugin: 'Plugin', builtin: 'Built-in',
+      system: 'System', admin: 'Admin', extra: 'Extra', 'claude.ai': 'Claude.ai' },
+    statuses: { ok: 'Available', off: 'Off', 'needs-auth': 'Needs authentication',
+      'pending-approval': 'Pending approval', failed: 'Failed', unknown: 'Unknown' },
+    reasons: { 'human-disabled': 'Disabled in native settings', 'user-invocable-only': 'Available by explicit invocation only',
+      'implicit-invocation-disabled': 'Implicit invocation is disabled', 'disable-model-invocation': 'Model invocation is disabled',
+      'plugin-disabled': 'The source plugin is disabled', shadowed: 'Hidden by native precedence',
+      'availability-unverified': 'Native availability is not verified', 'invalid-metadata': 'Invalid native metadata',
+      'load-tool-unavailable': 'The native load tool is unavailable' },
+    diagnostics: { 'missing-context': 'Project context is unavailable', 'context-unverified': 'Native policy or scope is not verified',
+      unavailable: 'A native CLI or source is unavailable', unreadable: 'A native source could not be read',
+      'invalid-config': 'A native configuration could not be read safely', 'invalid-output': 'A native response could not be read safely',
+      timeout: 'A native query timed out', 'output-limit': 'The snapshot exceeded a safety limit',
+      'resolver-partial': 'The native skill inventory is partial', 'identity-unverified': 'The native project identity is not verified',
+      'receipt-unverified': 'Parley ownership could not be verified' },
+  },
+  mcpActions: {
+    add: 'Add MCP server', remove: 'Remove…', check: 'Check', confirmRemove: 'Remove server', cancel: 'Cancel',
+    removePrompt: 'Remove this server from its native configuration?', connected: 'Connected',
+    appliesToNew: 'Applies to new sessions. Restart running sessions to pick up changes.',
+    runningSessions: (n: number) => `Applies to new sessions. ${n} ${n === 1 ? 'session is' : 'sessions are'} running in this project — restart affected sessions to pick up changes.`,
+    nativeRecovery: 'Use /mcp in a native Codex session to check the connection or authenticate.',
+    name: 'Server name', transport: 'Transport', stdio: 'Standard input/output', http: 'HTTP', json: 'JSON from README',
+    command: 'Command', args: 'Arguments (one per line)', env: 'Environment (JSON object)', url: 'URL',
+    headers: 'Headers (JSON object)', bearer: 'Codex bearer token environment variable', scope: 'Claude scope',
+    inputJson: 'Server JSON or mcpServers block', parseJson: 'Use JSON', chooseServer: 'Choose a server',
+    inputFailed: 'Check the input and selected providers. Unsupported fields cannot be added.', queued: 'Waiting for the native action…',
+    codes: { ok: 'Done', unverified: 'The native source is not verified', stale: 'The snapshot changed. Refresh and try again.',
+      builtin: 'Managed by Parley', managed: 'Managed by native policy', ambiguous: 'The effective server identity is ambiguous',
+      'not-installed': 'The native CLI is unavailable', 'unsupported-scope': 'This scope is unavailable for this provider',
+      'unsupported-transport': 'This transport is unavailable', 'unsupported-fields': 'Some fields are unsupported',
+      'unsupported-context': 'This native binary or context is not supported', 'native-only': 'Use the native /mcp interface',
+      'invalid-input': 'The input is invalid', conflict: 'A server with this name already exists', timeout: 'The native action timed out',
+      'output-limit': 'The native output exceeded a safety limit', 'cli-error': 'The native action failed',
+      'invalid-output': 'The native response could not be verified', 'context-changed': 'The native configuration changed. Refresh and try again.', shutdown: 'The host stopped the action' },
+  },
+  backlog: {
+    title: 'Backlog', suggested: (count: number): string => `Suggested (${count})`,
+    unavailable: 'Backlog is unavailable on this host.', liveUnavailable: 'Live backlog updates are unavailable. Use Refresh to read current changes.',
+    failed: 'The backlog could not be updated. Refresh and try again.', refresh: 'Refresh', openFile: 'Open file', addItem: 'Add item',
+    agentSuggestions: 'Agent suggestions', ask: 'Ask before adding', problems: 'Add bugs and debt', everything: 'Add everything',
+    add: 'Add', editAdd: 'Edit & add', dismiss: 'Dismiss', show: 'Show', showItems: 'Show items', open: 'Open', taken: 'Taken', done: 'Done',
+    empty: 'No items in this view.', items: 'Items', edit: 'Edit', remove: 'Remove', take: 'Take into room…',
+    itemTaken: (target: string): string => `Taken: ${target}`, itemDone: (date: string): string => `Done: ${date}`,
+    titleField: 'Title', details: 'Details', section: 'Section', save: 'Save', cancel: 'Cancel', task: 'Task',
+    noWorkspace: 'Open an active workspace in this project to take an item into a room.',
+    markFailed: 'The target was created, but the backlog could not be marked. Retry keeps the same target.',
+    ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Review which backlog files you share.',
+      'parley-dir-ignored': 'The project state folder is ignored by Git. Review the project ignore rules before sharing backlog files.' },
+  },
+  decisions: {
+    title: 'Decisions', filter: 'Filter decisions', filterPlaceholder: 'Filter by title, work, room or file', refresh: 'Refresh',
+    open: 'Open accepted revision', loading: 'Loading decisions…', empty: 'No accepted decisions yet.', emptyFiltered: 'No decisions match this filter.',
+    unavailable: 'This host does not support the decisions list. Restart or update the host and try again.',
+    disconnected: 'Reconnect to the host to load decisions.',
+    loadFailed: 'Decisions could not be loaded. Try Refresh.', openFailed: 'The accepted revision could not be opened.',
+    partial: 'Part of the journal could not be read, so this list may be incomplete.',
+    errors: {
+      'file-unreadable': (n: number): string => `${n} journal ${n === 1 ? 'file' : 'files'} could not be read.`,
+      'file-unrecognized': (n: number): string => `${n} ${n === 1 ? 'file' : 'files'} with an unrecognized name ${n === 1 ? 'was' : 'were'} ignored.`,
+      'map-unreadable': (n: number): string => `${n} workspace ${n === 1 ? 'map' : 'maps'} could not be checked, so some files are unverified.`,
+      'scan-limit': (): string => 'Only the newest files were read.',
+    },
+    states: { accepted: 'Accepted', retained: 'Accepted · workspace deleted · contents not verified', edited: 'Edited after acceptance',
+      unverified: 'Unverified file', pending: 'Export pending · not written yet' },
+    completion: 'Completion', revision: (rev: number): string => `revision ${rev}`,
+    showing: (shown: number, total: number): string => `Showing ${shown} of ${total}`,
+  },
+  /** Вкладка Memory панели проекта (спека памяти и журнала, 5 и 8). */
+  memory: {
+    title: 'Memory', refresh: 'Refresh', openFile: 'Open file', add: 'Add', edit: 'Edit', save: 'Save', cancel: 'Cancel',
+    addEntry: 'Add entry', editAdd: 'Edit & add', dismiss: 'Dismiss', undo: 'Undo',
+    kind: 'Kind', kinds: { fact: 'Fact', lesson: 'Lesson', agreement: 'Agreement' },
+    factField: 'Fact', detailsField: 'Details',
+    suggested: (count: number): string => `Suggested (${count})`,
+    suggestedBy: (who: string): string => `Suggested by ${who}`,
+    why: (text: string): string => `Why: ${text}`,
+    entries: 'Entries', empty: 'No memory entries yet. Agents suggest facts and lessons here; you can also add your own.',
+    emptySuggested: 'No suggestions waiting.',
+    unavailable: 'This host does not support project memory. Restart or update the host and try again.',
+    disconnected: 'Reconnect to the host to load project memory.',
+    loading: 'Loading memory…', loadFailed: 'Project memory could not be loaded. Fix memory.md or try Refresh.',
+    failed: 'The memory could not be updated. Refresh and try again.',
+    openFailed: 'memory.md could not be opened.',
+    conflict: 'The memory changed. Refresh to see the current entries, then try again.',
+    undoConflict: 'The entry was edited after it was remembered, so Undo kept it. Remove it by editing memory.md.',
+    authors: { human: 'You', agent: 'Agent', unknown: 'Hand-written' },
+    onRequest: 'Agent says you asked for this', amended: 'Edited by you', superseded: 'Superseded',
+    recentRequests: 'Remembered on request', recentHint: 'An agent saved these saying you asked for it. Undo removes the entry it added.',
+    ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that memory.md is tracked by Git.',
+      'parley-dir-ignored': 'The project state folder is ignored by Git, so the memory stays local.' },
+  },
+  /** Вкладка Search панели проекта: поиск по прошлому проекта (спека памяти и журнала, 6.3). */
+  projectSearch: {
+    title: 'Search', field: 'Search project history', placeholder: 'Search decisions, memory, plans, backlog, rooms and sessions',
+    scope: 'Where', scopes: { all: 'Everything', decisions: 'Decisions', memory: 'Memory', plans: 'Plans', backlog: 'Backlog', history: 'Room history', sessions: 'Sessions' },
+    sources: { decisions: 'Decisions', memory: 'Memory', plans: 'Plans', backlog: 'Backlog', history: 'Room history', sessions: 'Session results' },
+    search: 'Search', searching: 'Searching…', empty: 'Nothing found. Try fewer or other words.', hint: 'All words must appear in one entry.',
+    unavailable: 'This host does not support history search. Restart or update the host and try again.',
+    disconnected: 'Reconnect to the host to search.', failed: 'The search failed. Try again.',
+    partial: (sources: readonly string[]): string => `Some sources could not be read fully: ${sources.join(', ')}.`,
+    showing: (shown: number, total: number): string => `Showing ${shown} of ${total}`,
+    openFile: 'Open file', openRoom: 'Open room', openSession: 'Open session',
+    openFailed: 'The result could not be opened.', gone: 'The workspace, room or session no longer exists.',
+    incomplete: 'Excerpt', shared: 'Shared snapshot', alsoShared: 'Also shared', line: (n: number): string => `line ${n}`,
+  },
+  roomHistory: {
+    menu: 'History', notShared: 'Not shared', sharedAt: (iso: string): string => `Shared at ${new Date(iso).toLocaleString()}`,
+    conflict: 'The shared file was changed or is not owned by Parley. Parley will not overwrite or remove it.',
+    share: 'Share history…', reshare: 'Share again…', unshare: 'Unshare…',
+    shareWarning: 'This publishes a snapshot to the project’s shared Git files. Check for secrets before continuing.',
+    confirmShare: 'Publish snapshot',
+    unshareWarning: 'Remove the shared snapshot from the working copy. Previous Git commits retain it.',
+    confirmUnshare: 'Remove snapshot',
+    loading: 'Reading the history state…', loadFailed: 'The history state could not be read. Try again.', refresh: 'Refresh',
+    unavailable: 'Update or restart the host to share room history.', disconnected: 'Reconnect to the host to share room history.',
+    shareFailed: 'The history could not be shared. Nothing was recorded as shared.',
+    unshareFailed: 'The shared snapshot could not be removed.',
+    changed: 'The shared history changed. Review it and try again.',
+    ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
+      'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
+  },
+  roles: {
+    readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
+    option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
+    defaultEffort: (effort: string): string => `Default effort: ${effort}`,
+  },
+  /** Рецепты комнат: выбор в диалоге «New session or room», Save as recipe и чип в шапке комнаты (спека рецептов, 5.2, 6). */
+  recipes: {
+    field: 'Recipe', none: 'No recipe', loadFailed: 'Recipes could not be loaded.',
+    /** Битый рецепт виден в списке с причиной и не выбирается: `broken.md · Not valid YAML`. */
+    invalidOption: (file: string, reason: string): string => `${file} · ${reason}`,
+    reason: {
+      'invalid-id': 'Invalid file name', 'missing-frontmatter': 'No header block', 'invalid-yaml': 'Not valid YAML',
+      'invalid-schema': 'Unknown or invalid field', 'invalid-role': 'Invalid role', 'invalid-count': 'Invalid count',
+      'invalid-lead': 'Needs exactly one lead', 'too-few-agents': 'Needs at least two agents', 'invalid-utf8': 'Not valid UTF-8',
+      'file-too-large': 'File is too large', unreadable: 'File could not be read', 'discovery-limit': 'Too many recipe files',
+    } as Record<string, string>,
+    modeField: 'Mode',
+    worktreeField: 'Own worktree',
+    roleMissing: (role: string): string => `Role not found: ${role}. Pick another role or remove this agent.`,
+    noWorktree: 'This project is not a Git repository, so agents share the project folder.',
+    singleDropsRecipe: 'A recipe and a mode apply to rooms of two or more agents. With one agent this starts a plain session without them.',
+    gone: 'The recipe is no longer available. Choose it again or pick No recipe.',
+    save: 'Save as recipe…', saveTitle: 'Save as recipe',
+    saveHint: 'Saves the agents, mode and playbook as a project recipe in .parley/recipes.',
+    nameField: 'Recipe name', descriptionField: 'Description', fileField: 'File name', playbookField: 'Lead playbook',
+    nameRequired: 'Give the recipe a name and a description.',
+    fileInvalid: 'Use letters, digits, - and _ in the file name.',
+    needRoles: 'Choose a role for every agent to save a recipe.', needAgents: 'A recipe needs at least two agents.',
+    confirmSave: 'Save recipe', back: 'Back',
+    exists: (file: string): string => `${file}.md already exists. Rename the file or replace it.`,
+    replace: 'Replace', rename: 'Rename',
+    saved: (name: string): string => `Saved recipe ${name}`, savedNotOpened: (name: string): string => `Saved recipe ${name}. The file could not be opened.`,
+    playbookTemplate: [
+      '1. Ask the human for the goal and the acceptance criteria in one message. Wait for the answer.',
+      '2. Draft a plan and split it between the agents.',
+      '3. Keep the room moving: unblock the agents and answer their questions.',
+      '4. When the work is verified, bring the result for the human to accept.',
+    ].join('\n'),
+    chip: (name: string): string => `Recipe: ${name}`,
+    playbookFor: (name: string): string => `Lead playbook · ${name}`, noPlaybook: 'This recipe has no playbook.',
+  },
   /** Общие подписи кнопок, переиспользуемые в нескольких диалогах. */
   common: {
     cancel: 'Cancel',
@@ -91,6 +330,10 @@ export const S = {
     showDone: 'Show done',
     /** `aria-label` кнопки «⋯» заголовка секции. */
     sectionMenu: 'Section options',
+    openParleyMd: 'Open PARLEY.md',
+    createParleyMd: 'Create PARLEY.md',
+    parleyMdCreated: 'Parley added PARLEY.md — team rules for your agents',
+    parleyMdOpen: 'Open',
     /** `aria-label` кнопки `#`/`#N` карточки — меню комнат работы (спека 6.3). */
     roomsMenu: 'Rooms',
     /** `aria-label` поля переименования на месте (спека 6.4). */
@@ -295,6 +538,8 @@ export const S = {
      * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим.
      */
     newSession: {
+      roleField: 'Role',
+      noRole: 'No role',
       titleSession: 'New session',
       titleRoom: 'New room',
       hintSession: 'Add another agent to make it a room.',
@@ -334,6 +579,18 @@ export const S = {
       providerUnavailable: (name: string): string => `${name} is unavailable. Connect it or choose another agent.`,
       /** Итог запуска по агенту при частичном сбое; тег — короткий номер сессии `S05`. */
       agentStarted: (tag: string): string => `${tag} started`,
+      /** Бюджет работы (P37): строка в подвале — что занято и сколько запусков осталось в часе. */
+      budgetLine: (running: number, limit: number, startsLeft: number): string =>
+        `${running} of ${limit} sessions running · ${startsLeft} starts left this hour`,
+      /** Старт не поместится: нужно столько-то слотов, осталось меньше; кнопка неактивна, расширяет лимит человек. */
+      budgetBlockedSlots: (needed: number, remaining: number): string =>
+        `This start needs ${needed} session slots, ${remaining} left. Stop a session or raise the limits in Settings → Agents.`,
+      budgetBlockedStarts: (needed: number, remaining: number): string =>
+        `This start needs ${needed} launches, ${remaining} left this hour. Wait or raise the limits in Settings → Agents.`,
+      budgetBlockedRoom: (needed: number, limit: number): string =>
+        `A room runs at most ${limit} sessions at once; this one has ${needed}. Remove an agent or raise the limit in Settings → Agents.`,
+      /** Отказ хоста по агенту (бюджет исчерпал другой процесс за время диалога): текст хоста уже называет предел. */
+      budgetRefused: (reason: string): string => `Not started: ${reason}`,
     },
     /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
     mergeRoom: {
@@ -434,6 +691,10 @@ export const S = {
     replyMissing: 'Original message is not in this room',
     /** Кнопка `↓N` над низом ленты (Parley 0.3.0): столько пришло снизу, пока человек читал историю; клик — к низу. */
     newBelow: (n: number): string => `${n} new below`,
+    /** Кнопка над лентой: письма комнаты старше хвоста, который прислал хост (`context.messages`, P35). */
+    earlier: (n: number): string => `Show earlier messages (${n})`,
+    earlierLoading: 'Loading earlier messages…',
+    earlierAction: 'load earlier messages',
     /** Карточка решения. */
     decisionWaiting: 'decision · waiting for you',
     accept: 'Accept',
@@ -498,7 +759,25 @@ export const S = {
     autoLaunchPending: 'Auto-launch pending sessions',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
+    skillNavigator: 'Skill navigator',
+    skillNavigatorHint: 'Applies to new and resumed sessions.',
     worktreeRoot: 'Worktree root',
+    /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
+    limits: {
+      heading: 'Work limits',
+      hint: 'Counts of sessions, starts and messages, not tokens or money. A room is limited more tightly than its workspace. Changes apply to new starts; running sessions are not stopped. Subagents a CLI starts inside its own session are not counted.',
+      workConcurrent: 'Running sessions, workspace',
+      roomConcurrent: 'Running sessions, room',
+      workNewSessions: 'Agent-created sessions, workspace',
+      roomNewSessions: 'Agent-created sessions, room',
+      spawnDepth: 'Spawn depth',
+      workLaunches: 'Starts and wake-ups per hour, workspace',
+      roomLaunches: 'Starts and wake-ups per hour, room',
+      workMessages: 'Agent messages per hour, workspace',
+      roomMessages: 'Agent messages per hour, room',
+      fanout: 'Message deliveries per hour, workspace',
+      range: (min: number, max: number): string => `${min}…${max}`,
+    },
     notifyNeedsYou: 'needs you',
     notifyFinished: 'finished',
     notifyMail: 'mail and mentions to you',
@@ -982,6 +1261,8 @@ export const S = {
    */
   works: {
     unreadable: "Host couldn't read the workspace list (works-index.json may be damaged). Fix the file, then restart the host.",
+    /** Причина хоста `snapshot-too-large`: даже компактный снимок не влезает в кадр (P35). */
+    tooLarge: 'Workspace data is too large to load. Delete or archive old workspaces, then restart the host.',
   },
 
   /** Экраны связи с хостом — `App.tsx`, короткие варианты — `shell/StatusBar.tsx`. */
@@ -1006,6 +1287,8 @@ export const S = {
     reasonClosed: 'Connection to host closed',
     /** `main/host-connection.ts` — запущенный процесс хоста жив, а сокета нет дольше срока старта (lane-r4). */
     reasonHostNotAnswering: 'Host process is running but not answering',
+    /** `main/host-connection.ts` — хост до P35 прислал строку длиннее предела кадра: переподключение её не уменьшит. */
+    reasonOversize: 'The host sent a response over the 8 MiB limit (an older host build). Restart the host to update it.',
   },
 
   /**
@@ -1022,6 +1305,7 @@ export const S = {
 
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
+    capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
     toggleDictation: 'Toggle dictation',
     goToFile: 'Go to file',
@@ -1137,6 +1421,7 @@ export const S = {
       switchModel: 'switch the model',
       switchEffort: 'change the effort',
       createRoom: 'create room',
+      saveRecipe: 'save recipe',
       loadSettings: 'load settings',
       saveSettings: 'save settings',
       renameWorkspace: 'rename workspace',
@@ -1146,6 +1431,7 @@ export const S = {
       deleteWorkspace: 'delete workspace',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',
+      createParleyMd: 'create PARLEY.md',
       revealInFinder: 'reveal in Finder',
       saveScreenshot: 'save screenshot',
       toggleAutoWake: 'toggle auto-wake',
@@ -1378,6 +1664,17 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
+  'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
+  'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
+  'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
+  'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
+  'role-missing': 'saved role is unavailable — this session starts without role defaults',
+  'memory-truncated': 'project memory was cut at 12 KiB — clean up memory.md to include the remaining facts',
+  'memory-unreadable': 'could not read project memory — resolve memory.md conflicts or access errors',
+  'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
+  'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
+  'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 
 /**

@@ -1,7 +1,12 @@
+import { constants } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { TextDecoder } from 'node:util';
 import {
+  lstat,
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -13,7 +18,9 @@ import path from 'node:path';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
-import { ensureStateDir, isDirectorySync, stateDir } from './state-dir.js';
+import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
+import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
+import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /**
@@ -107,15 +114,17 @@ export class WorkNotFoundError extends Error {
 }
 
 /** Эксклюзивное создание файла — атомарная операция файловой системы. */
-async function acquireLock(lockFile: string, timeoutMs: number): Promise<FileHandle> {
+async function acquireLock(lockFile: string, timeoutMs: number,
+  timeoutError: () => Error = () => new MapLockTimeoutError(lockFile, timeoutMs), mode = 0o666,
+): Promise<FileHandle> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      return await open(lockFile, 'wx');
+      return await open(lockFile, 'wx', mode);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (Date.now() >= deadline) {
-        throw new MapLockTimeoutError(lockFile, timeoutMs);
+        throw timeoutError();
       }
       await delay(RETRY_MS);
     }
@@ -445,4 +454,163 @@ export async function setWorkStatus(
   status: WorkStatus,
 ): Promise<WorkMap> {
   return updateMap(projectPath, workId, (map) => (map.work.status = status), { touch: false });
+}
+
+
+export type SharedStateErrorCode = 'project-unavailable' | 'git-context-unverified' | 'main-project-unavailable' |
+  'shared-state-unsafe' | 'shared-file-too-large' | 'shared-file-unreadable' | 'backlog-lock-timeout' |
+  'backlog-conflict' | 'backlog-merge-conflict' | 'backlog-invalid' | 'preferences-invalid' | 'suggestions-invalid' |
+  'memory-invalid' | 'memory-merge-conflict' | 'memory-conflict' | 'memory-suggestions-invalid';
+export class SharedStateError extends Error {
+  constructor(readonly code: SharedStateErrorCode) { super(code); this.name = 'SharedStateError'; }
+}
+export interface SharedDiagnostic { code: 'parley-gitignore-custom' | 'parley-dir-ignored' }
+export interface SharedProjectPaths {
+  context: Exclude<SharedProjectContext, { kind: 'unavailable' }>;
+  dir: string; backlog: string; plans: string; decisions: string; historyShared: string; preferences: string; suggestions: string; memory: string; memorySuggestions: string; lock: string;
+}
+export interface SharedWriteOptions extends ProjectContextOptions, WriteOptions {
+  /** Optional optimistic version from a human editor; stale edits are refused rather than reapplied. */
+  expectedVersion?: string;
+  /** Deterministic external-editor fixture seam, immediately before the final comparison. */
+  beforeCommit?: (file: string, attempt: number) => Promise<void>;
+}
+
+export async function sharedProjectPaths(projectPath: string, options: ProjectContextOptions = {}): Promise<SharedProjectPaths> {
+  const context = await resolveSharedProjectContext(projectPath, options);
+  if (context.kind === 'unavailable') throw new SharedStateError(context.reason);
+  const dir = stateDir(context.projectPath);
+  try {
+    const info = await lstat(dir);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new SharedStateError('shared-state-unsafe');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  return { context, dir, backlog: path.join(dir, 'backlog.md'), plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'), historyShared: path.join(dir, 'history-shared'),
+    preferences: path.join(dir, 'preferences.json'), suggestions: path.join(dir, 'backlog-suggestions.json'),
+    memory: path.join(dir, 'memory.md'), memorySuggestions: path.join(dir, 'memory-suggestions.json'),
+    lock: path.join(dir, 'backlog.lock') };
+}
+
+export interface SharedFileSnapshot { text: string; version: string }
+const SHARED_FILE_LIMIT = 1024 * 1024;
+export const MISSING_SHARED_VERSION = 'missing';
+
+/** Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes. */
+export async function readSharedFile(file: string): Promise<SharedFileSnapshot> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await readSharedFileOnce(file); }
+    catch (error) {
+      if (!(error instanceof SharedStateError) || error.code !== 'backlog-conflict') throw error;
+    }
+  }
+  throw new SharedStateError('backlog-conflict');
+}
+async function readSharedFileOnce(file: string): Promise<SharedFileSnapshot> {
+  let handle: FileHandle;
+  try { handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { text: '', version: MISSING_SHARED_VERSION };
+    throw new SharedStateError('shared-file-unreadable');
+  }
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile()) throw new SharedStateError('shared-file-unreadable');
+    if (before.size > BigInt(SHARED_FILE_LIMIT)) throw new SharedStateError('shared-file-too-large');
+    const bytes = Buffer.alloc(Number(before.size) + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null);
+      if (result.bytesRead === 0) break;
+      length += result.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    if (length !== Number(before.size) || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
+      throw new SharedStateError('backlog-conflict');
+    const content = bytes.subarray(0, length);
+    let text: string;
+    try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content); }
+    catch { throw new SharedStateError('shared-file-unreadable'); }
+    const version = [before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
+      createHash('sha256').update(content).digest('hex')].join(':');
+    return { text, version };
+  } finally { await handle.close(); }
+}
+
+/** Atomic replacement, not filesystem CAS: a non-cooperating writer after comparison can still race. */
+export async function writeSharedFile(file: string, text: string, expected: SharedFileSnapshot, mode = 0o600): Promise<void> {
+  if (Buffer.byteLength(text, 'utf8') > SHARED_FILE_LIMIT) throw new SharedStateError('shared-file-too-large');
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(temporary, 'wx', mode);
+    await handle.writeFile(text, 'utf8'); await handle.sync(); await handle.close(); handle = undefined;
+    if ((await readSharedFile(file)).version !== expected.version) throw new SharedStateError('backlog-conflict');
+    await rename(temporary, file);
+  } finally { await handle?.close(); await rm(temporary, { force: true }); }
+}
+
+/** Single shared-domain lock; existing work/map paths and their lock behavior remain independent. */
+export async function withSharedProjectLock<T>(paths: SharedProjectPaths, body: () => Promise<T>, options: WriteOptions = {}): Promise<T> {
+  const selected = await ensureStateDir(paths.context.projectPath);
+  if (selected !== paths.dir || !(await lstat(selected)).isDirectory() || (await lstat(selected)).isSymbolicLink())
+    throw new SharedStateError('shared-state-unsafe');
+  const timeout = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+  if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
+  const handle = await acquireLock(paths.lock, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
+  const identity = await handle.stat();
+  try { return await body(); }
+  finally {
+    await releaseSharedLock(handle, paths.lock, identity);
+  }
+}
+
+async function releaseSharedLock(handle: FileHandle, file: string, identity: { dev: number; ino: number }): Promise<void> {
+  await handle.close();
+  // Do not remove an observed replacement lock. Portable compare/unlink still has a small TOCTOU.
+  try {
+    const current = await lstat(file);
+    if (current.dev === identity.dev && current.ino === identity.ino) await rm(file);
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
+/** Private history receipt lock: selected checkout only, without native main discovery. */
+export async function withLocalHistoryLock<T>(root: string, parent: string, body: () => Promise<T>, options: WriteOptions = {}): Promise<T> {
+  const verify = async (): Promise<void> => {
+    if (path.dirname(parent) !== root || path.basename(parent) !== 'history' ||
+        await realpath(root) !== root || await realpath(parent) !== parent ||
+        !(await lstat(root)).isDirectory() || !(await lstat(parent)).isDirectory())
+      throw new SharedStateError('shared-state-unsafe');
+  };
+  await verify();
+  const timeout = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+  if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
+  const file = path.join(parent, 'history.lock');
+  const handle = await acquireLock(file, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
+  let identity: { dev: number; ino: number } | undefined;
+  try { identity = await handle.stat(); await verify(); return await body(); }
+  finally { if (identity) await releaseSharedLock(handle, file, identity); else await handle.close(); }
+}
+
+/** Read-only diagnostics: never creates state or migrates an existing ignore file. */
+export async function inspectSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
+  const previous = await readSharedFile(path.join(paths.dir, '.gitignore'));
+  const diagnostics: SharedDiagnostic[] = [];
+  let exists = true;
+  if (previous.version === MISSING_SHARED_VERSION) {
+    try { await lstat(paths.dir); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') exists = false; else throw error; }
+  }
+  if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== PRE_JOURNAL_STATE_IGNORE && previous.text !== PRE_RECIPES_STATE_IGNORE && previous.text !== '*\n')
+    diagnostics.push({ code: 'parley-gitignore-custom' });
+  if (await sharedPathIgnored(paths.context, paths.backlog, options) || await sharedPathIgnored(paths.context, paths.memory, options)) diagnostics.push({ code: 'parley-dir-ignored' });
+  return diagnostics;
+}
+/** Called under the project lock on shared writes; only the exact generated legacy ignore is migrated. */
+export async function prepareSharedIgnore(paths: SharedProjectPaths, options: ProjectContextOptions = {}): Promise<SharedDiagnostic[]> {
+  const file = path.join(paths.dir, '.gitignore');
+  const previous = await readSharedFile(file);
+  if ((previous.text === '*\n' || previous.text === PRE_MEMORY_STATE_IGNORE || previous.text === PRE_JOURNAL_STATE_IGNORE || previous.text === PRE_RECIPES_STATE_IGNORE) && previous.version !== MISSING_SHARED_VERSION)
+    await writeSharedFile(file, SHARED_STATE_IGNORE, previous, 0o644);
+  return inspectSharedIgnore(paths, options);
 }

@@ -1,4 +1,8 @@
+import type { SkillCatalog } from '../skills/catalog.js';
+import type { ResourceLimits } from '../work/resource-policy.js';
+import type { WorkSession } from '../work/types.js';
 import path from 'node:path';
+import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
 
 /**
@@ -9,6 +13,15 @@ import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../n
 export interface McpContext {
   /** Корень проекта: пути артефактов в карте отсчитываются от него. */
   projectPath: string;
+  /** Internal fixture inventory adapter; never environment or protocol input. */
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
+  /** Immutable launch environment snapshot. Absence is safely disabled for legacy sessions. */
+  skillNavigator?: boolean;
+  /** Родной список скиллов этого запуска сокращён (снимок запуска, как и `skillNavigator`). */
+  skillListReduced?: boolean;
+  nativeContextRevision?: string;
+  /** Internal isolated adapter fixture; never protocol/environment input. */
+  skillCatalog?: (session: WorkSession, cwd: string) => Promise<SkillCatalog | null>;
   workId: string;
   /** `<проект>/.parley/works/<work-id>/` (или прежний `.harnas`) — то, что пришло в `PARLEY_WORK_DIR`. */
   workDir: string;
@@ -32,6 +45,12 @@ export interface McpContext {
    * В окружении его тоже нет — `server.ts` берёт из настроек, как и `messageRate`.
    */
   worktreeRoot?: string;
+  /**
+   * Пороги бюджета работы и комнаты (`work/resource-policy.ts`). В окружении их нет, и подставить их агенту нечем:
+   * без этого поля сервер читает настройки заново перед каждым допуском, чтобы изменение человека действовало сразу.
+   * Поле нужно тестам и встраиванию.
+   */
+  resourceLimits?: ResourceLimits;
 }
 
 /**
@@ -65,5 +84,8 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     // Переменную пишет сам харнесс ровно со значением `1`: чужое значение —
     // не наша настройка, и звонок остаётся выключенным.
     channel: envValue(env, 'CHANNEL') === '1',
+    skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
+    ...(envValue(env, 'SKILL_LIST_REDUCED') === '1' ? { skillListReduced: true } : {}),
+    ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
   };
 }

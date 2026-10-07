@@ -5,7 +5,6 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
@@ -27,6 +26,14 @@ import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
+import { addBacklogItem, readBacklog } from '../work/backlog.js';
+import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
+import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
+import { undoProjectMemory } from '../work/project-memory.js';
+import { setBacklogRule } from '../work/project-preferences.js';
+import { planLaunch } from '../work/launch.js';
+import { buildRoleCatalog } from '../roles/catalog.js';
+import type { RoleCatalog } from '../roles/types.js';
 import { contextFromEnv } from './context.js';
 import type { Ring } from './inbox-watch.js';
 import {
@@ -43,7 +50,7 @@ let workId = '';
 let savedPath: string | undefined;
 
 /** Всё, что пришлось поднять для одного клиента: закрываем в afterEach. */
-const opened: { client: Client; server: Server }[] = [];
+const opened: { client: Client; server: ReturnType<typeof createParleyServer> }[] = [];
 
 interface Call {
   isError: boolean;
@@ -77,6 +84,7 @@ async function connect(
   channel = false,
   rings: Ring[] = [],
   worktreeRoot = DEFAULT_CONFIG.worktreeRoot,
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>,
 ): Promise<Client> {
   const context = {
     projectPath: project,
@@ -87,6 +95,7 @@ async function connect(
     messageRate,
     channel,
     worktreeRoot,
+    ...(roleCatalog ? { roleCatalog } : {}),
   };
   const server = createParleyServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -181,6 +190,7 @@ describe('contextFromEnv', () => {
       workDir: workPaths(project, workId).dir,
       sessionId: 's-01',
       channel: false,
+      skillNavigator: false,
     });
   });
 
@@ -208,21 +218,32 @@ describe('contextFromEnv', () => {
 });
 
 describe('список инструментов', () => {
-  it('ровно двенадцать инструментов спецификации', async () => {
+  it('набор инструментов включает только согласованные MCP routes', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'add_to_room',
+      'backlog_list',
+      'backlog_suggest',
       'check_inbox',
       'close_session',
       'create_room',
       'get_map',
+      'list_roles',
+      'memory_read',
+      'plan_submit',
+      'plan_update',
+      'plan_verify',
+      'propose_completion',
       'propose_decision',
       'read_guide',
       'read_room',
+      'remember',
       'report',
+      'search_history',
       'send_message',
+      'set_room_mode',
       'spawn_session',
       'wait_for',
     ]);
@@ -248,7 +269,7 @@ describe('список инструментов', () => {
     const propose = tools.find((tool) => tool.name === 'propose_decision');
 
     expect(propose?.inputSchema.required).toEqual(['room', 'text']);
-    expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'text']);
+    expect(Object.keys(propose?.inputSchema.properties ?? {}).sort()).toEqual(['kind', 'plan', 'planId', 'rev', 'room', 'text']);
     // Тон соседних описаний: только ведущий, решение ждёт человека, повтор заменяет, ответ — письмом.
     expect(propose?.description).toMatch(/lead only/i);
     expect(propose?.description).toMatch(/waits for the human's answer/);
@@ -287,18 +308,20 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const spawn = tools.find((tool) => tool.name === 'spawn_session');
     const effort = spawn?.inputSchema.properties?.['effort'] as
-      | { type?: string; enum?: unknown; description?: string }
+      | { type?: string | string[]; enum?: unknown; description?: string }
       | undefined;
 
-    expect(spawn?.inputSchema.required).toEqual(['provider', 'label', 'task']);
-    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: 'string' });
-    expect(effort?.type).toBe('string');
+    // Провайдера может дать роль, поэтому он не обязателен; null — явный «Default», снимающий умолчание роли.
+    expect(spawn?.inputSchema.required).toEqual(['label', 'task']);
+    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: ['string', 'null'] });
+    expect(effort?.type).toEqual(['string', 'null']);
     // Нормалайзер модели и effort (5.6): закрытого списка больше нет — у Claude пять уровней,
     // у Codex до ultra.
     expect(effort).not.toHaveProperty('enum');
     expect(effort?.description).toContain('one of the efforts of the chosen model in get_map');
     expect(effort?.description).toContain("with the default model, the levels shared by its provider's models");
     expect(effort?.description).toContain('A provider with effort: false drops the value');
+    expect(effort?.description).toContain('Exact null explicitly clears the role default');
     expect(JSON.stringify(spawn?.inputSchema.properties?.['model'])).toContain('get_map');
   });
 
@@ -522,6 +545,16 @@ describe('get_map', () => {
     expect(byId('glm')).toMatchObject({ models: selectableModels(PROVIDERS.glm), effort: true });
   });
 
+  it('комната с рецептом показывает агенту id и имя, но не плейбук ведущего', async () => {
+    await updateMap(project, workId, (current) => {
+      addRoom(current, { title: 'R', creator: HUMAN, members: ['s-01'], lead: 's-01', recipe: { id: 'project:pay', name: 'Payments', playbook: 'SECRET LEAD PLAYBOOK' } });
+    });
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map');
+    expect(JSON.stringify(result)).not.toContain('SECRET LEAD PLAYBOOK');
+    expect((result['map'] as WorkMap).rooms[0]?.recipe).toEqual({ id: 'project:pay', name: 'Payments' });
+  });
+
   it('модели несут свои уровни effort (нормалайзер, 5.6): у Claude и GLM пять, у Haiku — null, у Codex свои наборы', async () => {
     const client = await connect('s-01');
     const result = await callOk(client, 'get_map');
@@ -556,6 +589,216 @@ describe('get_map', () => {
 
     expect(result['sessionId']).toBeNull();
     expect((result['map'] as WorkMap).work.id).toBe(workId);
+  });
+});
+
+describe('get_map: компактная карта и страницы (P35)', () => {
+  const longText = (n: number, mark = 'я'): string => mark.repeat(n);
+
+  /** s-01 (план) и s-02, комната r-01 из обоих; письма дописывает `fill`. */
+  async function seedRoom(): Promise<void> {
+    await updateMap(project, workId, (current) => {
+      addSession(current, { provider: 'claude', label: 'код', task: 'писать', parent: 's-01' });
+      addRoom(current, { title: 'Обсуждение', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' });
+    });
+  }
+  const fill = async (count: number, size: number, extra: Partial<Parameters<typeof addMessage>[1]> = {}): Promise<void> => {
+    await updateMap(project, workId, (current) => {
+      for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
+    });
+  };
+
+  it('по умолчанию — топология без текстов писем: размер не растёт с перепиской, счётчики и подсказка страниц на месте', async () => {
+    await seedRoom();
+    const client = await connect('s-01');
+    const before = (await call(client, 'get_map')).text.length;
+    await fill(400, 5000);
+    const after = await call(client, 'get_map');
+    expect(after.isError).toBe(false);
+    expect(after.text.length).toBeLessThan(before + 1500);
+    expect(after.text).not.toContain('яяяя');
+    const result = JSON.parse(after.text) as { map: { messages: { total: number; latestId: string; unreadForYou: { total: number } }; pages: string; rooms: { messages: { total: number } }[] } };
+    expect(result.map.messages).toMatchObject({ total: 400, latestId: 'm-400' });
+    expect(result.map.messages.unreadForYou.total).toBe(400);
+    expect(result.map.rooms[0]?.messages.total).toBe(400);
+    expect(result.map.pages).toContain('field: messages');
+  });
+
+  it('длинная цель сокращена с полным размером в cut и читается страницами field goal до конца, без потерь', async () => {
+    const goal = longText(60_000, 'ц');
+    await updateMap(project, workId, (current) => { current.work.goal = goal; });
+    const client = await connect('s-01');
+    const map = (await callOk(client, 'get_map'))['map'] as { work: { cut: { goal: number }; goal: string } };
+    expect(map.work.cut.goal).toBe(120_000);
+    expect(map.work.goal).toContain('cut: 120000 bytes in full');
+
+    let text = '';
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await callOk(client, 'get_map', { field: 'goal', ...(cursor === undefined ? {} : { cursor }), maxBytes: 32768 });
+      text += page['text'] as string;
+      expect(page['totalBytes']).toBe(120_000);
+      if (page['complete'] === true) break;
+      cursor = page['next'] as string;
+    }
+    expect(text).toBe(goal);
+  });
+
+  it('поля сессии: task, summary, history, artifacts, contextFrom; без session — понятная ошибка', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      const target = current.sessions[1]!;
+      target.task = longText(30_000, 'з');
+      target.summary = 'итог';
+      target.artifacts = [{ kind: 'file', path: 'a.md' }, { kind: 'file', path: 'b.md' }];
+      target.contextFrom = ['s-01'];
+    });
+    const client = await connect('s-01');
+    const task = await callOk(client, 'get_map', { session: 's-02', field: 'task', maxBytes: 65536 });
+    expect(task).toMatchObject({ session: 's-02', field: 'task', totalBytes: 60_000, complete: true });
+    expect(await callOk(client, 'get_map', { session: 's-02', field: 'summary' })).toMatchObject({ text: 'итог', complete: true });
+    const artifacts = await callOk(client, 'get_map', { session: 's-02', field: 'artifacts' });
+    expect((artifacts['artifacts'] as { path: string }[]).map((a) => a.path)).toEqual(['a.md', 'b.md']);
+    expect(artifacts['page']).toMatchObject({ total: 2, complete: true, next: null });
+    const history = await callOk(client, 'get_map', { session: 's-02', field: 'history' });
+    expect((history['history'] as { event: string }[])[0]?.event).toBe('pending');
+    expect(await callOk(client, 'get_map', { session: 's-02', field: 'contextFrom' })).toMatchObject({ contextFrom: ['s-01'] });
+    expect(await callOk(client, 'get_map', { session: 's-02' })).toMatchObject({ session: { id: 's-02', artifactCount: 2 } });
+
+    const noSession = await call(client, 'get_map', { field: 'task' });
+    expect(noSession.isError).toBe(true);
+    expect(noSession.text).toContain('session');
+    expect((await call(client, 'get_map', { session: 's-99', field: 'task' })).isError).toBe(true);
+  });
+
+  it('страницы писем комнаты: байтовый потолок, next ведёт к старым без повторов, kind отбирает решения', async () => {
+    await seedRoom();
+    await fill(120, 3000);
+    await fill(1, 20, { kind: 'decision', from: 's-01' });
+    const client = await connect('s-01');
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const page = await call(client, 'get_map', { field: 'messages', room: 'r-01', maxBytes: 16384, ...(cursor === undefined ? {} : { cursor }) });
+      expect(page.isError, page.text).toBe(false);
+      expect(page.text.length).toBeLessThanOrEqual(16384);
+      const parsed = JSON.parse(page.text) as { messages: { id: string }[]; page: { complete: boolean; next: string | null; total: number } };
+      seen.unshift(...parsed.messages.map((m) => m.id));
+      expect(parsed.page.total).toBe(121);
+      if (parsed.page.complete) break;
+      cursor = parsed.page.next as string;
+    }
+    expect(seen).toHaveLength(121);
+    expect(new Set(seen).size).toBe(121);
+    expect(seen[0]).toBe('m-001'.replace('m-001', 'm-01'));
+    const decisions = await callOk(client, 'get_map', { field: 'messages', room: 'r-01', kind: 'decision' });
+    expect((decisions['messages'] as { id: string }[]).map((m) => m.id)).toEqual(['m-121']);
+    expect((await call(client, 'get_map', { field: 'messages', room: 'r-01', kind: 'bogus' })).isError).toBe(true);
+  });
+
+  it('письма комнаты читает только участник; без сессии страницы писем недоступны', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => { addSession(current, { provider: 'claude', label: 'сторонний', task: 'x' }); });
+    await fill(3, 20);
+    const stranger = await connect('s-03');
+    const denied = await call(stranger, 'get_map', { field: 'messages', room: 'r-01' });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('not a participant');
+    const none = await connect(null);
+    expect((await call(none, 'get_map', { field: 'messages' })).isError).toBe(true);
+  });
+
+  it('прямые письма: только из треда сессии; field message читает длинное письмо страницами', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      addMessage(current, { from: 's-01', to: ['s-02'], text: longText(40_000) }); // m-01
+      addSession(current, { provider: 'claude', label: 'чужой', task: 'x', parent: null }); // s-03
+      addSession(current, { provider: 'claude', label: 'чужой2', task: 'x', parent: null }); // s-04
+      addMessage(current, { from: 's-03', to: ['s-04'], text: 'секрет' }); // m-02
+    });
+    const client = await connect('s-02');
+    const direct = await callOk(client, 'get_map', { field: 'messages' });
+    expect((direct['messages'] as { id: string }[]).map((m) => m.id)).toEqual(['m-01']);
+    // 40 000 знаков по два байта — больше страницы по умолчанию: письмо сокращено, а целиком читается полем message.
+    expect((direct['page'] as { cut: number }).cut).toBe(1);
+    expect(JSON.stringify(direct)).not.toContain('секрет');
+
+    let text = '';
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const page = await callOk(client, 'get_map', { field: 'message', id: 'm-01', maxBytes: 32768, ...(cursor === undefined ? {} : { cursor }) });
+      text += page['text'] as string;
+      if (page['complete'] === true) break;
+      cursor = page['next'] as string;
+    }
+    expect(text).toBe(longText(40_000));
+    const hidden = await call(client, 'get_map', { field: 'message', id: 'm-02' });
+    expect(hidden.isError).toBe(true);
+    expect(hidden.text).toContain('unknown-target');
+  });
+
+  it('устаревший или кривой курсор — понятная ошибка, а не молчаливая склейка', async () => {
+    await seedRoom();
+    const client = await connect('s-01');
+    const bad = await call(client, 'get_map', { field: 'messages', room: 'r-01', cursor: 'next-please' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('invalid-cursor');
+    await updateMap(project, workId, (current) => { current.sessions[0]!.summary = 'я'.repeat(9000); });
+    const first = await callOk(client, 'get_map', { session: 's-01', field: 'summary', maxBytes: 2048 });
+    expect(first['complete']).toBe(false);
+    await updateMap(project, workId, (current) => { current.sessions[0]!.summary = 'новое резюме'; });
+    const stale = await call(client, 'get_map', { session: 's-01', field: 'summary', cursor: first['next'] });
+    expect(stale.isError).toBe(true);
+    expect(stale.text).toContain('stale-cursor');
+  });
+
+  it('summaries и archive: страницы по номеру; архив — другие работы этого проекта', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      current.sessions[0]!.summary = 'первое';
+      current.sessions[1]!.summary = 'я'.repeat(20_000);
+    });
+    const other = await createWork(project, { title: 'Старая работа', goal: '' });
+    const client = await connect('s-01');
+    const summaries = await callOk(client, 'get_map', { field: 'summaries', maxBytes: 8192 });
+    const list = summaries['summaries'] as { id: string; text: string; textBytes?: number }[];
+    expect(list.map((row) => row.id)).toEqual(['s-01', 's-02']);
+    expect(list[1]?.textBytes).toBe(40_000);
+    expect(list[1]?.text).toContain('get_map {session: "s-02", field: "summary"}');
+    const archive = await callOk(client, 'get_map', { field: 'archive' });
+    expect((archive['workspaces'] as { id: string }[]).map((row) => row.id)).toEqual([other.work.id]);
+    expect(archive['page']).toMatchObject({ total: 1, complete: true });
+  });
+
+  it('get_map {room}: комната целиком, с решением полностью, без плейбука', async () => {
+    await seedRoom();
+    await updateMap(project, workId, (current) => {
+      current.rooms[0]!.recipe = { id: 'project:x', name: 'X', playbook: 'SECRET PLAYBOOK' };
+      current.rooms[0]!.proposal = { id: 'p-01', from: 's-01', text: 'р'.repeat(8000), rev: 0, at: '2026-10-05T00:00:00.000Z' };
+    });
+    const client = await connect('s-01');
+    const result = await call(client, 'get_map', { room: 'r-01' });
+    expect(result.text).not.toContain('SECRET PLAYBOOK');
+    const parsed = JSON.parse(result.text) as { room: { proposal: { text: string }; recipe: { id: string } } };
+    expect(parsed.room.proposal.text).toHaveLength(8000);
+    expect(parsed.room.recipe).toEqual({ id: 'project:x', name: 'X' });
+  });
+
+  it('read_room: потолок в байтах, длинное письмо сокращено с полным размером, page.next идёт к старым', async () => {
+    await seedRoom();
+    await fill(40, 2000);
+    await fill(1, 300_000, { from: 's-01' });
+    const client = await connect('s-02');
+    const first = await call(client, 'read_room', { room: 'r-01', limit: 100, maxBytes: 16384 });
+    expect(first.isError, first.text).toBe(false);
+    expect(first.text.length).toBeLessThanOrEqual(16384);
+    const parsed = JSON.parse(first.text) as { messages: { id: string; text: string; textBytes?: number }[]; page: { complete: boolean; next: string; cut: number } };
+    expect(parsed.messages.at(-1)).toMatchObject({ id: 'm-41', textBytes: 599_998 });
+    expect(parsed.messages.at(-1)?.text).toContain('cut: ');
+    expect(parsed.page.cut).toBe(1);
+    expect(parsed.page.complete).toBe(false);
+    const older = await callOk(client, 'read_room', { room: 'r-01', limit: 5, cursor: parsed.page.next });
+    expect((older['messages'] as { id: string }[]).map((m) => m.id).every((id) => id < parsed.messages[0]!.id)).toBe(true);
   });
 });
 
@@ -594,6 +837,45 @@ describe('GLM readiness in MCP', () => {
     await versionStub('2.1.287');
     expect((await call(client, 'spawn_session', { ...args, worktree: false })).isError).toBe(false);
     expect(JSON.stringify(await readMap(project, workId))).not.toContain('fake-key');
+  });
+});
+
+describe('роли у GLM в MCP', () => {
+  beforeEach(async () => {
+    await writeFile(process.env.PARLEY_CLAUDE_BIN!, '#!/bin/sh\necho "2.1.287"\n', { mode: 0o755 });
+    await writeSecret('zai', 'fake-key');
+  });
+  const defineAgent = async (dir: string, name: string): Promise<void> => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${name}.md`), `---\nname: ${name}\ndescription: Session role\n---\nRole body.\n`);
+  };
+  it('spawn_session: встроенная роль «только чтение» у GLM принимается и пишется в карту', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'glm', role: 'builtin:planner', label: 'Plan', task: 'Plan changes' });
+    expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'builtin', name: 'planner' } });
+  });
+  it('spawn_session: роль Claude у GLM берётся из ~/.claude, а не из CLAUDE_CONFIG_DIR ведущего', async () => {
+    const fakeHome = path.join(home, 'user-home');
+    const configDir = path.join(home, 'lead-config');
+    await defineAgent(path.join(fakeHome, '.claude', 'agents'), 'from-home');
+    await defineAgent(path.join(configDir, 'agents'), 'from-config');
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', configDir);
+    try {
+      const client = await connect('s-01');
+      expect((await call(client, 'spawn_session', { provider: 'glm', role: 'claude:from-config', label: 'A', task: 'A' })).text).toContain('role-missing');
+      expect((await readMapFile()).sessions).toHaveLength(1);
+      await callOk(client, 'spawn_session', { provider: 'glm', role: 'claude:from-home', label: 'B', task: 'B' });
+      expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'claude', name: 'from-home' } });
+      // Ведущему Claude по-прежнему видна конфигурация из его окружения.
+      await callOk(client, 'spawn_session', { provider: 'claude', role: 'claude:from-config', label: 'C', task: 'C' });
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it('spawn_session: роль Codex у GLM — role-provider-mismatch', async () => {
+    const codexRole = { id: 'codex:exact', source: 'codex' as const, provider: 'codex' as const, name: 'exact', description: '', path: '/fixture.toml', prompt: 'Native', model: null, effort: null, sandboxMode: null, readOnly: false };
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, async () => buildRoleCatalog({ roles: [codexRole], diagnostics: [], partial: false }));
+    expect((await call(client, 'spawn_session', { provider: 'glm', role: 'codex:exact', label: 'A', task: 'A' })).text).toContain('role-provider-mismatch');
+    expect((await readMapFile()).sessions).toHaveLength(1);
   });
 });
 
@@ -783,7 +1065,7 @@ describe('spawn_session', () => {
 
   it('роль агента проверяется по определению проекта и попадает в карту', async () => {
     await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '# роль\n', 'utf8');
+    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role body.', 'utf8');
     const client = await connect('s-01');
 
     await callOk(client, 'spawn_session', {
@@ -793,7 +1075,8 @@ describe('spawn_session', () => {
       agent: 'reviewer',
     });
 
-    expect(session(await readMapFile(), 's-02').agent).toBe('reviewer');
+    expect(session(await readMapFile(), 's-02').role).toEqual({ source: 'claude', name: 'reviewer' });
+    expect(Object.hasOwn(session(await readMapFile(), 's-02'), 'agent')).toBe(false);
   });
 
   it('определения агента нет — ошибка, записи нет', async () => {
@@ -806,7 +1089,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('agent reviewer does not exist');
+    expect(result.text).toContain('role-missing');
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -822,7 +1105,7 @@ describe('spawn_session', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('does not accept agents');
+    expect(result.text).toMatch(/role-missing|role-provider-mismatch/);
     expect((await readMapFile()).sessions).toHaveLength(1);
   });
 
@@ -1737,7 +2020,7 @@ describe('propose_decision', () => {
 
     const refused = await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
     expect(refused.isError).toBe(true);
-    expect(refused.text).toMatch(/is closed/);
+    expect(refused.text).toMatch(/live launched caller/);
     expect(await rawMap()).toBe(before);
   });
 
@@ -2803,5 +3086,215 @@ describe('waitTimeoutMs', () => {
     expect(waitTimeoutMs(3600)).toBe(MAX_TIMEOUT_SEC * 1000);
     expect(waitTimeoutMs(5)).toBe(5000);
     expect(waitTimeoutMs(-1)).toBe(0);
+  });
+});
+
+describe('source-qualified session roles', () => {
+  it('lists safe current participant role metadata with no prompt or file paths', async () => {
+    let observed = '';
+    await updateMap(project, workId, map => { map.sessions[0]!.worktree = { path: '/participant/worktree', branch: 'b', base: 'main', createdAt: null }; });
+    const catalog = buildRoleCatalog({ roles: [{ id: 'claude:exact', source: 'claude', provider: 'claude', name: 'exact', nativeAgent: 'exact', description: 'Native role', path: '/sensitive/role.md', readOnly: false }], diagnostics: [], partial: false });
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, async cwd => { observed = cwd; return catalog; });
+    const result = await callOk(client, 'list_roles');
+    expect(observed).toBe('/participant/worktree');
+    expect(result).toHaveProperty('roles');
+    expect(JSON.stringify(result)).not.toContain('/sensitive'); expect(JSON.stringify(result)).not.toContain('prompt');
+  });
+  it('derives builtin provider, persists only role and explicit nullable choices', async () => {
+    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { role: 'builtin:critic', label: 'Review', task: 'Review the patch', model: null, effort: null });
+    const created = session(await readMapFile(), 's-02');
+    expect(created).toMatchObject({ provider: 'codex', role: { source: 'builtin', name: 'critic' }, model: null, effort: null });
+    expect(Object.hasOwn(created, 'agent')).toBe(false);
+  });
+  it('agent plus role and mandatory channel gaps refuse before map mutation', async () => {
+    const client = await connect('s-01');
+    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', agent: 'legacy', label: 'Review', task: 'Review' })).text).toContain('agent-and-role-conflict');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
+    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Review', task: 'Review' })).text).toContain('role-permissions-unavailable');
+    expect((await readMapFile()).sessions).toHaveLength(1);
+  });
+});
+
+
+describe('role defaults and explicit CLI clears through MCP', () => {
+  it.each([{ model: '', effort: '', cleared: false }, { model: null, effort: null, cleared: true }])('keeps empty strings omitted, clears only exact null ($cleared)', async ({ model, effort, cleared }) => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Plan', task: 'Plan changes', model, effort });
+    const stored = session(await readMapFile(), 's-02');
+    expect(Object.hasOwn(stored, 'model')).toBe(cleared);
+    expect(Object.hasOwn(stored, 'effort')).toBe(cleared);
+    const plan = await planLaunch(project, workId, stored);
+    if (cleared) {
+      expect(plan.args).not.toContain('--model');
+      expect(plan.args).not.toContain('--effort');
+    } else {
+      expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
+      expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+    }
+  });
+});
+
+
+describe('trusted caller backlog MCP tools', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  it('reads without writes and cannot redirect project/work/session through tool parameters', async () => {
+    const client = await connect('s-01');
+    const before = await readMapFile();
+    const listed = await callOk(client, 'backlog_list');
+    expect(listed.items).toEqual([]); expect(listed.rule).toBe('problems');
+    expect(await readMapFile()).toEqual(before);
+    expect(await readFile(path.join(project, '.parley', 'backlog.md')).catch(() => null)).toBeNull();
+    for (const name of ['backlog_list', 'backlog_suggest']) {
+      const response = await call(client, name, { projectPath: '/private/secret', workId: 'w-99', sessionId: 's-99', kind: 'bug', title: 'Spoof', why: 'Reason' });
+      expect(response.isError).toBe(true); expect(response.text).not.toContain('/private/secret');
+    }
+    expect(await readBacklog(project)).toMatchObject({ items: [] });
+  });
+  it('applies project rules, binds the author, deduplicates only open/pending titles, and adds one room feed notice', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Backlog room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const added = await callOk(client, 'backlog_suggest', { kind: 'bug', title: 'Observed regression', details: 'Reproduction', why: 'Evidence' });
+    expect(added.message).toBe('added: b-001');
+    expect((await readBacklog(project)).items[0]).toMatchObject({ by: 's-01', title: 'Observed regression' });
+    const duplicate = await callOk(client, 'backlog_suggest', { kind: 'bug', title: 'OBSERVED REGRESSION', why: 'Again' });
+    expect(duplicate.message).toBe('already in backlog: b-001');
+    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('added to the backlog'));
+    expect(notices).toHaveLength(1); expect(notices[0]).toMatchObject({ from: 'system', text: 'S01 added to the backlog: Observed regression' });
+    const proposed = await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'New feature', why: 'Useful later' });
+    expect(proposed.message).toBe('suggested: sg-02');
+    expect((await listBacklogSuggestions(project))[0]).toMatchObject({ workId, sessionId: 's-01', title: 'New feature' });
+    expect((await readBacklog(project)).items).toHaveLength(1);
+    await setBacklogRule(project, 'ask');
+    expect((await callOk(client, 'backlog_suggest', { kind: 'debt', title: 'Missing test', why: 'Observed' })).message).toBe('suggested: sg-03');
+    await setBacklogRule(project, 'everything');
+    expect((await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'Later feature', why: 'Useful' })).message).toBe('added: b-002');
+  });
+  it('supports bounded status/text reads while exposing no manual mutation tool', async () => {
+    await addBacklogItem(project, { title: 'Human item', details: 'Needle detail' });
+    const client = await connect('s-01');
+    expect((await callOk(client, 'backlog_list', { filter: 'open', text: 'needle' })).items).toHaveLength(1);
+    expect((await callOk(client, 'backlog_list', { filter: 'done' })).items).toEqual([]);
+    const names = (await client.listTools()).tools.map(row => row.name);
+    expect(names.filter(name => name.startsWith('backlog'))).toEqual(['backlog_list', 'backlog_suggest']);
+    for (const args of [{ filter: 'private' }, { text: 'x'.repeat(4097) }, { text: '\0' }, { taken: 'w-01/r-01' }])
+      expect((await call(client, 'backlog_list', args)).isError).toBe(true);
+    expect((await readBacklog(project)).items[0]).toMatchObject({ checked: false });
+  });
+  it('unknown/closed callers and malformed local data fail with safe fixed errors', async () => {
+    const unknown = await connect('s-99');
+    const failed = await call(unknown, 'backlog_suggest', { kind: 'bug', title: 'No author', why: 'Reason' });
+    expect(failed.isError).toBe(true); expect((await readBacklog(project)).items).toEqual([]);
+    await updateMap(project, workId, map => { map.sessions.find(row => row.id === 's-01')!.lifecycle = 'closed'; });
+    const closed = await connect('s-01'); expect((await call(closed, 'backlog_suggest', { kind: 'bug', title: 'Closed', why: 'Reason' })).isError).toBe(true);
+    const noSession = await connect(null); expect((await call(noSession, 'backlog_list')).isError).toBe(true);
+    await writeFile(path.join(project, '.parley', 'preferences.json'), 'secret native parser input');
+    const response = await call(closed, 'backlog_list'); expect(response.isError).toBe(true); expect(response.text).not.toContain('secret');
+    expect(response.text).toContain('preferences-invalid');
+  });
+});
+
+describe('memory and history MCP tools', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  const FACT = 'PTY tests flake in worktrees with long paths';
+  /** Системная вставка, с которой стартует новая сессия claude. */
+  async function newSessionPrompt(client: Client): Promise<string> {
+    const id = `s-0${(await readMapFile()).sessions.length + 1}`;
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'Fresh', task: 'Check the memory' });
+    const plan = await planLaunch(project, workId, session(await readMapFile(), id));
+    return plan.args[plan.args.indexOf('--append-system-prompt') + 1] ?? '';
+  }
+  it('обычный remember ждёт человека: файла памяти нет, в комнате строка-предложение, повтор не принимается', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Memory room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const first = await callOk(client, 'remember', { kind: 'lesson', fact: FACT, details: 'Compare with a baseline run.', why: 'Seen twice' });
+    expect(first.message).toBe('suggested: ms-01');
+    expect(await readFile(path.join(project, '.parley', 'memory.md')).catch(() => null)).toBeNull();
+    expect(await listMemorySuggestions(project)).toMatchObject([{ id: 'ms-01', kind: 'lesson', fact: FACT, why: 'Seen twice' }]);
+    expect((await callOk(client, 'remember', { kind: 'lesson', fact: FACT.toUpperCase(), why: 'Again' })).message).toBe('already remembered: ms-01');
+    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('remembering'));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ from: 'system', text: `S01 suggests remembering: ${FACT}` });
+    expect(await listUndoableMemory(project)).toEqual([]);
+  });
+  it('принятый урок виден новой сессии с первого хода', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'lesson', fact: FACT, why: 'Seen twice' });
+    expect(await newSessionPrompt(client)).not.toContain(FACT);
+    expect((await acceptMemorySuggestion(project, 'ms-01')).status).toBe('remembered');
+    const prompt = await newSessionPrompt(client);
+    expect(prompt).toContain('Project memory (.parley/memory.md):');
+    expect(prompt).toContain(FACT);
+  });
+  it('remember по просьбе человека пишет сразу с пометкой, строка в комнате честная, Undo убирает запись', async () => {
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Memory room', creator: 's-01', members: ['s-01'] }); });
+    const client = await connect('s-01');
+    const done = await callOk(client, 'remember', { kind: 'agreement', fact: 'Sessions close only with consent', why: 'The human said so', onHumanRequest: true });
+    expect(done.message).toBe('remembered: m-001');
+    const file = await readFile(path.join(project, '.parley', 'memory.md'), 'utf8');
+    expect(file).toContain('Sessions close only with consent');
+    expect(file).toContain('on request');
+    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 'system', text: 'S01 remembered, saying you asked for it: Sessions close only with consent' });
+    expect(await newSessionPrompt(client)).toContain('Sessions close only with consent');
+    const [undoable] = await listUndoableMemory(project);
+    expect(undoable).toMatchObject({ memoryId: 'm-001', fact: 'Sessions close only with consent', sessionId: 's-01' });
+    expect((await undoProjectMemory(project, undoable!.operationId)).status).toBe('undone');
+    expect(await listUndoableMemory(project)).toEqual([]);
+    expect(await readFile(path.join(project, '.parley', 'memory.md'), 'utf8')).not.toContain('Sessions close only with consent');
+    expect(await newSessionPrompt(client)).not.toContain('Sessions close only with consent');
+  });
+  it('memory_read отдаёт подробности, фильтрует по ids и не пишет файлов', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'fact', fact: 'Build with pnpm', details: 'Use pnpm build, not npm.', why: 'Asked', onHumanRequest: true });
+    await callOk(client, 'remember', { kind: 'lesson', fact: 'Second fact', why: 'Asked', onHumanRequest: true });
+    const all = await callOk(client, 'memory_read');
+    expect(all.total).toBe(2);
+    expect((all.items as { id: string; details: string; by: string; onRequest?: true }[])[0]).toMatchObject({ id: 'm-001', details: 'Use pnpm build, not npm.', by: 's-01', onRequest: true });
+    const one = await callOk(client, 'memory_read', { ids: ['m-002'] });
+    expect((one.items as { fact: string }[]).map(row => row.fact)).toEqual(['Second fact']);
+    for (const args of [{ ids: ['x-1'] }, { ids: 'm-001' }, { ids: Array.from({ length: 101 }, () => 'm-001') }, { projectPath: '/private/secret' }])
+      expect((await call(client, 'memory_read', args)).isError).toBe(true);
+  });
+  it('search_history находит урок и пункт бэклога, пустой результат — подсказка, скиллы не читаются', async () => {
+    await addBacklogItem(project, { title: 'Flaky pty harness', details: 'Needs a baseline' });
+    await mkdir(path.join(project, '.claude', 'skills', 'pty'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'skills', 'pty', 'SKILL.md'), '# pty flake skill\nSKILLBODYNEEDLE');
+    const client = await connect('s-01');
+    await callOk(client, 'remember', { kind: 'lesson', fact: FACT, why: 'Seen twice', onHumanRequest: true });
+    const found = await callOk(client, 'search_history', { query: 'pty flake' });
+    const sources = (found.hits as { source: string }[]).map(row => row.source);
+    expect(sources).toContain('memory');
+    expect((await callOk(client, 'search_history', { query: 'pty', scope: 'backlog' })).total).toBe(1);
+    expect((await callOk(client, 'search_history', { query: 'pty', limit: 1 })).hits).toHaveLength(1);
+    const none = await callOk(client, 'search_history', { query: 'SKILLBODYNEEDLE' });
+    expect(none.total).toBe(0); expect(none.message).toMatch(/Nothing found/);
+  });
+  it('search_history и remember отвергают чужие поля и неверные значения фиксированными ошибками', async () => {
+    const client = await connect('s-01');
+    for (const args of [{ query: '' }, { query: 'x', scope: 'skills' }, { query: 'x', limit: 31 }, { query: 'x', limit: 1.5 }, { query: 5 }, { query: 'x', sessionId: 's-99' }])
+      expect((await call(client, 'search_history', args)).isError, JSON.stringify(args)).toBe(true);
+    for (const args of [{ kind: 'note', fact: 'x', why: 'y' }, { kind: 'fact', fact: 'a\nb', why: 'y' }, { kind: 'fact', fact: 'x', why: 'y', onHumanRequest: 'yes' },
+      { kind: 'fact', fact: 'x', why: 'y', workId: 'w-99' }, { kind: 'fact', fact: 'x' }]) {
+      const response = await call(client, 'remember', args);
+      expect(response.isError, JSON.stringify(args)).toBe(true); expect(response.text).not.toContain('w-99');
+    }
+    expect(await listMemorySuggestions(project)).toEqual([]);
+  });
+  it('без сессии, с неизвестной или закрытой сессией — отказ; закрытая читает, но не пишет', async () => {
+    expect((await call(await connect(null), 'memory_read')).isError).toBe(true);
+    expect((await call(await connect(null), 'search_history', { query: 'x' })).isError).toBe(true);
+    expect((await call(await connect('s-99'), 'remember', { kind: 'fact', fact: 'x', why: 'y' })).isError).toBe(true);
+    await updateMap(project, workId, map => { map.sessions.find(row => row.id === 's-01')!.lifecycle = 'closed'; });
+    const closed = await connect('s-01');
+    expect((await call(closed, 'remember', { kind: 'fact', fact: 'x', why: 'y' })).isError).toBe(true);
+    expect((await call(closed, 'memory_read')).isError).toBe(false);
+  });
+  it('ошибка памяти (маркеры конфликта) — безопасный отказ без текста файла', async () => {
+    await mkdir(path.join(project, '.parley'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'memory.md'), '# Project memory\n\n## Facts\n<<<<<<< ours\nsecret text\n');
+    const client = await connect('s-01');
+    const response = await call(client, 'memory_read');
+    expect(response.isError).toBe(true); expect(response.text).toContain('memory-merge-conflict'); expect(response.text).not.toContain('secret');
   });
 });

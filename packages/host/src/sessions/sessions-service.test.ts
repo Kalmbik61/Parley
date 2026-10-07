@@ -1,14 +1,15 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
+  buildRoleCatalog,
   codexModelsFile,
   createPendingSession,
   createWork,
@@ -49,14 +50,38 @@ async function initGitProject(dir: string): Promise<void> {
   await runGit('git', ['-C', dir, 'commit', '-m', 'первый']);
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
+/**
+ * `nudge` — подталкивание для ожидания, которое зависит от fs-наблюдателя: запись карты, сделанная сразу после
+ * `works.start()`, уходит раньше, чем наблюдатель проекта включился, и событие теряется (под нагрузкой это
+ * случалось). Холостая запись карты раз в секунду даёт сервису новое событие; сам запуск по-прежнему
+ * определяется диффом снимков, так что проверяемое поведение то же.
+ */
+async function waitFor(
+  check: () => boolean | Promise<boolean>,
+  timeoutMs = 5000,
+  nudge?: () => Promise<unknown>,
+): Promise<void> {
   const started = Date.now();
+  let nudgedAt = started;
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > timeoutMs) throw new Error('не дождались условия');
+    const now = Date.now();
+    if (now - started > timeoutMs) throw new Error('не дождались условия');
+    if (nudge !== undefined && now - nudgedAt >= 1000) {
+      nudgedAt = now;
+      await nudge();
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+/**
+ * Тесты файла ждут настоящий процесс стаба или автозапуск через наблюдатель карт; под нагрузкой машины (полный
+ * прогон рядом с другими наборами) пять секунд по умолчанию — и для ожидания условия, и для самого теста — им
+ * хватало не всегда. Это верхняя граница, а не пауза: условие проверяется как и прежде и не ослаблено.
+ */
+const REAL_PROCESS_WAIT_MS = 20_000;
+vi.setConfig({ testTimeout: 30_000 });
 
 let broadcasts: Array<{ event: EventName; data: unknown }>;
 
@@ -114,14 +139,19 @@ beforeEach(async () => {
   // Настоящий бинарь в автотестах не запускается никогда — заглушка стоит
   // под именем claude через тот же оверрайд, что и в проде (`findRunnerBinary`).
   setEnv('PARLEY_CLAUDE_BIN', STUB);
+  // Навигатор включён по умолчанию с 2026-10-06: тесты вне его блока проверяют запуск без него, а блок про навигатор
+  // включает его сам.
+  setEnv('PARLEY_SKILL_NAVIGATOR', '0');
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const key of extraEnv) delete process.env[key];
   extraEnv = [];
   await Promise.all(worksServices.map((service) => service.stop()));
   worksServices = [];
-  await rm(project, { recursive: true, force: true });
+  // Процессы стаба после выхода ещё дописывают карту и журнал; повторы убирают гонку «каталог не пуст».
+  await rm(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 async function tempArgsFile(): Promise<string> {
@@ -148,7 +178,7 @@ interface StubArgs {
 }
 
 async function readArgs(file: string): Promise<StubArgs> {
-  await waitFor(() => existsSync(file));
+  await waitFor(() => existsSync(file), REAL_PROCESS_WAIT_MS);
   return JSON.parse(await readFile(file, 'utf8')) as StubArgs;
 }
 
@@ -334,6 +364,8 @@ describe('create(): модель и усилие из диалога (дизай
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
       'mcp_servers.parley',
+      'developer_instructions',
+      'project_doc_fallback_filenames',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
@@ -703,8 +735,13 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     );
 
     expect(registered).toHaveLength(1);
-    await waitFor(() => unregistered.length > 0);
+    await waitFor(() => unregistered.length > 0, REAL_PROCESS_WAIT_MS);
     expect(unregistered).toEqual([launched.ref]);
+    // Обработчик выхода после снятия токена ещё записывает сессию в карту: тест не кончается раньше него.
+    await waitFor(async () => {
+      const map = await readMap(project, launched.ref.workId);
+      return map.sessions.find((candidate) => candidate.id === launched.ref.sessionId)?.lifecycle !== 'active';
+    }, REAL_PROCESS_WAIT_MS);
   });
 
   it('pty.start бросил — выданный токен снимается, ошибка доходит до вызывающего', async () => {
@@ -811,10 +848,13 @@ describe('autoLaunch: сервис', () => {
 
     await waitFor(
       async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === spawnedId)?.lifecycle === 'active',
+      REAL_PROCESS_WAIT_MS,
+      () => updateMap(project, work.work.id, () => undefined),
     );
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === oldNoParentId)?.lifecycle).toBe('pending');
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
 
     await sessions.stop({ projectPath: project, workId: work.work.id, sessionId: spawnedId });
   });
@@ -899,7 +939,7 @@ describe('запуск без бинаря', () => {
       }),
     ).rejects.toThrow();
 
-    const notice = broadcasts.find((b) => b.event === 'host.notice');
+    const notice = broadcasts.find((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'launch-failed');
     expect(notice).toBeDefined();
     expect(notice?.data).toMatchObject({
       kind: 'launch-failed',
@@ -1103,6 +1143,8 @@ describe('worktree (план, кусок 4.2)', () => {
     await waitFor(
       async () =>
         (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)?.lifecycle === 'active',
+      REAL_PROCESS_WAIT_MS,
+      () => updateMap(project, work.work.id, () => undefined),
     );
 
     const map = await readMap(project, work.work.id);
@@ -1393,6 +1435,8 @@ describe('скилл parley при запуске сессии (кусок 10 п
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
     expect(existsSync(path.join(project, '.parley', 'skills-receipt.json'))).toBe(false);
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
+    expect(JSON.parse(await readFile(path.join(project, '.parley', 'parley-md-receipt.json'), 'utf8')).created).toBe(true);
 
     await service.stop(ref);
   });
@@ -1420,7 +1464,7 @@ describe('скилл parley при запуске сессии (кусок 10 п
 
     expect(await readFile(skillIn(project), 'utf8')).toBe('скилл команды\n');
     expect(existsSync(aliasIn(project))).toBe(false);
-    const notices = broadcasts.filter((item) => item.event === 'host.notice');
+    const notices = broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'skill-foreign');
     expect(notices).toHaveLength(1);
     expect(notices[0]?.data).toMatchObject({ kind: 'skill-foreign', ref: null });
 
@@ -1455,8 +1499,254 @@ describe('модель и усилие из карты: сессия, завед
   });
 });
 
+describe('session layer warnings and final spawn budget', () => {
+  const roomy = async () => ({ argMax: 1048576, pointerSize: 8 });
+  const makeRef = async (projectPath = project, provider = 'claude'): Promise<SessionRef> => {
+    const work = await createWork(projectPath, { title: 'Layer budget', goal: '' });
+    const sessionId = await createPendingSession(projectPath, work.work.id, { provider, label: 'fixture', task: 'Use fixtures' });
+    return { projectPath, workId: work.work.id, sessionId };
+  };
+
+  it('checks the final registered hook token and inherited env, refuses before PTY and unregisters', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    setEnv('P09_PRIVATE_ENV', 'private-environment-value'.repeat(3000));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start');
+    const unregister = vi.fn();
+    const token = 'private-hook-token'.repeat(3000);
+    const registered = vi.fn(() => token);
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), {
+      hooks: { url: () => 'http://127.0.0.1:4321/hooks', register: registered, unregister },
+      providerVersions: { ready: Promise.resolve(), get: () => '999.0.0' },
+      spawnLimits: async () => { expect(registered).toHaveBeenCalledTimes(1); return { argMax: 50000, pointerSize: 8 }; },
+    });
+    const ref = await makeRef();
+    await expect(service.launch(ref, 'launch')).rejects.toThrow('spawn-budget-too-large');
+    expect(start).not.toHaveBeenCalled();
+    expect(unregister).toHaveBeenCalledWith(ref);
+    expect(JSON.stringify(broadcasts)).not.toContain('private-hook-token');
+    expect(JSON.stringify(broadcasts)).not.toContain('private-environment-value');
+    await service.stopAll();
+  });
+
+  it('an unknown native limit fails before PTY, without claiming a guessed budget', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: async () => null });
+    await expect(service.launch(await makeRef(), 'launch')).rejects.toThrow('spawn-budget-unavailable');
+    expect(start).not.toHaveBeenCalled();
+    await service.stopAll();
+  });
+
+  it('native E2BIG never forwards the native error text or final environment', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('PRIVATE_NATIVE_COMMAND_AND_ENV'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const error = await service.launch(await makeRef(), 'launch').catch((caught: unknown) => caught);
+    expect(String(error)).toContain('spawn-budget-too-large');
+    expect(String(error)).not.toContain('PRIVATE_NATIVE_COMMAND_AND_ENV');
+    expect(JSON.stringify(broadcasts)).not.toContain('PRIVATE_NATIVE_COMMAND_AND_ENV');
+    await service.stopAll();
+  });
+
+  it('logs each PARLEY warning attempt but notices once per host/project/code', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    await mkdir(path.join(project, 'PARLEY.md'));
+    const host = fakeHost();
+    const warn = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const ref = await makeRef();
+    for (let i = 0; i < 2; i += 1) await service.launch(ref, 'launch').catch(() => {});
+    expect(warn.mock.calls.filter((call) => JSON.stringify(call).includes('parley-md-unreadable'))).toHaveLength(2);
+    expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-unreadable')).toHaveLength(1);
+    const otherProject = await mkdtemp(path.join(tmpdir(), 'parley-layer-other-'));
+    try {
+      await mkdir(path.join(otherProject, 'PARLEY.md'));
+      await service.launch(await makeRef(otherProject), 'launch').catch(() => {});
+      expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-unreadable')).toHaveLength(2);
+    } finally { await rm(otherProject, { recursive: true, force: true }); }
+    await service.stopAll();
+  });
+
+  it('override gap notices are global for this host, not repeated per project', async () => {
+    const home = path.join(project, 'home');
+    setEnv('PARLEY_HOME', home);
+    await mkdir(home);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['{prompt}'] } }));
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const host = fakeHost();
+    const warn = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
+    const otherProject = await mkdtemp(path.join(tmpdir(), 'parley-layer-other-'));
+    try {
+      for (const dir of [project, otherProject]) await service.launch(await makeRef(dir, 'codex'), 'launch').catch(() => {});
+      expect(warn.mock.calls.filter((call) => JSON.stringify(call).includes('provider-override-gap'))).toHaveLength(2);
+      expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'provider-override-gap')).toHaveLength(1);
+    } finally { await rm(otherProject, { recursive: true, force: true }); }
+    await service.stopAll();
+  });
+});
+
+describe('PARLEY.md before every host launch', () => {
+  it.each(['launch', 'new', 'resume'] as const)('accounts once before %s; deletion is preserved on another attempt', async (mode) => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => {
+      expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
+      throw Object.assign(new Error('fixture'), { code: 'E2BIG' });
+    });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    await expect(sessions.launch(ref, mode)).rejects.toThrow('spawn-budget-too-large');
+    expect(start).toHaveBeenCalledOnce();
+    expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'parley-md-created')).toHaveLength(1);
+    await rm(path.join(project, 'PARLEY.md'));
+    start.mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    await expect(sessions.launch(ref, mode)).rejects.toThrow('spawn-budget-too-large');
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('an initial receipt permission failure leaves PARLEY.md absent and still reaches PTY', async () => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    const host = fakeHost();
+    const warning = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    await chmod(path.join(project, '.parley'), 0o500);
+    try {
+      await expect(sessions.launch(ref, 'new')).rejects.toThrow('spawn-budget-too-large');
+      expect(start).toHaveBeenCalledOnce();
+      expect(warning.mock.calls.some(([message]) => message.includes('could not create PARLEY.md'))).toBe(true);
+      expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+    } finally { await chmod(path.join(project, '.parley'), 0o700); }
+  });
+
+  it('broken accounting logs once per host/project and never prevents a PTY launch attempt', async () => {
+    setEnv('PARLEY_AGENT_SKILLS', '0');
+    const work = await createWork(project, { title: 'Rules', goal: '' });
+    const sessionId = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'fixture', task: '' });
+    const ref = { projectPath: project, workId: work.work.id, sessionId };
+    await mkdir(path.join(project, '.parley', 'parley-md-receipt.json'));
+    const host = fakeHost();
+    const warning = vi.spyOn(host.log, 'warn');
+    const pty = createPtyManager(host);
+    const start = vi.spyOn(pty, 'start').mockImplementation(() => { throw Object.assign(new Error('fixture'), { code: 'E2BIG' }); });
+    const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(sessions.launch(ref, 'new')).rejects.toThrow('spawn-budget-too-large');
+    }
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(warning.mock.calls.filter(([message]) => message.includes('accounting'))).toHaveLength(1);
+    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(false);
+  });
+});
+
+
+describe('current role delivery and explicit session choices', () => {
+  it.each([{ model: '', cleared: false }, { model: null, cleared: true }])('keeps legacy empty model omitted and exact null explicit ($cleared)', async ({ model, cleared }) => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({ projectPath: project, workId: work.id, provider: 'claude', label: 'Plan', task: 'Plan', parent: null, role: { source: 'builtin', name: 'planner' }, model, ...(cleared ? { effort: null } : {}) });
+    try {
+      const stored = (await readMap(project, work.id)).sessions.find(item => item.id === ref.sessionId)!;
+      expect(stored.role).toEqual({ source: 'builtin', name: 'planner' });
+      expect(Object.hasOwn(stored, 'agent')).toBe(false);
+      expect(Object.hasOwn(stored, 'model')).toBe(cleared);
+      expect(Object.hasOwn(stored, 'effort')).toBe(cleared);
+      const args = await readArgs(argsFile);
+      expect(args.argv[args.argv.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit');
+      if (cleared) {
+        expect(args.argv).not.toContain('--model'); expect(args.argv).not.toContain('--effort');
+      } else {
+        expect(args.argv[args.argv.indexOf('--model') + 1]).toBe('opus');
+        expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
+      }
+    } finally { await service.stop(ref); }
+  });
+  it('rejects mandatory role channel gaps and alias conflicts before map or PTY mutation', async () => {
+    const home = path.join(project, 'home'); setEnv('PARLEY_HOME', home);
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const pty = createPtyManager(fakeHost()); const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const input = { projectPath: project, workId: work.id, provider: 'claude', label: 'Plan', task: 'Plan', parent: null, role: { source: 'builtin' as const, name: 'planner' } };
+    await expect(service.create({ ...input, agent: 'legacy' })).rejects.toThrow('agent-and-role-conflict');
+    await mkdir(home, { recursive: true });
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
+    await expect(service.create(input)).rejects.toThrow('role-permissions-unavailable');
+    expect((await readMap(project, work.id)).sessions).toHaveLength(0);
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('removed role warning delivery', () => {
+  it('logs each attempt but shows the safe warning once for each participant', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    const host = fakeHost(); const warn = vi.fn(); host.log.warn = warn;
+    const service = createSessionsService(host, fakeWorks(), createPtyManager(host), fakeActivity(), { roleCatalog: async () => buildRoleCatalog() });
+    const sessionId = await createPendingSession(project, work.id, { provider: 'claude', label: 'Old role', task: 'Continue', role: { source: 'claude', name: 'removed' } });
+    const ref = { projectPath: project, workId: work.id, sessionId };
+    try {
+      await service.launch(ref, 'new'); await service.stop(ref);
+      await service.launch(ref, 'new'); await service.stop(ref);
+      const notices = broadcasts.filter(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'role-missing');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]?.data).toMatchObject({ kind: 'role-missing', ref });
+      expect(JSON.stringify(notices)).not.toContain('removed');
+      expect(warn.mock.calls.filter(args => (args[1] as { code?: string } | undefined)?.code === 'role-missing')).toHaveLength(2);
+    } finally { await service.stopAll(); }
+  });
+});
+
+describe('participant native context launch binding', () => {
+  it('forwards the actual LaunchPlan revision into the successful PID/start stamp', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1'); setEnv('PARLEY_CODEX_BIN', STUB);
+    const work = await createWork(project, { title: 'Bound native context', goal: '' });
+    const argsFile = await tempArgsFile(); setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    let ref: SessionRef | undefined;
+    try {
+      ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'codex', label: 'Context', task: 'Review', parent: null });
+      // Навигатор при запуске читает каталог Codex тем же бинарём (`app-server`): заглушка успевает записать и этот вызов.
+      await waitFor(async () => {
+        try { return (JSON.parse(await readFile(argsFile, 'utf8')) as StubArgs).argv.some((arg) => arg.startsWith('mcp_servers.parley=')); } catch { return false; }
+      }, REAL_PROCESS_WAIT_MS);
+      const args = await readArgs(argsFile);
+      const value = JSON.parse(await readFile(path.join(project, '.parley/local/native-context', work.work.id, `${ref.sessionId}.json`), 'utf8'));
+      const session = (await readMap(project, work.work.id)).sessions.find(item => item.id === ref!.sessionId)!;
+      expect(value.process).toEqual({ pid: session.pid, startedAtProcess: session.startedAtProcess });
+      expect(value.process.pid).toBeGreaterThan(0); expect(value.process.startedAtProcess).toBeTypeOf('string');
+      expect(args.argv.find(arg => arg.startsWith('mcp_servers.parley='))).toContain(`PARLEY_NATIVE_CONTEXT_REVISION=${JSON.stringify(value.revision)}`);
+      expect(value.configArgs).toEqual([]);
+    } finally {
+      if (ref) await service.stop(ref);
+      await rm(path.dirname(argsFile), { recursive: true, force: true });
+    }
+  });
+});
+
 describe('setChoice(): выбор модели и effort в записи сессии (спека нормалайзера, 5.5)', () => {
-  it('значение пишет поле, null убирает его, undefined оставляет как было', async () => {
+  it('значение пишет поле, null пишется как явный Default, undefined оставляет как было', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const sessionId = await createPendingSession(project, work.work.id, {
       provider: 'claude',
@@ -1476,10 +1766,10 @@ describe('setChoice(): выбор модели и effort в записи сес�
     await service.setChoice(ref, { model: 'haiku', effort: null });
     const cleared = await session();
     expect(cleared?.model).toBe('haiku');
-    expect(Object.keys(cleared ?? {})).not.toContain('effort');
+    expect(cleared?.effort).toBeNull();
 
     await service.setChoice(ref, { model: null });
-    expect(Object.keys((await session()) ?? {})).not.toContain('model');
+    expect((await session())?.model).toBeNull();
   });
 
   it('сессии нет в карте — not_found', async () => {
@@ -1634,7 +1924,7 @@ describe('setModel(): смена модели (спека нормалайзер
     await service.stop(ref);
   });
 
-  it('у Haiku уровней нет: effort сброшен в карте, resume без --effort; unseen — тоже у приглашения', async () => {
+  it('у Haiku уровней нет: effort в карте — явный Default (null), resume без --effort; unseen — тоже у приглашения', async () => {
     const { service, ref, argsFile } = await liveSession(activityAt('unseen'));
 
     expect(await service.setModel(ref, 'haiku')).toEqual({ model: 'haiku', effort: null, restarted: true });
@@ -1644,7 +1934,7 @@ describe('setModel(): смена модели (спека нормалайзер
     expect(argv).not.toContain('--effort');
     const session = await sessionOf(ref);
     expect(session?.model).toBe('haiku');
-    expect(Object.keys(session ?? {})).not.toContain('effort');
+    expect(session?.effort).toBeNull();
     await service.stop(ref);
   });
 

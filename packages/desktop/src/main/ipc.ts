@@ -1,4 +1,7 @@
-import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { lstat, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { createParleyMd, sharedProjectPaths } from '@parley/core';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
@@ -9,10 +12,11 @@ import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
+import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
 import { isNotesFile } from '../shared/notes-types.js';
-import { isSessionId } from '../shared/work-keys.js';
+import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
@@ -495,6 +499,106 @@ export function registerIpc(options: RegisterIpcOptions): void {
     if (answer !== 'close' && answer !== 'cancel') return;
     answerClose(event.sender, answer);
   });
+
+  ipcMain.handle('app:open-backlog', withIpcError(async (_event, projectPath: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768)
+      throw new HostError('bad_request', 'Invalid backlog request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      // This fixed file is authorized through the proven shared project context, not an arbitrary path API.
+      const paths = await sharedProjectPaths(projectPath);
+      const info = await lstat(paths.backlog);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(paths.backlog) !== paths.backlog)
+        throw new HostError('bad_request', 'The backlog file is unavailable.');
+      const result = await openPath(paths.backlog);
+      if (result) throw new HostError('internal', 'The backlog file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The backlog file could not be opened.'); }
+  }));
+
+  // One accepted journal revision. The renderer names a file, never a path: the host list must confirm that exact file
+  // as an accepted (or retained) revision, then the fixed canonical location is checked before the editor opens it.
+  ipcMain.handle('app:open-decision', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !DECISION_FILE_NAME.test(file))
+      throw new HostError('bad_request', 'Invalid decision request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const listed = await connection.call('decisions.list', { projectPath, query: file, limit: 10 }) as Result<'decisions.list'>;
+      if (!listed.decisions.some(row => row.file === file && row.openable))
+        throw new HostError('not_found', 'The accepted revision is unavailable.');
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.decisions, file);
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The decision file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The decision file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The decision file could not be opened.'); }
+  }));
+
+  // Файл общего каталога состояния проекта, когда тот лежит вне папки проекта (linked worktree): окно называет путь
+  // относительно каталога, только из известного набора (SHARED_FILE_PATH). Каталог строит main сам; ссылки и подмена отсекаются.
+  ipcMain.handle('app:open-shared-file', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !SHARED_FILE_PATH.test(file))
+      throw new HostError('bad_request', 'Invalid shared file request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.dir, ...file.split('/'));
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The shared file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The shared file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The shared file could not be opened.'); }
+  }));
+
+  // Save as recipe: окно присылает данные рецепта и основу имени файла, не путь. Пишется только файл рецепта в каталоге
+  // рецептов известного проекта; занятое имя без `replace` — ответ `exists`, файл не тронут (спека рецептов, 5.2).
+  ipcMain.handle('app:save-recipe', withIpcError(async (_event, request: unknown) => {
+    const input = parseRecipeSaveRequest(request);
+    if (input === null) throw new HostError('bad_request', 'Invalid recipe request.');
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find(item => item.projectPath === input.projectPath);
+    if (!entry) throw new HostError('not_found', 'Project not found.');
+    await roots.rootPath({ workKey: projectWorkKey(input.projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const written = await writeProjectRecipe(input);
+    if (written.status === 'exists') return { status: 'exists' };
+    // Файл уже записан: отказ редактора рецепт не отменяет, окно скажет, что он не открылся.
+    let opened = false;
+    try { opened = !(await openPath(written.file)); } catch { /* сохранённый рецепт остаётся */ }
+    return { status: 'saved', id: written.id, opened };
+  }));
+
+  ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
+    if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
+      throw new HostError('bad_request', 'invalid PARLEY.md request');
+    }
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find((item) => item.projectPath === projectPath);
+    if (entry === undefined) throw new HostError('not_found', 'project not found');
+    // Use the same canonical project boundary as the file editor, never a worktree or arbitrary path.
+    await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const result = create ? await createParleyMd(projectPath) : { created: false };
+    if ('receiptError' in result && result.receiptError) console.warn('[parley] PARLEY.md accounting could not be completed; automatic recreation is suppressed');
+    let exists = false;
+    try { await lstat(path.join(projectPath, 'PARLEY.md')); exists = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    return { exists, created: result.created };
+  }));
 
   ipcMain.handle(
     'app:reveal-work',

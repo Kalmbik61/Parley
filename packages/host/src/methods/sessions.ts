@@ -50,9 +50,11 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
       // `exactOptionalPropertyTypes`: zod даёт `worktree?: boolean | undefined`,
       // а `CreateSessionInput.worktree?: boolean` явного `undefined` ключом не
       // принимает — той же дорогой, что `LaunchOptions.prompt` в `launch.ts`.
-      const { worktree, model, effort, ...rest } = params;
+      const { worktree, model, effort, role, agent, ...rest } = params;
       const ref = await deps.sessions.create({
         ...rest,
+        ...(role === undefined ? {} : { role }),
+        ...(agent === undefined ? {} : { agent }),
         ...(worktree === undefined ? {} : { worktree }),
         ...(model === undefined ? {} : { model }),
         ...(effort === undefined ? {} : { effort }),
@@ -107,7 +109,8 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         if (entry === undefined || !isClaudeCode(entry)) {
           throw new HostError('bad_request', 'effort of a running session can be changed only for Claude Code sessions');
         }
-        const model = session.model;
+        // `null` — явный «Default»: уровни те же, что у модели по умолчанию.
+        const model = session.model ?? undefined;
         const resolved = resolveModelEffort(entry, { ...(model === undefined ? {} : { model }), effort });
         if ('error' in resolved) throw new HostError('bad_request', resolved.error);
         const levels = effortsFor(entry, model);

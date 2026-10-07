@@ -60,6 +60,7 @@ export interface ActionContext {
     openNewSession(): void; // диалог 1.5 активной работы одним агентом (⌘T)
     openNewRoom(): void; // тот же диалог, открытый комнатой (два агента)
     openSettings(): void;
+    openProjectPanel(projectPath: string): void;
     setAppearance(mode: Appearance): void; // store/ui.ts: app.setAppearance, ui.json пишет main
     toggleShowArchived(): void;
     toggleWake(): Promise<void>; // useUiStore.getState().toggleWake(bridge)
@@ -150,6 +151,7 @@ const ZOOM_STEP: Partial<Record<ActionId, 1 | -1 | 0>> = {
 /** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. Правого сайдбара без неё нет (7.2). */
 function needsActiveWork(id: ActionId): boolean {
   return (
+    id === 'project.capabilities' ||
     id === 'session.new' ||
     id === 'room.new' ||
     id === 'sidebar.right.toggle' ||
@@ -229,6 +231,12 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       ctx.ui.showRightTab('changes');
       return;
     // Корень ⌘P и поиска — корень «Файлов» активной работы (`filesRootSpec`): его берут палитра и панель.
+    case 'project.capabilities': {
+      const entry = useWorksStore.getState().entries.find(item => workKeyOf(item.projectPath, item.map.work.id) === ctx.layout.activeWorkKey);
+      if (!entry) { ctx.toast(S.notifications.targetGone); return; }
+      ctx.ui.openProjectPanel(entry.projectPath);
+      return;
+    }
     case 'files.quickOpen':
       ctx.palette.openWith('files');
       return;

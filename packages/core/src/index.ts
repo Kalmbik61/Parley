@@ -68,6 +68,7 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  claudeConfigDirFor,
   modelChoiceError,
   printCommand,
   providersFile,
@@ -116,6 +117,24 @@ export {
 } from './work/map.js';
 export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
+export {
+  PAGE_DEFAULT_BYTES,
+  PAGE_MAX_BYTES,
+  PAGE_MAX_ITEMS,
+  PAGE_MIN_BYTES,
+  PageError,
+  clampPageBytes,
+  compactWorkMap,
+  listPage,
+  mapTopology,
+  messagePage,
+  pageBySeq,
+  parseCursor,
+  seqOf,
+  textPage,
+  viewBytes,
+} from './work/context-pages.js';
+export type { MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,
@@ -134,6 +153,24 @@ export {
   RoomRuleError,
 } from './work/rooms.js';
 export type { NewRoom } from './work/rooms.js';
+export { leadRecipeBlock, recipeLeadBlock, recipeLeadsPending, reconcileRecipeLeads } from './work/recipe-lead.js';
+export { BUILTIN_RECIPES } from './recipes/builtin.js';
+export { listRecipeCatalog, expandRecipe, recipeCatalogView, snapshotRecipe } from './recipes/catalog.js';
+export { parseProjectRecipe, projectRecipeId } from './recipes/parse.js';
+export type {
+  ExpandedRecipeAgent,
+  ParsedRecipe,
+  RecipeAgent,
+  RecipeAgentView,
+  RecipeCatalog,
+  RecipeCatalogView,
+  RecipeCode,
+  RecipeDefinition,
+  RecipeDiagnostic,
+  RecipeEntry,
+  RecipeEntryView,
+  RecipeSnapshot,
+} from './recipes/types.js';
 export {
   ACCEPTED_LETTER,
   ACCEPTED_LINE,
@@ -234,6 +271,8 @@ export {
   UNTITLED_WORK,
 } from './work/launch.js';
 export type { LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
+export { querySpawnLimits, validateSpawnBudget, SpawnBudgetError } from './work/session-layer.js';
+export type { SpawnLimits } from './work/session-layer.js';
 export {
   BinaryNotFoundError,
   findBinary,
@@ -358,6 +397,11 @@ export type {
 } from './capabilities/types.js';
 export { claudeCommands } from './capabilities/claude-commands.js';
 export { parseFrontmatter } from './capabilities/frontmatter.js';
+export { resolveSkillCatalog } from './skills/catalog.js';
+export type { SkillCatalog, SkillCatalogDiagnostic, SkillCatalogOptions } from './skills/catalog.js';
+export { searchSkills } from './skills/search.js';
+export type { SkillSearchMatch } from './skills/search.js';
+export type { NativeSkill, SkillUnavailableReason } from './skills/types.js';
 export { scanClaudeCapabilities } from './capabilities/scan.js';
 export type { ScanOptions } from './capabilities/scan.js';
 export {
@@ -386,7 +430,7 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
 } from './mcp/tools.js';
-export { HUMAN, MESSAGE_KINDS, SYSTEM } from './work/types.js';
+export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {
   Artifact,
   HistoryEntry,
@@ -409,3 +453,113 @@ export type {
   WorksIndex,
   WorktreeInfo,
 } from './work/types.js';
+
+export { createParleyMd, ensureParleyMd } from './work/parley-md.js';
+
+export { BUILTIN_ROLES, modelForTier } from './roles/builtin.js';
+export { buildRoleCatalog, listRoleCatalog, resolveRoleChoice, RoleChoiceError } from './roles/catalog.js';
+export type { RoleChoice, RequiredRolePermissions, ResolvedRoleChoice } from './roles/catalog.js';
+export type { RoleCatalog, RoleDefinition, RoleDiagnostic } from './roles/types.js';
+export { readCodexRoleContext, projectCodexRoleContext, readCodexNativeContext } from './roles/context.js';
+export type { CodexRoleContext, CodexContextOptions, CodexNativeContext } from './roles/context.js';
+export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, assertRoleDelivery, roleSummaries } from './work/agents.js';
+export type { SessionRoleCatalogOptions, RoleSummary, RoleList } from './work/agents.js';
+export type { SessionRole } from './work/types.js';
+
+// Shared project domain. Runtime workPaths continue to use their original local project path.
+export { resolveMainCheckout, resolveSharedProjectContext } from './work/project-context.js';
+export type { SharedProjectContext, ProjectContextOptions } from './work/project-context.js';
+export { sharedProjectPaths, SharedStateError, inspectSharedIgnore, prepareSharedIgnore, withSharedProjectLock, readSharedFile, writeSharedFile } from './work/store.js';
+export type { SharedProjectPaths, SharedDiagnostic, SharedWriteOptions, SharedStateErrorCode, SharedFileSnapshot } from './work/store.js';
+export { parseBacklog, readBacklog, addBacklogItem, updateBacklogItem, removeBacklogItem, takeBacklogItem, completeBacklogItem } from './work/backlog.js';
+export type { BacklogItem, BacklogDocument, BacklogInput, BacklogPatch, BacklogWriteResult, BacklogSuggestion, SuggestionKind } from './work/backlog.js';
+export { listBacklogSuggestions, suggestBacklog, acceptBacklogSuggestion, dismissBacklogSuggestion } from './work/backlog-suggestions.js';
+export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions } from './work/backlog-suggestions.js';
+export { readProjectPreferences, setBacklogRule } from './work/project-preferences.js';
+export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
+
+export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './work/plan-snapshots.js';
+export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
+export { proposeCompletion } from './work/proposals.js';
+export type { ProposalOptions } from './work/proposals.js';
+export type { MapCompact } from './work/types.js';
+export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
+
+export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
+export type { MemoryKind, MemoryProvenance, MemoryItem, MemoryDocument, MemoryInput, MemoryPatch, MemoryWriteOptions, MemoryWriteResult, MemorySuggestion } from './work/project-memory.js';
+export { rememberProjectMemory, listMemorySuggestions, listUndoableMemory, acceptMemorySuggestion, dismissMemorySuggestion } from './work/memory-suggestions.js';
+export type { RememberInput, RememberOptions, MemorySuggestionResult, UndoableMemory } from './work/memory-suggestions.js';
+export { formatMemoryFactBlock, MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER } from './work/session-layer.js';
+export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-layer.js';
+
+export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
+export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
+export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
+
+export {
+  DEFAULT_RESOURCE_LIMITS,
+  REQUEST_BUDGET_EXTENSION,
+  RESOURCE_COVERAGE,
+  RESOURCE_LIMIT_BOUNDS,
+  RESOURCE_LIMIT_KEYS,
+  RESOURCE_WINDOW_MS,
+  ResourceDeniedError,
+  admitSpawn,
+  assertMessageBudget,
+  attemptKindFor,
+  countRecipients,
+  deniedForAgent,
+  limitsFromConfig,
+  reserveAttempt,
+  resourceStatus,
+  roomOfSession,
+  settleAttempt,
+  settleByEvidence,
+  spawnDepthOf,
+  teamStartFits,
+} from './work/resource-policy.js';
+export type {
+  Meter,
+  MessageRequest,
+  ReserveRequest,
+  ResourceDeniedCode,
+  ResourceLimits,
+  ResourceStatus,
+  ScopeStatus,
+  SpawnRequest,
+} from './work/resource-policy.js';
+export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
+
+export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
+export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';
+export { renderRoomHistory, rebuildRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, readRoomHistoryStatus, RoomHistoryError } from './work/room-history.js';
+export type { RoomHistoryResult, RoomHistoryCode, RoomHistoryState, RoomHistoryStatus } from './work/room-history.js';
+export { searchHistory, HistorySearchError, HISTORY_SCOPES } from './work/history-search.js';
+export type { HistoryHit, HistoryScope, HistorySource, HistorySearchInput, HistorySearchResult } from './work/history-search.js';
+
+export {
+  createUsageLedger,
+  freezeUsage,
+  legacyUsage,
+  selectUsage,
+  sumUsage,
+  usageKey,
+  withDescendants,
+  asCount,
+  observedCount,
+  EPOCH_TOLERANCE_MS,
+} from './work/usage-ledger.js';
+export type {
+  DescendantUsage,
+  FrozenUsage,
+  KeyedUsage,
+  SelectUsageInput,
+  UsageAttribution,
+  UsageCompleteness,
+  UsageCounters,
+  UsageObservation,
+  UsageSource,
+  UsageSummary,
+  UsageTotal,
+} from './work/usage-ledger.js';

@@ -5,17 +5,23 @@
  * тултипе: название в 120 знаков в невысоком окне иначе съело бы ленту.
  */
 
+import type { ReactNode } from 'react';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
 
 export interface RoomHeaderProps {
+  modeControl?: ReactNode;
+  /** Чип рецепта комнаты (`RoomRecipeChip`) рядом с режимом. */
+  recipeChip?: ReactNode;
+  /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
+  historyMenu?: ReactNode;
   title: string;
   subtitle: string;
   participants: readonly ParticipantModel[];
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, participants, onOpenSession }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, participants, onOpenSession, modeControl, recipeChip, historyMenu }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -29,6 +35,10 @@ export function RoomHeader({ title, subtitle, participants, onOpenSession }: Roo
           {subtitle}
         </span>
       </div>
+      {recipeChip === undefined ? modeControl : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}</div>
+      )}
+      {historyMenu}
       <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
     </div>
   );

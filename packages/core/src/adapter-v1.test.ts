@@ -92,15 +92,31 @@ describe('adapterV1', () => {
     expect(record.usage).toEqual({ input: 2, output: 87, cacheRead: 38_011, cacheWrite: 48_061 });
   });
 
-  it('без usage токенов у записи нет, недостающие счётчики — нули', () => {
+  it('без usage токенов у записи нет', () => {
     expect(map({ type: 'assistant', message: { role: 'assistant' } }).usage).toBeNull();
     expect(map({ message: { usage: 'мусор' } }).usage).toBeNull();
+  });
+
+  it('недостающие и нечисловые счётчики — null, а не измеренный ноль', () => {
     expect(map({ message: { usage: { output_tokens: 5 } } }).usage).toEqual({
-      input: 0,
+      input: null,
       output: 5,
-      cacheRead: 0,
-      cacheWrite: 0,
+      cacheRead: null,
+      cacheWrite: null,
     });
+    expect(
+      map({ message: { usage: { input_tokens: '7', output_tokens: -1, cache_read_input_tokens: null } } }).usage,
+    ).toEqual({ input: null, output: null, cacheRead: null, cacheWrite: null });
+  });
+
+  it('явный ноль остаётся нулём', () => {
+    const usage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
+    expect(map({ message: { usage } }).usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it('неизвестные поля сохраняются в raw', () => {

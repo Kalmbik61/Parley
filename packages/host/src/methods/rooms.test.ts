@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addRoom,
   addSession,
   createWork,
   HUMAN,
+  PARLEY,
   readMap,
   roomLead,
   setProposal,
@@ -20,6 +21,9 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+
+// Каждый тест поднимает хост и ждёт письма настоящих сессий: под нагрузкой машины пяти секунд по умолчанию мало.
+vi.setConfig({ testTimeout: 30_000 });
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -70,14 +74,37 @@ async function setup(): Promise<{ client: TestClient; dir: string; workId: strin
 }
 
 let nextId = 1;
+/**
+ * Чтение сокета, общее для параллельных `call()` одного клиента: ответы разбираются по id и откладываются
+ * в `stash`, а не достаются чужому вызову (иначе два `call` без ожидания съедают ответы друг друга и один виснет).
+ */
+const readers = new WeakMap<TestClient, { stash: Map<number, RawMessage>; reading: Promise<void> | null }>();
+function readerOf(client: TestClient): { stash: Map<number, RawMessage>; reading: Promise<void> | null } {
+  let reader = readers.get(client);
+  if (reader === undefined) {
+    reader = { stash: new Map(), reading: null };
+    readers.set(client, reader);
+  }
+  return reader;
+}
+
 /** Ответ на свой запрос: события хоста (`works.changed` и др.) идут тем же сокетом. */
 async function call(client: TestClient, method: string, params: unknown): Promise<RawMessage> {
   const id = nextId;
   nextId += 1;
+  const reader = readerOf(client);
   client.send({ id, method, params });
   for (;;) {
-    const message = await client.next();
-    if (message.id === id) return message;
+    const answer = reader.stash.get(id);
+    if (answer !== undefined) {
+      reader.stash.delete(id);
+      return answer;
+    }
+    // Одно чтение за раз: остальные вызовы ждут его же и перепроверяют свой id.
+    reader.reading ??= client.next().then((message) => {
+      if (typeof message.id === 'number') reader.stash.set(message.id, message);
+    }).finally(() => { reader.reading = null; });
+    await reader.reading;
   }
 }
 
@@ -373,6 +400,76 @@ describe('rooms.create: ведущий и правило одной комнат
     await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Громкая', members: [b, c], quiet: false });
     map = await readMap(dir, workId);
     expect(map.messages.filter((message) => message.roomId === 'r-02').map((message) => message.to)).toEqual([[b], [c]]);
+  });
+});
+
+describe('rooms.create: режим и снимок рецепта (спека рецептов, 6.2–6.4)', () => {
+  const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Step one.\nStep two.' };
+  const parleyLetters = (map: Awaited<ReturnType<typeof readMap>>) => map.messages.filter((message) => message.from === PARLEY);
+  // Верхняя граница, а не пауза: письмо ведущему идёт по событию карты, а под нагрузкой оно приходит с запозданием.
+  const waitFor = async (check: () => Promise<boolean>): Promise<void> => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('не дождались условия');
+  };
+
+  it('режим и снимок ложатся в комнату; ведущему, ещё не запущенному, письмо не нужно: плейбук придёт слоем', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    let pending = '';
+    await updateMap(dir, workId, (map) => { pending = addSession(map, { provider: 'claude', label: 'ждёт', task: 't' }).id; });
+    const response = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [pending, a, b], mode: 'verified', recipe, lead: pending });
+    expect(response.result).toEqual({ roomId: 'r-01' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]).toMatchObject({ mode: 'verified', recipe, recipeLeadNotified: pending });
+    expect(parleyLetters(map)).toEqual([]);
+  });
+
+  it('ведущий запущен до комнаты (сессии созданы раньше): слой он получил без рецепта, плейбук приходит письмом ровно один раз', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b], recipe, quiet: true });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 1);
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'задача', kind: 'note' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    expect(parleyLetters(map)).toHaveLength(1);
+    expect(parleyLetters(map)[0]).toMatchObject({ to: [a], roomId: 'r-01', text: 'Recipe: Payments — you lead this room.\nStep one.\nStep two.' });
+    expect(map.rooms[0]).toMatchObject({ recipe, recipeLeadNotified: a });
+    expect(unreadFor(map, b).some((message) => message.from === PARLEY)).toBe(false);
+  });
+
+  it('без mode и recipe комната свободная и без рецепта; снимок с лишним полем — отказ запроса', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    const bad = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b], recipe: { ...recipe, extra: 1 } });
+    expect(bad.error).toBeDefined();
+    expect((await readMap(dir, workId)).rooms).toEqual([]);
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b] });
+    expect((await readMap(dir, workId)).rooms[0]).toMatchObject({ mode: 'free', recipe: null });
+  });
+
+  it('закрытого ведущего заменяет первый живой: письмо с исходным снимком уходит только ему и ровно один раз', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b, c] = ids as [string, string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Р', members: [a, b, c], recipe, quiet: true });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 1);
+    await updateMap(dir, workId, (map) => { transitionSession(map, a, 'closed'); });
+    await waitFor(async () => parleyLetters(await readMap(dir, workId)).length === 2);
+    // Ещё несколько изменений карты подряд: второго письма нет.
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'задача', kind: 'note' });
+    await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [], text: 'ещё', kind: 'note' });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const map = await readMap(dir, workId);
+    const letters = parleyLetters(map);
+    expect(letters).toHaveLength(2);
+    expect(letters[1]).toMatchObject({ to: [b], roomId: 'r-01', text: 'Recipe: Payments — you lead this room.\nStep one.\nStep two.' });
+    expect(map.rooms[0]).toMatchObject({ recipe, recipeLeadNotified: b });
+    expect(unreadFor(map, c).some((message) => message.from === PARLEY)).toBe(false);
   });
 });
 

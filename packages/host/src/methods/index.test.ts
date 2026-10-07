@@ -30,19 +30,49 @@ function fakeDeps(worksReady: Promise<void>): { deps: MethodDeps; touched: () =>
     sessions: service(),
     wake: { ...(service() as object), enterDelayMs: 0 },
     worktrees: service(),
+    planEffects: service(),
     worksReady,
   } as unknown as MethodDeps;
   return { deps, touched: () => calls };
 }
 
+it('registers the window-only decisions list and room history actions', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['decisions.list', 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] as const)
+    expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
+it('registers the window-only project memory and history search methods', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['memory.get', 'memory.add', 'memory.update', 'memory.accept', 'memory.dismiss', 'memory.undo', 'history.search'] as const)
+    expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
+it('registers both explicit native skill sharing actions', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  expect(handlers.methods['capabilities.skills.share']).toBeTypeOf('function');
+  expect(handlers.methods['capabilities.skills.unshare']).toBeTypeOf('function');
+});
+
 const request = { client: {} } as unknown as RequestInfo;
 const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 
 describe('методы на старте хоста ждут первого чтения работ (lane-r4, п. 4)', () => {
-  it('перечень: works.list, sessions.*, pty.attach/detach/send, feed.* и activity.seen', () => {
+  it('перечень: plans.*, rooms.resolveProposal/setMode, works.list, sessions.*, pty.*, feed.* и activity.seen', () => {
     expect([...WORKS_GATED_METHODS].sort()).toEqual(
       [
+        'rooms.resolveProposal',
+        'rooms.setMode',
+        'plans.update',
+        'plans.submit',
+        'plans.verify',
+        'plans.cancel',
+        'plans.retryEffects',
         'works.list',
+        'decisions.list',
         'sessions.create',
         'sessions.resume',
         'sessions.stop',
@@ -74,6 +104,8 @@ describe('методы на старте хоста ждут первого чт
     });
     const { deps, touched } = fakeDeps(ready);
     const handlers = createHostHandlers(deps);
+    for (const name of ['rooms.setMode', 'plans.update', 'plans.submit', 'plans.verify', 'plans.cancel', 'plans.retryEffects'] as const)
+      expect(handlers.methods[name]).toBeDefined();
     const baseline = touched();
     const params = { ref, refs: [ref], text: 'x', cols: 80, rows: 24, projectPath: '/p', workId: 'w-1' } as never;
 

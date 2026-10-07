@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { Result } from '@parley/protocol';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_RESOURCE_LIMITS } from '@parley/core/resource-policy';
 import { S } from '../../../shared/strings.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
@@ -58,6 +59,7 @@ const callsOf = (method: string): Array<Record<string, unknown>> =>
   bridge.calls.filter((call) => call.method === method).map((call) => call.params as Record<string, unknown>);
 
 function stubHost(): void {
+  bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
   bridge.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
   bridge.setHandler('worktrees.available', async () => ({ available: true }));
   bridge.setHandler('sessions.create', async (params) => ({
@@ -113,7 +115,7 @@ async function renderDialog(
   return { onOpenChange };
 }
 
-const dialog = (): HTMLElement => screen.getByRole('dialog', { name: /^New (session|room)$/ });
+const dialog = (): HTMLElement => screen.getByRole('dialog', { name: /^(New (session|room)|Save as recipe)$/ });
 const rows = (): HTMLElement[] => [...dialog().querySelectorAll<HTMLElement>('[data-agent-row]')];
 const button = (name: string | RegExp): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
 const providerRadio = (row: number, name: string): HTMLElement =>
@@ -387,7 +389,8 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
     ['models: []', { id: 'claude', label: 'Claude', available: true, models: [], effort: false }],
     ['поля models нет — старый хост', { id: 'claude', label: 'Claude', available: true }],
   ])('%s — контрола модели и усилия нет, sessions.create без model и effort', async (_name, provider) => {
-    bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => ({ providers: [provider] }));
     await renderDialog();
     expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(within(rows()[0] as HTMLElement).queryByRole('combobox', { name: 'Effort' })).toBeNull();
@@ -399,7 +402,8 @@ describe('NewSessionOrRoomDialog — контролы модели и усили
   });
 
   it('effort: false при непустом списке — модель есть, усилия нет; effort: true при models: null — наоборот', async () => {
-    bridge.setHandler('providers.list', async () => ({
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => ({
       providers: [
         { id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }], effort: false },
         { id: 'codex', label: 'Codex', available: true, models: null, effort: true },
@@ -521,7 +525,7 @@ describe('NewSessionOrRoomDialog — уровни effort по модели (но
     expect(await optionNames(effortSelect(0))).toEqual(['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
   });
 
-  it('каталог сменился при открытом диалоге (providers.changed): выбранных модели и уровня больше нет — поля в Default, уходит без них', async () => {
+  it('каталог сменился при открытом диалоге (providers.changed): выбранных модели и уровня больше нет — поля в Default, уходит явный Default', async () => {
     let providers = LEVELED;
     bridge.setHandler('providers.list', async () => ({ providers }));
     await renderDialog();
@@ -538,9 +542,8 @@ describe('NewSessionOrRoomDialog — уровни effort по модели (но
     expect(effortSelect(0).textContent).toBe('Default');
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
-    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'codex' });
-    expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
-    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+    // Выбор был явным (тронут), поэтому уходит явный Default: `null` снимает и умолчание роли, флагов нет.
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'codex', model: null, effort: null });
   });
 
   it('смена провайдера сбрасывает и модель, и effort в Default', async () => {
@@ -791,7 +794,8 @@ describe('NewSessionOrRoomDialog — работа диалога и ответ p
 
   it('Start session раньше ответа providers.list — кнопка неактивна; после ответа — агент по умолчанию, а не пустой', async () => {
     let release: () => void = () => {};
-    bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', () => new Promise((resolve) => (release = () => resolve({ providers: PROVIDERS }))));
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
     await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
     expect(button('Start session').disabled).toBe(true);
@@ -807,7 +811,8 @@ describe('NewSessionOrRoomDialog — работа диалога и ответ p
   });
 
   it('отказ providers.list — текст ошибки, кнопка неактивна', async () => {
-    bridge.setHandler('providers.list', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => {
       throw { code: 'internal', message: 'сбой' };
     });
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
@@ -1079,7 +1084,8 @@ describe('NewSessionOrRoomDialog — ошибка диалога в подвал
   });
 
   it('отказ providers.list: ошибка тоже в подвале', async () => {
-    bridge.setHandler('providers.list', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
+  bridge.setHandler('providers.list', async () => {
       throw { code: 'internal', message: 'сбой' };
     });
     render(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={() => {}} />);
@@ -1091,6 +1097,655 @@ describe('NewSessionOrRoomDialog — ошибка диалога в подвал
   it('без ошибки role=alert нет', async () => {
     await renderDialog();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('source-qualified role choices and explicit defaults', () => {
+  const roles = [
+    { id: 'builtin:planner', name: 'Planner', source: 'builtin' as const, provider: 'claude', description: 'Plan', model: 'opus', effort: 'high', readOnly: true, models: { claude: 'opus', codex: 'gpt-6-astra' } },
+    { id: 'claude:Planner', name: 'Planner', source: 'claude' as const, provider: 'claude', description: 'Native', model: null, effort: null, readOnly: false },
+    { id: 'codex:Planner', name: 'Planner', source: 'codex' as const, provider: 'codex', description: 'Native', model: 'gpt-6.1-sol', effort: 'xhigh', readOnly: true },
+  ];
+  const roleControl = () => within(rows()[0]!).getByRole('combobox', { name: 'Role' });
+  it('distinguishes same-name sources, displays native effort and locks its provider without persisting defaults', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+    await renderDialog();
+    await chooseOption(roleControl(), '🔒 Planner · Codex');
+    expect(screen.getByText('Default effort: xhigh')).toBeTruthy();
+    const providers = within(rows()[0]!).getByRole('radiogroup', { name: 'Agent 1' });
+    expect(within(providers).getAllByRole('radio').every(item => (item as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    const sent = callsOf('sessions.create')[0]!;
+    expect(sent).toMatchObject({ provider: 'codex', role: { source: 'codex', name: 'Planner' } });
+    expect(Object.hasOwn(sent, 'effort')).toBe(false); expect(Object.hasOwn(sent, 'model')).toBe(false);
+  });
+  it('explicit Model Default clears a role default with null while untouched effort remains absent', async () => {
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+    await renderDialog();
+    await chooseOption(roleControl(), '🔒 Planner · Builtin');
+    await chooseOption(within(rows()[0]!).getByRole('combobox', { name: 'Model' }), 'Default');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ role: { source: 'builtin', name: 'planner' }, model: null });
+    expect(Object.hasOwn(callsOf('sessions.create')[0]!, 'effort')).toBe(false);
+  });
+});
+
+
+describe('prepared backlog completion context', () => {
+  const context = { projectPath: PROJECT, id: 'b-001', version: 'v1', task: 'Backlog title\n\nBacklog details' };
+  async function prepared(room = true, onCreated = vi.fn().mockResolvedValue(undefined)) {
+    const onOpenChange = vi.fn();
+    render(<NewSessionOrRoomDialog open bridge={bridge} work={{ projectPath: PROJECT, workId: 'w-01' }} room={room}
+      backlog={context} onCreated={onCreated} onOpenChange={onOpenChange} />);
+    await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1)); await act(async () => {});
+    return { onCreated, onOpenChange };
+  }
+  it('prefills the task without changing plain creation choices and calls marking only after a room exists', async () => {
+    const onCreated = vi.fn(async () => { expect(callsOf('rooms.create')).toHaveLength(1); });
+    const { onOpenChange } = await prepared(true, onCreated);
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe(context.task);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    for (const call of callsOf('sessions.create')) { expect(call.task).toBe(context.task); expect(call).not.toHaveProperty('model'); expect(call).not.toHaveProperty('effort'); }
+  });
+  it('room marker failure preserves the created target; Retry never creates a second room or session', async () => {
+    const onCreated = vi.fn().mockRejectedValueOnce(new Error('PRIVATE_MARK_ERROR')).mockResolvedValue(undefined);
+    const { onOpenChange } = await prepared(true, onCreated); fireEvent.click(button('Create room'));
+    await screen.findByText(S.backlog.markFailed); expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.queryByText('PRIVATE_MARK_ERROR')).toBeNull();
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')).toHaveLength(1); expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(onCreated.mock.calls).toEqual([[{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }], [{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }]]);
+  });
+  it('a room creation failure leaves the stable prepared item unmarked; retry creates only the missing room', async () => {
+    bridge.setHandler('rooms.create', () => { throw new Error('Room failed'); });
+    const { onCreated } = await prepared(); fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1)); await act(async () => {});
+    expect(onCreated).not.toHaveBeenCalled();
+    bridge.setHandler('rooms.create', () => ({ roomId: 'r-02' })); fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ projectPath: PROJECT, workId: 'w-01', roomId: 'r-02' }));
+    expect(callsOf('sessions.create')).toHaveLength(2); expect(callsOf('rooms.create')).toHaveLength(2);
+  });
+  it('single-session Take preserves its target through marker Retry and does not offer a foreign project', async () => {
+    const onCreated = vi.fn().mockRejectedValueOnce(new Error('marker')).mockResolvedValue(undefined);
+    const { onOpenChange } = await prepared(false, onCreated); fireEvent.click(button('Start session'));
+    await screen.findByText(S.backlog.markFailed); fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(1); expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(onCreated.mock.calls[0]).toEqual([{ projectPath: PROJECT, workId: 'w-01', sessionId: 's-01' }]);
+    expect(callsOf('sessions.create')[0]!.projectPath).toBe(PROJECT);
+  });
+});
+
+
+describe('рецепты комнат (P26, спека рецептов 6.1, 6.2, 8)', () => {
+  const role = (id: string, provider: string) => ({
+    id, name: id.slice(id.indexOf(':') + 1), source: id.startsWith('builtin') ? ('builtin' as const) : ('claude' as const), provider,
+    description: id, model: null, effort: null, readOnly: false, models: { claude: null, codex: null },
+  });
+  const ROLES = [role('builtin:planner', 'claude'), role('builtin:critic', 'codex'), role('builtin:executor', 'claude'), role('builtin:reviewer', 'codex'), role('builtin:architect', 'claude'), role('claude:security', 'claude')];
+  interface Choice { role: string; worktree: boolean; lead: boolean; provider?: string; model?: string | null; effort?: string | null }
+  const agentView = (choice: Choice, resolvedProvider = choice.provider ?? 'claude', status = 'ready') =>
+    ({ choice, status, resolved: status === 'ready' ? { provider: resolvedProvider, model: null, effort: null, readOnly: false } : null });
+  const recipeEntry = (id: string, name: string, mode: string, agents: unknown[], playbook = 'Lead playbook\n') => ({
+    status: 'valid' as const,
+    recipe: { id, source: id.startsWith('builtin') ? 'builtin' : 'project', name, description: `${name} description`, mode, playbook, agents: [] },
+    agents,
+  });
+  const PLAN_BUILD = recipeEntry('builtin:plan-build', 'Plan & build', 'verified', [
+    agentView({ role: 'builtin:planner', worktree: false, lead: true }),
+    agentView({ role: 'builtin:critic', worktree: false, lead: false }, 'codex'),
+    agentView({ role: 'builtin:executor', worktree: true, lead: false }),
+    agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+  ]);
+  const REVIEW = recipeEntry('builtin:review', 'Review', 'free', [
+    agentView({ role: 'builtin:reviewer', worktree: false, lead: true }, 'codex'),
+    agentView({ role: 'builtin:architect', worktree: false, lead: false }),
+  ]);
+  const BROKEN = { status: 'invalid' as const, id: 'project:broken', file: 'broken.md', diagnostic: { code: 'invalid-yaml' as const, line: 3 } };
+  let entriesNow: unknown[] = [];
+  const stubRecipes = (entries: unknown[] = [PLAN_BUILD, REVIEW, BROKEN]): void => {
+    entriesNow = entries;
+    bridge.setHandler('recipes.list', async () => ({ entries: entriesNow, partial: false, diagnostics: [] }) as never);
+  };
+  beforeEach(() => {
+    bridge.setHandler('roles.list', async () => ({ roles: ROLES, diagnostics: [], partial: false }));
+    stubRecipes();
+  });
+
+  const recipeSelect = (): HTMLElement => within(dialog()).getByRole('combobox', { name: 'Recipe' });
+  const modeSelect = (): HTMLElement => within(dialog()).getByRole('combobox', { name: 'Mode' });
+  async function pick(name: string | RegExp): Promise<void> {
+    await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+    await chooseOption(recipeSelect(), name);
+    await act(async () => {});
+  }
+  const roleOfRow = (row: number): string => within(rows()[row] as HTMLElement).getByRole('combobox', { name: 'Role' }).textContent ?? '';
+  const worktreeButton = (row: number): HTMLElement => within(rows()[row] as HTMLElement).getByRole('button', { name: 'Own worktree' });
+  const stars = (): Array<string | null> => screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ }).map((item) => item.getAttribute('aria-pressed'));
+
+  it('хост без recipes.list: выбора рецепта нет, диалог работает как раньше', async () => {
+    bridge.setHandler('recipes.list', async () => { throw new Error('unknown method'); });
+    await renderDialog();
+    await act(async () => {});
+    expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('список: No recipe первым, встроенные, битый — с причиной и без возможности выбрать', async () => {
+    await renderDialog();
+    await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+    expect(recipeSelect().textContent).toBe('No recipe');
+    fireEvent.keyDown(recipeSelect(), { key: 'ArrowDown' });
+    const options = (await screen.findAllByRole('option')).map((item) => item.textContent);
+    expect(options).toEqual(['No recipe', 'Plan & build', 'Review', 'broken.md · Not valid YAML']);
+    const broken = screen.getByRole('option', { name: /broken\.md/ });
+    expect(broken.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(broken);
+    await act(async () => {});
+    // Список остался открытым (прячет диалог от дерева доступности), строки не менялись.
+    expect(document.querySelectorAll('[data-agent-row]')).toHaveLength(1);
+  });
+
+  it('выбор рецепта заполняет состав по ролям, режим и ведущего; описание — под списком', async () => {
+    await renderDialog();
+    await pick('Plan & build');
+    expect(rows()).toHaveLength(4);
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    expect([0, 1, 2, 3].map(roleOfRow)).toEqual(['planner · Builtin', 'critic · Builtin', 'executor · Builtin', 'reviewer · Builtin']);
+    expect(modeSelect().textContent).toBe('Verified');
+    expect(stars()).toEqual(['true', 'false', 'false', 'false']);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    expect(isChecked(providerRadio(2, 'Claude'))).toBe(true);
+    expect([0, 1, 2, 3].map((index) => worktreeButton(index).getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true', 'false']);
+    expect(dialog().querySelector('[data-recipe-description]')?.textContent).toBe('Plan & build description');
+    expect(screen.getByText('Room with 4 agents in Payments')).toBeTruthy();
+  });
+
+  it('поля после выбора правятся: провайдер, роль, строки, ведущий, режим, worktree; No recipe строки не трогает', async () => {
+    await renderDialog();
+    await pick('Review');
+    expect(stars()).toEqual(['true', 'false']);
+    fireEvent.click(providerRadio(0, 'Claude'));
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'critic · Builtin');
+    expect(roleOfRow(1)).toBe('critic · Builtin');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make lead' })[0] as HTMLElement);
+    expect(stars()).toEqual(['false', 'true']);
+    await chooseOption(modeSelect(), 'Checklist');
+    expect(modeSelect().textContent).toBe('Checklist');
+    fireEvent.click(worktreeButton(1));
+    expect(worktreeButton(1).getAttribute('aria-pressed')).toBe('true');
+    await addAgent();
+    expect(rows()).toHaveLength(3);
+    fireEvent.click(within(rows()[2] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(rows()).toHaveLength(2);
+    await chooseOption(recipeSelect(), 'No recipe');
+    expect(rows()).toHaveLength(2);
+    expect(modeSelect().textContent).toBe('Checklist');
+    expect(roleOfRow(1)).toBe('critic · Builtin');
+  });
+
+  it('запуск: роли, worktree построчно, rooms.create с mode и снимком рецепта из свежего recipes.list', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    // Файл рецепта поправили, пока диалог был открыт: снимок берётся в момент создания.
+    stubRecipes([{ ...PLAN_BUILD, recipe: { ...PLAN_BUILD.recipe, playbook: 'Edited playbook\n' } }, REVIEW]);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    const sessions = callsOf('sessions.create');
+    expect(sessions.map((call) => call.role)).toEqual([
+      { source: 'builtin', name: 'planner' }, { source: 'builtin', name: 'critic' }, { source: 'builtin', name: 'executor' }, { source: 'builtin', name: 'reviewer' },
+    ]);
+    expect(sessions.map((call) => call.provider)).toEqual(['claude', 'codex', 'claude', 'codex']);
+    expect(sessions.map((call) => call.worktree)).toEqual([false, false, true, false]);
+    // Умолчания роли не превращаются в явный выбор: model и effort не уходят.
+    for (const call of sessions) { expect(call).not.toHaveProperty('model'); expect(call).not.toHaveProperty('effort'); }
+    expect(callsOf('rooms.create')).toEqual([
+      { projectPath: PROJECT, workId: 'w-01', title: 'Room 1', members: ['s-01', 's-02', 's-03', 's-04'], lead: 's-01', quiet: true, mode: 'verified',
+        recipe: { id: 'builtin:plan-build', name: 'Plan & build', playbook: 'Edited playbook\n' } },
+    ]);
+  });
+
+  it('режим, выбранный человеком, главнее режима рецепта; free не уходит параметром', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    await chooseOption(modeSelect(), 'Free');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')[0]).not.toHaveProperty('mode');
+    expect(callsOf('rooms.create')[0]).toHaveProperty('recipe');
+  });
+
+  it('без рецепта режим выбирается в диалоге; одиночная сессия режима не показывает', async () => {
+    const { onOpenChange } = await renderDialog();
+    expect(within(dialog()).queryByRole('combobox', { name: 'Mode' })).toBeNull();
+    await addAgent();
+    await chooseOption(modeSelect(), 'Checklist');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')[0]).toMatchObject({ mode: 'checklist' });
+    expect(callsOf('rooms.create')[0]).not.toHaveProperty('recipe');
+  });
+
+  it('рецепт выбран, осталась одна строка: заметка, что рецепт и режим не сохранятся; создаётся обычная сессия', async () => {
+    await renderDialog();
+    await pick('Review');
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(rows()).toHaveLength(1);
+    expect(dialog().querySelector('[data-recipe-dropped]')?.textContent).toMatch(/starts a plain session without them/);
+    // Вернули вторую строку — заметки нет.
+    await addAgent();
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+  });
+
+  it('режим без рецепта при одной строке тоже не теряется молча; без рецепта и режима заметки нет', async () => {
+    await renderDialog();
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+    await addAgent();
+    await chooseOption(modeSelect(), 'Checklist');
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(dialog().querySelector('[data-recipe-dropped]')).not.toBeNull();
+  });
+
+  it('заданное рецептом — явный выбор: провайдер, модель и усилие уходят и не перетираются умолчаниями роли', async () => {
+    stubRecipes([recipeEntry('project:pinned', 'Pinned', 'free', [
+      agentView({ role: 'builtin:critic', worktree: false, lead: true, provider: 'claude', model: 'sonnet', effort: 'high' }),
+      agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+    ])]);
+    const { onOpenChange } = await renderDialog();
+    await pick('Pinned');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }).textContent).toBe('Sonnet');
+    // Смена роли умолчание (Codex) поверх явного выбора рецепта не ставит.
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    // Строка без явного провайдера следует роли.
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'critic · Builtin');
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', model: 'sonnet', effort: 'high', role: { source: 'builtin', name: 'planner' } });
+    expect(callsOf('sessions.create')[1]).toMatchObject({ provider: 'codex' });
+    expect(callsOf('sessions.create')[1]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[1]).not.toHaveProperty('effort');
+  });
+
+  it('провайдер встроенной роли недоступен на машине — строка берёт агента по умолчанию', async () => {
+    stubRecipes([recipeEntry('project:far', 'Far', 'free', [
+      agentView({ role: 'builtin:planner', worktree: false, lead: true }, 'cursor'),
+      agentView({ role: 'builtin:reviewer', worktree: false, lead: false }, 'codex'),
+    ])]);
+    await renderDialog();
+    await pick('Far');
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+    expect(isChecked(providerRadio(1, 'Codex'))).toBe(true);
+  });
+
+  it('роли нет на этой машине: строка помечена, комната не создаётся, пока её не поправят', async () => {
+    stubRecipes([recipeEntry('project:ghost', 'Ghost', 'free', [
+      agentView({ role: 'builtin:planner', worktree: false, lead: true }),
+      agentView({ role: 'claude:vanished', worktree: false, lead: false }, 'claude', 'role-missing'),
+    ])]);
+    await renderDialog();
+    await pick('Ghost');
+    expect(dialog().querySelector('[data-role-missing]')?.textContent).toBe('Role not found: claude:vanished. Pick another role or remove this agent.');
+    expect(button('Create room').disabled).toBe(true);
+    await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'reviewer · Builtin');
+    expect(dialog().querySelector('[data-role-missing]')).toBeNull();
+    expect(button('Create room').disabled).toBe(false);
+    expect(callsOf('sessions.create')).toHaveLength(0);
+  });
+
+  it('не git-проект: worktree рецепта не просят, причина видна', async () => {
+    bridge.setHandler('worktrees.available', async () => ({ available: false }));
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    expect(screen.getByText('This project is not a Git repository, so agents share the project folder.')).toBeTruthy();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create').map((call) => call.worktree)).toEqual([false, false, false, false]);
+  });
+
+  it('сбой строки: комнаты и рецепта нет, итог по строке; Retry создаёт только упавших и комнату с mode и снимком', async () => {
+    let fail = true;
+    bridge.setHandler('sessions.create', async (params) => {
+      const role = (params as { role?: { name: string } }).role?.name;
+      if (role === 'critic' && fail) throw Object.assign(new Error('boom'), { code: 'internal' });
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } };
+    });
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(4));
+    await act(async () => {});
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(button('Retry')).toBeTruthy();
+    expect(within(rows()[1] as HTMLElement).getByRole('status').textContent).toMatch(/create session/);
+    fail = false;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    // Повтор — только упавшая строка (critic), остальные не пересоздаются.
+    expect(callsOf('sessions.create')).toHaveLength(5);
+    expect((callsOf('sessions.create')[4] as { role: { name: string } }).role.name).toBe('critic');
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')[0]).toMatchObject({ mode: 'verified', members: ['s-01', 's-04', 's-02', 's-03'], recipe: { id: 'builtin:plan-build' } });
+  });
+
+  it('рецепт исчез к созданию: комната без него не создаётся; когда он вернулся, Retry создаёт только комнату', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    stubRecipes([REVIEW]);
+    fireEvent.click(button('Create room'));
+    await screen.findByText('The recipe is no longer available. Choose it again or pick No recipe.');
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    stubRecipes([PLAN_BUILD, REVIEW]);
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(4);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+  });
+
+  it('старт рецепта запускает ровно его участников: четыре sessions.create и одна комната, временной одиночной сессии нет (P37)', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Plan & build');
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(4);
+    expect(callsOf('sessions.create').map((call) => (call as { role: { name: string } }).role.name)).toEqual(['planner', 'critic', 'executor', 'reviewer']);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+  });
+
+  it('рецепт из четырёх при трёх свободных слотах: старт блокируется до первой сессии, а не наполовину (P37)', async () => {
+    bridge.setHandler('settings.get', async () => ({ config: { ...DEFAULT_RESOURCE_LIMITS, workConcurrent: 3 } as never, locked: {} }));
+    await renderDialog();
+    await pick('Plan & build');
+    await waitFor(() => expect(dialog().querySelector('[data-budget-blocked]')?.textContent).toBe('This start needs 4 session slots, 3 left. Stop a session or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+    expect(callsOf('sessions.create')).toHaveLength(0);
+  });
+
+  describe('Save as recipe', () => {
+    const field = (name: string): HTMLInputElement => within(dialog()).getByLabelText(name) as HTMLInputElement;
+    const typeIn = (name: string, value: string): void => { fireEvent.change(field(name), { target: { value } }); };
+    async function openSave(): Promise<void> {
+      await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+      fireEvent.click(button('Save as recipe…'));
+      await act(async () => {});
+    }
+    /** Состав из двух ролей: исполнитель — ведущий, с явными провайдером и моделью и своим worktree. */
+    async function compose(): Promise<void> {
+      await addAgent();
+      await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'executor · Builtin');
+      fireEvent.click(providerRadio(1, 'Codex'));
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'GPT-6 Astra');
+      fireEvent.click(worktreeButton(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Make lead' }));
+      await chooseOption(modeSelect(), 'Checklist');
+    }
+
+    it('кнопки нет у одиночной сессии; у комнаты она есть', async () => {
+      await renderDialog();
+      await waitFor(() => expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).not.toBeNull());
+      expect(screen.queryByRole('button', { name: 'Save as recipe…' })).toBeNull();
+      await addAgent();
+      expect(screen.getByRole('button', { name: 'Save as recipe…' })).toBeTruthy();
+    });
+
+    it('пишет состав, режим, worktree и ведущего; явные provider/model — только тронутые; плейбук — шаблон этапов', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      expect(screen.getByRole('heading', { name: 'Save as recipe' })).toBeTruthy();
+      typeIn('Recipe name', 'Payments change');
+      expect(field('File name').value).toBe('payments-change');
+      typeIn('Description', 'Plan then build');
+      expect((within(dialog()).getByLabelText('Lead playbook') as HTMLTextAreaElement).value).toMatch(/^1\. Ask the human/);
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(1));
+      expect(bridge.saveRecipeCalls[0]).toMatchObject({
+        projectPath: PROJECT, file: 'payments-change', name: 'Payments change', description: 'Plan then build', mode: 'checklist', replace: false,
+        agents: [
+          { role: 'builtin:planner', worktree: false, lead: false, count: 1 },
+          { role: 'builtin:executor', worktree: true, lead: true, count: 1, provider: 'codex', model: 'gpt-6-astra' },
+        ],
+      });
+      expect(bridge.saveRecipeCalls[0]?.agents[0]).not.toHaveProperty('provider');
+      expect(bridge.saveRecipeCalls[0]?.playbook.endsWith('\n')).toBe(true);
+      // Возврат в форму: список перечитан, новый рецепт выбран, диалог открыт.
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy());
+      expect(vi.mocked(toast)).toHaveBeenCalledWith('Saved recipe Payments change');
+      expect(callsOf('recipes.list').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('тронутый провайдер, который не определился (пустой у роли), в файл не уходит пустой строкой', async () => {
+      bridge.setHandler('roles.list', async () => ({ roles: [...ROLES, role('claude:blank', '')], diagnostics: [], partial: false }));
+      await renderDialog();
+      await addAgent();
+      await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'planner · Builtin');
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'executor · Builtin');
+      fireEvent.click(providerRadio(1, 'Codex'));
+      await chooseOption(within(rows()[1] as HTMLElement).getByRole('combobox', { name: 'Role' }), 'blank · Claude');
+      await openSave();
+      typeIn('Recipe name', 'Blank'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(1));
+      expect(bridge.saveRecipeCalls[0]?.agents[1]).not.toHaveProperty('provider');
+    });
+
+    it('плейбук выбранного рецепта предлагается как основа и правится', async () => {
+      await renderDialog();
+      await pick('Review');
+      await openSave();
+      expect((within(dialog()).getByLabelText('Lead playbook') as HTMLTextAreaElement).value).toBe('Lead playbook\n');
+    });
+
+    it('строка без роли — рецепт не собрать, файл не пишется', async () => {
+      await renderDialog();
+      await addAgent();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByText('Choose a role for every agent to save a recipe.');
+      expect(bridge.saveRecipeCalls).toHaveLength(0);
+    });
+
+    it('имя файла с ../ или слешем отвергается до обращения к main', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      for (const bad of ['../escape', 'a/b', '.hidden', 'x.md', '']) {
+        typeIn('File name', bad);
+        fireEvent.click(button('Save recipe'));
+        await screen.findByText('Use letters, digits, - and _ in the file name.');
+      }
+      expect(bridge.saveRecipeCalls).toHaveLength(0);
+    });
+
+    it('занятое имя: main ответил exists — предлагаются Rename и Replace, перезаписи без выбора нет', async () => {
+      bridge.setSaveRecipeAnswer(async (request) => request.replace ? { status: 'saved', id: 'project:taken', opened: true } : { status: 'exists' });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'Taken'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByText('taken.md already exists. Rename the file or replace it.');
+      expect(bridge.saveRecipeCalls.map((call) => call.replace)).toEqual([false]);
+      expect(screen.queryByRole('button', { name: 'Save recipe' })).toBeNull();
+      // Rename: сообщение уходит, поле имени файла доступно, запрос заново — уже без replace.
+      fireEvent.click(button('Rename'));
+      expect(screen.queryByText(/already exists/)).toBeNull();
+      expect(document.activeElement).toBe(field('File name'));
+      typeIn('File name', 'taken-2');
+      fireEvent.click(button('Save recipe'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(2));
+      expect(bridge.saveRecipeCalls[1]).toMatchObject({ file: 'taken-2', replace: false });
+    });
+
+    it('Replace — явный выбор человека: запрос с replace: true', async () => {
+      let first = true;
+      bridge.setSaveRecipeAnswer(async (request) => { if (first) { first = false; return { status: 'exists' }; } return { status: 'saved', id: `project:${request.file}`, opened: false }; });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'Taken'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByRole('button', { name: 'Replace' });
+      fireEvent.click(button('Replace'));
+      await waitFor(() => expect(bridge.saveRecipeCalls).toHaveLength(2));
+      expect(bridge.saveRecipeCalls.map((call) => call.replace)).toEqual([false, true]);
+      await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith('Saved recipe Taken. The file could not be opened.'));
+    });
+
+    it('отказ main — безопасный текст без сырой ошибки, форма остаётся', async () => {
+      bridge.setSaveRecipeAnswer(async () => { throw Object.assign(new Error('/private/path EACCES'), { code: 'failed' }); });
+      await renderDialog();
+      await compose();
+      await openSave();
+      typeIn('Recipe name', 'X'); typeIn('Description', 'Y');
+      fireEvent.click(button('Save recipe'));
+      await screen.findByRole('alert');
+      expect(dialog().textContent).not.toContain('EACCES');
+      expect(button('Save recipe')).toBeTruthy();
+    });
+
+    it('Back возвращает в форму с тем же составом', async () => {
+      await renderDialog();
+      await compose();
+      await openSave();
+      fireEvent.click(button('Back'));
+      expect(rows()).toHaveLength(2);
+      expect(modeSelect().textContent).toBe('Checklist');
+    });
+  });
+});
+
+describe('бюджет работы при старте (P37)', () => {
+  /** Пороги приходят из настроек при открытии диалога. */
+  const stubSettings = (patch: Record<string, number> = {}): void => {
+    // Диалогу нужны только пороги: остальное в настройках ему не интересно.
+    bridge.setHandler('settings.get', async () => ({ config: { ...DEFAULT_RESOURCE_LIMITS, ...patch } as never, locked: {} }));
+  };
+  const activeSessions = (count: number): void => {
+    useWorksStore.setState({
+      entries: [
+        makeWork('w-01', {
+          projectPath: PROJECT,
+          title: 'Payments',
+          sessions: Array.from({ length: count }, (_, index) => makeSession(`s-0${index + 1}`, `s${index + 1}`)),
+        }),
+      ],
+    });
+  };
+  const budgetLine = (): string | null => dialog().querySelector('[data-budget]')?.textContent ?? null;
+  const blocked = (): string | null => dialog().querySelector('[data-budget-blocked]')?.textContent ?? null;
+
+  it('подвал показывает занятое и сколько запусков осталось; пороги — из настроек, не выдуманные окном', async () => {
+    stubSettings({ workConcurrent: 5, workLaunches: 9 });
+    activeSessions(2);
+    await renderDialog();
+    await waitFor(() => expect(budgetLine()).toBe('2 of 5 sessions running · 9 starts left this hour'));
+    expect(blocked()).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('хост без порогов (прежняя версия): подвала бюджета нет, решает хост', async () => {
+    bridge.setHandler('settings.get', async () => { throw new Error('unknown method'); });
+    await renderDialog();
+    await act(async () => {});
+    expect(budgetLine()).toBeNull();
+    expect(button('Start session').disabled).toBe(false);
+  });
+
+  it('старт не помещается в слоты: кнопка неактивна, причина видна, ни одной sessions.create', async () => {
+    stubSettings({ workConcurrent: 3 });
+    activeSessions(2);
+    await renderDialog({ room: true });
+    await waitFor(() => expect(blocked()).toBe('This start needs 2 session slots, 1 left. Stop a session or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+    fireEvent.click(button('Create room'));
+    await act(async () => {});
+    expect(callsOf('sessions.create')).toHaveLength(0);
+    expect(callsOf('rooms.create')).toHaveLength(0);
+
+    // Убрали агента — теперь нужно одно место, и один агент помещается.
+    fireEvent.click(screen.getAllByRole('button', { name: S.dialogs.newSession.removeAgent })[1] as HTMLElement);
+    await act(async () => {});
+    expect(blocked()).toBeNull();
+  });
+
+  it('окно запусков в часе исчерпано: сказано про запуски, а не про слоты', async () => {
+    stubSettings({ workLaunches: 1 });
+    await renderDialog({ room: true });
+    await waitFor(() => expect(blocked()).toBe('This start needs 2 launches, 1 left this hour. Wait or raise the limits in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+  });
+
+  it('комната больше своего порога: сказано про комнату, работа вместить могла бы', async () => {
+    stubSettings({ roomConcurrent: 2 });
+    await renderDialog({ room: true });
+    await addAgent();
+    await waitFor(() => expect(blocked()).toBe('A room runs at most 2 sessions at once; this one has 3. Remove an agent or raise the limit in Settings → Agents.'));
+    expect(button('Create room').disabled).toBe(true);
+  });
+
+  it('старт команды запускает ровно запрошенных участников: три sessions.create, одна комната, лишней одиночной сессии нет', async () => {
+    stubSettings();
+    const { onOpenChange } = await renderDialog({ room: true });
+    await addAgent();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('sessions.create').every((call) => call.parent === null && call.task === '')).toBe(true);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')[0]?.members).toEqual(['s-01', 's-02', 's-03']);
+  });
+
+  it('отказ самого хоста по агенту показан его словами, комнаты нет, модель не запущена', async () => {
+    stubSettings();
+    bridge.setHandler('sessions.create', async () => {
+      throw Object.assign(new Error('session limit reached: 10 of 10 sessions are running or reserved in this workspace; stop one or raise the limit in Settings'), {
+        code: 'conflict', data: { code: 'resource-budget', reason: 'concurrent' },
+      });
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(within(rows()[0] as HTMLElement).getByRole('status').textContent).toMatch(/^Not started: session limit reached: 10 of 10/));
+    expect(callsOf('rooms.create')).toHaveLength(0);
+    expect(button('Retry')).toBeTruthy();
+  });
+
+  it('Retry после частичного сбоя считает слоты только для упавших строк: запущенный уже занял своё место в карте', async () => {
+    stubSettings({ workConcurrent: 3 });
+    activeSessions(1);
+    bridge.setHandler('sessions.create', async (params) => {
+      if (callsOf('sessions.create').length === 2) throw Object.assign(new Error('boom'), { code: 'internal' });
+      const id = `s-0${nextSession++ + 1}`;
+      // Хост записал сессию в карту, окно получило новый снимок работ.
+      const [entry] = useWorksStore.getState().entries;
+      if (entry !== undefined) {
+        useWorksStore.setState({ entries: [{ ...entry, map: { ...entry.map, sessions: [...entry.map.sessions, makeSession(id, id)] } }] });
+      }
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: id } };
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await screen.findByRole('button', { name: 'Retry' });
+    await act(async () => {});
+    // Свободен один слот из трёх (занято два: прежняя и запущенная), и нужен один — упавшей строке.
+    expect(budgetLine()).toBe('2 of 3 sessions running · 40 starts left this hour');
+    expect(blocked()).toBeNull();
+    expect(button('Retry').disabled).toBe(false);
   });
 });
 

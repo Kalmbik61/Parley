@@ -133,6 +133,9 @@ export function forYouTarget(map: WorkMap): ForYouTarget | null {
 
 /** Сообщения комнаты с isHumanUnread: человек — участник любой комнаты. */
 export function roomUnreadForHuman(map: WorkMap, roomId: string): number {
+  // Компактный снимок (P35) несёт точное число: письма комнаты в карте — только хвост, остальное за окном.
+  const exact = map.compact?.unread.rooms[roomId];
+  if (map.compact !== undefined) return exact ?? 0;
   return map.messages.filter((message) => message.roomId === roomId && isHumanUnread(message)).length;
 }
 
@@ -185,7 +188,9 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
 
   // Письма идут без `roomId`, упоминания — с ним: множества не пересекаются, и одно сообщение считается один раз.
   const mentions = humanUnreadMentions(map);
-  const humanUnread = humanUnreadLetters(map).length + mentions.length;
+  // Прямых писем в компактной карте — точное число из `compact.unread`; упоминания считаются по письмам окна: все
+  // непрочитанные в нём есть (до 200), а за ними счётчик комнаты и так точный.
+  const humanUnread = (map.compact?.unread.letters ?? humanUnreadLetters(map).length) + mentions.length;
   // Письмо человеку — ранг 3 (2.7, как `workRank` прототипа): выше работающей и простаивающей работы,
   // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Упоминание человека в
   // комнате — то же письмо, ему и ранг тот же. Прочие комнаты — фон, а не вызов: их непрочитанное уровень не

@@ -41,22 +41,49 @@ export function formatTokens(value: number): string {
   return Math.round(thousands) < 1000 ? withUnit(thousands, 'k') : withUnit(value / 1_000_000, 'M');
 }
 
+/** Счётчик строкой: неизвестный — `?`, а не `0` (измеренный ноль печатается нулём). */
+const known = (value: number | null): string => (value === null ? '?' : formatTokens(value));
+
+/**
+ * Кэш и происхождение цифр: `cache r30 w?` (чтение и запись; `?` — провайдер не сообщил) и пометка,
+ * когда цифры не свежий живой замер: `snapshot` (снимок из карты), `stale` (сессия идёт, свежего
+ * подтверждения нет), `partial` (нижняя граница), `n/a` (нет данных). Это токены, а не деньги и не доля
+ * лимита подписки.
+ */
+function usageParts(usage: NonNullable<LiveMetrics['usage']>): string[] {
+  const parts: string[] = [];
+  if (usage.cacheRead !== null || usage.cacheWrite !== null) {
+    parts.push(`cache r${known(usage.cacheRead)} w${known(usage.cacheWrite)}`);
+  }
+  const flags = [
+    usage.source === 'native-index' ? null : usage.source === 'unavailable' ? 'n/a' : 'snapshot',
+    usage.stale ? 'stale' : null,
+    usage.completeness === 'partial' ? 'partial' : null,
+  ].filter((flag) => flag !== null);
+  if (flags.length > 0) parts.push(flags.join(' '));
+  return parts;
+}
+
 /**
  * Строка метрик целиком. Токенов нет вовсе (оба `null`) — `—` вместо пары
- * стрелок; нулевые `▤` (субагенты) и `⋮` (непрочитанное) не печатаются —
- * колонка не должна заполняться нулями по умолчанию. Хост со списком живых
- * субагентов (`tasks`) их число показывает бейджем с поповером в самой строке
- * сессии (кусок 4b), счётчик `▤` тогда не повторяется; прежний хост списка
- * не присылает — счётчик остаётся единственным признаком.
+ * стрелок; одно неизвестное число у хоста с `usage` печатается как `?`, а не нулём; нулевые `▤`
+ * (субагенты) и `⋮` (непрочитанное) не печатаются — колонка не должна заполняться нулями по
+ * умолчанию. Хост со списком живых субагентов (`tasks`) их число показывает бейджем с поповером в самой
+ * строке сессии (кусок 4b), счётчик `▤` тогда не повторяется; прежний хост списка не присылает —
+ * счётчик остаётся единственным признаком.
  */
 export function formatMetricsLine(metrics: LiveMetrics): string {
   const parts: string[] = [];
+  // Прежний хост одного числа без второго не присылает: там `?` не нужен и старая запись `0` сохраняется.
+  const count = (value: number | null): string =>
+    metrics.usage === undefined ? formatTokens(value ?? 0) : known(value);
 
   parts.push(
     metrics.tokensIn === null && metrics.tokensOut === null
       ? '—'
-      : `↑${formatTokens(metrics.tokensIn ?? 0)} ↓${formatTokens(metrics.tokensOut ?? 0)}`,
+      : `↑${count(metrics.tokensIn)} ↓${count(metrics.tokensOut)}`,
   );
+  if (metrics.usage !== undefined) parts.push(...usageParts(metrics.usage));
   parts.push(formatDuration(metrics.durationMs));
   if (metrics.tasks === undefined && metrics.subagents > 0) parts.push(`▤${metrics.subagents}`);
   if (metrics.unread > 0) parts.push(`⋮${metrics.unread}`);

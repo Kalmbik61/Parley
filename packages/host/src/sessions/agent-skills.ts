@@ -1,5 +1,5 @@
 /**
- * Скилл `parley` при запуске сессии (кусок 10 плана комнат): хост зовёт установку из core перед
+ * Owned native skills at session launch (кусок 10 плана комнат): хост зовёт установку из core перед
  * каждым запуском, включая `resume` и фоновый autoLaunch, — установка идемпотентна и быстра, а
  * устаревший свой скилл она заодно обновляет и убирает свою прежнюю установку под именем `harnas`.
  *
@@ -14,7 +14,6 @@ import {
   installAgentSkill,
   LEGACY_SKILL_NAME,
   loadConfig,
-  SKILL_NAME,
   type SkillInstallOptions,
   type SkillInstallResult,
   type SkillSkip,
@@ -32,9 +31,9 @@ type Install = (options: SkillInstallOptions) => Promise<SkillInstallResult>;
  * показывает: оно берёт свой текст по виду уведомления (`skill-foreign`), а `notice.text` пишет в консоль.
  */
 const LOG_TEXT: Record<SkillSkip['reason'], string> = {
-  foreign: 'Parley skill was not installed: the path already exists and was not created by Parley — left as is',
-  edited: 'Parley skill was not updated: the file was edited by hand — left as is',
-  unsafe: 'Parley skill was not installed: a symlink or a file stands in place of a directory on the way to the path',
+  foreign: 'Agent skill was not installed: the path already exists and was not created by Parley — left as is',
+  edited: 'Agent skill was not updated: the file was edited by hand — left as is',
+  unsafe: 'Agent skill was not installed: a symlink or a file stands in place of a directory on the way to the path',
 };
 
 export function createSkillInstaller(
@@ -72,16 +71,16 @@ export function createSkillInstaller(
         ...(worktreePath === null ? {} : { worktreePath }),
       });
       if (result.written.length > 0) {
-        host.log.info('скилл parley установлен или обновлён', { ref, paths: result.written });
+        host.log.info('Agent skills installed or updated', { ref, paths: result.written });
       }
       if (result.removed.length > 0) {
         host.log.info(`прежний скилл ${LEGACY_SKILL_NAME} убран`, { ref, paths: result.removed });
       }
       for (const skip of result.skipped) report(ref, skip);
     } catch (error) {
-      host.log.error('скилл parley не поставлен: сбой записи, сессия запускается без него', {
+      host.log.error('Agent skills not installed: write failed; session starts without them', {
         ref,
-        skill: SKILL_NAME,
+        assets: 'builtin',
         error: String(error),
       });
     }

@@ -1,7 +1,10 @@
 import type { MethodName, NotificationName } from '@parley/protocol';
+import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { PlanEffectsService } from '../rooms/plan-effects.js';
+import type { HistoryService } from '../rooms/history-service.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
@@ -11,9 +14,14 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
-import { createCapabilitiesList } from './capabilities.js';
+import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
+import { createBacklogHandlers } from './backlog.js';
+import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
 import { createFeedHandlers } from './feed.js';
+import { createHistoryHandlers } from './history.js';
+import { createJournalHandlers } from './journal.js';
+import { createMemoryHandlers } from './memory.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
@@ -24,12 +32,14 @@ import {
   createProvidersRefreshLimits,
   createProvidersSetKey,
 } from './providers.js';
-import { roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
+import { createPlanHandlers, roomsAddMember, roomsCreate, roomsResolveProposal, roomsSend } from './rooms.js';
+import { createRolesList } from './roles.js';
+import { createRecipesList } from './recipes.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
 import { createWorktreesHandlers } from './worktrees.js';
-import { worksCreate, worksDelete, worksList, worksRename, worksSetStatus } from './works.js';
+import { worksCreate, createWorksDelete, worksList, worksRename, worksSetStatus } from './works.js';
 
 export interface MethodDeps {
   works: WorksService;
@@ -40,6 +50,12 @@ export interface MethodDeps {
   worktrees: WorktreesService;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
+  /** Live project backlog subscriptions; manual methods also work without this service. */
+  backlog?: BacklogService;
+  /** One host authority for durable plan delivery and export retries. */
+  planEffects?: PlanEffectsService;
+  /** Selected-checkout derivative history; shared publication stays explicit. */
+  history?: HistoryService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
   worksReady?: Promise<void>;
   /** Версии CLI из пробы на старте хоста (`providers.list`); без них у провайдеров `version: null`. */
@@ -57,11 +73,19 @@ export interface MethodDeps {
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, rooms.*, mail.*, worktrees.*), host.*,
+ * карт с диска (works.create/delete/rename/setStatus, rooms.create/addMember/send, mail.*, worktrees.*), host.*,
  * providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
+  'rooms.resolveProposal',
+  'rooms.setMode',
+  'plans.update',
+  'plans.submit',
+  'plans.verify',
+  'plans.cancel',
+  'plans.retryEffects',
   'works.list',
+  'decisions.list',
   'sessions.create',
   'sessions.resume',
   'sessions.stop',
@@ -108,13 +132,22 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
+  const capabilities = createCapabilitiesHandlers();
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
+    ...createBacklogHandlers(deps.backlog),
+    ...createJournalHandlers(deps.works),
+    ...createMemoryHandlers(),
+    ...createHistoryHandlers(),
+    ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
+    // Читают карту с диска, снимка работ не ждут: не в `WORKS_GATED_METHODS`.
+    'context.messages': contextMessages as AnyHandler,
+    'context.text': contextText as AnyHandler,
     'works.create': worksCreate as AnyHandler,
-    'works.delete': worksDelete as AnyHandler,
+    'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog) as AnyHandler,
@@ -127,6 +160,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'pty.attach': pty.ptyAttach as AnyHandler,
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,
+    'roles.list': createRolesList() as AnyHandler,
+    'recipes.list': createRecipesList() as AnyHandler,
     'sessions.create': sessions.sessionsCreate as AnyHandler,
     'sessions.resume': sessions.sessionsResume as AnyHandler,
     'sessions.stop': sessions.sessionsStop as AnyHandler,
@@ -142,7 +177,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'wake.state': wake.wakeState as AnyHandler,
     'rooms.create': roomsCreate as AnyHandler,
     'rooms.addMember': roomsAddMember as AnyHandler,
-    'rooms.resolveProposal': roomsResolveProposal as AnyHandler,
+    'rooms.resolveProposal': (async (params, request) => {
+      const result = await roomsResolveProposal(params, request);
+      // The decision is committed. Delivery failure retains pending effects and its safe notice.
+      await deps.planEffects?.flush(params.projectPath, params.workId).catch(() => undefined);
+      return result;
+    }) as typeof roomsResolveProposal as AnyHandler,
     'rooms.send': roomsSend as AnyHandler,
     'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
     'worktrees.diff': worktrees.worktreesDiff as AnyHandler,
@@ -154,6 +194,20 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
     'mail.markRead': mailMarkRead as AnyHandler,
     'capabilities.list': createCapabilitiesList() as AnyHandler,
+    'capabilities.get': capabilities.capabilitiesGet as AnyHandler,
+    'capabilities.refresh': capabilities.capabilitiesRefresh as AnyHandler,
+    'capabilities.skills.share': capabilities.capabilitiesSkillsShare as AnyHandler,
+    'capabilities.skills.unshare': capabilities.capabilitiesSkillsUnshare as AnyHandler,
+    'capabilities.mcp.add': capabilities.capabilitiesMcpAdd as AnyHandler,
+    'capabilities.mcp.remove': capabilities.capabilitiesMcpRemove as AnyHandler,
+    'capabilities.mcp.check': capabilities.capabilitiesMcpCheck as AnyHandler,
+    'capabilities.plugins.available': capabilities.capabilitiesPluginsAvailable as AnyHandler,
+    'capabilities.plugins.details': capabilities.capabilitiesPluginsDetails as AnyHandler,
+    'capabilities.plugins.install': capabilities.capabilitiesPluginsInstall as AnyHandler,
+    'capabilities.plugins.uninstall': capabilities.capabilitiesPluginsUninstall as AnyHandler,
+    'capabilities.plugins.enable': capabilities.capabilitiesPluginsEnable as AnyHandler,
+    'capabilities.plugins.disable': capabilities.capabilitiesPluginsDisable as AnyHandler,
+    'capabilities.plugins.addMarketplace': capabilities.capabilitiesPluginsAddMarketplace as AnyHandler,
   };
   if (deps.feed !== undefined) {
     const feed = createFeedHandlers({ feed: deps.feed });

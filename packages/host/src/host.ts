@@ -34,6 +34,9 @@ import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
+import { createBacklogService } from './backlog/backlog-service.js';
+import { createPlanEffectsService } from './rooms/plan-effects.js';
+import { createHistoryService } from './rooms/history-service.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -178,6 +181,27 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   const worksService = createWorksService(handle.context);
+  // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
+  // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
+  const planEffectNoticed = new Set<string>();
+  const planEffects = createPlanEffectsService(worksService, {
+    onFailure: ({ projectPath, workId }) => {
+      const key = `${projectPath}\0${workId}`;
+      if (planEffectNoticed.has(key)) return;
+      planEffectNoticed.add(key);
+      handle.context.broadcast('host.notice', {
+        kind: 'plan-effect-failed',
+        ref: null,
+        text: 'Plan delivery or export remains pending. Open the plan and retry after resolving the conflict.',
+        at: new Date().toISOString(),
+      });
+    },
+  });
+  const history = createHistoryService(worksService, {
+    onFailure: ({ count }) => log.warn('history-write-failed', { count }),
+  });
+  handle.context.onShutdown(async () => planEffects.stop());
+  handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
@@ -274,7 +298,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
 
+  const backlogService = createBacklogService();
+  handle.context.onShutdown(async () => backlogService.close());
+
   const handlers = createHostHandlers({
+    backlog: backlogService,
+    planEffects,
+    history,
     worksReady,
     providerVersions,
     codexCatalog,
@@ -306,6 +336,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      backlogService.removeClient(client.id);
     },
   });
 
@@ -362,6 +393,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     );
   }
   await activityService.start();
+  planEffects.start();
+  history.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся
   // раньше, получит лимиты событием.

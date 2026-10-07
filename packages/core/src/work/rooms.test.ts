@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { unreadFor } from './letters.js';
-import { addSession, removeSession, setResult, transitionSession } from './map.js';
+import { addSession, parseMap, removeSession, setResult, transitionSession } from './map.js';
 import {
   addMember,
   addMemberByLead,
@@ -65,7 +65,9 @@ describe('addRoom', () => {
       members: ['s-02', 's-03'],
       createdAt: '2026-09-26T10:05:00.000Z',
       lead: null,
+      mode: 'free',
       proposal: null,
+      recipe: null,
     });
     expect(map.rooms).toEqual([room]);
   });
@@ -544,5 +546,46 @@ describe('addRoomOriginMessage', () => {
 
     for (const id of ['s-01', 's-02', 's-03', 's-04']) expect(unreadFor(map, id)).toEqual([]);
     expect(line.readBy).toEqual({ [HUMAN]: NOW });
+  });
+});
+
+describe('addRoom: снимок рецепта', () => {
+  const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Lead playbook' };
+
+  it('снимок копируется: правка исходного объекта комнату не меняет', () => {
+    const map = emptyMap();
+    const source = { ...recipe };
+    const room = addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe: source });
+    source.playbook = 'changed later';
+    source.name = 'Other';
+    expect(room.recipe).toEqual(recipe);
+  });
+
+  it('без рецепта — recipe: null', () => {
+    expect(addRoom(emptyMap(), { title: 'x', creator: HUMAN, members: [] }).recipe).toBeNull();
+  });
+
+  it('снимок переживает запись на диск и чтение', () => {
+    const map = emptyMap();
+    addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe });
+    expect(parseMap(JSON.stringify(map), 'map.json').rooms[0]?.recipe).toEqual(recipe);
+  });
+
+  it('старая карта без поля recipe читается как комната без рецепта', () => {
+    const map = emptyMap();
+    const room = addRoom(map, { title: 'x', creator: HUMAN, members: [] });
+    const raw = JSON.parse(JSON.stringify(map)) as { rooms: Record<string, unknown>[] };
+    delete raw.rooms[0]?.['recipe'];
+    expect(parseMap(JSON.stringify(raw), 'map.json').rooms[0]).toEqual({ ...room, recipe: null });
+  });
+
+  it('снимок неверной формы — отказ чтения карты', () => {
+    const map = emptyMap();
+    addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe });
+    for (const bad of [{ ...recipe, extra: 1 }, { id: 'a', name: 'b' }, { ...recipe, name: '' }, { ...recipe, playbook: 5 }, 'text']) {
+      const raw = JSON.parse(JSON.stringify(map)) as { rooms: Record<string, unknown>[] };
+      raw.rooms[0]!['recipe'] = bad;
+      expect(() => parseMap(JSON.stringify(raw), 'map.json')).toThrow('invalid room recipe');
+    }
   });
 });

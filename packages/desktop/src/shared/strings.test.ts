@@ -15,7 +15,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
   'internal',
 ];
 
-/** Все одиннадцать видов `NoticeKind` (`packages/protocol/src/types.ts`). */
+/** Все виды `NoticeKind` (`packages/protocol/src/types.ts`). */
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
@@ -28,6 +28,15 @@ const NOTICE_KINDS: NoticeKind[] = [
   'trust-wait',
   'startup-wait',
   'skill-foreign',
+  'parley-md-created',
+  'parley-md-unreadable',
+  'parley-md-truncated',
+  'provider-override-gap',
+  'memory-truncated',
+  'memory-unreadable',
+  'plan-effect-failed',
+  'role-truncated',
+  'recipe-playbook-truncated',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
@@ -241,4 +250,60 @@ describe('noticeText', () => {
     expect(noticeText(hostNotice('map-lock'))).not.toMatch(CYRILLIC);
     expect(noticeText(hostNotice('map-corrupt'))).not.toMatch(CYRILLIC);
   });
+});
+
+
+it('backlog labels and safe warnings are English and do not interpolate raw errors', () => {
+  const labels = [S.backlog.title, S.backlog.failed, S.backlog.liveUnavailable, S.backlog.markFailed, ...Object.values(S.backlog.ignore)];
+  for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }
+  expect(S.backlog.suggested(3)).toBe('Suggested (3)'); expect(S.backlog.itemTaken('w-01/r-01')).toBe('Taken: w-01/r-01');
+});
+
+it('plugin strings distinguish unknown cost, data loss and native recovery without promising live adoption',()=>{
+ expect(S.capabilities.plugins.unknown).toBe('Unknown');expect(S.capabilities.plugins.dataLoss).toContain('permanently delete');
+ expect(S.capabilities.plugins.appliesToNew).toContain('new sessions');expect(S.capabilities.plugins.codes['native-only']).not.toContain('/mcp');
+ expect(S.capabilities.plugins.codexRecovery).toContain('native Codex plugin');
+});
+
+it('plan UI labels distinguish verification from human-accepted Checklist completion and captured exports',()=>{
+ expect(S.plans.basis(2)).toBe('Done in Checklist · human accepted revision 2');
+ expect(S.plans.progress('verified',1,3,1)).toBe('1/3 verified · 1 accepted from Checklist');
+ expect(S.plans.progress('checklist',2,3,0)).toBe('2/3 done');
+ expect(S.plans.snapshot('accepted',1,'pending')).toBe('accepted · revision 1 · pending');
+ expect(S.plans.freeCancels).toContain('cancels the active plan');
+});
+
+it('manual skill sharing labels and fixed codes are English and keep generic adoption/owned cleanup semantics',()=>{
+ const labels=S.capabilities.skillShare;expect(labels.share('Codex')).toBe('Share with Codex');expect(labels.unshare('Claude')).toBe('Unshare from Claude');
+ for(const value of Object.values(labels))if(typeof value==='string')expect(value).not.toMatch(CYRILLIC);
+ for(const value of Object.values(labels.codes))expect(value).not.toMatch(CYRILLIC);
+ expect(labels.projectHint).toContain('Git status');expect(labels.userHint).toContain('absolute symlink');expect(labels.cleanup).toContain('original skill stays');expect(labels.appliesToNew).not.toMatch(/\d+ sessions/);
+});
+
+it('describes closed-work plan controls without labeling pending delivery retry unavailable',()=>{
+ expect(S.plans.workClosed).toBe('Reopen this workspace to change the plan.');
+ expect(S.plans.retry).toBe('Retry pending deliveries');
+});
+
+it('decisions and room history labels are English, Share warns about Git and secrets, Unshare does not promise history removal', () => {
+  const walk = (value: unknown): string[] => typeof value === 'string' ? [value] : typeof value === 'function' ? [String((value as (n: never) => string)(1 as never))]
+    : value && typeof value === 'object' ? Object.values(value).flatMap(walk) : [];
+  for (const label of [...walk(S.decisions), ...walk(S.roomHistory)]) { expect(label).not.toMatch(CYRILLIC); expect(label.length).toBeGreaterThan(0); }
+  expect(S.roomHistory.shareWarning).toContain('shared Git files'); expect(S.roomHistory.shareWarning).toContain('secrets');
+  expect(S.roomHistory.unshareWarning).toContain('Previous Git commits retain it');
+  expect(S.roomHistory.sharedAt('2026-10-05T10:00:00.000Z')).toMatch(/^Shared at /);
+  expect(S.decisions.open).toBe('Open accepted revision');
+});
+
+it('recipe labels are English, name every parse diagnostic and the template playbook stays short', () => {
+  const R = S.recipes;
+  const labels = [R.field, R.none, R.loadFailed, R.modeField, R.worktreeField, R.noWorktree, R.singleDropsRecipe, R.gone, R.save, R.saveTitle, R.saveHint, R.nameField, R.descriptionField,
+    R.fileField, R.playbookField, R.nameRequired, R.fileInvalid, R.needRoles, R.needAgents, R.confirmSave, R.back, R.replace, R.rename, R.noPlaybook,
+    R.roleMissing('claude:x'), R.exists('x'), R.saved('X'), R.savedNotOpened('X'), R.chip('X'), R.playbookFor('X'), R.playbookTemplate, ...Object.values(R.reason)];
+  for (const label of labels) { expect(label).not.toMatch(/[А-Яа-яЁё]/); expect(label.length).toBeGreaterThan(0); }
+  // Каждый код разбора рецепта (`RecipeCode` core) имеет свою причину в списке рецептов.
+  for (const code of ['invalid-id', 'missing-frontmatter', 'invalid-yaml', 'invalid-schema', 'invalid-role', 'invalid-count', 'invalid-lead', 'too-few-agents', 'invalid-utf8', 'file-too-large', 'unreadable', 'discovery-limit'])
+    expect(R.reason[code], code).toBeTruthy();
+  expect(R.playbookTemplate.split('\n').length).toBeLessThanOrEqual(30);
+  expect(R.invalidOption('broken.md', R.reason['invalid-yaml'] as string)).toBe('broken.md · Not valid YAML');
 });

@@ -124,6 +124,7 @@ import { ErrorBoundary } from './ErrorBoundary.js';
 import { Landing } from './Landing.js';
 import { Resizer } from './Resizer.js';
 import { RightSidebar, rightSidebarHasRoom, useWindowWidth } from './RightSidebar.js';
+import { ProjectPanel } from '../components/project/ProjectPanel.js';
 import { StatusBar } from './StatusBar.js';
 import { Titlebar } from './Titlebar.js';
 
@@ -337,6 +338,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const lastMergeRef = useRef(mergeRoom);
   if (mergeRoom !== null) lastMergeRef.current = mergeRoom;
   const lastMerge = lastMergeRef.current;
+  const projectPanel = useUiStore((state) => state.projectPanel);
   const restartHostOpen = useUiStore((state) => state.dialogs.restartHost);
   const wakePaused = useUiStore((state) => state.wakePaused);
   const toggleWake = useUiStore((state) => state.toggleWake);
@@ -499,6 +501,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
       openNewSession: () => useUiStore.getState().openNewSessionDialog(),
       openNewRoom: () => useUiStore.getState().openNewSessionDialog(undefined, { room: true }),
       openSettings: () => useUiStore.getState().openSettingsDialog(),
+      openProjectPanel: (projectPath) => useUiStore.getState().openProjectPanel(projectPath),
       setAppearance: (mode) => useUiStore.getState().setAppearance(mode),
       toggleShowArchived: () => useUiStore.getState().toggleShowArchived(),
       toggleWake: () => useUiStore.getState().toggleWake(bridge),
@@ -723,6 +726,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         attention={attention}
         onNextAttention={openNextAttention}
       />
+      <ProjectPanel bridge={bridge} projectPath={projectPanel} onOpenChange={(open) => {
+        if (!open) useUiStore.getState().closeProjectPanel();
+      }} />
       <Palette bridge={bridge} run={stableRun} />
       <WindowCloseQuestion bridge={bridge} />
       <NewWorkComposer
@@ -739,6 +745,20 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
         bridge={bridge}
         work={newSession.work}
         room={newSession.room}
+        backlog={newSession.backlog ?? null}
+        onCreated={async target => {
+          const context = newSession.backlog;
+          if (!context) return;
+          // Retry keeps the created target and rereads the current row/version; it never creates another room.
+          const snapshot = await bridge.call('backlog.get', { projectPath: context.projectPath });
+          const item = snapshot.items.find(row => row.id === context.id);
+          const taken = `${target.workId}/${'roomId' in target ? target.roomId : target.sessionId}`;
+          if (!item || item.checked || [item.title, item.details].filter(Boolean).join('\n\n') !== context.task ||
+              (item.taken !== undefined && item.taken !== taken)) throw new Error('The backlog item changed.');
+          // An unchanged same-target marker may have committed before its reply was lost.
+          if (item.taken === taken) return;
+          await bridge.call('backlog.take', { projectPath: context.projectPath, id: context.id, version: snapshot.version, target });
+        }}
         onOpenChange={(open) => {
           if (!open) closeNewSessionDialog();
         }}

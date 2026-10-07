@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
+import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
 import type {
   FeedCardState,
   FeedItem,
@@ -8,8 +10,34 @@ import type {
   ProjectChanges,
   WorktreeDiff,
 } from '@parley/core';
+import type { CapabilitySnapshot } from './capability-snapshot.js';
+import { capabilityPluginMethodSchemas } from './capability-plugin-actions.js';
+import type { CapabilityPluginMethodResults } from './capability-plugin-actions.js';
+import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
+import type { CapabilityActionResult } from './capability-actions.js';
+import { planMethodSchemas } from './plan-actions.js';
+import type { PlanMethodResults } from './plan-actions.js';
+import { journalMethodSchemas } from './journal.js';
+import type { JournalMethodResults } from './journal.js';
+import { memoryMethodSchemas } from './memory.js';
+import type { MemoryMethodResults } from './memory.js';
+import { historyMethodSchemas } from './history.js';
+import type { HistoryMethodResults } from './history.js';
+import { contextPageMethodSchemas } from './context-pages.js';
+import type { ContextPageMethodResults } from './context-pages.js';
+import { backlogMethodSchemas } from './backlog.js';
+import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+
+/** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
+const recipeSnapshot = z
+  .object({
+    id: z.string().min(1).max(300),
+    name: z.string().min(1).max(300),
+    playbook: z.string().refine((text) => new TextEncoder().encode(text).length <= 1024 * 1024),
+  })
+  .strict();
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -34,7 +62,16 @@ export const EFFORT_TOKEN_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
-  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
+  ...capabilityPluginMethodSchemas,
+  ...capabilitySkillMethodSchemas,
+  ...backlogMethodSchemas,
+  ...planMethodSchemas,
+  ...journalMethodSchemas,
+  ...memoryMethodSchemas,
+  ...historyMethodSchemas,
+  ...contextPageMethodSchemas,
+  // `features` — что клиент умеет сверх протокола 1 (`COMPACT_WORKS_FEATURE`): старый клиент поля не шлёт.
+  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
@@ -70,6 +107,9 @@ export const METHODS = {
     workId: z.string(),
     status: z.enum(['active', 'done', 'archived']),
   }),
+  'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
+  // Каталог рецептов комнат: встроенные и рецепты выбранного проекта (спека рецептов, 5–6).
+  'recipes.list': z.object({ projectPath: z.string().min(1) }).strict(),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -77,6 +117,8 @@ export const METHODS = {
     label: z.string(),
     task: z.string(),
     parent: z.string().nullable(),
+    role: z.object({ source: z.enum(['builtin', 'claude', 'codex']), name: z.string().min(1).max(4096) }).nullable().optional(),
+    agent: z.string().min(1).max(4096).optional(),
     worktree: z.boolean().optional(),
     // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
     // — окно узнаёт об этом из `providers.list`. Модель — `id` из списка провайдера
@@ -90,8 +132,9 @@ export const METHODS = {
       .string()
       .max(200)
       .regex(/^(?:[^\s-]\S*)?$/)
+      .nullable()
       .optional(),
-    effort: z.string().regex(EFFORT_TOKEN_RE).optional(),
+    effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -108,6 +151,11 @@ export const METHODS = {
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
+  'capabilities.get': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.refresh': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.mcp.add': capabilityMcpAdd,
+  'capabilities.mcp.remove': capabilityMcpTarget,
+  'capabilities.mcp.check': capabilityMcpTarget,
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
@@ -133,6 +181,11 @@ export const METHODS = {
     // комнаты пуста, пока человек не напишет в неё задачу. Без флага приглашения уходят, как прежде:
     // сессии уже работают и о комнате иначе не узнают. Старый хост поле отбросит.
     quiet: z.boolean().optional(),
+    // Режим комнаты (планы и режимы): без него комната свободная, как прежде. Старый хост поле отбросит.
+    mode: z.enum(['free', 'checklist', 'verified']).optional(),
+    // Снимок рецепта на момент создания (спека рецептов, 6.2): хост кладёт его в комнату как есть, правка
+    // файла рецепта комнату потом не меняет. Лишние поля не принимаются.
+    recipe: recipeSnapshot.optional(),
   }),
   // Дизайн комнат, 3.2: человек вводит сессию в комнату; она уходит из прочих комнат работы. Уже
   // участник и нигде больше — `bad_request`; состоящая и в других комнатах (старая карта, решение 4)
@@ -156,7 +209,9 @@ export const METHODS = {
     action: z.enum(['accept', 'return']),
     note: z.string().max(4000).optional(),
     rev: z.number().int().min(0).optional(),
-  }),
+    planId: z.string().regex(/^pl-\d+$/).max(128).optional(),
+    planRev: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).refine(value => (value.planId === undefined) === (value.planRev === undefined)),
   'rooms.send': z.object({
     projectPath: z.string(),
     workId: z.string(),
@@ -210,9 +265,10 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
-  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
+  /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
+  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
@@ -278,6 +334,8 @@ export interface Results {
   'works.delete': { ok: true };
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
+  'roles.list': import('@parley/core').RoleList;
+  'recipes.list': import('@parley/core').RecipeCatalogView;
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };
@@ -301,6 +359,11 @@ export interface Results {
   'sessions.setModel': { model: string; effort: string | null; restarted: boolean };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
+  'capabilities.get': CapabilitySnapshot;
+  'capabilities.refresh': CapabilitySnapshot;
+  'capabilities.mcp.add': CapabilityActionResult;
+  'capabilities.mcp.remove': CapabilityActionResult;
+  'capabilities.mcp.check': CapabilityActionResult;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };

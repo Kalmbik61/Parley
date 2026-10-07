@@ -27,6 +27,10 @@ function serverLaunch(command?: string): { command: string; args: string[] } {
 export interface McpConfigParams {
   /** Путь к `<проект>/.parley/works/<work-id>/` — переменная `PARLEY_WORK_DIR` сервера (и прежняя `HARNAS_WORK_DIR`). */
   workDir: string;
+  skillNavigator?: boolean;
+  /** Родной список скиллов этого запуска сокращён: сервер объявляет это в описании `find_skill`. Только `true` попадает в окружение. */
+  skillListReduced?: boolean;
+  nativeContextRevision?: string;
   /** Id сессии в карте — переменная `PARLEY_SESSION_ID` (и прежняя `HARNAS_SESSION_ID`). */
   sessionId: string;
   /** Чем запускать сервер; по умолчанию node и скрипт сервера по абсолютному пути. */
@@ -70,6 +74,9 @@ export function mcpConfig({
   sessionId,
   command,
   channel,
+  skillNavigator,
+  skillListReduced,
+  nativeContextRevision,
 }: McpConfigParams): McpConfigFile {
   return {
     mcpServers: {
@@ -80,6 +87,9 @@ export function mcpConfig({
           WORK_DIR: workDir,
           SESSION_ID: sessionId,
           ...(channel === true ? { CHANNEL: '1' } : {}),
+          ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
+          ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
+          ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
         }),
       },
     },
@@ -119,14 +129,17 @@ export const CODEX_MCP_TOOL_TIMEOUT_SEC = 30 * 60 + 60;
 /** Переменные, которые сервер получает из окружения запускающего: только наше пространство имён, оба префикса. */
 const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_]+$`);
 /** Три переменные, которые харнесс задаёт сессии сам, под обоими именами: унаследованное значение их не перекрывает. */
-const SESSION_VARIABLES = new Set(Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '' })));
+const SESSION_VARIABLES = new Set(Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '' })));
 
 /** Пары `имя=значение` таблицы `env` сервера: сначала адрес сессии под обоими именами, затем унаследованные `PARLEY_*` и `HARNAS_*`. */
 function codexServerEnv({
   workDir,
   sessionId,
   env,
-}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env'>): Array<[string, string]> {
+  skillNavigator,
+  skillListReduced,
+  nativeContextRevision,
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision'>): Array<[string, string]> {
   const inherited = Object.entries(env ?? {})
     .filter(
       (entry): entry is [string, string] =>
@@ -136,7 +149,11 @@ function codexServerEnv({
         entry[1] !== '',
     )
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return [...Object.entries(bothEnv({ WORK_DIR: workDir, SESSION_ID: sessionId })), ...inherited];
+  return [...Object.entries(bothEnv({ WORK_DIR: workDir, SESSION_ID: sessionId,
+    ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
+    ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
+    ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+  })), ...inherited];
 }
 
 /**
@@ -188,6 +205,7 @@ export async function writeMcpConfig(
   sessionId: string,
   command?: string,
   channel = false,
+  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision'> = {},
 ): Promise<string> {
   const paths = workPaths(projectPath, workId);
   const file = path.join(paths.mcp, `${sessionId}.json`);
@@ -196,6 +214,7 @@ export async function writeMcpConfig(
   await writeFile(
     file,
     mcpConfigJson({
+      ...snapshot,
       workDir: paths.dir,
       sessionId,
       ...(command === undefined ? {} : { command }),

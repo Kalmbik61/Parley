@@ -7,16 +7,36 @@ import {
   setWorkStatus,
   WorkNotFoundError,
 } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { WorksService } from '../works/works-service.js';
+import type { HistoryService } from '../rooms/history-service.js';
 
 /**
  * `works.list` читает снимок сервиса: он один держит слитую по всем проектам картину.
  * Ожидание первого чтения работ — в общих воротах `WORKS_GATED_METHODS` (`methods/index.ts`).
  */
 export function worksList(works: WorksService): Handler<'works.list'> {
-  return async () => works.snapshot();
+  return async (_params, request) => {
+    // Окно с `compact-works` читает компактный снимок (P35): письма хвостом, длинные тексты сокращены.
+    if (request.client.features.has(COMPACT_WORKS_FEATURE)) {
+      const compact = works.windowSnapshot();
+      if (compact === null) {
+        throw new HostError('internal', 'The workspace snapshot does not fit into one frame.', { reason: HOST_ERROR_REASONS.snapshotTooLarge });
+      }
+      return compact;
+    }
+    // Прежнее окно получает прежний полный снимок, пока тот влезает в кадр; иначе — ошибка с просьбой обновить окно,
+    // а не строка, на которой декодер окна оборвёт соединение и начнёт переподключаться по кругу.
+    const legacy = works.legacySnapshot();
+    if (legacy === null) {
+      throw new HostError('conflict', 'The workspace data is too large for this version of the window: update Parley.', {
+        reason: HOST_ERROR_REASONS.clientUpgradeRequired,
+      });
+    }
+    return legacy;
+  };
 }
 
 export const worksCreate: Handler<'works.create'> = async (params) => {
@@ -24,7 +44,8 @@ export const worksCreate: Handler<'works.create'> = async (params) => {
   return { workId: map.work.id };
 };
 
-export const worksDelete: Handler<'works.delete'> = async (params) => {
+export function createWorksDelete(history?: Pick<HistoryService, 'removeWork'>): Handler<'works.delete'> {
+  return async (params) => {
   // Карта читается заново, а не из снимка сервиса: снимок мог отстать от диска
   // на длительность debounce, а конфликт должен решаться по настоящему состоянию.
   const map = await readMap(params.projectPath, params.workId).catch(() => null);
@@ -35,8 +56,13 @@ export const worksDelete: Handler<'works.delete'> = async (params) => {
     throw new HostError('conflict', `workspace ${params.workId} has a live session`);
   }
   await deleteWorkFiles(params.projectPath, params.workId);
+  // Cleanup is a derivative effect: deletion has already committed and cannot be retried as a mutation.
+  await history?.removeWork(params.projectPath, params.workId, map?.rooms.map(room => room.id) ?? []).catch(() => undefined);
   return { ok: true };
-};
+  };
+}
+
+export const worksDelete: Handler<'works.delete'> = createWorksDelete();
 
 /**
  * Работы нет — `not_found`, а не `internal`. Карта читается заранее, как в

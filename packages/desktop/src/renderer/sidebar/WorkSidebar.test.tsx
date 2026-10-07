@@ -88,6 +88,7 @@ const list = (): HTMLElement => {
 
 beforeEach(() => {
   bridge = createFakeBridge();
+  vi.stubGlobal('parley', bridge); window.parley = bridge;
   disposeHost = useHostStore.getState().init(bridge);
   setWorks([]);
   useActivityStore.setState({ byRef: {} });
@@ -96,7 +97,7 @@ beforeEach(() => {
     ui: DEFAULT_UI,
     sidebarHovering: false,
     sidebarHolds: {},
-    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null },
+    dialogs: { newWork: { open: false, projectPath: null, title: '' }, newSession: { open: false, work: null, room: false }, settings: false, mergeRoom: null, restartHost: false },
   });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
   useSidebarSectionsStore.setState({ sections: [], attention: {} });
