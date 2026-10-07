@@ -117,21 +117,43 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
 /** Основные кнопки видны и без ответа хоста; свои провайдеры добавляются после них. */
 const CORE_PROVIDERS = ['claude', 'codex', 'glm'] as const;
 
+/**
+ * Сегмент — кнопка поповера, и строка делит нехватку места между кнопками целиком, пропорционально вес × ширина: порядок
+ * «лимиты, версия, имя» держится только внутри кнопки. Сегмент из значка и имени (недоступный GLM) иначе получал свою долю и
+ * терял имя, пока у соседей ещё широк текст лимитов. Поэтому у сегмента с лимитами или версией вес строки — как у блока
+ * лимитов внутри, на порядки больше единицы у сегмента из одного имени.
+ */
+const YIELDING_SEGMENT = 'shrink-[1000000000]';
+
+/**
+ * Пол такого сегмента — то, что в нём не сжимается: значок 14 и зазоры 7 между частями, а с блоком лимитов — ещё `ml-1` и
+ * трек 44. Без пола при весе 10⁹ кнопка сжималась бы до нуля раньше сегментов из одного имени, и значок с полоской налезали
+ * бы на соседей.
+ */
+const segmentFloor = (version: boolean, meter: boolean): number =>
+  14 + 7 * (1 + Number(version) + Number(meter)) + (meter ? 4 + 44 : 0);
+
 function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; onRestartHost: () => void }): JSX.Element {
   const [open, setOpen] = useState(false);
   const reload = useProvidersStore((state) => state.reload);
   const name = providerName(provider.id, provider.label);
   const title = S.statusBar.providerTitle(name, provider.available);
+  const version = provider.available && provider.version !== null;
+  const limits = provider.available && (provider.id !== 'glm' || provider.limits?.source === 'zai');
+  // Блок лимитов рисуется, только когда есть хоть одно окно (`ProviderLimitsMeter`); у старого хоста поля нет вовсе.
+  const meter = limits && (provider.limits?.fiveHour != null || provider.limits?.week != null);
+  const yields = version || meter;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
-          className={cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', !provider.available && 'opacity-50')}>
+          style={yields ? { minWidth: segmentFloor(version, meter) } : undefined}
+          className={cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', yields && YIELDING_SEGMENT, !provider.available && 'opacity-50')}>
           <AgentIcon provider={provider.id} size={14} />
           <span className="min-w-0 truncate">{name}</span>
-          {provider.available && provider.version !== null ?
+          {version ?
             <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
-          {provider.available && (provider.id !== 'glm' || provider.limits?.source === 'zai') ? <ProviderLimitsMeter limits={provider.limits} /> : null}
+          {limits ? <ProviderLimitsMeter limits={provider.limits} /> : null}
         </button>
       </PopoverTrigger>
       <PopoverContent aria-label={name} side="top" align="start" className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto">
