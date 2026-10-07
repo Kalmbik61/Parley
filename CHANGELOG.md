@@ -10,7 +10,8 @@ All notable changes to Parley are documented in this file.
 
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
   session or room name, Agents, In its own worktree and Mode explains the field on hover; the
-  Mode hint lists what Free, Checklist and Verified do.
+  Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
+  Builtin ones against your own Claude and Codex agents, and the 🔒 of a read-only role.
 
 ## 0.7.0
 
