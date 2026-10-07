@@ -311,6 +311,7 @@ export class HostConnection {
         state: 'connected',
         hostVersion: result.hostVersion,
         methods: result.methods ?? null,
+        features: result.features ?? null,
       });
     } catch (err) {
       if (err instanceof HostError && err.code === 'protocol_mismatch') {

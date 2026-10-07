@@ -30,11 +30,13 @@ export type {
 } from './types.js';
 export { EFFORT_TOKEN_RE, METHODS, NOTIFICATIONS, permissionModeChoice, sessionRef } from './methods.js';
 export {
+  CODEX_FEED_MIN_VERSION,
   FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
   FEED_DECISION_ANSWERS,
   FEED_DECISION_ANSWER_LIMIT,
   FEED_DECISION_MESSAGE_LIMIT,
+  FEED_CODEX_FEATURE,
   FEED_INPUT_LIMIT,
   FEED_MIN_VERSION,
   FEED_PATCH_LINES,
@@ -43,8 +45,10 @@ export {
   FEED_TEXT_LIMIT,
   feedCardState,
   feedDecision,
+  feedDecisions,
   feedItem,
 } from './feed.js';
+export type { FeedDecisions } from './feed.js';
 export type {
   MethodName,
   NotificationName,

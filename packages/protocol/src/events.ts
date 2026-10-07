@@ -1,6 +1,7 @@
 import type { BacklogChanged } from './backlog.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
+import type { FeedDecisions } from './feed.js';
 import type {
   HostNotice,
   LiveMetrics,
@@ -41,6 +42,7 @@ export interface Events {
     upsert: FeedItem[];
     removed: string[];
     mode: string | null;
+    decisions?: FeedDecisions | null;
   };
 }
 

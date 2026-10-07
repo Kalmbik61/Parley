@@ -11,8 +11,10 @@ import { describe, expect, it } from 'vitest';
 import * as core from '@parley/core';
 import type { FeedDecision, FeedItem, FeedState } from '@parley/core';
 import {
+  CODEX_FEED_MIN_VERSION,
   FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
+  FEED_CODEX_FEATURE,
   FEED_INPUT_LIMIT,
   FEED_MIN_VERSION,
   FEED_PATCH_LINES,
@@ -325,6 +327,8 @@ describe('пределы и версия', () => {
     expect(FEED_TEXT_LIMIT).toBe(core.FEED_TEXT_LIMIT);
     expect(FEED_AGENT_CHILDREN).toBe(core.FEED_AGENT_CHILDREN);
     expect(FEED_MIN_VERSION).toBe(core.FEED_MIN_VERSION);
+    expect(CODEX_FEED_MIN_VERSION).toBe(core.CODEX_FEED_MIN_VERSION);
+    expect(FEED_CODEX_FEATURE).toBe('feed-codex');
     expect(FEED_SCHEMA_VERSION).toBe(2);
   });
 
