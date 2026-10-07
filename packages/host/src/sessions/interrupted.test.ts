@@ -44,6 +44,14 @@ describe('findInterrupted', () => {
     expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' }]);
   });
 
+  it('сессия codex без строк notify в журнале событий не считается прерванной', async () => {
+    // У Codex журнал `events/` пишет только notify: без него журнала нет (null) или он пуст.
+    const entry = entryOf([{ id: 's-01', lifecycle: 'sleeping' }]);
+
+    expect(await findInterrupted([entry], async () => null)).toEqual([]);
+    expect(await findInterrupted([entry], async () => [])).toEqual([]);
+  });
+
   it('архивная работа в список не идёт: её сессии до Reopen не поднимаются', async () => {
     const entry = {
       projectPath: '/tmp/p',

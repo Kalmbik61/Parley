@@ -189,6 +189,33 @@ describe('сигналы терминала codex → активность', () 
     15_000,
   );
 
+  it('без строк notify в журнале событий конец хода и «хуки приходили» берутся из терминала и rollout', async () => {
+    // Журнала `events/` нет вовсе: ни одной строки Stop от notify.
+    const startedAtMs = Date.now();
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-no-notify' });
+    const dir = path.join(codexRoot, '2026', '10', '07');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'rollout-2026-10-07T10-00-00-rollout-no-notify.jsonl');
+    const record = (type: string, timestamp: string) =>
+      `${JSON.stringify({ timestamp, type: 'event_msg', payload: { type } })}\n`;
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    a.terminalSignal(ref, { kind: 'turn-complete' });
+    await settle(40);
+    const at = new Date().toISOString();
+    await writeFile(
+      file,
+      `${JSON.stringify({ timestamp: at, type: 'session_meta', payload: { id: 'rollout-no-notify', cwd: project, source: 'cli' } })}\n` +
+        record('task_started', at) +
+        record('task_complete', new Date(Date.now() + 10).toISOString()),
+    );
+    await settle(600);
+    const live = a.get(ref);
+    expect(live?.activity.turnEndedAt).not.toBeNull();
+    expect(hookedSince(live?.activity, startedAtMs)).toBe(true);
+    expect(live?.activity.activity).not.toBe('working');
+  }, 20_000);
+
   it('working → working; ready → unseen; markSeen → idle', async () => {
     const { a, ref } = await started();
 
