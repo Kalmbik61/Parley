@@ -24,16 +24,23 @@
 //     STUB_SAY <текст> — `AgentMessage` (final_answer), `task_complete`, затем OSC 9 `Agent turn complete`
 //     STUB_SUBAGENT <тред> / STUB_SUBAGENT_DONE <тред> — агент: `SubAgentActivity` в журнале родителя и свой журнал
 //     Esc во время хода — `turn_aborted`
+//   Хуки Codex (спека 2026-10-07, 5.6; нужны `STUB_CODEX_HOOKS_TRUSTED=1` и `-c hooks.<Event>=[…]` в аргументах):
+//     при старте — `SessionStart`; `STUB_CMD` — `PreToolUse`, запись журнала, `PostToolUse`;
+//     STUB_PERMISSION <cmd> — `PermissionRequest` и печать в терминал по ответу моста: `approved`, `denied` или `prompt`
+//                       (пустой ответ — окно одобрения TUI). Без `STUB_CODEX_HOOKS_TRUSTED` хуки не вызываются,
+//                       как неодобренные.
 //
 // Окружение:
 //   STUB_CODEX_NO_TITLE=1  — заголовков нет вовсе: экран входа или доверия к папке, которого агент не покидает
 //   STUB_CODEX_THREAD=<id> — id треда в заголовке и в журнале
 //   STUB_CODEX_VERSION=<x.y.z> — версия в ответе на --version (по умолчанию 0.44.0)
 //   STUB_CODEX_SESSIONS=<каталог> — корень журналов: при старте создаётся rollout-файл треда
+//   STUB_CODEX_HOOKS_TRUSTED=1 — хуки из `-c hooks.*` одобрены: заглушка их вызывает
 
+import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { clearInterval, setInterval } from 'node:timers';
+import { clearInterval, clearTimeout, setInterval, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
 // Проба версий хоста (`<команда> --version`): ответ как у настоящего Codex, выход сразу.
@@ -55,6 +62,36 @@ if (process.argv[2] === 'debug' && process.argv[3] === 'models') {
 if (process.env.STUB_ARGV_LOG !== undefined && process.env.STUB_ARGV_LOG !== '') {
   const keep = Object.entries(process.env).filter(([name]) => name.startsWith('PARLEY_') || name.startsWith('HARNAS_') || name === 'SLASH_COMMAND_TOOL_CHAR_BUDGET');
   appendFileSync(process.env.STUB_ARGV_LOG, `${JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(keep), cwd: process.cwd() })}\n`);
+}
+
+// Хуки из `-c hooks.<Event>=[{hooks=[{type="command",command="<путь>",…}]}]`: событие → команда. Вызываются, только
+// если человек «доверил» их (`STUB_CODEX_HOOKS_TRUSTED=1`) — как Codex не зовёт неодобренные.
+const hookCommands = new Map();
+{
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] !== '-c') continue;
+    const match = /^hooks\.(\w+)=.*command="([^"]+)"/.exec(args[index + 1]);
+    if (match !== null) hookCommands.set(match[1], match[2]);
+  }
+}
+const HOOKS_TRUSTED = process.env.STUB_CODEX_HOOKS_TRUSTED === '1';
+
+/** Вызов хука: JSON события — в stdin команды, ответ моста (stdout) — результат. Без доверия или хука — пустая строка. */
+function callHook(event, extra) {
+  const command = hookCommands.get(event);
+  if (!HOOKS_TRUSTED || command === undefined) return Promise.resolve('');
+  return new Promise((resolve) => {
+    const child = spawn(command, [], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.on('error', () => resolve(''));
+    child.on('close', () => resolve(stdout));
+    child.stdin.end(JSON.stringify({ session_id: THREAD, hook_event_name: event, cwd: process.cwd(), ...extra }));
+  });
 }
 
 const PASTE_START = '\x1b[200~';
@@ -138,7 +175,17 @@ function journalCommand(text) {
   const subDone = rest('STUB_SUBAGENT_DONE');
   if (cmd !== null) {
     ensureTurn();
-    item(main, THREAD, { type: 'CommandExecution', command: ['/bin/zsh', '-lc', cmd], cwd: process.cwd(), parsed_cmd: [], source: 'agent', status: 'completed', aggregated_output: 'ok', exit_code: 0 });
+    const write = () => item(main, THREAD, { type: 'CommandExecution', command: ['/bin/zsh', '-lc', cmd], cwd: process.cwd(), parsed_cmd: [], source: 'agent', status: 'completed', aggregated_output: 'ok', exit_code: 0 });
+    if (!HOOKS_TRUSTED) write();
+    else {
+      // С доверенными хуками: `PreToolUse` (id вызова — id будущего элемента журнала), запись, `PostToolUse`.
+      const toolUseId = `it${items + 1}`;
+      const hook = { tool_name: 'Bash', tool_use_id: toolUseId, tool_input: { command: cmd } };
+      void callHook('PreToolUse', hook).then(() => {
+        write();
+        return callHook('PostToolUse', { ...hook, tool_response: { stdout: 'ok' } });
+      });
+    }
   } else if (edit !== null) {
     ensureTurn();
     item(main, THREAD, { type: 'FileChange', status: 'completed', changes: { [edit]: { type: 'update', unified_diff: EDIT_DIFF } } });
@@ -186,11 +233,28 @@ function stopSpinner() {
   spinner = null;
 }
 
+/** `STUB_PERMISSION <cmd>`: запрос разрешения через хук; ответ моста решает, что печатает «TUI». `true`, если строка — она. */
+function permissionCommand(text) {
+  if (!text.startsWith('STUB_PERMISSION ')) return false;
+  const command = text.slice('STUB_PERMISSION '.length);
+  // Пустой ответ — окно одобрения терминала.
+  void callHook('PermissionRequest', { tool_name: 'Bash', tool_input: { command } }).then((answer) => {
+    let behavior = '';
+    try {
+      behavior = JSON.parse(answer).hookSpecificOutput?.decision?.behavior ?? '';
+    } catch {
+      behavior = '';
+    }
+    line(behavior === 'allow' ? 'approved' : behavior === 'deny' ? 'denied' : 'prompt');
+  });
+  return true;
+}
+
 function submit(text, key) {
   if (key === 'tab') {
     line(`tab: ${text}`);
     // Ход идёт (обычный ввод его открыл), и окно отправило строку в очередь Tab: команды журнала заглушка исполняет сразу.
-    journalCommand(text);
+    if (!permissionCommand(text)) journalCommand(text);
     return undefined;
   }
   line(`enter: ${text}`);
@@ -202,6 +266,7 @@ function submit(text, key) {
     if (fresh) item(main, THREAD, { type: 'UserMessage', content: [{ type: 'text', text }] });
     startWork();
   }
+  else if (permissionCommand(text)) return undefined;
   else if (text === 'STUB_READY') {
     stopSpinner();
     title(`Ready | ${THREAD}`);
@@ -222,7 +287,10 @@ function submit(text, key) {
   return undefined;
 }
 
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+  void callHook('SessionStart', { source: 'startup' });
+}
 out('\x1b[?2004h');
 line('stub-codex готов');
 if (process.env.STUB_CODEX_NO_TITLE === '1') line('Do you trust the contents of this directory?');

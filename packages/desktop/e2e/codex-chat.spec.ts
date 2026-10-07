@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -19,6 +19,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * в `STUB_CODEX_SESSIONS` (он же `PARLEY_CODEX_SESSIONS_DIR` хоста), команды `STUB_*` пишут в журнал элементы
  * (`STUB_CMD`, `STUB_EDIT`, `STUB_SAY`, `STUB_SUBAGENT`) — отправка окна (`pty.send`) и поле Chat. Проба версий
  * включена (`PARLEY_SKIP_VERSION_PROBE: ''`), claude и glm тоже подменены: настоящие CLI в E2E не запускаются.
+ * Хуки Codex (Task 22, поправка к части D): настройка `codexApprovals` включается `settings.set` до создания сессии;
+ * `STUB_CODEX_HOOKS_TRUSTED=1` — стаб вызывает хуки из `-c hooks.*` (доверие дано), без него — как неодобренные;
+ * срок подсказки сокращён `PARLEY_CODEX_HOOK_GRACE_MS`. `STUB_ARGV_LOG` — argv стаба для проверки `-c hooks.*`.
  * `E2E_DPR=2` запускает окно с `--force-device-scale-factor=2`. Снимки — в `test-results/codex-chat/` (не коммитятся).
  */
 
@@ -95,12 +98,14 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
   let home: string;
   let project: string;
   let codexRoot: string;
+  let argvLog: string;
   let running: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
     home = await makeTempHome('codex-chat');
     project = await makeTempProject('codex-chat');
     codexRoot = path.join(home, 'codex-sessions');
+    argvLog = path.join(home, 'stub-argv.log');
     await mkdir(codexRoot, { recursive: true });
     await mkdir(shots, { recursive: true });
   });
@@ -120,8 +125,17 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     errors: string[];
   }
 
-  /** Окно со стабом Codex нужной версии и одной запущенной сессией; открыта вкладка сессии. */
-  async function open(width: number, height: number, version = '0.160.0'): Promise<Opened> {
+  /**
+   * Окно со стабом Codex нужной версии и одной запущенной сессией; открыта вкладка сессии. `hooks`: `off` —
+   * настройка `codexApprovals` выключена (по умолчанию), `trusted` — включена и стаб вызывает хуки, `untrusted` —
+   * включена, но хуки не одобрены.
+   */
+  async function open(
+    width: number,
+    height: number,
+    version = '0.160.0',
+    hooks: 'off' | 'trusted' | 'untrusted' = 'off',
+  ): Promise<Opened> {
     const env = {
       ...process.env,
       PARLEY_HOME: home,
@@ -134,6 +148,9 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
       STUB_CODEX_SESSIONS: codexRoot,
       STUB_CODEX_VERSION: version,
       STUB_CODEX_THREAD: THREAD,
+      STUB_ARGV_LOG: argvLog,
+      PARLEY_CODEX_HOOK_GRACE_MS: '1000',
+      STUB_CODEX_HOOKS_TRUSTED: hooks === 'trusted' ? '1' : '',
     };
     const app = await electron.launch({
       args: [mainEntry, `--force-device-scale-factor=${dpr}`],
@@ -145,6 +162,9 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await expect(window.getByTestId('landing')).toBeVisible();
     const errors: string[] = [];
     window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+    if (hooks !== 'off') {
+      await call(window, 'settings.set', { key: 'codexApprovals', value: 'true' });
+    }
     const work = await call<{ workId: string }>(window, 'works.create', {
       projectPath: project,
       title: 'e2e-codex-chat',
@@ -305,6 +325,148 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await expect(window.getByTitle('Chat needs Codex 0.160.0 or newer')).toHaveCount(1);
     await expect(window.getByTestId('chat-view')).toHaveCount(0);
     await expect(window.locator('.xterm').first()).toBeVisible();
+  });
+
+  /** Запуски стаба из `STUB_ARGV_LOG`: argv и окружение Parley каждого. */
+  async function launches(): Promise<Array<{ argv: string[]; env: Record<string, string> }>> {
+    const text = await readFile(argvLog, 'utf8').catch(() => '');
+    return text
+      .split('\n')
+      .filter((row) => row !== '')
+      .map((row) => JSON.parse(row) as { argv: string[]; env: Record<string, string> })
+      // Клиент ролей хоста (`app-server --stdio`) — не сессия под терминалом.
+      .filter((launch) => launch.argv[0] !== 'app-server');
+  }
+
+  /** Терминальный ответ стаба на `STUB_PERMISSION`: строка `approved`, `denied` или `prompt` на экране. */
+  async function terminalSays(window: Page): Promise<string> {
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect(window.getByTestId('chat-view')).toHaveCount(0);
+    return screenText(window);
+  }
+
+  test('настройка выключена: в argv стаба нет hooks., PARLEY_HOOK_URL нет, подсказки про хуки нет', async () => {
+    const { window, ref, errors } = await open(1400, 900);
+    const chat = await toChat(window);
+    await stub(window, ref, 'STUB_WORK');
+    await expect(chat.getByTestId('chat-stop')).toBeVisible({ timeout: 20_000 });
+    // Срок подсказки (1 с) давно вышел бы при включённой настройке.
+    await window.waitForTimeout(2_500);
+    await expect(chat.getByTestId('codex-hooks-hint')).toHaveCount(0);
+    await expect.poll(async () => (await launches()).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    const [first] = await launches();
+    expect(first).toBeDefined();
+    expect(first?.argv.some((arg) => arg.startsWith('hooks.'))).toBe(false);
+    expect(first?.env['PARLEY_HOOK_URL']).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  test('настройка включена, хуки доверены: 7 пар -c hooks.*; Allow — в терминале approved, Deny — denied; вызов Bash без дубля', async () => {
+    const { window, ref, errors } = await open(1400, 900, '0.160.0', 'trusted');
+    const chat = await toChat(window);
+    await expect.poll(async () => (await launches()).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    const [first] = await launches();
+    expect(first?.argv.filter((arg) => arg.startsWith('hooks.')).length).toBe(7);
+    expect(first?.env['PARLEY_HOOK_URL']).toBeDefined();
+    expect(first?.env['PARLEY_HOOK_TOKEN']).toBeDefined();
+
+    await chat.getByTestId('chat-composer').getByRole('textbox').fill('Сделай');
+    await window.keyboard.press('Enter');
+    await expect(chat.getByTestId('chat-prompt').first()).toContainText('Сделай', { timeout: 20_000 });
+
+    // Хуки пришли — подсказки про доверие нет, даже после срока ожидания.
+    await window.waitForTimeout(2_500);
+    await expect(chat.getByTestId('codex-hooks-hint')).toHaveCount(0);
+
+    const pending = chat.locator('[data-testid="chat-card"][data-card-kind="permission"][data-card-state="pending"]');
+    await stub(window, ref, 'STUB_PERMISSION touch ~/outside');
+    await expect(pending).toHaveCount(1, { timeout: 20_000 });
+    await expect(pending).toContainText('touch ~/outside');
+    await expect(pending.getByTestId('card-allow')).toBeVisible();
+    await expect(pending.getByTestId('card-deny')).toBeVisible();
+    await expect(chat.getByTestId('chat-waiting-banner')).toHaveCount(0);
+    await shot(window, 'permission-card-1400x900');
+    await pending.getByTestId('card-allow').click();
+    await expect(
+      chat.locator('[data-testid="chat-card"][data-card-kind="permission"][data-card-state="allowed"]'),
+    ).toHaveCount(1, { timeout: 20_000 });
+
+    await stub(window, ref, 'STUB_PERMISSION rm -rf ~/outside');
+    await expect(pending).toHaveCount(1, { timeout: 20_000 });
+    await pending.getByTestId('card-deny').click();
+    await expect(
+      chat.locator('[data-testid="chat-card"][data-card-kind="permission"][data-card-state="denied"]'),
+    ).toHaveCount(1, { timeout: 20_000 });
+
+    // Ответы моста дошли до «TUI» стаба.
+    await expect.poll(async () => {
+      const text = await terminalSays(window);
+      await window.getByRole('radio', { name: 'Chat' }).click();
+      return text;
+    }).toMatch(/approved[\s\S]*denied/);
+
+    // Вызов команды с доверенными хуками (PreToolUse, запись журнала, PostToolUse): в ленте одна строка Bash, не две.
+    await stub(window, ref, `STUB_CMD ${COMMAND}`);
+    const bash = chat.getByTestId('chat-tool').filter({ hasText: COMMAND.slice(0, 40) });
+    await expect(bash).toHaveCount(1, { timeout: 20_000 });
+    await expect(bash).toHaveAttribute('data-tool-status', 'done', { timeout: 20_000 });
+    await window.waitForTimeout(1_000);
+    await expect(bash).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('настройка включена, хуки не одобрены: подсказка про доверие, Open terminal, STUB_APPROVAL — баннер ожидания без карточки', async () => {
+    const { window, ref, errors } = await open(1400, 900, '0.160.0', 'untrusted');
+    const chat = await toChat(window);
+    const hint = chat.getByTestId('codex-hooks-hint');
+    await expect(hint).toBeVisible({ timeout: 20_000 });
+    await expect(hint).toContainText('Trust all and continue');
+    await shot(window, 'hooks-hint-1400x900');
+
+    await stub(window, ref, 'STUB_APPROVAL');
+    await expect(chat.getByTestId('chat-waiting-banner')).toBeVisible({ timeout: 20_000 });
+    await expect(chat.locator('[data-testid="chat-card"][data-card-kind="permission"]')).toHaveCount(0);
+
+    await hint.getByRole('button', { name: 'Open terminal' }).click();
+    await expect(window.getByTestId('chat-view')).toHaveCount(0);
+    await expect.poll(() => screenText(window)).toContain('enter: STUB_APPROVAL');
+    expect(errors).toEqual([]);
+  });
+
+  /** Ничего в ленте не шире её рамки и не выпирает за правый край. */
+  async function fitsChat(chat: Locator, name: string): Promise<void> {
+    const box = await boxOf(chat);
+    const edge = box.x + box.width;
+    expect(
+      await chat.evaluate((element) => element.scrollWidth <= element.clientWidth),
+      `${name}: scrollWidth`,
+    ).toBe(true);
+    for (const item of await chat.locator('button, section, header, li, p, pre, textarea, input').all()) {
+      const itemBox = await item.boundingBox();
+      if (itemBox !== null) expect(itemBox.x + itemBox.width, `${name}: край элемента`).toBeLessThanOrEqual(edge + 0.5);
+    }
+  }
+
+  test('800×500 с длинной командой: карточка Allow/Deny не вылезает за край', async () => {
+    const longCommand = `touch ${'very-long-directory-name/'.repeat(8)}file-${'x'.repeat(60)}.txt`;
+    const { window, ref, errors } = await open(800, 500, '0.160.0', 'trusted');
+    const chat = await toChat(window);
+    await stub(window, ref, `STUB_PERMISSION ${longCommand}`);
+    const card = chat.locator('[data-testid="chat-card"][data-card-kind="permission"][data-card-state="pending"]');
+    await expect(card).toHaveCount(1, { timeout: 20_000 });
+    await expect(card.getByTestId('card-deny')).toBeVisible();
+    await fitsChat(chat, 'карточка');
+    await shot(window, 'permission-card-800x500');
+    expect(errors).toEqual([]);
+  });
+
+  test('800×500: подсказка про хуки не вылезает за край', async () => {
+    const { window, errors } = await open(800, 500, '0.160.0', 'untrusted');
+    const chat = await toChat(window);
+    await expect(chat.getByTestId('codex-hooks-hint')).toBeVisible({ timeout: 20_000 });
+    await fitsChat(chat, 'подсказка');
+    await shot(window, 'hooks-hint-800x500');
+    expect(errors).toEqual([]);
   });
 
   for (const closeLeft of [false, true]) {
