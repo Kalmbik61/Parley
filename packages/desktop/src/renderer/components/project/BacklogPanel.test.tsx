@@ -23,6 +23,32 @@ function fixture(response: BacklogSnapshot = snapshot()) {
 }
 afterEach(cleanup);
 describe('BacklogPanel', () => {
+  it('offers TODOS.md once and saves either answer', async () => {
+    const offered: BacklogSnapshot = { ...snapshot(), file: { relativePath: '.parley/backlog.md', exists: true, choice: null, todos: 'TODOS.md' } };
+    const { props, call } = fixture(offered); render(<BacklogPanel {...props} />);
+    await screen.findByText('This project has TODOS.md. Keep the backlog there?');
+    fireEvent.click(screen.getByRole('button', { name: 'Use TODOS.md' }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith('backlog.file.set', { projectPath: project, file: 'todos' }));
+    // Пока идёт первый вызов, кнопки заблокированы: ждём конца.
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Keep in .parley' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep in .parley' }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith('backlog.file.set', { projectPath: project, file: 'state' }));
+  });
+  it('switches the backlog file from the selector and shows no offer after a choice', async () => {
+    const chosen: BacklogSnapshot = { ...snapshot(), file: { relativePath: '.parley/backlog.md', exists: true, choice: 'state', todos: 'TODO.md' } };
+    const { props, call } = fixture(chosen); render(<BacklogPanel {...props} />);
+    await screen.findByText('Open item');
+    expect(screen.queryByText(/Keep the backlog there/)).toBeNull();
+    expect(screen.getByRole('option', { name: 'TODO.md' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Backlog file'), { target: { value: 'todos' } });
+    await waitFor(() => expect(call).toHaveBeenLastCalledWith('backlog.file.set', { projectPath: project, file: 'todos' }));
+  });
+  it('hides the file choice with an older host', async () => {
+    const { props } = fixture(); render(<BacklogPanel {...props} />);
+    await screen.findByText('Open item');
+    expect(screen.queryByLabelText('Backlog file')).toBeNull();
+    expect(screen.queryByText(/Keep the backlog there/)).toBeNull();
+  });
   it('shows sections, pending reasons/authors, and open/taken/done filters', async () => {
     const { props } = fixture(); render(<BacklogPanel {...props} />);
     await screen.findByText('Open item'); expect(screen.getByText('Suggested (1)')).toBeTruthy();
