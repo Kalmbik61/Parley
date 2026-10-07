@@ -6,6 +6,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
@@ -465,15 +466,41 @@ export class SharedStateError extends Error {
   constructor(readonly code: SharedStateErrorCode) { super(code); this.name = 'SharedStateError'; }
 }
 export interface SharedDiagnostic { code: 'parley-gitignore-custom' | 'parley-dir-ignored' }
+/** Где лежит бэклог проекта: `state` — `<каталог состояния>/backlog.md`, `todos` — TODOS.md/TODO.md папки проекта. */
+export type BacklogFileChoice = 'state' | 'todos';
 export interface SharedProjectPaths {
   context: Exclude<SharedProjectContext, { kind: 'unavailable' }>;
   dir: string; backlog: string; plans: string; decisions: string; historyShared: string; preferences: string; suggestions: string; memory: string; memorySuggestions: string; lock: string;
+  /** Сохранённый выбор файла бэклога; null — выбора не было или настройки не читаются. */
+  backlogChoice: BacklogFileChoice | null;
+  /** TODOS.md/TODO.md папки проекта — имя как на диске; null — такого файла нет. */
+  todosFile: string | null;
 }
 export interface SharedWriteOptions extends ProjectContextOptions, WriteOptions {
   /** Optional optimistic version from a human editor; stale edits are refused rather than reapplied. */
   expectedVersion?: string;
   /** Deterministic external-editor fixture seam, immediately before the final comparison. */
   beforeCommit?: (file: string, attempt: number) => Promise<void>;
+}
+
+/** TODOS.md или TODO.md папки проекта, имя — как на диске, регистр не важен. Порядок: точное TODOS.md, другое написание
+ * todos.md, точное TODO.md, другое написание todo.md; внутри ранга — по кодам символов. */
+export async function findTodosFile(projectPath: string): Promise<string | null> {
+  let names: string[];
+  try { names = (await readdir(projectPath)).filter(name => /^todos?\.md$/i.test(name)); } catch { return null; }
+  const rank = (name: string): number => (name.toLowerCase() === 'todos.md' ? 0 : 2) + (name === 'TODOS.md' || name === 'TODO.md' ? 0 : 1);
+  return names.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0))[0] ?? null;
+}
+
+/** Выбор файла бэклога для пути — без исключений: испорченные настройки дают каталог состояния. Строгая проверка — при записи. */
+async function readBacklogChoice(file: string): Promise<BacklogFileChoice | null> {
+  try {
+    const value: unknown = JSON.parse((await readSharedFile(file)).text);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const choice = record['backlogFile'];
+    return record['version'] === 1 && (choice === 'state' || choice === 'todos') ? choice : null;
+  } catch { return null; }
 }
 
 export async function sharedProjectPaths(projectPath: string, options: ProjectContextOptions = {}): Promise<SharedProjectPaths> {
@@ -486,10 +513,13 @@ export async function sharedProjectPaths(projectPath: string, options: ProjectCo
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  return { context, dir, backlog: path.join(dir, 'backlog.md'), plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'), historyShared: path.join(dir, 'history-shared'),
-    preferences: path.join(dir, 'preferences.json'), suggestions: path.join(dir, 'backlog-suggestions.json'),
+  const preferences = path.join(dir, 'preferences.json');
+  const [backlogChoice, todosFile] = await Promise.all([readBacklogChoice(preferences), findTodosFile(context.projectPath)]);
+  const backlog = backlogChoice === 'todos' ? path.join(context.projectPath, todosFile ?? 'TODOS.md') : path.join(dir, 'backlog.md');
+  return { context, dir, backlog, plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'), historyShared: path.join(dir, 'history-shared'),
+    preferences, suggestions: path.join(dir, 'backlog-suggestions.json'),
     memory: path.join(dir, 'memory.md'), memorySuggestions: path.join(dir, 'memory-suggestions.json'),
-    lock: path.join(dir, 'backlog.lock') };
+    lock: path.join(dir, 'backlog.lock'), backlogChoice, todosFile };
 }
 
 export interface SharedFileSnapshot { text: string; version: string }
@@ -603,7 +633,10 @@ export async function inspectSharedIgnore(paths: SharedProjectPaths, options: Pr
   }
   if (exists && previous.text !== SHARED_STATE_IGNORE && previous.text !== PRE_MEMORY_STATE_IGNORE && previous.text !== PRE_JOURNAL_STATE_IGNORE && previous.text !== PRE_RECIPES_STATE_IGNORE && previous.text !== '*\n')
     diagnostics.push({ code: 'parley-gitignore-custom' });
-  if (await sharedPathIgnored(paths.context, paths.backlog, options) || await sharedPathIgnored(paths.context, paths.memory, options)) diagnostics.push({ code: 'parley-dir-ignored' });
+  // Бэклог в TODOS.md — файл проекта, а не каталога состояния: его игнор к `.parley` отношения не имеет.
+  const backlogInState = path.dirname(paths.backlog) === paths.dir;
+  if ((backlogInState && await sharedPathIgnored(paths.context, paths.backlog, options)) || await sharedPathIgnored(paths.context, paths.memory, options))
+    diagnostics.push({ code: 'parley-dir-ignored' });
   return diagnostics;
 }
 /** Called under the project lock on shared writes; only the exact generated legacy ignore is migrated. */
