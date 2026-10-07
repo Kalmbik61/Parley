@@ -751,8 +751,10 @@ that name; the palette itself does not create workspaces or sessions and does no
 terminal, and "Restart host…" asks for confirmation. An empty query shows the six most recent
 tabs and the four most recent workspaces. "Show archived workspaces" shows archived
 workspaces, dimmed at the end of their section, until the window restarts; to bring a
-workspace back, use "Reopen" in its menu. Archived workspaces are not counted in the
-counters, the badge and "Next session that needs you", even when shown.
+workspace back, use "Reopen" in its menu. Archiving stops the workspace's running agents and
+frees their processes; until "Reopen", the host does not start its sessions, and messages to
+them wait. Archived workspaces are not counted in the counters, the badge and "Next session
+that needs you", even when shown.
 
 The host itself wakes agents. When an agent has finished its turn and you are not typing
 anything, the host prints a pointer: "New messages (N). Call check_inbox." That is why a

@@ -28,6 +28,9 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- Archiving a workspace now stops its running agents, so their processes no longer stay in
+  memory. Until "Reopen", the host does not start the workspace's sessions: a message to an
+  agent waits instead of waking it, and "Resume" is refused.
 - Room agents no longer get renamed to "New messages (1) in r-01 … Call check_inbox.": a
   session whose conversation began with Parley's message pointer takes no automatic title (the
   title Claude Code generates from that pointer is skipped too; a `/rename` still applies). A

@@ -14,6 +14,7 @@ import {
   readMap,
   reserveAttempt,
   saveConfig,
+  setWorkStatus,
   settleAttempt,
   SYSTEM,
   transitionSession,
@@ -715,6 +716,7 @@ async function sleepingPair(
 interface ResumeRig {
   pty: ReturnType<typeof createPtyManager>;
   sessions: SessionsService;
+  activity: ReturnType<typeof createActivityService>;
   stream: () => string;
 }
 
@@ -748,7 +750,7 @@ async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRi
   // два наблюдателя работ читают их независимо, и позднее, но устаревшее чтение
   // перекрыло бы снимок со свежим письмом. Письма шлём после затишья.
   await settle(200);
-  return { pty, sessions, stream: () => stream };
+  return { pty, sessions, activity, stream: () => stream };
 }
 
 async function tempArgsFile(): Promise<string> {
@@ -947,6 +949,27 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(sessions.live(ref)).toBe(false);
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+  }, 20_000);
+
+  it('8: письмо спящей в архивной работе ждёт без подъёма и без resume-failed; после Reopen будит', async () => {
+    const { workId, target } = await sleepingPair();
+    await setWorkStatus(project, workId, 'archived');
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const { sessions, activity } = await resumeRig();
+    const ref = { projectPath: project, workId, sessionId: target };
+
+    await sendLetter(workId, target);
+    // Будильник письмо увидел и оставил ждать спящей; без архива здесь был бы `resuming`.
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(400);
+    expect(sessions.live(ref)).toBe(false);
+    expect(existsSync(argsFile)).toBe(false);
+    expect(notices('resume-failed')).toEqual([]);
+
+    await setWorkStatus(project, workId, 'active');
+    await readArgv(argsFile);
+    await waitFor(() => sessions.live(ref), 5000);
   }, 20_000);
 });
 
