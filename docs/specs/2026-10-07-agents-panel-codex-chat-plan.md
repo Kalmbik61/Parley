@@ -3300,6 +3300,22 @@ git commit -m "test(desktop): E2E Chat у Codex на журнале — лент
 
 Перед частью D перечитать раздел 13.2 спеки (живые пробы). Шаги ниже написаны по фактам раздела 3 спеки; если пробы показали другое (id вызова не совпадает, `session_id` — не id треда, TUI блокирует старт при неодобренных хуках) — сначала поправить спеку и эти задачи отдельным коммитом.
 
+### Поправка к части D (2026-10-07, после пробы 13.2 — читать раньше задач 18–22)
+
+Проба показала: неодобренные хуки из `-c` останавливают старт Codex экраном «Hooks need review». Решение человека (спека, решение 9): хуки — **только по переключателю в настройках, по умолчанию выключен**. Это меняет задачи 19–22 так (остальное в них — как написано):
+
+1. **Флаг `codexApprovals` в `config.json`** — по образцу `skillNavigator` (`packages/core/src/config.ts`):
+   - `ParleyConfig`: `/** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */ codexApprovals: boolean;`
+   - `DEFAULT_CONFIG`: `codexApprovals: false`; `ENV_NAMES`: `codexApprovals: 'CODEX_APPROVALS'` (тем же стилем, что `SKILL_NAVIGATOR`);
+   - `fromFile`: `take('codexApprovals', (value) => typeof value === 'boolean', 'true or false')`; `fromEnv`: ключ — в union `flag(...)` и вызов `flag('codexApprovals')`; `BOOLEAN_KEYS` — добавить;
+   - `config.test.ts`: полные объекты конфигов (`:34`, `:61`, `:91`) дополнить; тест — `codexApprovals` из файла и из окружения, неверное значение — ошибка как у `skillNavigator`.
+   Протокол и хост (`settings.get/set`) не менять: `settings.set` принимает любой ключ из `DEFAULT_CONFIG`.
+2. **Запуск (задача 19):** `codexHooks` заполняется только при `entry.id === 'codex' && launchConfig.codexApprovals && options.hookUrl !== undefined && options.codexHookCommand !== undefined` (`launchConfig` — `loadConfig()` в `plan()`, `launch.ts:193`). Комментарий `providers.ts:124` («Хуки Codex не включаются…») переписать: «включаются только по согласию человека — настройка `codexApprovals` (спека 2026-10-07, решение 9); доверие выдаёт сам человек в Codex». `feedHookUrl` (`sessions-service.ts:388`) у Codex отдаёт адрес только при `codexFeedSupported(version)` **и** `(await loadConfig()).config.codexApprovals`. Тесты: флаг выключен — ни одного `hooks.` в argv и нет `PARLEY_HOOK_URL`; включён — 7 пар `-c hooks.…` и `PARLEY_HOOK_URL`/`PARLEY_HOOK_TOKEN`; то же для resume.
+3. **Подсказка «не одобрены» (задачи 20–21):** таймер 15 с на старте процесса Codex взводится только при включённом `codexApprovals` (в `FeedServiceDeps` — `codexApprovals: () => Promise<boolean>`, по умолчанию из `loadConfig()`; в тестах — фейк). Выключен — `decisions` у Codex `null`, подсказки нет. Текст подсказки: `S.chat.codexHooksHint = "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks"`.
+4. **Переключатель в окне (задача 21):** `SettingsDialog.tsx`, вкладка Agents, рядом со `skillNavigator` (`:300-321`) и тем же способом: скрыт, если хост не знает ключа (`config.codexApprovals !== undefined`), замок от env (`locked.codexApprovals`), `save('codexApprovals', checked ? 'true' : 'false')`, ошибка `errors.codexApprovals`. Строки: `S.settings.codexApprovals = 'Answer Codex approvals in Parley'`, `S.settings.codexApprovalsHint = 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.'`. Тесты — в `SettingsDialog.test.tsx` рядом с тестами `skillNavigator` (`:374-427`), фикстура `CONFIG` (`:27-29`) дополняется.
+5. **`CODEX_EARLY_TOOLS = false`** (задача 18): совпадение `tool_use_id` с id элемента журнала вживую не проверено.
+6. **E2E (задача 22):** включение — `settings.set { key: 'codexApprovals', value: 'true' }` до создания сессии (как `setting(...)` в `e2e/parley-integration.spec.ts:201`). Сценарии: флаг выключен — в argv стаба (`STUB_ARGV_LOG`) нет `hooks.`, подсказки нет; флаг включён и `STUB_CODEX_HOOKS_TRUSTED=1` — карточки Allow/Deny; флаг включён без доверия — подсказка. Шаг 5 задачи 22 (живые прогоны) — только после «да» человека, не в Workflow.
+
 ### Task 18: Хуки Codex в ленте (core)
 
 **Files:**
