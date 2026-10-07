@@ -358,6 +358,17 @@ describe('ToolItem', () => {
     ]);
   });
 
+  it('законченный вызов без результата (правка Codex) — без раздела Result; идущий — «No result yet»', () => {
+    renderTool(tool({ id: 'done', name: 'Edit', input: { file_path: '/src/a.ts' }, status: 'done' }));
+    fireEvent.click(screen.getAllByTestId('chat-tool')[0]!.querySelector('button') as HTMLElement);
+    expect(screen.queryByText(S.chat.result)).toBeNull();
+    expect(screen.queryByText(S.chat.noResult)).toBeNull();
+    cleanup();
+    renderTool(tool({ id: 'run', status: 'running' }));
+    fireEvent.click(screen.getAllByTestId('chat-tool')[0]!.querySelector('button') as HTMLElement);
+    expect(screen.getByText(S.chat.noResult)).toBeTruthy();
+  });
+
   it('статусы: running — спиннер, failed и rejected — словом', () => {
     renderTool(tool({ id: 'a', status: 'running' }));
     renderTool(tool({ id: 'b', status: 'failed' }));
