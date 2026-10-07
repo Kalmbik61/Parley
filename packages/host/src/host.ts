@@ -253,13 +253,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
   // адрес приёмника и свой токен (подкусок 2c).
   // Запускатель хука Codex заводится при первой надобности (включённая `codexApprovals`), а не при каждом старте хоста.
-  let codexHookCommand: Promise<string> | undefined;
-  const codexHookCommandOnce = (): Promise<string> => {
+  // Не записался — запуск идёт без хуков (Codex спросит одобрение в терминале), а следующий запуск пробует снова.
+  let codexHookCommand: Promise<string | undefined> | undefined;
+  const codexHookCommandOnce = (): Promise<string | undefined> => {
     codexHookCommand ??= ensureCodexHookLauncher(
       parleyHome(),
       process.execPath,
       fileURLToPath(new URL('./feed/codex-hook-bin.js', import.meta.url)),
-    );
+    ).catch((error: unknown) => {
+      log.warn('хуки Codex: запускатель не записан, запуск без хуков', { error: String(error) });
+      codexHookCommand = undefined;
+      return undefined;
+    });
     return codexHookCommand;
   };
   const sessionsService = createSessionsService(

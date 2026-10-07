@@ -1018,7 +1018,7 @@ export const S = {
       /** Подсказка кнопки: какие правила добавит «не спрашивать больше». */
       allowAlwaysTitle: (rules: string): string => `Adds the rule: ${rules}`,
       deny: 'Deny',
-      denyMessage: 'Tell Claude what to do instead',
+      denyMessage: 'Tell the agent what to do instead',
       showContent: 'Show content',
       hideContent: 'Hide content',
       showArguments: 'Show arguments',
