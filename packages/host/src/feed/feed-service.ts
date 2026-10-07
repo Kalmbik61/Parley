@@ -22,6 +22,7 @@ import path from 'node:path';
 import {
   applyDecision,
   applyHookEvent,
+  applyCodexHookEvent,
   applyCodexRecords,
   claudeProjectRoots,
   closeFeedTurn,
@@ -34,6 +35,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   isClaudeCode,
+  loadConfig,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -51,7 +53,7 @@ import type {
   RawRecord,
 } from '@parley/core';
 import { FEED_SCHEMA_VERSION, refKey } from '@parley/protocol';
-import type { Result, SessionRef } from '@parley/protocol';
+import type { FeedDecisions, Result, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
@@ -96,6 +98,13 @@ const PLAN_TOOL = 'ExitPlanMode';
 const SAFE_AGENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 /** Как часто лента Codex перечитывает журналы, пока у сессии есть подписчики и живой процесс. */
 const CODEX_POLL_MS = 2_000;
+/** Сколько ждать первого хука после старта процесса Codex, прежде чем сказать «одобряет терминал» (спека 5.7). */
+export const CODEX_HOOK_GRACE_MS = 15_000;
+/**
+ * Сколько хост держит `PermissionRequest` Codex: таймаут хука в его `-c` — 600 с, и хост отвечает
+ * раньше, чем Codex оборвёт запрос сам (карточка станет `stale`, а не повиснет «ждущей»).
+ */
+export const CODEX_HOLD_MS = 590_000;
 
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
@@ -113,6 +122,10 @@ export interface FeedServiceOptions {
   batchMs?: number;
   /** Сколько хост держит хук без решения; дальше — `{}` и `stale`. */
   pendingTimeoutMs?: number;
+  /** Срок ожидания хуков Codex после старта процесса; по умолчанию `CODEX_HOOK_GRACE_MS`. */
+  codexHookGraceMs?: number;
+  /** Включена ли настройка `codexApprovals`; по умолчанию — из `config.json`. Выключена — подсказки про хуки нет. */
+  codexApprovals?: () => Promise<boolean>;
   /** Срок после Esc из чата, за который CLI сам пишет о прерывании; по умолчанию `INTERRUPT_GRACE_MS`. */
   interruptGraceMs?: number;
   now?: () => number;
@@ -191,6 +204,10 @@ interface SessionFeed {
   codex?: CodexFeed;
   /** Опрос журналов Codex, пока есть подписчики. */
   codexPoll?: NodeJS.Timeout | undefined;
+  /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
+  decisions: FeedDecisions | null;
+  /** Таймер ожидания первого хука Codex после старта процесса. */
+  codexGrace?: NodeJS.Timeout | undefined;
 }
 
 const isCard = (item: FeedItem): item is FeedCard =>
@@ -256,6 +273,9 @@ export function createFeedService(
   const batchMs = options.batchMs ?? FEED_BATCH_MS;
   const now = options.now ?? Date.now;
   const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
+  const codexHookGraceMs = options.codexHookGraceMs ?? CODEX_HOOK_GRACE_MS;
+  const codexApprovals =
+    options.codexApprovals ?? (async (): Promise<boolean> => (await loadConfig()).config.codexApprovals);
   const roots = options.roots ?? (() => claudeProjectRoots());
   const readRecords = options.readRecords ?? readRecordsTail;
 
@@ -334,6 +354,7 @@ export function createFeedService(
         seeded: false,
         seeding: undefined,
         transcriptPath: null,
+        decisions: null,
       };
       feeds.set(key, feed);
     }
@@ -416,6 +437,7 @@ export function createFeedService(
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
       mode: feed.state.permissionMode,
+      ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
     for (const client of Array.from(clients)) {
       // Клиент не успевает читать — подписка снимается, как у `pty.output`: окно возьмёт снимок заново.
@@ -469,12 +491,71 @@ export function createFeedService(
     return undefined;
   }
 
+  function setDecisions(feed: SessionFeed, value: FeedDecisions): void {
+    if (feed.decisions === value) return;
+    feed.decisions = value;
+    // Дельта уходит и без элементов: окно должно узнать, кто отвечает на одобрения.
+    feed.modeChanged = true;
+    schedule(feed);
+  }
+
+  function clearCodexGrace(feed: SessionFeed): void {
+    if (feed.codexGrace !== undefined) clearTimeout(feed.codexGrace);
+    feed.codexGrace = undefined;
+  }
+
+  /**
+   * Хук Codex (спека 5.6): лента продолжает читать журнал, хук лишь добавляет карточки одобрения и
+   * раннее состояние; `PermissionRequest` держится до решения окна, но не дольше `CODEX_HOLD_MS`.
+   */
+  function onCodexHook(request: HookRequest): void {
+    const { ref, body } = request;
+    const feed = feedOf(ref);
+    clearCodexGrace(feed);
+    setDecisions(feed, 'window');
+    const update = applyCodexHookEvent(feed.state, body, at());
+    commit(feed, update);
+    const card =
+      body['hook_event_name'] === 'PermissionRequest'
+        ? update.changes.find(
+            (item): item is FeedCard => isPendingCard(item) && item.kind === 'permission',
+          )
+        : undefined;
+    if (card === undefined) {
+      request.respond(EMPTY_HOOK_RESPONSE);
+      return;
+    }
+    const cardId = card.cardId;
+    pending.hold({
+      ref: feed.ref,
+      cardId,
+      hookEvent: 'PermissionRequest',
+      rawToolInput: recordOf(body['tool_input']),
+      kind: card.kind,
+      timeoutMs: CODEX_HOLD_MS,
+      respond: request.respond,
+    });
+    request.onAbandon(() => {
+      if (pending.drop(feed.ref, cardId)) settle(feed.ref, 'elsewhere', [cardId]);
+    });
+  }
+
   function onHook(request: HookRequest): void {
     if (stopped) {
       request.respond(EMPTY_HOOK_RESPONSE);
       return;
     }
     const { ref, body } = request;
+    let provider: string | undefined;
+    try {
+      provider = sessionOf(ref).provider;
+    } catch {
+      provider = undefined;
+    }
+    if (provider === 'codex') {
+      onCodexHook(request);
+      return;
+    }
     const feed = feedOf(ref);
     feed.live = true;
     const transcript = textOf(body['transcript_path']);
@@ -864,6 +945,7 @@ export function createFeedService(
     if (feed !== undefined) {
       if (feed.timer !== undefined) clearTimeout(feed.timer);
       feed.timer = undefined;
+      clearCodexGrace(feed);
       stopCodexPoll(feed);
       pending.settle(feed.ref);
       feeds.delete(key);
@@ -889,8 +971,31 @@ export function createFeedService(
 
   // Запуск и возобновление: журнал читается до первого события нового процесса.
   const unsubscribeStart = deps.pty.on('start', (ref) => {
-    if (!stopped) void seedAside(ref);
+    if (stopped) return;
+    void seedAside(ref);
+    void armCodexGrace(ref);
   });
+
+  /**
+   * Процесс Codex стартовал: если за `codexHookGraceMs` ни один хук не пришёл, одобрения отвечает
+   * терминал (Codex не доверил хукам Parley или их нет). Только при включённой `codexApprovals`.
+   */
+  async function armCodexGrace(ref: SessionRef): Promise<void> {
+    try {
+      if (sessionOf(ref).provider !== 'codex' || !(await codexApprovals())) return;
+    } catch {
+      return;
+    }
+    if (stopped) return;
+    const feed = feedOf(ref);
+    if (feed.decisions === 'window') return;
+    clearCodexGrace(feed);
+    feed.codexGrace = setTimeout(() => {
+      feed.codexGrace = undefined;
+      if (!stopped && feed.decisions !== 'window') setDecisions(feed, 'terminal');
+    }, codexHookGraceMs);
+    feed.codexGrace.unref();
+  }
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
@@ -899,6 +1004,7 @@ export function createFeedService(
       pending.settle(ref);
       return;
     }
+    clearCodexGrace(feed);
     // Процесс вышел: висящим хукам `{}`, карточки — `stale` (терминал ответит уже новому процессу),
     // ход закрыт.
     const time = at();
@@ -985,6 +1091,7 @@ export function createFeedService(
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
+        ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
     },
 
@@ -1087,6 +1194,7 @@ export function createFeedService(
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;
+        clearCodexGrace(feed);
         stopCodexPoll(feed);
       }
       for (const timer of interruptTimers) clearTimeout(timer);

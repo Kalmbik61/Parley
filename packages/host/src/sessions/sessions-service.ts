@@ -552,7 +552,11 @@ export function createSessionsService(
         const name = entry.runner.secret === 'zai' ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
         if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
-        env[name] = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
+        env[name] = hooks.register(
+          ref,
+          plan.providerSessionId ?? session.providerSessionId,
+          session.provider,
+        );
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).

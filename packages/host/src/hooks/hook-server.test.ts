@@ -308,6 +308,22 @@ describe('приём событий', () => {
     expect((await post(url, { ...preBash, session_id: 'c-10' }, { token })).status).toBe(404);
   });
 
+  it('провайдер codex: события Codex проходят, MessageDisplay (только Claude) — 400', async () => {
+    const { server, url } = await boot();
+    const token = server.register(REF, null, 'codex');
+    const permission = await post(url, event('PermissionRequest', { tool_name: 'Bash', tool_input: {} }), { token });
+    expect(permission.status).toBe(200);
+    expect((await post(url, event('SubagentStart', { agent_id: 'a1' }), { token })).status).toBe(200);
+    expect((await post(url, event('MessageDisplay', { message_id: 'm', index: 0, delta: 'x' }), { token })).status).toBe(400);
+  });
+
+  it('провайдер codex: первый хук с session_id привязывает id, чужой session_id не SessionStart — 404', async () => {
+    const { server, url } = await boot();
+    const token = server.register(REF, null, 'codex');
+    expect((await post(url, event('SessionStart', { session_id: 'th-main' }), { token })).status).toBe(200);
+    expect((await post(url, event('PreToolUse', { session_id: 'th-other', tool_name: 'Bash' }), { token })).status).toBe(404);
+  });
+
   it('Node не оборвёт удержанный запрос: requestTimeout выключен, заголовки — по умолчанию', async () => {
     const { server } = await boot();
     expect(server.http.requestTimeout).toBe(0);

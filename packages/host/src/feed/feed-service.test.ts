@@ -1334,3 +1334,112 @@ describe('лента Codex', () => {
     expect(fakes.writes).toEqual(['\x1b']);
   });
 });
+
+describe('хуки Codex', () => {
+  const CODEX_SESSION = 'th-main';
+  const hook = (name: string, extra: Record<string, unknown> = {}) => ({
+    hook_event_name: name,
+    session_id: CODEX_SESSION,
+    ...extra,
+  });
+  const permissionBash = (command: string) =>
+    hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command } });
+
+  beforeEach(() => {
+    fakes = fakeFeedDeps([{ ref: REF, provider: 'codex' }]);
+  });
+
+  it('первый хук сессии Codex — decisions window; PermissionRequest удерживается и отвечается решением окна', async () => {
+    start({ codexApprovals: async () => true });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('touch ~/x'));
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.decisions).toBe('window');
+    const card = snapshot.items.find((entry) => entry.kind === 'permission');
+    expect(held.responses).toEqual([]);
+    service.decide(REF, (card as { cardId: string }).cardId, { kind: 'permission', behavior: 'allow' });
+    expect(held.responses).toEqual([
+      { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } },
+    ]);
+  });
+
+  it('дельта несёт decisions, когда пришёл первый хук', async () => {
+    start({ codexApprovals: async () => true });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    send(hook('SessionStart', { source: 'startup' }));
+    await vi.waitFor(() => {
+      expect(feedChanged(client).some((data) => data.decisions === 'window')).toBe(true);
+    });
+  });
+
+  it('хуков нет за 15 с после старта процесса — decisions terminal, лента на журнале работает', async () => {
+    vi.useFakeTimers();
+    try {
+      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      fakes.emitStart(REF);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await service.snapshot(REF)).decisions).toBe('terminal');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('настройка codexApprovals выключена — таймера доверия нет, decisions не задан', async () => {
+    vi.useFakeTimers();
+    try {
+      start({ codexHookGraceMs: 15_000, codexApprovals: async () => false });
+      fakes.emitStart(REF);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((await service.snapshot(REF)).decisions).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('хук пришёл раньше срока — терминалом сессия не становится', async () => {
+    vi.useFakeTimers();
+    try {
+      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      fakes.emitStart(REF);
+      await vi.advanceTimersByTimeAsync(1_000);
+      send(hook('SessionStart', { source: 'startup' }));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect((await service.snapshot(REF)).decisions).toBe('window');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('удержание PermissionRequest Codex — не дольше 590 с, потом карточка stale и пустой ответ', async () => {
+    vi.useFakeTimers();
+    try {
+      start({ codexApprovals: async () => true });
+      send(hook('SessionStart'));
+      const held = send(permissionBash('ls'));
+      vi.advanceTimersByTime(590_000);
+      expect(held.responses).toEqual([{}]);
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+      expect(card).toMatchObject({ state: 'stale' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('хук без карточки получает пустой ответ сразу', () => {
+    start({ codexApprovals: async () => true });
+    const request = send(hook('SessionStart'));
+    expect(request.responses).toEqual([{}]);
+  });
+
+  it('Codex закрыл запрос сам — карточка elsewhere', async () => {
+    start({ codexApprovals: async () => true });
+    const request = send(permissionBash('ls'));
+    request.abandon();
+    const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+    expect(card).toMatchObject({ state: 'elsewhere' });
+  });
+});
