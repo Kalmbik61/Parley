@@ -1103,10 +1103,12 @@ export const S = {
     showTranscript: 'Show transcript',
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
-    queued: 'Queued — Claude reads it when the turn ends',
+    queued: 'Queued — the agent reads it when the turn ends',
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
+      codexLabel: 'Message to Codex',
+      codexPlaceholder: 'Message Codex — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',

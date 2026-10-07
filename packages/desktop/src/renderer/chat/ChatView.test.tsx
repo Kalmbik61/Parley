@@ -1830,13 +1830,18 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
 describe('ChatView — Codex', () => {
   const CODEX_OK = { id: 'codex', label: 'Codex', available: true, version: '0.160.0', limits: null };
   const started = (model: string): FeedItem => ({ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model } });
-  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.codexLabel }) as HTMLTextAreaElement;
 
   beforeEach(() => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: '0.8.0', methods: [...FEED_METHODS, 'sessions.setMode', 'sessions.setModel', 'sessions.setEffort'], features: ['feed-codex'] } });
     useProvidersStore.setState({ providers: [CLAUDE_OK, CODEX_OK], loaded: true });
     renderBody(makeSession('s-01', 'S01', { provider: 'codex' }));
     setFeed([started('gpt-6-astra'), prompt('p1', 'hi')]);
+  });
+
+  it('поле ввода подписано Codex, а не Claude', () => {
+    expect(field().placeholder).toBe(S.chat.composer.codexPlaceholder);
+    expect(screen.queryByRole('textbox', { name: S.chat.composer.label })).toBeNull();
   });
 
   it('вид Chat доступен; модель — подпись текстом, меню модели и режима нет', () => {

@@ -64,6 +64,8 @@ export interface ComposerProps {
   source: SuggestionSource;
   /** Подсказки команд по `/`; Codex их не знает (нет — включены). */
   slashCommands?: boolean;
+  /** Сессия Codex: подпись и подсказка поля — «Codex», а не «Claude» (спека 2026-10-07, 5.4). */
+  codex?: boolean;
   /** Диалог выбора файлов (скрепка): пути выбранных, `[]` — отмена. Отказ владелец показывает тостом. */
   onPickFiles: () => Promise<string[]>;
   /** Скриншот из буфера обмена → путь сохранённого файла; `null` — нет картинки или отказ (тост у владельца). */
@@ -84,6 +86,7 @@ export function Composer({
   onStop,
   source,
   slashCommands = true,
+  codex = false,
   onPickFiles,
   onPasteImage,
   dictationId,
@@ -223,10 +226,10 @@ export function Composer({
         <MicButton targetId={dictationId} />
         <textarea
           ref={field}
-          aria-label={S.chat.composer.label}
+          aria-label={codex ? S.chat.composer.codexLabel : S.chat.composer.label}
           aria-expanded={open}
           aria-controls={open ? 'chat-suggestions' : undefined}
-          placeholder={S.chat.composer.placeholder}
+          placeholder={codex ? S.chat.composer.codexPlaceholder : S.chat.composer.placeholder}
           value={text}
           rows={1}
           onChange={(event) => {

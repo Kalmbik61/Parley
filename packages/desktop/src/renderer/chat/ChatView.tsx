@@ -423,6 +423,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         <Composer
           source={suggestionSource}
           slashCommands={!codex}
+          codex={codex}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}
