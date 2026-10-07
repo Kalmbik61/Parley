@@ -568,7 +568,7 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     withFeedHost('codex');
     const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
-    expect(spies.toast).toHaveBeenCalledWith('Chat needs Claude Code 2.1.286 or newer');
+    expect(spies.toast).toHaveBeenCalledWith('Chat needs Codex 0.160.0 or newer');
     expect(spies.layout.apply).not.toHaveBeenCalled();
   });
 });

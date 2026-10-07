@@ -90,9 +90,9 @@ describe('feedAvailability — третье состояние «неизвес�
     expect(effectiveView({}, feedAvailability({ hostMethods: FEED, provider: 'claude', version: null, loaded: true }), true)).toBe('terminal');
   });
 
-  it('хост без ленты и codex ответа не ждут — сразу недоступен', () => {
+  it('хост без ленты ответа не ждёт — сразу недоступен; codex до загрузки провайдеров — неизвестно', () => {
     expect(feedAvailability({ hostMethods: NO_FEED, provider: 'claude', version: null, loaded: false })).toBe(false);
-    expect(feedAvailability({ hostMethods: FEED, provider: 'codex', version: null, loaded: false })).toBe(false);
+    expect(feedAvailability({ hostMethods: FEED, provider: 'codex', version: null, loaded: false })).toBeNull();
   });
 });
 
