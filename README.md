@@ -1011,6 +1011,13 @@ session's MCP server appends two lines of its own to the same log, `ParleyWaitSt
 In Chat view, each subagent also gets an agent card in the feed: its type, description, model and
 status, its tool calls, its final text and a "Show transcript" link.
 
+**Agents panel.** "N agents running" in the Chat toolbar, and the agents badge of a session in the
+sidebar or of a room member, open the **Agents** tab of the right sidebar (⌘⇧A): the agents of the
+focused session with what each is doing right now, and the finished ones folded below. Click an
+agent to see its task, steps, tool calls as they happen, its result and the full transcript;
+"All agents" goes back to the list. When the window is too narrow for the right sidebar, the badge
+scrolls the feed to the agent's card instead.
+
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP
 server; `<node>` is the one the host runs on). Claude Code calls it after every model
