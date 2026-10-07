@@ -18,13 +18,16 @@ import {
   activityOf,
   claudeProjectRoots,
   applyAutoTitle,
+  autoTitleOf,
   bareEvent,
   envValue,
   isNewLabel,
+  isPointerText,
   linkSession,
   loadConfig,
   legacyUsage,
   openEvents,
+  resetPointerLabel,
   selectUsage,
   sessionTag,
   unreadFor,
@@ -258,6 +261,8 @@ export function createActivityService(
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
+  /** Сессии, чей ярлык-указатель хост уже возвращает (или вернул) к метке новой сессии (`resetPointerLabel`). */
+  const pointerLabelReset = new Set<string>();
   /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
   const questionHeldKeys = new Set<string>();
   /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
@@ -511,11 +516,23 @@ export function createActivityService(
   const sameLive = (a: SessionLive, b: SessionLive): boolean =>
     JSON.stringify(a) === JSON.stringify(b);
 
-  /** Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). */
+  /**
+   * Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). Разговор, начатый
+   * указателем на письма, имени из лога не получает (`autoTitleOf`); ярлык-указатель, оставленный прежними
+   * сборками, тогда возвращается к метке новой сессии — один раз на сессию.
+   */
   function maybeAutoTitle(ref: SessionRef, key: string, session: WorkSession): void {
     if (!isNewLabel(session.label) || autoTitled.has(key)) return;
-    const title = logIndex.index(session)?.title;
-    if (title === undefined || title === null) return;
+    const title = autoTitleOf(logIndex.index(session));
+    if (title === null) {
+      if (!isPointerText(session.label) || pointerLabelReset.has(key)) return;
+      pointerLabelReset.add(key);
+      void resetPointerLabel(ref.projectPath, ref.workId, ref.sessionId).catch((error) => {
+        pointerLabelReset.delete(key);
+        host.log.error('ярлык-указатель не вернулся к метке новой сессии', { ref, error: String(error) });
+      });
+      return;
+    }
     autoTitled.add(key);
     void applyAutoTitle(ref.projectPath, ref.workId, ref.sessionId, title).catch((error) => {
       // Не удалось записать карту — пробуем на следующем изменении.
@@ -782,6 +799,7 @@ export function createActivityService(
     }
     for (const [key] of Array.from(seenAt)) if (!validSessions.has(key)) seenAt.delete(key);
     for (const key of Array.from(autoTitled)) if (!validSessions.has(key)) autoTitled.delete(key);
+    for (const key of Array.from(pointerLabelReset)) if (!validSessions.has(key)) pointerLabelReset.delete(key);
     for (const key of Array.from(mailWaits.keys())) {
       if (!validSessions.has(key)) mailWaits.delete(key);
     }

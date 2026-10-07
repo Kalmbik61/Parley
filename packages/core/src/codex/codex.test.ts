@@ -141,6 +141,23 @@ describe('indexCodexSession', () => {
     expect(index.subsessionCount).toBe(0);
   });
 
+  it('первая реплика — указатель Parley на письма: firstPromptPointer; указатель позже — нет', async () => {
+    const pointer = 'New messages (1) in r-01 "Second". Call check_inbox.';
+    const woken = await writeRollout(
+      '2026-03-12',
+      '019ce3d5-584a-7be2-922e-b8185a8d7c20',
+      meta() + userMessage(pointer) + userMessage('почини сборку', '2026-03-12T10:01:00.000Z'),
+    );
+    expect((await indexCodexSession(woken)).firstPromptPointer).toBe(true);
+
+    const usual = await writeRollout(
+      '2026-03-12',
+      '019ce3d5-584a-7be2-922e-b8185a8d7c21',
+      meta() + userMessage('почини сборку') + userMessage(pointer, '2026-03-12T10:01:00.000Z'),
+    );
+    expect(await indexCodexSession(usual)).not.toHaveProperty('firstPromptPointer');
+  });
+
   it('заголовок берётся из реплики человека, а не из системных сообщений', async () => {
     const file = await writeRollout(
       '2026-03-12',

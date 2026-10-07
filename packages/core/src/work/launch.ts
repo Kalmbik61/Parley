@@ -17,7 +17,7 @@ import { loadConfig } from '../config.js';
 import { findRunnerBinary } from './find-binary.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
-import { isServiceText } from '../session-index.js';
+import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
   EFFORT_TOKEN,
@@ -48,6 +48,7 @@ import { finishSession, linkProviderSession, type MetricsRoots } from './metrics
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { ensureStateDir } from './state-dir.js';
+import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
 
@@ -526,18 +527,22 @@ const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: мет�
 /**
  * Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. Служебный
  * текст Claude Code (`<local-command-caveat>…`) — тоже не имя: его ставил автозаголовок сборок до 0.2.0
- * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново.
+ * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново. Указатель на письма
+ * (`New messages (1) in r-01 "…". Call check_inbox.`) — тоже не имя: его ставил автозаголовок сборок до
+ * 0.7.0 включительно агентам комнаты, запущенным без задачи; хост возвращает такой ярлык к `NEW_LABEL`
+ * (`resetPointerLabel`).
  */
 export function isNewLabel(label: string): boolean {
-  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label);
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label) || isPointerText(label);
 }
 
 /**
  * Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. Служебный текст Claude
- * Code — тоже не название: автозаголовок сборок до 0.2.0 ставил его безымянной работе вместе с ярлыком сессии.
+ * Code и указатель на письма — тоже не название: автозаголовок прежних сборок ставил их безымянной работе
+ * вместе с ярлыком сессии.
  */
 export function isUntitledWork(title: string): boolean {
-  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title);
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title) || isPointerText(title);
 }
 
 export interface NewSessionResult {
@@ -592,9 +597,27 @@ export async function createChildSession(
 }
 
 /**
+ * Заголовок для автозаголовка из записи индекса логов; `null` — назвать сессию нечем. Разговор, начатый
+ * указателем на письма (`firstPromptPointer`: агент комнаты без задачи, первым ему пришла почта), имени из
+ * лога не получает: заголовок из реплики — сам указатель, а `ai-title` Claude генерирует по первому запросу
+ * («Проверка входящих сообщений») и это тоже не имя. Исключение — `custom-title`: его пишет только `/rename`
+ * человека в Claude Code, это явный выбор имени, а не пересказ первого запроса. Заголовок из реплики, который
+ * сам указатель (указатель пришёл последним), тоже не берётся — дождёмся `ai-title`.
+ */
+export function autoTitleOf(
+  index: Pick<SessionIndex, 'title' | 'titleSource' | 'firstPromptPointer'> | undefined,
+): string | null {
+  if (index === undefined || index.title === null) return null;
+  if (index.titleSource === 'custom') return index.title;
+  if (index.firstPromptPointer === true || isPointerText(index.title)) return null;
+  return index.title;
+}
+
+/**
  * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
  * заголовок работы `UNTITLED_WORK` обновляются из него один раз (5.1).
  * Переименованную руками сессию не трогаем — её ярлык уже не `NEW_LABEL`.
+ * Указатель на письма именем не ставится ни при каком источнике (`isPointerText`).
  */
 export async function applyAutoTitle(
   projectPath: string,
@@ -602,12 +625,32 @@ export async function applyAutoTitle(
   sessionId: string,
   title: string,
 ): Promise<void> {
+  if (isPointerText(title)) return;
   await updateMap(projectPath, workId, (map) => {
     const session = map.sessions.find((item) => item.id === sessionId);
     if (session === undefined || !isNewLabel(session.label)) return;
     session.label = title;
     if (isUntitledWork(map.work.title)) map.work.title = title;
   });
+}
+
+/**
+ * Ярлык-указатель (автозаголовок сборок до 0.7.0 включительно назвал агента комнаты текстом
+ * `New messages (1) in r-01 "…". Call check_inbox.`) → снова `NEW_LABEL`, а такой же заголовок работы →
+ * `UNTITLED_WORK`. Чинится сама карта, один раз: её читают и окно, и агенты (`get_map`, бриф), и нормализовать
+ * ярлык в каждом читателе пришлось бы во многих местах. Не событие работы — `updatedAt` не сдвигается.
+ */
+export async function resetPointerLabel(projectPath: string, workId: string, sessionId: string): Promise<void> {
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined && isPointerText(session.label)) session.label = NEW_LABEL;
+      if (isPointerText(map.work.title)) map.work.title = UNTITLED_WORK;
+    },
+    { touch: false },
+  );
 }
 
 /** Новая сессия работы: запись `pending` и бриф по общему шаблону (раздел 5). */
