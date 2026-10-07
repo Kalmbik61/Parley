@@ -311,8 +311,9 @@ describe('приём событий', () => {
   it('провайдер codex: события Codex проходят, MessageDisplay (только Claude) — 400', async () => {
     const { server, url } = await boot();
     const token = server.register(REF, null, 'codex');
-    const permission = await post(url, event('PermissionRequest', { tool_name: 'Bash', tool_input: {} }), { token });
-    expect(permission.status).toBe(200);
+    // PermissionRequest удерживается до решения окна, поэтому здесь берём событие без удержания
+    const pre = await post(url, event('PreToolUse', { tool_name: 'Bash', tool_input: {} }), { token });
+    expect(pre.status).toBe(200);
     expect((await post(url, event('SubagentStart', { agent_id: 'a1' }), { token })).status).toBe(200);
     expect((await post(url, event('MessageDisplay', { message_id: 'm', index: 0, delta: 'x' }), { token })).status).toBe(400);
   });
