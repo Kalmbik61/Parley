@@ -1,7 +1,7 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
 import { addMessage, maxNumber } from './map.js';
 import { sessionMention, sessionTag } from './thread.js';
-import { HUMAN, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
+import { HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
 /**
  * Нарушено правило комнаты: не участник, не ведущий, комната закрыта, ведущий вне круга.
@@ -225,6 +225,146 @@ export function addRoomOriginMessage(
   const [first, second] = origin;
   const text = `Room created from ${sessionMention(first)} and ${sessionMention(second)}`;
   return addSystemMessage(map, roomId, text, at);
+}
+
+/** Комната карты по id; нет такой — отказ запроса. */
+function findRoom(map: WorkMap, roomId: string): Room {
+  const room = map.rooms.find((candidate) => candidate.id === roomId);
+  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
+  return room;
+}
+
+/**
+ * Края названия: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM) — то же правило, что у названия
+ * работы (`renameWork` в `store.ts`) и у схемы `rooms.rename` протокола. Копия, а не импорт: `store.ts` тянет диск,
+ * а этот модуль — чистые правила карты.
+ */
+const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
+
+/**
+ * Человек переименовывает комнату из сайдбара (`rooms.rename`). Края обрезаются; пустое название — отказ, прежнее
+ * остаётся. Системной строки в ленте нет: это не событие разговора, а вкладка, шапка комнаты и строка сайдбара
+ * читают название из карты и сами покажут новое.
+ */
+export function renameRoom(map: WorkMap, roomId: string, title: string): void {
+  const room = findRoom(map, roomId);
+  const trimmed = title.replace(TITLE_EDGES, '');
+  if (trimmed === '') throw new RoomRuleError('room title is empty');
+  room.title = trimmed;
+}
+
+/**
+ * Письмо `parley` в комнате по действию человека. Человеку непрочитанным не значится — его отметка стоит с самой
+ * записи, как у системной строки (`addSystemMessage`): о том, что сделал сам, «нового» у него быть не должно.
+ * Адресату-сессии письмо непрочитано и будит её обычным будильником.
+ */
+function parleyNote(map: WorkMap, roomId: string, to: string, text: string, at: string): Message {
+  const message = addMessage(map, { from: PARLEY, to: [to], roomId, kind: 'note', text }, at);
+  message.readBy[HUMAN] = at;
+  return message;
+}
+
+export interface LeadChange {
+  /** Системная строка ленты «@s03 is now the lead» — для человека. */
+  line: Message;
+  /** Письма `parley` в комнате: новому ведущему и, если был живой прежний, ему. */
+  letters: Message[];
+}
+
+/**
+ * Человек назначает ведущего из сайдбара («Make lead», `rooms.setLead`). Ведущим становится участник комнаты
+ * (создатель-сессия тоже), не закрытый и не ведущий уже: «уже» — по `liveLead`, то есть тот, у кого в окне `★`.
+ * Запись — `room.lead`; человеку — системная строка «@s03 is now the lead»; новому ведущему и прежнему живому —
+ * письма от `parley` в комнате: сами агенты о смене не узнали бы, `get_map` без повода они не перечитывают.
+ *
+ * Ждущее решение прежнего ведущего остаётся в слоте (то же правило, что у `leaveOtherRooms`): человек ответит на
+ * него как на любое, а письмо о принятии или возврате пойдёт уже новому ведущему (`resolveProposal`). Плейбук
+ * рецепта новому ведущему пишет вызывающий — `reconcileRecipeLeads`, общий для любой смены ведущего.
+ */
+export function setRoomLead(
+  map: WorkMap,
+  roomId: string,
+  sessionId: string,
+  at = new Date().toISOString(),
+): LeadChange {
+  const room = findRoom(map, roomId);
+  if (sessionId === HUMAN || !isMember(room, sessionId)) {
+    throw new RoomRuleError(`session ${sessionId} is not a participant of room ${roomId}`);
+  }
+  const session = map.sessions.find((candidate) => candidate.id === sessionId);
+  if (session === undefined) throw new RoomRuleError(`session ${sessionId} is not in the map`);
+  if (session.lifecycle === 'closed') throw new RoomRuleError(`session ${sessionId} is closed`);
+  const previous = liveLead(map, room);
+  if (previous === sessionId) throw new RoomRuleError(`session ${sessionId} already leads room ${roomId}`);
+
+  room.lead = sessionId;
+  const line = addSystemMessage(map, roomId, `${sessionMention(sessionId)} is now the lead`, at);
+  const where = `room ${room.id} "${room.title}"`;
+  const letters = [
+    parleyNote(
+      map,
+      roomId,
+      sessionId,
+      `You now lead ${where}: the human made you the lead. Collect the participants' positions and bring the human a decision with propose_decision (read_guide topic: lead).`,
+      at,
+    ),
+  ];
+  if (previous !== null) {
+    letters.push(
+      parleyNote(
+        map,
+        roomId,
+        previous,
+        `${sessionMention(sessionId)} now leads ${where}: the human changed the lead. You are a regular participant now (read_guide topic: member).`,
+        at,
+      ),
+    );
+  }
+  return { line, letters };
+}
+
+/**
+ * Человек удаляет комнату из сайдбара (`rooms.delete`). Из карты уходит комната и всё, что держится за её id: лента
+ * (письма с её `roomId`), решение в слоте (оно в самой комнате), планы комнаты, их записи доставки (`planEffects`),
+ * отметки закрытия бэклога этих планов (`planBacklogIntents`: без своего плана они не проходят проверку карты) и
+ * счётчик сессий комнаты в журнале ресурсов; попытки журнала остаются в бюджете работы, но уже без комнаты.
+ * Остаются журналы принятого — `planExports` и `decisionExports`: это снятые копии фактов, которые хост дописывает в
+ * общий `.parley` (решения, снимки планов), а написанное туда комната с собой не уносит.
+ *
+ * Сессии комнаты остаются обычными сессиями работы. Каждому живому участнику (`active` или `sleeping`: ещё не
+ * запущенный о комнате и не знал), который не числится в другой комнате (старая карта), — прямое письмо от `parley`:
+ * комнаты больше нет, дальше он работает сам по себе. Будит адресатов обычный будильник. Номера комнаты, писем,
+ * решения и планов не переиспользуются: счётчики работы запоминают их до удаления записей, как `removeSession` —
+ * номер сессии. Возвращает эти письма.
+ */
+export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): Message[] {
+  const room = findRoom(map, roomId);
+  const plans = new Set((map.plans ?? []).filter((plan) => plan.roomId === roomId).map((plan) => plan.id));
+  const { work } = map;
+  work.roomSeq = Math.max(work.roomSeq ?? 0, maxNumber([room.id], 'r-'));
+  work.messageSeq = Math.max(work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-'));
+  if (room.proposal !== null) work.proposalSeq = Math.max(work.proposalSeq ?? 0, maxNumber([room.proposal.id], 'p-'));
+  if (plans.size > 0) work.planSeq = Math.max(work.planSeq ?? 0, maxNumber([...plans], 'pl-'));
+
+  map.rooms = map.rooms.filter((candidate) => candidate !== room);
+  map.messages = map.messages.filter((message) => message.roomId !== roomId);
+  if (map.plans !== undefined) map.plans = map.plans.filter((plan) => plan.roomId !== roomId);
+  if (map.planEffects !== undefined) map.planEffects = map.planEffects.filter((effect) => effect.roomId !== roomId);
+  if (map.planBacklogIntents !== undefined) {
+    map.planBacklogIntents = map.planBacklogIntents.filter((intent) => !plans.has(intent.planId));
+  }
+  if (map.resources !== undefined) {
+    delete map.resources.spawnedByRoom[roomId];
+    for (const attempt of map.resources.attempts) if (attempt.room === roomId) attempt.room = null;
+  }
+
+  const text = `The human deleted room ${room.id} "${room.title}": you now work as a regular session of this workspace.`;
+  const notified = [...new Set([room.creator, ...room.members])].filter(
+    (id) =>
+      map.sessions.some((session) => session.id === id && (session.lifecycle === 'active' || session.lifecycle === 'sleeping')) &&
+      !map.rooms.some((other) => isMember(other, id)),
+  );
+  return notified.map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));
 }
 
 /**
