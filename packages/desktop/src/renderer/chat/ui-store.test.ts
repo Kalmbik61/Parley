@@ -85,3 +85,17 @@ describe('ui-store: просьба показать карточку агент�
     expect(useChatUiStore.getState().reveal).toBeNull();
   });
 });
+
+describe('ui-store: панель агентов', () => {
+  it('выбор агента и раскрытие Finished — по сессии', () => {
+    resetChatUiStoreForTests();
+    const store = useChatUiStore.getState();
+    store.selectAgent('s1', { by: 'agent', id: 'a1' });
+    store.setFinishedOpen('s1', true);
+    expect(useChatUiStore.getState().agentPanel['s1']).toEqual({ by: 'agent', id: 'a1' });
+    expect(useChatUiStore.getState().agentPanel['s2']).toBeUndefined();
+    expect(useChatUiStore.getState().finishedOpen['s1']).toBe(true);
+    useChatUiStore.getState().selectAgent('s1', null);
+    expect(useChatUiStore.getState().agentPanel['s1']).toBeNull();
+  });
+});

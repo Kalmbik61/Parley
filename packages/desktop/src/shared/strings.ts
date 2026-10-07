@@ -856,6 +856,28 @@ export const S = {
   },
 
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
+  /** Вкладка Agents правого сайдбара (спека 2026-10-07, 5.1). */
+  agentsPanel: {
+    tab: 'Agents',
+    noSession: 'Open a session to see its agents',
+    empty: 'No agents in this session yet',
+    finished: (count: number): string => `Finished (${count})`,
+    starting: 'Starting…',
+    thinking: 'Thinking…',
+    needsChat: 'Agent details need the Chat view of this session',
+    back: 'All agents',
+    task: 'Task',
+    steps: 'Steps',
+    activity: 'Activity',
+    result: 'Result',
+    showAll: 'Show all',
+    showLess: 'Show less',
+    fullTranscript: 'Full transcript',
+    hideTranscript: 'Hide transcript',
+    showInChat: 'Show in chat',
+    noActivity: 'No tool calls yet',
+    gone: 'This agent is no longer in the feed',
+  },
   changes: {
     /** Буква статуса git → слово; неизвестная буква печатается как есть (см. вызов). */
     fileStatus: {
@@ -1353,6 +1375,7 @@ export const S = {
     toggleRightSidebar: 'Toggle right sidebar',
     showFiles: 'Show files',
     showChanges: 'Show changes',
+    showAgents: 'Show agents',
     splitRight: 'Split right',
     splitDown: 'Split down',
     previousGroup: 'Previous group',

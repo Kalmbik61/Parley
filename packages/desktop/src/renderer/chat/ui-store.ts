@@ -8,6 +8,7 @@
  */
 
 import { create } from 'zustand';
+import type { AgentPick } from '../agents/agents-model.js';
 import type { QueuedPrompt } from './FeedList.js';
 
 /** Ключ карточки: `cardId` у разных сессий может совпасть, поэтому с ключом сессии. */
@@ -64,6 +65,12 @@ export interface ChatUiState {
   /** Вложения поля ввода: пути файлов, которые уйдут упоминаниями вместе с текстом (`attachments.ts`). */
   attachments: Record<string /* refKey */, readonly string[]>;
   queued: Record<string /* refKey */, readonly Queued[]>;
+  /** Экран агента в панели Agents по сессии (`refKey`); `null` — список (спека 2026-10-07, 5.1). */
+  agentPanel: Record<string, AgentPick | null>;
+  /** Раскрыт ли блок «Finished» панели по сессии. */
+  finishedOpen: Record<string, boolean>;
+  selectAgent(sessionKey: string, pick: AgentPick | null): void;
+  setFinishedOpen(sessionKey: string, open: boolean): void;
   /** Одна просьба на окно: новая заменяет прежнюю. */
   reveal: RevealRequest | null;
   /** Поставить просьбу; сама гаснет через `REVEAL_TTL_MS`. */
@@ -90,6 +97,10 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   attachments: {},
   queued: {},
   reveal: null,
+  agentPanel: {},
+  finishedOpen: {},
+  selectAgent: (sessionKey, pick) => set((state) => ({ agentPanel: { ...state.agentPanel, [sessionKey]: pick } })),
+  setFinishedOpen: (sessionKey, open) => set((state) => ({ finishedOpen: { ...state.finishedOpen, [sessionKey]: open } })),
   requestReveal: (sessionKey, agentId) => {
     lastNonce += 1;
     const nonce = lastNonce;
@@ -121,5 +132,5 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, finishedOpen: {} });
 }

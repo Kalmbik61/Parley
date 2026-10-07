@@ -17,11 +17,13 @@ export interface VoiceUi {
   language: string;
 }
 
+export type RightSidebarTab = 'files' | 'changes' | 'agents';
+
 export interface UiFile {
   version: 1;
   appearance: Appearance;
   leftSidebar: { open: boolean; width: number };
-  rightSidebar: { open: boolean; width: number; tab: 'files' | 'changes' };
+  rightSidebar: { open: boolean; width: number; tab: RightSidebarTab };
   activeWorkKey: string | null;
   pinnedWorks: string[];
   collapsedProjects: string[];
@@ -126,7 +128,9 @@ function normalizeRightSidebar(value: unknown): UiFile['rightSidebar'] {
     ? Math.max(source.width, RIGHT_SIDEBAR.min)
     : DEFAULT_UI.rightSidebar.width;
   const tab =
-    source.tab === 'files' || source.tab === 'changes' ? source.tab : DEFAULT_UI.rightSidebar.tab;
+    source.tab === 'files' || source.tab === 'changes' || source.tab === 'agents'
+      ? source.tab
+      : DEFAULT_UI.rightSidebar.tab;
   return { open, width, tab };
 }
 

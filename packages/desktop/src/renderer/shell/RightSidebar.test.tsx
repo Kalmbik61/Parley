@@ -225,6 +225,16 @@ describe('RightSidebar (тест 9)', () => {
 
 // Раунд main-r2, п. 7 (ревью 7.2-A, Important 3): окно 800 px с обоими сайдбарами оставляло
 // центру ~170 px. Правый не оставляет центру меньше reserveCenter; не влезает — скрыт на время.
+describe('вкладка Agents (спека 2026-10-07, 5.1)', () => {
+  it('третья кнопка; выбор пишет tab agents, панель — AgentsPanel', async () => {
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    await renderShell([ENTRY]);
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    expect(saveUi).toHaveBeenLastCalledWith({ rightSidebar: { open: true, width: 320, tab: 'agents' } });
+    expect(screen.getByTestId('agents-panel')).toBeTruthy();
+  });
+});
+
 describe('правый сайдбар и ширина окна (раунд main-r2, п. 7)', () => {
   function resizeWindow(width: number): void {
     act(() => {
