@@ -10,6 +10,11 @@ All notable changes to Parley are documented in this file.
 
 - **Manage a room from the sidebar.** A right click on a room row gives "Rename" (in place) and "Delete…": the room goes with its feed, and its sessions stay as regular sessions of the workspace, each live one told by Parley; the checkbox "Also delete its N sessions" (off by default) deletes them too, as "Delete" on a session row does. A member row of an expanded room has "Make lead": the feed shows "@s03 is now the lead", and Parley writes to the new and the previous lead. Host methods `rooms.rename`, `rooms.setLead`, `rooms.delete`; with an older host the items are hidden.
 
+### Fixed
+
+- "Rename" from a workspace card's menu now puts the cursor in the name field. The field used to
+  open without focus, so typing went nowhere and Esc or a click elsewhere did not close it.
+
 ## 0.7.0
 
 The project layer: team rules in `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, the Capabilities panel, and a skill navigator that is on by default for Claude, GLM and Codex. It is checked by tests and by a few live sessions of `claude`, GLM and `codex`; most live checks are still open (see "What is not proven yet").

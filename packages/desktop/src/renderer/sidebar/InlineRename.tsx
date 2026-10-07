@@ -94,8 +94,19 @@ function RenameField({ title, hold, label, method, action, save, className, onDo
   useSidebarHold(hold, true);
 
   useLayoutEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
+    const take = (): void => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    take();
+    // Поле открывает пункт контекстного меню, и монтируется оно, пока меню ещё открыто: его ловушка фокуса (Radix
+    // FocusScope, `focusout`) возвращает фокус пункту, тот уходит вместе с меню, и фокус оказывается на `body` — поле
+    // без фокуса не закрывалось ни Esc, ни уходом (снято в живом окне 2026-10-07). Ловушку снимает очистка эффектов
+    // меню в том же такте, поэтому второй заход — следующей задачей.
+    const retry = setTimeout(() => {
+      if (document.activeElement !== inputRef.current) take();
+    }, 0);
+    return () => clearTimeout(retry);
   }, []);
 
   const finish = (commit: boolean): void => {
