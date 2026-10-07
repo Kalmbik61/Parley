@@ -184,7 +184,7 @@ describe('HostConnection', () => {
     const first = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     first.onStatus((status) => statuses.push(status));
     await first.connect();
-    expect(statuses.at(-1)).toEqual({ state: 'connected', hostVersion: '1.0.0', methods: null });
+    expect(statuses.at(-1)).toEqual({ state: 'connected', hostVersion: '1.0.0', methods: null, features: null });
     first.close();
     await new Promise<void>((resolve) => old.close(() => resolve()));
 
@@ -196,6 +196,7 @@ describe('HostConnection', () => {
       state: 'connected',
       hostVersion: '2.0.0',
       methods: ['hello', 'works.rename'],
+      features: null,
     });
     second.close();
     fresh.close();
