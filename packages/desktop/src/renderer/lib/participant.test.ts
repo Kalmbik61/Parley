@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
-import { sessionLabelFor, sessionRowLabel, workTitleText } from './participant.js';
+// Указатель — из исходников core (корневой `@parley/core` под jsdom не грузится, см. chat/items/items.test.tsx):
+// копия выражений в окне должна узнавать ровно то, что core набирает в терминал.
+import { oneLine } from '../../../../core/src/counters.js';
+import { isPointerText, pointerText } from '../../../../core/src/work/delivery.js';
+import type { Message, Room } from '../../../../core/src/work/types.js';
+import { sessionLabelFor, sessionLabelText, sessionRowLabel, workTitleText } from './participant.js';
 
 describe('sessionRowLabel', () => {
   // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('new session') окно показывает как «New session».
@@ -25,6 +30,55 @@ describe('sessionRowLabel', () => {
 
   it('чужая форма id печатается как есть', () => {
     expect(sessionRowLabel('manual-123', 'ручная')).toBe('manual-123 ручная');
+  });
+});
+
+describe('указатель на письма вместо ярлыка (автозаголовок сборок до 0.7.0 включительно)', () => {
+  const letter = (roomId: string | null): Message => ({
+    id: 'm-01',
+    roomId,
+    from: 's-02',
+    to: roomId === null ? ['s-01'] : [],
+    at: '2026-10-07T10:00:00.000Z',
+    text: 'hi',
+    kind: 'note',
+    readBy: {},
+  });
+  const room = (title: string): Room => ({
+    id: 'r-01',
+    title,
+    creator: 's-01',
+    members: ['s-02'],
+    createdAt: '2026-10-07T10:00:00.000Z',
+    lead: null,
+    proposal: null,
+  });
+
+  it('ярлык из карты пользователя — «New session», имя сессии на месте указателя не показывается', () => {
+    expect(sessionRowLabel('s-01', 'New messages (1) in r-01 "Second". Call check_inbox.')).toBe('S01 New session');
+  });
+
+  it('каждый указатель core — и как есть, и после oneLine с обрезкой длинного названия комнаты — «New session»', () => {
+    const texts = [
+      pointerText([letter(null)], []),
+      pointerText([letter('r-01')], [room('Second')]),
+      pointerText([letter('r-01'), { ...letter(null), id: 'm-02' }], [room('Second')]),
+      pointerText([letter('r-01')], [room('long room title '.repeat(12))]),
+    ];
+    for (const text of texts) {
+      for (const label of [text, oneLine(text)]) {
+        expect(isPointerText(label), label).toBe(true);
+        expect(sessionLabelText(label), label).toBe('New session');
+      }
+    }
+    expect(workTitleText(texts[1]!)).toBe('Untitled workspace');
+  });
+
+  it('похожее, но своё имя — как есть', () => {
+    expect(sessionRowLabel('s-01', 'New messages handling')).toBe('S01 New messages handling');
+    expect(sessionLabelText('New messages (1). Call check_inbox. And fix the parser')).toBe(
+      'New messages (1). Call check_inbox. And fix the parser',
+    );
   });
 });
 

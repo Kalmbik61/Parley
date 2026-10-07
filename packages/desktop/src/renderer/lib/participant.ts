@@ -31,14 +31,25 @@ const RUSSIAN_NEW_LABEL = 'новая сессия'; // cyrillic-ok: метка-
 const UNTITLED_WORK = 'untitled';
 const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: метка-страж core в картах старых сборок
 
-/** Ярлык сессии для окна: метка новой сессии из core — «New session», остальные как есть. */
+/**
+ * Указатель на письма — те же выражения, что в `isPointerText` (`core/work/delivery.ts`): целиком и обрезанный
+ * `oneLine`. Автозаголовок сборок до 0.7.0 включительно делал его ярлыком агента комнаты (и заголовком безымянной
+ * работы); это не имя, и окно показывает такую метку как новую, пока хост не вернул её в карте (`resetPointerLabel`).
+ */
+const POINTER_TEXT = /^\s*New messages \(\d+\)(?: in r-[\s\S]*)?\. Call check_inbox\.\s*$/;
+const CUT_POINTER_TEXT = /^\s*New messages \(\d+\) in r-[\s\S]*…$/;
+const isPointerText = (text: string): boolean => POINTER_TEXT.test(text) || CUT_POINTER_TEXT.test(text);
+
+/** Ярлык сессии для окна: метка новой сессии из core и указатель на письма — «New session», остальные как есть. */
 export function sessionLabelText(label: string): string {
-  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL ? S.participants.newSession : label;
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isPointerText(label) ? S.participants.newSession : label;
 }
 
-/** Название работы для окна: метка безымянной работы из core — «Untitled workspace», остальные как есть. */
+/** Название работы для окна: метка безымянной работы из core и указатель — «Untitled workspace», остальные как есть. */
 export function workTitleText(title: string): string {
-  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK ? S.participants.untitledWorkspace : title;
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isPointerText(title)
+    ? S.participants.untitledWorkspace
+    : title;
 }
 
 /** `S03 бэкенд` — то, что видно в строке дерева сессий. */
