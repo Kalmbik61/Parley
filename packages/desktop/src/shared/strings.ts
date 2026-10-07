@@ -412,7 +412,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
-    archiveConfirmDescription: 'Live sessions keep running while it is hidden. Bring it back with "Show archived workspaces" in the palette.',
+    archiveConfirmDescription: 'Running agents will be stopped. Bring it back with "Show archived workspaces" in the palette, then "Reopen" it to resume them.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,
@@ -859,6 +859,28 @@ export const S = {
   },
 
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
+  /** Вкладка Agents правого сайдбара (спека 2026-10-07, 5.1). */
+  agentsPanel: {
+    tab: 'Agents',
+    noSession: 'Open a session to see its agents',
+    empty: 'No agents in this session yet',
+    finished: (count: number): string => `Finished (${count})`,
+    starting: 'Starting…',
+    thinking: 'Thinking…',
+    needsChat: 'Agent details need the Chat view of this session',
+    back: 'All agents',
+    task: 'Task',
+    steps: 'Steps',
+    activity: 'Activity',
+    result: 'Result',
+    showAll: 'Show all',
+    showLess: 'Show less',
+    fullTranscript: 'Full transcript',
+    hideTranscript: 'Hide transcript',
+    showInChat: 'Show in chat',
+    noActivity: 'No tool calls yet',
+    gone: 'This agent is no longer in the feed',
+  },
   changes: {
     /** Буква статуса git → слово; неизвестная буква печатается как есть (см. вызов). */
     fileStatus: {
@@ -1356,6 +1378,7 @@ export const S = {
     toggleRightSidebar: 'Toggle right sidebar',
     showFiles: 'Show files',
     showChanges: 'Show changes',
+    showAgents: 'Show agents',
     splitRight: 'Split right',
     splitDown: 'Split down',
     previousGroup: 'Previous group',

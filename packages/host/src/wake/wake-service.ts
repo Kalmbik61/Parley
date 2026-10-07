@@ -504,8 +504,10 @@ export function createWakeService(
       const letters = unreadFor(entry.map, session.id).length > 0;
       // Без нашего PTY письмо поднимает только спящую: живая без него —
       // сессия, поднятая не хостом (CLI), со своим каналом звонка, `pending`
-      // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2).
-      if (session.lifecycle !== 'sleeping' || state.resuming || state.resumeUnavailable) {
+      // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2). Спящую архивной работы
+      // письмо ждёт до Reopen: архив освобождает процессы агентов.
+      const archived = entry.map.work.status === 'archived';
+      if (session.lifecycle !== 'sleeping' || archived || state.resuming || state.resumeUnavailable) {
         const reason: MailWait | null = !letters
           ? null
           : session.lifecycle === 'pending'

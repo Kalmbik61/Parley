@@ -8,6 +8,8 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Agents panel.** "N agents running" in the Chat toolbar opens an "Agents" tab in the right sidebar (⌘⇧A): the session's agents with what each is doing now, finished ones below. Click an agent to see its task, steps, tool calls as they happen, result and full transcript. The agents badge in the sidebar and in a room opens the same panel.
+
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
   session or room name, Agents, In its own worktree and Mode explains the field on hover; the
   Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
@@ -33,6 +35,9 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- Archiving a workspace now stops its running agents, so their processes no longer stay in
+  memory. Until "Reopen", the host does not start the workspace's sessions: a message to an
+  agent waits instead of waking it, and "Resume" is refused.
 - Room agents no longer get renamed to "New messages (1) in r-01 … Call check_inbox.": a
   session whose conversation began with Parley's message pointer takes no automatic title (the
   title Claude Code generates from that pointer is skipped too; a `/rename` still applies). A

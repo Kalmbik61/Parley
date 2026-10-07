@@ -429,6 +429,10 @@ export function createSessionsService(
       if (session.lifecycle === 'closed') {
         throw new Error(`session ${ref.sessionId} is closed`);
       }
+      // Архив освобождает процессы агентов: до Reopen сессии работы не поднимает ни письмо, ни человек.
+      if (map.work.status === 'archived') {
+        throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
+      }
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
@@ -856,12 +860,14 @@ export function createSessionsService(
 
   /**
    * Сессию закрыл `close_session` агента прямо в карте, а её PTY ещё жив: хост
-   * гасит процесс сам — закрытая сессия жить не должна.
+   * гасит процесс сам — закрытая сессия жить не должна. Так же и всякая живая
+   * сессия архивной работы: архив освобождает процессы агентов, сессии засыпают.
    */
-  function stopClosed(snapshot: WorksSnapshot): void {
+  function stopRetired(snapshot: WorksSnapshot): void {
     for (const entry of snapshot.entries) {
+      const archived = entry.map.work.status === 'archived';
       for (const session of entry.map.sessions) {
-        if (session.lifecycle !== 'closed') continue;
+        if (!archived && session.lifecycle !== 'closed') continue;
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
@@ -913,7 +919,7 @@ export function createSessionsService(
   }
 
   works.onChange((snapshot, previous) => {
-    stopClosed(snapshot);
+    stopRetired(snapshot);
     void runAutoLaunch(snapshot, previous);
   });
 

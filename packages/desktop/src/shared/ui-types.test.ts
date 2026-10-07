@@ -153,4 +153,9 @@ describe('fitRightSidebar', () => {
   it('левый закрыт (0) — место есть и на 800 px', () => {
     expect(fitRightSidebar(350, 800, 0)).toEqual({ width: 350, max: 480 });
   });
+
+  it('вкладка правого сайдбара agents сохраняется; незнакомая читается как files', () => {
+    expect(normalizeUi({ rightSidebar: { open: true, width: 320, tab: 'agents' } }).rightSidebar.tab).toBe('agents');
+    expect(normalizeUi({ rightSidebar: { open: true, width: 320, tab: 'terminal' } }).rightSidebar.tab).toBe('files');
+  });
 });

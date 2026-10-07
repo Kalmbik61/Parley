@@ -9,31 +9,26 @@
  * Состояние транскрипта (показан, загружен) держит лента по `id` карточки, как и раскрытие: строку вне
  * экрана виртуальный список размонтирует, и загруженный транскрипт иначе пропал бы. Показываются
  * последние `TRANSCRIPT_TAIL` элементов с пометкой — транскрипт в тысячи элементов с Markdown целиком
- * в DOM подвесил бы окно.
+ * в DOM подвесил бы окно. Транскрипт грузит и обновляет общий `chat/transcript.ts` — он же у экрана агента
+ * в панели Agents.
  */
 
 import { Bot, ChevronRight, ListChecks, LoaderCircle, Search, type LucideIcon } from 'lucide-react';
-import type { FeedAgent, FeedItem } from '@parley/core';
-import { decodeIpcError } from '../../../shared/ipc-error.js';
+import type { FeedAgent } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { RoomMarkdown } from '../../components/rooms/RoomMarkdown.js';
 import { cn } from '../../lib/cn.js';
 import { formatDuration } from '../../lib/metrics-line.js';
 import { useNow } from '../../lib/use-now.js';
 import { useChatEnv } from '../chat-env.js';
+import { TRANSCRIPT_TAIL, requestTranscript, useLiveTranscript, type Transcript, type TranscriptUpdate } from '../transcript.js';
 import { ToolItem } from './ToolItem.js';
 
 const TYPE_ICONS: Record<string, LucideIcon> = { Explore: Search, Plan: ListChecks };
 
 const noLabel = (): null => null;
 
-/** Сколько последних элементов транскрипта субагента показывается. */
-export const TRANSCRIPT_TAIL = 200;
-
-export type Transcript = { state: 'loading' } | { state: 'error' } | { state: 'ready'; items: FeedItem[] };
-
-/** Обновление транскрипта карточки; `null` — свёрнут. */
-export type TranscriptUpdate = (was: Transcript | null) => Transcript | null;
+export { TRANSCRIPT_TAIL, type Transcript, type TranscriptUpdate };
 
 export interface AgentItemProps {
   item: FeedAgent;
@@ -68,22 +63,17 @@ export function AgentItem({ item, expanded, onToggle, transcript, onTranscript: 
     (part): part is string => part !== null,
   );
 
+  const reload = (): void => {
+    if (item.agentId !== null) requestTranscript(bridge, sessionRef, item.agentId, setTranscript);
+  };
   const toggleTranscript = (): void => {
     if (transcript !== null) {
       setTranscript(() => null);
       return;
     }
-    const agentId = item.agentId;
-    if (agentId === null) return;
-    setTranscript(() => ({ state: 'loading' }));
-    bridge.call('feed.snapshot', { ref: sessionRef, agentId }).then(
-      (snapshot) => setTranscript((was) => (was === null ? was : { state: 'ready', items: snapshot.items })),
-      (error: unknown) => {
-        console.warn('[parley] feed.snapshot agent', decodeIpcError(error).message);
-        setTranscript((was) => (was === null ? was : { state: 'error' }));
-      },
-    );
+    reload();
   };
+  useLiveTranscript(item, transcript !== null, reload);
 
   return (
     <div

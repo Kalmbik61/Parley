@@ -44,6 +44,17 @@ describe('findInterrupted', () => {
     expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' }]);
   });
 
+  it('архивная работа в список не идёт: её сессии до Reopen не поднимаются', async () => {
+    const entry = {
+      projectPath: '/tmp/p',
+      map: { work: { id: 'w-01', status: 'archived' }, sessions: [{ id: 's-01', lifecycle: 'sleeping' }] },
+    } as unknown as WorkEntry;
+
+    const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit')]);
+
+    expect(refs).toEqual([]);
+  });
+
   it('строки ожидания wait_for (их пишет MCP-сервер, не Claude) конец хода не меняют', async () => {
     const journals: Record<string, readonly EventRecord[] | null> = {
       // Ход закончился, а запоздалый конец ожидания дописан после Stop: не прервана.

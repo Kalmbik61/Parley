@@ -18,6 +18,7 @@ import {
   plannedWorktree,
   readMap,
   saveConfig,
+  setWorkStatus,
   SKILL_MD,
   SYSTEM,
   transitionSession,
@@ -1022,6 +1023,60 @@ describe('закрытие по карте', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === ref.sessionId)?.lifecycle).toBe('closed');
+  });
+});
+
+describe('архив работы', () => {
+  it('9: работа ушла в archived при живом PTY — процесс получил SIGHUP, сессия спит', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const works = service({ debounceMs: 20 });
+    const pty = createPtyManager(fakeHost());
+    const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
+    await works.start();
+
+    const ref = await sessions.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'a',
+      task: 'т',
+      parent: null,
+    });
+    expect(sessions.live(ref)).toBe(true);
+
+    await setWorkStatus(project, work.work.id, 'archived');
+
+    await waitFor(() => broadcasts.some((b) => b.event === 'pty.exit'), REAL_PROCESS_WAIT_MS);
+    const exit = broadcasts.find((b) => b.event === 'pty.exit')?.data as { ref: SessionRef; signal: number | null };
+    expect(exit.ref).toEqual(ref);
+    expect(exit.signal).toBe(1);
+    expect(sessions.live(ref)).toBe(false);
+
+    // Не `closed`: после Reopen сессию поднимает Resume.
+    await waitFor(async () => (await readMap(project, work.work.id)).sessions[0]?.lifecycle === 'sleeping');
+  });
+
+  it('10: сессию архивной работы не поднять — conflict; после Reopen поднимается', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'a',
+      task: 'т',
+      parent: null,
+    });
+    await service.stop(ref);
+    await setWorkStatus(project, work.work.id, 'archived');
+
+    await expect(service.launch(ref, 'resume')).rejects.toMatchObject({ code: 'conflict' });
+    expect(service.live(ref)).toBe(false);
+
+    await setWorkStatus(project, work.work.id, 'active');
+    await service.launch(ref, 'resume');
+    expect(service.live(ref)).toBe(true);
+    await service.stop(ref);
   });
 });
 

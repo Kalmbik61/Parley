@@ -751,8 +751,10 @@ that name; the palette itself does not create workspaces or sessions and does no
 terminal, and "Restart host…" asks for confirmation. An empty query shows the six most recent
 tabs and the four most recent workspaces. "Show archived workspaces" shows archived
 workspaces, dimmed at the end of their section, until the window restarts; to bring a
-workspace back, use "Reopen" in its menu. Archived workspaces are not counted in the
-counters, the badge and "Next session that needs you", even when shown.
+workspace back, use "Reopen" in its menu. Archiving stops the workspace's running agents and
+frees their processes; until "Reopen", the host does not start its sessions, and messages to
+them wait. Archived workspaces are not counted in the counters, the badge and "Next session
+that needs you", even when shown.
 
 The host itself wakes agents. When an agent has finished its turn and you are not typing
 anything, the host prints a pointer: "New messages (N). Call check_inbox." That is why a
@@ -1010,6 +1012,13 @@ session's MCP server appends two lines of its own to the same log, `ParleyWaitSt
 `parley_wait_target`) and `ParleyWaitEnd`, so the window can show what an agent waits for.
 In Chat view, each subagent also gets an agent card in the feed: its type, description, model and
 status, its tool calls, its final text and a "Show transcript" link.
+
+**Agents panel.** "N agents running" in the Chat toolbar, and the agents badge of a session in the
+sidebar or of a room member, open the **Agents** tab of the right sidebar (⌘⇧A): the agents of the
+focused session with what each is doing right now, and the finished ones folded below. Click an
+agent to see its task, steps, tool calls as they happen, its result and the full transcript;
+"All agents" goes back to the list. When the window is too narrow for the right sidebar, the badge
+scrolls the feed to the agent's card instead.
 
 **Subscription limits.** Next to the hooks, the same file holds `statusLine` — a status line
 script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, like the MCP
