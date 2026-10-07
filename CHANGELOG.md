@@ -14,6 +14,13 @@ All notable changes to Parley are documented in this file.
   Builtin ones against your own Claude and Codex agents, and the 🔒 of a read-only role.
 - **Manage a room from the sidebar.** A right click on a room row gives "Rename" (in place) and "Delete…": the room goes with its feed, and its sessions stay as regular sessions of the workspace, each live one told by Parley; the checkbox "Also delete its N sessions" (off by default) deletes them too, as "Delete" on a session row does. A member row of an expanded room has "Make lead": the feed shows "@s03 is now the lead", and Parley writes to the new and the previous lead. Host methods `rooms.rename`, `rooms.setLead`, `rooms.delete`; with an older host the items are hidden.
 
+### Changed
+
+- **Plan letters in the room feed are laid out by section.** A letter from Parley about a plan
+  item shows the item's title in bold, then Scope, Criteria as a list, Evidence or the return
+  note, and "Next:" with the tool names as code; paths to files and folders in Parley's letters
+  are shown as code. The letter text the agent reads is unchanged.
+
 ### Fixed
 
 - Room agents no longer get renamed to "New messages (1) in r-01 … Call check_inbox.": a

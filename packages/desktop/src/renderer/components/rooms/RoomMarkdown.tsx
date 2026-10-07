@@ -64,6 +64,8 @@ export interface RoomMarkdownProps {
    * человека (`RoomMessage`), себя он не упоминает.
    */
   humanChips?: boolean;
+  /** Пути к файлам и папкам — `code` (`remarkCodePaths`): так лента рисует письма Parley и системные строки. */
+  codePaths?: boolean;
 }
 
 /**
@@ -225,6 +227,7 @@ export function RoomMarkdown({
   onOpenExternal,
   inline = false,
   humanChips = true,
+  codePaths = false,
 }: RoomMarkdownProps): JSX.Element {
   // Один набор компонентов на экземпляр: новые функции React счёл бы новыми типами и пересоздал бы ссылки и
   // таблицы при каждой перерисовке ленты — выделение текста в них сбрасывалось бы. Колбэк читается из ref.
@@ -243,7 +246,7 @@ export function RoomMarkdown({
       // не ошибка вкладки.
       <MarkdownBoundary text={text}>
         <ReactMarkdown
-          remarkPlugins={remarkPluginsFor(inline, humanChips)}
+          remarkPlugins={remarkPluginsFor(inline, humanChips, codePaths)}
           components={components}
           allowedElements={inline ? INLINE_ELEMENTS : undefined}
           unwrapDisallowed={inline}
@@ -254,7 +257,7 @@ export function RoomMarkdown({
         </ReactMarkdown>
       </MarkdownBoundary>
     ),
-    [text, components, inline, humanChips],
+    [text, components, inline, humanChips, codePaths],
   );
 
   return (
