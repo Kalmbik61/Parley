@@ -3,7 +3,7 @@
  * `ui.rightSidebar` зеркала в пределах 220 … окно − левый − 320 (`fitRightSidebar`, раунд
  * main-r2: не влезает — `AppShell` его не показывает), тот же `Resizer`, что у левого; в
  * `ui.json` ширина уходит на `pointerup`. Сверху — полоса вкладок: «Files» (⌘⇧E) и «Changes»
- * (⌘⇧G, кусок 8.2b) — `tab` из `ui.json`.
+ * (⌘⇧G, кусок 8.2b) и «Agents» (⌘⇧A; спека 2026-10-07, 5.1: агенты сессии `focusedSessionOf`) — `tab` из `ui.json`.
  *
  * Вкладка и ширина пишутся только через `setSidebar('right', …)` — `app.saveUi` напрямую не
  * зовётся (2.3). Свёрнутый сайдбар `AppShell` не монтирует вовсе: слежение за корнем снимается.
@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { fitRightSidebar, RIGHT_SIDEBAR } from '../../shared/ui-types.js';
+import { AgentsPanel } from '../agents/AgentsPanel.js';
 import { FilesPanel } from '../files/FilesPanel.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { ChangesPanel } from '../review/ChangesPanel.js';
@@ -57,6 +58,7 @@ export interface RightSidebarProps {
 const TABS = [
   { tab: 'files', label: S.files.panel },
   { tab: 'changes', label: S.changes.panel },
+  { tab: 'agents', label: S.agentsPanel.tab },
 ] as const;
 
 export function RightSidebar({ bridge, workKey, width: shown, max, sendDeps }: RightSidebarProps): JSX.Element {
@@ -96,6 +98,8 @@ export function RightSidebar({ bridge, workKey, width: shown, max, sendDeps }: R
         </div>
         {entry === undefined ? null : current === 'changes' ? (
           <ChangesPanel bridge={bridge} workKey={workKey} entry={entry} sendDeps={sendDeps} />
+        ) : current === 'agents' ? (
+          <AgentsPanel key={workKey} bridge={bridge} entry={entry} />
         ) : (
           // `key` работы (раунд fix-7.4, п. 1): панель другой работы — свой экземпляр, без чужого поиска.
           <FilesPanel key={workKey} bridge={bridge} entry={entry} />

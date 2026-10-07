@@ -11,7 +11,7 @@
 import { create } from 'zustand';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
-import { DEFAULT_UI, normalizeUi, type Appearance, type UiFile } from '../../shared/ui-types.js';
+import { DEFAULT_UI, normalizeUi, type Appearance, type RightSidebarTab, type UiFile } from '../../shared/ui-types.js';
 
 /** Работа, для которой открыт диалог (кусок 3.4). */
 export interface DialogWork {
@@ -178,7 +178,7 @@ export interface UiState {
    * Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. `tab` есть
    * только у правого (кусок 7.2); у левого он отбрасывается, а не уходит лишним ключом в ui.json.
    */
-  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number; tab?: 'files' | 'changes' }) => void;
+  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number; tab?: RightSidebarTab }) => void;
   setSidebarHovering: (hovering: boolean) => void;
   setSidebarHold: (id: string, on: boolean) => void;
 

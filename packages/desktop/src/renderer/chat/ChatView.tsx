@@ -18,7 +18,7 @@
  * Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) ничего не возвращает: текст уже в поле ввода терминала.
  *
  * Агенты (кусок 4b): «N agents running» в тулбаре — по карточкам `agent` ленты со статусом `running`; клик по ней и по
- * бейджу агентов в сайдбаре и комнате ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
+ * бейджу агентов в сайдбаре и комнате ведут в панель Agents правого сайдбара (`agents/open-agents.ts`); нет места — ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
  * сессию держат одни фоновые субагенты (`heldByBackground`), лента кончается `turn`: хода нет, Stop не показывается,
  * поле ввода открыто — карточки агентов `turnActive` не считает.
  *
@@ -68,6 +68,7 @@ import { resumeSession, sendWithToast, type SendWithToastDeps } from '../termina
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
+import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-model.js';
@@ -362,8 +363,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   };
   // К первой работающей карточке; у только что созданной (`SubagentStart` ещё не пришёл) `agentId` нет — прокручивать не к чему.
   const showAgent = (): void => {
-    const agentId = agents.map((agent) => agent.agentId).find((id): id is string => id !== null);
-    if (agentId !== undefined) useChatUiStore.getState().requestReveal(sessionKey, agentId);
+    const agentId = agents.map((agent) => agent.agentId).find((id): id is string => id !== null) ?? null;
+    openAgentsPanel(sessionKey, agentId);
   };
   const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
 

@@ -38,6 +38,13 @@ vi.mock('sonner', () => {
   return { toast: fn };
 });
 
+/** Есть ли место под правый сайдбар: по умолчанию нет — «N agents running» ведёт к карточке в ленте, как раньше. */
+const sidebarRoom = vi.hoisted(() => ({ value: false }));
+vi.mock('../shell/RightSidebar.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shell/RightSidebar.js')>()),
+  rightSidebarHasRoom: () => sidebarRoom.value,
+}));
+
 /** Claude Code с лентой: версия не ниже порога, ответ `providers.list` пришёл. */
 const CLAUDE_OK = { id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null };
 
@@ -1710,6 +1717,19 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(useChatUiStore.getState().reveal).toBeNull();
     // Прилипание к низу снято: человек читает выше.
     expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
+  });
+
+  it('есть место под правый сайдбар — клик по «N agents running» открывает вкладку Agents, ленту не трогает', () => {
+    sidebarRoom.value = true;
+    try {
+      renderBody(makeSession('s-01', 'S01'));
+      setFeed(feedWithAgents());
+      fireEvent.click(running()!);
+      expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'agents' });
+      expect(useChatUiStore.getState().reveal).toBeNull();
+    } finally {
+      sidebarRoom.value = false;
+    }
   });
 
   it('у первой работающей карточки agentId ещё нет (SubagentStart не пришёл) — берётся следующая; ни у одной нет — просьбы нет', async () => {

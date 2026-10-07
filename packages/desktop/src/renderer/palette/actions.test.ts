@@ -128,6 +128,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
     'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
     'sidebar.changes': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('changes'),
+    'sidebar.agents': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('agents'),
     'work.prev': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[8]),
     'work.next': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[1]),
     'works.showArchived': ({ ui }) => expect(ui.toggleShowArchived).toHaveBeenCalledTimes(1),

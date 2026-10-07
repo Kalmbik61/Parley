@@ -25,6 +25,12 @@ import { RoomBody } from './RoomBody.js';
 
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
 
+// Места в правом сайдбаре нет — прежнее поведение (карточка в ленте); с местом строка ведёт в панель Agents (open-agents.test).
+vi.mock('../../shell/RightSidebar.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../shell/RightSidebar.js')>()),
+  rightSidebarHasRoom: () => false,
+}));
+
 const PROJECT = '/tmp/proj';
 const KEY = `${PROJECT} w-01`;
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-01', sessionId });

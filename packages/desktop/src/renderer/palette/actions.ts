@@ -14,7 +14,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
-import type { Appearance } from '../../shared/ui-types.js';
+import type { Appearance, RightSidebarTab } from '../../shared/ui-types.js';
 import type { AttentionTarget } from '../attention/next.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
@@ -55,7 +55,7 @@ export interface ActionContext {
   ui: {
     toggleSidebar(side: 'left' | 'right'): void;
     /** Правый сайдбар на этой вкладке; открытый не прячет. */
-    showRightTab(tab: 'files' | 'changes'): void; // setSidebar('right', { open: true, tab })
+    showRightTab(tab: RightSidebarTab): void; // setSidebar('right', { open: true, tab })
     openNewWork(title?: string): void; // openNewWorkDialog(null, title)
     openNewSession(): void; // диалог 1.5 активной работы одним агентом (⌘T)
     openNewRoom(): void; // тот же диалог, открытый комнатой (два агента)
@@ -157,6 +157,7 @@ function needsActiveWork(id: ActionId): boolean {
     id === 'sidebar.right.toggle' ||
     id === 'sidebar.files' ||
     id === 'sidebar.changes' ||
+    id === 'sidebar.agents' ||
     id === 'files.quickOpen' ||
     id === 'files.search' ||
     id.startsWith('group.') ||
@@ -229,6 +230,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'sidebar.changes':
       ctx.ui.showRightTab('changes');
+      return;
+    case 'sidebar.agents':
+      ctx.ui.showRightTab('agents');
       return;
     // Корень ⌘P и поиска — корень «Файлов» активной работы (`filesRootSpec`): его берут палитра и панель.
     case 'project.capabilities': {

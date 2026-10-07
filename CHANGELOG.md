@@ -8,6 +8,8 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Agents panel.** "N agents running" in the Chat toolbar opens an "Agents" tab in the right sidebar (⌘⇧A): the session's agents with what each is doing now, finished ones below. Click an agent to see its task, steps, tool calls as they happen, result and full transcript. The agents badge in the sidebar and in a room opens the same panel.
+
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
   session or room name, Agents, In its own worktree and Mode explains the field on hover; the
   Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
