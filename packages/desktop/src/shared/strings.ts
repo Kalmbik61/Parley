@@ -584,7 +584,20 @@ export const S = {
       removeAgent: 'Remove agent',
       addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
-      summarySession: (work: string): string => `One session in ${work}`,
+      /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
+      hintLabel: (field: string): string => `About “${field}”`,
+      /** Подсказки полей диалога по наведению на «?»: что это за поле, без деталей реализации. */
+      hints: {
+        recipe: 'A saved room setup: roles, providers, models, the mode, worktrees and the lead, plus a playbook that only the lead gets. Built-in recipes and your own from .parley/recipes. Everything it fills stays editable.',
+        workspace: 'The workspace the new agents join. A workspace is one task in a project: its sessions and rooms share one map and know about each other.',
+        roomName: 'The room’s title in the sidebar and on its tab. If empty, the room is called “Room 1”, “Room 2” and so on.',
+        sessionName: 'The session’s name in the sidebar and on its tab. If empty, it is “New session” until Claude Code gives the session a title.',
+        agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
+        worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
+        /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
+        mode: 'How the room tracks the work. You can change it later in the room.',
+      },
+      summarySession:(work: string): string => `One session in ${work}`,
       summaryRoom: (agents: number, work: string): string => `Room with ${agents} agents in ${work}`,
       submitSession: 'Start session',
       submitRoom: 'Create room',

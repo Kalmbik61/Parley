@@ -8,6 +8,10 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
+  session or room name, Agents, In its own worktree and Mode explains the field on hover; the
+  Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
+  Builtin ones against your own Claude and Codex agents, and the 🔒 of a read-only role.
 - **Manage a room from the sidebar.** A right click on a room row gives "Rename" (in place) and "Delete…": the room goes with its feed, and its sessions stay as regular sessions of the workspace, each live one told by Parley; the checkbox "Also delete its N sessions" (off by default) deletes them too, as "Delete" on a session row does. A member row of an expanded room has "Make lead": the feed shows "@s03 is now the lead", and Parley writes to the new and the previous lead. Host methods `rooms.rename`, `rooms.setLead`, `rooms.delete`; with an older host the items are hidden.
 
 ### Fixed

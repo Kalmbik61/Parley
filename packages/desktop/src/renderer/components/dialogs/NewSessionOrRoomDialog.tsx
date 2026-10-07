@@ -59,13 +59,16 @@
  * запоминается в `ui.json.lastProvider`. Список провайдеров может прийти позже открытия — строки ждут его как
  * «агент по умолчанию», а кнопка неактивна до ответа.
  *
+ * Подсказки полей (2026-10-07): «?» у Recipe, Workspace, названия, Agents, In its own worktree и Mode показывает по
+ * наведению, что это за поле (`FieldHint`, тексты — `S.dialogs.newSession.hints`; у Mode — строки режимов панели плана).
+ *
  * Облик — спека окна 2026-09-29, 1.5 и снимки `dark-11`, `dark-12`. Цвет выбранного (рамка пилюли провайдера,
  * звезда ведущего) — `--ring`: в тёмной теме это `accent`, как в спеке, в светлой `accent-600`: чистый `accent` даёт
  * к фону диалога 2.69:1, ниже порога 3:1 для признака состояния.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react';
-import { GitBranch, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react';
+import { CircleHelp, GitBranch, Plus, X } from 'lucide-react';
 import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WorkEntry } from '@parley/core';
 import {
   RESOURCE_LIMIT_KEYS,
@@ -96,6 +99,7 @@ import { Input } from '../../ui/input.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
+import { TOOLTIP_DELAY_MS, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { radioGroupKeyDown } from './radio-keys.js';
@@ -229,6 +233,41 @@ function ProviderPopoverContent(props: ComponentPropsWithoutRef<typeof PopoverCo
   return <PopoverContent {...props} ref={observeProviderContent} />;
 }
 
+/**
+ * Знак «?» у подписи поля: по наведению — что это за поле. Вне порядка Tab: иначе автофокус диалога попадал бы на «?»
+ * у рецепта и открывал его подсказку сразу при открытии. Клик подсказку не закрывает (Radix закрывает тултип по нажатию
+ * на триггер, а «?» нажимают как раз чтобы прочитать): свой `preventDefault` отменяет обработчик Radix.
+ */
+function FieldHint({ field, text }: { field: string; text: string }): JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={S.dialogs.newSession.hintLabel(field)}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={(event) => event.preventDefault()}
+          className="inline-flex size-4 shrink-0 cursor-help items-center justify-center rounded-full text-neutral-600 hover:text-foreground"
+        >
+          <CircleHelp className="size-[13px]" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[300px] whitespace-pre-line leading-snug">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Подпись поля со знаком «?» рядом. */
+function FieldCaption({ text, hint }: { text: string; hint: string }): JSX.Element {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {text}
+      <FieldHint field={text} text={hint} />
+    </span>
+  );
+}
+
 export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = null, onCreated, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const activeWorkKey = useLayoutStore((state) => state.activeWorkKey);
@@ -266,6 +305,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   const [recipeId, setRecipeId] = useState<string | null>(null);
   const [recipesReload, setRecipesReload] = useState(0);
   const [mode, setMode] = useState<Mode>('free');
+  const nameId = useId();
+  const modeId = useId();
   const [saving, setSaving] = useState(false);
   const [results, setResults] = useState<Record<number, AgentResult>>({});
   const [error, setError] = useState<string | null>(null);
@@ -722,10 +763,12 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           />
         ) : (
           <>
+        {/* Свой провайдер тултипов: диалог не зависит от провайдера окна (`main.tsx`) — его монтируют и отдельно, в тестах. */}
+        <TooltipProvider delayDuration={TOOLTIP_DELAY_MS}>
         <div className="flex min-w-0 flex-col gap-3 text-sm">
           {recipes === null ? null : (
             <div className="flex min-w-0 flex-col gap-1">
-              <span>{S.recipes.field}</span>
+              <FieldCaption text={S.recipes.field} hint={text.hints.recipe} />
               <Select value={recipeId ?? NO_RECIPE} disabled={groupLocked} onValueChange={chooseRecipe}>
                 <SelectTrigger aria-label={S.recipes.field}><SelectValue /></SelectTrigger>
                 <SelectContent className={LIST_HEIGHT}>
@@ -740,7 +783,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           )}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex min-w-0 flex-col gap-1">
-              <span>{text.workspaceField}</span>
+              <FieldCaption text={text.workspaceField} hint={text.hints.workspace} />
               <Select value={selectedKey ?? ''} disabled={groupLocked} onValueChange={setWorkChoice}>
                 <SelectTrigger
                   aria-label={text.workspaceField}
@@ -757,21 +800,26 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
                 </SelectContent>
               </Select>
             </div>
-            <label className="flex min-w-0 flex-col gap-1">
-              {multi ? text.roomNameField : text.sessionNameField}
+            <div className="flex min-w-0 flex-col gap-1">
+              {/* Подпись — через `htmlFor`: «?» внутри обёртки-`label` стал бы её первым полем вместо ввода. */}
+              <span className="flex min-w-0 items-center gap-1">
+                <label htmlFor={nameId}>{multi ? text.roomNameField : text.sessionNameField}</label>
+                <FieldHint field={multi ? text.roomNameField : text.sessionNameField} text={multi ? text.hints.roomName : text.hints.sessionName} />
+              </span>
               <Input
+                id={nameId}
                 value={name}
                 disabled={groupLocked}
                 placeholder={multi ? text.roomNamePlaceholder : text.sessionNamePlaceholder}
                 onChange={(event) => setName(event.target.value)}
               />
-            </label>
+            </div>
           </div>
 
           {backlog && <label>{S.backlog.task}<Textarea aria-label={S.backlog.task} value={task} disabled={groupLocked}
             onChange={event => setTask(event.target.value)} /></label>}
           <div className="flex min-w-0 flex-col gap-1">
-            <span>{text.agentsField}</span>
+            <FieldCaption text={text.agentsField} hint={text.hints.agents} />
             <div className="flex min-w-0 flex-col gap-2">
               {agents.map((row, index) => {
                 const role = roleOf(row);
@@ -978,22 +1026,29 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           </div>
 
           <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-            <label className="flex items-center gap-2">
-              <Switch
-                checked={worktreeAvailable && allWorktree}
-                disabled={!worktreeAvailable || groupLocked}
-                onCheckedChange={(on) => { setWorktree(on); setAgents((rows) => rows.map((row) => ({ ...row, worktree: null }))); }}
-              />
-              {text.inOwnWorktree}
-            </label>
-            {multi ? (
+            {/* «?» — вне `label`: внутри он попал бы в имя переключателя и списка. */}
+            <span className="flex items-center gap-1">
               <label className="flex items-center gap-2">
-                {S.recipes.modeField}
+                <Switch
+                  checked={worktreeAvailable && allWorktree}
+                  disabled={!worktreeAvailable || groupLocked}
+                  onCheckedChange={(on) => { setWorktree(on); setAgents((rows) => rows.map((row) => ({ ...row, worktree: null }))); }}
+                />
+                {text.inOwnWorktree}
+              </label>
+              <FieldHint field={text.inOwnWorktree} text={text.hints.worktree} />
+            </span>
+            {multi ? (
+              <span className="flex items-center gap-2">
+                <span className="flex items-center gap-1">
+                  <label htmlFor={modeId}>{S.recipes.modeField}</label>
+                  <FieldHint field={S.recipes.modeField} text={[text.hints.mode, ...MODES.map((item) => `${S.plans.modes[item]} — ${S.plans.modeHelp[item]}`)].join('\n')} />
+                </span>
                 <Select value={mode} disabled={groupLocked} onValueChange={(value) => setMode(value as Mode)}>
-                  <SelectTrigger aria-label={S.recipes.modeField} className="w-[120px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger id={modeId} aria-label={S.recipes.modeField} className="w-[120px]"><SelectValue /></SelectTrigger>
                   <SelectContent>{MODES.map((item) => <SelectItem key={item} value={item}>{S.plans.modes[item]}</SelectItem>)}</SelectContent>
                 </Select>
-              </label>
+              </span>
             ) : null}
             {multi && recipes !== null ? (
               <Button type="button" variant="outline" disabled={groupLocked || selected === null} onClick={() => setSaving(true)} className="ml-auto">
@@ -1005,6 +1060,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           {!multi && (recipeId !== null || mode !== 'free') ? <p role="status" data-recipe-dropped className="m-0 text-xs text-neutral-700">{S.recipes.singleDropsRecipe}</p> : null}
           {multi && !worktreeAvailable && agents.some((row) => row.worktree === true) ? <p className="m-0 text-xs text-neutral-700">{S.recipes.noWorktree}</p> : null}
         </div>
+        </TooltipProvider>
         <DialogFooter className="items-center">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs">
             {/* Ошибка диалога — в подвале: он не прокручивается, а тело с пятью агентами в окне 800×500 уходит за край. */}

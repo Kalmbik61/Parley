@@ -293,6 +293,47 @@ describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
   });
 });
 
+describe('NewSessionOrRoomDialog — подсказки «?» у полей', () => {
+  const hint = (field: string): HTMLButtonElement => button(S.dialogs.newSession.hintLabel(field));
+  const openHint = (field: string): string => {
+    act(() => hint(field).focus());
+    return screen.getByRole('tooltip').textContent ?? '';
+  };
+
+  it('комната: «?» у Workspace, Room name, Agents, In its own worktree и Mode; вне порядка Tab', async () => {
+    await renderDialog({ room: true });
+    const fields = ['Workspace', 'Room name', 'Agents', 'In its own worktree', 'Mode'];
+    for (const field of fields) expect(hint(field).tabIndex).toBe(-1);
+    // «?» не забирает подписи у полей: имя ввода, переключателя и списка — прежние.
+    expect(screen.getByLabelText('Room name')).toBe(screen.getByPlaceholderText('What the agents will discuss'));
+    expect(screen.getByRole('switch', { name: 'In its own worktree' })).toBeTruthy();
+    expect(within(dialog()).getByRole('combobox', { name: 'Mode' })).toBeTruthy();
+  });
+
+  it('подсказка режима перечисляет Free, Checklist и Verified текстами панели плана', async () => {
+    await renderDialog({ room: true });
+    const text = openHint('Mode');
+    expect(text).toContain(S.dialogs.newSession.hints.mode);
+    for (const mode of ['free', 'checklist', 'verified'] as const) expect(text).toContain(`${S.plans.modes[mode]} — ${S.plans.modeHelp[mode]}`);
+  });
+
+  it('клик по «?» подсказку не закрывает', async () => {
+    await renderDialog({ room: true });
+    expect(openHint('Agents')).toBe(S.dialogs.newSession.hints.agents);
+    // Замок у роли в списке — «только чтение»: подсказка его объясняет.
+    expect(S.dialogs.newSession.hints.agents).toContain('🔒 — a read-only role');
+    fireEvent.pointerDown(hint('Agents'));
+    fireEvent.click(hint('Agents'));
+    expect(screen.getByRole('tooltip').textContent).toBe(S.dialogs.newSession.hints.agents);
+  });
+
+  it('одна сессия: у названия — подсказка Session name, режима нет', async () => {
+    await renderDialog();
+    expect(openHint('Session name')).toBe(S.dialogs.newSession.hints.sessionName);
+    expect(screen.queryByRole('button', { name: S.dialogs.newSession.hintLabel('Mode') })).toBeNull();
+  });
+});
+
 describe('NewSessionOrRoomDialog — один агент (2.1)', () => {
   it('один sessions.create с model и effort, без rooms.create; lastProvider запоминается; диалог закрывается', async () => {
     const { onOpenChange } = await renderDialog();
