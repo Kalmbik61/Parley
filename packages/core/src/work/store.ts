@@ -513,13 +513,16 @@ export async function sharedProjectPaths(projectPath: string, options: ProjectCo
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const preferences = path.join(dir, 'preferences.json');
-  const [backlogChoice, todosFile] = await Promise.all([readBacklogChoice(preferences), findTodosFile(context.projectPath)]);
-  const backlog = backlogChoice === 'todos' ? path.join(context.projectPath, todosFile ?? 'TODOS.md') : path.join(dir, 'backlog.md');
-  return { context, dir, backlog, plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'), historyShared: path.join(dir, 'history-shared'),
-    preferences, suggestions: path.join(dir, 'backlog-suggestions.json'),
+  return withBacklogChoice({ context, dir, backlog: path.join(dir, 'backlog.md'), plans: path.join(dir, 'plans'), decisions: path.join(dir, 'decisions'),
+    historyShared: path.join(dir, 'history-shared'), preferences: path.join(dir, 'preferences.json'), suggestions: path.join(dir, 'backlog-suggestions.json'),
     memory: path.join(dir, 'memory.md'), memorySuggestions: path.join(dir, 'memory-suggestions.json'),
-    lock: path.join(dir, 'backlog.lock'), backlogChoice, todosFile };
+    lock: path.join(dir, 'backlog.lock'), backlogChoice: null, todosFile: null });
+}
+/** Файл бэклога по сохранённому выбору — без повторного определения контекста проекта (git не вызывается). */
+export async function withBacklogChoice(paths: SharedProjectPaths): Promise<SharedProjectPaths> {
+  const [backlogChoice, todosFile] = await Promise.all([readBacklogChoice(paths.preferences), findTodosFile(paths.context.projectPath)]);
+  const backlog = backlogChoice === 'todos' ? path.join(paths.context.projectPath, todosFile ?? 'TODOS.md') : path.join(paths.dir, 'backlog.md');
+  return { ...paths, backlog, backlogChoice, todosFile };
 }
 
 export interface SharedFileSnapshot { text: string; version: string }

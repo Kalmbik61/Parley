@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { MISSING_SHARED_VERSION, SharedStateError, prepareSharedIgnore, readSharedFile, sharedProjectPaths,
-  withSharedProjectLock, writeSharedFile } from './store.js';
+  withBacklogChoice, withSharedProjectLock, writeSharedFile } from './store.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedProjectPaths, SharedWriteOptions } from './store.js';
 
 export interface BacklogItem {
@@ -146,9 +146,8 @@ export async function withBacklogTransaction<T>(projectPath: string, options: Sh
   body: (tx: BacklogTransaction) => Promise<T>): Promise<T> {
   const locked = await sharedProjectPaths(projectPath, options);
   return withSharedProjectLock(locked, async () => {
-    // Пока ждали замок, человек мог сменить файл бэклога: пути — заново, под замком. Замок у обоих файлов один.
-    const paths = await sharedProjectPaths(projectPath, options);
-    if (paths.dir !== locked.dir) throw new SharedStateError('backlog-conflict');
+    // Пока ждали замок, человек мог сменить файл бэклога: выбор — заново, под замком. Контекст проекта тот же, замок у обоих файлов один.
+    const paths = await withBacklogChoice(locked);
     const tx = { paths, ...await readBacklogLocal(paths) };
     // Recover only reserved appends whose known base or already-written identity proves the operation.
     for (const operation of tx.state.operations.filter(row => row.status === 'reserved')) await applyAppend(tx, operation, options, true);

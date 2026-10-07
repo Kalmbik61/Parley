@@ -63,6 +63,23 @@ describe('backlog writes under the chosen file', () => {
     expect(await readFile(todos(), 'utf8')).toContain('Late');
     await expect(lstat(state())).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('resolves the project context once per backlog write', async () => {
+    // Под замком перечитывается только выбор файла: повторный git на каждую запись замедлял бэклог в разы.
+    let calls = 0;
+    const readGit = async (args: readonly string[], env: NodeJS.ProcessEnv) => {
+      calls++;
+      try { const result = await run('git', [...args], { env }); return { code: 0, stdout: result.stdout, stderr: result.stderr }; }
+      catch (error) {
+        const failed = error as { code?: unknown; stdout?: string; stderr?: string };
+        return { code: typeof failed.code === 'number' ? failed.code : null, stdout: failed.stdout ?? '', stderr: failed.stderr ?? '' };
+      }
+    };
+    await sharedProjectPaths(project, { readGit });
+    const perResolution = calls; calls = 0;
+    await addBacklogItem(project, { title: 'Once' }, { readGit });
+    expect(perResolution).toBeGreaterThan(0);
+    expect(calls).toBe(perResolution);
+  });
   it('keeps the mode of an existing backlog file', async () => {
     await prefs({ version: 1, backlogFile: 'todos' });
     await writeFile(todos(), '# TODOS\n'); await chmod(todos(), 0o755);
