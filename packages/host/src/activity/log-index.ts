@@ -34,6 +34,8 @@ export interface LogIndex {
    * лога нет или он собран кодом до P36.
    */
   usage(session: WorkSession): UsageSummary | undefined;
+  /** Журналы прямых субагентов треда Codex этой сессии (`parent_thread_id`); у сессии без журнала — []. */
+  childLogs(session: WorkSession): Array<{ threadId: string; file: string }>;
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: () => void): () => void;
@@ -110,6 +112,12 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   };
 
   return {
+    childLogs(session) {
+      if (session.provider !== 'codex') return [];
+      const root = indexOf(session);
+      if (root === undefined) return [];
+      return (byParent.get(logKey('codex', root.id)) ?? []).map((child) => ({ threadId: child.id, file: child.file }));
+    },
     async start() {
       // Полный список могут читать гигабайты истории (`~/.claude/projects`) —
       // вызывающий (`ActivityService`) не ждёт эту функцию, чтобы не задерживать

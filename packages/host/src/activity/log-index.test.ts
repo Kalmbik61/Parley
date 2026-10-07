@@ -238,6 +238,19 @@ describe('createLogIndex', () => {
       expect(idx.usage(codex('grandchild-1'))).toMatchObject({ input: 1, coverage: 'conversation' });
     });
 
+    it('childLogs: файлы прямых субагентов треда, у сессии без журнала — пусто', async () => {
+      await writeThread(THREAD, 100);
+      await writeThread('th-a', 1, { parent_thread_id: THREAD });
+      await writeThread('th-b', 1, { parent_thread_id: THREAD });
+      await writeThread('th-other', 1, { parent_thread_id: 'чужой-родитель' });
+      const idx = index();
+      await idx.start();
+
+      expect(idx.childLogs(codex(THREAD)).map((child) => child.threadId).sort()).toEqual(['th-a', 'th-b']);
+      expect(idx.childLogs(codex(THREAD)).every((child) => child.file.endsWith('.jsonl'))).toBe(true);
+      expect(idx.childLogs(codex('нет-такого'))).toEqual([]);
+    });
+
     it('Codex: цикл в родстве не зацикливает обход, а потомок с двумя файлами одного треда считается один раз', async () => {
       await writeThread('loop-a', 100, { parent_thread_id: 'loop-b' });
       await writeThread('loop-b', 10, { parent_thread_id: 'loop-a' });
