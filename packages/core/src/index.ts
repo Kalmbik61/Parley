@@ -475,12 +475,12 @@ export type { SessionRole } from './work/types.js';
 export { resolveMainCheckout, resolveSharedProjectContext } from './work/project-context.js';
 export type { SharedProjectContext, ProjectContextOptions } from './work/project-context.js';
 export { sharedProjectPaths, SharedStateError, inspectSharedIgnore, prepareSharedIgnore, withSharedProjectLock, readSharedFile, writeSharedFile } from './work/store.js';
-export type { SharedProjectPaths, SharedDiagnostic, SharedWriteOptions, SharedStateErrorCode, SharedFileSnapshot } from './work/store.js';
+export type { BacklogFileChoice, SharedProjectPaths, SharedDiagnostic, SharedWriteOptions, SharedStateErrorCode, SharedFileSnapshot } from './work/store.js';
 export { parseBacklog, readBacklog, addBacklogItem, updateBacklogItem, removeBacklogItem, takeBacklogItem, completeBacklogItem } from './work/backlog.js';
 export type { BacklogItem, BacklogDocument, BacklogInput, BacklogPatch, BacklogWriteResult, BacklogSuggestion, SuggestionKind } from './work/backlog.js';
 export { listBacklogSuggestions, suggestBacklog, acceptBacklogSuggestion, dismissBacklogSuggestion } from './work/backlog-suggestions.js';
 export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions } from './work/backlog-suggestions.js';
-export { readProjectPreferences, setBacklogRule } from './work/project-preferences.js';
+export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
 export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';

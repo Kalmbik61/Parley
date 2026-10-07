@@ -20,6 +20,11 @@ All notable changes to Parley are documented in this file.
   dropped anywhere on the room tab are attached too. They show as chips above the field (images
   as thumbnails) and are sent at the end of the message as an "Attachments:" list of absolute
   paths that the agents open themselves.
+- **Keep the backlog in TODOS.md.** The Backlog tab has a "Backlog file" switch:
+  `.parley/backlog.md` (the default) or the project's `TODOS.md`/`TODO.md`. A project that
+  already has one is offered it once. Switching to it moves the existing items there with their
+  IDs and sections; switching back leaves the file untouched. Agents' backlog tools follow the
+  choice.
 
 ### Changed
 
@@ -46,6 +51,10 @@ All notable changes to Parley are documented in this file.
   name keeps at least its number, and the ★ and the state word stay whole. The chip's tooltip
   now starts with the full role. A member row in the sidebar no longer shows the time of the
   last event.
+- The backlog works again in a project folder that is not a Git repository when a parent folder
+  holds a stub `.git` without HEAD, objects or refs (GitKraken leaves one in the home folder), or
+  a lone `HEAD`, `objects` or `refs` entry. Agents used to get "Backlog operation failed
+  (git-context-unverified)". A broken repository higher up still blocks the backlog.
 
 ## 0.7.0
 
