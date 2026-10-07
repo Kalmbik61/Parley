@@ -320,6 +320,8 @@ describe('NewSessionOrRoomDialog — подсказки «?» у полей', ()
   it('клик по «?» подсказку не закрывает', async () => {
     await renderDialog({ room: true });
     expect(openHint('Agents')).toBe(S.dialogs.newSession.hints.agents);
+    // Замок у роли в списке — «только чтение»: подсказка его объясняет.
+    expect(S.dialogs.newSession.hints.agents).toContain('🔒 — a read-only role');
     fireEvent.pointerDown(hint('Agents'));
     fireEvent.click(hint('Agents'));
     expect(screen.getByRole('tooltip').textContent).toBe(S.dialogs.newSession.hints.agents);
