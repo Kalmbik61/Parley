@@ -190,7 +190,7 @@ interface SessionFeed {
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
   codex?: CodexFeed;
   /** Опрос журналов Codex, пока есть подписчики. */
-  codexPoll?: NodeJS.Timeout;
+  codexPoll?: NodeJS.Timeout | undefined;
 }
 
 const isCard = (item: FeedItem): item is FeedCard =>
