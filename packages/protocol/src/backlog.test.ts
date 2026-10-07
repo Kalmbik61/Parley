@@ -38,4 +38,14 @@ describe('backlog wire boundary', () => {
     for (const title of ['', '   ', 'New\nline', 'Nul\0', 'x'.repeat(4097)]) expect(backlogMethodSchemas['backlog.add'].safeParse({ projectPath: '/project', title }).success).toBe(false);
     expect(backlogMethodSchemas['backlog.preferences.set'].safeParse({ projectPath: '/project', rule: 'silently-accept' }).success).toBe(false);
   });
+
+  it('accepts the backlog file choice and TODOS names, and an older snapshot without them', () => {
+    expect(backlogMethodSchemas['backlog.file.set'].safeParse({ projectPath: '/project', file: 'todos' }).success).toBe(true);
+    expect(backlogMethodSchemas['backlog.file.set'].safeParse({ projectPath: '/project', file: 'notes' }).success).toBe(false);
+    const base = { projectPath: '/p', sharedProjectPath: '/p', version: 'v', items: [], suggestions: [], rule: 'ask', diagnostics: [] };
+    expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: '.parley/backlog.md', exists: false } }).success).toBe(true);
+    expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: 'Todo.md', exists: true, choice: 'todos', todos: 'Todo.md' } }).success).toBe(true);
+    expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: 'notes.md', exists: true } }).success).toBe(false);
+    expect(backlogSnapshot.safeParse({ ...base, file: { relativePath: '.parley/backlog.md', exists: true, choice: null, todos: '../TODOS.md' } }).success).toBe(false);
+  });
 });
