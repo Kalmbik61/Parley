@@ -51,3 +51,5 @@ export { applyCodexRecords, CODEX_HISTORY_IN_TERMINAL, CODEX_HISTORY_MESSAGE, co
 export type { CodexCursor } from './codex/apply-codex.js';
 export { parseRolloutLine, rolloutRecordOf } from './codex/rollout-record.js';
 export type { RolloutRecord } from './codex/rollout-record.js';
+export { codexAgentMeta, emptyCodexAgentMeta, withCodexAgentMeta } from './codex/codex-agents.js';
+export type { CodexAgentMeta } from './codex/codex-agents.js';

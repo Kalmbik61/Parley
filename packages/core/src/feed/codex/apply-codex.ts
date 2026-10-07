@@ -18,6 +18,7 @@ import {
   closeTurn,
   emptyFeedState,
   FeedDraft,
+  finishAgent,
   finishTool,
   limitText,
   newText,
@@ -26,6 +27,7 @@ import {
 } from '../reduce.js';
 import {
   FEED_TEXT_LIMIT,
+  type FeedAgent,
   type FeedError,
   type FeedItem,
   type FeedNotice,
@@ -223,6 +225,46 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
       if (agentId !== null) return;
       const notice: FeedNotice = { id: `notice:${id}`, at: endAt, kind: 'notice', notice: { type: 'compact', phase: 'post', trigger: null } };
       draft.put(notice);
+      return;
+    }
+    case 'SubAgentActivity': {
+      if (agentId !== null) return;
+      const thread = str(item, 'agent_thread_id');
+      if (thread === null) return;
+      const kind = str(item, 'kind');
+      const known = agentById(draft, thread);
+      if (kind === 'started') {
+        if (known === undefined) {
+          const card: FeedAgent = {
+            id: `agent:${thread}`,
+            at: endAt,
+            kind: 'agent',
+            toolUseId: thread,
+            agentId: thread,
+            agentType: null,
+            description: null,
+            prompt: null,
+            model: null,
+            background: false,
+            status: 'running',
+            toolCount: 0,
+            children: [],
+          };
+          draft.put(card);
+        }
+        return;
+      }
+      if (known !== undefined && known.status === 'running' && (kind === 'completed' || kind === 'interrupted')) {
+        draft.put(finishAgent(known, kind === 'completed' ? 'done' : 'failed', endAt));
+      }
+      return;
+    }
+    case 'CollabAgentToolCall': {
+      const tool = str(item, 'tool');
+      if (tool === null || tool === 'spawn_agent') return;
+      const receivers = Array.isArray(item['receiver_thread_ids']) ? item['receiver_thread_ids'].filter((value) => typeof value === 'string') : [];
+      const prompt = str(item, 'prompt');
+      putTool(draft, agentId, finishTool(newTool(id, tool, { receivers, ...(prompt === null ? {} : { prompt }) }, startAt, agentId), statusOf(item), undefined, endAt));
       return;
     }
     default:
