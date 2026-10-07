@@ -287,8 +287,9 @@ function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCurso
   }
   if (agentId !== null) return;
   if (kind === 'task_started') draft.turnStartedAt = record.at;
-  else if (kind === 'task_complete') closeTurn(draft, record.at, false);
-  else if (kind === 'turn_aborted') closeTurn(draft, record.at, true);
+  // Ход мог уже закрыть хук `Stop`: повторное закрытие по журналу не даёт второй черты.
+  else if (kind === 'task_complete' && draft.turnStartedAt !== null) closeTurn(draft, record.at, false);
+  else if (kind === 'turn_aborted' && draft.turnStartedAt !== null) closeTurn(draft, record.at, true);
 }
 
 export function applyCodexRecords(
