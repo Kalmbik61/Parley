@@ -1570,8 +1570,8 @@ skills on a small model, and Codex's launch input dropped by about 8,600 tokens.
 measured:** how well agents choose a skill through `find_skill` (no agent has called it on
 Claude), full waves on Codex and GLM, Linux, and a general saving of tokens. The bench is
 `tools/parley-token-benchmark.ts` (see `docs/research/2026-10-04-parley-token-benchmark.md`).
-Known limits: the Codex catalog built from `skills/list` is checked by tests only, not yet with
-a live Codex that has plugin and system skills; a skill that the jev mod made
+Known limits: the Codex catalog built from `skills/list` was checked live in one Codex 0.160.0
+session, where the agent did not need a skill; a skill that the jev mod made
 `user-invocable-only` is not offered either. **If the `jev-skill-suggestion` mod is installed,
 run `/jev-skill-suggestion:setup restore` before relying on the navigator:** it returns the
 skills that mod hid to the model everywhere. It is your personal setting, Parley does not change
@@ -2119,8 +2119,8 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
   prompts and full Codex and GLM waves of the skill navigator. A general saving of tokens is not
   claimed.
 - **Skill navigator.** On by default. For Codex `find_skill` offers the inventory that Codex
-  itself returns (`skills/list`, plugin and system skills included; checked by tests on
-  synthetic answers, not yet with a live Codex), and Codex keeps its native list only when that
+  itself returns (`skills/list`, plugin and system skills included; checked in one live Codex
+  0.160.0 session), and Codex keeps its native list only when that
   inventory cannot be read or stored; every Codex launch reads it once. If the jev mod is
   installed, the skills it made `user-invocable-only` are not offered; run
   `/jev-skill-suggestion:setup restore` to give them back (a personal setting that Parley never

@@ -907,14 +907,17 @@ CHANGELOG, лицензия MIT. Открыто:
 - **Текст отказа бюджета и окно.** Агенту говорят «Parley Settings, Limits», а в окне блок
   называется «Work limits» во вкладке Agents (`REQUEST_BUDGET_EXTENSION` в
   `packages/core/src/work/resource-policy.ts`). Привести к одному названию.
-- **Codex: каталог из `skills/list` ждёт живой проверки.** Закрыто 2026-10-07: покрытие плагинов и
+- **Codex: каталог из `skills/list` — осталась загрузка навыка агентом.** Закрыто 2026-10-07: покрытие плагинов и
   системных навыков и чтение состава на каждый запуск. Каталог `find_skill` у Codex теперь берётся из
   `skills/list` самого Codex и сохраняется при запуске (`<stateDir>/local/native-context/<workId>/<sessionId>.skills.json`),
   правило покрытия и диагностика `codex-skill-list-kept` удалены (`projectCodexListCatalog`,
   `packages/core/src/skills/context.ts`; запуск — `packages/core/src/work/launch.ts`; запись и чтение —
-  `packages/core/src/work/native-context.ts`; спека, разделы 2.2 и 12). Открыто: живая проверка запуска и
-  возобновления Codex с плагинными и системными навыками и с Codex новее 0.160.0; чтение состава по-прежнему
-  стоит каждому запуску до 8 с (кеш на сессию не нужен: MCP читает сохранённое).
+  `packages/core/src/work/native-context.ts`; спека, разделы 2.2 и 12). Живая сессия
+  2026-10-07 (codex-cli 0.160.0, `ambiguous…codex.r2`): список убран при 131 плагинном и 5 системных навыках,
+  каталог из 282 навыков сохранён, задача принята; агент `find_skill` не звал, поиск по плагинным и системным
+  навыкам проверен прямым вызовом MCP-сервера сессии. Открыто: агент сам грузит плагинный или системный навык
+  через `find_skill`; возобновление; Codex новее 0.160.0; чтение состава по-прежнему стоит каждому запуску
+  до 8 с (кеш на сессию не нужен: MCP читает сохранённое).
 - **Действия Claude в Capabilities только на проверенной сборке.** MCP и плагины Claude
   работают лишь с Claude Code 2.1.287 для macOS на Apple silicon (по размеру и `sha256`,
   `packages/host/src/capabilities/native-targets.ts`); на других сборках и платформах недоступны.
