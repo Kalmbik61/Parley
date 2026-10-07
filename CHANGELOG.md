@@ -46,6 +46,10 @@ All notable changes to Parley are documented in this file.
   name keeps at least its number, and the ★ and the state word stay whole. The chip's tooltip
   now starts with the full role. A member row in the sidebar no longer shows the time of the
   last event.
+- The backlog works again in a project folder that is not a Git repository when a parent folder
+  holds a stub `.git` without HEAD, objects or refs (GitKraken leaves one in the home folder), or
+  a lone `HEAD`, `objects` or `refs` entry. Agents used to get "Backlog operation failed
+  (git-context-unverified)". A broken repository higher up still blocks the backlog.
 
 ## 0.7.0
 

@@ -32,6 +32,31 @@ describe('shared project identity', () => {
     expect(await resolveSharedProjectContext(alias)).toEqual({ kind: 'non-git', projectPath: actual });
     expect(await resolveMainCheckout(alias)).toBeNull();
   });
+  it('proves non-Git under a stub .git ancestor that holds no HEAD, objects or refs', async () => {
+    // The `~/.git` stub GitKraken leaves behind: Git itself skips it.
+    const home = path.join(root, 'home'); const project = path.join(home, 'project');
+    await mkdir(path.join(home, '.git', 'gk'), { recursive: true }); await mkdir(path.join(home, '.git', 'info'));
+    await writeFile(path.join(home, '.git', 'gk', 'config'), ''); await writeFile(path.join(home, '.git', 'info', 'exclude'), '');
+    await mkdir(project);
+    expect(await resolveSharedProjectContext(project)).toEqual({ kind: 'non-git', projectPath: project });
+  });
+  it('proves non-Git next to lone HEAD/objects/refs entries that are not a bare repository', async () => {
+    for (const [name, made] of [['HEAD', 'file'], ['objects', 'dir'], ['refs', 'dir']] as const) {
+      const area = path.join(root, `area-${name}`); const project = path.join(area, 'project');
+      await mkdir(project, { recursive: true });
+      if (made === 'file') await writeFile(path.join(area, name), ''); else await mkdir(path.join(area, name));
+      expect(await resolveSharedProjectContext(project)).toEqual({ kind: 'non-git', projectPath: project });
+    }
+  });
+  it('keeps broken repository look-alikes ambiguous', async () => {
+    // A broken `.git` (HEAD present, Git rejects it) and a folder with all three bare parts prove nothing.
+    const broken = path.join(root, 'broken'); await mkdir(path.join(broken, '.git'), { recursive: true });
+    await writeFile(path.join(broken, '.git', 'HEAD'), ''); await mkdir(path.join(broken, 'project'));
+    expect(await resolveSharedProjectContext(path.join(broken, 'project'))).toEqual({ kind: 'unavailable', reason: 'git-context-unverified' });
+    const bare = path.join(root, 'bare-like'); await mkdir(path.join(bare, 'objects'), { recursive: true });
+    await mkdir(path.join(bare, 'refs')); await writeFile(path.join(bare, 'HEAD'), ''); await mkdir(path.join(bare, 'project'));
+    expect(await resolveSharedProjectContext(path.join(bare, 'project'))).toEqual({ kind: 'unavailable', reason: 'git-context-unverified' });
+  });
   it('maps root and explicit nested folders to the same folder in the main checkout', async () => {
     const main = await repository(); const linked = path.join(root, 'linked');
     await git(main, 'worktree', 'add', '-b', 'linked', linked);

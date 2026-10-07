@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 
@@ -36,14 +37,24 @@ function contained(root: string, target: string): boolean {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-/** Absence is proved through every ancestor; unreadable/occupied/bare markers are ambiguous. */
+const GIT_DIR_PARTS = ['HEAD', 'objects', 'refs'];
+/** null — no entry; 'unknown' — the entry cannot be checked. */
+async function entry(file: string): Promise<Stats | null | 'unknown'> {
+  try { return await lstat(file); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'unknown'; }
+}
+
+/** Absence is proved through every ancestor; unreadable/gitfile/repository-like markers are ambiguous.
+ * A `.git` folder without HEAD, objects or refs (GitKraken leaves such a stub in the home folder) is no
+ * repository, nor is a lone HEAD/objects/refs entry: Git skips both, so only all three parts look bare. */
 async function hasNoRepositoryMarker(cwd: string): Promise<boolean> {
   let folder = cwd;
   for (let depth = 0; depth < 128; depth++) {
-    for (const marker of ['.git', 'HEAD', 'objects', 'refs']) {
-      try { await lstat(path.join(folder, marker)); return false; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false; }
-    }
+    const dotGit = await entry(path.join(folder, '.git'));
+    if (dotGit === 'unknown' || (dotGit && !dotGit.isDirectory())) return false;
+    for (const part of dotGit ? GIT_DIR_PARTS : []) if (await entry(path.join(folder, '.git', part)) !== null) return false;
+    const bare = await Promise.all(GIT_DIR_PARTS.map(part => entry(path.join(folder, part))));
+    if (bare.includes('unknown') || bare.every(Boolean)) return false;
     const parent = path.dirname(folder);
     if (parent === folder) return true;
     folder = parent;
