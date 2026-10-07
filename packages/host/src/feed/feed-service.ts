@@ -282,6 +282,8 @@ export function createFeedService(
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
+  /** Процессы Codex, чья сессия на старте ещё не попала в карту работ: таймер доверия взведут по её появлению. */
+  const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
   const interruptTimers = new Set<NodeJS.Timeout>();
   let stopped = false;
@@ -952,6 +954,7 @@ export function createFeedService(
     }
     lastActivity.delete(key);
     subscribers.delete(key);
+    graceWaiting.delete(key);
   }
 
   const unsubscribeWorks = deps.works.onChange((snapshot) => {
@@ -966,6 +969,11 @@ export function createFeedService(
     }
     for (const key of [...feeds.keys(), ...subscribers.keys(), ...lastActivity.keys()]) {
       if (!alive.has(key)) forget(key);
+    }
+    for (const [key, ref] of [...graceWaiting]) {
+      if (!alive.has(key)) continue;
+      graceWaiting.delete(key);
+      void armCodexGrace(ref);
     }
   });
 
@@ -983,7 +991,9 @@ export function createFeedService(
   async function armCodexGrace(ref: SessionRef): Promise<void> {
     try {
       if (sessionOf(ref).provider !== 'codex' || !(await codexApprovals())) return;
-    } catch {
+    } catch (error) {
+      // Новая сессия попадает в карту работ чуть позже старта процесса: таймер взведём, когда она появится.
+      if (error instanceof HostError && error.code === 'not_found') graceWaiting.set(refKey(ref), ref);
       return;
     }
     if (stopped) return;
@@ -999,6 +1009,7 @@ export function createFeedService(
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
+    graceWaiting.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
       pending.settle(ref);

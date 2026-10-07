@@ -78,6 +78,11 @@ export interface HostOptions {
    * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
    */
   startupWaitMs?: number;
+  /**
+   * Срок ожидания хуков Codex после старта процесса, мс (спека 2026-10-07, 5.7): ни одного хука — подсказка про доверие.
+   * Боевой хост не задаёт — 15 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_HOOK_GRACE_MS`.
+   */
+  codexHookGraceMs?: number;
 }
 
 export interface RunningHost {
@@ -230,7 +235,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
-  });
+  }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
   const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а

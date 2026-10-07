@@ -1388,6 +1388,21 @@ describe('хуки Codex', () => {
     }
   });
 
+  it('сессии ещё нет в карте работ на старте процесса — таймер доверия взводится, когда она появилась', async () => {
+    vi.useFakeTimers();
+    try {
+      fakes = fakeFeedDeps([]);
+      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      fakes.emitStart(REF);
+      await vi.advanceTimersByTimeAsync(1_000);
+      fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await service.snapshot(REF)).decisions).toBe('terminal');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('настройка codexApprovals выключена — таймера доверия нет, decisions не задан', async () => {
     vi.useFakeTimers();
     try {

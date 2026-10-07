@@ -19,12 +19,16 @@ async function main(): Promise<number> {
   const glmCheck = glmCheckOptionsFromEnv(process.env);
   // Срок экранов старта Codex — тоже рычаг E2E: ждать двадцать секунд экрана доверия тест не может.
   const startupWaitMs = startupWaitFromEnv(process.env);
+  // Срок ожидания хуков Codex — рычаг E2E: ждать пятнадцать секунд подсказки тест не может.
+  const hookGraceRaw = Number(envValue(process.env, 'CODEX_HOOK_GRACE_MS'));
+  const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
     ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog } : {}),
     ...(limits === undefined ? {} : { limits }),
     ...(glmCheck === undefined ? {} : { glmCheck }),
     ...(startupWaitMs === undefined ? {} : { startupWaitMs }),
+    ...(codexHookGraceMs === undefined ? {} : { codexHookGraceMs }),
   };
   try {
     const running = await startHost(options);
