@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { inspectSharedIgnore, sharedProjectPaths } from './store.js';
+import { addBacklogItem } from './backlog.js';
+import { inspectSharedIgnore, sharedProjectPaths, withSharedProjectLock } from './store.js';
 
 const run = promisify(execFile);
 const git = (cwd: string, ...args: string[]) => run('git', ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], {
@@ -44,5 +45,27 @@ describe('backlog file choice', () => {
     await prefs({ version: 1, backlogFile: 'todos' });
     const diagnostics = await inspectSharedIgnore(await sharedProjectPaths(project));
     expect(diagnostics.map(row => row.code)).not.toContain('parley-dir-ignored');
+  });
+});
+
+describe('backlog writes under the chosen file', () => {
+  it('a writer that waited for the lock during a switch lands in the new file', async () => {
+    const paths = await sharedProjectPaths(project);
+    let pending: Promise<unknown> = Promise.resolve();
+    await withSharedProjectLock(paths, async () => {
+      pending = addBacklogItem(project, { title: 'Late' });
+      // Писатель успевает вычислить пути (ещё .parley) и ждёт замок; таймаут замка — 3 с.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await writeFile(paths.preferences, JSON.stringify({ version: 1, backlogFile: 'todos' }));
+    });
+    await pending;
+    expect(await readFile(todos(), 'utf8')).toContain('Late');
+    await expect(lstat(state())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('keeps the mode of an existing backlog file', async () => {
+    await prefs({ version: 1, backlogFile: 'todos' });
+    await writeFile(todos(), '# TODOS\n'); await chmod(todos(), 0o755);
+    await addBacklogItem(project, { title: 'Keeps mode' });
+    expect((await stat(todos())).mode & 0o777).toBe(0o755);
   });
 });

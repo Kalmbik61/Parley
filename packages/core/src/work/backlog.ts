@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { lstat } from 'node:fs/promises';
 import { MISSING_SHARED_VERSION, SharedStateError, prepareSharedIgnore, readSharedFile, sharedProjectPaths,
   withSharedProjectLock, writeSharedFile } from './store.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedProjectPaths, SharedWriteOptions } from './store.js';
@@ -143,13 +144,20 @@ export async function saveBacklogLocal(tx: BacklogTransaction): Promise<void> {
 }
 export async function withBacklogTransaction<T>(projectPath: string, options: SharedWriteOptions,
   body: (tx: BacklogTransaction) => Promise<T>): Promise<T> {
-  const paths = await sharedProjectPaths(projectPath, options);
-  return withSharedProjectLock(paths, async () => {
+  const locked = await sharedProjectPaths(projectPath, options);
+  return withSharedProjectLock(locked, async () => {
+    // Пока ждали замок, человек мог сменить файл бэклога: пути — заново, под замком. Замок у обоих файлов один.
+    const paths = await sharedProjectPaths(projectPath, options);
+    if (paths.dir !== locked.dir) throw new SharedStateError('backlog-conflict');
     const tx = { paths, ...await readBacklogLocal(paths) };
     // Recover only reserved appends whose known base or already-written identity proves the operation.
     for (const operation of tx.state.operations.filter(row => row.status === 'reserved')) await applyAppend(tx, operation, options, true);
     return body(tx);
   }, options);
+}
+/** Права записи бэклога: у существующего файла — его собственные (бит исполнения у TODOS.md человека видит git), у нового — 0o644. */
+export async function backlogMode(file: string): Promise<number> {
+  try { return (await lstat(file)).mode & 0o777; } catch { return 0o644; }
 }
 export async function readBacklog(projectPath: string, options: SharedWriteOptions = {}): Promise<BacklogDocument> {
   const snapshot = await readSharedFile((await sharedProjectPaths(projectPath, options)).backlog);
@@ -243,7 +251,7 @@ async function applyAppend(tx: BacklogTransaction, operation: AppendOperation, o
     await saveBacklogLocal(tx); // Reserve counters/operation before writing shared Markdown.
     diagnostics = await prepareSharedIgnore(tx.paths, options);
     await options.beforeCommit?.(tx.paths.backlog, attempt);
-    try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); }
+    try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); }
     catch (error) {
       if (error instanceof SharedStateError && error.code === 'backlog-conflict' && options.expectedVersion === undefined && !recovering) continue;
       throw error;
@@ -286,7 +294,7 @@ export async function ensureBacklogIdsInTransaction(tx: BacklogTransaction, opti
     if (options.expectedVersion !== undefined && before.version !== options.expectedVersion) throw new SharedStateError('backlog-conflict');
     await saveBacklogLocal(tx); const diagnostics = await prepareSharedIgnore(tx.paths, options);
     await options.beforeCommit?.(tx.paths.backlog, attempt);
-    try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); return diagnostics; }
+    try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); return diagnostics; }
     catch (error) {
       if (!(error instanceof SharedStateError) || error.code !== 'backlog-conflict' || options.expectedVersion !== undefined) throw error;
     }
@@ -335,7 +343,7 @@ async function changeBacklog(projectPath: string, locator: string | number, patc
       await saveBacklogLocal(tx);
       const diagnostics = await prepareSharedIgnore(tx.paths, options);
       await options.beforeCommit?.(tx.paths.backlog, attempt);
-      try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); }
+      try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); }
       catch (error) {
         if (error instanceof SharedStateError && error.code === 'backlog-conflict' && options.expectedVersion === undefined) continue;
         throw error;
