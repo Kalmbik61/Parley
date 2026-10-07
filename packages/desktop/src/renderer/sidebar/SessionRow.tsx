@@ -87,6 +87,8 @@ export interface SessionRowProps {
   onOpen(): void;
   /** Строка участника комнаты: отступ слева 18 вместо `8 + 12·depth`, без правого поля. */
   inRoom?: boolean;
+  /** Комната участника — для «Make lead» в меню строки; только у участника комнаты. */
+  roomId?: string;
   /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
   lead?: boolean;
 }
@@ -106,6 +108,7 @@ export const SessionRow = memo(function SessionRow({
   selected,
   onOpen,
   inRoom = false,
+  roomId,
   lead = false,
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
@@ -209,7 +212,15 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <HoverCard open={tooltipOpen && !dragging && !agentsOpen} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
-      <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
+      <SessionRowMenu
+        workKey={workKey}
+        projectPath={projectPath}
+        workId={workId}
+        session={session}
+        bridge={bridge}
+        onOpen={onOpen}
+        {...(roomId === undefined ? {} : { room: { id: roomId, lead } })}
+      >
       <HoverCardTrigger asChild>
         <div
           ref={setRowRef}

@@ -338,6 +338,8 @@ export const S = {
     roomsMenu: 'Rooms',
     /** `aria-label` поля переименования на месте (спека 6.4). */
     renameField: 'Workspace name',
+    /** `aria-label` того же поля в строке комнаты (`RoomRowMenu` → «Rename»). */
+    roomRenameField: 'Room name',
     /** aria-label списка карточек — дерево «работа → сессии» для клавиатуры (спека 6.5). */
     workspaceList: 'Workspaces',
     /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
@@ -376,6 +378,17 @@ export const S = {
       closeConfirmTitle: (label: string): string => `Close "${label}"?`,
       closeConfirmDescription: 'Session will no longer receive mail',
       deleteConfirmTitle: (label: string): string => `Delete "${label}"?`,
+      /** Участник развёрнутой комнаты, не ведущий и не закрытый: `rooms.setLead`. */
+      makeLead: 'Make lead',
+    },
+    /** Меню строки комнаты по правой кнопке — `sidebar/RoomRowMenu.tsx`. */
+    roomMenu: {
+      rename: 'Rename',
+      deleteEllipsis: 'Delete…',
+      deleteConfirmTitle: (title: string): string => `Delete room "${title}"?`,
+      deleteConfirmDescription: 'The room and its feed will be deleted. Its sessions keep running as regular sessions of the workspace.',
+      /** Флажок подтверждения, снят по умолчанию: удалить и сессии комнаты, как пункт «Delete» строки сессии. */
+      deleteSessions: (n: number): string => `Also delete its ${n} ${n === 1 ? 'session' : 'sessions'}`,
     },
   },
 
@@ -1442,6 +1455,9 @@ export const S = {
       reopenWorkspace: 'reopen workspace',
       archiveWorkspace: 'archive workspace',
       deleteWorkspace: 'delete workspace',
+      renameRoom: 'rename room',
+      deleteRoom: 'delete room',
+      makeLead: 'change the room lead',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',
       createParleyMd: 'create PARLEY.md',

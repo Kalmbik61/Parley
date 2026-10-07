@@ -8,6 +8,7 @@ import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
@@ -716,6 +717,24 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     [...list().querySelectorAll<HTMLElement>('[data-work-key], [data-room-row], [data-session-id]')].filter((element) => element.tabIndex === 0);
 
   beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
+
+  it('Shift+F10 на строке комнаты — её меню, если хост его знает; иначе ничего не открывается', () => {
+    const entry = withRoom('w-r');
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    act(() => cardOf(entry).focus());
+    fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(roomOf(entry));
+    fireEvent.keyDown(roomOf(entry), { key: 'F10', shiftKey: true });
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    act(() => bridge.setHostMethods([...REQUIRED_METHODS, 'rooms.rename', 'rooms.delete']));
+    fireEvent.keyDown(roomOf(entry), { key: 'F10', shiftKey: true });
+    expect(screen.getByRole('menu')).toBeTruthy();
+    expect(screen.getByText('Rename')).toBeTruthy();
+    expect(screen.queryByText('Pin')).toBeNull();
+  });
 
   it('карточка → строка комнаты → (свёрнутая: участников нет) следующая сессия карточки; Enter на комнате открывает её', () => {
     const onOpenRoom = vi.fn();

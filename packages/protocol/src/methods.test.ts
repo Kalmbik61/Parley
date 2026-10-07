@@ -236,6 +236,29 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.addMember'>>().toEqualTypeOf<{ messageId: string }>();
   });
 
+  it('rooms.rename: название по правилу works.rename — края обрезаются, пустое и длиннее 120 кодовых точек не проходят', () => {
+    const parse = (title: unknown) => METHODS['rooms.rename'].safeParse({ ...room, title });
+    expect(parse('  Платежи\u200B ').data?.title).toBe('Платежи');
+    for (const title of ['', '   ', '\u200B\u2060', '😀'.repeat(121), 5]) expect(parse(title).success).toBe(false);
+    expect(parse('😀'.repeat(120)).success).toBe(true);
+    expect(METHODS['rooms.rename'].safeParse({ projectPath: '/p', workId: 'w-0001', title: 'x' }).success).toBe(false);
+    expectTypeOf<Result<'rooms.rename'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('rooms.setLead: комната и сессия обязательны; ответ — id системной строки', () => {
+    expect(METHODS['rooms.setLead'].safeParse({ ...room, sessionId: 's-02' }).success).toBe(true);
+    expect(METHODS['rooms.setLead'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.setLead'].safeParse({ ...room, sessionId: 2 }).success).toBe(false);
+    expectTypeOf<Result<'rooms.setLead'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.delete: только комната — сессии окно удаляет отдельно, через sessions.delete', () => {
+    expect(METHODS['rooms.delete'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.delete'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.delete'>>().toEqualTypeOf<{ projectPath: string; workId: string; roomId: string }>();
+    expectTypeOf<Result<'rooms.delete'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
     const accept = { ...room, proposalId: 'p-01', action: 'accept' };
     expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);

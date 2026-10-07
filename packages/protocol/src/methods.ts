@@ -48,6 +48,23 @@ export const sessionRef = z.object({
 /** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
+/**
+ * Новое название работы или комнаты (`works.rename`, `rooms.rename`). Предел — по кодовым точкам: `.max(120)` zod
+ * считает UTF-16, эмодзи шло бы за два. Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
+ * заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что у `renameWork` в core: невидимые
+ * символы формата по краям считаются пробелами, иначе название из одних ZWSP прошло бы.
+ */
+const renameTitle = z
+  .string()
+  .refine((title) => title.length <= 480, { abort: true })
+  .transform((title) => title.replace(TITLE_EDGES, ''))
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .refine((title) => [...title].length <= 120),
+  );
+
 /** Режимы, которые окно выбирает само: цикл Shift+Tab (auto — когда модель его даёт) без обхода разрешений. */
 export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan', 'auto']);
 export type PermissionModeChoice = z.infer<typeof permissionModeChoice>;
@@ -83,25 +100,7 @@ export const METHODS = {
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
-  // Предел — по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два.
-  // Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
-  // заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что
-  // у `renameWork` в core: невидимые символы формата по краям считаются
-  // пробелами, иначе название из одних ZWSP прошло бы.
-  'works.rename': z.object({
-    projectPath: z.string(),
-    workId: z.string(),
-    title: z
-      .string()
-      .refine((title) => title.length <= 480, { abort: true })
-      .transform((title) => title.replace(TITLE_EDGES, ''))
-      .pipe(
-        z
-          .string()
-          .min(1)
-          .refine((title) => [...title].length <= 120),
-      ),
-  }),
+  'works.rename': z.object({ projectPath: z.string(), workId: z.string(), title: renameTitle }),
   'works.setStatus': z.object({
     projectPath: z.string(),
     workId: z.string(),
@@ -196,6 +195,13 @@ export const METHODS = {
     roomId: z.string(),
     sessionId: z.string(),
   }),
+  // Управление комнатой из сайдбара. Название — по правилу `works.rename`: пустое после обрезки не проходит схему,
+  // и прежнее остаётся. «Make lead»: участник, не закрытый и не ведущий уже, — правила сверяет хост (`bad_request`).
+  // Удаление уносит комнату с лентой, а её сессии остаются обычными сессиями работы: удалить и их окно просит
+  // отдельно, через `sessions.delete` каждой, до `rooms.delete` (`RoomRowMenu`).
+  'rooms.rename': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), title: renameTitle }),
+  'rooms.setLead': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), sessionId: z.string() }),
+  'rooms.delete': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
   // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
   // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
@@ -375,6 +381,10 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   'rooms.create': { roomId: string };
   /** `messageId` — системная строка ленты «@s04 joined the room». */
   'rooms.addMember': { messageId: string };
+  'rooms.rename': { ok: true };
+  /** `messageId` — системная строка ленты «@s03 is now the lead». */
+  'rooms.setLead': { messageId: string };
+  'rooms.delete': { ok: true };
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };

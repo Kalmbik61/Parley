@@ -142,6 +142,7 @@ export {
   addRoom,
   addRoomOriginMessage,
   addSystemMessage,
+  deleteRoom,
   isDescendant,
   isMember,
   isRoomClosed,
@@ -149,10 +150,12 @@ export {
   leaveOtherRooms,
   liveLead,
   nextRoomId,
+  renameRoom,
   roomLead,
   RoomRuleError,
+  setRoomLead,
 } from './work/rooms.js';
-export type { NewRoom } from './work/rooms.js';
+export type { LeadChange, NewRoom } from './work/rooms.js';
 export { leadRecipeBlock, recipeLeadBlock, recipeLeadsPending, reconcileRecipeLeads } from './work/recipe-lead.js';
 export { BUILTIN_RECIPES } from './recipes/builtin.js';
 export { listRecipeCatalog, expandRecipe, recipeCatalogView, snapshotRecipe } from './recipes/catalog.js';

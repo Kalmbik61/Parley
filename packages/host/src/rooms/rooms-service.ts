@@ -16,6 +16,7 @@ import {
   addMessage,
   addRoom,
   addRoomOriginMessage,
+  deleteRoom,
   HUMAN,
   DEFAULT_CONFIG,
   loadConfig,
@@ -28,8 +29,10 @@ import {
   joinNotice,
   leaveOtherRooms,
   ProposalConflictError,
+  renameRoom,
   resolveProposal,
   RoomRuleError,
+  setRoomLead,
   updateMap,
   workPaths,
   type WorkMap,
@@ -216,4 +219,72 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
     }
   });
   return messageId;
+}
+
+/**
+ * Человек переименовывает комнату из сайдбара (`rooms.rename`). Пустое после обрезки название не проходит уже схему,
+ * правило повторяет core (`renameRoom`). Не событие работы: `updatedAt` стоит на месте, как у `works.rename`, иначе
+ * карточка всплыла бы в начало своего ранга в сайдбаре. Вкладка, шапка комнаты и строка сайдбара читают название из
+ * карты — окно покажет новое по обычному `works.changed`.
+ */
+export async function renameHumanRoom(input: Params<'rooms.rename'>): Promise<void> {
+  const { projectPath, workId, roomId, title } = input;
+  assertWork(projectPath, workId);
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      try {
+        renameRoom(map, roomId, title);
+      } catch (error) {
+        throw asHostError(error);
+      }
+    },
+    { touch: false },
+  );
+}
+
+/**
+ * «Make lead» из окна (`rooms.setLead`): правила, системная строка и письма `parley` — в core (`setRoomLead`).
+ * Плейбук рецепта новому ведущему пишется той же мутацией (`reconcileRecipeLeads`). Будильник сделал бы это и сам по
+ * следующему изменению карты (`deliverRecipeToNewLeads`), но в одной записи «You now lead…» и плейбук ложатся подряд,
+ * а отметка `recipeLeadNotified` второго письма уже не даст. Письма будит обычный будильник; доставку пунктов плана
+ * новому ведущему пересчитывает служба плана: смена `lead` в карте для неё — изменение источника. Возвращает id
+ * системной строки.
+ */
+export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<string> {
+  const { projectPath, workId, roomId, sessionId } = input;
+  assertWork(projectPath, workId);
+  let messageId = '';
+  await updateMap(projectPath, workId, (map) => {
+    try {
+      messageId = setRoomLead(map, roomId, sessionId).line.id;
+    } catch (error) {
+      throw asHostError(error);
+    }
+    reconcileRecipeLeads(map);
+  });
+  return messageId;
+}
+
+/**
+ * Удаление комнаты из окна (`rooms.delete`): правила — в core (`deleteRoom`). Комната уходит с лентой, её сессии
+ * остаются обычными сессиями работы, и живым из них — прощальные письма `parley`; будит их обычный будильник.
+ *
+ * Удалить заодно и сессии окно просит само, до этого вызова, — тем же `sessions.delete`, что у пункта «Delete» строки
+ * сессии (`RoomRowMenu`): остановка процесса, worktree с отказом на грязном, запись карты, а перед ними — вопрос окна о
+ * несохранённых правках во вкладках файлов worktree. Хост этот путь не повторяет: вопрос о правках задаёт только окно,
+ * а отказ на грязном worktree должен остановить удаление до того, как комната пропадёт. К этому вызову удалённых сессий
+ * в карте уже нет, и прощальные письма им не пишутся.
+ */
+export async function deleteHumanRoom(input: Params<'rooms.delete'>): Promise<void> {
+  const { projectPath, workId, roomId } = input;
+  assertWork(projectPath, workId);
+  await updateMap(projectPath, workId, (map) => {
+    try {
+      deleteRoom(map, roomId);
+    } catch (error) {
+      throw asHostError(error);
+    }
+  });
 }

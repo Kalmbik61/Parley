@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeWork } from '../test-utils/work-fixtures.js';
-import { InlineRename } from './InlineRename.js';
+import { makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { InlineRename, RoomInlineRename } from './InlineRename.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -95,6 +95,55 @@ describe('InlineRename (тест 3)', () => {
     // Повторная потеря фокуса после ответа не шлёт второй вызов.
     act(() => fireEvent.blur(input));
     expect(renames()).toHaveLength(1);
+    warn.mockRestore();
+  });
+});
+
+describe('RoomInlineRename — то же поле в строке комнаты', () => {
+  const roomRenames = (): unknown[] => bridge.calls.filter((call) => call.method === 'rooms.rename').map((call) => call.params);
+
+  beforeEach(() => bridge.setHandler('rooms.rename', () => ({ ok: true as const })));
+
+  function renderRoom(title: string, onDone = vi.fn()): { input: HTMLInputElement; onDone: ReturnType<typeof vi.fn> } {
+    render(<RoomInlineRename projectPath="/tmp/proj" workId="w-01" room={makeRoom('r-02', title)} bridge={bridge} onDone={onDone} />);
+    return { input: screen.getByRole('textbox', { name: 'Room name' }) as HTMLInputElement, onDone };
+  }
+
+  it('открывается на названии комнаты, выделено всё; Enter зовёт rooms.rename с комнатой', async () => {
+    const { input, onDone } = renderRoom('Refunds');
+    expect(input.value).toBe('Refunds');
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'Refunds'.length]);
+    fireEvent.change(input, { target: { value: 'Payments' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(roomRenames()).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-02', title: 'Payments' }]);
+    expect(renames()).toEqual([]);
+  });
+
+  it('безымянная комната — поле на «Room»; пустое и без изменений хосту не уходят', () => {
+    const first = renderRoom('');
+    expect(first.input.value).toBe('Room');
+    fireEvent.blur(first.input);
+    expect(first.onDone).toHaveBeenCalled();
+    cleanup();
+
+    const second = renderRoom('Refunds');
+    fireEvent.change(second.input, { target: { value: '  ' } });
+    fireEvent.keyDown(second.input, { key: 'Enter' });
+    expect(second.onDone).toHaveBeenCalled();
+    expect(roomRenames()).toEqual([]);
+  });
+
+  it('отказ хоста — тост «Couldn\'t rename room: invalid request.», поле закрыто', async () => {
+    bridge.setHandler('rooms.rename', () => {
+      throw encodeIpcError({ code: 'bad_request', message: 'room r-02 is not in the map' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { input, onDone } = renderRoom('Refunds');
+    fireEvent.change(input, { target: { value: 'Payments' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't rename room: invalid request."));
+    expect(onDone).toHaveBeenCalled();
     warn.mockRestore();
   });
 });

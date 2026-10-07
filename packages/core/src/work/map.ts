@@ -68,13 +68,13 @@ export function nextSessionId(map: WorkMap): string {
   return `s-${String(next).padStart(2, '0')}`;
 }
 
-/** Следующий id сообщения внутри работы: `m-01`, `m-02`, … */
+/**
+ * Следующий id сообщения внутри работы: `m-01`, `m-02`, … Номер — по списку, но не ниже `work.messageSeq`:
+ * удалённая комната уносит свои письма, и их id не переиспользуются.
+ */
 export function nextMessageId(map: WorkMap): string {
-  return nextId(
-    map.messages.map((message) => message.id),
-    'm-',
-    2,
-  );
+  const next = Math.max(map.work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-')) + 1;
+  return `m-${String(next).padStart(2, '0')}`;
 }
 
 /** Следующий id работы: `w-0001`, `w-0002`, … — сквозной по глобальному индексу. */
