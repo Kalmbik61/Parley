@@ -8,6 +8,9 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Chat view for Codex 0.160.0+.** A Codex session opens as a conversation like Claude Code does: the feed is read from the session log Codex writes itself (read-only), so prompts, replies, commands, file edits with diffs, subagents and turn ends show up with nothing to set up, and the Agents panel works for Codex subagents too.
+- **Answer Codex approvals in Parley (Settings → Agents, off by default).** With it on, new and resumed Codex sessions start with Parley's hooks and every approval shows as an Allow / Deny card in Chat. Codex asks once to trust the hooks ("Trust all and continue"); until then the feed shows a hint and approvals stay in the terminal. Parley writes nothing to `~/.codex`.
+
 - **Agents panel.** "N agents running" in the Chat toolbar opens an "Agents" tab in the right sidebar (⌘⇧A): the session's agents with what each is doing now, finished ones below. Click an agent to see its task, steps, tool calls as they happen, result and full transcript. The agents badge in the sidebar and in a room opens the same panel.
 
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
@@ -29,6 +32,8 @@ All notable changes to Parley are documented in this file.
   are shown as code. The letter text the agent reads is unchanged.
 
 ### Fixed
+
+- **Parley no longer replaces your Codex `notify` program** in its sessions: the end of a turn comes from the terminal and the session log instead.
 
 - Archiving a workspace now stops its running agents, so their processes no longer stay in
   memory. Until "Reopen", the host does not start the workspace's sessions: a message to an
