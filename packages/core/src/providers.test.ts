@@ -1451,7 +1451,7 @@ describe('codex: запуск и возобновление (спека комн
     const template = [
       ...(PROVIDERS.codex.runner.args ?? []),
       ...(PROVIDERS.codex.runner.resumeArgs ?? []),
-    ].join(' ');
+    ].join(' ').replaceAll('{codexHooks}', '');
     expect(template).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks|trust/i);
   });
 

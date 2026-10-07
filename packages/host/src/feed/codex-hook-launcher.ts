@@ -14,7 +14,7 @@ const shellQuote = (value: string): string => `"${value.replace(/(["\\$`])/g, '\
 export async function ensureCodexHookLauncher(parleyHome: string, nodePath: string, bridgePath: string): Promise<string> {
   const dir = path.join(parleyHome, 'bin');
   const file = path.join(dir, CODEX_HOOK_LAUNCHER);
-  const body = `#!/bin/sh\n# Хук Codex от Parley: путь постоянный, содержимое переписывает хост при старте.\nexec ${shellQuote(nodePath)} ${shellQuote(bridgePath)} "$@"\n`;
+  const body = `#!/bin/sh\n# Parley Codex hook: the path is stable, the host rewrites the content on start.\nexec ${shellQuote(nodePath)} ${shellQuote(bridgePath)} "$@"\n`;
   await mkdir(dir, { recursive: true });
   const current = await readFile(file, 'utf8').catch(() => null);
   if (current !== body) await writeFile(file, body, 'utf8');
