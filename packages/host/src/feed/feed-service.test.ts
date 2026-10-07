@@ -1215,3 +1215,122 @@ describe('прерывание Esc по записи журнала (решен�
     expect(ofKind((await service.snapshot(REF)).items, 'turn')).toHaveLength(0);
   });
 });
+
+describe('лента Codex', () => {
+  const stamp = (n: number): string => new Date(Date.UTC(2026, 9, 7, 10, 0, n)).toISOString();
+  const line = (n: number, ordinal: number, type: string, payload: Record<string, unknown>) => ({
+    timestamp: stamp(n),
+    ordinal,
+    type,
+    payload,
+  });
+  const meta = (id: string) => line(0, 0, 'session_meta', { id, cwd: '/tmp/p', cli_version: '0.160.0', source: 'cli' });
+  const started = (n: number) => line(n, n, 'event_msg', { type: 'task_started', turn_id: 'u1' });
+  const complete = (n: number) => line(n, n, 'event_msg', { type: 'task_complete', turn_id: 'u1' });
+  const item = (n: number, thread: string, body: Record<string, unknown>) =>
+    line(n, n, 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: 'u1', item: body });
+  const userMessage = (n: number, id: string, text: string) =>
+    item(n, 'th-main', { type: 'UserMessage', id, content: [{ type: 'text', text }] });
+  const command = (n: number, id: string, cmd: string, thread = 'th-main') =>
+    item(n, thread, {
+      type: 'CommandExecution',
+      id,
+      command: [cmd],
+      cwd: '/tmp/p',
+      parsed_cmd: [],
+      source: 'agent',
+      status: 'completed',
+      aggregated_output: '',
+      exit_code: 0,
+    });
+  const subagent = (n: number, child: string, kind: string) =>
+    item(n, 'th-main', { type: 'SubAgentActivity', id: `sa${n}`, kind, agent_thread_id: child, agent_path: '/root/explorer' });
+  const childMeta = (id: string, parent: string, historyStart: number) =>
+    line(2, 0, 'session_meta', {
+      id,
+      parent_thread_id: parent,
+      forked_from_id: parent,
+      agent_nickname: 'explorer',
+      subagent_history_start_ordinal: historyStart,
+      source: { subagent: { thread_spawn: { parent_thread_id: parent, depth: 1, agent_path: '/root/explorer', agent_nickname: 'explorer', agent_role: 'explorer' } } },
+    });
+  const parentCopy = (n: number) => command(n, `parent_old${n}`, 'ls', 'th-parent');
+  const task = (n: number, text: string) =>
+    line(n, n, 'response_item', {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/explorer',
+      content: [{ type: 'input_text', text }],
+    });
+
+  const body = (rows: object[]): string => rows.map((row) => JSON.stringify(row)).join('\n') + '\n';
+  const writeRollout = (file: string, rows: object[]) => writeFile(file, body(rows));
+  const appendRollout = (file: string, rows: object[]) => writeFile(file, body(rows), { flag: 'a' });
+
+  let dir: string;
+  let file: string;
+
+  beforeEach(async () => {
+    dir = await tempRoot();
+    file = path.join(dir, 'main.jsonl');
+    fakes = fakeFeedDeps([{ ref: REF, provider: 'codex' }]);
+    fakes.setLogFile(file);
+  });
+
+  it('снимок — лента из журнала Codex', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), userMessage(2, 'um1', 'Почини тесты'), command(3, 'c1', 'ls'), complete(4)]);
+    start();
+    const snapshot = await service.snapshot(REF);
+    expect(snapshot.items.map((entry) => entry.kind)).toEqual(['prompt', 'tool', 'turn']);
+  });
+
+  it('дописанные строки приходят дельтой по изменению журналов', async () => {
+    await writeRollout(file, [meta('th-main'), started(1)]);
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    await appendRollout(file, [userMessage(2, 'um1', 'go')]);
+    fakes.emitLog();
+    await vi.waitFor(() =>
+      expect(feedChanged(client).flatMap((delta) => delta.upsert.map((entry) => entry.kind))).toContain('prompt'),
+    );
+  });
+
+  it('рестарт хоста посреди хода: процесса нет — ход закрыт Interrupted; процесс жив — не закрыт (Review Focus 5)', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), userMessage(2, 'um1', 'go'), command(3, 'c1', 'sleep 100')]);
+    fakes.setProcess(null);
+    start();
+    const dead = await service.snapshot(REF);
+    expect(dead.items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+    await service.stop();
+    fakes = fakeFeedDeps([{ ref: REF, provider: 'codex' }]);
+    fakes.setLogFile(file);
+    fakes.setProcess({ pid: 42 });
+    start();
+    const alive = await service.snapshot(REF);
+    expect(alive.items.some((entry) => entry.kind === 'turn')).toBe(false);
+  });
+
+  it('агент Codex: карточка, сведения и вызовы из его журнала; снимок агента — его лента', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Найди newAgent'), command(4, 'cc1', 'rg newAgent', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    await service.snapshot(REF);
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ prompt: 'Найди newAgent', toolCount: 1 });
+    });
+    const sub = await service.snapshot(REF, 'th-child');
+    expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  it('Stop у Codex — только Esc, без стирания промпта', () => {
+    fakes.setProcess({ pid: 42 });
+    start();
+    service.interrupt(REF);
+    expect(fakes.writes).toEqual(['\x1b']);
+  });
+});
