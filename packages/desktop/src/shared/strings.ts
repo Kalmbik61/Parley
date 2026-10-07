@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
   plans: {
@@ -987,7 +987,11 @@ export const S = {
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
-    terminalOnly: `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    terminalOnlyFor: (provider: string): string =>
+      provider === 'codex' ? `Chat needs Codex ${CODEX_FEED_MIN_VERSION} or newer` : `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    /** Заметка ленты Codex: журнал не хранит историю до подключения Parley (`codex-history-in-terminal`). */
+    codexHistoryInTerminal: 'Earlier history of this session is only in Terminal',
+    openTerminal: 'Open terminal',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",

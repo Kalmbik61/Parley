@@ -62,6 +62,8 @@ export interface ComposerProps {
   onStop?: () => void;
   /** Откуда берутся подсказки: команды и скиллы, модели, файлы и субагенты. */
   source: SuggestionSource;
+  /** Подсказки команд по `/`; Codex их не знает (нет — включены). */
+  slashCommands?: boolean;
   /** Диалог выбора файлов (скрепка): пути выбранных, `[]` — отмена. Отказ владелец показывает тостом. */
   onPickFiles: () => Promise<string[]>;
   /** Скриншот из буфера обмена → путь сохранённого файла; `null` — нет картинки или отказ (тост у владельца). */
@@ -81,6 +83,7 @@ export function Composer({
   onSubmit,
   onStop,
   source,
+  slashCommands = true,
   onPickFiles,
   onPasteImage,
   dictationId,
@@ -116,7 +119,8 @@ export function Composer({
   };
 
   // Подсказки: закрытие Esc действует, пока текст тот же; следующая буква открывает их снова.
-  const context = suggestionContext(text, caret);
+  const found = suggestionContext(text, caret);
+  const context = !slashCommands && found?.kind === 'command' ? null : found;
   const items = useSuggestions(source, context);
   const [selected, setSelected] = useState(0);
   const [closedFor, setClosedFor] = useState<string | null>(null);

@@ -7,9 +7,9 @@ afterEach(cleanup);
 
 describe('ChatToolbar — кнопка микрофона вида Terminal (спека 3.2)', () => {
   it('micTargetId — кнопка микрофона в тулбаре; без него — нет', () => {
-    const { rerender } = render(<ChatToolbar workKey="k" tabId="t" view="terminal" available micTargetId="terminal:x" />);
+    const { rerender } = render(<ChatToolbar workKey="k" tabId="t" view="terminal" available provider="claude" micTargetId="terminal:x" />);
     expect(screen.getByTestId('mic').dataset.target).toBe('terminal:x');
-    rerender(<ChatToolbar workKey="k" tabId="t" view="terminal" available />);
+    rerender(<ChatToolbar workKey="k" tabId="t" view="terminal" available provider="claude" />);
     expect(screen.queryByTestId('mic')).toBeNull();
   });
 });

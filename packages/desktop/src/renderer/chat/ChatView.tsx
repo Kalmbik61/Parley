@@ -17,6 +17,9 @@
  * набранное возвращается — но только в поле, пустое к этому моменту: человек мог начать новое сообщение. Вставка без
  * Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) ничего не возвращает: текст уже в поле ввода терминала.
  *
+ * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
+ * вложения — списком путей, как в комнате.
+ *
  * Агенты (кусок 4b): «N agents running» в тулбаре — по карточкам `agent` ленты со статусом `running`; клик по ней и по
  * бейджу агентов в сайдбаре и комнате ведут в панель Agents правого сайдбара (`agents/open-agents.ts`); нет места — ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
  * сессию держат одни фоновые субагенты (`heldByBackground`), лента кончается `turn`: хода нет, Stop не показывается,
@@ -65,9 +68,10 @@ import { useWorksStore } from '../store/works.js';
 import { NotRunningCard } from '../terminal/NotRunningCard.js';
 import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
+import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
-import { ChatToolbar, type ModeChoice } from './ChatToolbar.js';
+import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
@@ -167,6 +171,7 @@ function noteOf(feed: FeedEntry | null): string | null {
 
 export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, sendDeps, provider, storedModel, storedEffort }: ChatViewProps): JSX.Element {
   const feed = useFeed(sessionRef);
+  const codex = provider === 'codex';
   const items = feed?.items ?? NO_ITEMS;
   const active = live && turnActive(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
@@ -190,7 +195,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // ползунок самого CLI.
   const modelDisabled = live ? busyReason : null;
   const effortDisabled = live ? busyReason : S.chat.choice.notLive;
-  const showChoice = canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
+  const showChoice = !codex && canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
   // Карточка неживой сессии — то же правило, что у `TerminalSurface`.
   const showCard = useWorksStore((state) => {
     const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
@@ -237,7 +242,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
 
   const submit = (typed: string, paths: readonly string[]): void => {
     const { updateQueued, setDraft, setAttachments } = useChatUiStore.getState();
-    const text = composePrompt(typed, paths);
+    const text = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
     const id = String((nextQueuedId += 1));
     if (active) updateQueued(sessionKey, (was) => [...was, { id, text, seen: promptCount(items, text) }]);
     // Поле очищается сразу, как в любом чате; хост ничего не вставил — набранное вернётся (ниже).
@@ -383,8 +388,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           tabId={tab.id}
           view="chat"
           available
-          model={modelLabel}
-          {...(canSetMode ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
+          provider={provider}
+          model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
+          {...(codex && feed?.mode != null ? { modeLabelText: modeLabel(feed.mode) } : {})}
+          {...(canSetMode && !codex ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
           {...(showChoice
             ? {
                 choiceMenu: {
@@ -415,6 +422,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         <Composer
           source={suggestionSource}
+          slashCommands={!codex}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}

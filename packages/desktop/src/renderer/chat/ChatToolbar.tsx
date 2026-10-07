@@ -97,6 +97,10 @@ export interface ChatToolbarProps {
   view: TerminalView;
   /** Вид «Chat» доступен сессии; нет — сегмент выключен. */
   available: boolean;
+  /** `WorkSession.provider`: от него зависит подсказка недоступности вида. */
+  provider: string;
+  /** Подпись режима без меню (Codex: режим меняется только в терминале); `null` или нет — не показывается. */
+  modeLabelText?: string | null;
   /** Меню режима; нет — не показывается (вид терминала или хост без `sessions.setMode`). */
   modeMenu?: ModeMenuProps;
   /** Подпись модели без меню (хост без `sessions.setModel`/`setEffort`); `null` или нет — не показывается. */
@@ -198,7 +202,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
   const entries = useWorksStore(state => state.entries);
   const layout = useLayoutStore(state => state.layouts[workKey]);
   const found = layout ? findTab(layout, tabId) : null;
@@ -217,7 +221,7 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
       style={{ height: TAB_TOOLBAR_PX }}
     >
       {/* `title` — на обёртке: у выключенных кнопок нет событий указателя, подсказка не всплыла бы. */}
-      <span title={available ? undefined : S.chat.terminalOnly} className="inline-flex">
+      <span title={available ? undefined : S.chat.terminalOnlyFor(provider)} className="inline-flex">
         <ToggleGroup
           type="single"
           size="sm"
@@ -242,6 +246,11 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
           {S.chat.agent.running(agents.running)}
         </Button>
       )}
+      {modeMenu === undefined && modeLabelText !== null ? (
+        <span data-testid="chat-mode" title={S.chat.mode.label} className="shrink-0 text-xs text-muted-foreground">
+          {modeLabelText}
+        </span>
+      ) : null}
       {modeMenu === undefined ? null : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild disabled={modeMenu.busy}>

@@ -37,6 +37,22 @@ describe('feedAvailable', () => {
     expect(feedAvailable({ hostMethods: NO_FEED, provider: 'claude', version: '2.1.286' })).toBe(false);
   });
 
+  it('Codex: нужен признак feed-codex и версия не ниже 0.160.0', () => {
+    const codex = { hostMethods: FEED, provider: 'codex', version: '0.160.0' };
+    expect(feedAvailable({ ...codex, features: new Set(['feed-codex']) })).toBe(true);
+    expect(feedAvailable({ ...codex, features: new Set() })).toBe(false);
+    expect(feedAvailable({ ...codex, features: new Set(['feed-codex']), version: '0.159.0' })).toBe(false);
+    expect(feedAvailable({ ...codex, features: new Set(['feed-codex']), version: null })).toBe(false);
+  });
+
+  it('Codex до загрузки провайдеров — неизвестно (null), как у Claude', () => {
+    expect(feedAvailability({ hostMethods: FEED, features: new Set(['feed-codex']), provider: 'codex', version: null, loaded: false })).toBeNull();
+  });
+
+  it('Claude без признака — как раньше', () => {
+    expect(feedAvailable({ hostMethods: FEED, provider: 'claude', family: 'claude', version: '2.1.289' })).toBe(true);
+  });
+
   it('codex — недоступен', () => {
     expect(feedAvailable({ hostMethods: FEED, provider: 'codex', version: null })).toBe(false);
   });

@@ -2,8 +2,9 @@
  * Вид вкладки сессии — «Chat» или терминал (план 2026-10-01, решение 6). Вид «Chat» доступен сессии,
  * когда у хоста есть лента (`feed.snapshot` в `hello.methods`), сессия — семейства Claude Code и её версия из
  * `providers.list` не ниже `FEED_MIN_VERSION`. Версия неизвестна (`null`: проба версий выключена или
- * сбоила) — вид недоступен: хост без версии HTTP-хуков ленты не пишет, и чат был бы пуст. Codex и
- * старый `claude` — терминал. Без поля `view` у вкладки — умолчание по доступности; явный выбор
+ * сбоила) — вид недоступен: хост без версии HTTP-хуков ленты не пишет, и чат был бы пуст. Codex — вид
+ * доступен, когда хост объявил признак `feed-codex` и версия не ниже `CODEX_FEED_MIN_VERSION` (лента
+ * из журнала, спека 2026-10-07, 5.4). Старый `claude` — терминал. Без поля `view` у вкладки — умолчание по доступности; явный выбор
  * человека побеждает, только пока вид доступен.
  *
  * Третье состояние — «неизвестно» (`null`): хост ленту знает, сессия — Claude Code, но первый ответ
@@ -13,15 +14,17 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { FEED_MIN_VERSION, refKey, type SessionRef } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, TerminalView } from '../../shared/layout-types.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
-import { hostMethods, semver } from './capabilities.js';
+import { hostFeatures, hostMethods, semver } from './capabilities.js';
 
 export interface FeedAvailabilityInput {
   hostMethods: ReadonlySet<string>;
+  /** Признаки хоста (`hello.features`); нет — хост до ленты Codex. */
+  features?: ReadonlySet<string>;
   /** `WorkSession.provider`: встроенный или свой провайдер. */
   provider: string;
   /** Семейство текущей записи; нет поля у старого хоста — Claude только по id. */
@@ -41,18 +44,22 @@ function atLeast(version: string, min: string): boolean {
 
 export function feedAvailable({
   hostMethods: methods,
+  features,
   provider,
   family,
   version,
 }: FeedAvailabilityInput): boolean {
   if (!methods.has('feed.snapshot')) return false;
+  if (provider === 'codex') {
+    return (features?.has(FEED_CODEX_FEATURE) ?? false) && version !== null && atLeast(version, CODEX_FEED_MIN_VERSION);
+  }
   if (family !== 'claude' && !(family === undefined && provider === 'claude')) return false;
   return version !== null && atLeast(version, FEED_MIN_VERSION);
 }
 
 /**
- * Доступность с третьим состоянием: Claude/GLM ждут первый снимок провайдеров.
- * Старый хост без family разрешает Chat только id claude. Хост без ленты и Codex не ждут.
+ * Доступность с третьим состоянием: Claude/GLM/Codex ждут первый снимок провайдеров.
+ * Старый хост без family разрешает Chat только id claude. Хост без ленты не ждёт.
  */
 export function feedAvailability(
   input: FeedAvailabilityInput & { loaded: boolean },
@@ -60,7 +67,7 @@ export function feedAvailability(
   if (!input.hostMethods.has('feed.snapshot')) return false;
   if (
     !input.loaded &&
-    (input.provider === 'claude' || input.provider === 'glm' || input.family === 'claude')
+    (input.provider === 'claude' || input.provider === 'glm' || input.provider === 'codex' || input.family === 'claude')
   )
     return null;
   if (!input.loaded) return false;
@@ -141,11 +148,14 @@ export function useFeedAvailability(): (provider: string) => boolean | null {
   const hasFeed = useHostHasFeed();
   const providers = useProvidersStore((state) => state.providers);
   const loaded = useProvidersStore((state) => state.loaded);
+  const status = useHostStore((state) => state.status);
+  const features = useMemo(() => hostFeatures(status), [status]);
   const methods = hasFeed ? FEED_METHODS : NO_METHODS;
   return (provider) => {
     const info = providers.find((entry) => entry.id === provider);
     return feedAvailability({
       hostMethods: methods,
+      features,
       provider,
       family: info?.family,
       version: info?.version ?? null,
@@ -162,6 +172,7 @@ export function feedAvailableNow(provider: string): boolean {
   const info = useProvidersStore.getState().providers.find((entry) => entry.id === provider);
   return feedAvailable({
     hostMethods: hostMethods(useHostStore.getState().status),
+    features: hostFeatures(useHostStore.getState().status),
     provider,
     family: info?.family,
     version: info?.version ?? null,

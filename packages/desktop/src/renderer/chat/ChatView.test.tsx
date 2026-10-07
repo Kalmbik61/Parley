@@ -23,6 +23,7 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -132,7 +133,7 @@ describe('TerminalBody — вид вкладки', () => {
     expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect((segment('Terminal') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTitle(S.chat.terminalOnly).contains(segment('Chat'))).toBe(true);
+    expect(screen.getByTitle(S.chat.terminalOnlyFor('codex')).contains(segment('Chat'))).toBe(true);
   });
 
   it('версия claude неизвестна (null) — терминал, сегмент выключен с подсказкой', () => {
@@ -142,8 +143,8 @@ describe('TerminalBody — вид вкладки', () => {
     expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect(segment('Terminal').getAttribute('aria-checked')).toBe('true');
-    expect(S.chat.terminalOnly).toBe('Chat needs Claude Code 2.1.286 or newer');
-    expect(screen.getByTitle(S.chat.terminalOnly).contains(segment('Chat'))).toBe(true);
+    expect(S.chat.terminalOnlyFor('claude')).toBe('Chat needs Claude Code 2.1.286 or newer');
+    expect(screen.getByTitle(S.chat.terminalOnlyFor('claude')).contains(segment('Chat'))).toBe(true);
   });
 
   it('providers.list ещё не ответил — пустая заглушка: ни чата, ни терминала, ни тулбара; ответ пришёл — чат', () => {
@@ -1823,5 +1824,40 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     ]);
     expect(screen.getByTestId('chat-stop')).toBeTruthy();
     expect(running()).toBeNull();
+  });
+});
+
+describe('ChatView — Codex', () => {
+  const CODEX_OK = { id: 'codex', label: 'Codex', available: true, version: '0.160.0', limits: null };
+  const started = (model: string): FeedItem => ({ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model } });
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.8.0', methods: [...FEED_METHODS, 'sessions.setMode', 'sessions.setModel', 'sessions.setEffort'], features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [CLAUDE_OK, CODEX_OK], loaded: true });
+    renderBody(makeSession('s-01', 'S01', { provider: 'codex' }));
+    setFeed([started('gpt-6-astra'), prompt('p1', 'hi')]);
+  });
+
+  it('вид Chat доступен; модель — подпись текстом, меню модели и режима нет', () => {
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
+    expect(screen.getByTestId('chat-model').textContent).toBe('gpt-6-astra');
+    expect(screen.queryByTestId('chat-mode')).toBeNull();
+    expect(document.querySelector('[aria-haspopup="menu"]')).toBeNull();
+  });
+
+  it('ввод «/» не открывает подсказки команд', () => {
+    fireEvent.change(field(), { target: { value: '/' } });
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('отправка с вложением — пути списком, как в комнате', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    act(() => useChatUiStore.getState().setAttachments(refKey(REF), ['/tmp/a b.png']));
+    fireEvent.change(field(), { target: { value: 'hi' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const sent = bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+    expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true }]);
   });
 });

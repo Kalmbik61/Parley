@@ -222,6 +222,13 @@ describe('лента на фикстурах core', () => {
     expect(screen.getByTestId('chat-turn').textContent).toBe('Turn finished · 5s');
   });
 
+  it('codex-history-in-terminal — строка окна и кнопка «Open terminal»', () => {
+    renderFeed([{ id: 'e', at: AT, kind: 'error', error: 'codex-history-in-terminal', message: null }]);
+    expect(screen.getByTestId('chat-error').textContent).toContain(S.chat.codexHistoryInTerminal);
+    expect(screen.getByRole('button', { name: S.chat.openTerminal })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('ожидающая карточка — «ждёт ответа в терминале» с командой, без кнопок', () => {
     renderFeed([
       {
