@@ -37,14 +37,16 @@
  * событию `scroll`), поэтому новое сообщение человека от оригинала не уводит.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { addAttachments } from '../../chat/attachments.js';
 import { useHostSupports } from '../../lib/capabilities.js';
+import { cn } from '../../lib/cn.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { earlierRemaining } from '../../lib/window-merge.js';
@@ -53,7 +55,9 @@ import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { useRoomPagesStore } from '../../store/room-pages.js';
+import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
+import { dragHasFiles } from '../../terminal/drop.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
@@ -115,6 +119,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
+  /** Над вкладкой тащат файлы — подсветка места броска. */
+  const [dropping, setDropping] = useState(false);
   const resolveMounted = useRef(true);
   useEffect(() => { resolveMounted.current = true; return () => { resolveMounted.current = false; }; }, []);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -374,8 +380,37 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     }
   };
 
+  // Файлы из Finder на всю вкладку: подсветка, затем пути — вложениями поля ввода этой комнаты (как у «Chat»).
+  const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropping(true);
+  };
+  const onDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
+  };
+  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    setDropping(false);
+    if (!dragHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    // Пустой путь — у `File` нет места на диске (синтетический): пропускаем.
+    const paths = Array.from(event.dataTransfer.files)
+      .map((file) => bridge.app.pathForFile(file))
+      .filter((path) => path !== '');
+    const store = useUiStore.getState();
+    store.setComposerAttachments(draftKey, addAttachments(store.composerAttachments[draftKey] ?? [], paths));
+  };
+
   return (
-    <div data-room-panel="" className="flex h-full min-h-0 min-w-0 flex-col">
+    <div
+      data-room-panel=""
+      {...(dropping ? { 'data-dropping': '' } : {})}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
+    >
       <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -461,7 +496,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           ))}
         </div>
       )}
-      <Composer key={draftKey} members={members} draftKey={draftKey} onSend={handleSend} />
+      <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
     </div>
   );
 }

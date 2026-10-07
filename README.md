@@ -506,7 +506,10 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
 links stay but headings and list marks do not), then
 the messages: Markdown (headings, lists, code, tables, links) with mention chips. HTML in a
 message is shown as text, and a link opens in your browser. A message whose Markdown cannot
-be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. Each
+be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. A plan letter
+from Parley is laid out by section: the item's title in bold, Scope, Criteria as a list,
+Evidence or the return note, and "Next:" with the tool names as code; paths to files and
+folders in Parley's letters are shown as code (the letter text itself is unchanged). Each
   message shows the sender, a `★` for the lead, the recipients ("→ all" or labels), the kind
   tag (`note`, `question`, `decision`), the time and a dot for an unread one. Under a message
   addressed to agents stands its delivery line: "✓ Picked up by S03" for those who have read
@@ -530,7 +533,11 @@ be drawn (or has quotes nested deeper than 100 levels) is shown as plain text. E
   everyone" or "To S02, S03"; `@` opens the member menu (a filter by label, provider and
   model; ↑/↓, Enter or Tab, Esc; mouse click), and the chosen member becomes a chip and a
   recipient. Enter sends, Shift+Enter inserts a line break, only plain text is pasted, and an
-  unfinished draft is kept per room until the window restarts;
+  unfinished draft is kept per room until the window restarts. Files are attached with the
+  paperclip ("Attach a file") or by dropping them anywhere on the room tab; they stand as chips
+  above the field (an image as a thumbnail) and go out at the end of the message as an
+  "Attachments:" list of absolute paths, which the agents open themselves; a message of
+  attachments alone is sent too;
 - the mouse, menus and ⌘ shortcuts, with no prefix key: ⌘T — a new session or room in the
   active workspace, ⌘D and ⇧⌘D — a new group on the right or below, with the content chosen
   through the palette ("Open in new group"), ⌘W — close the tab, ⌘⇧T — reopen a closed one,

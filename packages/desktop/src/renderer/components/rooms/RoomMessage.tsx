@@ -34,6 +34,7 @@ import { isoMs } from '../../lib/iso-time.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { Badge } from '../../ui/badge.js';
 import type { MessageModel, ReplyModel } from './feed-model.js';
+import { planLetterMarkdown } from './plan-letter.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
@@ -105,6 +106,8 @@ export function RoomMessage({
   observeRef,
 }: RoomMessageProps): JSX.Element {
   const { picked, waiting } = message.delivery;
+  /** Письмо `parley` или системная строка. */
+  const system = message.sender.kind === 'system';
   return (
     <div
       data-message-id={message.id}
@@ -141,10 +144,12 @@ export function RoomMessage({
         </div>
         {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} />}
         <RoomMarkdown
-          text={message.text}
+          // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
+          text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
           labelOf={labelOf}
           onOpenExternal={onOpenExternal}
           humanChips={message.sender.kind !== 'human'}
+          codePaths={system}
         />
         {picked.length === 0 && waiting.length === 0 ? null : (
           <div data-message-delivery="" className="break-words text-xs text-muted-foreground">

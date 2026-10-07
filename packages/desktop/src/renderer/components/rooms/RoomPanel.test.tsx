@@ -60,7 +60,7 @@ let bridge: FakeBridge;
 beforeEach(() => {
   bridge = createFakeBridge();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
-  useUiStore.setState({ composerDrafts: {}, windowFocused: true, documentVisible: true });
+  useUiStore.setState({ composerDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
   vi.mocked(toast).mockClear();
   // Меню упоминаний прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.
@@ -2348,5 +2348,19 @@ describe('room history menu in the header (P28)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
     expect(screen.getByText('Update or restart the host to share room history.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
+  });
+});
+
+describe('RoomPanel — файлы, брошенные на вкладку', () => {
+  it('подсветка при переносе файлов; бросок — вложения поля ввода; текст без файлов вкладка не берёт', () => {
+    renderPanel(entryOf());
+    const panel = document.querySelector<HTMLElement>('[data-room-panel]') as HTMLElement;
+    fireEvent.dragOver(panel, { dataTransfer: { types: ['Files'], dropEffect: 'none' } });
+    expect(panel.hasAttribute('data-dropping')).toBe(true);
+    fireEvent.drop(panel, { dataTransfer: { types: ['Files'], files: [new File(['x'], 'mock.png'), new File(['y'], 'spec.md')] } });
+    expect(panel.hasAttribute('data-dropping')).toBe(false);
+    expect(screen.getAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'))).toEqual(['/fake/mock.png', '/fake/spec.md']);
+    fireEvent.drop(panel, { dataTransfer: { types: ['text/plain'], files: [] } });
+    expect(screen.getAllByTestId('chat-attachment')).toHaveLength(2);
   });
 });

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useUiStore } from '../../store/ui.js';
 import { fakeDictationDeps } from '../../test-utils/dictation.js';
+import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { useDictationStore } from '../../voice/dictation-store.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
@@ -77,19 +78,21 @@ afterEach(() => {
   Reflect.deleteProperty(document, 'caretRangeFromPoint');
 });
 
+let bridge: FakeBridge = createFakeBridge();
+
 function renderComposer(
   onSend: (submission: ComposerSubmission) => SendResult = vi.fn(),
   draftKey = KEY,
   members: ComposerMember[] = MEMBERS,
 ) {
-  const view = render(<Composer members={members} draftKey={draftKey} onSend={onSend} />);
+  const view = render(<Composer members={members} bridge={bridge} draftKey={draftKey} onSend={onSend} />);
   return { ...view, onSend };
 }
 
 /** Новое поле «с нуля» посреди теста: прежнее размонтировано и черновик стёрт, иначе он поднялся бы в новое поле. */
 function fresh(): void {
   cleanup();
-  useUiStore.setState({ composerDrafts: {} });
+  useUiStore.setState({ composerDrafts: {}, composerAttachments: {} });
 }
 
 const editor = (): HTMLElement => screen.getByRole('textbox', { name: 'Message' });
@@ -633,6 +636,8 @@ describe('Composer — перетаскивание в поле: только т
     const event = createEvent.drop(editor(), {
       dataTransfer: {
         files: [],
+        // Как у настоящего `DataTransfer`: форматы, что несёт перетаскивание, — по ним поле отличает файлы от текста.
+        types: [...(plain === '' ? [] : ['text/plain']), ...(html === '' ? [] : ['text/html'])],
         getData: (format: string) => (format === 'text/plain' ? plain : format === 'text/html' ? html : ''),
       },
     });
@@ -850,5 +855,58 @@ describe('диктовка в поле комнаты (спека 3.2)', () => {
     fireEvent.click(within(mic).getByRole('button'));
     await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('hello from voice'));
     expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('Composer — вложения', () => {
+  beforeEach(() => {
+    bridge = createFakeBridge();
+    useUiStore.setState({ composerDrafts: {}, composerAttachments: {} });
+  });
+
+  const attach = (): HTMLElement => screen.getByRole('button', { name: 'Attach a file' });
+  const chips = (): string[] => screen.queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path') ?? '');
+
+  it('скрепка: выбранные файлы — чипами, без повторов; отправка — текст и пути списком кодом, чипы уходят', async () => {
+    bridge.setChosenFiles(['/Users/me/mock.png', '/Users/me/spec.md']);
+    const { onSend } = renderComposer();
+    fireEvent.click(attach());
+    await waitFor(() => expect(chips()).toEqual(['/Users/me/mock.png', '/Users/me/spec.md']));
+    fireEvent.click(attach());
+    await waitFor(() => expect(chips()).toHaveLength(2));
+    type('Посмотри макет');
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith({ to: [], text: 'Посмотри макет\n\nAttachments:\n- `/Users/me/mock.png`\n- `/Users/me/spec.md`' });
+    expect(chips()).toEqual([]);
+  });
+
+  it('сообщение из одних вложений уходит; крестик убирает вложение', async () => {
+    bridge.setChosenFiles(['/a/one.txt', '/a/two.txt']);
+    const { onSend } = renderComposer();
+    fireEvent.click(attach());
+    await waitFor(() => expect(chips()).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove one.txt' }));
+    expect(chips()).toEqual(['/a/two.txt']);
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith({ to: [], text: 'Attachments:\n- `/a/two.txt`' });
+  });
+
+  it('отказ отправки возвращает и текст, и вложения', async () => {
+    bridge.setChosenFiles(['/a/one.txt']);
+    const onSend = vi.fn(() => Promise.reject(new Error('нет')));
+    renderComposer(onSend);
+    fireEvent.click(attach());
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    type('Текст');
+    press('Enter');
+    await waitFor(() => expect(chips()).toEqual(['/a/one.txt']));
+    expect(editor().textContent).toBe('Текст');
+  });
+
+  it('файлы, брошенные на поле, текстом не вставляются', () => {
+    renderComposer();
+    const files = { types: ['Files'], files: [], getData: () => '/Users/me/mock.png' };
+    fireEvent.drop(editor(), { dataTransfer: files });
+    expect(editor().textContent).toBe('');
   });
 });
