@@ -121,7 +121,8 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * - `notify` человека не подменяется: конец хода Codex — OSC 9 и журнал (`task_complete`), спека 2026-10-07, 5.5;
  * - `skills.include_instructions` — родной каталог скиллов (`{skillCatalog}`): значение есть только при включённом
  *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
- * Хуки Codex не включаются (`hooks.*`): им нужно ревью человека, а доверие себе харнесс не выдаёт.
+ * Хуки Codex (`{codexHooks}`, `hooks.*`) включаются только по согласию человека — настройка `codexApprovals`
+ * (спека 2026-10-07, решение 9); доверие выдаёт сам человек в Codex, харнесс его себе не пишет.
  * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
  */
 const CODEX_CONFIG_FLAGS: readonly string[] = [
@@ -143,6 +144,7 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   'tui.notification_condition="always"',
   '-c',
   '{skillCatalog}',
+  '{codexHooks}',
 ];
 
 /**
@@ -410,6 +412,8 @@ export interface RunnerSubstitutions {
   agent?: string;
   /** Целое присваивание TOML `skills.include_instructions=false`: Codex без родного каталога скиллов. */
   skillCatalog?: string;
+  /** Готовые пары `-c hooks.<Event>=…` (`work/codex-hooks.ts`): подставляются на место элемента, без значения — выпадают. */
+  codexHooks?: readonly string[];
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
@@ -423,7 +427,7 @@ export interface RunnerSubstitutions {
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|model|effort|disallowedTools|sandbox)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|model|effort|disallowedTools|sandbox)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -482,11 +486,20 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
     }
 
     const value = subs[match[1] as keyof RunnerSubstitutions];
-    if (value === undefined) {
-      dropWithFlag();
+    if (Array.isArray(value)) {
+      // Элемент-массив разворачивается на месте; флага-предшественника у него нет — пары `-c` в нём уже готовы.
+      for (const part of value as readonly string[]) {
+        args.push(part);
+        fromTemplate.push(false);
+      }
       continue;
     }
-    args.push(value);
+    if (value === undefined) {
+      // У `{codexHooks}` своего флага перед элементом нет — соседний `-c` чужой.
+      if (match[1] !== 'codexHooks') dropWithFlag();
+      continue;
+    }
+    args.push(value as string);
     fromTemplate.push(false);
   }
   return args;

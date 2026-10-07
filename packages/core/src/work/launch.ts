@@ -14,6 +14,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
+import { codexHookFlags } from './codex-hooks.js';
 import { findRunnerBinary } from './find-binary.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
@@ -83,6 +84,11 @@ export interface LaunchOptions {
    * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
    */
   hookUrl?: string;
+  /**
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook`. Вместе с `hookUrl` и настройкой
+   * `codexApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6).
+   */
+  codexHookCommand?: string;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
   layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
 }
@@ -339,6 +345,16 @@ async function plan(
     });
   }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
+  // Хуки Codex — только по согласию человека (`codexApprovals`, по умолчанию выключено): без доверия в `/hooks`
+  // Codex остановил бы старт экраном ревью.
+  if (
+    entry.id === 'codex' &&
+    launchConfig.codexApprovals &&
+    options.hookUrl !== undefined &&
+    options.codexHookCommand !== undefined
+  ) {
+    subs.codexHooks = codexHookFlags(options.codexHookCommand);
+  }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');
   if (options.layer?.role?.trim()) {

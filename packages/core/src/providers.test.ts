@@ -1354,6 +1354,22 @@ describe('codex: запуск и возобновление (спека комн
     expect(substituteArgs(['-c', '{skillCatalog}', 'x'], {})).toEqual(['x']);
   });
 
+  it('{codexHooks}: массив разворачивается на месте и в запуске, и в resume; без значения элемент выпадает без соседнего -c', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{codexHooks}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{codexHooks}');
+    expect(PROVIDERS.claude.runner.args).not.toContain('{codexHooks}');
+    const plain = startCommand(PROVIDERS.codex, subs).args;
+    expect(plain.join(' ')).not.toContain('hooks.');
+    const hooks = ['-c', 'hooks.Stop=[]', '-c', 'hooks.SessionStart=[]'];
+    const withHooks = startCommand(PROVIDERS.codex, { ...subs, codexHooks: hooks }).args;
+    expect(withHooks).toHaveLength(plain.length + hooks.length);
+    expect(withHooks.slice(withHooks.indexOf('hooks.Stop=[]') - 1, withHooks.indexOf('hooks.Stop=[]') + 3)).toEqual(hooks);
+    const resume = { ...subs, providerSessionId: 'uuid-1' };
+    expect(resumeCommand(PROVIDERS.codex, { ...resume, codexHooks: hooks }).args).toContain('hooks.SessionStart=[]');
+    expect(substituteArgs(['-c', 'a=1', '{codexHooks}'], {})).toEqual(['-c', 'a=1']);
+    expect(substituteArgs(['-c', 'a=1', '{codexHooks}'], { codexHooks: ['-c', 'b=2'] })).toEqual(['-c', 'a=1', '-c', 'b=2']);
+  });
+
   it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
     for (const args of [
       startCommand(PROVIDERS.codex, subs).args,

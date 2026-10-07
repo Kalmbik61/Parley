@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
   isStaleHostLock,
@@ -34,6 +35,7 @@ import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
+import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
@@ -245,12 +247,22 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
   // адрес приёмника и свой токен (подкусок 2c).
+  // Запускатель хука Codex заводится при первой надобности (включённая `codexApprovals`), а не при каждом старте хоста.
+  let codexHookCommand: Promise<string> | undefined;
+  const codexHookCommandOnce = (): Promise<string> => {
+    codexHookCommand ??= ensureCodexHookLauncher(
+      parleyHome(),
+      process.execPath,
+      fileURLToPath(new URL('./feed/codex-hook-bin.js', import.meta.url)),
+    );
+    return codexHookCommand;
+  };
   const sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
-    { hooks: hookServer, providerVersions },
+    { hooks: hookServer, providerVersions, codexHookCommand: codexHookCommandOnce },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем

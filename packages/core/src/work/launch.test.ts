@@ -420,6 +420,37 @@ describe('план запуска', () => {
     expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
   });
 
+  it('codex: хуки (-c hooks.…) только при codexApprovals, hookUrl и команде — и при запуске, и при resume', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    const options = { hookUrl: 'http://127.0.0.1:41234/hooks', codexHookCommand: '/home/me/.parley/bin/parley-codex-hook' };
+    const hookArgs = (args: string[]): string[] => args.filter((arg) => arg.startsWith('hooks.'));
+
+    // Флаг выключен (умолчание): ни одного hooks.* даже с адресом и командой.
+    expect(hookArgs((await planLaunch(project, workId, session, options)).args)).toEqual([]);
+
+    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    const launched = await planLaunch(project, workId, session, options);
+    expect(hookArgs(launched.args)).toHaveLength(7);
+    for (const arg of hookArgs(launched.args)) expect(launched.args[launched.args.indexOf(arg) - 1]).toBe('-c');
+    // Без адреса или без команды — снова ни одного.
+    expect(hookArgs((await planLaunch(project, workId, session, { codexHookCommand: options.codexHookCommand })).args)).toEqual([]);
+    expect(hookArgs((await planLaunch(project, workId, session, { hookUrl: options.hookUrl })).args)).toEqual([]);
+
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: '7fa0e1ee-cc7b-4a1e-9d4e-000000000001' }, options);
+    expect(hookArgs(resumed.args)).toEqual(hookArgs(launched.args));
+  });
+
+  it('codex: текст хуков побайтно одинаков между запусками', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    const options = { hookUrl: 'http://127.0.0.1:1/hooks', codexHookCommand: '/h/bin/parley-codex-hook' };
+    const first = (await planLaunch(project, workId, session, options)).args.filter((arg) => arg.startsWith('hooks.'));
+    const second = (await planLaunch(project, workId, session, { ...options, hookUrl: 'http://127.0.0.1:2/hooks' })).args.filter((arg) => arg.startsWith('hooks.'));
+    expect(second).toEqual(first);
+  });
+
   it('hookUrl доезжает до файла --settings: HTTP-хуки ленты; без него файл прежний (вид «Chat»)', async () => {
     const { workId, sessionId } = await pending('claude');
     const url = 'http://127.0.0.1:41234/hooks';
