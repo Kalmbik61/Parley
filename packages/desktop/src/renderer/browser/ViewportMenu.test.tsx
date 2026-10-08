@@ -1,6 +1,6 @@
 // packages/desktop/src/renderer/browser/ViewportMenu.test.tsx
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { customSize, presetSpec, rotatedSpec, viewportName, ViewportMenu } from './ViewportMenu.js';
 
@@ -33,6 +33,10 @@ describe('помощники меню размеров (спека 4.2)', () => 
       ['10.5', '700'],
       ['', '700'],
       ['abc', '700'],
+      ['1e3', '700'],
+      ['0x400', '700'],
+      ['+500', '700'],
+      ['500.0', '700'],
     ];
     for (const [width, height] of bad) expect(customSize(width, height), `${width}×${height}`).toBeNull();
   });
@@ -102,6 +106,51 @@ describe('ViewportMenu (спека 4.2)', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
     expect(onChange).toHaveBeenCalledWith({ width: 1024, height: 700, mobile: false, dpr: 1 });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('подсказка кнопки несёт текущий размер, имя для доступности не меняется', () => {
+    const { rerender } = render(<ViewportMenu viewport={null} disabled={false} onChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Viewport size' }).getAttribute('title')).toBe('Fit');
+    rerender(<ViewportMenu viewport={{ preset: 'mobile-m', rotated: false, dpr: 2 }} disabled={false} onChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Viewport size' }).getAttribute('title')).toBe('Mobile M');
+    rerender(<ViewportMenu viewport={{ width: 1024, height: 700, mobile: false, dpr: 1 }} disabled={false} onChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Viewport size' }).getAttribute('title')).toBe('1024×700');
+  });
+
+  it('Custom…: после Escape и после Apply фокус возвращается на кнопку', async () => {
+    render(<ViewportMenu viewport={null} disabled={false} onChange={vi.fn()} />);
+    const button = screen.getByRole('button', { name: 'Viewport size' });
+
+    fireEvent.click(within(openMenu()).getByRole('menuitemradio', { name: 'Custom…' }));
+    fireEvent.keyDown(within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Width' }), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(button));
+
+    button.blur();
+    fireEvent.click(within(openMenu()).getByRole('menuitemradio', { name: 'Custom…' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(button));
+  });
+
+  it('Custom…: клик мимо поповера оставляет фокус там, куда кликнули', async () => {
+    render(
+      <>
+        <input aria-label="Other" />
+        <ViewportMenu viewport={null} disabled={false} onChange={vi.fn()} />
+      </>,
+    );
+    fireEvent.click(within(openMenu()).getByRole('menuitemradio', { name: 'Custom…' }));
+    const dialog = screen.getByRole('dialog');
+    await new Promise((resolve) => setTimeout(resolve, 10)); // Radix вешает слушатель клика мимо в следующем такте
+    const other = screen.getByRole('textbox', { name: 'Other' });
+    // Как у мыши: фокус уходит на нажатии, а поповер закрывается на клике.
+    fireEvent.pointerDown(other);
+    other.focus();
+    fireEvent.click(other);
+    await waitFor(() => expect(dialog.isConnected).toBe(false));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(document.activeElement).toBe(other);
   });
 
   it('без страницы — кнопка неактивна', () => {

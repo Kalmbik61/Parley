@@ -52,8 +52,10 @@ export function rotatedSpec(spec: ViewportSpec): ViewportSpec | null {
   return { ...spec, width: spec.height, height: spec.width };
 }
 
-/** Поля Custom… → размер в пределах 200–3840 × 200–2400; иначе null. Пустое поле — 0, тоже вне пределов. */
+/** Поля Custom… → размер в пределах 200–3840 × 200–2400; иначе null. Только цифры: `1e3`, `0x400`, `+500`, `500.0` — нет. */
 export function customSize(widthText: string, heightText: string): { width: number; height: number } | null {
+  const digits = /^\d+$/;
+  if (!digits.test(widthText.trim()) || !digits.test(heightText.trim())) return null;
   const width = Number(widthText.trim());
   const height = Number(heightText.trim());
   const ok = (value: number, max: number): boolean => Number.isInteger(value) && value >= DEVTOOLS_LIMITS.customMin && value <= max;
@@ -80,6 +82,10 @@ export function ViewportMenu({ viewport, disabled, onChange }: ViewportMenuProps
   const [heightText, setHeightText] = useState('');
   // Custom… закрывает меню: фокус уходит в поля поповера, а не обратно на кнопку.
   const toCustom = useRef(false);
+  // `PopoverAnchor` не заводит `triggerRef` поповера, поэтому Radix сам фокус на кнопку не вернёт — возвращаем руками.
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Клик мимо поповера отдаёт фокус тому, по чему кликнули, — кнопка его не забирает.
+  const outside = useRef(false);
   const selected = viewport === null ? 'fit' : 'preset' in viewport ? viewport.preset : 'custom';
   const rotated = viewport === null ? null : rotatedSpec(viewport);
   const size = customSize(widthText, heightText);
@@ -104,9 +110,10 @@ export function ViewportMenu({ viewport, disabled, onChange }: ViewportMenuProps
         <PopoverAnchor asChild>
           <DropdownMenuTrigger asChild>
             <button
+              ref={triggerRef}
               type="button"
               aria-label={S.browser.viewport.menu}
-              title={S.browser.viewport.menu}
+              title={viewportName(viewport)}
               disabled={disabled}
               className="flex h-6 shrink-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
             >
@@ -172,7 +179,18 @@ export function ViewportMenu({ viewport, disabled, onChange }: ViewportMenuProps
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-      <PopoverContent align="end" className="w-64 p-3">
+      <PopoverContent
+        align="end"
+        className="w-64 p-3"
+        onInteractOutside={() => {
+          outside.current = true;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (!outside.current) triggerRef.current?.focus();
+          outside.current = false;
+        }}
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();
