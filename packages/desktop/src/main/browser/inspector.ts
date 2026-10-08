@@ -9,11 +9,13 @@
  * главного фрейма: растёт на `Page.frameNavigated` без `parentId`, и запросы с `loaderId` нового документа (сам
  * документ уходит до коммита) переходят в неё.
  *
- * Окну журнал идёт пачками (`onBatch`) не чаще раза в 150 мс и не больше 200 записей — сверх них самые свежие
- * изменения; остальное отдаёт `snapshot`. Команды CDP — только из `CDP_ALLOWED`, у каждой тайм-аут: без страницы
- * `enable` висит (проба 1.4). `ready` отвечает, когда все четыре `enable` отработали — ответом, отказом или
- * тайм-аутом. Не подключился или отцепился — `capture: 'unavailable'` и новая попытка на следующей навигации
- * главного фрейма.
+ * Окну журнал идёт пачками (`onBatch`) не чаще раза в 150 мс и не больше 200 записей: что не влезло, идёт в
+ * следующих пачках по порядку изменений (вытесненное из кольца до отправки отбрасывается), так что окно сходится с
+ * журналом, а `snapshot` нужен ему лишь на старте. Команды CDP — только из `CDP_ALLOWED`, у каждой тайм-аут: без
+ * страницы `enable` висит (проба 1.4). `ready` отвечает, когда все четыре `enable` отработали — ответом, отказом или
+ * тайм-аутом. Не подключился, отцепился или `enable` отказал (тогда инспектор сам отцепляет отладчик) —
+ * `capture: 'unavailable'` и новая попытка на следующей навигации главного фрейма; `on`/`late` вернутся только после
+ * ответа всех `enable`.
  *
  * События CDP — данные страницы: обработчик отладчика не бросает наружу (исключение в main — окно ошибки Electron),
  * сбой разбора одного события пишется в журнал main и не мешает следующим.
@@ -96,6 +98,8 @@ interface NetRecord {
 interface Journal {
   id: number;
   attached: boolean;
+  /** Номер попытки подключения: запоздалый отказ прежней попытки новую не трогает. */
+  attempt: number;
   /** Все `enable` последнего подключения отработали; до подключения и после его отказа — уже готово. */
   ready: Promise<void>;
   epoch: number;
@@ -207,18 +211,31 @@ export function createInspector(deps: {
     });
   }
 
+  /** Запись, чьё изменение ждёт пачки, ещё в кольце? Консоль — подряд идущие id, сеть — по requestId. */
+  function inRing(journal: Journal, key: string): boolean {
+    if (key.startsWith('c')) {
+      const first = journal.console[0];
+      return first !== undefined && Number(key.slice(1)) >= first.id;
+    }
+    return journal.network.has(key.slice(1));
+  }
+
   function flush(journal: Journal): void {
     journal.cancelFlush = null;
     if (!journal.dirty) return;
     journal.dirty = false;
-    // Сверх 200 — самые свежие изменения (Фокус ревью 1): окно не тонет в болтливой консоли, всё кольцо отдаёт snapshot.
+    // Вытесненное из кольца отправлять уже нечего.
+    for (const key of journal.pending.keys()) if (!inRing(journal, key)) journal.pending.delete(key);
+    // Не больше 200 записей за пачку, самые давние изменения первыми: остаток остаётся в `pending` и уходит в
+    // следующих пачках по порядку (Фокус ревью 1) — окно не отстаёт от журнала, упавший запрос посреди всплеска
+    // не теряется.
     const keys = new Set(
       [...journal.pending.entries()]
         .sort((a, b) => a[1] - b[1])
-        .slice(-DEVTOOLS_LIMITS.batchMax)
+        .slice(0, DEVTOOLS_LIMITS.batchMax)
         .map(([key]) => key),
     );
-    journal.pending.clear();
+    for (const key of keys) journal.pending.delete(key);
     const batch: DevtoolsBatch = {
       webContentsId: journal.id,
       epoch: journal.epoch,
@@ -229,6 +246,7 @@ export function createInspector(deps: {
       network: [...journal.network.values()].filter((record) => keys.has(`n${record.entry.id}`)).map((record) => ({ ...record.entry })),
     };
     journal.reset = false;
+    if (journal.pending.size > 0) schedule(journal);
     for (const listener of batchListeners) guarded('batch listener', () => listener(batch));
   }
 
@@ -328,7 +346,10 @@ export function createInspector(deps: {
       touch(journal, `n${record.entry.id}`);
     }
     // Документ из bfcache приходит без запроса, about:blank — без сети: это не пропуск захвата.
-    if (data.type !== 'BackForwardCacheRestore' && isHttp(str(frame.url))) setCapture(journal, sawDocument ? 'on' : 'late');
+    // `unavailable` снимает только успешное подключение: навигация сама по себе не доказывает, что домены включены.
+    if (data.type !== 'BackForwardCacheRestore' && isHttp(str(frame.url)) && journal.capture !== 'unavailable') {
+      setCapture(journal, sawDocument ? 'on' : 'late');
+    }
     schedule(journal);
   }
 
@@ -386,6 +407,20 @@ export function createInspector(deps: {
     if (listeners !== undefined) for (const listener of listeners) guarded(`${method} listener`, () => listener(params));
   }
 
+  /** Отказ или тайм-аут `enable`: отладчик отцепляем (иначе повторный attach упрётся в «уже подключён») и ждём навигации. */
+  function enableFailed(journal: Journal, contents: WebContents, attempt: number, method: CdpMethod, error: unknown): void {
+    // Остальные `enable` той же попытки отказывают следом; отказ прежней попытки новую не касается.
+    if (journal.attempt !== attempt || !journal.attached) return;
+    console.warn(`[parley] devtools ${method} failed`, error);
+    journal.attached = false;
+    try {
+      contents.debugger.detach();
+    } catch {
+      // Уже отцеплен или гость уничтожен.
+    }
+    setCapture(journal, 'unavailable');
+  }
+
   function connect(journal: Journal, contents: WebContents): void {
     try {
       contents.debugger.attach('1.3');
@@ -395,22 +430,30 @@ export function createInspector(deps: {
       return;
     }
     journal.attached = true;
+    journal.attempt += 1;
+    const attempt = journal.attempt;
     // Первое подключение — к пустому гостю (адрес '' или about:blank): страница ещё не грузилась. Повторное — к
     // живой странице: её запросы до этого прошли мимо.
     const url = contents.getURL();
-    setCapture(journal, url === '' || url === 'about:blank' ? 'on' : 'late');
-    // Отказ и тайм-аут `enable` не бросают, а ставят `unavailable`: ready не должен держать страницу вкладки.
+    const target: CaptureState = url === '' || url === 'about:blank' ? 'on' : 'late';
+    // Первое подключение показывает захват сразу; повторное после отказа — `unavailable` до ответа всех `enable`.
+    if (journal.capture !== 'unavailable') setCapture(journal, target);
+    // Отказ и тайм-аут `enable` не бросают, а отцепляют отладчик и ставят `unavailable`: ready не держит страницу вкладки.
     journal.ready = Promise.all(
       ENABLE.map(([method, params]) =>
         command(contents, method, params).then(
-          () => undefined,
+          () => true,
           (error: unknown) => {
-            console.warn(`[parley] devtools ${method} failed`, error);
-            setCapture(journal, 'unavailable');
+            enableFailed(journal, contents, attempt, method, error);
+            return false;
           },
         ),
       ),
-    ).then(() => undefined);
+    ).then((answers) => {
+      if (answers.every(Boolean) && journal.attempt === attempt && journal.attached && journal.capture === 'unavailable') {
+        setCapture(journal, target);
+      }
+    });
   }
 
   function attach(contents: WebContents): void {
@@ -418,6 +461,7 @@ export function createInspector(deps: {
     const journal: Journal = {
       id: contents.id,
       attached: false,
+      attempt: 0,
       ready: Promise.resolve(),
       epoch: 0,
       capture: 'on',

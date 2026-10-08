@@ -41,6 +41,7 @@ function fakeClock() {
 function fakeGuest(id: number, url = '') {
   const dbg = Object.assign(new EventEmitter(), {
     attach: vi.fn<(version: string) => void>(),
+    detach: vi.fn<() => void>(),
     sendCommand: vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>(async () => ({})),
   });
   const contents = Object.assign(new EventEmitter(), {
@@ -132,7 +133,7 @@ describe('подключение (спека 3.3, спайк 0.1 — вариа�
     expect(inspector.snapshot(7)).toEqual({ epoch: 0, capture: 'on', console: [], network: [] });
   });
 
-  it('attach бросил — unavailable; повтор только на навигации главного фрейма с новым документом; живая страница — late', () => {
+  it('attach бросил — unavailable; повтор только на навигации главного фрейма с новым документом; живая страница — late, но после ответа enable', async () => {
     quietWarnings();
     const { contents, dbg, inspector } = setup({ attachError: true, url: 'http://localhost:5173/' });
     expect(inspector.snapshot(7)?.capture).toBe('unavailable');
@@ -141,21 +142,29 @@ describe('подключение (спека 3.3, спайк 0.1 — вариа�
     expect(dbg.attach).toHaveBeenCalledTimes(1);
     contents.emit('did-start-navigation', { url: 'http://localhost:5173/next', isMainFrame: true, isSameDocument: false });
     expect(dbg.attach).toHaveBeenCalledTimes(2);
+    // Повторное подключение показывает захват только после ответа всех enable.
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    await settle();
     expect(inspector.snapshot(7)?.capture).toBe('late');
   });
 
-  it('enable не ответил за 10 с — unavailable', async () => {
+  it('enable не ответил за 10 с — unavailable, отладчик отцеплен, команды гостю отказывают', async () => {
     quietWarnings();
-    const { clock, inspector } = setup({ hang: true });
+    const { clock, dbg, inspector } = setup({ hang: true });
     clock.tick(CDP_COMMAND_MS - 1);
     await settle();
     expect(inspector.snapshot(7)?.capture).toBe('on');
+    expect(dbg.detach).not.toHaveBeenCalled();
     clock.tick(1);
     await settle();
     expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    // Четыре enable вышли по тайм-ауту разом, отцепили отладчик один раз.
+    expect(dbg.detach).toHaveBeenCalledTimes(1);
+    await expect(inspector.send(7, 'Page.enable')).rejects.toThrow('capture unavailable: 7');
+    await expect(inspector.responseBody(7, 'r1', 1000)).resolves.toBeNull();
   });
 
-  it('detach — unavailable; на следующей навигации главного фрейма — новое подключение', () => {
+  it('detach — unavailable; на следующей навигации главного фрейма — новое подключение', async () => {
     quietWarnings();
     const { contents, dbg, inspector } = setup();
     dbg.emit('detach', {}, 'target closed');
@@ -163,6 +172,7 @@ describe('подключение (спека 3.3, спайк 0.1 — вариа�
     contents.getURL.mockReturnValue('http://localhost:5173/');
     contents.emit('did-start-navigation', { url: 'http://localhost:5173/', isMainFrame: true, isSameDocument: false });
     expect(dbg.attach).toHaveBeenCalledTimes(2);
+    await settle();
     expect(inspector.snapshot(7)?.capture).toBe('late');
   });
 
@@ -224,6 +234,75 @@ describe('подключение (спека 3.3, спайк 0.1 — вариа�
       ['img', 'image', 2],
     ]);
     expect(snapshot?.capture).toBe('on');
+  });
+});
+
+const MAIN_NAVIGATION = { url: 'http://localhost:5173/next', isMainFrame: true, isSameDocument: false };
+
+describe('повтор после отказа enable (спека 3.3, раздел 9: повторная попытка — на следующей навигации главного фрейма)', () => {
+  it('тайм-аут enable: новая попытка только на навигации главного фрейма; on — после ответа enable, не раньше', async () => {
+    quietWarnings();
+    const { clock, contents, dbg, inspector } = setup({ hang: true });
+    clock.tick(CDP_COMMAND_MS);
+    await settle();
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    dbg.sendCommand.mockImplementation(async () => ({}));
+    contents.emit('did-start-navigation', { url: 'http://localhost:5173/#top', isMainFrame: true, isSameDocument: true });
+    contents.emit('did-start-navigation', { url: 'http://ads.test/', isMainFrame: false, isSameDocument: false });
+    expect(dbg.attach).toHaveBeenCalledTimes(1);
+    contents.emit('did-start-navigation', MAIN_NAVIGATION);
+    expect(dbg.attach).toHaveBeenCalledTimes(2);
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    await settle();
+    expect(inspector.snapshot(7)?.capture).toBe('on');
+    // Новое подключение работает: события гостя идут в журнал.
+    dbg.emit('message', {}, 'Runtime.consoleAPICalled', log('again'));
+    expect(inspector.snapshot(7)?.console.map((entry) => entry.text)).toEqual(['again']);
+  });
+
+  it('Page.frameNavigated сам по себе unavailable не снимает, даже с увиденным документом', async () => {
+    quietWarnings();
+    const { cdp, clock, inspector } = setup({ hang: true });
+    clock.tick(CDP_COMMAND_MS);
+    await settle();
+    cdp('Network.requestWillBeSent', request('doc', 'http://localhost:5173/', { loaderId: 'L1', type: 'Document' }));
+    cdp('Page.frameNavigated', mainFrame('L1', 'http://localhost:5173/'));
+    expect(inspector.snapshot(7)).toMatchObject({ capture: 'unavailable', epoch: 1 });
+  });
+
+  it('повторная попытка тоже отказала — снова unavailable и отцеплен; третья — на следующей навигации', async () => {
+    quietWarnings();
+    const { clock, contents, dbg, inspector } = setup({ hang: true });
+    clock.tick(CDP_COMMAND_MS);
+    await settle();
+    contents.emit('did-start-navigation', MAIN_NAVIGATION);
+    expect(dbg.attach).toHaveBeenCalledTimes(2);
+    clock.tick(CDP_COMMAND_MS - 1);
+    await settle();
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    expect(dbg.detach).toHaveBeenCalledTimes(1);
+    clock.tick(1);
+    await settle();
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    expect(dbg.detach).toHaveBeenCalledTimes(2);
+    contents.emit('did-start-navigation', MAIN_NAVIGATION);
+    expect(dbg.attach).toHaveBeenCalledTimes(3);
+  });
+
+  it('запоздалый тайм-аут enable прежней попытки новое подключение не отцепляет', async () => {
+    quietWarnings();
+    const { clock, contents, dbg } = setup({ hang: true });
+    clock.tick(5000);
+    dbg.emit('detach', {}, 'target closed');
+    contents.emit('did-start-navigation', MAIN_NAVIGATION);
+    expect(dbg.attach).toHaveBeenCalledTimes(2);
+    // Enable первой попытки выходят по тайм-ауту раньше, чем enable второй.
+    clock.tick(5000);
+    await settle();
+    expect(dbg.detach).not.toHaveBeenCalled();
+    clock.tick(5000);
+    await settle();
+    expect(dbg.detach).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -485,8 +564,14 @@ describe('пачки окну (раздел 8; Фокус ревью 1)', () => 
     expect(batches[0]?.network.map((entry) => [entry.id, entry.status])).toEqual([['r1', 500]]);
   });
 
-  it('Фокус ревью 1: 10 000 сообщений за 1 с → в окно ушло ≤ 7 пачек по ≤ 200 записей, в кольце 1000, у повторов count', () => {
+  it('Фокус ревью 1: 10 000 сообщений за 1 с → ≤ 7 пачек по ≤ 200 записей, в кольце 1000, у повторов count; остаток кольца доходит окну', () => {
     const { cdp, clock, inspector, batches } = setup();
+    // Запись, ушедшая в пачке, в этот момент ещё в кольце: вытесненное до отправки не уходит.
+    const stale: number[] = [];
+    inspector.onBatch((batch) => {
+      const ring = new Set((inspector.snapshot(7)?.console ?? []).map((entry) => entry.id));
+      for (const entry of batch.console) if (!ring.has(entry.id)) stale.push(entry.id);
+    });
     for (let ms = 0; ms < 1000; ms += 1) {
       for (let k = 0; k < 10; k += 1) {
         // Пары подряд одинаковые: 5000 разных сообщений, у каждого count 2.
@@ -495,13 +580,81 @@ describe('пачки окну (раздел 8; Фокус ревью 1)', () => 
       clock.tick(1);
     }
     clock.tick(DEVTOOLS_LIMITS.batchMs);
+    // Остаток переносится в следующие пачки, а не выбрасывается, но темп прежний — раз в 150 мс.
     expect(batches.length).toBeGreaterThan(0);
     expect(batches.length).toBeLessThanOrEqual(7);
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 10);
     for (const batch of batches) expect(batch.console.length + batch.network.length).toBeLessThanOrEqual(DEVTOOLS_LIMITS.batchMax);
+    expect(stale).toEqual([]);
     const entries = inspector.snapshot(7)?.console ?? [];
     expect(entries).toHaveLength(DEVTOOLS_LIMITS.consoleEntries);
     expect(entries.every((entry) => entry.count === 2)).toBe(true);
     expect(entries.at(-1)?.text).toBe('message 4999');
+    // Каждая запись кольца дошла окну, последняя версия — с итоговым count.
+    const delivered = new Map(batches.flatMap((batch) => batch.console).map((entry) => [entry.id, entry]));
+    expect(entries.every((entry) => delivered.get(entry.id)?.count === 2)).toBe(true);
+    // Порядок по изменениям: в последней пачке — свежая запись, в первой — не самая свежая.
+    expect(batches.at(-1)?.console.at(-1)?.text).toBe('message 4999');
+    expect(batches[0]?.console.at(-1)?.text).not.toBe('message 4999');
+  });
+
+  it('всплеск в 450 разных сообщений: пачки по ≤ 200 раз в 150 мс, остаток не теряется — все записи по порядку и по разу', () => {
+    const { cdp, clock, inspector, batches } = setup();
+    for (let n = 1; n <= 450; n += 1) cdp('Runtime.consoleAPICalled', log(`m${n}`));
+    clock.tick(DEVTOOLS_LIMITS.batchMs);
+    expect(batches.map((batch) => batch.console.length)).toEqual([200]);
+    clock.tick(DEVTOOLS_LIMITS.batchMs);
+    expect(batches.map((batch) => batch.console.length)).toEqual([200, 200]);
+    clock.tick(DEVTOOLS_LIMITS.batchMs);
+    expect(batches.map((batch) => batch.console.length)).toEqual([200, 200, 50]);
+    expect(batches.flatMap((batch) => batch.console.map((entry) => entry.text))).toEqual(
+      (inspector.snapshot(7)?.console ?? []).map((entry) => entry.text),
+    );
+    // Остатка нет — таймер больше не взводится.
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 10);
+    expect(batches).toHaveLength(3);
+  });
+
+  it('всплеск больше кольца: вытесненное до отправки окну не уходит, остальное — по порядку и по разу', () => {
+    const { cdp, clock, inspector, batches } = setup();
+    const total = DEVTOOLS_LIMITS.consoleEntries + 200;
+    for (let n = 1; n <= total; n += 1) cdp('Runtime.consoleAPICalled', log(`m${n}`));
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 10);
+    const ring = (inspector.snapshot(7)?.console ?? []).map((entry) => entry.text);
+    expect(ring).toHaveLength(DEVTOOLS_LIMITS.consoleEntries);
+    expect(ring[0]).toBe('m201');
+    expect(batches.map((batch) => batch.console.length)).toEqual([200, 200, 200, 200, 200]);
+    expect(batches.flatMap((batch) => batch.console.map((entry) => entry.text))).toEqual(ring);
+  });
+
+  it('предел 200 общий для консоли и сети: 150 сообщений и 150 запросов — пачки 200 и 100, всё по разу и по порядку', () => {
+    const { cdp, clock, inspector, batches } = setup();
+    for (let n = 1; n <= 150; n += 1) cdp('Runtime.consoleAPICalled', log(`m${n}`));
+    for (let n = 1; n <= 150; n += 1) cdp('Network.requestWillBeSent', request(`r${n}`, `http://localhost:5173/${n}`));
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 3);
+    expect(batches.map((batch) => batch.console.length + batch.network.length)).toEqual([200, 100]);
+    const snapshot = inspector.snapshot(7);
+    expect(batches.flatMap((batch) => batch.console.map((entry) => entry.text))).toEqual(snapshot?.console.map((entry) => entry.text));
+    expect(batches.flatMap((batch) => batch.network.map((entry) => entry.id))).toEqual(snapshot?.network.map((entry) => entry.id));
+  });
+
+  it('упавший запрос из прошлой пачки: ответ среди всплеска доходит окну, итоговое состояние каждого запроса совпадает с журналом', () => {
+    const { cdp, clock, inspector, batches } = setup();
+    cdp('Network.requestWillBeSent', request('first', 'http://localhost:5173/first'));
+    clock.tick(DEVTOOLS_LIMITS.batchMs);
+    expect(batches[0]?.network.map((entry) => entry.failure)).toEqual([null]);
+    // Отказ первого — самое старое изменение всплеска: при усечении «свежих 200» оно бы пропало.
+    cdp('Network.loadingFailed', { requestId: 'first', timestamp: 100.01, errorText: 'net::ERR_CONNECTION_REFUSED' });
+    for (let n = 1; n <= 450; n += 1) {
+      cdp('Network.requestWillBeSent', request(`r${n}`, `http://localhost:5173/api/${n}`));
+      cdp('Network.responseReceived', { requestId: `r${n}`, type: 'Fetch', response: { status: 500, statusText: 'Internal Server Error', headers: {} } });
+    }
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 10);
+    for (const batch of batches) expect(batch.network.length).toBeLessThanOrEqual(DEVTOOLS_LIMITS.batchMax);
+    const delivered = new Map(batches.flatMap((batch) => batch.network).map((entry) => [entry.id, entry]));
+    expect(delivered.get('first')?.failure).toEqual({ reason: 'net', text: 'net::ERR_CONNECTION_REFUSED' });
+    expect(delivered.size).toBe(1 + 450);
+    for (const entry of inspector.snapshot(7)?.network ?? []) expect(delivered.get(entry.id)).toEqual(entry);
   });
 
   it('без изменений пачек нет; отцепился — пачка с capture unavailable и без записей', () => {
