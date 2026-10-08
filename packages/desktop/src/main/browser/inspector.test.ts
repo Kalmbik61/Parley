@@ -657,6 +657,25 @@ describe('пачки окну (раздел 8; Фокус ревью 1)', () => 
     for (const entry of inspector.snapshot(7)?.network ?? []) expect(delivered.get(entry.id)).toEqual(entry);
   });
 
+  it('всплеск в 300 запросов, первые 5 уже получили ответ до первой пачки: окно получает id в порядке создания, r0 первый', () => {
+    const { cdp, clock, inspector, batches } = setup();
+    for (let n = 0; n < 300; n += 1) cdp('Network.requestWillBeSent', request(`r${n}`, `http://localhost:5173/m/${n}`));
+    // Ответ приходит раньше первой отправки: свежее изменение не должно отодвигать запись в хвост очереди.
+    for (let n = 0; n < 5; n += 1) {
+      cdp('Network.responseReceived', { requestId: `r${n}`, type: 'Fetch', response: { status: 200, statusText: 'OK', headers: {} } });
+      cdp('Network.loadingFinished', { requestId: `r${n}`, timestamp: 100.5, encodedDataLength: 10 });
+    }
+    clock.tick(DEVTOOLS_LIMITS.batchMs * 10);
+    // Окно дописывает новые id в конец в порядке прихода (upsert по id): порядок первого появления и есть порядок списка.
+    const arrival: string[] = [];
+    for (const batch of batches) for (const entry of batch.network) if (!arrival.includes(entry.id)) arrival.push(entry.id);
+    expect(arrival).toEqual(Array.from({ length: 300 }, (_, n) => `r${n}`));
+    expect(arrival[0]).toBe('r0');
+    // Итоговое состояние тех пяти — с ответом: сходимость не пострадала.
+    const delivered = new Map(batches.flatMap((batch) => batch.network).map((entry) => [entry.id, entry]));
+    for (const entry of inspector.snapshot(7)?.network ?? []) expect(delivered.get(entry.id)).toEqual(entry);
+  });
+
   it('без изменений пачек нет; отцепился — пачка с capture unavailable и без записей', () => {
     quietWarnings();
     const { dbg, clock, batches } = setup();

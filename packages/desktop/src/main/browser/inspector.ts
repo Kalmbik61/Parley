@@ -257,8 +257,12 @@ export function createInspector(deps: {
   }
 
   function touch(journal: Journal, key: string): void {
-    journal.seq += 1;
-    journal.pending.set(key, journal.seq);
+    // Номер ставится по самому раннему неотправленному изменению: ответ на запрос, пришедший раньше первой отправки,
+    // не должен уводить запись в хвост очереди — иначе окно получит id не в порядке создания.
+    if (!journal.pending.has(key)) {
+      journal.seq += 1;
+      journal.pending.set(key, journal.seq);
+    }
     schedule(journal);
   }
 
