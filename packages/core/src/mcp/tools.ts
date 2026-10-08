@@ -266,7 +266,7 @@ function roomTaskOf(map: WorkMap, message: Message, recipientId: string) {
     role: isLead ? ('lead' as const) : ('member' as const),
     lead,
     leadLabel: participantLabel(map, lead),
-    proposalWaiting: room.proposal != null,
+    proposalWaiting: room.proposal !== null,
     hint: isLead ? LEAD_ROLE : memberRole(sessionMention(recipientId)),
   };
 }

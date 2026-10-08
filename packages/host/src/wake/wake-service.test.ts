@@ -1042,8 +1042,9 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
   return new Map(ids.map((id) => [id, () => streams.get(id) ?? '']));
 }
 
-const inRoom = (count: number, room: string, title: string): string =>
-  `New messages (${count}) in ${room} "${title}". Call check_inbox.`;
+/** `task` — среди писем задача человека всем: указатель помечает её «(a task for everyone)». */
+const inRoom = (count: number, room: string, title: string, task = false): string =>
+  `New messages (${count}) in ${room} "${title}"${task ? ' (a task for everyone)' : ''}. Call check_inbox.`;
 
 describe('WakeService: комнаты (3.5)', () => {
   it('1: рассылка комнаты будит всех участников, кроме отправителя', async () => {
@@ -1108,8 +1109,8 @@ describe('WakeService: комнаты (3.5)', () => {
 
     await sendHumanLetter({ projectPath: project, workId, roomId, to: [], text: 'всем', kind: 'decision' });
 
-    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт.
-    const expected = `echo: ${inRoom(2, roomId, 'Созвон')}`;
+    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт; рассылка человека — задача всем.
+    const expected = `echo: ${inRoom(2, roomId, 'Созвон', true)}`;
     await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
     await settle(300);
