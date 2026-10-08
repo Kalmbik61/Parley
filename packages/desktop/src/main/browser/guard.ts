@@ -95,8 +95,13 @@ function guardGuest(
   deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect'>,
 ): void {
   // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
-  // (спайк 0.1).
-  deps.inspect(contents);
+  // (спайк 0.1). Сбой журнала клетку не отменяет: исключение отсюда оставило бы гостя с allowpopups без обработчиков
+  // ниже — окна и навигация на file: прошли бы.
+  try {
+    deps.inspect(contents);
+  } catch (error) {
+    console.warn('[parley] inspector attach failed', error);
+  }
 
   contents.setWindowOpenHandler(({ url }) => {
     // about:blank вкладки не открывает: вкладка без адреса http(s) — заглушка, а не страница.

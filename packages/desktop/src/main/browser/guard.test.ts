@@ -487,6 +487,32 @@ describe('журнал гостя (спека 2026-10-07, 3.3)', () => {
     guard.created(fakeContents(1, 'window'));
     expect(guard.inspect).toHaveBeenCalledTimes(1);
   });
+
+  it('inspect бросил — клетка гостя всё равно ставится (окна и навигация закрыты), сбой пишется в журнал main', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const guard = setupGuard();
+      const failure = new Error('attach failed');
+      guard.inspect.mockImplementation(() => {
+        throw failure;
+      });
+      const guest = fakeContents(42, 'webview');
+      expect(() => guard.created(guest)).not.toThrow();
+
+      expect(guest.openHandler('https://x')).toEqual({ action: 'deny' });
+      const navigation = fakeEvent({ url: 'file:///etc/hosts', isMainFrame: true });
+      guest.emit('will-navigate', navigation);
+      expect(navigation.defaultPrevented).toBe(true);
+      const frame = fakeEvent({ url: 'file:///etc/hosts', isMainFrame: false });
+      guest.emit('will-frame-navigate', frame);
+      expect(frame.defaultPrevented).toBe(true);
+      expect(guest.setZoomMode).toHaveBeenCalledWith('isolated');
+
+      expect(warn).toHaveBeenCalledWith('[parley] inspector attach failed', failure);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 describe('пустая запись истории гостя (спайк 0.1, вариант D; Фокус ревью 6)', () => {
