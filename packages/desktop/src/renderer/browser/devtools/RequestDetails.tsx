@@ -169,7 +169,7 @@ export function RequestDetails({ entry, webContentsId, bridge, onClose, onAddToC
             <button type="button" onClick={copyUrl} className={ACTION}>
               {details.copyUrl}
             </button>
-            <PanelIconButton label={details.close} onClick={onClose}>
+            <PanelIconButton label={details.close} onClick={() => onClose()}>
               <X className="size-3" aria-hidden="true" />
             </PanelIconButton>
           </div>

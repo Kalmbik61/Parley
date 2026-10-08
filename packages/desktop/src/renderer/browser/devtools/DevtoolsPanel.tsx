@@ -101,7 +101,7 @@ export function DevtoolsPanel(props: DevtoolsPanelProps): JSX.Element {
               // Узкая шапка: подпись урезается первой, остальные кнопки остаются на месте.
               <button
                 type="button"
-                onClick={onAddErrorsToChat}
+                onClick={() => onAddErrorsToChat()}
                 className="h-5 min-w-0 truncate rounded px-1.5 text-[11px] hover:bg-accent"
               >
                 {S.browser.devtools.addErrorsToChat}
@@ -113,7 +113,7 @@ export function DevtoolsPanel(props: DevtoolsPanelProps): JSX.Element {
             >
               {S.browser.devtools.preserveLog}
             </FilterToggle>
-            <PanelIconButton label={S.browser.devtools.clear} onClick={props.onClear}>
+            <PanelIconButton label={S.browser.devtools.clear} onClick={() => props.onClear()}>
               <Ban className="size-3" aria-hidden="true" />
             </PanelIconButton>
             <PanelIconButton label={S.browser.devtools.close} onClick={() => store.hide(tabId)}>
@@ -129,7 +129,7 @@ export function DevtoolsPanel(props: DevtoolsPanelProps): JSX.Element {
             <span className="min-w-0 truncate" title={notice}>
               {notice}
             </span>
-            <button type="button" onClick={props.onReload} className="shrink-0 underline">
+            <button type="button" onClick={() => props.onReload()} className="shrink-0 underline">
               {S.browser.reload}
             </button>
           </div>
