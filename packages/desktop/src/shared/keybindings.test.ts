@@ -58,7 +58,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'work.goto.6': true, 'work.goto.7': true, 'work.goto.8': true, 'work.goto.9': true,
   'work.prev': true, 'work.next': true, 'works.showArchived': true,
   'history.back': true, 'history.forward': true,
-  'sidebar.left.toggle': true, 'sidebar.right.toggle': true, 'sidebar.files': true, 'sidebar.changes': true,
+  'sidebar.left.toggle': true, 'sidebar.right.toggle': true, 'sidebar.files': true, 'sidebar.changes': true, 'sidebar.agents': true,
   'group.splitRight': true, 'group.splitDown': true, 'group.prev': true, 'group.next': true,
   'tab.close': true, 'tab.reopen': true, 'tab.prev': true, 'tab.next': true, 'tab.mruNext': true, 'tab.mruPrev': true,
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,

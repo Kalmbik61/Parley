@@ -33,6 +33,8 @@ export interface FakeFeedDeps {
   log: ReturnType<typeof silentLog>;
   /** Журнал сессии, который отдаёт «индекс логов». */
   setLogFile(file: string | null): void;
+  /** Журнал субагента Codex по id его треда (`activity.childLogFile`); `null` — убрать. */
+  setChildLogFile(threadId: string, file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
   emitExit(ref: SessionRef): void;
   /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
@@ -72,6 +74,7 @@ function worksSnapshotOf(sessions: FakeSession[]): { entries: FakeEntry[] } {
 export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedDeps {
   let sessions = initial;
   let logFile: string | null = null;
+  const childLogFiles = new Map<string, string>();
   const activityListeners = new Set<ActivityListener>();
   const logListeners = new Set<() => void>();
   const exitListeners = new Set<ExitListener>();
@@ -107,6 +110,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     },
     activity: {
       logFile: () => logFile,
+      childLogFile: (_ref: SessionRef, threadId: string) => childLogFiles.get(threadId) ?? null,
       questionHeld: vi.fn(),
       onChange: (listener: ActivityListener) => {
         activityListeners.add(listener);
@@ -138,6 +142,10 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     log,
     setLogFile(file) {
       logFile = file;
+    },
+    setChildLogFile(threadId, file) {
+      if (file === null) childLogFiles.delete(threadId);
+      else childLogFiles.set(threadId, file);
     },
     emitActivity(ref, activity) {
       for (const listener of activityListeners)

@@ -5,7 +5,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
-import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import type { SkillCatalog } from '../skills/catalog.js';
 import { claudeSkillRoute, codexSkillRoute } from './skill-reduction.js';
 import {
@@ -410,18 +409,46 @@ describe('план запуска', () => {
     });
   });
 
-  it('codex: notify — node и скрипт харнесса, а каталог events/ для его журнала заведён', async () => {
+  it('codex: notify человека не подменяется, каталог events/ запуск не заводит', async () => {
     const { workId, sessionId } = await pending('codex');
-    await expect(stat(workPaths(project, workId).events)).rejects.toThrow();
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
-    const notify = plan.args.find((arg) => arg.startsWith('notify=')) as string;
-    expect(plan.args[plan.args.indexOf(notify) - 1]).toBe('-c');
-    expect(parseTomlAssignment(notify).value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
-    // Хуков у codex нет, `--settings` не заводит каталог за него — его заводит запуск.
-    expect((await stat(workPaths(project, workId).events)).isDirectory()).toBe(true);
-    // Как и у Claude Code, сессия живёт под теми же переменными (оба имени): notify берёт адрес из них.
+    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(false);
+    expect(plan.args).not.toContain('{notify}');
+    await expect(stat(workPaths(project, workId).events)).rejects.toThrow();
+    // Как и у Claude Code, сессия живёт под теми же переменными (оба имени).
     expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
+  });
+
+  it('codex: хуки (-c hooks.…) только при codexApprovals, hookUrl и команде — и при запуске, и при resume', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    const options = { hookUrl: 'http://127.0.0.1:41234/hooks', codexHookCommand: '/home/me/.parley/bin/parley-codex-hook' };
+    const hookArgs = (args: string[]): string[] => args.filter((arg) => arg.startsWith('hooks.'));
+
+    // Флаг выключен (умолчание): ни одного hooks.* даже с адресом и командой.
+    expect(hookArgs((await planLaunch(project, workId, session, options)).args)).toEqual([]);
+
+    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    const launched = await planLaunch(project, workId, session, options);
+    expect(hookArgs(launched.args)).toHaveLength(7);
+    for (const arg of hookArgs(launched.args)) expect(launched.args[launched.args.indexOf(arg) - 1]).toBe('-c');
+    // Без адреса или без команды — снова ни одного.
+    expect(hookArgs((await planLaunch(project, workId, session, { codexHookCommand: options.codexHookCommand })).args)).toEqual([]);
+    expect(hookArgs((await planLaunch(project, workId, session, { hookUrl: options.hookUrl })).args)).toEqual([]);
+
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: '7fa0e1ee-cc7b-4a1e-9d4e-000000000001' }, options);
+    expect(hookArgs(resumed.args)).toEqual(hookArgs(launched.args));
+  });
+
+  it('codex: текст хуков побайтно одинаков между запусками', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    const options = { hookUrl: 'http://127.0.0.1:1/hooks', codexHookCommand: '/h/bin/parley-codex-hook' };
+    const first = (await planLaunch(project, workId, session, options)).args.filter((arg) => arg.startsWith('hooks.'));
+    const second = (await planLaunch(project, workId, session, { ...options, hookUrl: 'http://127.0.0.1:2/hooks' })).args.filter((arg) => arg.startsWith('hooks.'));
+    expect(second).toEqual(first);
   });
 
   it('hookUrl доезжает до файла --settings: HTTP-хуки ленты; без него файл прежний (вид «Chat»)', async () => {
@@ -751,13 +778,13 @@ describe('план возобновления', () => {
     // Только `-c`: `--no-daemon` и `-a` после `resume <id>` не проверены на живом Codex (спека 3.6: «те же `-c`»).
     expect(plan.args).not.toContain('--no-daemon');
     expect(plan.args).not.toContain('-a');
-    // Те же `-c`, что у запуска: MCP и notify в тред Codex не сохраняются.
+    // Те же `-c`, что у запуска: MCP в тред Codex не сохраняется; notify человека не подменяется.
     expect(plan.args.some((arg) => arg.startsWith('mcp_servers.parley='))).toBe(true);
-    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(true);
+    expect(plan.args.some((arg) => arg.startsWith('notify='))).toBe(false);
     // Бриф второй раз не подставляется: сессия продолжается, а не начинается.
     expect(plan.args.join(' ')).not.toContain('прогнать e2e');
-    // Указателя нет (ручной подъём) — промпта в конце нет, последним идёт `-c notify=…`.
-    expect(plan.args.at(-1)?.startsWith('notify=')).toBe(true);
+    // Указателя нет (ручной подъём) — промпта в конце нет, последним идёт значение `-c`.
+    expect(plan.args.at(-2)).toBe('-c');
   });
 
   it('codex: указатель на письма при подъёме — последним аргументом resume', async () => {

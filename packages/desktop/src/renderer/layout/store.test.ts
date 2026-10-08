@@ -256,6 +256,12 @@ describe('focusedSessionOf (тест 2 куска 7.2)', () => {
     expect(focusedSessionOf(state(layout, [tabId.terminal('s-02'), diffTab.id, fileTab.id]), key)).toBe('s-02');
   });
 
+  it('фокус ушёл на вкладку комнаты — сессия панели прежняя (терминал s-02), а не null', () => {
+    const roomTab: TabSpec = { kind: 'room', id: tabId.room('r-01'), roomId: 'r-01' };
+    const layout = openTab(openTab(emptyLayout(), terminalTab('s-02')), roomTab);
+    expect(focusedSessionOf(state(layout, [tabId.terminal('s-02'), roomTab.id]), key)).toBe('s-02');
+  });
+
   it('вкладок сессий нет → null; раскладки нет → null', () => {
     const layout = openTab(openTab(emptyLayout(), { kind: 'mail', id: tabId.mail() }), fileTab);
     expect(focusedSessionOf(state(layout, [tabId.mail(), fileTab.id, null]), key)).toBeNull();

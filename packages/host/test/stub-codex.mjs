@@ -18,7 +18,6 @@
 //   STUB_APPROVAL       — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
 //   STUB_TITLE <текст>  — произвольный заголовок
 //   STUB_NOTE <текст>   — произвольное уведомление OSC 9
-//   STUB_NOTIFY [json]  — как Codex после хода: запускает программу из `-c notify=[…]` с JSON последним
 //   STUB_EXIT           — выход с кодом 0
 //
 // Окружение:
@@ -29,7 +28,6 @@
 //   STUB_CODEX_THREAD=<uuid>     — id треда в заголовке
 //   STUB_CODEX_ARGS_FILE=<путь>  — при старте пишет туда JSON { argv, cwd, env }
 
-import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { clearInterval, clearTimeout, setInterval, setTimeout } from 'node:timers';
 
@@ -64,35 +62,6 @@ function finishWork() {
   title(`Ready | ${THREAD}`);
 }
 
-/** Как Codex после хода: программа из `-c notify=[…]`, JSON события — последним аргументом. */
-function runNotify(json) {
-  const args = process.argv;
-  const at = args.findIndex((arg) => arg.startsWith('notify=['));
-  if (at === -1) return line('notify: в argv нет -c notify');
-  let command;
-  try {
-    command = JSON.parse(args[at].slice('notify='.length));
-  } catch {
-    return line('notify: значение не JSON');
-  }
-  const payload =
-    json ??
-    JSON.stringify({
-      type: 'agent-turn-complete',
-      'thread-id': THREAD,
-      'turn-id': 'turn-1',
-      cwd: process.cwd(),
-      'last-assistant-message': 'Готово.',
-    });
-  const child = spawn(command[0], [...command.slice(1), payload], {
-    stdio: 'ignore',
-    detached: true,
-  });
-  child.on('error', () => undefined);
-  child.unref();
-  return line('notify: запущен');
-}
-
 function submit(text, key) {
   if (key === 'tab') {
     line(`tab: ${text}`);
@@ -111,7 +80,6 @@ function submit(text, key) {
     title(`[ ! ] Action Required | ${THREAD}`);
   } else if (command === 'STUB_TITLE') title(argument);
   else if (command === 'STUB_NOTE') out(`\x1b]9;${argument}\x07`);
-  else if (command === 'STUB_NOTIFY') runNotify(argument === '' ? undefined : argument);
   else if (command === 'STUB_EXIT') process.exit(0);
 }
 

@@ -4,6 +4,7 @@ import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
+import type { FeedDecisions } from './feed.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 
@@ -506,6 +507,7 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       revision: number;
       schemaVersion: number;
       mode: string | null;
+      decisions?: FeedDecisions | null;
     }>();
     expectTypeOf<Result<'feed.subscribe'>>().toEqualTypeOf<{ ok: true }>();
     expectTypeOf<Result<'feed.unsubscribe'>>().toEqualTypeOf<{ ok: true }>();
@@ -516,6 +518,7 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       upsert: FeedItem[];
       removed: string[];
       mode: string | null;
+      decisions?: FeedDecisions | null;
     }>();
     expectTypeOf<Params<'feed.decide'>['decision']>().toEqualTypeOf<FeedDecision>();
   });

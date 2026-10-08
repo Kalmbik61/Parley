@@ -43,7 +43,7 @@ export interface ToolHeadline {
 }
 
 const MCP = /^mcp__(.+?)__(.+)$/;
-const PATH_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'Read', 'NotebookEdit']);
+const PATH_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'Read', 'NotebookEdit', 'Delete', 'ViewImage']);
 
 function stringField(input: Record<string, unknown>, key: string): string | null {
   const value = input[key];

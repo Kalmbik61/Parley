@@ -34,7 +34,7 @@ import type { Appearance, UiFile } from './ui-types.js';
 export type HostStatus =
   | { state: 'connecting' }
   /** `methods: null` — хост до этапа 3: ответ `hello` без списка методов (спека 3.2). */
-  | { state: 'connected'; hostVersion: string; methods: string[] | null }
+  | { state: 'connected'; hostVersion: string; methods: string[] | null; features?: string[] | null }
   | { state: 'mismatch'; hostVersion: string; liveSessions: number | null }
   | { state: 'disconnected'; reason: string };
 

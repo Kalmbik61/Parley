@@ -5,13 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
 import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
-import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
   CODEX_MCP_STARTUP_TIMEOUT_SEC,
   CODEX_MCP_TOOL_TIMEOUT_SEC,
   MCP_SERVER_ENTRY,
   codexMcpOverride,
-  codexNotifyOverride,
   mcpConfig,
   mcpConfigJson,
   mcpConfigValue,
@@ -249,19 +247,9 @@ describe('tomlString — экранирование значений TOML для
   });
 });
 
-describe('codexNotifyOverride', () => {
-  it('notify — массив из node и скрипта харнесса по абсолютным путям', () => {
-    expect(path.isAbsolute(CODEX_NOTIFY_ENTRY)).toBe(true);
-    expect(CODEX_NOTIFY_ENTRY.endsWith('codex-notify-bin.js')).toBe(true);
-    const { key, value } = parseTomlAssignment(codexNotifyOverride());
-    expect(key).toEqual(['notify']);
-    expect(value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
-  });
-});
-
 // Собранное окно запускает хост своим node: `Parley.app/Contents/Resources/node/bin/node`, а `process.execPath`
 // хоста — тот же путь. Приложение лежит там, куда его положил человек, — путь бывает с пробелом и апострофом.
-describe('node приложения в каталоге с пробелом: сервер MCP и notify получают путь целым словом', () => {
+describe('node приложения в каталоге с пробелом: сервер MCP получает путь целым словом', () => {
   const bundled = "/Applications/My Apps/Parley's.app/Contents/Resources/node/bin/node";
   let original = '';
 
@@ -286,10 +274,6 @@ describe('node приложения в каталоге с пробелом: с�
   it('-c mcp_servers для Codex: после разбора TOML command и args те же', () => {
     const table = parseTomlAssignment(codexMcpOverride(params)).value;
     expect(table).toMatchObject({ command: bundled, args: [MCP_SERVER_ENTRY] });
-  });
-
-  it('-c notify для Codex: массив из двух элементов, путь с пробелом остаётся одним', () => {
-    expect(parseTomlAssignment(codexNotifyOverride()).value).toEqual([bundled, CODEX_NOTIFY_ENTRY]);
   });
 });
 

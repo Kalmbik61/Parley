@@ -185,6 +185,8 @@ Fallback Codex читает CLAUDE.md только в тех папках от �
 <!--
 Team rules for agents working together in Parley. Every agent Parley launches in this
 project gets this file on top of its own instructions (CLAUDE.md, AGENTS.md).
+Parley's own rules (rooms, messages, reports) reach agents without this file:
+write here only your team's rules for this project.
 Comments like this one and empty sections are not sent to agents.
 -->
 

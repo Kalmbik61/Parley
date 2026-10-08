@@ -129,6 +129,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
     'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
     'sidebar.changes': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('changes'),
+    'sidebar.agents': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('agents'),
     'work.prev': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[8]),
     'work.next': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[1]),
     'works.showArchived': ({ ui }) => expect(ui.toggleShowArchived).toHaveBeenCalledTimes(1),
@@ -572,7 +573,7 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     withFeedHost('codex');
     const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
-    expect(spies.toast).toHaveBeenCalledWith('Chat needs Claude Code 2.1.286 or newer');
+    expect(spies.toast).toHaveBeenCalledWith('Chat needs Codex 0.160.0 or newer');
     expect(spies.layout.apply).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -37,6 +38,13 @@ vi.mock('sonner', () => {
   const fn = Object.assign(vi.fn(), { error: vi.fn() });
   return { toast: fn };
 });
+
+/** Есть ли место под правый сайдбар: по умолчанию нет — «N agents running» ведёт к карточке в ленте, как раньше. */
+const sidebarRoom = vi.hoisted(() => ({ value: false }));
+vi.mock('../shell/RightSidebar.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shell/RightSidebar.js')>()),
+  rightSidebarHasRoom: () => sidebarRoom.value,
+}));
 
 /** Claude Code с лентой: версия не ниже порога, ответ `providers.list` пришёл. */
 const CLAUDE_OK = { id: 'claude', label: 'Claude Code', available: true, version: '2.1.286', limits: null };
@@ -125,7 +133,7 @@ describe('TerminalBody — вид вкладки', () => {
     expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect((segment('Terminal') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTitle(S.chat.terminalOnly).contains(segment('Chat'))).toBe(true);
+    expect(screen.getByTitle(S.chat.terminalOnlyFor('codex')).contains(segment('Chat'))).toBe(true);
   });
 
   it('версия claude неизвестна (null) — терминал, сегмент выключен с подсказкой', () => {
@@ -135,8 +143,8 @@ describe('TerminalBody — вид вкладки', () => {
     expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect(segment('Terminal').getAttribute('aria-checked')).toBe('true');
-    expect(S.chat.terminalOnly).toBe('Chat needs Claude Code 2.1.286 or newer');
-    expect(screen.getByTitle(S.chat.terminalOnly).contains(segment('Chat'))).toBe(true);
+    expect(S.chat.terminalOnlyFor('claude')).toBe('Chat needs Claude Code 2.1.286 or newer');
+    expect(screen.getByTitle(S.chat.terminalOnlyFor('claude')).contains(segment('Chat'))).toBe(true);
   });
 
   it('providers.list ещё не ответил — пустая заглушка: ни чата, ни терминала, ни тулбара; ответ пришёл — чат', () => {
@@ -177,7 +185,7 @@ const text = (id: string, body: string): FeedItem => ({ id, at: AT, kind: 'text'
 
 function setFeed(items: FeedItem[], revision = 1): void {
   act(() => {
-    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, mode: null, status: 'ready' } } });
+    useFeedStore.setState({ feeds: { [refKey(REF)]: { items, revision, mode: null, decisions: null, status: 'ready' } } });
   });
 }
 
@@ -221,7 +229,7 @@ describe('ChatView — лента', () => {
     expect(screen.getByTestId('chat-feed').textContent).toBe(S.chat.loading);
     expect(screen.queryByRole('button', { name: S.common.retry })).toBeNull();
     act(() => {
-      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, mode: null, status: 'error', error: 'boom' } } });
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 0, mode: null, decisions: null, status: 'error', error: 'boom' } } });
     });
     expect(screen.getByTestId('chat-feed').textContent).toBe(`${S.chat.feedUnavailable}${S.common.retry}`);
   });
@@ -638,7 +646,7 @@ describe('ChatView — меню режима (кусок 4a, решения К �
 
   function setMode(mode: string | null): void {
     act(() => {
-      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 1, mode, status: 'ready' } } });
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [], revision: 1, mode, decisions: null, status: 'ready' } } });
     });
   }
 
@@ -1712,6 +1720,19 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(screen.getByRole('button', { name: S.chat.jumpToLatest })).toBeTruthy();
   });
 
+  it('есть место под правый сайдбар — клик по «N agents running» открывает вкладку Agents, ленту не трогает', () => {
+    sidebarRoom.value = true;
+    try {
+      renderBody(makeSession('s-01', 'S01'));
+      setFeed(feedWithAgents());
+      fireEvent.click(running()!);
+      expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'agents' });
+      expect(useChatUiStore.getState().reveal).toBeNull();
+    } finally {
+      sidebarRoom.value = false;
+    }
+  });
+
   it('у первой работающей карточки agentId ещё нет (SubagentStart не пришёл) — берётся следующая; ни у одной нет — просьбы нет', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'go'), agent('a1', null), agent('a2', 'g2'), turn('u1')]);
@@ -1734,7 +1755,7 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: KEY, agentId: 'g2' });
     expect(feed.scrollTo).not.toHaveBeenCalled();
     act(() => {
-      useFeedStore.setState({ feeds: { [KEY]: { items: feedWithAgents(), revision: 1, mode: null, status: 'ready' } } });
+      useFeedStore.setState({ feeds: { [KEY]: { items: feedWithAgents(), revision: 1, mode: null, decisions: null, status: 'ready' } } });
     });
     await act(async () => {});
     // Строки только что появились и не измерены — точное смещение виртуализатор доведёт сам, здесь важно, что прокрутка была.
@@ -1803,5 +1824,80 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     ]);
     expect(screen.getByTestId('chat-stop')).toBeTruthy();
     expect(running()).toBeNull();
+  });
+});
+
+describe('ChatView — Codex', () => {
+  const CODEX_OK = { id: 'codex', label: 'Codex', available: true, version: '0.160.0', limits: null };
+  const started = (model: string): FeedItem => ({ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model } });
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.codexLabel }) as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.8.0', methods: [...FEED_METHODS, 'sessions.setMode', 'sessions.setModel', 'sessions.setEffort'], features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [CLAUDE_OK, CODEX_OK], loaded: true });
+    renderBody(makeSession('s-01', 'S01', { provider: 'codex' }));
+    setFeed([started('gpt-6-astra'), prompt('p1', 'hi')]);
+  });
+
+  it('поле ввода подписано Codex, а не Claude', () => {
+    expect(field().placeholder).toBe(S.chat.composer.codexPlaceholder);
+    expect(screen.queryByRole('textbox', { name: S.chat.composer.label })).toBeNull();
+  });
+
+  it('вид Chat доступен; модель — подпись текстом, меню модели и режима нет', () => {
+    expect(screen.getAllByTestId('chat-view')).toHaveLength(1);
+    expect(screen.getByTestId('chat-model').textContent).toBe('gpt-6-astra');
+    expect(screen.queryByTestId('chat-mode')).toBeNull();
+    expect(document.querySelector('[aria-haspopup="menu"]')).toBeNull();
+  });
+
+  it('ввод «/» не открывает подсказки команд', () => {
+    fireEvent.change(field(), { target: { value: '/' } });
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('отправка с вложением — пути списком, как в комнате', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    act(() => useChatUiStore.getState().setAttachments(refKey(REF), ['/tmp/a b.png']));
+    fireEvent.change(field(), { target: { value: 'hi' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const sent = bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
+    expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true }]);
+  });
+
+  describe('подсказка про хуки', () => {
+    const setDecisions = (decisions: 'window' | 'terminal' | null): void => {
+      act(() => {
+        useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [started('gpt-6-astra'), prompt('p1', 'hi')], revision: 2, mode: null, decisions, status: 'ready' } } });
+      });
+    };
+
+    it('decisions terminal — строка с кнопками; «Got it» прячет её', () => {
+      setDecisions('terminal');
+      const hint = screen.getByTestId('codex-hooks-hint');
+      expect(hint.textContent).toContain(S.chat.codexHooksHint);
+      expect(screen.getByRole('button', { name: S.chat.openTerminal })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: S.chat.gotIt }));
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      expect(useChatUiStore.getState().hooksHintDismissed[refKey(REF)]).toBe(true);
+    });
+
+    it('decisions window и null — строки нет', () => {
+      setDecisions('window');
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      setDecisions(null);
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+    });
+  });
+});
+
+describe('ChatView — Claude без подсказки про хуки Codex', () => {
+  it('decisions terminal у Claude — строки нет', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    act(() => {
+      useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [prompt('p1', 'hi')], revision: 1, mode: null, decisions: 'terminal', status: 'ready' } } });
+    });
+    expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
   });
 });

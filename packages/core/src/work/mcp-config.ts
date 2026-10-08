@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import type { McpConfigKind } from '../providers.js';
-import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import { ensureStateDir } from './state-dir.js';
 import { workPaths } from './store.js';
 
@@ -175,16 +174,6 @@ export function codexMcpOverride(params: McpConfigParams): string {
     `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(launch.command)},args=${args},env=${env},` +
     `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`
   );
-}
-
-/**
- * `-c notify=[<node>, <скрипт>]`: после каждого хода Codex запускает скрипт и отдаёт ему JSON
- * `agent-turn-complete` последним аргументом. Скрипт дописывает `Stop` в журнал событий сессии
- * (`work/codex-notify.ts`). Программу Codex запускает без оболочки, поэтому пути — элементами
- * массива, а node — текущего процесса, как у сервера MCP и строки статуса.
- */
-export function codexNotifyOverride(): string {
-  return `notify=[${tomlString(process.execPath)},${tomlString(CODEX_NOTIFY_ENTRY)}]`;
 }
 
 /** Значение подстановки `{mcpConfig}` для записи реестра. */

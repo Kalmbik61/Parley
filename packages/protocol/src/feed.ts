@@ -33,6 +33,13 @@ export const FEED_AGENT_CHILDREN = 100;
  * ней решает, доступен ли сессии вид «Chat» (решение 6), — core в рендерер не импортируется.
  */
 export const FEED_MIN_VERSION = '2.1.286';
+/** = `CODEX_FEED_MIN_VERSION` core: наименьшая версия `codex` для вида «Chat» (спека 2026-10-07, 5.4). */
+export const CODEX_FEED_MIN_VERSION = '0.160.0';
+/** Признак `hello.features` хоста, который строит ленту Codex из журнала. */
+export const FEED_CODEX_FEATURE = 'feed-codex';
+/** Может ли окно отвечать на одобрения сессии (`window`) или только терминал (`terminal`); спека 5.7. */
+export const feedDecisions = z.enum(['window', 'terminal']);
+export type FeedDecisions = z.infer<typeof feedDecisions>;
 
 /** Текст отказа для модели в `feed.decide` (как заметка возврата `rooms.resolveProposal`). */
 export const FEED_DECISION_MESSAGE_LIMIT = 4000;

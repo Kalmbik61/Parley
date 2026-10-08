@@ -15,7 +15,7 @@ export type ActionId =
   | 'work.goto.6' | 'work.goto.7' | 'work.goto.8' | 'work.goto.9'
   | 'work.prev' | 'work.next' | 'works.showArchived'
   | 'history.back' | 'history.forward'
-  | 'sidebar.left.toggle' | 'sidebar.right.toggle' | 'sidebar.files' | 'sidebar.changes'
+  | 'sidebar.left.toggle' | 'sidebar.right.toggle' | 'sidebar.files' | 'sidebar.changes' | 'sidebar.agents'
   | 'group.splitRight' | 'group.splitDown' | 'group.prev' | 'group.next'
   | 'tab.close' | 'tab.reopen' | 'tab.prev' | 'tab.next' | 'tab.mruNext' | 'tab.mruPrev'
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
@@ -68,6 +68,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'sidebar.right.toggle', title: S.actions.toggleRightSidebar, keywords: ['sidebar', 'right', 'hide', 'show'], keys: 'CmdOrCtrl+L', menu: 'view', when: 'always', inPalette: true },
   { id: 'sidebar.files', title: S.actions.showFiles, keywords: ['explorer', 'tree', 'files'], keys: 'CmdOrCtrl+Shift+E', menu: 'view', when: 'always', inPalette: true },
   { id: 'sidebar.changes', title: S.actions.showChanges, keywords: ['git', 'diff', 'changes'], keys: 'CmdOrCtrl+Shift+G', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.agents', title: S.actions.showAgents, keywords: ['agents', 'subagents', 'tasks'], keys: 'CmdOrCtrl+Shift+A', menu: 'view', when: 'always', inPalette: true },
 
   { id: 'work.new', title: S.actions.newWorkspace, keywords: ['create', 'workspace'], keys: 'CmdOrCtrl+N', menu: 'workspace', when: 'always', inPalette: true },
   { id: 'session.new', title: S.actions.newSession, keywords: ['create', 'agent', 'session', 'room'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { briefRevisions, buildBrief, loadBrief, reconcileBrief, writeBrief } from './brief.js';
+import { LEAD_ROLE, briefRevisions, buildBrief, loadBrief, memberRole, reconcileBrief, writeBrief } from './brief.js';
 import { BRIEF_MAX_BYTES, ContextBudgetError, contextBytes, textHash } from './context-budget.js';
 import { GUIDE_TOPICS, guideTopic } from './guide.js';
 import { addMessage, addSession } from './map.js';
@@ -272,6 +272,11 @@ describe('бриф: роль в комнате', () => {
     expect(brief).toContain('yours is `@s03`');
     expect(brief).toMatch(/report to the lead in the room/);
     expect(brief).not.toContain('you are the lead');
+  });
+
+  it('экспортированные тексты ролей — ровно то, что печатает бриф (их же несёт roomTask в check_inbox)', () => {
+    expect(buildBrief(mapWithRoom(), 's-02')).toContain(LEAD_ROLE);
+    expect(buildBrief(mapWithRoom(), 's-03')).toContain(memberRole('@s03'));
   });
 
   it('ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {

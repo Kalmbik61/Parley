@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
   plans: {
@@ -132,6 +132,9 @@ export const S = {
     unavailable: 'Backlog is unavailable on this host.', liveUnavailable: 'Live backlog updates are unavailable. Use Refresh to read current changes.',
     failed: 'The backlog could not be updated. Refresh and try again.', refresh: 'Refresh', openFile: 'Open file', addItem: 'Add item',
     agentSuggestions: 'Agent suggestions', ask: 'Ask before adding', problems: 'Add bugs and debt', everything: 'Add everything',
+    file: 'Backlog file', stateFile: '.parley/backlog.md', todosFile: 'TODOS.md',
+    todosOffer: (name: string): string => `This project has ${name}. Keep the backlog there?`,
+    useTodos: (name: string): string => `Use ${name}`, keepState: 'Keep in .parley',
     add: 'Add', editAdd: 'Edit & add', dismiss: 'Dismiss', show: 'Show', showItems: 'Show items', open: 'Open', taken: 'Taken', done: 'Done',
     empty: 'No items in this view.', items: 'Items', edit: 'Edit', remove: 'Remove', take: 'Take into room…',
     itemTaken: (target: string): string => `Taken: ${target}`, itemDone: (date: string): string => `Done: ${date}`,
@@ -409,7 +412,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
-    archiveConfirmDescription: 'Live sessions keep running while it is hidden. Bring it back with "Show archived workspaces" in the palette.',
+    archiveConfirmDescription: 'Running agents will be stopped. Bring it back with "Show archived workspaces" in the palette, then "Reopen" it to resume them.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,
@@ -789,6 +792,8 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
+    codexApprovals: 'Answer Codex approvals in Parley',
+    codexApprovalsHint: 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
     worktreeRoot: 'Worktree root',
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
@@ -856,6 +861,28 @@ export const S = {
   },
 
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
+  /** Вкладка Agents правого сайдбара (спека 2026-10-07, 5.1). */
+  agentsPanel: {
+    tab: 'Agents',
+    noSession: 'Open a session to see its agents',
+    empty: 'No agents in this session yet',
+    finished: (count: number): string => `Finished (${count})`,
+    starting: 'Starting…',
+    thinking: 'Thinking…',
+    needsChat: 'Agent details need the Chat view of this session',
+    back: 'All agents',
+    task: 'Task',
+    steps: 'Steps',
+    activity: 'Activity',
+    result: 'Result',
+    showAll: 'Show all',
+    showLess: 'Show less',
+    fullTranscript: 'Full transcript',
+    hideTranscript: 'Hide transcript',
+    showInChat: 'Show in chat',
+    noActivity: 'No tool calls yet',
+    gone: 'This agent is no longer in the feed',
+  },
   changes: {
     /** Буква статуса git → слово; неизвестная буква печатается как есть (см. вызов). */
     fileStatus: {
@@ -965,7 +992,14 @@ export const S = {
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
-    terminalOnly: `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    terminalOnlyFor: (provider: string): string =>
+      provider === 'codex' ? `Chat needs Codex ${CODEX_FEED_MIN_VERSION} or newer` : `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    /** Заметка ленты Codex: журнал не хранит историю до подключения Parley (`codex-history-in-terminal`). */
+    codexHistoryInTerminal: 'Earlier history of this session is only in Terminal',
+    openTerminal: 'Open terminal',
+    /** Строка над полем ввода Codex: хуки включены в настройках, но Codex их не одобрил (`decisions: 'terminal'`). */
+    codexHooksHint: "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks",
+    gotIt: 'Got it',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
@@ -987,7 +1021,7 @@ export const S = {
       /** Подсказка кнопки: какие правила добавит «не спрашивать больше». */
       allowAlwaysTitle: (rules: string): string => `Adds the rule: ${rules}`,
       deny: 'Deny',
-      denyMessage: 'Tell Claude what to do instead',
+      denyMessage: 'Tell the agent what to do instead',
       showContent: 'Show content',
       hideContent: 'Hide content',
       showArguments: 'Show arguments',
@@ -1077,10 +1111,12 @@ export const S = {
     showTranscript: 'Show transcript',
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
-    queued: 'Queued — Claude reads it when the turn ends',
+    queued: 'Queued — the agent reads it when the turn ends',
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
+      codexLabel: 'Message to Codex',
+      codexPlaceholder: 'Message Codex — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
@@ -1441,6 +1477,7 @@ export const S = {
     toggleRightSidebar: 'Toggle right sidebar',
     showFiles: 'Show files',
     showChanges: 'Show changes',
+    showAgents: 'Show agents',
     splitRight: 'Split right',
     splitDown: 'Split down',
     previousGroup: 'Previous group',

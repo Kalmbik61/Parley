@@ -511,9 +511,9 @@ describe('parley-core work session new', () => {
     expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);
 
-  it('codex: напечатанная команда — та же, что запускает окно: PARLEY_* в env сервера и -c notify', async () => {
+  it('codex: напечатанная команда — та же, что запускает окно: PARLEY_* в env сервера, notify человека не подменяется', async () => {
     // Codex режет серверу MCP окружение: дом харнесса (`PARLEY_HOME`) должен лежать в таблице `env` явно, а конец
-    // хода приходит скриптом `notify`, которому нужен каталог `events/` работы.
+    // хода Codex — OSC 9 и журнал, `notify` человека не подменяется.
     await newWork('Авторизация');
     const printed = await ok(
       'work',
@@ -539,14 +539,13 @@ describe('parley-core work session new', () => {
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
-      'notify',
     ]);
     const mcp = overrides[0] as string;
     expect(mcp).toContain(`PARLEY_HOME=${JSON.stringify(home)}`);
     expect(mcp).toContain('PARLEY_SESSION_ID="s-01"');
     expect(mcp).toContain('HARNAS_SESSION_ID="s-01"');
-    expect(overrides.at(-1)).toMatch(/^notify=\[".+node.*",".*codex-notify-bin\.js"\]$/);
-    expect((await stat(workPaths(project, 'w-0001').events)).isDirectory()).toBe(true);
+    expect(args.some((arg) => arg.startsWith('notify='))).toBe(false);
+    expect(args).not.toContain('{notify}');
   }, 60_000);
 
   it('--context попадает в карту и в бриф', async () => {

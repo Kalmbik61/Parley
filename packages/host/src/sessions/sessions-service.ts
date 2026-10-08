@@ -35,6 +35,7 @@ import {
   findRunnerBinary,
   GitStateError,
   InvalidRevisionError,
+  codexFeedSupported,
   feedSupported,
   isGitRepo,
   loadConfig,
@@ -165,6 +166,11 @@ export interface SessionsFeedOptions {
   spawnLimits?: () => Promise<SpawnLimits | null>;
   /** Current snapshot injection for isolated tests, never a persisted default. */
   roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
+  /**
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook` (спека 2026-10-07, 5.6). Зовётся только
+   * при включённой настройке `codexApprovals` и адресе приёмника; нет — хуки Codex не включаются.
+   */
+  codexHookCommand?: () => Promise<string | undefined>;
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -381,19 +387,23 @@ export function createSessionsService(
   });
 
   /**
-   * Адрес приёмника хуков для запуска — только `claude` не ниже `FEED_MIN_VERSION`. Версия — проба
-   * старта хоста по команде провайдера (короткая, ждём её); нет версии, старый `claude`, codex и прочие —
-   * без хуков, окно покажет терминал.
+   * Адрес приёмника хуков для запуска — `claude` не ниже `FEED_MIN_VERSION` и `codex` не ниже
+   * `CODEX_FEED_MIN_VERSION`, у Codex ещё и при включённой настройке `codexApprovals` (хукам нужно доверие человека,
+   * спека 2026-10-07, решение 9). Версия — проба старта хоста по команде провайдера (короткая, ждём её); нет версии,
+   * старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    if (!isClaudeCode(provider) || hooks === undefined || providerVersions === undefined) return undefined;
+    const codex = provider === 'codex';
+    if ((!isClaudeCode(provider) && !codex) || hooks === undefined || providerVersions === undefined) return undefined;
     const url = hooks.url();
     if (url === null) return undefined;
+    if (codex && !(await loadConfig()).config.codexApprovals) return undefined;
     await providerVersions.ready;
     const entry = (await loadProviders())[provider];
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
-    return version !== null && feedSupported(version) ? url : undefined;
+    if (version === null) return undefined;
+    return (codex ? codexFeedSupported(version) : feedSupported(version)) ? url : undefined;
   }
 
   async function readyProvider(provider: string): Promise<ProviderEntry> {
@@ -428,6 +438,10 @@ export function createSessionsService(
       // жил бы без записи в карте.
       if (session.lifecycle === 'closed') {
         throw new Error(`session ${ref.sessionId} is closed`);
+      }
+      // Архив освобождает процессы агентов: до Reopen сессии работы не поднимает ни письмо, ни человек.
+      if (map.work.status === 'archived') {
+        throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
       }
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
@@ -497,11 +511,13 @@ export function createSessionsService(
       }
 
       const hookUrl = await feedHookUrl(session.provider);
+      const codexHookCommand = hookUrl !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
         ...(feed.roleCatalog ? { roleCatalog: await feed.roleCatalog(session.worktree?.path ?? ref.projectPath) } : {}),
         ...(hookUrl === undefined ? {} : { hookUrl }),
+        ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
@@ -534,7 +550,13 @@ export function createSessionsService(
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
         const name = entry.runner.secret === 'zai' ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
-        env[name] = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
+        // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
+        if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
+        env[name] = hooks.register(
+          ref,
+          plan.providerSessionId ?? session.providerSessionId,
+          session.provider,
+        );
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
@@ -856,12 +878,14 @@ export function createSessionsService(
 
   /**
    * Сессию закрыл `close_session` агента прямо в карте, а её PTY ещё жив: хост
-   * гасит процесс сам — закрытая сессия жить не должна.
+   * гасит процесс сам — закрытая сессия жить не должна. Так же и всякая живая
+   * сессия архивной работы: архив освобождает процессы агентов, сессии засыпают.
    */
-  function stopClosed(snapshot: WorksSnapshot): void {
+  function stopRetired(snapshot: WorksSnapshot): void {
     for (const entry of snapshot.entries) {
+      const archived = entry.map.work.status === 'archived';
       for (const session of entry.map.sessions) {
-        if (session.lifecycle !== 'closed') continue;
+        if (!archived && session.lifecycle !== 'closed') continue;
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
@@ -913,7 +937,7 @@ export function createSessionsService(
   }
 
   works.onChange((snapshot, previous) => {
-    stopClosed(snapshot);
+    stopRetired(snapshot);
     void runAutoLaunch(snapshot, previous);
   });
 

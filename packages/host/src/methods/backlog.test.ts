@@ -32,6 +32,25 @@ async function target(): Promise<{ projectPath: string; workId: string; roomId: 
 }
 
 describe('human backlog handlers', () => {
+  it('offers TODOS.md, moves the backlog there and back without touching it', async () => {
+    const todos = path.join(project, 'TODOS.md');
+    await writeFile(todos, '# TODOS\n');
+    expect((await get()).file).toEqual({ relativePath: '.parley/backlog.md', exists: false, choice: null, todos: 'TODOS.md' });
+    await add('Moved item');
+    const moved = await handlers['backlog.file.set']({ projectPath: project, file: 'todos' });
+    expect(moved.file).toEqual({ relativePath: 'TODOS.md', exists: true, choice: 'todos', todos: 'TODOS.md' });
+    expect(moved.items.map(item => item.title)).toEqual(['Moved item']);
+    await add('Second');
+    const before = await readFile(todos, 'utf8'); expect(before).toContain('Second');
+    const back = await handlers['backlog.file.set']({ projectPath: project, file: 'state' });
+    expect(back.file).toMatchObject({ relativePath: '.parley/backlog.md', exists: false, choice: 'state' });
+    expect(await readFile(todos, 'utf8')).toBe(before);
+  });
+  it('refuses a switch over malformed preferences with a safe error code', async () => {
+    await mkdir(path.join(project, '.parley'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'preferences.json'), '{broken');
+    await expect(handlers['backlog.file.set']({ projectPath: project, file: 'todos' })).rejects.toMatchObject({ data: { code: 'preferences-invalid' } });
+  });
   it('GET missing files is side-effect free and returns only safe projections', async () => {
     const snapshot = await get();
     expect(snapshot).toMatchObject({ projectPath: project, sharedProjectPath: project, file: { exists: false }, items: [], suggestions: [], rule: 'problems' });

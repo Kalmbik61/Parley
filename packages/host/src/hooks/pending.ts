@@ -22,6 +22,8 @@ export interface HeldHook {
   /** `tool_input` тела хука целиком: вопрос возвращает его в `updatedInput`. */
   rawToolInput: Record<string, unknown>;
   kind: FeedCard['kind'];
+  /** Свой предел удержания (у Codex короче часа); без него — `PENDING_TIMEOUT_MS`. */
+  timeoutMs?: number;
   /** Отвечает на HTTP-запрос хука; повторный вызов приёмник игнорирует. */
   respond(json: HookResponse): void;
 }
@@ -88,7 +90,7 @@ export function createPendingHooks(options: PendingHooksOptions = {}): PendingHo
       const timer = setTimeout(() => {
         const expired = finish(key, EMPTY_HOOK_RESPONSE);
         if (expired !== undefined) options.onTimeout?.(expired.ref, expired.cardId);
-      }, timeoutMs);
+      }, held.timeoutMs ?? timeoutMs);
       // Висящий хук не держит процесс хоста живым: остановку решает хост, а не таймер.
       timer.unref();
       entries.set(key, { held, sessionKey, timer });

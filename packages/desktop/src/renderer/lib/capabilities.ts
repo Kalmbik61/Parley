@@ -114,3 +114,13 @@ export function semver(version: string): [number, number, number] | null {
 export function useHostSupports(method: string): boolean {
   return useHostStore((state) => hostMethods(state.status).has(method));
 }
+
+/** Признаки хоста сверх протокола 1 (`hello.features`); хост без поля — пусто. */
+export function hostFeatures(status: HostStatus): Set<string> {
+  return status.state === 'connected' ? new Set(status.features ?? []) : new Set();
+}
+
+/** Есть ли у хоста признак — например, `feed-codex` (лента Codex из журнала). */
+export function useHostFeature(feature: string): boolean {
+  return useHostStore((state) => hostFeatures(state.status).has(feature));
+}

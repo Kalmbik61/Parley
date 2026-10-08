@@ -31,15 +31,16 @@ const REVISION_LINE = /^Brief revision: ([0-9a-f]{12})\n/m;
  * решение ждёт, новое сообщение человека всем цикл не перезапускает: ни позиции заново, ни сбор заново;
  * ведущий читает его как поправку к решению (меняет суть — повторный `propose_decision`, иначе ничего).
  * Здесь только суть, подробности — в гиде: бриф нарочно короткий.
+ * Оба текста экспортированы: их же несёт `roomTask` в `check_inbox` (`mcp/tools.ts`), бриф и письмо не разойдутся.
  */
-const LEAD_ROLE =
+export const LEAD_ROLE =
   "you are the lead. The human sets a task for everyone in the room — collect the participants' positions (each answers in the room with one message), propose a decision with `propose_decision` and do not start the work before acceptance. While a decision waits (the room's `proposal` in `get_map` is not `null`), a new human message to everyone is not a new task: do not collect positions again. Such a message is a correction to the waiting decision: if it changes the substance, take it into account and replace the text with a repeated `propose_decision`, otherwise do nothing. Accepted — hand out the parts with mentions like `@s07`; returned — redo it and propose again. Answer the human in the room without `to`, with `replyTo` set to the id of the message you answer.";
 
 /**
  * Участнику нужен его токен: по нему в раздаче частей он находит своё. Задача человека — не реплика
  * коллеги: ответ нужен и на письмо вида `note`, иначе правило брифа «do not answer a `note`» с ней спорит.
  */
-const memberRole = (mention: string): string =>
+export const memberRole = (mention: string): string =>
   `The human sets a task for everyone in the room — speak up in one message to the room (answer even if the human's message is a \`note\`) with \`replyTo\` set to the id of the human's message, so the window quotes it; do not start the work until the lead names your part (the lead hands out parts with mentions, yours is \`${mention}\`), and when done report to the lead in the room. While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human message to everyone is not a new task: do not write positions again.`;
 
 /**

@@ -47,6 +47,15 @@ describe('темы гида', () => {
     expect(guideTopic('window')).not.toContain('### Session worktree');
   });
 
+  it('темы lead и member говорят, как задача человека всем приходит в письме: toEveryone и roomTask', () => {
+    for (const topic of ['lead', 'member']) {
+      const text = (guideTopic(topic) ?? '').replace(/\s+/g, ' ');
+      expect(text, topic).toContain('`check_inbox`');
+      expect(text, topic).toContain('`toEveryone: true`');
+      expect(text, topic).toContain('`roomTask` field — your `role`, the `lead`, `proposalWaiting` and a `hint` with what to do');
+    }
+  });
+
   it('указатель check_inbox лежит в теме про письма', () => {
     expect(guideTopic('letters')).toContain('## The pointer');
     expect(guideTopic('letters')).toContain('New messages (N). Call check_inbox.');

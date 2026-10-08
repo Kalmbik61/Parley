@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { lstat } from 'node:fs/promises';
 import { MISSING_SHARED_VERSION, SharedStateError, prepareSharedIgnore, readSharedFile, sharedProjectPaths,
-  withSharedProjectLock, writeSharedFile } from './store.js';
+  withBacklogChoice, withSharedProjectLock, writeSharedFile } from './store.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedProjectPaths, SharedWriteOptions } from './store.js';
 
 export interface BacklogItem {
@@ -143,13 +144,19 @@ export async function saveBacklogLocal(tx: BacklogTransaction): Promise<void> {
 }
 export async function withBacklogTransaction<T>(projectPath: string, options: SharedWriteOptions,
   body: (tx: BacklogTransaction) => Promise<T>): Promise<T> {
-  const paths = await sharedProjectPaths(projectPath, options);
-  return withSharedProjectLock(paths, async () => {
+  const locked = await sharedProjectPaths(projectPath, options);
+  return withSharedProjectLock(locked, async () => {
+    // Пока ждали замок, человек мог сменить файл бэклога: выбор — заново, под замком. Контекст проекта тот же, замок у обоих файлов один.
+    const paths = await withBacklogChoice(locked);
     const tx = { paths, ...await readBacklogLocal(paths) };
     // Recover only reserved appends whose known base or already-written identity proves the operation.
     for (const operation of tx.state.operations.filter(row => row.status === 'reserved')) await applyAppend(tx, operation, options, true);
     return body(tx);
   }, options);
+}
+/** Права записи бэклога: у существующего файла — его собственные (бит исполнения у TODOS.md человека видит git), у нового — 0o644. */
+export async function backlogMode(file: string): Promise<number> {
+  try { return (await lstat(file)).mode & 0o777; } catch { return 0o644; }
 }
 export async function readBacklog(projectPath: string, options: SharedWriteOptions = {}): Promise<BacklogDocument> {
   const snapshot = await readSharedFile((await sharedProjectPaths(projectPath, options)).backlog);
@@ -179,15 +186,12 @@ function allocateMissing(source: string, state: BacklogLocalState): string {
   });
   return applyReplacements(source, replacements);
 }
-function appendSource(source: string, id: string, input: BacklogInput): string {
+function insertBlock(source: string, block: string, section?: string): string {
   const eol = eolOf(source);
   if (!source) source = `# Backlog${eol}`;
-  const tokens = input.by ? [`by: ${input.by}`] : [];
-  const block = renderLine({ id, title: input.title.trim(), details: '', checked: false, section: null }, tokens, eol) +
-    (input.details ? input.details.split(/\r\n|\n|\r/).map(line => `  ${line}${eol}`).join('') : '');
   const headings = sectionHeadings(source);
-  if (input.section) {
-    const selected = headings.findIndex(heading => heading.title === input.section!.trim());
+  if (section) {
+    const selected = headings.findIndex(heading => heading.title === section.trim());
     if (selected >= 0) {
       const at = headings[selected + 1]?.start ?? source.length;
       const before = source.slice(0, at);
@@ -195,10 +199,60 @@ function appendSource(source: string, id: string, input: BacklogInput): string {
       return before + separator + block + source.slice(at);
     }
     if (!source.endsWith('\n') && !source.endsWith('\r')) source += eol;
-    source += `${eol}## ${input.section.trim()}${eol}`;
+    source += `${eol}## ${section.trim()}${eol}`;
   }
   const separator = source.endsWith('\n') || source.endsWith('\r') ? '' : eol;
   return source + separator + block;
+}
+function appendSource(source: string, id: string, input: BacklogInput): string {
+  const eol = eolOf(source);
+  const tokens = input.by ? [`by: ${input.by}`] : [];
+  const block = renderLine({ id, title: input.title.trim(), details: '', checked: false, section: null }, tokens, eol) +
+    (input.details ? input.details.split(/\r\n|\n|\r/).map(line => `  ${line}${eol}`).join('') : '');
+  return insertBlock(source, block, input.section);
+}
+
+/** Дописывает в target пункты source, чьих ID в target ещё нет: строка с пометками и подробности — как есть, в свой раздел
+ * (нет раздела — новый `## <раздел>` в конце). Пустой target — это source целиком. Повтор ничего не дублирует. */
+export function mergeBacklogInto(target: string, source: string): string {
+  const present = new Map(parseItems(target).filter(item => item.id !== null).map(item => [item.id!, item]));
+  const moving = parseItems(source).filter(item => {
+    const known = item.id === null ? undefined : present.get(item.id);
+    // Тот же ID с другим текстом — чужой пункт (ID выданы в разных клонах): пропуск потерял бы его вместе с файлом-источником.
+    if (known && (known.title !== item.title || known.details !== item.details)) throw new SharedStateError('backlog-conflict');
+    return !known;
+  });
+  if (moving.length === 0) return target;
+  if (!target) return source;
+  let result = target;
+  const eol = eolOf(target);
+  for (const item of moving) {
+    // Окончания строк — как у target: без смеси CRLF и LF в файле человека.
+    const raw = source.slice(item.start, item.end).replace(/^\uFEFF/, '').replace(/\r\n|\n|\r/g, eol);
+    result = insertBlock(result, raw.endsWith(eol) ? raw : raw + eol, item.section ?? undefined);
+  }
+  parseItems(result); // Дубль ID или маркеры конфликта — ошибка до записи.
+  return result;
+}
+
+/** Текст без пунктов (строк `- [ ]` с подробностями); null — кроме заголовков и пустых строк ничего не осталось. */
+export function backlogLeftover(source: string): string | null {
+  const rest = applyReplacements(source, parseItems(source).map(item => ({ start: item.start, end: item.end, text: '' })));
+  return rest.split(/\r\n|\n|\r/).every(line => !line.trim() || /^ {0,3}#{1,6}[ \t]/.test(line.replace(/^\uFEFF/, ''))) ? null : rest;
+}
+
+/** Проверка целевого файла до любых изменений: незакрытый блок кода, маркеры конфликта, дубли ID — ошибка. */
+export function assertBacklogReadable(source: string): void {
+  parseItems(source); sectionHeadings(source);
+}
+
+/** Счётчик ID — не ниже любого ID в тексте. Счётчик сохраняется только при записи, а у оставленного файла записей нет:
+ * без этого новый пункт повторил бы ID из него, и следующий перенос счёл бы пункт уже перенесённым. */
+export function raiseBacklogSeq(state: BacklogLocalState, source: string): void {
+  for (const item of parseItems(source)) if (item.id) {
+    const sequence = Number(item.id.slice(2)); if (!boundedSequence(sequence)) fail();
+    state.backlogSeq = Math.max(state.backlogSeq, sequence);
+  }
 }
 
 function sectionHeadings(source: string): { title: string; start: number }[] {
@@ -243,7 +297,7 @@ async function applyAppend(tx: BacklogTransaction, operation: AppendOperation, o
     await saveBacklogLocal(tx); // Reserve counters/operation before writing shared Markdown.
     diagnostics = await prepareSharedIgnore(tx.paths, options);
     await options.beforeCommit?.(tx.paths.backlog, attempt);
-    try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); }
+    try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); }
     catch (error) {
       if (error instanceof SharedStateError && error.code === 'backlog-conflict' && options.expectedVersion === undefined && !recovering) continue;
       throw error;
@@ -286,7 +340,7 @@ export async function ensureBacklogIdsInTransaction(tx: BacklogTransaction, opti
     if (options.expectedVersion !== undefined && before.version !== options.expectedVersion) throw new SharedStateError('backlog-conflict');
     await saveBacklogLocal(tx); const diagnostics = await prepareSharedIgnore(tx.paths, options);
     await options.beforeCommit?.(tx.paths.backlog, attempt);
-    try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); return diagnostics; }
+    try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); return diagnostics; }
     catch (error) {
       if (!(error instanceof SharedStateError) || error.code !== 'backlog-conflict' || options.expectedVersion !== undefined) throw error;
     }
@@ -335,7 +389,7 @@ async function changeBacklog(projectPath: string, locator: string | number, patc
       await saveBacklogLocal(tx);
       const diagnostics = await prepareSharedIgnore(tx.paths, options);
       await options.beforeCommit?.(tx.paths.backlog, attempt);
-      try { await writeSharedFile(tx.paths.backlog, source, before, 0o644); }
+      try { await writeSharedFile(tx.paths.backlog, source, before, await backlogMode(tx.paths.backlog)); }
       catch (error) {
         if (error instanceof SharedStateError && error.code === 'backlog-conflict' && options.expectedVersion === undefined) continue;
         throw error;

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
   isStaleHostLock,
@@ -34,6 +35,7 @@ import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createFeedService } from './feed/feed-service.js';
+import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
@@ -76,6 +78,11 @@ export interface HostOptions {
    * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
    */
   startupWaitMs?: number;
+  /**
+   * Срок ожидания хуков Codex после старта процесса, мс (спека 2026-10-07, 5.7): ни одного хука — подсказка про доверие.
+   * Боевой хост не задаёт — 15 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_HOOK_GRACE_MS`.
+   */
+  codexHookGraceMs?: number;
 }
 
 export interface RunningHost {
@@ -228,7 +235,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
-  });
+  }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
   const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -245,12 +252,27 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
   // адрес приёмника и свой токен (подкусок 2c).
+  // Запускатель хука Codex заводится при первой надобности (включённая `codexApprovals`), а не при каждом старте хоста.
+  // Не записался — запуск идёт без хуков (Codex спросит одобрение в терминале), а следующий запуск пробует снова.
+  let codexHookCommand: Promise<string | undefined> | undefined;
+  const codexHookCommandOnce = (): Promise<string | undefined> => {
+    codexHookCommand ??= ensureCodexHookLauncher(
+      parleyHome(),
+      process.execPath,
+      fileURLToPath(new URL('./feed/codex-hook-bin.js', import.meta.url)),
+    ).catch((error: unknown) => {
+      log.warn('хуки Codex: запускатель не записан, запуск без хуков', { error: String(error) });
+      codexHookCommand = undefined;
+      return undefined;
+    });
+    return codexHookCommand;
+  };
   const sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
-    { hooks: hookServer, providerVersions },
+    { hooks: hookServer, providerVersions, codexHookCommand: codexHookCommandOnce },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем

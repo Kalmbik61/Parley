@@ -165,6 +165,21 @@ export function BacklogPanel({ bridge, projectPath, supported, connection, onOpe
           <option value="ask">{S.backlog.ask}</option><option value="problems">{S.backlog.problems}</option><option value="everything">{S.backlog.everything}</option>
         </select>
       </label>
+      {snapshot.file.choice !== undefined && <>
+        {snapshot.file.choice === null && snapshot.file.todos && <div role="note" className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2">
+          <span>{S.backlog.todosOffer(snapshot.file.todos)}</span>
+          <Button size="xs" disabled={busy} onClick={() => { void mutate('backlog.file.set', { projectPath, file: 'todos' }); }}>{S.backlog.useTodos(snapshot.file.todos)}</Button>
+          <Button size="xs" variant="outline" disabled={busy} onClick={() => { void mutate('backlog.file.set', { projectPath, file: 'state' }); }}>{S.backlog.keepState}</Button>
+        </div>}
+        <label className="flex items-center gap-2">{S.backlog.file}
+          <select aria-label={S.backlog.file} value={snapshot.file.choice ?? 'state'} disabled={busy} onChange={event => {
+            const file = event.target.value;
+            if (file === 'state' || file === 'todos') void mutate('backlog.file.set', { projectPath, file });
+          }}>
+            <option value="state">{S.backlog.stateFile}</option><option value="todos">{snapshot.file.todos ?? S.backlog.todosFile}</option>
+          </select>
+        </label>
+      </>}
       <section aria-label="Suggested">
         <h3>{S.backlog.suggested(snapshot.suggestions.length)}</h3>
         {snapshot.suggestions.map(row => <article key={row.id} className="space-y-1 rounded-md border border-border p-2">

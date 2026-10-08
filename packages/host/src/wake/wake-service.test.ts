@@ -14,6 +14,7 @@ import {
   readMap,
   reserveAttempt,
   saveConfig,
+  setWorkStatus,
   settleAttempt,
   SYSTEM,
   transitionSession,
@@ -715,6 +716,7 @@ async function sleepingPair(
 interface ResumeRig {
   pty: ReturnType<typeof createPtyManager>;
   sessions: SessionsService;
+  activity: ReturnType<typeof createActivityService>;
   stream: () => string;
 }
 
@@ -748,7 +750,7 @@ async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRi
   // два наблюдателя работ читают их независимо, и позднее, но устаревшее чтение
   // перекрыло бы снимок со свежим письмом. Письма шлём после затишья.
   await settle(200);
-  return { pty, sessions, stream: () => stream };
+  return { pty, sessions, activity, stream: () => stream };
 }
 
 async function tempArgsFile(): Promise<string> {
@@ -948,6 +950,27 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
   }, 20_000);
+
+  it('8: письмо спящей в архивной работе ждёт без подъёма и без resume-failed; после Reopen будит', async () => {
+    const { workId, target } = await sleepingPair();
+    await setWorkStatus(project, workId, 'archived');
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const { sessions, activity } = await resumeRig();
+    const ref = { projectPath: project, workId, sessionId: target };
+
+    await sendLetter(workId, target);
+    // Будильник письмо увидел и оставил ждать спящей; без архива здесь был бы `resuming`.
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(400);
+    expect(sessions.live(ref)).toBe(false);
+    expect(existsSync(argsFile)).toBe(false);
+    expect(notices('resume-failed')).toEqual([]);
+
+    await setWorkStatus(project, workId, 'active');
+    await readArgv(argsFile);
+    await waitFor(() => sessions.live(ref), 5000);
+  }, 20_000);
 });
 
 /** Работа с тремя живыми сессиями хоста; `events/` заведён, как при настоящем запуске. */
@@ -1019,8 +1042,9 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
   return new Map(ids.map((id) => [id, () => streams.get(id) ?? '']));
 }
 
-const inRoom = (count: number, room: string, title: string): string =>
-  `New messages (${count}) in ${room} "${title}". Call check_inbox.`;
+/** `task` — среди писем задача человека всем: указатель помечает её «(a task for everyone)». */
+const inRoom = (count: number, room: string, title: string, task = false): string =>
+  `New messages (${count}) in ${room} "${title}"${task ? ' (a task for everyone)' : ''}. Call check_inbox.`;
 
 describe('WakeService: комнаты (3.5)', () => {
   it('1: рассылка комнаты будит всех участников, кроме отправителя', async () => {
@@ -1085,8 +1109,8 @@ describe('WakeService: комнаты (3.5)', () => {
 
     await sendHumanLetter({ projectPath: project, workId, roomId, to: [], text: 'всем', kind: 'decision' });
 
-    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт.
-    const expected = `echo: ${inRoom(2, roomId, 'Созвон')}`;
+    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт; рассылка человека — задача всем.
+    const expected = `echo: ${inRoom(2, roomId, 'Созвон', true)}`;
     await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
     await settle(300);

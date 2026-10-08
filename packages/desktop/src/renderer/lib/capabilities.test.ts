@@ -13,6 +13,7 @@ import { useHostStore } from '../store/host.js';
 import {
   BASELINE_METHODS,
   REQUIRED_METHODS,
+  hostFeatures,
   hostMethods,
   missingMethods,
   otherHostBuild,
@@ -139,5 +140,13 @@ describe('otherHostBuild — хост от другой сборки окна (0
     expect(
       otherHostBuild({ state: 'mismatch', hostVersion: '0.9.0', liveSessions: 0 }, '1.1.0'),
     ).toBeNull();
+  });
+});
+
+describe('hostFeatures', () => {
+  it('признаки подключённого хоста; иначе пусто', () => {
+    expect(hostFeatures({ state: 'connected', hostVersion: '0.8.0', methods: null, features: ['feed-codex'] }).has('feed-codex')).toBe(true);
+    expect(hostFeatures({ state: 'connected', hostVersion: '0.7.0', methods: null, features: null }).size).toBe(0);
+    expect(hostFeatures({ state: 'connecting' }).size).toBe(0);
   });
 });

@@ -46,6 +46,13 @@ describe('bounded project backlog subscriptions', () => {
     value = { ...value, version: 'v2' }; callbacks.get(root)!();
     await vi.waitFor(() => expect(notify).toHaveBeenCalledWith({ projectPath: root })); expect(read).toHaveBeenCalledTimes(3);
   });
+  it('notifies when only the file choice or TODOS.md presence changes while the version stays the same', async () => {
+    const { result, read } = service(); const notify = vi.fn(); await result.subscribe(root, 'one', notify);
+    value = { ...value, file: { ...value.file, choice: null, todos: 'TODOS.md' } }; callbacks.get(root)!();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    value = { ...value, file: { ...value.file, choice: 'todos' } }; callbacks.get(root)!();
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2)); expect(read).toHaveBeenCalledTimes(3);
+  });
   it('arms the newly created state directory and rearms on its inode replacement', async () => {
     const { result, watchDirectory } = service(); await result.subscribe(root, 'one', vi.fn());
     const directory = path.join(root, '.parley'); await mkdir(directory); callbacks.get(root)!();

@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { FEED_HOOK_EVENTS } from '@parley/core';
+import { CODEX_HOOK_EVENTS, FEED_HOOK_EVENTS } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -33,6 +33,7 @@ const KEEP_ALIVE_MS = 5_000;
 const CLOSE_FLUSH_MS = 1_000;
 
 const FEED_EVENTS: ReadonlySet<string> = new Set(FEED_HOOK_EVENTS);
+const CODEX_EVENTS: ReadonlySet<string> = new Set(CODEX_HOOK_EVENTS);
 
 /** Принятое событие хука одной сессии. */
 export interface HookRequest {
@@ -63,9 +64,9 @@ export interface HookServer {
   /**
    * Токен запуска сессии (32 байта, hex) для `PARLEY_HOOK_TOKEN`. Прежний токен той же сессии
    * отзывается. `providerSessionId` — id сессии у Claude Code; `null` — сверять `session_id` не с чем,
-   * первый принятый хук его запомнит.
+   * первый принятый хук его запомнит. `provider` задаёт набор принимаемых событий (у Codex свой).
    */
-  register(ref: SessionRef, providerSessionId: string | null): string;
+  register(ref: SessionRef, providerSessionId: string | null, provider?: string): string;
   /** Отзывает токен сессии: её хуки дальше — 401. */
   unregister(ref: SessionRef): void;
   /** `{}` всем висящим запросам, затем закрывает сервер и все соединения. */
@@ -78,6 +79,8 @@ interface Registration {
   ref: SessionRef;
   token: string;
   providerSessionId: string | null;
+  /** События, которые принимает этот запуск: у Claude Code и Codex наборы разные. */
+  events: ReadonlySet<string>;
 }
 
 /** Строка заголовка: у повторённого заголовка Node отдаёт массив — такой не принимаем. */
@@ -204,7 +207,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
       return;
     }
     const event = body['hook_event_name'];
-    if (typeof event !== 'string' || !FEED_EVENTS.has(event)) {
+    if (typeof event !== 'string' || !registration.events.has(event)) {
       reject(req, res, 400, 'event');
       return;
     }
@@ -220,7 +223,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         reject(req, res, 404, 'session-id');
         return;
       }
-      log.info('приёмник хуков: новый id сессии Claude Code', {
+      log.info('приёмник хуков: новый id сессии провайдера', {
         sessionId: registration.ref.sessionId,
       });
       registration.providerSessionId = sessionId;
@@ -287,12 +290,17 @@ export function createHookServer(options: HookServerOptions): HookServer {
       });
     },
     url: () => address,
-    register(ref, providerSessionId) {
+    register(ref, providerSessionId, provider = 'claude') {
       const key = refKey(ref);
       const previous = tokenOfSession.get(key);
       if (previous !== undefined) byToken.delete(previous);
       const token = randomBytes(32).toString('hex');
-      byToken.set(token, { ref: { ...ref }, token, providerSessionId });
+      byToken.set(token, {
+        ref: { ...ref },
+        token,
+        providerSessionId,
+        events: provider === 'codex' ? CODEX_EVENTS : FEED_EVENTS,
+      });
       tokenOfSession.set(key, token);
       return token;
     },
