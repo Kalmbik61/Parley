@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget, inlineOrRef, textHash } from './context-budget.js';
-import { isMember, liveLead } from './rooms.js';
+import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
 import { readMap, workPaths } from './store.js';
 import { participantLabel, recentDecisions, sessionMention, threadOf } from './thread.js';
@@ -132,7 +132,8 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // Комнаты, где сессия участник (этап 3, раздел 6.3): без них сессия узнаёт
   // о своих комнатах только из ответа `create_room`, а на резюме сессии в
   // брифе комната появляется у всех остальных участников.
-  const rooms = map.rooms.filter((room) => isMember(room, session.id));
+  // Архивную комнату человек убрал с глаз, и писать в неё нельзя: ни в составе, ни ролью ведущего она не нужна.
+  const rooms = map.rooms.filter((room) => isMember(room, session.id) && !isRoomArchived(room));
   if (colleagues.length > 0 || rooms.length > 0) {
     lines.push('## Colleagues', '');
     for (const id of colleagues.slice(0, MAX_COLLEAGUES)) {

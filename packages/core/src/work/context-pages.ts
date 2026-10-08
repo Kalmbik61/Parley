@@ -1,5 +1,6 @@
 import { markedExcerpt, textHash } from './context-budget.js';
 import { unreadFor, unreadForHuman } from './letters.js';
+import { isRoomArchived } from './rooms.js';
 import { displayStatus } from './status-view.js';
 import type { Message, MapCompact, RoomPlan, WorkMap, WorkSession } from './types.js';
 
@@ -508,6 +509,8 @@ export interface RoomTopology {
     cut?: Cut;
   } | null;
   messages: { total: number; latestId: string | null; unreadForYou: number };
+  /** Только у архивной комнаты: человек убрал её с глаз, писать в неё нельзя, пока он её не вернёт (`archivedAt` в `{room}`). */
+  archived?: true;
   cut?: Cut;
 }
 
@@ -625,6 +628,7 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
       recipe: room.recipe == null ? null : { id: room.recipe.id, name: room.recipe.name },
       proposal: waiting,
       messages: { total: counted.total, latestId: counted.latestId, unreadForYou: unreadRooms[room.id] ?? 0 },
+      ...(isRoomArchived(room) ? { archived: true as const } : {}),
     };
     return Object.keys(cut).length === 0 ? entry : { ...entry, cut };
   });

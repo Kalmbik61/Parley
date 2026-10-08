@@ -1,5 +1,7 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
 import { addMessage, maxNumber } from './map.js';
+import { recipientsOf } from './letters.js';
+import { cancelActiveRoomPlan } from './plans.js';
 import { sessionMention, sessionTag } from './thread.js';
 import { HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
@@ -67,6 +69,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
     proposal: null,
     mode: init.mode ?? 'free',
     recipe: init.recipe == null ? null : { id: init.recipe.id, name: init.recipe.name, playbook: init.recipe.playbook },
+    archivedAt: null,
   };
   map.rooms.push(room);
   return room;
@@ -95,6 +98,14 @@ function isAlive(map: WorkMap, id: string): boolean {
  */
 export function isRoomClosed(map: WorkMap, room: Room): boolean {
   return ![room.creator, ...room.members].some((id) => isAlive(map, id));
+}
+
+/**
+ * В архиве ли комната: человек убрал её с глаз (`archiveRoom`). Проверка по строке, а не по `=== null`: комната из
+ * литерала без поля (старая фикстура, карта в памяти не через `parseMap`) считается открытой, а не архивной.
+ */
+export function isRoomArchived(room: Room): boolean {
+  return typeof room.archivedAt === 'string';
 }
 
 /**
@@ -165,8 +176,7 @@ export function addMember(
   sessionId: string,
   at = new Date().toISOString(),
 ): Message {
-  const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
+  const room = requireOpenRoom(map, roomId);
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
   if (session === undefined) throw new RoomRuleError(`session ${sessionId} is not in the map`);
   if (session.lifecycle === 'closed') throw new RoomRuleError(`session ${sessionId} is closed`);
@@ -197,8 +207,7 @@ export function addMemberByLead(
   sessionId: string,
   at = new Date().toISOString(),
 ): Message {
-  const room = map.rooms.find((candidate) => candidate.id === roomId);
-  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
+  const room = requireOpenRoom(map, roomId);
   if (isRoomClosed(map, room)) {
     throw new RoomRuleError(`room ${roomId} is closed: it has no live participants`);
   }
@@ -231,6 +240,18 @@ export function addRoomOriginMessage(
 function findRoom(map: WorkMap, roomId: string): Room {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
+  return room;
+}
+
+/**
+ * Комната карты для записи в неё: найденная, а для архивной — отказ `RoomRuleError`, который хост отдаёт окну как
+ * `bad_request`, а агенту текстом ошибки. Единой точки поиска комнаты в коде нет, поэтому этот хелпер ставят на пути
+ * записи (письмо, вход в комнату, решение, план, режим, ведущий); пути чтения — лента, `get_map {room}`, страницы писем —
+ * его не зовут. `addSystemMessage` и `addMessage` проверки не делают: строки об архивации и возврате должны проходить.
+ */
+export function requireOpenRoom(map: WorkMap, roomId: string): Room {
+  const room = findRoom(map, roomId);
+  if (isRoomArchived(room)) throw new RoomRuleError(`room ${roomId} is archived: only the human can reopen it`);
   return room;
 }
 
@@ -287,7 +308,7 @@ export function setRoomLead(
   sessionId: string,
   at = new Date().toISOString(),
 ): LeadChange {
-  const room = findRoom(map, roomId);
+  const room = requireOpenRoom(map, roomId);
   if (sessionId === HUMAN || !isMember(room, sessionId)) {
     throw new RoomRuleError(`session ${sessionId} is not a participant of room ${roomId}`);
   }
@@ -365,6 +386,59 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
       !map.rooms.some((other) => isMember(other, id)),
   );
   return notified.map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));
+}
+
+/**
+ * Человек архивирует комнату (`rooms.archive`): лента остаётся и читается, писать в неё нельзя (`requireOpenRoom`),
+ * пока комнату не вернут (`reopenRoom`). Повторный вызов для архивной комнаты ничего не меняет и пустой список отдаёт.
+ *
+ * Сначала закрывается незавершённое и пишется строка в ленту, и только потом ставится `archivedAt`. Живой план
+ * (`active`, `completing`) отменяется как в `cancelRoomPlan` (`cancelActiveRoomPlan`), его неотправленные доставки
+ * (`planEffects` в `queued`) снимаются, а слот `proposal` очищается без ответа — как у плана закрытой комнаты в
+ * `reconcileRoomPlans`. Затем в ленту ложится строка «Room archived by the human.».
+ *
+ * Возвращает id сессий, которых архивация оставила без открытой комнаты: участники (создатель-сессия и `members`, без
+ * человека и без сессий, которых уже нет в карте), не числящиеся в другой неархивной комнате. Правило то же, что у
+ * прощальных писем `deleteRoom`. Остановить их и написать им, кого не остановили, — дело хоста.
+ */
+export function archiveRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): string[] {
+  if (isRoomArchived(findRoom(map, roomId))) return [];
+
+  cancelActiveRoomPlan(map, roomId, at);
+  for (const effect of map.planEffects ?? []) {
+    if (effect.roomId === roomId && effect.status === 'queued') effect.status = 'cancelled';
+  }
+  // Отмена плана подменяет `map.rooms` копией (`edit` в plans.ts): запись комнаты ищем заново, а не держим прежнюю ссылку.
+  const room = findRoom(map, roomId);
+  room.proposal = null;
+  addSystemMessage(map, roomId, 'Room archived by the human.', at);
+  room.archivedAt = at;
+
+  return [...new Set([room.creator, ...room.members])].filter(
+    (id) =>
+      id !== HUMAN &&
+      map.sessions.some((session) => session.id === id) &&
+      !map.rooms.some((other) => other.id !== roomId && !isRoomArchived(other) && isMember(other, id)),
+  );
+}
+
+/**
+ * Человек возвращает комнату из архива (`rooms.reopen`): `archivedAt` снова `null`, в ленте строка «Room reopened by
+ * the human.». Сессии сами не поднимаются, как и при Reopen работы; в комнате остаются те, кто в ней числился (правило
+ * одной комнаты `leaveOtherRooms` архивную комнату не обходит). Открытая комната — ничего не меняет.
+ *
+ * Письма ленты, не прочитанные до архивации, после возврата снова стали бы непрочитанными (`recipientsOf`) и будильник
+ * поднял бы спящих участников — поэтому старые письма комнаты помечаются прочитанными её участниками.
+ */
+export function reopenRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): void {
+  const room = findRoom(map, roomId);
+  if (!isRoomArchived(room)) return;
+  room.archivedAt = null;
+  for (const message of map.messages) {
+    if (message.roomId !== roomId) continue;
+    for (const id of recipientsOf(message, map)) message.readBy[id] ??= at;
+  }
+  addSystemMessage(map, roomId, 'Room reopened by the human.', at);
 }
 
 /**

@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createParleyServer } from "./tools.js";
 import { addSession, transitionSession } from "../work/map.js";
-import { addRoom } from "../work/rooms.js";
+import { addRoom, archiveRoom } from "../work/rooms.js";
 import { createWork, updateMap, readMap, workPaths } from "../work/store.js";
 import { resolveProposal } from "../work/proposals.js";
 import { HUMAN } from "../work/types.js";
@@ -377,4 +377,29 @@ it("multilingual near-limit notes remain valid while the independent 64 KiB JSON
       note: "я".repeat(10000),
     })).failed,
   ).toBe(false);
+});
+
+describe("archived room", () => {
+  const REFUSAL = "room r-01 is archived: only the human can reopen it";
+  it("refuses every plan tool with the archive reason, not a stale-revision error, and writes nothing", async () => {
+    await accepted();
+    await updateMap(project, context.workId, (map) => {
+      archiveRoom(map, "r-01", "2026-10-08T12:00:00.000Z");
+    });
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const cases: [string, string, Record<string, unknown>][] = [
+      ["s-01", "propose_decision", { room: "r-01", text: "Amend", plan: draft }],
+      ["s-01", "set_room_mode", { room: "r-01", mode: "verified", reason: "No change" }],
+      ["s-02", "plan_update", { planId: "pl-01", rev: 0, item: 1, status: "in_progress" }],
+      ["s-02", "plan_submit", { planId: "pl-01", rev: 0, item: 1, evidence: { text: "Done", artifacts: [] } }],
+      ["s-03", "plan_verify", { planId: "pl-01", rev: 0, item: 1, verdict: "verified", note: "Fine" }],
+      ["s-01", "propose_completion", { planId: "pl-01", rev: 0, summary: "All done" }],
+    ];
+    for (const [actor, name, args] of cases) {
+      const result = await call(actor, name, args);
+      expect(result.failed, name).toBe(true);
+      expect(result.text, name).toBe(REFUSAL);
+    }
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
 });

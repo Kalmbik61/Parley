@@ -432,13 +432,14 @@ function isRecipeSnapshot(value: unknown): boolean {
 
 /**
  * Ведущего и решения в комнатах до 2026-09-29 не было: подставляется `null`, а ведущим
- * такой комнаты считается первый из `members` (`roomLead`). Запись, которая не объект,
- * не трогаем — как и прежде, её форму проверять некому.
+ * такой комнаты считается первый из `members` (`roomLead`). Архива комнат (`archivedAt`) до 2026-10-08 тоже не было:
+ * комната открыта. Запись, которая не объект, не трогаем — как и прежде, её форму проверять некому.
  */
 function migrateRoom(room: unknown): void {
   if (!isRecord(room)) return;
   room['lead'] ??= null;
   room['proposal'] ??= null;
+  room['archivedAt'] ??= null;
   room['mode'] ??= 'free';
   if (!['free', 'checklist', 'verified'].includes(String(room['mode']))) throw new Error('invalid room mode');
   room['recipe'] ??= null;

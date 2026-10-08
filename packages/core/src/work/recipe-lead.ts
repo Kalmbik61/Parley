@@ -1,7 +1,7 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
 import { addMessage } from './map.js';
 import { truncateMarked } from './parley-md.js';
-import { liveLead } from './rooms.js';
+import { isRoomArchived, liveLead } from './rooms.js';
 import { PARLEY, type Message, type WorkMap } from './types.js';
 
 export const RECIPE_PLAYBOOK_MARKER = '[Playbook is cut at 32 KB by Parley]';
@@ -14,7 +14,7 @@ export function recipeLeadBlock(recipe: Pick<RecipeSnapshot, 'name' | 'playbook'
 /** Блок рецепта сессии, если она сейчас ведёт комнату со снимком рецепта; иначе `null`. */
 export function leadRecipeBlock(map: WorkMap, sessionId: string): string | null {
   for (const room of map.rooms) {
-    if (room.recipe != null && liveLead(map, room) === sessionId) return recipeLeadBlock(room.recipe);
+    if (room.recipe != null && !isRoomArchived(room) && liveLead(map, room) === sessionId) return recipeLeadBlock(room.recipe);
   }
   return null;
 }
@@ -29,7 +29,8 @@ export function leadRecipeBlock(map: WorkMap, sessionId: string): string | null 
 export function reconcileRecipeLeads(map: WorkMap, at = new Date().toISOString()): Message[] {
   const sent: Message[] = [];
   for (const room of map.rooms) {
-    if (room.recipe == null) continue;
+    // В ленту архивной комнаты не пишет никто, кроме человека (архив комнат, 3.3): плейбук ведущему не нужен.
+    if (room.recipe == null || isRoomArchived(room)) continue;
     const lead = liveLead(map, room);
     if (lead === null || room.recipeLeadNotified === lead) continue;
     const text = truncateMarked(recipeLeadBlock(room.recipe), RECIPE_PLAYBOOK_MARKER).text;
@@ -42,7 +43,7 @@ export function reconcileRecipeLeads(map: WorkMap, at = new Date().toISOString()
 /** Нужна ли запись: чтение без лока перед `updateMap`, чтобы не переписывать карту впустую. */
 export function recipeLeadsPending(map: WorkMap): boolean {
   return map.rooms.some((room) => {
-    if (room.recipe == null) return false;
+    if (room.recipe == null || isRoomArchived(room)) return false;
     const lead = liveLead(map, room);
     return lead !== null && room.recipeLeadNotified !== lead;
   });

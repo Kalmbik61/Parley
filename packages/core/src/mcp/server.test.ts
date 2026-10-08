@@ -23,7 +23,7 @@ import { activityOf } from '../work/activity.js';
 import { openEvents } from '../work/events.js';
 import { planLaunch } from '../work/launch.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
-import { addRoom } from '../work/rooms.js';
+import { addRoom, archiveRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
@@ -3436,5 +3436,95 @@ describe('memory and history MCP tools', () => {
     const client = await connect('s-01');
     const response = await call(client, 'memory_read');
     expect(response.isError).toBe(true); expect(response.text).toContain('memory-merge-conflict'); expect(response.text).not.toContain('secret');
+  });
+});
+
+describe('архивная комната в MCP (архив комнат, 3.3, 3.4, 3.6)', () => {
+  beforeEach(() => { process.env.PATH = savedPath ?? ''; });
+  const AT = '2026-10-08T12:00:00.000Z';
+  const REFUSAL = 'room r-01 is archived: only the human can reopen it';
+
+  /**
+   * Комната r-01 «архив» в архиве: s-01 — создатель и ведущий, s-02 — участник; s-03 вне её и ведёт открытую r-02.
+   * До архивации s-02 написал всей комнате «до архива».
+   */
+  async function setup(): Promise<{ lead: Client; member: Client; outsider: Client }> {
+    await updateMap(project, workId, (current) => {
+      addSession(current, { provider: 'claude', label: 'бэк', task: 'делать' });
+      addSession(current, { provider: 'claude', label: 'ревью', task: 'делать' });
+      addRoom(current, { title: 'архив', creator: 's-01', members: ['s-02'], lead: 's-01' });
+      addRoom(current, { title: 'открытая', creator: 's-03', members: [] });
+      addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'до архива' });
+      archiveRoom(current, 'r-01', AT);
+    });
+    return { lead: await connect('s-01'), member: await connect('s-02'), outsider: await connect('s-03') };
+  }
+
+  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+
+  it('send_message и add_to_room в архивную комнату отказывают текстом из спеки, карта не меняется', async () => {
+    const { lead, member } = await setup();
+    const before = await rawMap();
+
+    for (const refused of [
+      await call(lead, 'send_message', { room: 'r-01', text: 'поздно' }),
+      await call(member, 'send_message', { room: 'r-01', to: 's-01', text: 'поздно' }),
+      await call(lead, 'add_to_room', { room: 'r-01', session: 's-03' }),
+    ]) {
+      expect(refused).toEqual({ isError: true, text: REFUSAL });
+    }
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('инструменты решения и режима отказывают тем же текстом', async () => {
+    const { lead } = await setup();
+    const before = await rawMap();
+
+    expect(await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' })).toEqual({ isError: true, text: REFUSAL });
+    expect(await call(lead, 'set_room_mode', { room: 'r-01', mode: 'checklist', reason: 'пробуем' })).toEqual({ isError: true, text: REFUSAL });
+    expect(await rawMap()).toBe(before);
+  });
+
+  it('открытая комната рядом работает как прежде', async () => {
+    const { outsider } = await setup();
+    const sent = await call(outsider, 'send_message', { room: 'r-02', text: 'живая' });
+    expect(sent.isError, sent.text).toBe(false);
+  });
+
+  it('чтение остаётся: read_room, get_map {room}, страницы писем; письма архивной комнаты не непрочитаны и не будят', async () => {
+    const { lead, member } = await setup();
+
+    const read = await callOk(member, 'read_room', { room: 'r-01' });
+    expect((read['messages'] as { text: string }[]).map((m) => m.text)).toEqual(['до архива', 'Room archived by the human.']);
+
+    const detail = await callOk(lead, 'get_map', { room: 'r-01' });
+    expect(detail['room']).toMatchObject({ id: 'r-01', archivedAt: AT });
+    expect(detail['messages']).toMatchObject({ total: 2 });
+
+    const page = await callOk(lead, 'get_map', { field: 'messages', room: 'r-01' });
+    expect((page['messages'] as { text: string }[]).map((m) => m.text)).toEqual(['до архива', 'Room archived by the human.']);
+
+    // «до архива» было рассылкой комнаты: до архивации оно ждало s-01, после — нет.
+    expect(await callOk(lead, 'check_inbox')).toEqual({ messages: [] });
+  });
+
+  it('get_map: archived: true только у архивной комнаты', async () => {
+    const { lead } = await setup();
+    const rooms = ((await callOk(lead, 'get_map'))['map'] as { rooms: { id: string; archived?: boolean }[] }).rooms;
+
+    expect(rooms.find((room) => room.id === 'r-01')?.archived).toBe(true);
+    expect(rooms.find((room) => room.id === 'r-02')).not.toHaveProperty('archived');
+  });
+
+  it('backlog_suggest и remember не пишут строку в ленту архивной комнаты', async () => {
+    const { member } = await setup();
+    const before = (await readMap(project, workId)).messages.length;
+
+    expect((await callOk(member, 'backlog_suggest', { kind: 'bug', title: 'Observed regression', why: 'Evidence' })).message).toBe('added: b-001');
+    expect((await callOk(member, 'remember', { kind: 'lesson', fact: 'PTY tests flake in worktrees', why: 'Seen twice' })).message).toBe('suggested: ms-01');
+
+    const after = await readMap(project, workId);
+    expect(after.messages).toHaveLength(before);
+    expect(after.messages.filter((m) => m.roomId === 'r-01' && m.from === 'system').map((m) => m.text)).toEqual(['Room archived by the human.']);
   });
 });
