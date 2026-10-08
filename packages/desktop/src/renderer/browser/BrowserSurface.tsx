@@ -180,7 +180,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
 
   // Журнал гостя: снимок на dom-ready и при открытии панели, дальше — пачки своего гостя (Фокус ревью 4).
   useDevtoolsFeed(bridge, tabId, state.webContentsId, devtools.open);
-  const applied = useViewport({
+  const { applied, failed: viewportFailed, retry: retryViewport } = useViewport({
     bridge,
     webContentsId: state.webContentsId,
     viewport,
@@ -374,8 +374,12 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
 
   // Размер вьюпорта (спека 2026-10-07, 4.2) — в раскладку: он переживает перезапуск; эмуляцию ставит useViewport.
   const setViewport = (next: ViewportSpec | null): void => {
-    // Повторный выбор того же пресета не меняет ни раскладку, ни эмуляцию.
-    if (sameViewport(next, viewport)) return;
+    // Повторный выбор того же пресета не меняет ни раскладку, ни эмуляцию — если прошлая попытка удалась.
+    // После отказа тот же выбор (в том числе Fit) шлёт команды заново.
+    if (sameViewport(next, viewport)) {
+      if (viewportFailed) retryViewport();
+      return;
+    }
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { viewport: next }));
   };
 

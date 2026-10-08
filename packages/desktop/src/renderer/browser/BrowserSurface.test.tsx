@@ -812,6 +812,70 @@ describe('BrowserSurface — размер вьюпорта (спека 2026-10-0
     expect(tabOfLayout()).toMatchObject({ viewport: { preset: 'mobile-l', rotated: false, dpr: 2 } });
     expect(applied()).toBe(before + 1);
   });
+
+  it('m4: setViewport отказал → выбор Fit в меню всё равно шлёт сброс setViewport(id, null, поле)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    const setViewport = vi.spyOn(bridge.browser, 'setViewport').mockRejectedValue({ code: 'failed', message: 'boom' });
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith('[parley] setViewport failed', { code: 'failed', message: 'boom' });
+    setViewport.mockClear();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fit' }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledWith(7, null, { width: 768, height: 548 });
+    error.mockRestore();
+  });
+
+  it('m4: setViewport отказал → повторный выбор того же пресета шлёт setViewport заново; после успеха повтор снова пропускается', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    const setViewport = vi.spyOn(bridge.browser, 'setViewport').mockRejectedValue({ code: 'failed', message: 'boom' });
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    setViewport.mockClear();
+    setViewport.mockResolvedValue({ scale: 1 });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledTimes(1);
+    expect(setViewport).toHaveBeenCalledWith(7, MOBILE_M, { width: 768, height: 548 });
+    // Теперь размер стоит: тот же выбор снова ничего не шлёт.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it('m5: захват пропал — сцена без ужатой коробки и подписи, страница во всё поле; вернулся — setViewport заново и сцена снова с размером', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    bridge.setViewportScale(0.5);
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    const sent = (): number => bridge.browserCalls.filter((call) => call.method === 'setViewport').length;
+    expect(view.style.width).toBe('187px');
+    expect(screen.getByTestId('viewport-label')).toBeTruthy();
+    const before = sent();
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 7, capture: 'unavailable' })));
+    await act(async () => {});
+    expect(view.style.width).toBe('');
+    expect(screen.queryByTestId('viewport-label')).toBeNull();
+    expect(sent()).toBe(before);
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 7, capture: 'on' })));
+    await act(async () => {});
+    expect(sent()).toBe(before + 1);
+    expect(view.style.width).toBe('187px');
+    expect(screen.getByTestId('viewport-label').textContent).toContain('50%');
+  });
 });
 
 describe('BrowserSurface — первая загрузка после захвата (спайк 0.1, вариант D; Фокус ревью 6)', () => {
