@@ -184,6 +184,18 @@ describe('подключение (спека 3.3, спайк 0.1 — вариа�
     expect(inspector.snapshot(7)).toBeNull();
   });
 
+  it('onDestroyed: гость уничтожен — слушатель получает его id один раз; отписанный не зовётся', () => {
+    const { contents, inspector } = setup();
+    const seen: number[] = [];
+    const off = inspector.onDestroyed((id) => seen.push(id));
+    const unsubscribed = vi.fn<(id: number) => void>();
+    inspector.onDestroyed(unsubscribed)();
+    contents.emit('destroyed');
+    expect(seen).toEqual([7]);
+    expect(unsubscribed).not.toHaveBeenCalled();
+    off();
+  });
+
   it('ready: не раньше ответа на все четыре enable', async () => {
     const gates: Array<() => void> = [];
     const { inspector } = setup({ gates });

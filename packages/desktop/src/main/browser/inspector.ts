@@ -84,6 +84,8 @@ export interface Inspector {
   responseBody(id: number, requestId: string, limit: number): Promise<ResponseBody | null>;
   send<T = unknown>(id: number, method: CdpMethod, params?: Record<string, unknown>): Promise<T>;
   onBatch(listener: (batch: DevtoolsBatch) => void): () => void;
+  /** Гость уничтожен, журнал снят: тем, у кого есть состояние по id гостя (размер вкладки), пора его забыть. */
+  onDestroyed(listener: (id: number) => void): () => void;
   onEvent(id: number, method: string, listener: (params: unknown) => void): () => void;
 }
 
@@ -192,6 +194,7 @@ export function createInspector(deps: {
     });
   const journals = new Map<number, Journal>();
   const batchListeners = new Set<(batch: DevtoolsBatch) => void>();
+  const destroyedListeners = new Set<(id: number) => void>();
   const eventListeners = new Map<number, Map<string, Set<(params: unknown) => void>>>();
 
   function command<T>(contents: WebContents, method: CdpMethod, params?: Record<string, unknown>): Promise<T> {
@@ -493,6 +496,7 @@ export function createInspector(deps: {
       journal.cancelFlush?.();
       journals.delete(journal.id);
       eventListeners.delete(journal.id);
+      for (const listener of destroyedListeners) guarded('destroyed listener', () => listener(journal.id));
     });
     connect(journal, contents);
   }
@@ -553,6 +557,12 @@ export function createInspector(deps: {
       batchListeners.add(listener);
       return () => {
         batchListeners.delete(listener);
+      };
+    },
+    onDestroyed(listener) {
+      destroyedListeners.add(listener);
+      return () => {
+        destroyedListeners.delete(listener);
       };
     },
     onEvent(id, method, listener) {

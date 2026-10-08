@@ -85,6 +85,18 @@ describe('createEmulation', () => {
     expect(emulation.current(7)).toEqual(MOBILE_M);
   });
 
+  it('forget: гость уничтожен — размер вкладки забыт, current даёт null; чужие вкладки целы', async () => {
+    const send = vi.fn<(id: number, method: string, params?: Record<string, unknown>) => Promise<unknown>>(async () => ({}));
+    const emulation = createEmulation({ inspector: { send } });
+    await emulation.set(7, MOBILE_M, AREA);
+    await emulation.set(8, MOBILE_M, AREA);
+    emulation.forget(7);
+    expect(emulation.current(7)).toBeNull();
+    expect(emulation.current(8)).toEqual(MOBILE_M);
+    // Забыть неизвестный id — не ошибка.
+    expect(() => emulation.forget(99)).not.toThrow();
+  });
+
   it('current — копия без лишних полей: чужой объект не меняет состояние вкладки', async () => {
     const send = vi.fn<(id: number, method: string, params?: Record<string, unknown>) => Promise<unknown>>(async () => ({}));
     const emulation = createEmulation({ inspector: { send } });

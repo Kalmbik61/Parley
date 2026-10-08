@@ -72,6 +72,8 @@ function copySpec(spec: ViewportSpec): ViewportSpec {
 export interface Emulation {
   set(id: number, spec: ViewportSpec | null, area: ViewportArea): Promise<{ scale: number }>;
   current(id: number): ViewportSpec | null;
+  /** Гость уничтожен: размер его вкладки не помним (id не переиспользуются, но `current` не должен отдавать чужой след). */
+  forget(id: number): void;
 }
 
 export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation {
@@ -88,6 +90,9 @@ export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): E
     current(id) {
       const entry = state.get(id);
       return entry === undefined ? null : copySpec(entry.spec);
+    },
+    forget(id) {
+      state.delete(id);
     },
   };
 }

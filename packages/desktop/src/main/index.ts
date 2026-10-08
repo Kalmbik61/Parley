@@ -316,6 +316,8 @@ if (!gotLock) {
     const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
     forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
     const emulation = createEmulation({ inspector });
+    // Журнал снят вместе с гостем — размер его вкладки тоже.
+    inspector.onDestroyed((id) => emulation.forget(id));
     installBrowserGuard({
       app,
       // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
