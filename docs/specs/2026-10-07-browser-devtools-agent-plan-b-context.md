@@ -8653,6 +8653,31 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
 
   - в обработчике `did-navigate` после `update(…)`: `useAnnotateStore.getState().markAllGone(tabId);` с комментарием «Новый документ: меток на странице больше нет, данные в лотке остаются»;
   - в `<BrowserChrome …/>` — `onAnnotate={() => toggleBrowserMode(tabId, 'annotate')}`;
+  - клавиши режимов с фокусом в строке или панели вкладки («Расхождения», п. 20): в фильтр `PANEL_KEYS` (A) добавить `'browser.select'` и `'browser.annotate'`, комментарий над ним — «Клавиши панели, Select и Annotate»; в `onKeyDown` корня сразу после `event.preventDefault();`:
+
+```tsx
+        if (action === 'browser.select' || action === 'browser.annotate') {
+          toggleBrowserMode(tabId, action === 'browser.select' ? 'select' : 'annotate');
+          return;
+        }
+```
+
+    и тест в `BrowserSurface.test.tsx` рядом с тестом A «кнопка строки — панель; ⌘⌥I в адресной строке…»:
+
+```tsx
+  it('⌘⇧C и ⌘⌥A с фокусом в адресной строке — Select и Annotate, как ⌘⌥I у панели (спека 4.9)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+  });
+```
+
   - в поле страницы (`fieldRef`) после `FindBar` — там, где стояла карточка Design Mode:
 
 ```tsx
@@ -9474,4 +9499,4 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
     - `PopoverContent` (`ui/popover.tsx`) получает необязательный `portalContainer`; `ANNOTATION_EDITOR` и `editorAt` прежней редакции не вводятся;
     - `NOTICE` называет каждый такой файл, страж — `notice.test.ts#orcaFiles`. Этапы C и D, беря код Orca, добавляют в шапку ту же пометку и строку в `NOTICE`.
 19. **Вид Chat у Codex** (PR #36, Codex 0.160.0 и новее) отправляет вложения через `composeRoomMessage` — списком «Attachments:». Спека 1.2 и 4.5 поправлены: сессия Codex с Chat — первая строка таблицы доставки; `.png` к ней даёт задача 11.
-20. **Клавиши Select и Annotate с фокусом в окне.** Индекс говорит, что ⌘⇧C и ⌘⌥A с фокусом в строке или панели вкладки ловит `BrowserSurface` (как ⌘⌥I и ⌘⌥J), а задачи 17 и 23 этого не делают: из страницы клавиши пересылает main, в окне — кнопки и палитра. Добавить их в `panelKey` — отдельное решение.
+20. **Клавиши Select и Annotate с фокусом в окне.** Как обещает индекс: ⌘⇧C и ⌘⌥A с фокусом в строке или панели вкладки ловит `BrowserSurface` тем же `panelKey`, что ⌘⌥I и ⌘⌥J этапа A (задача 23, шаг 6); из страницы их пересылает main. Решение 2026-10-08: без этого клавиша в адресной строке молча ничего не делала бы.
