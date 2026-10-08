@@ -1130,9 +1130,13 @@ describe('размер вкладки браузера (спека 2026-10-07, 4
   it('parseWorkLayout: пресет и свой размер читаются, лишние поля размера выкинуты', () => {
     const preset = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: { ...MOBILE_M, extra: 1 } }));
     expect(preset === null ? null : groups(preset)[0]?.tabs[0]).toEqual({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: MOBILE_M });
+    const presetTab = preset === null ? null : groups(preset)[0]?.tabs[0];
+    expect(Object.keys(presetTab?.kind === 'browser' ? (presetTab.viewport ?? {}) : {}).sort()).toEqual(['dpr', 'preset', 'rotated']);
     const custom = { width: 1024, height: 700, mobile: false, dpr: 1 };
-    const own = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: custom }));
-    expect(own === null ? null : groups(own)[0]?.tabs[0]).toEqual({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: custom });
+    const own = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: { ...custom, extra: 1 } }));
+    const ownTab = own === null ? null : groups(own)[0]?.tabs[0];
+    expect(ownTab).toEqual({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: custom });
+    expect(Object.keys(ownTab?.kind === 'browser' ? (ownTab.viewport ?? {}) : {}).sort()).toEqual(['dpr', 'height', 'mobile', 'width']);
   });
 
   it('parseWorkLayout: мусор в размере — вкладка без размера (Fit), раскладка цела', () => {

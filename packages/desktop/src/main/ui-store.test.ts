@@ -70,6 +70,13 @@ describe('createUiStore', () => {
     expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
   });
 
+  it('пустой патч browser не стирает сохранённую высоту панели: browser сливается по одному уровню (NESTED_KEYS)', async () => {
+    const store = createUiStore(file);
+    await store.save({ browser: { devtoolsHeight: 260 } });
+    await store.save({ browser: {} });
+    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
+  });
+
   // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать
   // нетронутые подполя к DEFAULT_UI — раньше `{ sound: false }` поверх
   // «всё true, mail: false» возвращал needsYou/finished/mail к дефолтному true.
