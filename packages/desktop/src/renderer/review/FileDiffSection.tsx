@@ -23,6 +23,7 @@ import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import type { DiffNote } from '../../shared/notes-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { releaseDiffEditor } from '../lib/release-diff-editor.js';
 import { Button } from '../ui/button.js';
 import { loadSides, type DiffSides } from './diff-sides.js';
@@ -380,6 +381,7 @@ function FileDiffSectionImpl(props: FileDiffSectionProps): JSX.Element {
         <span className="w-3 shrink-0 font-mono text-muted-foreground" title={FILE_STATUS[file.status] ?? file.status}>
           {file.status}
         </span>
+        <FileTypeIcon path={file.path} />
         <span className="min-w-0 flex-1 truncate font-mono" title={title}>
           {title}
         </span>

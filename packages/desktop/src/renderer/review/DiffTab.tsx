@@ -25,6 +25,7 @@ import type { DiffFile, FileRoot } from '../../shared/files-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { bufferKey } from '../files/buffer.js';
 import { useMonacoReady } from '../files/editor/MonacoEditor.js';
 import { setupMonaco } from '../files/editor/monaco-setup.js';
@@ -125,10 +126,12 @@ function FileList({ files, mode, onOpen }: { files: DiffFile[]; mode: DiffListMo
         row.kind === 'dir' ? (
           <li
             key={`d:${row.key}`}
-            className="flex h-6 min-w-0 items-center px-3 text-xs text-muted-foreground"
+            className="flex h-6 min-w-0 items-center gap-2 px-3 text-xs text-muted-foreground"
             style={{ paddingLeft: 12 + row.depth * 12 }}
             title={row.key}
           >
+            {/* Дерево сводного списка не сворачивается — папка всегда открыта (спека значков 3.4). */}
+            <FileTypeIcon path={row.key} kind="folder" open />
             <span className="truncate">{row.name}</span>
           </li>
         ) : (
@@ -143,6 +146,7 @@ function FileList({ files, mode, onOpen }: { files: DiffFile[]; mode: DiffListMo
               <span className="w-3 shrink-0 font-mono text-muted-foreground" title={FILE_STATUS[row.file.status] ?? row.file.status}>
                 {row.file.status}
               </span>
+              <FileTypeIcon path={row.file.path} />
               <span className="min-w-0 flex-1 truncate">{row.name}</span>
               {row.file.additions === null ? null : <span className="shrink-0 tabular-nums text-status-success-text">{`+${row.file.additions}`}</span>}
               {row.file.deletions === null ? null : <span className="shrink-0 tabular-nums text-accent-700">{`−${row.file.deletions}`}</span>}

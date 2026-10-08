@@ -53,12 +53,12 @@ function whenOverlaps(a: ActionDef['when'], b: ActionDef['when']): boolean {
  */
 const ALL_ACTION_IDS: Record<ActionId, true> = {
   'palette.open': true, 'files.quickOpen': true, 'files.search': true,
-  'work.new': true, 'session.new': true, 'room.new': true,
+  'work.new': true, 'session.new': true, 'room.new': true, 'project.capabilities': true,
   'work.goto.1': true, 'work.goto.2': true, 'work.goto.3': true, 'work.goto.4': true, 'work.goto.5': true,
   'work.goto.6': true, 'work.goto.7': true, 'work.goto.8': true, 'work.goto.9': true,
   'work.prev': true, 'work.next': true, 'works.showArchived': true,
   'history.back': true, 'history.forward': true,
-  'sidebar.left.toggle': true, 'sidebar.right.toggle': true, 'sidebar.files': true, 'sidebar.changes': true,
+  'sidebar.left.toggle': true, 'sidebar.right.toggle': true, 'sidebar.files': true, 'sidebar.changes': true, 'sidebar.agents': true,
   'group.splitRight': true, 'group.splitDown': true, 'group.prev': true, 'group.next': true,
   'tab.close': true, 'tab.reopen': true, 'tab.prev': true, 'tab.next': true, 'tab.mruNext': true, 'tab.mruPrev': true,
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
@@ -68,6 +68,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
   'browser.newTab': true,
   'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,
+  'browser.devtools': true, 'browser.console': true,
 };
 
 describe('ACTIONS (тест 1)', () => {
@@ -126,7 +127,7 @@ describe('ACTIONS (тест 1)', () => {
   });
 
   it('действия браузера — when browser, без меню; палитровые без сочетания — без меню', () => {
-    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset'] as const) {
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset', 'browser.devtools', 'browser.console'] as const) {
       const action = ACTIONS.find((candidate) => candidate.id === id);
       expect(action?.when).toBe('browser');
       expect(action?.menu).toBeNull();
@@ -175,5 +176,14 @@ describe('matchesAccelerator (тест 2)', () => {
     expect(matchesAccelerator('Control+Tab', key({ key: 'Tab', code: 'Tab', ctrlKey: true, shiftKey: true }))).toBe(
       false,
     );
+  });
+});
+
+describe('панель браузера (спека 2026-10-07, 4.9)', () => {
+  it('browser.devtools — ⌘⌥I, browser.console — ⌘⌥J; в палитре; ⌥ даёт ˆ и ∆ — нажатие узнаётся по code', () => {
+    expect(ACTIONS.find((action) => action.id === 'browser.devtools')).toMatchObject({ keys: 'CmdOrCtrl+Alt+I', menu: null, when: 'browser', inPalette: true });
+    expect(ACTIONS.find((action) => action.id === 'browser.console')).toMatchObject({ keys: 'CmdOrCtrl+Alt+J', menu: null, when: 'browser', inPalette: true });
+    expect(matchesAccelerator('CmdOrCtrl+Alt+I', key({ key: 'ˆ', code: 'KeyI', metaKey: true, altKey: true }))).toBe(true);
+    expect(matchesAccelerator('CmdOrCtrl+Alt+J', key({ key: '∆', code: 'KeyJ', metaKey: true, altKey: true }))).toBe(true);
   });
 });

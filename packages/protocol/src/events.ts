@@ -1,4 +1,7 @@
+import type { BacklogChanged } from './backlog.js';
+import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
+import type { FeedDecisions } from './feed.js';
 import type {
   HostNotice,
   LiveMetrics,
@@ -9,6 +12,8 @@ import type {
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
+  'backlog.changed': BacklogChanged;
+  'capabilities.changed': { projectPath: string; snapshot: CapabilitySnapshot };
   'works.changed': WorksSnapshot;
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
   'pty.output': { ref: SessionRef; data: string };
@@ -37,6 +42,7 @@ export interface Events {
     upsert: FeedItem[];
     removed: string[];
     mode: string | null;
+    decisions?: FeedDecisions | null;
   };
 }
 

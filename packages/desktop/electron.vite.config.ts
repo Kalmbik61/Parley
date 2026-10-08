@@ -4,6 +4,7 @@ import { dirname as dirOf, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import { fileIcons } from '@parley/file-icons/vite';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 
@@ -71,7 +72,7 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
-    plugins: [react(), tailwindcss(), pdfjsAssets()],
+    plugins: [react(), tailwindcss(), pdfjsAssets(), fileIcons()],
     build: {
       rollupOptions: {
         input: resolve(dirname, 'src/renderer/index.html'),

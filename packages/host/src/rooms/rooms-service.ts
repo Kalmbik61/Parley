@@ -16,13 +16,23 @@ import {
   addMessage,
   addRoom,
   addRoomOriginMessage,
+  deleteRoom,
   HUMAN,
+  DEFAULT_CONFIG,
+  loadConfig,
+  capturePlanNotice,
+  reservePlanEffects,
+  PlanConflictError,
   isMember,
+  recipeLeadsPending,
+  reconcileRecipeLeads,
   joinNotice,
   leaveOtherRooms,
   ProposalConflictError,
+  renameRoom,
   resolveProposal,
   RoomRuleError,
+  setRoomLead,
   updateMap,
   workPaths,
   type WorkMap,
@@ -53,7 +63,7 @@ function assertDeliverable(map: WorkMap, sessionId: string): void {
  */
 function asHostError(error: unknown): unknown {
   if (error instanceof RoomRuleError) return bad(error.message);
-  if (error instanceof ProposalConflictError) return new HostError('conflict', error.message);
+  if (error instanceof ProposalConflictError || error instanceof PlanConflictError) return new HostError('conflict', error.message);
   return error;
 }
 
@@ -87,7 +97,20 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
       throw bad('origin: two different sessions among the room participants');
     }
 
-    const room = addRoom(map, { title: input.title, creator: HUMAN, members, lead });
+    const room = addRoom(map, {
+      title: input.title,
+      creator: HUMAN,
+      members,
+      lead,
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
+      ...(input.recipe === undefined ? {} : { recipe: input.recipe }),
+    });
+    // Слой строится из карты при запуске: ведущий, ещё не запущенный (`pending`), получит плейбук им, и письмо
+    // не нужно. Запущенный раньше комнаты (окно создаёт сессии до неё) слой уже получил без рецепта — ему
+    // плейбук придёт письмом, как новому ведущему (`reconcileRecipeLeads`).
+    if (room.recipe != null && map.sessions.find((session) => session.id === lead)?.lifecycle === 'pending') {
+      room.recipeLeadNotified = lead;
+    }
     for (const id of members) leaveOtherRooms(map, id, room.id);
     roomId = room.id;
     if (origin !== undefined) addRoomOriginMessage(map, room.id, origin);
@@ -99,6 +122,27 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     }
   });
   return roomId;
+}
+
+class NothingToDeliver extends Error {}
+
+/**
+ * Смена ведущего у комнаты с рецептом: новому ведущему письмом от `parley` уходит исходный снимок плейбука
+ * (спека рецептов, 6.4). Отметка о доставленном ведущем пишется в карту вместе с письмом, поэтому повтор и
+ * перезапуск хоста второго письма не дают. Письмо будит адресата обычный будильник. Карту трогает только
+ * если есть кому слать: `recipeLeadsPending` смотрит снимок хоста без записи.
+ */
+export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap): Promise<void> {
+  if (!recipeLeadsPending(map)) return;
+  try {
+    await updateMap(projectPath, map.work.id, (current) => {
+      // Снимок хоста мог отстать: под локом уже могло быть сделано — карту не переписываем впустую.
+      if (!recipeLeadsPending(current)) throw new NothingToDeliver();
+      reconcileRecipeLeads(current);
+    });
+  } catch (error) {
+    if (!(error instanceof NothingToDeliver)) throw error;
+  }
 }
 
 /**
@@ -159,15 +203,88 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
  * (`accept`) или письма ведущему (`return`).
  */
 export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string> {
-  const { projectPath, workId, roomId, proposalId, action, note, rev } = input;
+  const { projectPath, workId, roomId, proposalId, action, note, rev, planId, planRev } = input;
+  const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
   await updateMap(projectPath, workId, (map) => {
     try {
-      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev }).messageId;
+      const completion = map.rooms.find(row => row.id === roomId)?.proposal;
+      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
+      if (action === 'return' && completion?.kind === 'completion')
+        capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
+      reservePlanEffects(map, rate);
     } catch (error) {
       throw asHostError(error);
     }
   });
   return messageId;
+}
+
+/**
+ * Человек переименовывает комнату из сайдбара (`rooms.rename`). Пустое после обрезки название не проходит уже схему,
+ * правило повторяет core (`renameRoom`). Не событие работы: `updatedAt` стоит на месте, как у `works.rename`, иначе
+ * карточка всплыла бы в начало своего ранга в сайдбаре. Вкладка, шапка комнаты и строка сайдбара читают название из
+ * карты — окно покажет новое по обычному `works.changed`.
+ */
+export async function renameHumanRoom(input: Params<'rooms.rename'>): Promise<void> {
+  const { projectPath, workId, roomId, title } = input;
+  assertWork(projectPath, workId);
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      try {
+        renameRoom(map, roomId, title);
+      } catch (error) {
+        throw asHostError(error);
+      }
+    },
+    { touch: false },
+  );
+}
+
+/**
+ * «Make lead» из окна (`rooms.setLead`): правила, системная строка и письма `parley` — в core (`setRoomLead`).
+ * Плейбук рецепта новому ведущему пишется той же мутацией (`reconcileRecipeLeads`). Будильник сделал бы это и сам по
+ * следующему изменению карты (`deliverRecipeToNewLeads`), но в одной записи «You now lead…» и плейбук ложатся подряд,
+ * а отметка `recipeLeadNotified` второго письма уже не даст. Письма будит обычный будильник; доставку пунктов плана
+ * новому ведущему пересчитывает служба плана: смена `lead` в карте для неё — изменение источника. Возвращает id
+ * системной строки.
+ */
+export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<string> {
+  const { projectPath, workId, roomId, sessionId } = input;
+  assertWork(projectPath, workId);
+  let messageId = '';
+  await updateMap(projectPath, workId, (map) => {
+    try {
+      messageId = setRoomLead(map, roomId, sessionId).line.id;
+    } catch (error) {
+      throw asHostError(error);
+    }
+    reconcileRecipeLeads(map);
+  });
+  return messageId;
+}
+
+/**
+ * Удаление комнаты из окна (`rooms.delete`): правила — в core (`deleteRoom`). Комната уходит с лентой, её сессии
+ * остаются обычными сессиями работы, и живым из них — прощальные письма `parley`; будит их обычный будильник.
+ *
+ * Удалить заодно и сессии окно просит само, до этого вызова, — тем же `sessions.delete`, что у пункта «Delete» строки
+ * сессии (`RoomRowMenu`): остановка процесса, worktree с отказом на грязном, запись карты, а перед ними — вопрос окна о
+ * несохранённых правках во вкладках файлов worktree. Хост этот путь не повторяет: вопрос о правках задаёт только окно,
+ * а отказ на грязном worktree должен остановить удаление до того, как комната пропадёт. К этому вызову удалённых сессий
+ * в карте уже нет, и прощальные письма им не пишутся.
+ */
+export async function deleteHumanRoom(input: Params<'rooms.delete'>): Promise<void> {
+  const { projectPath, workId, roomId } = input;
+  assertWork(projectPath, workId);
+  await updateMap(projectPath, workId, (map) => {
+    try {
+      deleteRoom(map, roomId);
+    } catch (error) {
+      throw asHostError(error);
+    }
+  });
 }

@@ -10,7 +10,12 @@ import {
   addRoom,
   addSession,
   createWork,
+  DEFAULT_RESOURCE_LIMITS,
   readMap,
+  reserveAttempt,
+  saveConfig,
+  setWorkStatus,
+  settleAttempt,
   SYSTEM,
   transitionSession,
   unreadFor,
@@ -22,7 +27,7 @@ import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
-import { createHumanRoom, sendHumanLetter } from '../rooms/rooms-service.js';
+import { createHumanRoom, deleteHumanRoom, sendHumanLetter, setHumanRoomLead } from '../rooms/rooms-service.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
@@ -467,8 +472,9 @@ describe('WakeService: процесс без хуков и диалог пере
       path.join(workPaths(project, workId).events, `${sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
     );
-    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
-  });
+    // Верхняя граница, а не пауза: хук доходит событием fs (или дочитыванием), настоящий процесс отвечает под нагрузкой не сразу.
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 15_000);
+  }, 30_000);
 
   it('хуки прошлого процесса не в счёт: журнал до запуска — указатель не печатается', async () => {
     const { workId, sessionId } = await activeSession();
@@ -710,6 +716,7 @@ async function sleepingPair(
 interface ResumeRig {
   pty: ReturnType<typeof createPtyManager>;
   sessions: SessionsService;
+  activity: ReturnType<typeof createActivityService>;
   stream: () => string;
 }
 
@@ -743,7 +750,7 @@ async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRi
   // два наблюдателя работ читают их независимо, и позднее, но устаревшее чтение
   // перекрыло бы снимок со свежим письмом. Письма шлём после затишья.
   await settle(200);
-  return { pty, sessions, stream: () => stream };
+  return { pty, sessions, activity, stream: () => stream };
 }
 
 async function tempArgsFile(): Promise<string> {
@@ -840,6 +847,61 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
   }, 20_000);
 
+  it('5а: бюджет работы исчерпан — письмо ждёт, процесса нет, resume-limit называет бюджет, счёт часа не списан (P37)', async () => {
+    await saveConfig({ workLaunches: 1 });
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    // Один запуск в окне уже потрачен — другим поколением.
+    await updateMap(project, workId, (map) => {
+      const attempt = reserveAttempt(map, {
+        kind: 'launch', actor: 'human', session: sender, owner: 'host-old', limits: { ...DEFAULT_RESOURCE_LIMITS, workLaunches: 1 },
+      });
+      settleAttempt(map, attempt.id, 'host-old', 'spent');
+    });
+    const limiter = new ResumeLimiter(() => 6);
+    const { sessions } = await resumeRig({ limiter });
+
+    await sendLetter(workId, target, 'проснись');
+    await waitFor(() => notices('resume-limit').length > 0, 8000);
+    await sendLetter(workId, target, 'ещё раз');
+    await settle(300);
+
+    expect(notices('resume-limit')).toHaveLength(1);
+    expect(noticeTexts('resume-limit')[0]).toMatch(/^S01 was not resumed: the workspace budget is exhausted \(launch limit reached: 1 of 1/);
+    expect(sessions.live(ref)).toBe(false);
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+    // Письма не потеряны и не названы указанными: они ждут слота. Резерв не остался.
+    expect(unreadFor(map, target)).toHaveLength(2);
+    expect(map.messages.some((m) => m.from === SYSTEM)).toBe(false);
+    expect(map.resources?.attempts.filter((a) => a.state === 'reserved')).toEqual([]);
+    // Отказ не расходует счёт часа: все шесть подъёмов ещё доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+  }, 20_000);
+
+  it('5б: перезапуск хоста не обнуляет потолок возобновлений сессии — он читается из карты (P37)', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    // Шесть возобновлений за час сделал прошлый хост; у нового памяти об этом нет.
+    await updateMap(project, workId, (map) => {
+      for (let i = 0; i < 6; i += 1) {
+        const attempt = reserveAttempt(map, {
+          kind: 'resume', actor: 'wake', session: target, owner: 'host-old', limits: { ...DEFAULT_RESOURCE_LIMITS, workLaunches: 100 },
+        });
+        settleAttempt(map, attempt.id, 'host-old', 'spent');
+      }
+    });
+    const { sessions } = await resumeRig();
+
+    await sendLetter(workId, target, 'проснись');
+    await waitFor(() => notices('resume-limit').length > 0, 8000);
+
+    expect(noticeTexts('resume-limit')[0]).toContain('resume limit reached: 6 of 6');
+    expect(sessions.live(ref)).toBe(false);
+    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+  }, 20_000);
+
   it('6: стаб выходит сразу — отправителю письмо от system, есть resume-failed', async () => {
     const { workId, target, sender } = await sleepingPair();
     setEnv('STUB_EXIT_AFTER_MS', '10');
@@ -887,6 +949,27 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(sessions.live(ref)).toBe(false);
     expect(existsSync(argsFile)).toBe(false);
     expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+  }, 20_000);
+
+  it('8: письмо спящей в архивной работе ждёт без подъёма и без resume-failed; после Reopen будит', async () => {
+    const { workId, target } = await sleepingPair();
+    await setWorkStatus(project, workId, 'archived');
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const { sessions, activity } = await resumeRig();
+    const ref = { projectPath: project, workId, sessionId: target };
+
+    await sendLetter(workId, target);
+    // Будильник письмо увидел и оставил ждать спящей; без архива здесь был бы `resuming`.
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'sleeping', 5000);
+    await settle(400);
+    expect(sessions.live(ref)).toBe(false);
+    expect(existsSync(argsFile)).toBe(false);
+    expect(notices('resume-failed')).toEqual([]);
+
+    await setWorkStatus(project, workId, 'active');
+    await readArgv(argsFile);
+    await waitFor(() => sessions.live(ref), 5000);
   }, 20_000);
 });
 
@@ -959,8 +1042,9 @@ async function trioRig(workId: string, ids: readonly string[]): Promise<Map<stri
   return new Map(ids.map((id) => [id, () => streams.get(id) ?? '']));
 }
 
-const inRoom = (count: number, room: string, title: string): string =>
-  `New messages (${count}) in ${room} "${title}". Call check_inbox.`;
+/** `task` — среди писем задача человека всем: указатель помечает её «(a task for everyone)». */
+const inRoom = (count: number, room: string, title: string, task = false): string =>
+  `New messages (${count}) in ${room} "${title}"${task ? ' (a task for everyone)' : ''}. Call check_inbox.`;
 
 describe('WakeService: комнаты (3.5)', () => {
   it('1: рассылка комнаты будит всех участников, кроме отправителя', async () => {
@@ -1025,10 +1109,39 @@ describe('WakeService: комнаты (3.5)', () => {
 
     await sendHumanLetter({ projectPath: project, workId, roomId, to: [], text: 'всем', kind: 'decision' });
 
-    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт.
-    const expected = `echo: ${inRoom(2, roomId, 'Созвон')}`;
+    // Приглашение в комнату тоже ещё не прочитано — в счёт указателя оно идёт; рассылка человека — задача всем.
+    const expected = `echo: ${inRoom(2, roomId, 'Созвон', true)}`;
     await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
     await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('New messages');
+  }, 20_000);
+
+  it('4: «Make lead» — письма parley будят нового и прежнего ведущего, прочих участников — нет', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b, c], lead: a, quiet: true });
+    const streams = await trioRig(workId, ids);
+
+    await setHumanRoomLead({ projectPath: project, workId, roomId, sessionId: b });
+
+    const expected = `echo: ${inRoom(1, roomId, 'Созвон')}`;
+    await waitFor(() => streams.get(b)?.().includes(expected) === true, 3000);
+    await waitFor(() => streams.get(a)?.().includes(expected) === true, 3000);
+    await settle(300);
+    expect(streams.get(c)?.()).not.toContain('New messages');
+  }, 20_000);
+
+  it('5: удалённая комната — прямое письмо parley будит её участников, сессию вне комнаты — нет', async () => {
+    const { workId, ids } = await trio();
+    const [a, b, c] = ids;
+    const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b], quiet: true });
+    const streams = await trioRig(workId, ids);
+
+    await deleteHumanRoom({ projectPath: project, workId, roomId });
+
+    await waitFor(() => streams.get(a)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
+    await waitFor(() => streams.get(b)?.().includes(`echo: ${pointer(1)}`) === true, 3000);
     await settle(300);
     expect(streams.get(c)?.()).not.toContain('New messages');
   }, 20_000);

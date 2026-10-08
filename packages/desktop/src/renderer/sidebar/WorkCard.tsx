@@ -292,6 +292,7 @@ export const WorkCard = memo(function WorkCard({
                 workId={map.work.id}
                 bridge={bridge}
                 row={row}
+                plan={(map.plans ?? []).find(plan => plan.roomId === row.room.id && (plan.status === 'active' || plan.status === 'completing')) ?? null}
                 unread={attention.roomsUnread[row.room.id] ?? 0}
                 mentioned={(attention.roomMentions[row.room.id] ?? 0) > 0}
                 activity={activity}

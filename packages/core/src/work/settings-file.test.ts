@@ -5,7 +5,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,7 +43,8 @@ describe('workSettings', () => {
       const commands = hooks[event]?.[0]?.hooks;
       expect(commands).toHaveLength(1);
       expect(commands?.[0]?.type).toBe('command');
-      expect(commands?.[0]?.command).toBe(HOOK_COMMAND);
+      const hook = commands?.[0];
+      expect(hook?.type === 'command' ? hook.command : undefined).toBe(HOOK_COMMAND);
     }
     // Новое имя главнее, а нет его — прежнее (R3): у старой сессии в окружении только `HARNAS_*`.
     expect(HOOK_COMMAND).toBe(
@@ -58,6 +59,22 @@ describe('workSettings', () => {
     for (const event of HOOK_EVENTS.filter((name) => name !== 'SessionEnd')) {
       expect(hooks[event]?.[0]?.hooks[0]?.timeout).toBeUndefined();
     }
+  });
+});
+
+describe('выключение плагинов в сессии (сокращение списка скиллов)', () => {
+  it('без disablePlugins файл побайтно прежний, поля enabledPlugins нет', () => {
+    expect(workSettingsJson({ disablePlugins: [] })).toBe(workSettingsJson());
+    expect(workSettings()).not.toHaveProperty('enabledPlugins');
+    expect(workSettingsJson()).not.toContain('enabledPlugins');
+  });
+
+  it('точные id уходят значением false, хуки и statusLine сохраняются', () => {
+    const plain = workSettings({ hookUrl: 'http://127.0.0.1:40001/hooks' });
+    const off = workSettings({ hookUrl: 'http://127.0.0.1:40001/hooks', disablePlugins: ['jev-skill-suggestion@skills-dir'] });
+    expect(off.enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false });
+    expect({ ...off, enabledPlugins: undefined }).toEqual({ ...plain, enabledPlugins: undefined });
+    expect(Object.keys(off.hooks)).toEqual(Object.keys(plain.hooks));
   });
 });
 
@@ -241,7 +258,8 @@ describe('statusLine: скрипт строки статуса лимитов (�
 
     expect(settings.statusLine).toEqual({ type: 'command', command: statusLineCommand() });
     expect(Object.keys(settings.hooks)).toEqual([...HOOK_EVENTS]);
-    expect(settings.hooks['Stop']?.[0]?.hooks[0]?.command).toBe(HOOK_COMMAND);
+    const hook = settings.hooks['Stop']?.[0]?.hooks[0];
+    expect(hook?.type === 'command' ? hook.command : undefined).toBe(HOOK_COMMAND);
   });
 
   it('команда — node процесса и скрипт по абсолютному пути, без надежды на PATH', () => {
@@ -343,6 +361,88 @@ describe('writeWorkSettings', () => {
     await writeWorkSettings(project, work.id);
     expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
   });
+  it('session-local files preserve command/HTTP hooks and statusLine without touching the off-path file', async () => {
+    const { work } = await createWork(project, { title: 'Navigator' });
+    const legacy = await writeWorkSettings(project, work.id);
+    const baseline = await readFile(legacy, 'utf8');
+    const options = { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' };
+    const file = await writeWorkSettings(project, work.id, options);
+    expect(file).toBe(path.join(workPaths(project, work.id).dir, 'settings', 's-01.json'));
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options));
+    expect(await readFile(legacy, 'utf8')).toBe(baseline);
+    expect(await writeWorkSettings(project, work.id, options)).toBe(file);
+    const parsed = JSON.parse(await readFile(file, 'utf8'));
+    expect(parsed.statusLine).toEqual({ type: 'command', command: statusLineCommand() });
+    expect(parsed.hooks.Stop[0].hooks[0]).toEqual({ type: 'command', command: HOOK_COMMAND });
+    expect(parsed.hooks.Stop[0].hooks[1].type).toBe('http');
+    expect(Object.keys(parsed).sort()).toEqual(['hooks', 'statusLine']);
+  });
+
+  it('parallel sessions keep separate HTTP destinations and never share a settings file', async () => {
+    const { work } = await createWork(project, { title: 'Parallel' });
+    const options = [
+      { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' },
+      { sessionId: 's-02', hookUrl: 'http://127.0.0.1:40002/hooks' },
+    ];
+    const files = await Promise.all(options.map(option => writeWorkSettings(project, work.id, option)));
+    expect(new Set(files).size).toBe(2);
+    for (const [index, file] of files.entries()) expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options[index]));
+  });
+
+  it.each(['../outside', 's-01/../../outside', '', 's-01\\outside'])('rejects unsafe session file identity %s', async sessionId => {
+    const { work } = await createWork(project, { title: 'Bounds' });
+    await expect(writeWorkSettings(project, work.id, { sessionId })).rejects.toThrow('invalid-session-id');
+  });
+
+  it.each(['settings-directory', 'session-file', 'works-directory'])('rejects a redirected %s without touching foreign settings', async kind => {
+    const { work } = await createWork(project, { title: 'No-follow' });
+    const paths = workPaths(project, work.id);
+    const foreign = path.join(home, 'foreign');
+    await mkdir(foreign);
+    const target = path.join(foreign, 's-01.json');
+    const original = '{"humanNativeSetting":true}\n';
+    await writeFile(target, original);
+    if (kind === 'settings-directory') await symlink(foreign, path.join(paths.dir, 'settings'));
+    else if (kind === 'session-file') {
+      await mkdir(path.join(paths.dir, 'settings'));
+      await symlink(target, path.join(paths.dir, 'settings', 's-01.json'));
+    } else {
+      const foreignWork = path.join(foreign, work.id, 'settings');
+      await mkdir(foreignWork, { recursive: true });
+      await writeFile(path.join(foreignWork, 's-01.json'), original);
+      await rm(path.dirname(paths.dir), { recursive: true });
+      await symlink(foreign, path.dirname(paths.dir));
+    }
+    await expect(writeWorkSettings(project, work.id, { sessionId: 's-01' })).rejects.toThrow();
+    expect(await readFile(target, 'utf8')).toBe(original);
+    if (kind === 'works-directory') expect(await readFile(path.join(foreign, work.id, 'settings', 's-01.json'), 'utf8')).toBe(original);
+  });
+
+  it.each(['directory', 'fifo'])('rejects a special session leaf (%s) without opening it for writing', async kind => {
+    const { work } = await createWork(project, { title: 'Special' });
+    const parent = path.join(workPaths(project, work.id).dir, 'settings');
+    await mkdir(parent);
+    const leaf = path.join(parent, 's-01.json');
+    if (kind === 'directory') await mkdir(leaf);
+    else execFileSync('mkfifo', [leaf]);
+    await expect(writeWorkSettings(project, work.id, { sessionId: 's-01' })).rejects.toThrow();
+  });
+
+  it('atomically replaces a regular hard-linked session file without truncating its foreign link', async () => {
+    const { work } = await createWork(project, { title: 'Hard link' });
+    const parent = path.join(workPaths(project, work.id).dir, 'settings');
+    await mkdir(parent);
+    const foreign = path.join(home, 'human.json');
+    const original = '{"humanNativeSetting":true}\n';
+    await writeFile(foreign, original);
+    await link(foreign, path.join(parent, 's-01.json'));
+    const options = { sessionId: 's-01', hookUrl: 'http://127.0.0.1:40001/hooks' };
+    const file = await writeWorkSettings(project, work.id, options);
+    expect(await readFile(foreign, 'utf8')).toBe(original);
+    expect(await readFile(file, 'utf8')).toBe(workSettingsJson(options));
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
 });
 
 describe('GLM settings', () => {

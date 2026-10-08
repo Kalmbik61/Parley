@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
-import { deliveryAction, pointerText } from './delivery.js';
+import { oneLine } from '../counters.js';
+import { deliveryAction, isPointerText, pointerText } from './delivery.js';
 import type { Message, Room, WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
@@ -95,6 +96,106 @@ describe('pointerText', () => {
   it('комнаты вместе с прямыми — «and direct»', () => {
     const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })];
     expect(pointerText(letters, rooms)).toBe('New messages (2) in r-01 and direct. Call check_inbox.');
+  });
+
+  describe('задача человека всем в комнате — пометка перед точкой головы', () => {
+    // Задача всем: от человека, в комнате и без адресата.
+    const taskOf = (patch: Partial<Message> = {}): Message =>
+      messageOf({ from: 'human', to: [], roomId: 'r-01', ...patch });
+
+    it('в одной комнате — пометка после названия', () => {
+      expect(pointerText([taskOf()], rooms)).toBe(
+        'New messages (1) in r-01 "Ревью «схемы» — ёж" (a task for everyone). Call check_inbox.',
+      );
+    });
+
+    it('в двух комнатах — пометка после списка id', () => {
+      const letters = [taskOf({ id: 'm-01' }), messageOf({ id: 'm-02', roomId: 'r-02' })];
+      expect(pointerText(letters, rooms)).toBe(
+        'New messages (2) in r-01, r-02 (a task for everyone). Call check_inbox.',
+      );
+    });
+
+    it('комнаты вместе с прямыми — пометка после «and direct»', () => {
+      const letters = [taskOf({ id: 'm-01' }), messageOf({ id: 'm-02' })];
+      expect(pointerText(letters, rooms)).toBe(
+        'New messages (2) in r-01 and direct (a task for everyone). Call check_inbox.',
+      );
+    });
+
+    it('комнаты в карте нет — пометка и после одного id', () => {
+      expect(pointerText([taskOf({ roomId: 'r-09' })], rooms)).toBe(
+        'New messages (1) in r-09 (a task for everyone). Call check_inbox.',
+      );
+    });
+
+    it('рассылка агента без адресата и письмо человека адресату — без пометки', () => {
+      const agentBroadcast = messageOf({ from: 's-02', to: [], roomId: 'r-01' });
+      const addressed = taskOf({ to: ['s-01'] });
+      expect(pointerText([agentBroadcast], rooms)).toBe(
+        'New messages (1) in r-01 "Ревью «схемы» — ёж". Call check_inbox.',
+      );
+      expect(pointerText([addressed], rooms)).toBe(
+        'New messages (1) in r-01 "Ревью «схемы» — ёж". Call check_inbox.',
+      );
+    });
+
+    it('только прямые письма — указатель прежний', () => {
+      expect(pointerText([messageOf({ from: 'human' })], rooms)).toBe('New messages (1). Call check_inbox.');
+    });
+
+    it('isPointerText узнаёт указатель с пометкой — и обрезанный oneLine', () => {
+      for (const letters of [[taskOf()], [taskOf({ id: 'm-01' }), messageOf({ id: 'm-02' })]]) {
+        const text = pointerText(letters, rooms);
+        expect(isPointerText(text), text).toBe(true);
+        expect(isPointerText(oneLine(text)), text).toBe(true);
+      }
+    });
+  });
+});
+
+describe('isPointerText', () => {
+  const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
+  const forms = [
+    [messageOf()],
+    [messageOf({ id: 'm-01', roomId: 'r-01' })],
+    [messageOf({ id: 'm-01', roomId: 'r-02' }), messageOf({ id: 'm-02', roomId: 'r-01' })],
+    [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02' })],
+    // Комнаты в карте нет — в указателе один id.
+    [messageOf({ id: 'm-01', roomId: 'r-09' })],
+  ];
+
+  it('узнаёт каждую форму pointerText — и ярлык, каким его записал автозаголовок (oneLine)', () => {
+    for (const letters of forms) {
+      const text = pointerText(letters, rooms);
+      expect(isPointerText(text), text).toBe(true);
+      expect(isPointerText(oneLine(text)), text).toBe(true);
+    }
+    // Ярлык из карты пользователя (w-0043, сборка 0.7.0).
+    expect(isPointerText('New messages (1) in r-01 "Second". Call check_inbox.')).toBe(true);
+  });
+
+  it('длинное название комнаты: oneLine обрезал хвост `Call check_inbox.` — всё равно указатель', () => {
+    const text = pointerText([messageOf({ roomId: 'r-01' })], [roomOf('r-01', 'очень длинное название '.repeat(10))]);
+    const cut = oneLine(text);
+    expect(cut.endsWith('…')).toBe(true);
+    expect(cut).not.toContain('check_inbox');
+    expect(isPointerText(cut)).toBe(true);
+  });
+
+  it('обычные реплики и ярлыки — не указатель, даже похожие', () => {
+    for (const text of [
+      'бэкенд',
+      'new session',
+      'New messages',
+      'New messages (1)',
+      'New messages (1). Call check_inbox. А потом почини парсер',
+      'Проверь new messages (1). Call check_inbox.',
+      'New messages (1) in the inbox…',
+      'Проверка входящих сообщений',
+    ]) {
+      expect(isPointerText(text), text).toBe(false);
+    }
   });
 });
 

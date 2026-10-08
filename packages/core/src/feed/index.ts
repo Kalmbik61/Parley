@@ -47,3 +47,11 @@ export { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-t
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';
 export { turnActive } from './turn.js';
+export { applyCodexRecords, CODEX_HISTORY_IN_TERMINAL, CODEX_HISTORY_MESSAGE, commandText, emptyCodexCursor, feedFromCodexRollout } from './codex/apply-codex.js';
+export type { CodexCursor } from './codex/apply-codex.js';
+export { parseRolloutLine, rolloutRecordOf } from './codex/rollout-record.js';
+export type { RolloutRecord } from './codex/rollout-record.js';
+export { codexAgentMeta, emptyCodexAgentMeta, withCodexAgentMeta } from './codex/codex-agents.js';
+export type { CodexAgentMeta } from './codex/codex-agents.js';
+export { applyCodexHookEvent, CODEX_EARLY_TOOLS, CODEX_HOOK_EVENTS } from './codex/apply-codex-hook.js';
+export type { CodexHookEvent } from './codex/apply-codex-hook.js';

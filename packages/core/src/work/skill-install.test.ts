@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   chmod,
   cp,
@@ -21,6 +22,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installAgentSkill } from './skill-install.js';
 import { SKILL_MD } from './skill.js';
+import { MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 
 const run = promisify(execFile);
 const git = async (dir: string, ...args: string[]): Promise<string> =>
@@ -57,6 +59,9 @@ async function initRepo(dir: string): Promise<void> {
 
 const canonical = (dir: string): string => path.join(dir, '.agents', 'skills', 'parley');
 const alias = (dir: string): string => path.join(dir, '.claude', 'skills', 'parley');
+const minimal = (dir: string) => path.join(dir, '.agents', 'skills', 'minimal-development');
+const minimalAlias = (dir: string) => path.join(dir, '.claude', 'skills', 'minimal-development');
+const installedPaths = (dir: string) => [canonical(dir), alias(dir), minimal(dir), minimalAlias(dir)];
 const receiptFile = (dir: string): string => path.join(dir, '.parley', 'skills-receipt.json');
 const readReceipt = async (
   dir: string,
@@ -90,7 +95,7 @@ describe('установка с нуля', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result.skipped).toEqual([]);
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
     // Симлинк — относительный и указывает в канонную копию, а не в абсолютный путь этой машины.
     expect((await lstat(alias(project))).isSymbolicLink()).toBe(true);
@@ -104,6 +109,8 @@ describe('установка с нуля', () => {
       entries: {
         [canonical(project)]: { kind: 'dir', sha256: sha256(SKILL_MD) },
         [alias(project)]: { kind: 'symlink', target: '../../.agents/skills/parley' },
+        [minimal(project)]: { kind: 'dir', sha256: sha256(MINIMAL_DEVELOPMENT_SKILL_MD), files: { LICENSE: sha256(MINIMAL_DEVELOPMENT_LICENSE) } },
+        [minimalAlias(project)]: { kind: 'symlink', target: '../../.agents/skills/minimal-development' },
       },
     });
   });
@@ -224,13 +231,13 @@ describe('обновление своего', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     expect(await readFile(path.join(alias(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
   });
 });
 
 describe('чужое и правленное не трогается', () => {
-  it('чужая канонная папка на месте, ссылка на неё не ставится, в учёте пусто', async () => {
+  it('чужая канонная папка на месте, ссылка не ставится; второй builtin учитывается независимо', async () => {
     await mkdir(canonical(project), { recursive: true });
     await writeFile(path.join(canonical(project), 'SKILL.md'), 'чужой навык\n', 'utf8');
 
@@ -238,12 +245,12 @@ describe('чужое и правленное не трогается', () => {
 
     expect(result).toEqual({
       skipped: [{ path: canonical(project), reason: 'foreign' }],
-      written: [],
+      written: [minimal(project), minimalAlias(project)],
       removed: [],
     });
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe('чужой навык\n');
     expect(await exists(alias(project))).toBe(false);
-    expect(await exists(receiptFile(project))).toBe(false);
+    expect(Object.keys((await readReceipt(project)).entries)).toEqual([minimal(project), minimalAlias(project)]);
   });
 
   it('чужая ссылка Claude Code на месте: канонная копия ставится, ссылка не тронута', async () => {
@@ -254,9 +261,9 @@ describe('чужое и правленное не трогается', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result.skipped).toEqual([{ path: alias(project), reason: 'foreign' }]);
-    expect(result.written).toEqual([canonical(project)]);
+    expect(result.written).toEqual([canonical(project), minimal(project), minimalAlias(project)]);
     expect(await readlink(alias(project))).toBe(path.join('..', '..', 'свой-навык'));
-    expect(Object.keys((await readReceipt(project)).entries)).toEqual([canonical(project)]);
+    expect(Object.keys((await readReceipt(project)).entries)).toEqual([canonical(project), minimal(project), minimalAlias(project)]);
   });
 
   it('чужая папка вместо ссылки тоже остаётся как есть', async () => {
@@ -332,7 +339,7 @@ describe('чужое и правленное не трогается', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result.written).toEqual([]);
-    expect(result.skipped.map((item) => item.reason)).toEqual(['foreign']);
+    expect(result.skipped.map((item) => item.reason)).toEqual(['foreign', 'foreign']);
 
     const fresh = path.join(root, 'fresh');
     await mkdir(path.join(fresh, '.parley'), { recursive: true });
@@ -366,7 +373,7 @@ describe('корень — ссылка на каталог', () => {
     const result = await installAgentSkill({ projectPath: link });
 
     expect(result.skipped).toEqual([]);
-    expect(result.written).toEqual([canonical(link), alias(link)]);
+    expect(result.written).toEqual(installedPaths(link));
     expect(await readFile(path.join(real, '.agents', 'skills', 'parley', 'SKILL.md'), 'utf8')).toBe(
       SKILL_MD,
     );
@@ -392,7 +399,9 @@ describe('запись за симлинк не идёт', () => {
     expect(result.written).toEqual([canonical(project)]);
     expect(await readFile(victim, 'utf8')).toBe('не трогать\n');
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
-    expect(await readdir(canonical(project))).toEqual(['SKILL.md']);
+    expect((await readdir(canonical(project))).sort()).toEqual(['SKILL.md', 'SKILL.md.tmp']);
+    expect(await readlink(path.join(canonical(project), 'SKILL.md.tmp'))).toBe(victim);
+    expect(await readlink(`${receiptFile(project)}.tmp`)).toBe(victim);
     expect((await readReceipt(project)).entries[canonical(project)]).toEqual({
       kind: 'dir',
       sha256: sha256(SKILL_MD),
@@ -406,7 +415,7 @@ describe('запись за симлинк не идёт', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }]);
     expect(await readdir(elsewhere)).toEqual([]);
     expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
   });
@@ -419,7 +428,7 @@ describe('запись за симлинк не идёт', () => {
     const result = await installAgentSkill({ projectPath: project });
 
     expect(result).toEqual({
-      skipped: [{ path: canonical(project), reason: 'unsafe' }],
+      skipped: [{ path: canonical(project), reason: 'unsafe' }, { path: minimal(project), reason: 'unsafe' }],
       written: [],
       removed: [],
     });
@@ -433,7 +442,7 @@ describe('запись за симлинк не идёт', () => {
 
     const result = await installAgentSkill({ projectPath: project });
 
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }]);
     expect(await readFile(path.join(project, '.claude', 'skills'), 'utf8')).toBe('файл\n');
   });
 });
@@ -447,7 +456,7 @@ describe('симлинк нельзя — запасная копия', () => {
     const result = await installAgentSkill({ projectPath: project, symlink: denied });
 
     expect(result.skipped).toEqual([]);
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     expect((await lstat(alias(project))).isSymbolicLink()).toBe(false);
     expect((await lstat(alias(project))).isDirectory()).toBe(true);
     expect(await readFile(path.join(alias(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
@@ -502,8 +511,8 @@ describe('скрыть от git: info/exclude', () => {
     const status = await porcelain(project);
     expect(status).not.toContain('.agents');
     expect(status).not.toContain('.claude');
-    // Учёт лежит в `.parley/`, а созданный кодом каталог сам прячет себя от git: `.gitignore` со строкой `*` (R5).
-    expect(status).not.toContain('.parley');
+    // A new state dir hides itself completely; the shared allowlist appears only at the first shared write.
+    expect(status).toBe('');
     expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
   });
 
@@ -563,7 +572,11 @@ describe('скрыть от git: info/exclude', () => {
 
     await installAgentSkill({ projectPath: project });
 
-    expect(await exclude(project)).toBe(before);
+    const text = await exclude(project);
+    expect(text.startsWith(before)).toBe(true);
+    for (const line of PATTERNS) expect(text).not.toContain(line);
+    expect(text).toContain('/.agents/skills/minimal-development');
+    expect(text).toContain('/.claude/skills/minimal-development');
     expect(await porcelain(project)).toContain('.agents/skills/parley/SKILL.md');
   });
 
@@ -622,10 +635,8 @@ describe('worktree сессии', () => {
 
     expect(result.skipped).toEqual([]);
     expect(result.written).toEqual([
-      canonical(project),
-      alias(project),
-      canonical(worktree),
-      alias(worktree),
+      ...installedPaths(project),
+      ...installedPaths(worktree),
     ]);
     expect(await readFile(path.join(alias(worktree), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
     expect(await readlink(alias(worktree))).toBe('../../.agents/skills/parley');
@@ -662,7 +673,7 @@ describe('worktree сессии', () => {
 
     const result = await installAgentSkill({ projectPath: project, worktreePath: second });
 
-    expect(result.written).toEqual([canonical(second), alias(second)]);
+    expect(result.written).toEqual(installedPaths(second));
     expect(await readFile(path.join(project, '.git', 'info', 'exclude'), 'utf8')).toBe(before);
   });
 
@@ -691,7 +702,7 @@ describe('worktree сессии', () => {
 
     const result = await installAgentSkill({ projectPath: project, worktreePath: gone });
 
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     expect(await exists(gone)).toBe(false);
   });
 
@@ -699,13 +710,13 @@ describe('worktree сессии', () => {
     await initRepo(project);
     const worktree = await addWorktree();
     await installAgentSkill({ projectPath: project, worktreePath: worktree });
-    expect(Object.keys((await readReceipt(project)).entries)).toHaveLength(4);
+    expect(Object.keys((await readReceipt(project)).entries)).toHaveLength(8);
 
     await git(project, 'worktree', 'remove', '--force', worktree);
     await installAgentSkill({ projectPath: project });
 
     expect(Object.keys((await readReceipt(project)).entries).sort()).toEqual(
-      [canonical(project), alias(project)].sort(),
+      installedPaths(project).sort(),
     );
   });
 });
@@ -777,7 +788,7 @@ describe('прежняя установка под именем harnas (R8)', ()
 
     expect(result).toEqual({
       skipped: [],
-      written: [canonical(project), alias(project)],
+      written: installedPaths(project),
       removed: [legacyAlias(project), legacyCanonical(project)],
     });
     expect(await exists(legacyCanonical(project))).toBe(false);
@@ -789,7 +800,7 @@ describe('прежняя установка под именем harnas (R8)', ()
     const receipt = JSON.parse(
       await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
     ) as { entries: Record<string, unknown> };
-    expect(Object.keys(receipt.entries).sort()).toEqual([canonical(project), alias(project)].sort());
+    expect(Object.keys(receipt.entries).sort()).toEqual(installedPaths(project).sort());
 
     const text = await exclude(project);
     expect(text).not.toContain(LEGACY_MARKER);
@@ -838,7 +849,7 @@ describe('прежняя установка под именем harnas (R8)', ()
     expect(result.removed).toEqual([legacyAlias(project), legacyCanonical(project)]);
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
     expect(Object.keys((await readReceipt(project)).entries).sort()).toEqual(
-      [canonical(project), alias(project)].sort(),
+      installedPaths(project).sort(),
     );
   });
 
@@ -853,7 +864,7 @@ describe('прежняя установка под именем harnas (R8)', ()
     expect(result.removed).toEqual([legacyAlias(project)]);
     expect(await readFile(file, 'utf8')).toBe(`${OLD_STUB}мои правила\n`);
     expect(await exists(legacyAlias(project))).toBe(false);
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     const receipt = JSON.parse(
       await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
     ) as { entries: Record<string, unknown> };
@@ -921,7 +932,7 @@ describe('прежняя установка под именем harnas (R8)', ()
     const receipt = JSON.parse(
       await readFile(path.join(project, '.harnas', 'skills-receipt.json'), 'utf8'),
     ) as { entries: Record<string, unknown> };
-    expect(Object.keys(receipt.entries).sort()).toEqual([canonical(project), alias(project)].sort());
+    expect(Object.keys(receipt.entries).sort()).toEqual(installedPaths(project).sort());
   });
 
   it('.claude — ссылка на другой каталог: прежняя копия за ней не трогается, остальное убирается', async () => {
@@ -941,7 +952,7 @@ describe('прежняя установка под именем harnas (R8)', ()
 
     expect(result.removed).toEqual([legacyCanonical(project)]);
     expect(await readFile(path.join(elsewhere, 'skills', 'harnas', 'SKILL.md'), 'utf8')).toBe(OLD_STUB);
-    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }]);
+    expect(result.skipped).toEqual([{ path: alias(project), reason: 'unsafe' }, { path: minimalAlias(project), reason: 'unsafe' }]);
   });
 
   it('worktree сессии: прежнее убирается и там; строки exclude — когда прежнего не осталось нигде', async () => {
@@ -1038,7 +1049,7 @@ describe('прежняя установка под именем harnas (R8)', ()
     try {
       const failed = await installAgentSkill({ projectPath: project });
 
-      expect(failed.written).toEqual([canonical(project), alias(project)]);
+      expect(failed.written).toEqual(installedPaths(project));
       expect(failed.removed).toEqual([legacyAlias(project)]);
       expect(await exists(path.join(legacyCanonical(project), 'SKILL.md'))).toBe(true);
     } finally {
@@ -1094,7 +1105,7 @@ describe('рамка: каталоги агентов не трогаются', 
 
     const result = await installAgentSkill({ projectPath: inHome });
 
-    expect(result.written).toEqual([canonical(inHome), alias(inHome)]);
+    expect(result.written).toEqual(installedPaths(inHome));
   });
 
   it('worktree внутри каталога агента пропускается, проект получает скилл', async () => {
@@ -1104,7 +1115,7 @@ describe('рамка: каталоги агентов не трогаются', 
 
     const result = await installAgentSkill({ projectPath: project, worktreePath: inside });
 
-    expect(result.written).toEqual([canonical(project), alias(project)]);
+    expect(result.written).toEqual(installedPaths(project));
     expect(await readdir(inside)).toEqual([]);
   });
 });
@@ -1119,8 +1130,7 @@ describe('параллельные запуски одного проекта', 
 
     expect(results.flatMap((result) => result.skipped)).toEqual([]);
     expect(results.flatMap((result) => result.written)).toEqual([
-      canonical(project),
-      alias(project),
+      ...installedPaths(project),
     ]);
     expect((await readReceipt(project)).version).toBe(1);
     const exclude = await readFile(path.join(project, '.git', 'info', 'exclude'), 'utf8');
@@ -1141,6 +1151,138 @@ describe('параллельные запуски одного проекта', 
     await rm(path.join(project, '.parley'));
     const third = await installAgentSkill({ projectPath: project });
     expect(third.skipped).toEqual([]);
-    expect(third.written).toEqual([canonical(project), alias(project)]);
+    expect(third.written).toEqual(installedPaths(project));
   });
+});
+
+
+describe('second fixed builtin and license ownership', () => {
+  it('delivers both native assets to project and worktree with a demand-loaded Claude alias', async () => {
+    const worktree = path.join(root, 'worktree'); await mkdir(worktree);
+    await installAgentSkill({ projectPath: project, worktreePath: worktree });
+    for (const dir of [project, worktree]) {
+      expect(await readFile(path.join(minimal(dir), 'SKILL.md'), 'utf8')).toBe(MINIMAL_DEVELOPMENT_SKILL_MD);
+      expect(await readFile(path.join(minimalAlias(dir), 'LICENSE'), 'utf8')).toBe(MINIMAL_DEVELOPMENT_LICENSE);
+      expect(await readlink(minimalAlias(dir))).toBe('../../.agents/skills/minimal-development');
+    }
+    expect((await readReceipt(project)).entries[minimal(project)]).toEqual({ kind: 'dir', sha256: sha256(MINIMAL_DEVELOPMENT_SKILL_MD), files: { LICENSE: sha256(MINIMAL_DEVELOPMENT_LICENSE) } });
+  });
+  it('includes the license in fallback copies and leaves both assets untouched on repeated delivery', async () => {
+    const noSymlink = async () => { throw new Error('unsupported'); };
+    await installAgentSkill({ projectPath: project, symlink: noSymlink });
+    const files = [path.join(minimal(project), 'SKILL.md'), path.join(minimal(project), 'LICENSE'), path.join(minimalAlias(project), 'LICENSE')];
+    const before = await Promise.all(files.map(async file => ({ bytes: await readFile(file), time: (await stat(file)).mtimeMs })));
+    expect(await installAgentSkill({ projectPath: project, symlink: noSymlink })).toEqual({ skipped: [], written: [], removed: [] });
+    expect(await Promise.all(files.map(async file => ({ bytes: await readFile(file), time: (await stat(file)).mtimeMs })))).toEqual(before);
+    expect((await readReceipt(project)).entries[minimalAlias(project)]).toMatchObject({ kind: 'copy', files: { LICENSE: sha256(MINIMAL_DEVELOPMENT_LICENSE) } });
+  });
+  it('refuses a foreign minimal-development folder while continuing the independent parley installation', async () => {
+    await mkdir(minimal(project), { recursive: true }); await writeFile(path.join(minimal(project), 'SKILL.md'), 'human body');
+    const result = await installAgentSkill({ projectPath: project });
+    expect(result.skipped).toContainEqual({ path: minimal(project), reason: 'foreign' });
+    expect(await readFile(path.join(minimal(project), 'SKILL.md'), 'utf8')).toBe('human body');
+    expect(await exists(minimalAlias(project))).toBe(false);
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+  });
+  it('preserves an edited license and refuses a partial body update or deletion of foreign extras', async () => {
+    await installAgentSkill({ projectPath: project });
+    const body = path.join(minimal(project), 'SKILL.md'); const license = path.join(minimal(project), 'LICENSE');
+    await writeFile(body, 'owned previous body'); await writeFile(license, 'human license'); await writeFile(path.join(minimal(project), 'notes'), 'human extra');
+    const receipt = await readReceipt(project); receipt.entries[minimal(project)]!['sha256'] = sha256('owned previous body');
+    await writeFile(receiptFile(project), JSON.stringify(receipt));
+    const result = await installAgentSkill({ projectPath: project });
+    expect(result.skipped).toContainEqual({ path: minimal(project), reason: 'edited' });
+    expect(await readFile(body, 'utf8')).toBe('owned previous body'); expect(await readFile(license, 'utf8')).toBe('human license');
+    expect(await readFile(path.join(minimal(project), 'notes'), 'utf8')).toBe('human extra');
+  });
+  it.each(['SKILL.md', 'LICENSE'])('does not follow or replace an owned asset redirected through a %s symlink', async file => {
+    await installAgentSkill({ projectPath: project }); const victim = path.join(root, 'foreign'); await writeFile(victim, 'human bytes');
+    const leaf = path.join(minimal(project), file); await rm(leaf); await symlink(victim, leaf);
+    const result = await installAgentSkill({ projectPath: project });
+    expect(result.skipped).toContainEqual({ path: minimal(project), reason: 'edited' });
+    expect(await readFile(victim, 'utf8')).toBe('human bytes'); expect((await lstat(leaf)).isSymbolicLink()).toBe(true);
+  });
+  it('restores a missing owned license without adopting or deleting other human files', async () => {
+    await installAgentSkill({ projectPath: project }); await rm(path.join(minimal(project), 'LICENSE'));
+    await writeFile(path.join(minimal(project), 'notes'), 'human extra');
+    const result = await installAgentSkill({ projectPath: project });
+    expect(result.written).toEqual([minimal(project)]);
+    expect(await readFile(path.join(minimal(project), 'LICENSE'), 'utf8')).toBe(MINIMAL_DEVELOPMENT_LICENSE);
+    expect(await readFile(path.join(minimal(project), 'notes'), 'utf8')).toBe('human extra');
+  });
+  it.each(['file', 'directory', 'symlink', 'fifo'].flatMap(kind => ['restore', 'update'].map(operation => ({ kind, operation }))))(
+    'preserves a human LICENSE.tmp $kind while performing an owned $operation', async ({ kind, operation }) => {
+      if (kind === 'fifo' && process.platform === 'win32') return;
+      await installAgentSkill({ projectPath: project });
+      const dir = minimal(project); const license = path.join(dir, 'LICENSE'); const temp = `${license}.tmp`;
+      if (operation === 'restore') await rm(license);
+      else {
+        await writeFile(license, 'previous owned license');
+        const receipt = await readReceipt(project);
+        receipt.entries[dir] = { kind: 'dir', sha256: sha256(MINIMAL_DEVELOPMENT_SKILL_MD), files: { LICENSE: sha256('previous owned license') } } as unknown as Record<string, string>;
+        await writeFile(receiptFile(project), JSON.stringify(receipt));
+      }
+      const victim = path.join(root, 'human-license'); await writeFile(victim, 'human content');
+      if (kind === 'file') await writeFile(temp, 'human draft');
+      else if (kind === 'directory') { await mkdir(temp); await writeFile(path.join(temp, 'notes'), 'human draft'); }
+      else if (kind === 'symlink') await symlink(victim, temp);
+      else await run('mkfifo', [temp]);
+      const before = await lstat(temp);
+      expect((await installAgentSkill({ projectPath: project })).written).toEqual([dir]);
+      expect(await readFile(license, 'utf8')).toBe(MINIMAL_DEVELOPMENT_LICENSE);
+      const after = await lstat(temp); expect(after.ino).toBe(before.ino); expect(after.mode).toBe(before.mode);
+      if (kind === 'file') expect(await readFile(temp, 'utf8')).toBe('human draft');
+      else if (kind === 'directory') expect(await readFile(path.join(temp, 'notes'), 'utf8')).toBe('human draft');
+      else if (kind === 'symlink') expect(await readlink(temp)).toBe(victim);
+      else expect(after.isFIFO()).toBe(true);
+      expect(await readFile(victim, 'utf8')).toBe('human content');
+      expect((await readdir(dir)).sort()).toEqual(['LICENSE', 'LICENSE.tmp', 'SKILL.md']);
+    },
+  );
+  it('updates intact owned body and license together while retaining v1 parley receipts', async () => {
+    await installAgentSkill({ projectPath: project });
+    await writeFile(path.join(minimal(project), 'SKILL.md'), 'old body'); await writeFile(path.join(minimal(project), 'LICENSE'), 'old license');
+    const receipt = await readReceipt(project);
+    receipt.entries[minimal(project)] = { kind: 'dir', sha256: sha256('old body'), files: { LICENSE: sha256('old license') } } as unknown as Record<string, string>;
+    await writeFile(receiptFile(project), JSON.stringify(receipt));
+    expect((await installAgentSkill({ projectPath: project })).written).toEqual([minimal(project)]);
+    expect(await readFile(path.join(minimal(project), 'SKILL.md'), 'utf8')).toBe(MINIMAL_DEVELOPMENT_SKILL_MD);
+    expect(await readFile(path.join(minimal(project), 'LICENSE'), 'utf8')).toBe(MINIMAL_DEVELOPMENT_LICENSE);
+    expect((await readReceipt(project)).entries[canonical(project)]).toEqual({ kind: 'dir', sha256: sha256(SKILL_MD) });
+  });
+  it('rejects malformed or unbounded per-file receipt metadata instead of gaining ownership', async () => {
+    await installAgentSkill({ projectPath: project }); const receipt = await readReceipt(project);
+    receipt.entries[minimal(project)] = { kind: 'dir', sha256: sha256(MINIMAL_DEVELOPMENT_SKILL_MD), files: { LICENSE: sha256(MINIMAL_DEVELOPMENT_LICENSE), '../foreign': sha256('unsafe') } } as unknown as Record<string, string>;
+    await writeFile(receiptFile(project), JSON.stringify(receipt));
+    expect((await installAgentSkill({ projectPath: project })).skipped).toContainEqual({ path: minimal(project), reason: 'foreign' });
+  });
+});
+
+import { discoverClaudeSkills } from '../skills/claude.js';
+import { discoverCodexSkills } from '../skills/codex.js';
+
+it('both accepted native catalog readers recognize the delivered metadata through their own roots', async () => {
+  await installAgentSkill({ projectPath: project });
+  const [claude, codex] = await Promise.all([
+    discoverClaudeSkills({ cwd: project, homeDir: root, configDir: path.join(root, 'isolated-claude') }),
+    discoverCodexSkills({ cwd: project, homeDir: root, roots: [{ path: path.join(project, '.agents/skills'), source: 'project' }], configLayers: [] }),
+  ]);
+  for (const catalog of [claude, codex]) {
+    const skill = catalog.skills.find(item => item.name === 'minimal-development');
+    expect(skill?.description).toContain('Use for implementing, fixing or reviewing code');
+    // Inventory alone does not invent native policy/tool verification.
+    expect(skill?.modelAvailable).toBe(false);
+  }
+});
+
+it('rejects an owned license FIFO without hanging the launch or touching unrelated assets', async () => {
+  if (process.platform === 'win32') return;
+  await installAgentSkill({ projectPath: project }); const license = path.join(minimal(project), 'LICENSE');
+  await rm(license); await run('mkfifo', [license]);
+  const script = `import { installAgentSkill } from ${JSON.stringify(new URL('./skill-install.ts', import.meta.url).href)};
+    const result = await installAgentSkill({ projectPath: ${JSON.stringify(project)} });
+    process.stdout.write(JSON.stringify({ edited: result.skipped.some(item => item.reason === 'edited'), written: result.written.length }));`;
+  const result = await run(process.execPath, ['--import', createRequire(import.meta.url).resolve('tsx'), '--input-type=module', '-e', script], { timeout: 2500 });
+  expect(JSON.parse(result.stdout)).toEqual({ edited: true, written: 0 });
+  expect((await lstat(license)).isFIFO()).toBe(true);
 });

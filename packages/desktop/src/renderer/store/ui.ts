@@ -11,13 +11,16 @@
 import { create } from 'zustand';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
-import { DEFAULT_UI, normalizeUi, type Appearance, type UiFile } from '../../shared/ui-types.js';
+import { DEFAULT_UI, normalizeUi, type Appearance, type RightSidebarTab, type UiFile } from '../../shared/ui-types.js';
 
 /** Работа, для которой открыт диалог (кусок 3.4). */
 export interface DialogWork {
   projectPath: string;
   workId: string;
 }
+
+/** Ephemeral prepared backlog context. The shared row already has a stable ID before creation. */
+export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
 export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice';
@@ -34,7 +37,7 @@ export interface DialogsState {
    * `null` — активная работа (⌘T). `room` — «New room» (меню карточки, палитра): диалог открывается сразу с двумя
    * агентами, то есть комнатой.
    */
-  newSession: { open: boolean; work: DialogWork | null; room: boolean };
+  newSession: { open: boolean; work: DialogWork | null; room: boolean; backlog?: BacklogTakeContext };
   settings: boolean;
   /**
    * Диалог «New room» из двух сессий (1.6): сессию `dragged` бросили на сессию `target` той же работы; `null` — диалог
@@ -80,6 +83,10 @@ export interface UiState {
   /** `null` — состояние будильника ещё не пришло с хоста. */
   wakePaused: boolean | null;
   dialogs: DialogsState;
+  /** Selected project panel, only in window memory. */
+  projectPanel: string | null;
+  openProjectPanel(projectPath: string): void;
+  closeProjectPanel(): void;
   /** Вкладка, с которой откроются настройки (`openSettingsDialog(section)`). */
   settingsSection: SettingsSection;
   /**
@@ -96,6 +103,11 @@ export interface UiState {
    * записи нет.
    */
   composerDrafts: Record<string, string>;
+  /**
+   * Вложения поля ввода комнаты — абсолютные пути (скрепка и файлы, брошенные на вкладку комнаты), по тому же ключу и с
+   * той же жизнью, что черновик: в памяти окна, переживают смену вкладок. Пустого списка в записи нет.
+   */
+  composerAttachments: Record<string, readonly string[]>;
 
   /** Зеркало `ui.json` (кусок 2.3, спека 3.4): до `app.loadUi()` — значения по умолчанию. */
   ui: UiFile;
@@ -133,10 +145,12 @@ export interface UiState {
   setWindowFocused: (focused: boolean) => void;
   /** Поле ввода комнаты зовёт на каждую правку; пустой текст убирает запись. */
   setComposerDraft: (draftKey: string, draft: string) => void;
+  /** Вложения поля ввода комнаты; пустой список убирает запись. */
+  setComposerAttachments: (draftKey: string, paths: readonly string[]) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
   closeNewWorkDialog: () => void;
   /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
-  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean }) => void;
+  openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean; backlog?: BacklogTakeContext }) => void;
   closeNewSessionDialog: () => void;
   openSettingsDialog: (section?: SettingsSection) => void;
   closeSettingsDialog: () => void;
@@ -164,7 +178,7 @@ export interface UiState {
    * Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. `tab` есть
    * только у правого (кусок 7.2); у левого он отбрасывается, а не уходит лишним ключом в ui.json.
    */
-  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number; tab?: 'files' | 'changes' }) => void;
+  setSidebar: (side: 'left' | 'right', patch: { open?: boolean; width?: number; tab?: RightSidebarTab }) => void;
   setSidebarHovering: (hovering: boolean) => void;
   setSidebarHold: (id: string, on: boolean) => void;
 
@@ -198,9 +212,13 @@ export const useUiStore = create<UiState>((set, get) => {
     documentVisible: typeof document === 'undefined' ? true : document.visibilityState === 'visible',
     wakePaused: null,
     dialogs: CLOSED_DIALOGS,
+    projectPanel: null,
+    openProjectPanel: (projectPath) => set({ projectPanel: projectPath }),
+    closeProjectPanel: () => set({ projectPanel: null }),
     settingsSection: 'appearance',
     visibleSessionRefs: {},
     composerDrafts: {},
+    composerAttachments: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
     sidebarHovering: false,
@@ -238,6 +256,15 @@ export const useUiStore = create<UiState>((set, get) => {
         return { composerDrafts: { ...state.composerDrafts, [draftKey]: draft } };
       }),
 
+    setComposerAttachments: (draftKey, paths) =>
+      set((state) => {
+        if ((state.composerAttachments[draftKey] ?? []) === paths) return state;
+        if (paths.length === 0) {
+          return { composerAttachments: Object.fromEntries(Object.entries(state.composerAttachments).filter(([key]) => key !== draftKey)) };
+        }
+        return { composerAttachments: { ...state.composerAttachments, [draftKey]: paths } };
+      }),
+
     openNewWorkDialog: (projectPath, title) =>
       set((state) => ({
         dialogs: { ...state.dialogs, newWork: { open: true, projectPath: projectPath ?? null, title: title ?? '' } },
@@ -246,7 +273,7 @@ export const useUiStore = create<UiState>((set, get) => {
       set((state) => ({ dialogs: { ...state.dialogs, newWork: { open: false, projectPath: null, title: '' } } })),
     openNewSessionDialog: (work, options) =>
       set((state) => ({
-        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true } },
+        dialogs: { ...state.dialogs, newSession: { open: true, work: work ?? null, room: options?.room === true, ...(options?.backlog ? { backlog: options.backlog } : {}) } },
       })),
     closeNewSessionDialog: () =>
       set((state) => ({

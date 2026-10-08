@@ -5,13 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
 import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
-import { CODEX_NOTIFY_ENTRY } from './codex-notify.js';
 import {
   CODEX_MCP_STARTUP_TIMEOUT_SEC,
   CODEX_MCP_TOOL_TIMEOUT_SEC,
   MCP_SERVER_ENTRY,
   codexMcpOverride,
-  codexNotifyOverride,
   mcpConfig,
   mcpConfigJson,
   mcpConfigValue,
@@ -249,19 +247,9 @@ describe('tomlString — экранирование значений TOML для
   });
 });
 
-describe('codexNotifyOverride', () => {
-  it('notify — массив из node и скрипта харнесса по абсолютным путям', () => {
-    expect(path.isAbsolute(CODEX_NOTIFY_ENTRY)).toBe(true);
-    expect(CODEX_NOTIFY_ENTRY.endsWith('codex-notify-bin.js')).toBe(true);
-    const { key, value } = parseTomlAssignment(codexNotifyOverride());
-    expect(key).toEqual(['notify']);
-    expect(value).toEqual([process.execPath, CODEX_NOTIFY_ENTRY]);
-  });
-});
-
 // Собранное окно запускает хост своим node: `Parley.app/Contents/Resources/node/bin/node`, а `process.execPath`
 // хоста — тот же путь. Приложение лежит там, куда его положил человек, — путь бывает с пробелом и апострофом.
-describe('node приложения в каталоге с пробелом: сервер MCP и notify получают путь целым словом', () => {
+describe('node приложения в каталоге с пробелом: сервер MCP получает путь целым словом', () => {
   const bundled = "/Applications/My Apps/Parley's.app/Contents/Resources/node/bin/node";
   let original = '';
 
@@ -286,10 +274,6 @@ describe('node приложения в каталоге с пробелом: с�
   it('-c mcp_servers для Codex: после разбора TOML command и args те же', () => {
     const table = parseTomlAssignment(codexMcpOverride(params)).value;
     expect(table).toMatchObject({ command: bundled, args: [MCP_SERVER_ENTRY] });
-  });
-
-  it('-c notify для Codex: массив из двух элементов, путь с пробелом остаётся одним', () => {
-    expect(parseTomlAssignment(codexNotifyOverride()).value).toEqual([bundled, CODEX_NOTIFY_ENTRY]);
   });
 });
 
@@ -345,5 +329,42 @@ describe('writeMcpConfig', () => {
     const written = JSON.parse(await readFile(file, 'utf8')) as ReturnType<typeof mcpConfig>;
     expect(written.mcpServers[MCP_SERVER_NAME]?.env['PARLEY_CHANNEL']).toBe('1');
     expect(written.mcpServers[MCP_SERVER_NAME]?.env['HARNAS_CHANNEL']).toBe('1');
+  });
+});
+
+describe('immutable navigator snapshot', () => {
+  it.each([false, true])('carries explicit %s and the launch revision through both native MCP formats', skillNavigator => {
+    const nativeContextRevision = '12345678-1234-1234-1234-123456789abc';
+    const snapshot = { ...params, skillNavigator, nativeContextRevision, env: { PARLEY_SKILL_NAVIGATOR: skillNavigator ? '0' : '1', PARLEY_NATIVE_CONTEXT_REVISION: 'STALE' } };
+    const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+    const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+    for (const env of [json, table.env]) {
+      expect(env.PARLEY_SKILL_NAVIGATOR).toBe(skillNavigator ? '1' : '0');
+      expect(env.HARNAS_SKILL_NAVIGATOR).toBe(skillNavigator ? '1' : '0');
+      expect(env.PARLEY_NATIVE_CONTEXT_REVISION).toBe(nativeContextRevision);
+      expect(env.HARNAS_NATIVE_CONTEXT_REVISION).toBe(nativeContextRevision);
+    }
+  });
+});
+
+describe('сокращённый список скиллов в окружении сервера', () => {
+  it('SKILL_LIST_REDUCED=1 есть в обоих форматах только у подтверждённого сокращения и не наследуется', () => {
+    const inherited = { PARLEY_SKILL_LIST_REDUCED: '1', HARNAS_SKILL_LIST_REDUCED: '1' };
+    for (const skillListReduced of [undefined, false] as const) {
+      const snapshot = { ...params, skillNavigator: true, ...(skillListReduced === undefined ? {} : { skillListReduced }), env: inherited };
+      const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+      const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+      for (const env of [json, table.env]) {
+        expect(env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
+        expect(env).not.toHaveProperty('HARNAS_SKILL_LIST_REDUCED');
+      }
+    }
+    const snapshot = { ...params, skillNavigator: true, skillListReduced: true };
+    const json = mcpConfig(snapshot).mcpServers[MCP_SERVER_NAME]!.env;
+    const table = parseTomlAssignment(codexMcpOverride(snapshot)).value as { env: Record<string, string> };
+    for (const env of [json, table.env]) {
+      expect(env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
+      expect(env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
+    }
   });
 });

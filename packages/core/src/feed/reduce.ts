@@ -568,7 +568,7 @@ function rejectTool(draft: FeedDraft, toolUseId: string, agentId: string | null,
  * Карточка с вложенным вызовом: новый — в конец (старше `FEED_AGENT_CHILDREN` уходят, `toolCount`
  * считает и их), известный — на своём месте.
  */
-function withChild(agent: FeedAgent, child: FeedTool): FeedAgent {
+export function withChild(agent: FeedAgent, child: FeedTool): FeedAgent {
   const index = agent.children.findIndex((item) => item.toolUseId === child.toolUseId);
   const children = agent.children.slice();
   if (index !== -1) {
@@ -605,7 +605,7 @@ function rejectRunningTools(draft: FeedDraft, at: string): void {
 }
 
 /** Закрывает идущий ход: тексты, карточки, вызовы; `turn` — если ход шёл. */
-function closeTurn(draft: FeedDraft, at: string, interrupted = false): void {
+export function closeTurn(draft: FeedDraft, at: string, interrupted = false): void {
   closeTexts(draft);
   settleAllPending(draft, at);
   rejectRunningTools(draft, at);

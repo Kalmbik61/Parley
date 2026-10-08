@@ -4,6 +4,7 @@ import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { EventData } from './events.js';
+import type { FeedDecisions } from './feed.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 
@@ -212,6 +213,21 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Params<'rooms.create'>['quiet']>().toEqualTypeOf<boolean | undefined>();
   });
 
+  it('rooms.create: mode и снимок рецепта необязательны; снимок строгий, режим из трёх', () => {
+    const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-02', 's-03'] };
+    const parse = (extra: Record<string, unknown>) => METHODS['rooms.create'].safeParse({ ...base, ...extra });
+    const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Lead playbook' };
+
+    expect(parse({}).success).toBe(true);
+    expect(parse({ mode: 'verified', recipe }).success).toBe(true);
+    expect(parse({ recipe: { ...recipe, playbook: '' } }).success).toBe(true);
+    for (const mode of ['', 'strict', 1, null]) expect(parse({ mode }).success).toBe(false);
+    for (const bad of [{ ...recipe, extra: 1 }, { id: 'a', name: 'b' }, { ...recipe, name: '' }, { ...recipe, playbook: 5 }, { ...recipe, playbook: 'x'.repeat(1024 * 1024 + 1) }, null, 'text'])
+      expect(parse({ recipe: bad }).success).toBe(false);
+    expectTypeOf<Params<'rooms.create'>['mode']>().toEqualTypeOf<'free' | 'checklist' | 'verified' | undefined>();
+    expectTypeOf<Params<'rooms.create'>['recipe']>().toEqualTypeOf<{ id: string; name: string; playbook: string } | undefined>();
+  });
+
   it('rooms.addMember: комната и сессия обязательны', () => {
     expect(METHODS['rooms.addMember'].safeParse({ ...room, sessionId: 's-04' }).success).toBe(true);
     expect(METHODS['rooms.addMember'].safeParse(room).success).toBe(false);
@@ -219,6 +235,29 @@ describe('комнаты: ведущий и решение (дизайн ком�
       false,
     );
     expectTypeOf<Result<'rooms.addMember'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.rename: название по правилу works.rename — края обрезаются, пустое и длиннее 120 кодовых точек не проходят', () => {
+    const parse = (title: unknown) => METHODS['rooms.rename'].safeParse({ ...room, title });
+    expect(parse('  Платежи\u200B ').data?.title).toBe('Платежи');
+    for (const title of ['', '   ', '\u200B\u2060', '😀'.repeat(121), 5]) expect(parse(title).success).toBe(false);
+    expect(parse('😀'.repeat(120)).success).toBe(true);
+    expect(METHODS['rooms.rename'].safeParse({ projectPath: '/p', workId: 'w-0001', title: 'x' }).success).toBe(false);
+    expectTypeOf<Result<'rooms.rename'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('rooms.setLead: комната и сессия обязательны; ответ — id системной строки', () => {
+    expect(METHODS['rooms.setLead'].safeParse({ ...room, sessionId: 's-02' }).success).toBe(true);
+    expect(METHODS['rooms.setLead'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.setLead'].safeParse({ ...room, sessionId: 2 }).success).toBe(false);
+    expectTypeOf<Result<'rooms.setLead'>>().toEqualTypeOf<{ messageId: string }>();
+  });
+
+  it('rooms.delete: только комната — сессии окно удаляет отдельно, через sessions.delete', () => {
+    expect(METHODS['rooms.delete'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.delete'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.delete'>>().toEqualTypeOf<{ projectPath: string; workId: string; roomId: string }>();
+    expectTypeOf<Result<'rooms.delete'>>().toEqualTypeOf<{ ok: true }>();
   });
 
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
@@ -252,9 +291,10 @@ describe('модель, усилие и поля providers.list (дизайн к
   it('sessions.create: model и effort необязательны — старое окно их не шлёт', () => {
     expect(parse({}).success).toBe(true);
     expect(parse({ model: 'opus', effort: 'high' }).success).toBe(true);
-    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | undefined>();
-    // Уровень — строка-токен: набор уровней у каждой модели свой (нормалайзер модели и effort, 5.6).
-    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<Params<'sessions.create'>['model']>().toEqualTypeOf<string | null | undefined>();
+    // Уровень — строка-токен: набор уровней у каждой модели свой (нормалайзер модели и effort, 5.6);
+    // null — явное «по умолчанию» (снимает умолчание роли).
+    expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<string | null | undefined>();
   });
 
   it('effort — токен уровня: прежние low, medium, high старого окна и новые xhigh, max, ultra проходят', () => {
@@ -262,10 +302,14 @@ describe('модель, усилие и поля providers.list (дизайн к
     for (const effort of good) expect(parse({ effort }).success, effort).toBe(true);
   });
 
-  it('effort: заглавные, пробел, кавычка, пустое, 33 знака и не строка — отказ схемы: токен уходит в argv и в кавычки TOML', () => {
+  it('effort: заглавные, пробел, кавычка, пустое, 33 знака и не строка (кроме null) — отказ схемы: токен уходит в argv и в кавычки TOML', () => {
     // Принадлежность уровня модели проверяет хост (`bad_request`); схема держит только вид токена.
-    const bad = ['HIGH', 'High', 'hi gh', '"max', 'max"', '', 'a'.repeat(33), '-high', '1high', 'high\n', 3, null];
+    const bad = ['HIGH', 'High', 'hi gh', '"max', 'max"', '', 'a'.repeat(33), '-high', '1high', 'high\n', 3];
     for (const effort of bad) expect(parse({ effort }).success, JSON.stringify(effort)).toBe(false);
+  });
+
+  it('effort: null — явный «по умолчанию» (снимает умолчание роли), схема его пропускает', () => {
+    expect(parse({ effort: null }).success).toBe(true);
   });
 
   it('model — одно слово: алиас или полное имя, без пробелов и не похожее на флаг', () => {
@@ -463,6 +507,7 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       revision: number;
       schemaVersion: number;
       mode: string | null;
+      decisions?: FeedDecisions | null;
     }>();
     expectTypeOf<Result<'feed.subscribe'>>().toEqualTypeOf<{ ok: true }>();
     expectTypeOf<Result<'feed.unsubscribe'>>().toEqualTypeOf<{ ok: true }>();
@@ -473,6 +518,7 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
       upsert: FeedItem[];
       removed: string[];
       mode: string | null;
+      decisions?: FeedDecisions | null;
     }>();
     expectTypeOf<Params<'feed.decide'>['decision']>().toEqualTypeOf<FeedDecision>();
   });
@@ -506,6 +552,29 @@ describe('capabilities.list (живая проверка 2026-10-02: подск�
 
   it('результат — команды, скиллы и субагенты', () => {
     expectTypeOf<Result<'capabilities.list'>>().toEqualTypeOf<Capabilities>();
+  });
+});
+
+
+describe('recipes.list', () => {
+  it('принимает только абсолютно заданный проект без лишних полей', () => {
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '/p' }).success).toBe(true);
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '' }).success).toBe(false);
+    expect(METHODS['recipes.list'].safeParse({ projectPath: '/p', extra: 1 }).success).toBe(false);
+    expectTypeOf<Result<'recipes.list'>['partial']>().toEqualTypeOf<boolean>();
+  });
+});
+
+describe('session role protocol compatibility', () => {
+  const base = { projectPath: '/p', workId: null, provider: 'claude', label: 'Plan', task: '', parent: null };
+  it('accepts old omitted choices, exact nullable clears, and source-qualified role data', () => {
+    expect(METHODS['sessions.create'].safeParse(base).success).toBe(true);
+    expect(METHODS['sessions.create'].safeParse({ ...base, model: null, effort: null, role: { source: 'builtin', name: 'planner' } })).toMatchObject({ success: true, data: { model: null, effort: null, role: { source: 'builtin', name: 'planner' } } });
+    expect(METHODS['sessions.create'].safeParse({ ...base, role: { source: 'unknown', name: 'planner' } }).success).toBe(false);
+  });
+  it('accepts current participant scope for safe role listings', () => {
+    expect(METHODS['roles.list'].safeParse({ projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-1' } }).success).toBe(true);
+    expect(METHODS['roles.list'].safeParse({ projectPath: '/p' }).success).toBe(true);
   });
 });
 

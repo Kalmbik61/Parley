@@ -14,10 +14,11 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
-import type { Appearance } from '../../shared/ui-types.js';
+import type { Appearance, RightSidebarTab } from '../../shared/ui-types.js';
 import type { AttentionTarget } from '../attention/next.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
+import { useDevtoolsStore } from '../browser/devtools/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
@@ -55,11 +56,12 @@ export interface ActionContext {
   ui: {
     toggleSidebar(side: 'left' | 'right'): void;
     /** Правый сайдбар на этой вкладке; открытый не прячет. */
-    showRightTab(tab: 'files' | 'changes'): void; // setSidebar('right', { open: true, tab })
+    showRightTab(tab: RightSidebarTab): void; // setSidebar('right', { open: true, tab })
     openNewWork(title?: string): void; // openNewWorkDialog(null, title)
     openNewSession(): void; // диалог 1.5 активной работы одним агентом (⌘T)
     openNewRoom(): void; // тот же диалог, открытый комнатой (два агента)
     openSettings(): void;
+    openProjectPanel(projectPath: string): void;
     setAppearance(mode: Appearance): void; // store/ui.ts: app.setAppearance, ui.json пишет main
     toggleShowArchived(): void;
     toggleWake(): Promise<void>; // useUiStore.getState().toggleWake(bridge)
@@ -150,11 +152,13 @@ const ZOOM_STEP: Partial<Record<ActionId, 1 | -1 | 0>> = {
 /** Действия, которым нужна активная работа (бриф 6.3): без неё — тост. Правого сайдбара без неё нет (7.2). */
 function needsActiveWork(id: ActionId): boolean {
   return (
+    id === 'project.capabilities' ||
     id === 'session.new' ||
     id === 'room.new' ||
     id === 'sidebar.right.toggle' ||
     id === 'sidebar.files' ||
     id === 'sidebar.changes' ||
+    id === 'sidebar.agents' ||
     id === 'files.quickOpen' ||
     id === 'files.search' ||
     id.startsWith('group.') ||
@@ -190,6 +194,15 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     if (page === null) return;
     if (zoom === undefined) useBrowserStore.getState().update(page.tabId, { findOpen: true });
     else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[parley] browser zoom', error));
+    return;
+  }
+  // Панель Console | Network (спека 2026-10-07, 4.3): ⌘⌥I — показать или спрятать, ⌘⌥J — сразу на Console. Цель — та
+  // же вкладка браузера активной группы; без страницы — ничего.
+  if (id === 'browser.devtools' || id === 'browser.console') {
+    const page = ctx.browser.active();
+    if (page === null) return;
+    if (id === 'browser.devtools') useDevtoolsStore.getState().toggle(page.tabId);
+    else useDevtoolsStore.getState().show(page.tabId, 'console');
     return;
   }
   if (id.startsWith('tab.goto.') && active !== null) {
@@ -228,7 +241,16 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'sidebar.changes':
       ctx.ui.showRightTab('changes');
       return;
+    case 'sidebar.agents':
+      ctx.ui.showRightTab('agents');
+      return;
     // Корень ⌘P и поиска — корень «Файлов» активной работы (`filesRootSpec`): его берут палитра и панель.
+    case 'project.capabilities': {
+      const entry = useWorksStore.getState().entries.find(item => workKeyOf(item.projectPath, item.map.work.id) === ctx.layout.activeWorkKey);
+      if (!entry) { ctx.toast(S.notifications.targetGone); return; }
+      ctx.ui.openProjectPanel(entry.projectPath);
+      return;
+    }
     case 'files.quickOpen':
       ctx.palette.openWith('files');
       return;
@@ -350,7 +372,7 @@ function toggleChatView(ctx: ActionContext, key: string, layout: WorkLayout): vo
   if (session === undefined) return;
   const available = feedAvailableNow(session.provider);
   if (!available) {
-    ctx.toast(S.chat.terminalOnly);
+    ctx.toast(S.chat.terminalOnlyFor(session.provider));
     return;
   }
   const ref = { projectPath: entry?.projectPath ?? '', workId: entry?.map.work.id ?? '', sessionId: tab.sessionId };

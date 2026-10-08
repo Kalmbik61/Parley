@@ -14,6 +14,7 @@ import type {
   Result,
 } from '@parley/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
@@ -32,6 +33,7 @@ import type {
 } from '../../shared/files-types.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import type { NotesFile } from '../../shared/notes-types.js';
+import type { RecipeSaveRequest, RecipeSaveResult } from '../../shared/recipe-save.js';
 import type { IpcErrorInfo } from '../../shared/ipc-error.js';
 import { rootKey } from '../../shared/work-keys.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -103,6 +105,9 @@ export interface FakeBridge extends ParleyBridge {
   readonly locateCalls: Array<{ workKey: string; absPaths: string[] }>;
   /** Чем ответит `app.openPath`: `'opened'` (по умолчанию), `'revealed'` или ошибка — отказ. */
   setOpenPathResult(result: 'opened' | 'revealed' | { error: unknown }): void;
+  /** Вызовы `app.saveRecipe` и ответ на них (по умолчанию — `saved`). */
+  readonly saveRecipeCalls: RecipeSaveRequest[];
+  setSaveRecipeAnswer(answer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult>): void;
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -174,6 +179,16 @@ export interface FakeBridge extends ParleyBridge {
   setPickResult(answer: PickResult | null | IpcErrorInfo): void;
   /** Вызовы `browser.pickStart` и `browser.pickCancel` по порядку (кусок 9.3a). */
   readonly pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }>;
+  /** Ответ browser.devtoolsSnapshot (спека 2026-10-07, 3.5); по умолчанию пустой журнал с capture 'on'. */
+  setDevtoolsSnapshot(snapshot: DevtoolsSnapshot): void;
+  /** Пачка журнала: событие `browser:devtools` слушателям `browser.onDevtools`. */
+  emitDevtools(batch: DevtoolsBatch): void;
+  /** Ответ browser.responseBody; по умолчанию null. Отказ — объект с code, как у прочих отказов. */
+  setResponseBody(answer: ResponseBody | null | IpcErrorInfo): void;
+  /** scale ответа browser.setViewport; по умолчанию 1. */
+  setViewportScale(scale: number): void;
+  /** Ответ browser.devtoolsReady (спайк 0.1): промис, который тест разрешает сам, или отказ с code; по умолчанию готово. */
+  setDevtoolsReady(answer: Promise<void> | IpcErrorInfo): void;
   /** Вызовы `voice.*` по порядку (голосовой ввод). */
   readonly voiceCalls: Array<{ method: string; args: unknown[] }>;
   /** Скачанные модели Whisper: что отдаёт `voice.listModels`. */
@@ -210,6 +225,8 @@ export function createFakeBridge(): FakeBridge {
   const located = new Map<string, Located | null>();
   const fileStats = new Map<string, FileStat | null>();
   const locateCalls: Array<{ workKey: string; absPaths: string[] }> = [];
+  const saveRecipeCalls: RecipeSaveRequest[] = [];
+  let saveRecipeAnswer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult> = (request) => ({ status: 'saved', id: `project:${request.file}`, opened: true });
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
   const revealedPaths: string[] = [];
@@ -257,6 +274,11 @@ export function createFakeBridge(): FakeBridge {
   const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
   let pickAnswer: PickResult | null | IpcErrorInfo = null;
   const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
+  let devtoolsSnapshot: DevtoolsSnapshot = { epoch: 0, capture: 'on', console: [], network: [] };
+  const devtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
+  let responseBodyAnswer: ResponseBody | null | IpcErrorInfo = null;
+  let viewportScale = 1;
+  let devtoolsReadyAnswer: Promise<void> | IpcErrorInfo = Promise.resolve();
   let watchSeq = 0;
   /** mtimeMs ответа write: растёт с каждой записью, как на диске. */
   let writeMtimeMs = 1_700_000_000_000;
@@ -304,6 +326,10 @@ export function createFakeBridge(): FakeBridge {
       fileStats.set(`${rootKey(root)}\n${path}`, stat);
     },
     locateCalls,
+    saveRecipeCalls,
+    setSaveRecipeAnswer: (answer) => {
+      saveRecipeAnswer = answer;
+    },
     setOpenPathResult: (result) => {
       openPathResult = result;
     },
@@ -391,6 +417,21 @@ export function createFakeBridge(): FakeBridge {
       pickAnswer = answer;
     },
     pickCalls,
+    setDevtoolsSnapshot: (snapshot) => {
+      devtoolsSnapshot = snapshot;
+    },
+    emitDevtools: (batch) => {
+      for (const listener of devtoolsListeners) listener(batch);
+    },
+    setResponseBody: (answer) => {
+      responseBodyAnswer = answer;
+    },
+    setViewportScale: (scale) => {
+      viewportScale = scale;
+    },
+    setDevtoolsReady: (answer) => {
+      devtoolsReadyAnswer = answer;
+    },
     voice: {
       listModels: async () => {
         voiceCalls.push({ method: 'listModels', args: [] });
@@ -472,6 +513,33 @@ export function createFakeBridge(): FakeBridge {
       onFocus: (listener) => {
         browserFocusListeners.add(listener);
         return () => browserFocusListeners.delete(listener);
+      },
+      devtoolsSnapshot: async (webContentsId) => {
+        browserCalls.push({ method: 'devtoolsSnapshot', args: [webContentsId] });
+        return devtoolsSnapshot;
+      },
+      devtoolsClear: async (webContentsId) => {
+        browserCalls.push({ method: 'devtoolsClear', args: [webContentsId] });
+      },
+      devtoolsReady: async (webContentsId) => {
+        browserCalls.push({ method: 'devtoolsReady', args: [webContentsId] });
+        const answer = devtoolsReadyAnswer;
+        if ('code' in answer) throw answer;
+        await answer;
+      },
+      responseBody: async (webContentsId, requestId) => {
+        browserCalls.push({ method: 'responseBody', args: [webContentsId, requestId] });
+        const answer = responseBodyAnswer;
+        if (answer !== null && 'code' in answer) throw answer;
+        return answer;
+      },
+      onDevtools: (listener) => {
+        devtoolsListeners.add(listener);
+        return () => devtoolsListeners.delete(listener);
+      },
+      setViewport: async (webContentsId, spec, area) => {
+        browserCalls.push({ method: 'setViewport', args: [webContentsId, spec, area] });
+        return { scale: viewportScale };
       },
     },
     files: {
@@ -666,6 +734,14 @@ export function createFakeBridge(): FakeBridge {
       },
       titlebarDoubleClick: () => {
         titlebarDoubleClicks.push(titlebarDoubleClicks.length);
+      },
+      openBacklog: async () => ({ opened: true }),
+      openDecision: async () => ({ opened: true }),
+      openSharedFile: async () => ({ opened: true }),
+      parleyMd: async () => ({ exists: true, created: false }),
+      saveRecipe: async (request) => {
+        saveRecipeCalls.push(request);
+        return saveRecipeAnswer(request);
       },
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });

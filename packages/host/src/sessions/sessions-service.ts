@@ -12,13 +12,21 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   addMessage,
+  attemptKindFor,
+  limitsFromConfig,
+  prepareSessionRole,
+  roleId,
+  type SessionRole,
+  type RoleCatalog,
   baseBranchOf,
   createChildSession,
   createNewSession,
   createPendingSession,
   createWorktree,
+  ensureParleyMd,
   deleteSession,
   DirtyWorktreeError,
   discardWorktree,
@@ -27,6 +35,7 @@ import {
   findRunnerBinary,
   GitStateError,
   InvalidRevisionError,
+  codexFeedSupported,
   feedSupported,
   isGitRepo,
   loadConfig,
@@ -41,15 +50,23 @@ import {
   planResume,
   plannedWorktree,
   processStartedAt,
+  querySpawnLimits,
+  validateSpawnBudget,
+  SpawnBudgetError,
   readMap,
+  reserveAttempt,
+  ResourceDeniedError,
   sessionTag,
+  settleAttempt,
   startSession,
   SYSTEM,
   transitionSession,
   updateMap,
   workPaths,
   writeBrief,
-  type ModelEffortChoice,
+  type EffortLevel,
+  type LaunchPlan,
+  type SpawnLimits,
   type WorkEntry,
   type ProviderEntry,
 } from '@parley/core';
@@ -76,6 +93,8 @@ export interface CreateSessionInput {
   label: string;
   task: string;
   parent: string | null;
+  role?: SessionRole | null;
+  agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
   worktree?: boolean;
   /**
@@ -84,18 +103,24 @@ export interface CreateSessionInput {
    * Разрешённый выбор ложится в запись сессии (`WorkSession.model`, `.effort`): его берут и повторный запуск,
    * и resume.
    */
-  model?: string;
-  effort?: string;
+  model?: string | null;
+  effort?: string | null;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
 
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
+  /**
+   * Кто просит запуск — для журнала бюджета (`resource-policy.ts`): `human` — окно, `auto` — автозапуск
+   * созданного агентом, `wake` — будильник. Нет значения — человек. Возобновление будильником подчиняется ещё и
+   * личному потолку `resumeRate`.
+   */
+  by?: 'human' | 'auto' | 'wake';
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
-  model?: string;
-  effort?: string;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 export interface SessionsService {
@@ -116,8 +141,8 @@ export interface SessionsService {
   /** Поднимает прерванных без промпта — только с согласия человека (спека 10). */
   resumeInterrupted(refs: readonly SessionRef[]): Promise<void>;
   /**
-   * Выбор модели и effort в записи сессии (спека нормалайзера, 5.5): `null` убирает поле («по умолчанию»),
-   * `undefined` оставляет как было. Процесс не трогает.
+   * Выбор модели и effort в записи сессии (спека нормалайзера, 5.5): `null` — явный «Default» (снимает и умолчание
+   * роли), `undefined` оставляет как было. Процесс не трогает.
    */
   setChoice(ref: SessionRef, choice: { model?: string | null; effort?: string | null }): Promise<void>;
   /** Замок смены модели и effort этой сессии: через него идут `sessions.setEffort` и `sessions.setModel`. */
@@ -137,6 +162,15 @@ export interface SessionsService {
 export interface SessionsFeedOptions {
   hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
   providerVersions?: ProviderVersions;
+  /** Injectable native limit query; production queries the runtime before spawn. */
+  spawnLimits?: () => Promise<SpawnLimits | null>;
+  /** Current snapshot injection for isolated tests, never a persisted default. */
+  roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
+  /**
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook` (спека 2026-10-07, 5.6). Зовётся только
+   * при включённой настройке `codexApprovals` и адресе приёмника; нет — хуки Codex не включаются.
+   */
+  codexHookCommand?: () => Promise<string | undefined>;
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -191,6 +225,27 @@ export function createSessionsService(
   feed: SessionsFeedOptions = {},
 ): SessionsService {
   const { hooks, providerVersions } = feed;
+  const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
+  const warned = new Set<string>();
+  const creationWarnings = new Set<string>();
+
+  function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
+    const diagnostics = plan.diagnostics ?? [];
+    for (const message of plan.warnings) {
+      if (!diagnostics.some((warning) => warning.message === message)) {
+        host.log.warn('session launch warning', { ref, message });
+      }
+    }
+    for (const warning of diagnostics) {
+      host.log.warn('session layer warning', { ref, code: warning.code, message: warning.message });
+      const key = warning.code === 'provider-override-gap'
+        ? warning.code : warning.code === 'role-missing' ? `${refKey(ref)}\0${warning.code}` : `${ref.projectPath}\0${warning.code}`;
+      if (warned.has(key)) continue;
+      warned.add(key);
+      host.broadcast('host.notice', { kind: warning.code, ref, text: warning.message, at: new Date().toISOString() });
+    }
+  }
+
   // Одна смена модели или effort на сессию за раз — общий замок `sessions.setEffort` и `sessions.setModel`.
   const exclusive = createSwitchLock();
 
@@ -217,6 +272,90 @@ export function createSessionsService(
 
   // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
+
+  // Поколение этого хоста: им подписаны резервы бюджета. Резерв прошлого поколения без свидетельств неоднозначен —
+  // он считается занятым и сам по сроку не снимается (`resource-policy.ts`); новая попытка той же сессии его подхватывает.
+  const generation = `host-${randomUUID()}`;
+
+  /**
+   * Бюджет исчерпан — безопасный исход: процесс и worktree не создаются, модель не запускается. Автозапуску
+   * созданного агентом отказ виден: уведомление человеку и системное письмо родителю (иначе тот ждал бы ребёнка).
+   * Окну отказ возвращается ошибкой со значением `data.code = 'resource-budget'`, будильнику — тоже: письма ждут.
+   */
+  async function refuseLaunch(
+    ref: SessionRef,
+    parentId: string | null,
+    by: 'human' | 'auto' | 'wake',
+    error: ResourceDeniedError,
+  ): Promise<never> {
+    host.log.warn('launch refused by the resource budget', { ref, by, code: error.code, scope: error.scope });
+    if (by === 'auto') {
+      const text = `${sessionTag(ref.sessionId)} was not started: ${error.message}`;
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      if (parentId !== null) {
+        await updateMap(ref.projectPath, ref.workId, (current) => {
+          if (current.sessions.some((candidate) => candidate.id === parentId)) {
+            addMessage(current, { from: SYSTEM, to: [parentId], text });
+          }
+        }).catch((mapError: unknown) => {
+          host.log.error('письмо об отказе запуска не записалось', { ref, error: String(mapError) });
+        });
+      }
+    }
+    throw new HostError('conflict', error.message, {
+      code: 'resource-budget',
+      reason: error.code,
+      scope: error.scope,
+      limit: error.limit,
+      used: error.used,
+    });
+  }
+
+  /** Резерв слота до запуска: проверка и запись одним действием под замком карты. */
+  async function reserveLaunch(
+    ref: SessionRef,
+    parentId: string | null,
+    mode: LaunchMode,
+    by: 'human' | 'auto' | 'wake',
+  ): Promise<string> {
+    const { config } = await loadConfig();
+    let attemptId = '';
+    try {
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map) => {
+          attemptId = reserveAttempt(map, {
+            kind: attemptKindFor(map, ref.sessionId, mode),
+            actor: by,
+            session: ref.sessionId,
+            owner: generation,
+            limits: limitsFromConfig(config),
+            ...(by === 'wake' ? { sessionResumeRate: config.resumeRate } : {}),
+          }).id;
+        },
+        { touch: false },
+      );
+    } catch (error) {
+      if (error instanceof ResourceDeniedError) return refuseLaunch(ref, parentId, by, error);
+      throw error;
+    }
+    return attemptId;
+  }
+
+  /** Исход резерва: `spent` — процесс стартовал, `released` — запуска не было. Трогает только резерв этого поколения. */
+  async function settleLaunch(ref: SessionRef, attemptId: string, outcome: 'spent' | 'released'): Promise<void> {
+    await updateMap(
+      ref.projectPath,
+      ref.workId,
+      (map) => {
+        settleAttempt(map, attemptId, generation, outcome);
+      },
+      { touch: false },
+    ).catch((error: unknown) => {
+      host.log.error('исход резерва бюджета не записался', { ref, attemptId, outcome, error: String(error) });
+    });
+  }
 
   // Закрываемые сейчас: между остановкой PTY и записью `closed` сессия успевает
   // побыть `sleeping`, и письмо в этот миг подняло бы её обратно.
@@ -248,19 +387,23 @@ export function createSessionsService(
   });
 
   /**
-   * Адрес приёмника хуков для запуска — только `claude` не ниже `FEED_MIN_VERSION`. Версия — проба
-   * старта хоста по команде провайдера (короткая, ждём её); нет версии, старый `claude`, codex и прочие —
-   * без хуков, окно покажет терминал.
+   * Адрес приёмника хуков для запуска — `claude` не ниже `FEED_MIN_VERSION` и `codex` не ниже
+   * `CODEX_FEED_MIN_VERSION`, у Codex ещё и при включённой настройке `codexApprovals` (хукам нужно доверие человека,
+   * спека 2026-10-07, решение 9). Версия — проба старта хоста по команде провайдера (короткая, ждём её); нет версии,
+   * старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    if (!isClaudeCode(provider) || hooks === undefined || providerVersions === undefined) return undefined;
+    const codex = provider === 'codex';
+    if ((!isClaudeCode(provider) && !codex) || hooks === undefined || providerVersions === undefined) return undefined;
     const url = hooks.url();
     if (url === null) return undefined;
+    if (codex && !(await loadConfig()).config.codexApprovals) return undefined;
     await providerVersions.ready;
     const entry = (await loadProviders())[provider];
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
-    return version !== null && feedSupported(version) ? url : undefined;
+    if (version === null) return undefined;
+    return (codex ? codexFeedSupported(version) : feedSupported(version)) ? url : undefined;
   }
 
   async function readyProvider(provider: string): Promise<ProviderEntry> {
@@ -282,6 +425,9 @@ export function createSessionsService(
     const key = refKey(ref);
     if (launching.has(key) || closing.has(key) || pty.get(ref) !== undefined) return;
     launching.add(key);
+    // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
+    let attemptId: string | null = null;
+    let processStarted = false;
     try {
       const map = await readMap(ref.projectPath, ref.workId);
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -293,9 +439,16 @@ export function createSessionsService(
       if (session.lifecycle === 'closed') {
         throw new Error(`session ${ref.sessionId} is closed`);
       }
+      // Архив освобождает процессы агентов: до Reopen сессии работы не поднимает ни письмо, ни человек.
+      if (map.work.status === 'archived') {
+        throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
+      }
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
+      // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
       const entry = await readyProvider(session.provider);
+      // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
+      attemptId = await reserveLaunch(ref, session.parent, mode, options.by ?? 'human');
 
       // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
       // в core), но каталога на диске ещё нет — заводим его перед первым же
@@ -340,16 +493,36 @@ export function createSessionsService(
       // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не
       // останавливает — `installSkill` его не бросает.
       await installSkill(ref, session.worktree?.path ?? null);
+      try {
+        const result = await ensureParleyMd(ref.projectPath);
+        if (result.receiptError && !creationWarnings.has(ref.projectPath)) {
+          creationWarnings.add(ref.projectPath);
+          host.log.warn('PARLEY.md accounting could not be completed; automatic recreation is suppressed', { projectPath: ref.projectPath });
+        }
+        if (result.created) host.broadcast('host.notice', {
+          kind: 'parley-md-created', ref,
+          text: 'Parley added PARLEY.md — team rules for your agents', at: new Date().toISOString(),
+        });
+      } catch {
+        if (!creationWarnings.has(ref.projectPath)) {
+          creationWarnings.add(ref.projectPath);
+          host.log.warn('Parley could not create PARLEY.md; this session still starts', { projectPath: ref.projectPath });
+        }
+      }
 
       const hookUrl = await feedHookUrl(session.provider);
+      const codexHookCommand = hookUrl !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await planFn(ref.projectPath, ref.workId, session, {
         channel: false,
+        ...(feed.roleCatalog ? { roleCatalog: await feed.roleCatalog(session.worktree?.path ?? ref.projectPath) } : {}),
         ...(hookUrl === undefined ? {} : { hookUrl }),
+        ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
       });
+      deliverWarnings(ref, plan);
 
       let command: string;
       try {
@@ -377,12 +550,20 @@ export function createSessionsService(
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
         const name = entry.runner.secret === 'zai' ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
-        env[name] = hooks.register(ref, plan.providerSessionId ?? session.providerSessionId);
+        // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
+        if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
+        env[name] = hooks.register(
+          ref,
+          plan.providerSessionId ?? session.providerSessionId,
+          session.provider,
+        );
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
       try {
+        // The hook token and inherited host environment are now final. No PTY starts on guard failure.
+        validateSpawnBudget(command, plan.args, env, await spawnLimits());
         handle = pty.start(ref, {
           command,
           args: plan.args,
@@ -390,16 +571,28 @@ export function createSessionsService(
           env,
           provider: session.provider,
         });
+        processStarted = true;
       } catch (error) {
         if (hookUrl !== undefined) hooks?.unregister(ref);
-        throw error;
+        const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
+          ? new SpawnBudgetError('spawn-budget-too-large') : error;
+        if (safe instanceof SpawnBudgetError) {
+          host.log.warn('session spawn budget rejected', { ref, code: safe.code, ...safe.details });
+          throw new HostError('bad_request', safe.message, { code: safe.code, ...safe.details });
+        }
+        throw safe;
       }
       const started = (async () => {
-        await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
-          pid: handle.pid,
-          startedAtProcess: await processStartedAt(handle.pid),
-          launchedBy: 'host',
-        });
+        try {
+          await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
+            pid: handle.pid,
+            startedAtProcess: await processStartedAt(handle.pid),
+            launchedBy: 'host',
+          }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+        } finally {
+          // Процесс уже идёт: слот потрачен, даже если запись старта в карту не удалась.
+          if (attemptId !== null) await settleLaunch(ref, attemptId, 'spent');
+        }
       })();
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));
@@ -416,6 +609,8 @@ export function createSessionsService(
       });
       throw error;
     } finally {
+      // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
+      if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
       launching.delete(key);
     }
   }
@@ -442,18 +637,14 @@ export function createSessionsService(
    * и тогда сессию переименует заголовок Claude Code (автозаголовок). Модель и
    * усилие ложатся в запись так же, как их пишет `spawn_session`: без выбора полей нет.
    */
-  async function applyChoice(
-    ref: SessionRef,
-    label: string,
-    provider: string,
-    choice: ModelEffortChoice,
-  ): Promise<void> {
+  async function applyChoice(ref: SessionRef, label: string, provider: string, role: SessionRole | null, choice: LaunchChoice): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return;
       if (trimmed !== '') session.label = trimmed;
       session.provider = provider;
+      session.role = role;
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
     });
@@ -505,7 +696,19 @@ export function createSessionsService(
     // Модель и усилие — раньше всего: пара не из каталога провайдера отвергается до первой записи в карте (иначе
     // осталась бы `pending`-сессия, которую нечем запустить), а пустое значение — «по умолчанию». Разрешённый выбор
     // пишется в запись сессии на всех путях ниже: повторный запуск и resume берут его оттуда (спека нормалайзера, 5.5).
-    const choice = await resolveModelChoice(provider, input.model, input.effort);
+    // Пустая строка — отсутствие выбора; только явный null очищает default роли до default CLI.
+    if (input.agent !== undefined && input.role !== undefined) throw new HostError('bad_request', 'agent-and-role-conflict');
+    const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
+    const registry = await loadProviders();
+    const entry = registry[provider];
+    if (!entry) throw new HostError('bad_request', 'unknown provider');
+    await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
+    const resolved = await resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined);
+    // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
+    const choice: LaunchChoice = {
+      ...(input.model === null ? { model: null } : resolved.model === undefined ? {} : { model: resolved.model }),
+      ...(input.effort === null ? { effort: null } : resolved.effort === undefined ? {} : { effort: resolved.effort }),
+    };
 
     // Проверка до создания сессии, а не после (как и в `spawn_session` core,
     // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
@@ -516,7 +719,7 @@ export function createSessionsService(
     if (workId === null) {
       const created = await createNewSession(projectPath, null);
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, choice);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new', choice);
     }
@@ -524,7 +727,7 @@ export function createSessionsService(
     if (task === '' && parent === null) {
       const created = await createNewSession(projectPath, workId);
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, choice);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, null, false);
       return createInteractive(ref, 'new', choice);
     }
@@ -532,7 +735,7 @@ export function createSessionsService(
     if (task === '' && parent !== null) {
       const created = await createChildSession(projectPath, workId, parent);
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, choice);
+      await applyChoice(ref, label, provider, role, choice);
       if (worktree === true) await attachWorktreePlan(ref, parent, true);
       return createInteractive(ref, 'launch', choice);
     }
@@ -543,6 +746,7 @@ export function createSessionsService(
       task,
       parent,
       contextFrom: parent === null ? [] : [parent],
+      role,
       ...choice,
     });
     const ref = { projectPath, workId, sessionId };
@@ -567,10 +771,10 @@ export function createSessionsService(
       if (session === undefined) {
         throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
       }
-      if (choice.model === null) delete session.model;
-      else if (choice.model !== undefined) session.model = choice.model;
-      if (choice.effort === null) delete session.effort;
-      else if (choice.effort !== undefined) session.effort = choice.effort;
+      // `null` — явный «Default» из меню чата: пишется как `null`, а не удаляет поле, иначе после смены
+      // вернулось бы умолчание роли.
+      if (choice.model !== undefined) session.model = choice.model;
+      if (choice.effort !== undefined) session.effort = choice.effort;
     });
   }
 
@@ -601,10 +805,14 @@ export function createSessionsService(
       if (next === undefined) throw new HostError('bad_request', `provider ${entry.id} does not accept a model`);
       // Та же модель — ни записи, ни перезапуска: меню отмечает её и так.
       if (next === session.model) return { model: next, effort: session.effort ?? null, restarted: false };
+      // Нет выбора effort — его нет и после смены (умолчание роли не вытесняется); выбор, которого у новой модели
+      // нет, становится явным «Default» (`null`).
       const effort =
-        session.effort !== undefined && (effortsFor(entry, next)?.some((level) => level.id === session.effort) ?? false)
-          ? session.effort
-          : null;
+        session.effort === undefined
+          ? undefined
+          : session.effort !== null && (effortsFor(entry, next)?.some((level) => level.id === session.effort) ?? false)
+            ? session.effort
+            : null;
       // Сессия сейчас поднимается: процесса ещё нет, но он уже прочитал старую модель из карты — запись «для неживой»
       // и следующий запуск молча остались бы с ней.
       if (launching.has(refKey(ref))) throw busyError('The session is starting; try again in a moment');
@@ -620,11 +828,11 @@ export function createSessionsService(
           throw busyError('The input field has unsent text; send or clear it first');
         }
       }
-      await setChoice(ref, { model: next, effort });
-      if (!live) return { model: next, effort, restarted: false };
+      await setChoice(ref, { model: next, ...(effort === undefined ? {} : { effort }) });
+      if (!live) return { model: next, effort: effort ?? null, restarted: false };
       await stop(ref);
       await launch(ref, 'resume');
-      return { model: next, effort, restarted: true };
+      return { model: next, effort: effort ?? null, restarted: true };
     });
   }
 
@@ -670,12 +878,14 @@ export function createSessionsService(
 
   /**
    * Сессию закрыл `close_session` агента прямо в карте, а её PTY ещё жив: хост
-   * гасит процесс сам — закрытая сессия жить не должна.
+   * гасит процесс сам — закрытая сессия жить не должна. Так же и всякая живая
+   * сессия архивной работы: архив освобождает процессы агентов, сессии засыпают.
    */
-  function stopClosed(snapshot: WorksSnapshot): void {
+  function stopRetired(snapshot: WorksSnapshot): void {
     for (const entry of snapshot.entries) {
+      const archived = entry.map.work.status === 'archived';
       for (const session of entry.map.sessions) {
-        if (session.lifecycle !== 'closed') continue;
+        if (!archived && session.lifecycle !== 'closed') continue;
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
@@ -719,7 +929,7 @@ export function createSessionsService(
           workId: entry.map.work.id,
           sessionId,
         };
-        launch(ref, 'launch').catch((error: unknown) => {
+        launch(ref, 'launch', { by: 'auto' }).catch((error: unknown) => {
           host.log.error('autoLaunch: запуск сессии не удался', { ref, error: String(error) });
         });
       }
@@ -727,7 +937,7 @@ export function createSessionsService(
   }
 
   works.onChange((snapshot, previous) => {
-    stopClosed(snapshot);
+    stopRetired(snapshot);
     void runAutoLaunch(snapshot, previous);
   });
 

@@ -14,9 +14,19 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_WORKTREE_ROOT, envName, envValue } from './names.js';
+import {
+  DEFAULT_RESOURCE_LIMITS,
+  RESOURCE_LIMIT_BOUNDS,
+  RESOURCE_LIMIT_KEYS,
+  type ResourceLimits,
+} from './work/resource-policy.js';
 import { parleyHome } from './work/store.js';
 
-export interface ParleyConfig {
+/**
+ * Пороги бюджета работы и комнаты (`work/resource-policy.ts`) — те же ключи, что у `ResourceLimits`: человек видит и
+ * меняет их в настройках окна. Это счётчики запусков, сессий и писем, а не денежный лимит.
+ */
+export interface ParleyConfig extends ResourceLimits {
   /** Порог молчания лога для страховочной `activity` (раздел 4.3). */
   silenceThresholdMs: number;
   /**
@@ -42,6 +52,13 @@ export interface ParleyConfig {
    * обновляет; уже поставленное не удаляется.
    */
   agentSkills: boolean;
+  /**
+   * Навигатор скиллов `find_skill` у Claude, GLM и Codex (спека навигатора). Включён по умолчанию с 2026-10-06 по
+   * итогам живых проверок; выключается настройкой, переключателем окна или `PARLEY_SKILL_NAVIGATOR=0`.
+   */
+  skillNavigator: boolean;
+  /** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */
+  codexApprovals: boolean;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
@@ -62,10 +79,13 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   resumeRate: 6,
   autoLaunch: true,
   agentSkills: true,
+  skillNavigator: true,
+  codexApprovals: false,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
   worktreeRoot: DEFAULT_WORKTREE_ROOT,
+  ...DEFAULT_RESOURCE_LIMITS,
 };
 
 /**
@@ -79,9 +99,21 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   resumeRate: 'RESUME_RATE',
   autoLaunch: 'AUTO_LAUNCH',
   agentSkills: 'AGENT_SKILLS',
+  skillNavigator: 'SKILL_NAVIGATOR',
+  codexApprovals: 'CODEX_APPROVALS',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
   worktreeRoot: 'WORKTREE_ROOT',
+  workConcurrent: 'WORK_CONCURRENT',
+  roomConcurrent: 'ROOM_CONCURRENT',
+  workNewSessions: 'WORK_NEW_SESSIONS',
+  roomNewSessions: 'ROOM_NEW_SESSIONS',
+  spawnDepth: 'SPAWN_DEPTH',
+  workLaunches: 'WORK_LAUNCHES',
+  roomLaunches: 'ROOM_LAUNCHES',
+  workMessages: 'WORK_MESSAGES',
+  roomMessages: 'ROOM_MESSAGES',
+  fanout: 'FANOUT',
 };
 
 export interface LoadedConfig {
@@ -135,6 +167,15 @@ const isResumeRate = (value: unknown): value is number =>
   value <= RESUME_RATE_MAX;
 const RESUME_RATE_EXPECTED = `an integer from ${RESUME_RATE_MIN} to ${RESUME_RATE_MAX}`;
 
+/** Порог бюджета — целое в границах своего ключа (`RESOURCE_LIMIT_BOUNDS`): ноль допустим не везде. */
+const isResourceLimit = (key: keyof ResourceLimits, value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= RESOURCE_LIMIT_BOUNDS[key].min &&
+  value <= RESOURCE_LIMIT_BOUNDS[key].max;
+const resourceLimitExpected = (key: keyof ResourceLimits): string =>
+  `an integer from ${RESOURCE_LIMIT_BOUNDS[key].min} to ${RESOURCE_LIMIT_BOUNDS[key].max}`;
+
 /** Значения из файла: тут JSON, поэтому типы проверяются как есть. */
 function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -158,9 +199,12 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
   take('autoLaunch', (value) => typeof value === 'boolean', 'true or false');
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
+  take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
+  take('codexApprovals', (value) => typeof value === 'boolean', 'true or false');
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   take('worktreeRoot', isWorktreeRoot, 'a non-empty string');
+  for (const key of RESOURCE_LIMIT_KEYS) take(key, (value) => isResourceLimit(key, value), resourceLimitExpected(key));
   return patch;
 }
 
@@ -176,7 +220,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   // Имя, которое назвать человеку: то, под которым значение реально пришло.
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
-  const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills'): void => {
+  const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills' | 'skillNavigator' | 'codexApprovals'): void => {
     const value = text(key);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -204,6 +248,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   }
   flag('autoLaunch');
   flag('agentSkills');
+  flag('skillNavigator');
+  flag('codexApprovals');
 
   const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
@@ -220,6 +266,13 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   if (worktreeRoot !== undefined) {
     if (isWorktreeRoot(worktreeRoot)) patch.worktreeRoot = worktreeRoot;
     else complain(`${nameOf('worktreeRoot')}: expected a non-empty string`);
+  }
+  for (const key of RESOURCE_LIMIT_KEYS) {
+    const raw = text(key);
+    if (raw === undefined) continue;
+    const parsed = Number(raw);
+    if (isResourceLimit(key, parsed)) patch[key] = parsed;
+    else complain(`${nameOf(key)}: expected ${resourceLimitExpected(key)}`);
   }
   return patch;
 }
@@ -276,6 +329,8 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
   'autoLaunch',
   'agentSkills',
+  'skillNavigator',
+  'codexApprovals',
 ]);
 
 /**
@@ -305,6 +360,12 @@ export function parseSetting<K extends keyof ParleyConfig>(
     const parsed = Number(text);
     if (isResumeRate(parsed)) return { value: parsed as ParleyConfig[K] };
     return { error: `${key}: expected ${RESUME_RATE_EXPECTED}` };
+  }
+  if ((RESOURCE_LIMIT_KEYS as readonly string[]).includes(key)) {
+    const limit = key as keyof ResourceLimits;
+    const parsed = Number(text);
+    if (text.trim() !== '' && isResourceLimit(limit, parsed)) return { value: parsed as ParleyConfig[K] };
+    return { error: `${key}: expected ${resourceLimitExpected(limit)}` };
   }
   if (BOOLEAN_KEYS.has(key)) {
     const lower = text.toLowerCase();

@@ -14,19 +14,26 @@
  * текст на месте, форма возврата и заметка при этом остаются.
  */
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import type { WorkEntry } from '@parley/core';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { Badge } from '../../ui/badge.js';
 import { Button } from '../../ui/button.js';
 import { Textarea } from '../../ui/textarea.js';
 import type { ProposalModel } from './feed-model.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
+import { PlanSummary } from './PlanPanel.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
 /** Предел заметки возврата — схема `rooms.resolveProposal` (`note` до 4000 знаков). */
 const NOTE_MAX = 4000;
 
 export interface DecisionCardProps {
+  unavailableReason?: string;
+  entry?: WorkEntry;
+  bridge?: ParleyBridge;
+  children?: ReactNode;
   proposal: ProposalModel;
   /** Время решения в относительной записи («2m»). */
   time: string;
@@ -39,14 +46,15 @@ export interface DecisionCardProps {
   onLayout: () => void;
 }
 
-export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout }: DecisionCardProps): JSX.Element {
+export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason }: DecisionCardProps): JSX.Element {
   const [returning, setReturning] = useState(false);
   const [note, setNote] = useState('');
   /** Версия карточки, на которую уже ушёл ответ; `null` — отвечать можно. */
   const [resolving, setResolving] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const version = `${proposal.id}:${proposal.rev}`;
+  const version = [proposal.id, proposal.rev, proposal.planId ?? proposal.plan?.id, proposal.planRev ?? proposal.plan?.rev].join(':');
   const busy = resolving === version;
+  const isPlan = proposal.plan !== undefined || proposal.kind === 'completion';
 
   const layoutRef = useRef(onLayout);
   layoutRef.current = onLayout;
@@ -56,7 +64,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
 
   const answer = async (action: 'accept' | 'return'): Promise<void> => {
     // Второй клик в тот же тик, до перерисовки с занятыми кнопками, вызова не даёт.
-    if (inFlight.current) return;
+    if (inFlight.current || !canResolve) return;
     inFlight.current = true;
     setResolving(version);
     const accepted = await onResolve(action, action === 'return' ? note.trim() : '');
@@ -74,35 +82,39 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs">
         <SenderAvatar kind="agent" provider={proposal.provider} />
         <span className="min-w-0 break-words font-semibold">{proposal.from}</span>
-        <Badge variant="accent">{S.rooms.decisionWaiting}</Badge>
+        <Badge variant="accent">{proposal.kind === 'completion' ? S.plans.completion : S.rooms.decisionWaiting}</Badge>
         <span className="text-muted-foreground">{time}</span>
       </div>
       <RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
-      {!canResolve ? null : returning ? (
+      {proposal.plan ? <><h4>{S.plans.proposed}</h4><PlanSummary plan={proposal.plan} {...(entry ? {entry} : {})} {...(bridge ? {bridge} : {})}/></> : null}
+      {children}
+      {isPlan && !canResolve ? <p>{unavailableReason ?? S.plans.oldHost}</p> : null}
+      {!canResolve && !isPlan ? null : returning ? (
         <div className="flex flex-col gap-2">
           <Textarea
+            disabled={busy || !canResolve}
             value={note}
-            onChange={(event) => setNote(event.target.value)}
+            onChange={(event) => { if (!busy && canResolve) setNote(event.target.value); }}
             placeholder={S.rooms.returnPlaceholder}
             aria-label={S.rooms.returnPlaceholder}
             maxLength={NOTE_MAX}
             className="min-h-16 rounded-[14px] border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)]"
           />
           <div className="flex flex-wrap gap-2">
-            <Button type="button" disabled={busy} onClick={() => void answer('return')}>
+            <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('return')}>
               {S.rooms.sendToLead}
             </Button>
-            <Button type="button" variant="outline" disabled={busy} onClick={() => setReturning(false)}>
+            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(false)}>
               {S.common.cancel}
             </Button>
           </div>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={busy} onClick={() => void answer('accept')}>
+          <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('accept')}>
             {S.rooms.accept}
           </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => setReturning(true)}>
+          <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(true)}>
             {S.rooms.returnForRework}
           </Button>
         </div>

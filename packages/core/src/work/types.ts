@@ -1,7 +1,12 @@
+import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
+import type { RecipeSnapshot } from '../recipes/types.js';
+import type { FrozenUsage } from './usage-ledger.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
+export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
+
 export type WorkStatus = 'active' | 'done' | 'archived';
 
 /**
@@ -56,6 +61,11 @@ export interface SessionMetrics {
   durationMs: number;
   /** `null` — в логе нет ни одной записи с usage: «не знаем» и «ноль» — разные вещи. */
   tokens: TokenTotals | null;
+  /**
+   * Те же токены с происхождением: кэш как наблюдение, время записи, связывание и эпоха, при которых
+   * снимок снят (P36). Нет поля — снимок до P36: известны только вход и выход (`legacyUsage`).
+   */
+  usage?: FrozenUsage;
   toolCalls: Record<string, number>;
 }
 
@@ -125,7 +135,9 @@ export interface WorkSession {
    * `null` — обычная сессия. На диске может отсутствовать (карты до 2026-09-08):
    * `parseMap` подставляет `null` (спецификация 2026-09-08, 3.2).
    */
-  agent: string | null;
+  /** Legacy input only; normalized maps and new writes use role. */
+  agent?: string | null;
+  role?: SessionRole | null;
   /**
    * Своя рабочая копия git; `null` — сессия работает прямо в каталоге проекта.
    * В картах на диске до этого куска поля нет вовсе: `parseMap` подставляет
@@ -133,13 +145,15 @@ export interface WorkSession {
    */
   worktree: WorktreeInfo | null;
   /**
-   * Модель и усилие сессии: с ними строятся и запуск, и `resume` (`plan` в `launch.ts`), а выбор
-   * запуска их перекрывает. Нет поля — «Default»: без флага, CLI берёт своё. Усилие — id уровня из
-   * каталога модели: значение, не проходящее `EFFORT_TOKEN`, `parseMap` читает как «нет выбора». На
-   * диске полей может не быть: `parseMap` их не подставляет.
+   * Явный выбор модели и усилия из окна или `spawn_session`: с ним строятся и запуск, и `resume`
+   * (`plan` в `launch.ts`), а выбор запуска его перекрывает. Нет поля — выбора нет: умолчание
+   * текущей роли, без роли — умолчание CLI (без флага). `null` — явный «Default»: снимает умолчание
+   * роли, флага нет. Вычисленные умолчания роли не записываются и пересчитываются при каждом новом
+   * запуске. Усилие — id уровня из каталога модели: значение, не проходящее `EFFORT_TOKEN`,
+   * `parseMap` читает как «нет выбора». На диске полей может не быть: `parseMap` их не подставляет.
    */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /**
@@ -154,6 +168,55 @@ export const MESSAGE_KINDS: readonly MessageKind[] = ['note', 'question', 'decis
 export const HUMAN = 'human';
 /** Отправитель системного письма хоста («S05 не поднялась: …»). */
 export const SYSTEM = 'system';
+/** Trusted accepted-plan assignments, reserved by the host/domain before wake. */
+export const PARLEY = 'parley';
+
+export type RoomMode = 'free' | 'checklist' | 'verified';
+export type PlanMode = Exclude<RoomMode, 'free'>;
+export type PlanStatus = 'proposed' | 'active' | 'completing' | 'completed' | 'cancelled';
+export type PlanItemStatus = 'waiting' | 'ready' | 'in_progress' | 'done' | 'blocked' | 'verified' | 'returned';
+export interface PlanEvidence { text: string; artifacts: string[] }
+export interface PlanItemInput {
+  id: number; title: string; owner: string; scope: string; after?: number[];
+  criteria?: string[]; verifier?: string | null;
+}
+export interface PlanDraft {
+  /** Required together for an amendment: the currently accepted identity/revision. */
+  id?: string; rev?: number; mode: PlanMode; goal: string; items: PlanItemInput[]; backlog?: string[];
+}
+export interface PlanItem extends PlanItemInput {
+  after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
+  evidence: PlanEvidence | null; note: string | null;
+  /** Human-accepted Checklist completion retained on promotion; never a verification claim. */
+  acceptedChecklistRevision?: number;
+  log: { at: string; by: string; status: PlanItemStatus; note: string | null }[];
+}
+export interface RoomPlan {
+  id: string; roomId: string; mode: PlanMode; status: PlanStatus; rev: number;
+  goal: string; items: PlanItem[]; backlog: string[];
+  acceptedAt: string | null; completedAt: string | null; cancelledAt: string | null;
+  completionSummary: string | null;
+}
+/** Local durable intent: exact captured Markdown, never rebuilt from a later live revision. */
+export interface PlanExportIntent {
+  file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
+  content: string; status: 'pending' | 'written';
+}
+
+/** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
+export interface PlanEffect {
+  key: string; roomId: string; planId: string | null; rev: number;
+  item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
+  occurrence: string; target: string; text: string; createdAt: string;
+  status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
+}
+/** Captured completion, then separately prepared file version; never a map/Markdown atomic claim. */
+export interface PlanBacklogIntent {
+  key: string; planId: string; rev: number; backlogId: string; completedAt: string;
+  status: 'pending' | 'written' | 'conflict';
+  expectedVersion?: string; itemFingerprint?: string;
+  code?: 'backlog-conflict' | 'backlog-unavailable';
+}
 
 /**
  * Решение ведущего, которое ждёт ответа человека (дизайн комнат, 3.1). Это изменяемый
@@ -161,6 +224,11 @@ export const SYSTEM = 'system';
  * возврата, системные строки — дописываются, когда человек ответил.
  */
 export interface Proposal {
+  /** Absent in legacy Free proposals. */
+  kind?: 'decision' | 'completion';
+  plan?: RoomPlan;
+  planId?: string;
+  planRev?: number;
   /** `p-01`; счётчик `work.proposalSeq`, id не переиспользуется. */
   id: string;
   /** Ведущий, чей текст лежит в слоте. */
@@ -174,6 +242,7 @@ export interface Proposal {
 
 /** Комната — круг участников переписки (спецификация 6.1). */
 export interface Room {
+  mode?: RoomMode;
   /** `r-01`; счётчик `work.roomSeq`, id не переиспользуется. */
   id: string;
   title: string;
@@ -191,6 +260,17 @@ export interface Room {
   lead: string | null;
   /** Решение, ждущее человека; `null` — ждать нечего. Так же подставляется `parseMap`ом. */
   proposal: Proposal | null;
+  /**
+   * Снимок рецепта на момент создания комнаты (спека рецептов, 6.2): правка файла рецепта комнату
+   * не меняет. `null` — комната без рецепта; в картах до рецептов поля нет, `parseMap` подставляет `null`.
+   */
+  recipe?: RecipeSnapshot | null;
+  /**
+   * Ведущий, которому уже ушёл снимок плейбука письмом (спека рецептов, 6.4). Одна отметка на смену
+   * ведущего: хост не шлёт письмо повторно после перезапуска. Хост ставит её при создании комнаты, если ведущий
+   * ещё не запущен (плейбук придёт слоем). Нет поля — ведущему плейбук ещё не доставлен, письмо уйдёт.
+   */
+  recipeLeadNotified?: string;
 }
 
 /** Письмо: доставляется по pull, живёт в карте. */
@@ -222,6 +302,71 @@ export interface Message {
    * него уже некому.
    */
   deleted?: boolean;
+  /**
+   * Полный размер текста в байтах, когда `text` сокращён: так письмо выглядит только в карте окна и на страницах
+   * (`context-pages.ts`); на диске этого поля нет.
+   */
+  textBytes?: number;
+}
+
+/**
+ * Что осталось за пределами компактной карты окна (`compactWorkMap`): письма за окном, точные счётчики
+ * непрочитанного человеком и пути обрезанных полей. На диске поля нет — оно появляется только в снимке для окна.
+ */
+export interface MapCompact {
+  version: 1;
+  messages: {
+    total: number;
+    included: number;
+    latestId: string | null;
+    /**
+     * По комнатам и по прямым письмам (`direct`): сколько всего и сколько из них в карте. `tailFrom` — номер самого
+     * раннего письма хвоста, в котором в карте есть все письма комнаты подряд до последнего; всё, что старше, окно
+     * берёт страницами (`context.messages` с курсором `before:tailFrom`). `null` — хвоста нет (самое новое письмо за бюджетом).
+     */
+    rooms: Record<string, { total: number; included: number; tailFrom: number | null }>;
+  };
+  /** Точное число непрочитанных человеком: прямых писем и по комнатам, независимо от окна. */
+  unread: { letters: number; rooms: Record<string, number> };
+  cut: Array<{ path: string; bytes: number }>;
+  omitted: Record<string, number>;
+}
+
+/** Что израсходовано под бюджет работы (`resource-policy.ts`): запуск, возобновление, повтор запуска или новая сессия от агента. */
+export type ResourceKind = 'spawn' | 'launch' | 'resume' | 'retry';
+
+/**
+ * Одна попытка в журнале ресурсов. `reserved` — слот взят до операции и ещё не подтверждён; `spent` — операция
+ * случилась (процесс стартовал, запись создана); `released` — отменена своим владельцем до результата, слот вернулся.
+ */
+export interface ResourceAttempt {
+  /** `a-0001`; счётчик `resources.seq`, id попытки не переиспользуется. */
+  id: string;
+  kind: ResourceKind;
+  state: 'reserved' | 'spent' | 'released';
+  at: string;
+  settledAt?: string;
+  /** Кто просил: id сессии (`spawn_session`), `human`, `wake` или `auto`. */
+  actor: string;
+  /** Сессия, под которую взят слот: новая (`spawn`) или поднимаемая. */
+  session: string;
+  /** Комната, чей бюджет тратится; `null` — только бюджет работы. */
+  room: string | null;
+  /** Поколение владельца резерва: чужой нерешённый резерв неоднозначен и сам по сроку не снимается. */
+  owner: string;
+}
+
+/**
+ * Журнал ресурсов работы: переживает перезапуск хоста, потому что лежит в карте и меняется под тем же замком, что и
+ * сама операция. Это счётчики запусков и сессий, а не денег: жёсткого денежного потолка у провайдера нет.
+ */
+export interface WorkResources {
+  seq: number;
+  /** Сколько новых сессий агенты завели за всё время работы; удаление сессии счётчик не уменьшает. */
+  spawned: number;
+  spawnedByRoom: Record<string, number>;
+  /** Только попытки в пределах окна и нерешённые: старые свёрнуты в счётчики. */
+  attempts: ResourceAttempt[];
 }
 
 export interface Work {
@@ -250,6 +395,13 @@ export interface Work {
    * по устаревшему окну принял бы чужое решение. Поле появилось 2026-09-29.
    */
   proposalSeq?: number;
+  planSeq?: number;
+  /**
+   * Нижняя граница номеров писем: удалённая комната уносит из карты свои письма (`deleteRoom`), и по одному
+   * списку следующий `m-NN` повторил бы id уже ушедшего — а по id письма окно ставит отметки прочтения и рисует
+   * цитаты, будильник помнит указанные письма. Пишет только удаление комнаты; в картах до него поля нет.
+   */
+  messageSeq?: number;
 }
 
 /**
@@ -262,6 +414,16 @@ export interface WorkMap {
   sessions: WorkSession[];
   messages: Message[];
   rooms: Room[];
+  plans?: RoomPlan[];
+  planExports?: PlanExportIntent[];
+  /** Exact accepted decision payloads; local durable retry state, not a prompt layer. */
+  decisionExports?: DecisionJournalIntent[];
+  planEffects?: PlanEffect[];
+  planBacklogIntents?: PlanBacklogIntent[];
+  /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
+  resources?: WorkResources;
+  /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
+  compact?: MapCompact;
 }
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */

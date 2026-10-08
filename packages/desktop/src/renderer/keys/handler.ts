@@ -19,10 +19,12 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'work.new',
   'session.new',
   'settings.open',
+  'project.capabilities',
   'sidebar.left.toggle',
   'sidebar.right.toggle',
   'sidebar.files',
   'sidebar.changes',
+  'sidebar.agents',
   ...ACTIONS.filter((action) => action.id.startsWith('work.goto.') || action.id.startsWith('tab.goto.')).map((action) => action.id),
   'work.prev',
   'work.next',
@@ -57,11 +59,14 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'browser.zoomIn',
   'browser.zoomOut',
   'browser.zoomReset',
+  'browser.devtools',
+  'browser.console',
 ]);
 
 /** Действию нужны методы хоста: без них оно недоступно, даже когда реализовано. */
 const REQUIRED_HOST_METHODS: Partial<Record<ActionId, readonly string[]>> = {
   'wake.toggle': ['wake.pause', 'wake.resume'],
+  'project.capabilities': ['capabilities.get', 'capabilities.refresh'],
   // Без ленты у хоста вида «Chat» нет (план 2026-10-01, решение 6).
   'chat.toggleView': ['feed.snapshot'],
 };

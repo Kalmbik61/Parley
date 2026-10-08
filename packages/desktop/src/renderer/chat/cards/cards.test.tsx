@@ -205,6 +205,13 @@ describe('PermissionCard', () => {
     expect(lastDecision()).toEqual({ kind: 'permission', behavior: 'allow', always: true });
   });
 
+  it('карточка Codex (suggestions пусты) — Allow и Deny есть, «Allow and don\'t ask again» нет', () => {
+    render(<Card item={permission({ suggestions: [] })} />);
+    expect(screen.getByTestId('card-allow')).toBeTruthy();
+    expect(screen.getByTestId('card-deny')).toBeTruthy();
+    expect(screen.queryByTestId('card-allow-always')).toBeNull();
+  });
+
   it('второй клик, пока запрос в пути, второго feed.decide не шлёт; кнопки выключены', async () => {
     bridge.setHandler('feed.decide', () => new Promise(() => undefined));
     render(<Card item={permission()} />);

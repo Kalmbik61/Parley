@@ -18,7 +18,10 @@ import type { EffortOption, ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
-import { updateTab } from '../layout/tree.js';
+import { RoleChip } from '../lib/role-summary.js';
+import { useWorksStore } from '../store/works.js';
+import { workKey as keyOf } from '../lib/tree-order.js';
+import { updateTab, findTab } from '../layout/tree.js';
 import { Button } from '../ui/button.js';
 import {
   DropdownMenu,
@@ -94,6 +97,10 @@ export interface ChatToolbarProps {
   view: TerminalView;
   /** Вид «Chat» доступен сессии; нет — сегмент выключен. */
   available: boolean;
+  /** `WorkSession.provider`: от него зависит подсказка недоступности вида. */
+  provider: string;
+  /** Подпись режима без меню (Codex: режим меняется только в терминале); `null` или нет — не показывается. */
+  modeLabelText?: string | null;
   /** Меню режима; нет — не показывается (вид терминала или хост без `sessions.setMode`). */
   modeMenu?: ModeMenuProps;
   /** Подпись модели без меню (хост без `sessions.setModel`/`setEffort`); `null` или нет — не показывается. */
@@ -195,7 +202,13 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
+  const entries = useWorksStore(state => state.entries);
+  const layout = useLayoutStore(state => state.layouts[workKey]);
+  const found = layout ? findTab(layout, tabId) : null;
+  const tab = found?.group.tabs[found.index];
+  const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
+  const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
     if (value !== 'chat' && value !== 'terminal') return;
@@ -208,7 +221,7 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
       style={{ height: TAB_TOOLBAR_PX }}
     >
       {/* `title` — на обёртке: у выключенных кнопок нет событий указателя, подсказка не всплыла бы. */}
-      <span title={available ? undefined : S.chat.terminalOnly} className="inline-flex">
+      <span title={available ? undefined : S.chat.terminalOnlyFor(provider)} className="inline-flex">
         <ToggleGroup
           type="single"
           size="sm"
@@ -225,6 +238,7 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
           </ToggleGroupItem>
         </ToggleGroup>
       </span>
+      {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
       {agents === undefined ? null : (
         <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">
@@ -232,6 +246,11 @@ export function ChatToolbar({ workKey, tabId, view, available, model = null, mod
           {S.chat.agent.running(agents.running)}
         </Button>
       )}
+      {modeMenu === undefined && modeLabelText !== null ? (
+        <span data-testid="chat-mode" title={S.chat.mode.label} className="shrink-0 text-xs text-muted-foreground">
+          {modeLabelText}
+        </span>
+      ) : null}
       {modeMenu === undefined ? null : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild disabled={modeMenu.busy}>

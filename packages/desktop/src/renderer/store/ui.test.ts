@@ -345,3 +345,23 @@ describe('useUiStore — windowFocused при фокусе в странице (
     expect(useUiStore.getState().windowFocused).toBe(true);
   });
 });
+
+ it('project panel opens for the chosen project and closes without persisting UI settings', () => {
+  const bridge = createFakeBridge(); useUiStore.getState().init(bridge);
+  const save = vi.spyOn(bridge.app, 'saveUi');
+  useUiStore.getState().openProjectPanel('/tmp/other project');
+  expect(useUiStore.getState().projectPanel).toBe('/tmp/other project');
+  useUiStore.getState().closeProjectPanel();
+  expect(useUiStore.getState().projectPanel).toBeNull();
+  expect(save).not.toHaveBeenCalled();
+ });
+
+
+it('prepared backlog completion context is ephemeral and clears on plain open/close', () => {
+  const context = { projectPath: '/tmp/p', id: 'b-001', version: 'v1', task: 'Title\nDetails' };
+  const before = useUiStore.getState().ui;
+  useUiStore.getState().openNewSessionDialog({ projectPath: '/tmp/p', workId: 'w-01' }, { room: true, backlog: context });
+  expect(useUiStore.getState().dialogs.newSession.backlog).toEqual(context); expect(useUiStore.getState().ui).toBe(before);
+  useUiStore.getState().closeNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
+  useUiStore.getState().openNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
+});

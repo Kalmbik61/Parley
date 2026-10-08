@@ -60,7 +60,7 @@ let bridge: FakeBridge;
 beforeEach(() => {
   bridge = createFakeBridge();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
-  useUiStore.setState({ composerDrafts: {}, windowFocused: true, documentVisible: true });
+  useUiStore.setState({ composerDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
   vi.mocked(toast).mockClear();
   // Меню упоминаний прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.
@@ -1492,7 +1492,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     editor().append(node);
     document.getSelection()?.collapse(node, 1);
     fireEvent.input(editor());
-    const starred = screen.getAllByRole('option').filter((item) => within(item).queryByTitle('Lead') !== null);
+    const starred = within(screen.getByRole('listbox')).getAllByRole('option').filter((item) => within(item).queryByTitle('Lead') !== null);
     expect(starred.map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
   });
 
@@ -1503,7 +1503,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     editor().append(node);
     document.getSelection()?.collapse(node, 1);
     fireEvent.input(editor());
-    const meta = screen.getAllByRole('option').map((item) => item.lastElementChild?.textContent);
+    const meta = within(screen.getByRole('listbox')).getAllByRole('option').map((item) => item.lastElementChild?.textContent);
     expect(meta).toEqual(['Opus 5.5 · working', 'idle', 'GPT-5.5 · working']);
   });
 
@@ -1514,7 +1514,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     editor().append(node);
     document.getSelection()?.collapse(node, node.data.length);
     fireEvent.input(editor());
-    expect(screen.getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01']);
   });
 
   it('в меню упоминаний — живые участники; закрытый не предлагается', () => {
@@ -1525,7 +1525,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     editor().append(node);
     document.getSelection()?.collapse(node, 1);
     fireEvent.input(editor());
-    expect(screen.getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01', 's-02']);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01', 's-02']);
   });
 
   it('не ушло: тост с причиной, текст возвращается в поле', async () => {
@@ -2291,5 +2291,76 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     const notPrevented = fireEvent.click(within(card()).getByRole('link', { name: 'ревью' }));
     expect(notPrevented).toBe(false);
     expect(initial.onOpenExternal).toHaveBeenCalledWith('https://example.com/review');
+  });
+});
+
+it('resolves the displayed completion with paired plan identity and ignores a late reply after reconnect',async()=>{
+ useHostStore.setState({connections:1});
+ const entry=entryOf(); const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:4,mode:'verified',status:'completing',goal:'Release',items:[],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};entry.map.plans=[plan];entry.map.rooms[0]!.mode='verified';entry.map.rooms[0]!.proposal={id:'p-01',rev:1,from:'s-01',at:'x',text:'Complete now',kind:'completion',planId:'pl-01',planRev:4};
+ let finish!: (value: {messageId:string})=>void;bridge.setHandler('rooms.resolveProposal',()=>new Promise(resolve=>{finish=resolve;}));
+ const view=renderPanel(entry);fireEvent.click(screen.getByText('Accept'));await waitFor(()=>expect(finish).toBeTypeOf('function'));
+ expect(bridge.calls.find(c=>c.method==='rooms.resolveProposal')?.params).toMatchObject({proposalId:'p-01',rev:1,planId:'pl-01',planRev:4});
+ act(()=>useHostStore.setState({connections:2}));await act(async()=>finish({messageId:'m-01'}));
+ expect(document.querySelector('[data-completion-card]')).not.toBeNull();expect((screen.getByText('Accept') as HTMLButtonElement).disabled).toBe(false);view.unmount();
+});
+
+it('shows accepted plan controls in the room and passes the proposed plan revision on acceptance',async()=>{
+ const entry=entryOf(); const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:3,mode:'checklist',status:'active',goal:'Accepted goal',items:[{id:1,title:'Recovery',owner:'s-01',scope:'plain',after:[],criteria:[],verifier:null,status:'ready',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};entry.map.plans=[plan];entry.map.rooms[0]!.mode='checklist';entry.map.rooms[0]!.proposal={id:'p-01',rev:2,from:'s-01',at:'x',text:'Proposed amendment',plan:{...plan,rev:4,status:'proposed',goal:'New goal'}};
+ bridge.setHandler('rooms.resolveProposal',()=>({messageId:'m-01'}));renderPanel(entry);
+ expect(screen.getByText('Mark done')).toBeTruthy();expect(screen.getByText('New goal')).toBeTruthy();fireEvent.click(screen.getByText('Accept'));await waitFor(()=>expect(bridge.calls.some(c=>c.method==='rooms.resolveProposal')).toBe(true));expect(bridge.calls.find(c=>c.method==='rooms.resolveProposal')?.params).toMatchObject({planId:'pl-01',planRev:4,rev:2});
+});
+
+it('disables archived completion responses and ignores a response when its work closes',async()=>{
+ useHostStore.setState({connections:1});
+ const entry=entryOf(); const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:4,mode:'verified',status:'completing',goal:'Release',items:[],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};entry.map.plans=[plan];entry.map.rooms[0]!.mode='verified';entry.map.rooms[0]!.proposal={id:'p-01',rev:1,from:'s-01',at:'x',text:'Complete now',kind:'completion',planId:'pl-01',planRev:4};
+ let finish!: (value:{messageId:string})=>void;bridge.setHandler('rooms.resolveProposal',()=>new Promise(resolve=>{finish=resolve;}));
+ const view=renderPanel(entry);fireEvent.click(screen.getByText('Accept'));await waitFor(()=>expect(finish).toBeTypeOf('function'));
+ const closed=structuredClone(entry);closed.map.work.status='archived';view.update(closed);
+ await act(async()=>finish({messageId:'m-01'}));
+ expect(document.querySelector('[data-completion-card]')).not.toBeNull();
+ expect(screen.getByText('Accept')).toHaveProperty('disabled',true);
+ expect(screen.getByText('Return for rework')).toHaveProperty('disabled',true);
+ fireEvent.click(screen.getByText('Accept'));expect(bridge.calls.filter(call=>call.method==='rooms.resolveProposal')).toHaveLength(1);
+ expect(screen.getAllByText('Reopen this workspace to change the plan.').length).toBeGreaterThan(0);
+});
+
+describe('room history menu in the header (P28)', () => {
+  const sharedStatus = { state: 'shared' as const, sharedAt: '2026-10-05T10:00:00.000Z', version: 'v1', diagnostics: [] };
+  const notShared = { state: 'not-shared' as const, sharedAt: null, version: 'missing', diagnostics: [] };
+  it('is part of the room header and does not touch the host until opened', () => {
+    renderPanel(entryOf());
+    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
+    expect(bridge.calls.some(call => call.method.startsWith('rooms.history.'))).toBe(false);
+  });
+  it('Share publishes the snapshot of this room only after the explicit confirmation, with the host version', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] } });
+    bridge.setHandler('rooms.history.get', () => notShared); bridge.setHandler('rooms.history.share', () => sharedStatus);
+    renderPanel(entryOf());
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Share history…' }));
+    expect(bridge.calls.some(call => call.method === 'rooms.history.share')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot' }));
+    await screen.findByText(/^Shared at /);
+    expect(bridge.calls.find(call => call.method === 'rooms.history.share')?.params).toEqual({ projectPath: PROJECT, workId: WORK_ID, roomId: 'r-01', expectedVersion: 'missing', confirmed: true });
+  });
+  it('an old host leaves the room usable and the history actions unavailable', () => {
+    renderPanel(entryOf());
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    expect(screen.getByText('Update or restart the host to share room history.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
+  });
+});
+
+describe('RoomPanel — файлы, брошенные на вкладку', () => {
+  it('подсветка при переносе файлов; бросок — вложения поля ввода; текст без файлов вкладка не берёт', () => {
+    renderPanel(entryOf());
+    const panel = document.querySelector<HTMLElement>('[data-room-panel]') as HTMLElement;
+    fireEvent.dragOver(panel, { dataTransfer: { types: ['Files'], dropEffect: 'none' } });
+    expect(panel.hasAttribute('data-dropping')).toBe(true);
+    fireEvent.drop(panel, { dataTransfer: { types: ['Files'], files: [new File(['x'], 'mock.png'), new File(['y'], 'spec.md')] } });
+    expect(panel.hasAttribute('data-dropping')).toBe(false);
+    expect(screen.getAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'))).toEqual(['/fake/mock.png', '/fake/spec.md']);
+    fireEvent.drop(panel, { dataTransfer: { types: ['text/plain'], files: [] } });
+    expect(screen.getAllByTestId('chat-attachment')).toHaveLength(2);
   });
 });

@@ -26,26 +26,33 @@
  * комнаты целиком.
  *
  * Участник развёрнутой комнаты (кусок 5, спека окна 2026-09-29, 1.2) — та же строка, но с отступом слева 18 и без
- * правого поля (его даёт строка комнаты, `RoomRow.tsx`); у ведущего после названия `★` 11px `accent-700`,
- * тултип `Lead`.
+ * правого поля (его даёт строка комнаты, `RoomRow.tsx`) и без времени последнего события (у ведущего с ролью оно
+ * выходило за рамку комнаты); у ведущего после названия `★` 11px `accent-700`,
+ * тултип `Lead`. В тесной строке сжимается чип роли (`RoleChip`), название — не уже `5ch` (номер сессии `S02…`).
  *
- * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером перед словом состояния
+ * Живые субагенты (`metrics.tasks`, кусок 4b плана 2026-10-01) — бейдж «2 agents» с поповером (клик по агенту ведёт в панель Agents, без места — к карточке) перед словом состояния
  * (`AgentsBadge`): строка поповера открывает сессию на карточке агента. Хост прежней версии списка не присылает —
  * тогда у строки бейджа нет, а счётчик `▤N` остаётся в тултипе, как был.
+ *
+ * Непрочитанные агентом письма (`metrics.unread`) — значок Mail 11px `accent-700` после названия, мигает
+ * (`animate-pulse`, под `prefers-reduced-motion` стоит), тултип и `aria-label` `Has new messages`. Название сессии при
+ * этом прежнее: письмо — состояние, а не имя. Агент прочёл почту — значок ушёл. Закрытой сессии письма не доставляются
+ * (спецификация 7.1), а рассылки комнаты копятся ей непрочитанными — значка у неё нет.
  */
 
 import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { GitBranch } from 'lucide-react';
+import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
-import { openAgentCard } from '../chat/open-agent.js';
+import { openAgentInPanel } from '../agents/open-agents.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { dndId, type DragSourceData } from '../layout/dnd.js';
+import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
 import { displayStatus, dotState, stateWord } from '../lib/dot-state.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -86,6 +93,8 @@ export interface SessionRowProps {
   onOpen(): void;
   /** Строка участника комнаты: отступ слева 18 вместо `8 + 12·depth`, без правого поля. */
   inRoom?: boolean;
+  /** Комната участника — для «Make lead» в меню строки; только у участника комнаты. */
+  roomId?: string;
   /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
   lead?: boolean;
 }
@@ -105,6 +114,7 @@ export const SessionRow = memo(function SessionRow({
   selected,
   onOpen,
   inRoom = false,
+  roomId,
   lead = false,
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
@@ -200,6 +210,7 @@ export const SessionRow = memo(function SessionRow({
   // Живые субагенты — бейдж с поповером (кусок 4b); хост прежней версии списка не присылает, и счётчик `▤N` остаётся в
   // тултипе. Метрики спящей и закрытой сессии — след прошлого процесса: у них агентов нет, как и на карточке участника комнаты.
   const agents = session.lifecycle === 'active' ? (activity?.metrics?.tasks ?? []) : [];
+  const unreadMail = !closed && (activity?.metrics?.unread ?? 0) > 0;
   // Последний агент закончил при открытом поповере — бейдж ушёл вместе с ним и «закрыто» не сообщил: без сброса тултип
   // строки остался бы спрятан насовсем.
   useEffect(() => {
@@ -208,7 +219,15 @@ export const SessionRow = memo(function SessionRow({
 
   return (
     <HoverCard open={tooltipOpen && !dragging && !agentsOpen} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
-      <SessionRowMenu workKey={workKey} projectPath={projectPath} workId={workId} session={session} bridge={bridge} onOpen={onOpen}>
+      <SessionRowMenu
+        workKey={workKey}
+        projectPath={projectPath}
+        workId={workId}
+        session={session}
+        bridge={bridge}
+        onOpen={onOpen}
+        {...(roomId === undefined ? {} : { room: { id: roomId, lead } })}
+      >
       <HoverCardTrigger asChild>
         <div
           ref={setRowRef}
@@ -267,10 +286,22 @@ export const SessionRow = memo(function SessionRow({
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
-          <span className={cn('min-w-0 flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          <span className={cn('min-w-[5ch] flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
               ★
+            </span>
+          ) : null}
+          {unreadMail ? (
+            <span
+              data-agent-unread
+              role="img"
+              title={S.sidebar.agentUnread}
+              aria-label={S.sidebar.agentUnread}
+              className="inline-flex shrink-0 animate-pulse text-accent-700 motion-reduce:animate-none"
+            >
+              <Mail className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
           {trustWait ? (
@@ -289,7 +320,7 @@ export const SessionRow = memo(function SessionRow({
               // Tab в списке ведёт курсор строки (roving tabindex): бейдж встаёт в порядок Tab только у строки под курсором.
               tabIndex={stop ? 0 : -1}
               onOpenChange={setAgentsOpen}
-              onOpen={(task) => openAgentCard({ projectPath, workId, sessionId: session.id }, task.id)}
+              onOpen={(task) => openAgentInPanel({ projectPath, workId, sessionId: session.id }, task.id)}
               className={cn(
                 'h-[18px] shrink-0 rounded-full bg-[color-mix(in_srgb,currentColor_10%,transparent)] px-1.5 text-[10px] leading-[18px] hover:bg-[color-mix(in_srgb,currentColor_20%,transparent)]',
                 secondary,
@@ -309,7 +340,7 @@ export const SessionRow = memo(function SessionRow({
               <GitBranch className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
-          <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>
+          {inRoom ? null : <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>}
         </div>
       </HoverCardTrigger>
       </SessionRowMenu>

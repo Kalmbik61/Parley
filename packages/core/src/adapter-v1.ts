@@ -1,4 +1,4 @@
-import { tokenCount, type TokenTotals } from './counters.js';
+import { observedCount, type UsageCounters } from './work/usage-ledger.js';
 import type { RawRecord } from './jsonl.js';
 
 /**
@@ -40,8 +40,12 @@ export interface SessionRecord {
   title: string | null;
   /** lastPrompt записи last-prompt. */
   lastPrompt: string | null;
-  /** message.usage — четыре счётчика токенов; null, если usage в записи нет. */
-  usage: TokenTotals | null;
+  /**
+   * message.usage — четыре счётчика токенов; null, если usage в записи нет. Поля, которых в записи нет
+   * (или они не числа), — `null`, а не 0: «не сообщено» и «ноль» разные наблюдения. Подставить 0 для
+   * показа — дело потребителя.
+   */
+  usage: Omit<UsageCounters, 'totalInput'> | null;
   leafUuid: string | null;
   raw: RawRecord;
 }
@@ -94,14 +98,14 @@ function extractContent(message: RawRecord | null): { toolUses: string[]; text: 
  * message.usage записи ассистента: вход, выход и две половины кэша.
  * Отсутствие блока — не ошибка: usage есть далеко не у каждой записи.
  */
-function extractUsage(message: RawRecord | null): TokenTotals | null {
+function extractUsage(message: RawRecord | null): SessionRecord['usage'] {
   const usage = message === null ? null : asRecord(message['usage']);
   if (usage === null) return null;
   return {
-    input: tokenCount(usage, 'input_tokens'),
-    output: tokenCount(usage, 'output_tokens'),
-    cacheRead: tokenCount(usage, 'cache_read_input_tokens'),
-    cacheWrite: tokenCount(usage, 'cache_creation_input_tokens'),
+    input: observedCount(usage, 'input_tokens'),
+    output: observedCount(usage, 'output_tokens'),
+    cacheRead: observedCount(usage, 'cache_read_input_tokens'),
+    cacheWrite: observedCount(usage, 'cache_creation_input_tokens'),
   };
 }
 

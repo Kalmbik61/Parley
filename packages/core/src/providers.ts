@@ -49,15 +49,15 @@ export interface RunnerConfig {
    * `{channel}` — канал звонка, `{agent}` — роль, `{model}` и `{effort}` — выбор
    * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
    * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф,
-   * `{notify}` — `-c notify=[…]` Codex (скрипт харнесса, который после хода дописывает `Stop`
-   * в журнал событий сессии).
+   * `{skillCatalog}` — `-c skills.include_instructions=false` Codex: убирает родной
+   * каталог скиллов, только при включённом навигаторе и подтверждённом пути загрузки.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{notify}`, `{prompt}` — указатель на письма при подъёме
+   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
    * спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
@@ -118,13 +118,22 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * - `tui.notifications` (`approval-requested`, `agent-turn-complete`), способ `osc9` и условие
  *   `always` — те же события уведомлениями терминала; по умолчанию они молчат, пока терминал «в фокусе»,
  *   а для Codex в pty хоста фокус всегда «есть»;
- * - `notify` — конец хода скриптом харнесса (`{notify}`).
- * Хуки Codex не включаются (`hooks.*`): им нужно ревью человека, а доверие себе харнесс не выдаёт.
+ * - `notify` человека не подменяется: конец хода Codex — OSC 9 и журнал (`task_complete`), спека 2026-10-07, 5.5;
+ * - `skills.include_instructions` — родной каталог скиллов (`{skillCatalog}`): значение есть только при включённом
+ *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
+ * Хуки Codex (`{codexHooks}`, `hooks.*`) включаются только по согласию человека — настройка `codexApprovals`
+ * (спека 2026-10-07, решение 9); доверие выдаёт сам человек в Codex, харнесс его себе не пишет.
  * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
  */
 const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
   '{mcpConfig}',
+  '-c',
+  '{developerInstructions}',
+  '-c',
+  '{sandbox}',
+  '-c',
+  'project_doc_fallback_filenames=["CLAUDE.md"]',
   '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
   '-c',
@@ -134,7 +143,8 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
   'tui.notification_condition="always"',
   '-c',
-  '{notify}',
+  '{skillCatalog}',
+  '{codexHooks}',
 ];
 
 /**
@@ -194,12 +204,15 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         // выпадает целиком, и сессия живёт на модели и усилии по умолчанию. Те же пары стоят и в
         // `resumeArgs`: effort возобновлённой сессии Claude Code сам не восстанавливает и без флага
         // уходит на умолчание (спека нормалайзера модели и effort, раздел 3, п. 6).
+        // В карте хранится только явный выбор, без вычисленных defaults роли.
         '--model',
         '{model}',
         '--effort',
         '{effort}',
         '--agent',
         '{agent}',
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       resumeArgs: [
@@ -221,6 +234,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{effort}',
         '--agent',
         '{agent}',
+        '--disallowedTools',
+        '{disallowedTools}',
         // Указатель на письма, которыми хост поднимает спящую сессию (спека окна
         // 7.2): первым ходом возобновлённой сессии. Ручной подъём идёт без него —
         // пустая подстановка просто выпадает.
@@ -310,6 +325,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{effort}',
         '--agent',
         '{agent}',
+        // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       // Tier aliases suppress native restoration. Explicitly keep the configured launch model.
@@ -329,6 +347,9 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{effort}',
         '--agent',
         '{agent}',
+        // «Только чтение» роли — как у claude: GLM — тот же Claude Code, флаг ему знаком.
+        '--disallowedTools',
+        '{disallowedTools}',
         '{prompt}',
       ],
       mcpConfig: 'json-file',
@@ -343,6 +364,15 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
         (provider) => provider.id === entry && provider.family === 'claude',
       )
     : entry.family === 'claude';
+}
+
+/**
+ * `CLAUDE_CONFIG_DIR`, под которым живёт процесс провайдера семейства Claude Code. У GLM хост срезает
+ * переменную (`provider-env.ts`): его конфигурация — `~/.claude`, и значение из окружения хоста или ведущего
+ * агента ему не принадлежит. Одно правило для запуска, каталога ролей и поиска скиллов.
+ */
+export function claudeConfigDirFor(entry: ProviderEntry, env: NodeJS.ProcessEnv): string | undefined {
+  return entry.runner.secret === 'zai' ? undefined : env.CLAUDE_CONFIG_DIR;
 }
 
 /** Провайдеры, чьи сессии попадают в список. */
@@ -372,14 +402,18 @@ export interface RunnerSubstitutions {
   settingsFile?: string;
   /** Системная вставка гида (`work/guidance.ts`): кто ты и чем пользоваться. */
   systemPrompt?: string;
+  /** Whole TOML assignment: developer_instructions=<JSON serialized layer>. */
+  developerInstructions?: string;
   prompt?: string;
   providerSessionId?: string;
   /** Канал звонка: `server:parley` при включённом push, иначе подстановки нет. */
   channel?: string;
   /** Имя роли для `claude --agent` (спецификация 2026-09-08, 4.4). */
   agent?: string;
-  /** Значение `-c notify=[…]` Codex: скрипт харнесса, который пишет конец хода в журнал событий. */
-  notify?: string;
+  /** Целое присваивание TOML `skills.include_instructions=false`: Codex без родного каталога скиллов. */
+  skillCatalog?: string;
+  /** Готовые пары `-c hooks.<Event>=…` (`work/codex-hooks.ts`): подставляются на место элемента, без значения — выпадают. */
+  codexHooks?: readonly string[];
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
@@ -387,10 +421,13 @@ export interface RunnerSubstitutions {
    * кавычки строки шаблона без экранирования, поэтому `substituteArgs` пускает только `EFFORT_TOKEN`.
    */
   effort?: EffortLevel;
+  disallowedTools?: string;
+  sandbox?: string;
 }
 
+// `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|prompt|providerSessionId|channel|agent|notify|model|effort)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|model|effort|disallowedTools|sandbox)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -449,11 +486,20 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
     }
 
     const value = subs[match[1] as keyof RunnerSubstitutions];
-    if (value === undefined) {
-      dropWithFlag();
+    if (Array.isArray(value)) {
+      // Элемент-массив разворачивается на месте; флага-предшественника у него нет — пары `-c` в нём уже готовы.
+      for (const part of value as readonly string[]) {
+        args.push(part);
+        fromTemplate.push(false);
+      }
       continue;
     }
-    args.push(value);
+    if (value === undefined) {
+      // У `{codexHooks}` своего флага перед элементом нет — соседний `-c` чужой.
+      if (match[1] !== 'codexHooks') dropWithFlag();
+      continue;
+    }
+    args.push(value as string);
     fromTemplate.push(false);
   }
   return args;

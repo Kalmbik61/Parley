@@ -9,6 +9,8 @@
  * означали бы, что при правке формата их можно поправить порознь.
  */
 
+import type { ViewportSpec } from './browser-devtools.js';
+
 export type LayoutNode = GroupNode | SplitNode;
 
 export interface GroupNode {
@@ -44,7 +46,8 @@ export type TabSpec =
   | { kind: 'diff'; id: string; sessionId: string; commit: string | null }
   // path — относительный.
   | { kind: 'file'; id: string; root: FileRootSpec; path: string }
-  | { kind: 'browser'; id: string; url: string };
+  // viewport: нет поля — Fit (спека 2026-10-07-browser-devtools-agent-design.md, 4.2); размер переживает перезапуск.
+  | { kind: 'browser'; id: string; url: string; viewport?: ViewportSpec };
 
 export interface WorkLayout {
   root: LayoutNode;

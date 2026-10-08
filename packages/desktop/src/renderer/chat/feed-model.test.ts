@@ -126,6 +126,8 @@ describe('toolHeadline', () => {
     expect(toolHeadline('Edit', { file_path: '/a.ts' })).toEqual({ name: 'Edit', summary: '/a.ts' });
     expect(toolHeadline('Write', { file_path: '/b.ts' }).summary).toBe('/b.ts');
     expect(toolHeadline('Read', { file_path: '/c.ts' }).summary).toBe('/c.ts');
+    expect(toolHeadline('Delete', { file_path: '/tmp/p/old.ts' })).toEqual({ name: 'Delete', summary: '/tmp/p/old.ts' });
+    expect(toolHeadline('ViewImage', { file_path: '/tmp/p/shot.png' })).toEqual({ name: 'ViewImage', summary: '/tmp/p/shot.png' });
     expect(toolHeadline('mcp__parley__get_map', {})).toEqual({ name: 'parley · get_map', summary: null });
     expect(toolHeadline('Glob', { pattern: '*' })).toEqual({ name: 'Glob', summary: null });
     expect(toolHeadline('Bash', { command: 42 }).summary).toBeNull();

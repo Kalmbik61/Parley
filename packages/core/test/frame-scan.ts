@@ -79,6 +79,55 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека комнат Organic 3.5: скрипт строки статуса только читает settings.json человека и проекта, чтобы вызвать их statusLine',
   },
   {
+    file: 'packages/core/src/skills/claude.ts',
+    rule: 'запись в каталоги агентов',
+    line: "{ name: 'project', source: 'project', file: path.join(cwd, '.claude/settings.json') },",
+    reason:
+      'спека возможностей (2026-10-02): резолвер скиллов только читает settings.json проекта (O_RDONLY), чтобы учесть enabledPlugins и переопределения видимости',
+  },
+  {
+    file: 'packages/core/src/work/agents.ts',
+    rule: 'YOLO-флаги',
+    line: "return ['--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox', '--yolo', '--approve-for-me', '--not-so-yolo'].includes(item) ||",
+    reason:
+      'список флагов Codex, которые ОТВЕРГАЕТ проверка доставки роли (assertRoleDelivery): пользовательский шаблон запуска с ними конфликтует с режимом доступа роли; сами флаги Parley не подставляет',
+  },
+  {
+    file: 'packages/host/src/capabilities/claude.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const userFile = config.userConfigFile ?? (config.configDir ? path.join(configDir, '.claude.json') : path.join(context.homeDir, '.claude.json'));",
+    reason:
+      'спека возможностей (2026-10-02): Parley только читает ~/.claude.json (readJsonFile, O_RDONLY), пишет в него только сам Claude Code через свой CLI',
+  },
+  {
+    file: 'packages/host/src/capabilities/native-plugin-inventory.ts',
+    rule: 'запись в каталоги агентов',
+    line: "readJsonFile(context.claude?.userConfigFile ?? (nativeEnv.CLAUDE_CONFIG_DIR ? path.join(nativeConfigDir, '.claude.json') : path.join(context.homeDir, '.claude.json'))),",
+    reason:
+      'спека возможностей (2026-10-02): только чтение ~/.claude.json для сверки секретов в выводе плагинов',
+  },
+  {
+    file: 'packages/host/src/capabilities/native-plugin-inventory.ts',
+    rule: 'запись в каталоги агентов',
+    line: "for (const [scope, file] of Object.entries({ user: path.join(configDir, 'settings.json'), project: path.join(cwd, '.claude/settings.json'), local: path.join(cwd, '.claude/settings.local.json') })) {",
+    reason:
+      'спека возможностей (2026-10-02): только чтение settings.json (enabledPlugins) трёх уровней, запись делает нативный claude plugin',
+  },
+  {
+    file: 'packages/host/src/capabilities/native-targets.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const nativeFile = env.CLAUDE_CONFIG_DIR ? path.join(nativeDir, '.claude.json') : path.join(context.homeDir, '.claude.json');",
+    reason:
+      'спека возможностей (2026-10-02): только сравнение путей назначения нативных команд, файл не открывается на запись',
+  },
+  {
+    file: 'packages/host/src/capabilities/snapshot.ts',
+    rule: 'запись в каталоги агентов',
+    line: "claude: { ...(configDir ? { configDir, userConfigFile: path.join(configDir, '.claude.json') } : {}),",
+    reason:
+      'спека возможностей (2026-10-02): контекст снимка называет путь ~/.claude.json, снимок его только читает',
+  },
+  {
     file: 'packages/host/src/limits/zai-quota.ts',
     rule: 'API провайдеров',
     line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",

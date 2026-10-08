@@ -9,6 +9,7 @@ import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
+import { useDevtoolsStore } from '../browser/devtools/store.js';
 import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -70,6 +71,7 @@ function makeContext(patch: { source?: ActionSource; activeWorkKey?: string | nu
     openNewSession: vi.fn(),
     openNewRoom: vi.fn(),
     openSettings: vi.fn(),
+    openProjectPanel: vi.fn(),
     setAppearance: vi.fn(),
     toggleShowArchived: vi.fn(),
     toggleWake: vi.fn(async () => {}),
@@ -122,10 +124,12 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'session.new': ({ ui }) => expect(ui.openNewSession).toHaveBeenCalledTimes(1),
     'room.new': ({ ui }) => expect(ui.openNewRoom).toHaveBeenCalledTimes(1),
     'settings.open': ({ ui }) => expect(ui.openSettings).toHaveBeenCalledTimes(1),
+    'project.capabilities': ({ ui }) => expect(ui.openProjectPanel).toHaveBeenCalledWith('/tmp/p'),
     'sidebar.left.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('left'),
     'sidebar.right.toggle': ({ ui }) => expect(ui.toggleSidebar).toHaveBeenCalledWith('right'),
     'sidebar.files': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('files'),
     'sidebar.changes': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('changes'),
+    'sidebar.agents': ({ ui }) => expect(ui.showRightTab).toHaveBeenCalledWith('agents'),
     'work.prev': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[8]),
     'work.next': ({ layout }) => expect(layout.setActiveWork).toHaveBeenCalledWith(ORDER[1]),
     'works.showArchived': ({ ui }) => expect(ui.toggleShowArchived).toHaveBeenCalledTimes(1),
@@ -173,6 +177,9 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'browser.zoomIn': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]),
     'browser.zoomOut': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, -1] }]),
     'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
+    // Спека 2026-10-07, 4.3: панель вкладки браузера активной группы.
+    'browser.devtools': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(true),
+    'browser.console': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' }),
     // План 2026-10-01: активная вкладка s-09 — Claude без поля view, то есть в чате; действие ставит terminal.
     'chat.toggleView': ({ layout }) => {
       expect(layout.apply).toHaveBeenCalledTimes(1);
@@ -217,6 +224,7 @@ function resetFeedHost(): void {
 
 describe('runAction — таблица по реестру (тест 1 куска 6.3)', () => {
   beforeEach(() => withFeedHost());
+  beforeEach(() => useDevtoolsStore.setState({ tabs: {} }));
   afterEach(resetFeedHost);
 
   it.each([...IMPLEMENTED_ACTIONS])('%s', (id) => {
@@ -565,7 +573,32 @@ describe('chat.toggleView (план 2026-10-01, решение 6)', () => {
     withFeedHost('codex');
     const spies = makeContext();
     runAction('chat.toggleView', spies.ctx);
-    expect(spies.toast).toHaveBeenCalledWith('Chat needs Claude Code 2.1.286 or newer');
+    expect(spies.toast).toHaveBeenCalledWith('Chat needs Codex 0.160.0 or newer');
     expect(spies.layout.apply).not.toHaveBeenCalled();
+  });
+});
+
+it('capabilities uses the currently active project and cannot open without an active workspace', () => {
+ const spies = makeContext(); useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p' })] });
+ runAction('project.capabilities', spies.ctx); expect(spies.ui.openProjectPanel).toHaveBeenCalledWith('/tmp/p');
+ const missing = makeContext({ activeWorkKey: null }); runAction('project.capabilities', missing.ctx);
+ expect(missing.ui.openProjectPanel).not.toHaveBeenCalled(); expect(missing.toast).toHaveBeenCalledTimes(1);
+ resetFeedHost();
+});
+
+describe('панель браузера (спека 2026-10-07, 4.3)', () => {
+  beforeEach(() => useDevtoolsStore.setState({ tabs: {} }));
+
+  it('browser.devtools дважды — спрятана; browser.console — открыта на Console; без страницы — ничего', () => {
+    const spies = makeContext();
+    runAction('browser.devtools', spies.ctx);
+    runAction('browser.devtools', spies.ctx);
+    expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(false);
+    useDevtoolsStore.getState().show(BROWSER_TAB, 'network');
+    runAction('browser.console', spies.ctx);
+    expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' });
+    useDevtoolsStore.setState({ tabs: {} });
+    runAction('browser.devtools', makeContext({ browser: false }).ctx);
+    expect(useDevtoolsStore.getState().tabs).toEqual({});
   });
 });

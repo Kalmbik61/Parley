@@ -1,10 +1,12 @@
 import { mkdir, appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
+  freezeUsage,
+  readMap,
   transitionSession,
   updateMap,
   workPaths,
@@ -95,6 +97,13 @@ const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> =>
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 };
+
+/**
+ * Метка сессии — с диска, а не из снимка works-сервиса: снимок обновляет fs-наблюдатель, и под нагрузкой
+ * его событие приходит поздно или теряется, тогда как проверяется запись автозаголовка в карту.
+ */
+const labelOnDisk = async (workId: string, sessionId: string): Promise<string | undefined> =>
+  (await readMap(project, workId)).sessions.find((s) => s.id === sessionId)?.label;
 
 const hook = (name: string, extra: Record<string, unknown> = {}): string =>
   `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
@@ -324,15 +333,10 @@ describe('createActivityService', () => {
     await a.start();
     // Индекс логов строится в фоне (не блокирует старт) — под общей сборкой
     // пакетов подключается заметно медленнее, чем в одиночном прогоне.
-    await waitFor(
-      () =>
-        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
-        'первый заголовок',
-      15_000,
+    await vi.waitFor(
+      async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('первый заголовок'),
+      { timeout: 30_000, interval: 25 },
     );
-
-    const afterAuto = w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId);
-    expect(afterAuto?.label).toBe('первый заголовок');
 
     // Переименовали руками — метка больше не NEW_LABEL.
     await updateMap(project, workId, (map) => {
@@ -349,9 +353,8 @@ describe('createActivityService', () => {
     );
     await settle(1500);
 
-    const final = w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId);
-    expect(final?.label).toBe('своё имя');
-  }, 40_000);
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe('своё имя');
+  }, 60_000);
 
   it('6b: ярлык в прежней русской записи (карта сборки до перевода) тоже получает автозаголовок', async () => {
     const { ref, workId } = await activeSession({ label: 'новая сессия', providerSessionId: 's-legacy' });
@@ -363,13 +366,67 @@ describe('createActivityService', () => {
 
     const w = await works();
     await activity(w).start();
-    await waitFor(
-      () =>
-        w.entry(project, workId)?.map.sessions.find((s) => s.id === ref.sessionId)?.label ===
-        'заголовок из лога',
-      15_000,
+    await vi.waitFor(
+      async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('заголовок из лога'),
+      { timeout: 30_000, interval: 25 },
     );
-  }, 40_000);
+  }, 60_000);
+
+  // Агент комнаты без задачи: первым в его терминал пришёл указатель на письма, и автозаголовок сборок до 0.7.0
+  // включительно делал его именем сессии (карта пользователя w-0043).
+  const POINTER = 'New messages (1) in r-01 "Second". Call check_inbox.';
+  const record = (value: Record<string, unknown>, id: string): string => `${JSON.stringify({ sessionId: id, ...value })}\n`;
+  /** Лог агента, разбуженного почтой: первая реплика — указатель, `ai-title` Claude сгенерировал по нему. */
+  const pointerLog = (id: string): string =>
+    record({ type: 'user', timestamp: '2026-10-07T10:00:00.000Z', message: { role: 'user', content: POINTER } }, id) +
+    record({ type: 'last-prompt', lastPrompt: POINTER }, id) +
+    record({ type: 'ai-title', aiTitle: 'Проверка входящих сообщений' }, id) +
+    record(
+      {
+        type: 'assistant',
+        timestamp: '2026-10-07T10:00:05.000Z',
+        message: { id: 'msg-1', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ок' }] },
+      },
+      id,
+    );
+
+  it('6c: разговор, начатый указателем на письма, автозаголовка не получает; ярлык-указатель — снова метка новой сессии', async () => {
+    const { ref, workId } = await activeSession({ label: POINTER, providerSessionId: 's-pointer' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(path.join(claudeRoot, '-proj', 's-pointer.jsonl'), pointerLog('s-pointer'));
+
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await vi.waitFor(async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe(NEW_LABEL), {
+      timeout: 30_000,
+      interval: 25,
+    });
+    // Индекс лога доехал (модель из него в метриках), а `ai-title` по указателю ярлыком так и не стал.
+    await vi.waitFor(() => expect(a.get(ref)?.metrics?.model).toBe('claude-opus-5-5'), { timeout: 30_000, interval: 25 });
+    await appendFile(
+      path.join(claudeRoot, '-proj', 's-pointer.jsonl'),
+      record({ type: 'ai-title', aiTitle: 'Сообщения в r-01 «Second»' }, 's-pointer'),
+    );
+    await settle(1500);
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(NEW_LABEL);
+  }, 60_000);
+
+  it('6d: /rename человека (custom-title) в разговоре, начатом указателем, — имя', async () => {
+    const { ref, workId } = await activeSession({ label: NEW_LABEL, providerSessionId: 's-renamed' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-renamed.jsonl'),
+      pointerLog('s-renamed') + record({ type: 'custom-title', customTitle: 'ревьюер' }, 's-renamed'),
+    );
+
+    const w = await works();
+    await activity(w).start();
+    await vi.waitFor(async () => expect(await labelOnDisk(workId, ref.sessionId)).toBe('ревьюер'), {
+      timeout: 30_000,
+      interval: 25,
+    });
+  }, 60_000);
 
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
     await activeSession({ launchedBy: 'host', createEventsDir: false });
@@ -945,4 +1002,447 @@ describe('удержанный вопрос агента (план 2026-10-01, �
     expect(() => a.questionHeld(unknown, true)).not.toThrow();
     expect(() => a.questionHeld(unknown, false)).not.toThrow();
   }, 20_000);
+});
+
+describe('токены сессии: свежесть и учёт кэша (P36)', () => {
+  const LAUNCH = '2026-10-04T12:00:00.000Z';
+  const AFTER_LAUNCH = '2026-10-04T12:00:01.000Z';
+  const BEFORE_LAUNCH = '2026-10-04T11:00:00.000Z';
+  const NATIVE = 'native-thread-1';
+
+  /** Снимок, который `report` или усыпление ставят в карту: вход 100, выход 20, кэш не наблюдался. */
+  const snapshot = (binding = NATIVE, closed = false, epoch: string | null = LAUNCH) => ({
+    durationMs: 100,
+    tokens: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 },
+    toolCalls: {},
+    usage: freezeUsage(
+      {
+        input: 100,
+        output: 20,
+        cacheRead: null,
+        cacheWrite: null,
+        totalInput: null,
+        source: 'native-index',
+        observedAt: BEFORE_LAUNCH,
+        stale: false,
+        completeness: 'partial',
+        coverage: 'conversation',
+      },
+      { binding, epoch, closed },
+    ),
+  });
+
+  /** Идущая (или спящая) сессия `claude` со снимком в карте и запуском процесса `LAUNCH`. */
+  async function session(
+    over: {
+      lifecycle?: 'active' | 'sleeping' | 'closed';
+      metrics?: 'snapshot' | 'legacy' | 'other-binding' | null;
+      provider?: string;
+      /** Снимок снят в момент ухода процесса (сон), а не `report` посреди работы. */
+      closedSnapshot?: boolean;
+      snapshotEpoch?: string | null;
+    } = {},
+  ) {
+    const { ref } = await activeSession({ providerSessionId: NATIVE });
+    await updateMap(project, ref.workId, (map) => {
+      const found = map.sessions.find((item) => item.id === ref.sessionId)!;
+      found.startedAtProcess = LAUNCH;
+      if (over.provider !== undefined) found.provider = over.provider;
+      if (over.lifecycle === 'sleeping' || over.lifecycle === 'closed') found.lifecycle = over.lifecycle;
+      const metrics = over.metrics === undefined ? 'snapshot' : over.metrics;
+      if (metrics === 'snapshot') {
+        found.metrics = snapshot(NATIVE, over.closedSnapshot ?? false, over.snapshotEpoch === undefined ? LAUNCH : over.snapshotEpoch);
+      }
+      if (metrics === 'other-binding') found.metrics = snapshot('другой-разговор');
+      if (metrics === 'legacy') {
+        found.metrics = { durationMs: 100, tokens: { input: 100, output: 20, cacheRead: 7, cacheWrite: 0 }, toolCalls: {} };
+      }
+    });
+    return ref;
+  }
+
+  async function writeClaudeLog(at: string, usage: Record<string, number>): Promise<void> {
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', `${NATIVE}.jsonl`),
+      `${JSON.stringify({
+        type: 'assistant',
+        sessionId: NATIVE,
+        cwd: project,
+        timestamp: at,
+        message: { role: 'assistant', id: 'msg_native_1', model: 'claude-opus-5', usage },
+      })}\n`,
+    );
+  }
+
+  /** Запускает сервис и ждёт, пока индекс лога дойдёт до метрик (модель берётся только из индекса). */
+  async function started(ref: SessionRef): Promise<ActivityService> {
+    const a = activity(await works());
+    await a.start();
+    await waitFor(() => a.get(ref)?.metrics?.model === 'claude-opus-5', 15_000);
+    return a;
+  }
+
+  const FULL = { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 300, cache_creation_input_tokens: 50 };
+
+  it('снимок идущей сессии 100/20 и свежий живой индекс 1000/200 дают 1000/200', async () => {
+    const ref = await session();
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const metrics = (await started(ref)).get(ref)?.metrics;
+    expect(metrics).toMatchObject({
+      tokensIn: 1000,
+      tokensOut: 200,
+      usage: {
+        source: 'native-index',
+        stale: false,
+        observedAt: AFTER_LAUNCH,
+        input: 1000,
+        output: 200,
+        cacheRead: 300,
+        cacheWrite: 50,
+        totalInput: 1350,
+        completeness: 'complete',
+        attribution: { workId: ref.workId, sessionId: ref.sessionId, roomId: null, runId: null },
+      },
+    });
+  });
+
+  it('индекс с записью до запуска процесса (чужая эпоха) не побеждает: снимок помечен устаревшим', async () => {
+    const ref = await session();
+    await writeClaudeLog(BEFORE_LAUNCH, FULL);
+
+    const metrics = (await started(ref)).get(ref)?.metrics;
+    expect(metrics).toMatchObject({
+      tokensIn: 100,
+      tokensOut: 20,
+      usage: { source: 'frozen-snapshot', stale: true, cacheRead: null, cacheWrite: null, observedAt: BEFORE_LAUNCH },
+    });
+  });
+
+  it('остановленная сессия — закрытый период: снимок сохраняется, перечитанный лог его не подменяет', async () => {
+    const ref = await session({ lifecycle: 'sleeping', closedSnapshot: true });
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const metrics = (await started(ref)).get(ref)?.metrics;
+    expect(metrics).toMatchObject({ tokensIn: 100, tokensOut: 20, usage: { source: 'frozen-snapshot', stale: false } });
+  });
+
+  it('закрытая без finishSession: снимок report 100/20 снят посреди работы, живой индекс 1000/200 его не теряет', async () => {
+    const ref = await session({ lifecycle: 'closed', closedSnapshot: false });
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const metrics = (await started(ref)).get(ref)?.metrics;
+    expect(metrics).toMatchObject({
+      tokensIn: 1000,
+      tokensOut: 200,
+      usage: { source: 'native-index', stale: false, input: 1000, output: 200 },
+    });
+  });
+
+  it('закрытый период чужой эпохи (снимок сна до возобновления) не прячет записи нового запуска', async () => {
+    const ref = await session({ lifecycle: 'closed', closedSnapshot: true, snapshotEpoch: BEFORE_LAUNCH });
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const metrics = (await started(ref)).get(ref)?.metrics;
+    expect(metrics).toMatchObject({ tokensIn: 1000, usage: { source: 'native-index', stale: false } });
+  });
+
+  it('закрытая сессия без лога: снимок report — нижняя граница, помечен устаревшим', async () => {
+    const ref = await session({ lifecycle: 'closed', closedSnapshot: false });
+    const a = activity(await works());
+    await a.start();
+    await waitFor(() => a.get(ref) !== undefined);
+
+    expect(a.get(ref)?.metrics).toMatchObject({ tokensIn: 100, usage: { source: 'frozen-snapshot', stale: true } });
+  });
+
+  it('одна нить в двух видах (две сессии с одним нативным id) показывает цифры нити один раз в каждой', async () => {
+    const first = await session();
+    const second = await session();
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const a = await started(first);
+    await waitFor(() => a.get(second)?.metrics?.model === 'claude-opus-5', 15_000);
+    expect(a.get(first)?.metrics?.usage).toMatchObject({ input: 1000, output: 200, completeness: 'complete' });
+    expect(a.get(second)?.metrics?.usage).toMatchObject({ input: 1000, output: 200, completeness: 'complete' });
+  });
+
+  it('снимок до P36 показывает вход и выход, а кэш неизвестен; без живого индекса он устаревший', async () => {
+    const ref = await session({ metrics: 'legacy' });
+    const a = activity(await works());
+    await a.start();
+    await waitFor(() => a.get(ref) !== undefined);
+
+    expect(a.get(ref)?.metrics).toMatchObject({
+      tokensIn: 100,
+      tokensOut: 20,
+      usage: { source: 'legacy-snapshot', stale: true, cacheRead: null, cacheWrite: null, totalInput: null, completeness: 'unknown' },
+    });
+  });
+
+  it('снимок другого разговора (сессию перепривязали) за свой не принимается', async () => {
+    const ref = await session({ metrics: 'other-binding' });
+    const a = activity(await works());
+    await a.start();
+    await waitFor(() => a.get(ref) !== undefined);
+
+    expect(a.get(ref)?.metrics).toMatchObject({ tokensIn: null, tokensOut: null, usage: { source: 'unavailable', input: null } });
+  });
+
+  it('возобновление: новая эпоха процесса — запись между старым и новым запуском не свежая, после нового запуска свежая', async () => {
+    const ref = await session();
+    await updateMap(project, ref.workId, (map) => {
+      map.sessions.find((item) => item.id === ref.sessionId)!.startedAtProcess = '2026-10-04T13:00:00.000Z';
+    });
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+    const a = await started(ref);
+    expect(a.get(ref)?.metrics).toMatchObject({ tokensIn: 100, usage: { source: 'frozen-snapshot', stale: true } });
+
+    await writeClaudeLog('2026-10-04T13:00:05.000Z', { ...FULL, input_tokens: 2000 });
+    await waitFor(() => a.get(ref)?.metrics?.tokensIn === 2000, 15_000);
+    expect(a.get(ref)?.metrics?.usage).toMatchObject({ source: 'native-index', stale: false });
+  }, 30_000);
+
+  it('Codex: ненаблюдаемая запись в кэш — null, а не измеренный ноль', async () => {
+    const ref = await session({ provider: 'codex', metrics: null });
+    const dir = path.join(codexRoot, '2026', '10', '04');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, `rollout-2026-10-04T12-00-00-${NATIVE}.jsonl`),
+      [
+        { timestamp: AFTER_LAUNCH, type: 'session_meta', payload: { id: NATIVE, cwd: project, source: 'cli' } },
+        {
+          timestamp: AFTER_LAUNCH,
+          type: 'turn_context',
+          payload: { type: 'turn_context', cwd: project, model: 'gpt-5.1-codex' },
+        },
+        {
+          timestamp: AFTER_LAUNCH,
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: { total_token_usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 200 } },
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join('\n'),
+    );
+    const a = activity(await works());
+    await a.start();
+    await waitFor(() => a.get(ref)?.metrics?.model === 'gpt-5.1-codex', 15_000);
+
+    expect(a.get(ref)?.metrics).toMatchObject({
+      tokensIn: 800,
+      tokensOut: 200,
+      usage: { source: 'native-index', input: 800, cacheRead: 200, cacheWrite: null, totalInput: 1000 },
+    });
+  });
+
+  describe('потомки (P36c)', () => {
+    const SUB = 'agent-native-sub';
+    const answer = (id: string | null, at: string, input: number, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: NATIVE,
+        timestamp: at,
+        ...extra,
+        message: {
+          role: 'assistant',
+          ...(id === null ? {} : { id }),
+          model: 'claude-opus-5',
+          usage: { input_tokens: input, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      });
+
+    /** Родитель и подагент Claude рядом: `<id>.jsonl` и `<id>/subagents/agent-<id>.jsonl`. */
+    async function writeClaudeFamily(parent: string[], sub: string[]): Promise<void> {
+      const dir = path.join(claudeRoot, '-proj');
+      await mkdir(path.join(dir, NATIVE, 'subagents'), { recursive: true });
+      await writeFile(path.join(dir, `${NATIVE}.jsonl`), `${parent.join('\n')}\n`);
+      await writeFile(path.join(dir, NATIVE, 'subagents', `agent-${SUB}.jsonl`), `${sub.join('\n')}\n`);
+    }
+
+    it('Claude: родитель плюс подагент дают сумму, охват — с потомками', async () => {
+      const ref = await session();
+      await writeClaudeFamily(
+        [answer('msg_parent', AFTER_LAUNCH, 1000)],
+        [answer('msg_sub', '2026-10-04T12:00:02.000Z', 400)],
+      );
+
+      const metrics = (await started(ref)).get(ref)?.metrics;
+      expect(metrics).toMatchObject({
+        tokensIn: 1400,
+        tokensOut: 20,
+        usage: {
+          source: 'native-index',
+          input: 1400,
+          output: 20,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+          observedAt: '2026-10-04T12:00:02.000Z',
+        },
+      });
+    });
+
+    it('Claude: подагент, увиденный из двух видов родителя, учтён один раз в каждом', async () => {
+      const first = await session();
+      const second = await session();
+      await writeClaudeFamily([answer('msg_parent', AFTER_LAUNCH, 1000)], [answer('msg_sub', AFTER_LAUNCH, 400)]);
+
+      const a = await started(first);
+      await waitFor(() => a.get(second)?.metrics?.model === 'claude-opus-5', 15_000);
+      for (const ref of [first, second]) {
+        expect(a.get(ref)?.metrics?.usage).toMatchObject({
+          input: 1400,
+          output: 20,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+        });
+      }
+    });
+
+    it('Claude: запись агента у родителя и в файле агента без общего id — не удваивается, итог неполный', async () => {
+      const ref = await session();
+      await writeClaudeFamily(
+        [answer('msg_parent', AFTER_LAUNCH, 1000), answer(null, AFTER_LAUNCH, 400, { isSidechain: true, agentId: SUB })],
+        [answer(null, AFTER_LAUNCH, 400)],
+      );
+
+      const metrics = (await started(ref)).get(ref)?.metrics;
+      expect(metrics?.usage).toMatchObject({ input: 1400, completeness: 'partial' });
+    });
+
+    const SPAWNED = 'codex-thread-child';
+
+    /** Rollout Codex: тред `id` (с родителем и форком, если заданы) и его накопленный итог. */
+    async function writeCodexThread(
+      id: string,
+      total: { input_tokens: number; cached_input_tokens: number; output_tokens: number },
+      payload: Record<string, unknown> = {},
+    ): Promise<void> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, `rollout-2026-10-04T12-00-00-${id}.jsonl`),
+        [
+          { timestamp: AFTER_LAUNCH, type: 'session_meta', payload: { id, cwd: project, source: 'cli', ...payload } },
+          { timestamp: AFTER_LAUNCH, type: 'turn_context', payload: { type: 'turn_context', cwd: project, model: 'gpt-5.1-codex' } },
+          {
+            timestamp: AFTER_LAUNCH,
+            type: 'event_msg',
+            payload: { type: 'token_count', info: { total_token_usage: total } },
+          },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join('\n'),
+      );
+    }
+
+    const codexUsage = (input: number, cached = 200, output = 200) => ({
+      input_tokens: input,
+      cached_input_tokens: cached,
+      output_tokens: output,
+    });
+    const child = { source: { subagent: { thread_spawn: { parent_thread_id: NATIVE, depth: 1 } } }, parent_thread_id: NATIVE };
+
+    async function startedCodex(ref: SessionRef): Promise<ActivityService> {
+      const a = activity(await works());
+      await a.start();
+      await waitFor(() => a.get(ref)?.metrics?.model === 'gpt-5.1-codex', 15_000);
+      return a;
+    }
+
+    it('Codex: порождённый тред находится по parent_thread_id и входит в итог родителя один раз в каждом виде', async () => {
+      const first = await session({ provider: 'codex', metrics: null });
+      const second = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+
+      const a = await startedCodex(first);
+      await waitFor(() => a.get(first)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      await waitFor(() => a.get(second)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      for (const ref of [first, second]) {
+        expect(a.get(ref)?.metrics?.usage).toMatchObject({
+          source: 'native-index',
+          // 800 + 400 без кэша, 200 + 100 из кэша, полный вход 1000 + 500: запись в кэш у Codex не наблюдается.
+          input: 1200,
+          output: 250,
+          cacheRead: 300,
+          cacheWrite: null,
+          totalInput: 1500,
+          coverage: 'conversation-and-descendants',
+          completeness: 'complete',
+        });
+      }
+    });
+
+    it('Codex: тред с чужим parent_thread_id и обычный тред в том же cwd потомками не считаются — по времени и cwd не угадываем', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread('codex-other-child', codexUsage(500), { parent_thread_id: 'another-parent' });
+      await writeCodexThread('codex-plain', codexUsage(700));
+
+      const metrics = (await startedCodex(ref)).get(ref)?.metrics;
+      expect(metrics?.usage).toMatchObject({ input: 800, coverage: 'conversation', completeness: 'complete' });
+    });
+
+    it('Codex: форк унаследовал историю — перекрытие без доказательства: итог неполный, цифры форка не прибавлены', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(5000, 100, 50), { ...child, forked_from_id: NATIVE });
+
+      const a = await startedCodex(ref);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.completeness === 'partial', 15_000);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 800, totalInput: 1000, coverage: 'conversation', completeness: 'partial' });
+    });
+
+    it('Codex: запись потомка после старта доезжает до метрик родителя', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      const a = await startedCodex(ref);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 800, coverage: 'conversation' });
+
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      expect(a.get(ref)?.metrics?.usage).toMatchObject({ input: 1200, totalInput: 1500 });
+    }, 30_000);
+
+    it('в публичных метриках нет нативных id потомков, путей их логов и корней истории', async () => {
+      const claude = await session();
+      await writeClaudeFamily([answer('msg_parent', AFTER_LAUNCH, 1000)], [answer('msg_sub', AFTER_LAUNCH, 400)]);
+      const a = await started(claude);
+      const json = JSON.stringify(a.get(claude)?.metrics);
+      expect(json).not.toContain(SUB);
+      expect(json).not.toContain('msg_sub');
+      expect(json).not.toMatch(/agent-|\.jsonl|binding|epoch/);
+      expect(json).not.toContain(claudeRoot);
+    });
+
+    it('в публичных метриках Codex нет нативного id порождённого треда', async () => {
+      const ref = await session({ provider: 'codex', metrics: null });
+      await writeCodexThread(NATIVE, codexUsage(1000));
+      await writeCodexThread(SPAWNED, codexUsage(500, 100, 50), child);
+      const a = await startedCodex(ref);
+      await waitFor(() => a.get(ref)?.metrics?.usage?.coverage === 'conversation-and-descendants', 15_000);
+      const json = JSON.stringify(a.get(ref)?.metrics);
+      expect(json).not.toContain(SPAWNED);
+      expect(json).not.toContain(codexRoot);
+    });
+  });
+
+  it('публичные метрики не раскрывают нативный id, путь лога и корень истории', async () => {
+    const ref = await session();
+    await writeClaudeLog(AFTER_LAUNCH, FULL);
+
+    const a = await started(ref);
+    const json = JSON.stringify(a.get(ref)?.metrics);
+    expect(json).not.toContain(NATIVE);
+    expect(json).not.toContain('msg_native_1');
+    expect(json).not.toContain(claudeRoot);
+    expect(json).not.toMatch(/\.jsonl|binding|epoch/);
+    // Уходящее окну событие устроено так же, как и снимок.
+    expect(JSON.stringify(activityChanges(ref).at(-1)?.metrics)).not.toContain(NATIVE);
+  });
 });

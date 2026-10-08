@@ -222,6 +222,13 @@ describe('лента на фикстурах core', () => {
     expect(screen.getByTestId('chat-turn').textContent).toBe('Turn finished · 5s');
   });
 
+  it('codex-history-in-terminal — строка окна и кнопка «Open terminal»', () => {
+    renderFeed([{ id: 'e', at: AT, kind: 'error', error: 'codex-history-in-terminal', message: null }]);
+    expect(screen.getByTestId('chat-error').textContent).toContain(S.chat.codexHistoryInTerminal);
+    expect(screen.getByRole('button', { name: S.chat.openTerminal })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('ожидающая карточка — «ждёт ответа в терминале» с командой, без кнопок', () => {
     renderFeed([
       {
@@ -349,6 +356,17 @@ describe('ToolItem', () => {
       ['parley · send_message', null],
       ['Glob', null],
     ]);
+  });
+
+  it('законченный вызов без результата (правка Codex) — без раздела Result; идущий — «No result yet»', () => {
+    renderTool(tool({ id: 'done', name: 'Edit', input: { file_path: '/src/a.ts' }, status: 'done' }));
+    fireEvent.click(screen.getAllByTestId('chat-tool')[0]!.querySelector('button') as HTMLElement);
+    expect(screen.queryByText(S.chat.result)).toBeNull();
+    expect(screen.queryByText(S.chat.noResult)).toBeNull();
+    cleanup();
+    renderTool(tool({ id: 'run', status: 'running' }));
+    fireEvent.click(screen.getAllByTestId('chat-tool')[0]!.querySelector('button') as HTMLElement);
+    expect(screen.getByText(S.chat.noResult)).toBeTruthy();
   });
 
   it('статусы: running — спиннер, failed и rejected — словом', () => {

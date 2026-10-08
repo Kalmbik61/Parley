@@ -1,8 +1,10 @@
 import path from 'node:path';
-import { Counter, oneLine, tokenCount, type TokenTotals } from '../counters.js';
+import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
+import { isPointerText } from '../work/delivery.js';
+import { createUsageLedger, observedCount } from '../work/usage-ledger.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
 function asRecord(value: unknown): RawRecord | null {
@@ -18,25 +20,25 @@ function str(source: RawRecord | null, key: string): string | null {
 }
 
 /**
- * Токены из записи `token_count`: `total_token_usage` — накопительный итог сессии,
- * поэтому берётся последняя такая запись, а не сумма.
- *
- * У Codex `input_tokens` включает в себя `cached_input_tokens`, поэтому кэш
- * вычитается: иначе четыре счётчика перестают складываться в общий итог, как
- * они складываются у Claude. Отдельного счётчика ЗАПИСИ в кэш у Codex нет —
- * `cacheWrite` всегда 0 (docs/schema/codex-schema-report.json).
+ * `total_token_usage` записи `token_count` как наблюдение для учёта токенов (он накопительный, поэтому
+ * берётся последняя такая запись, а не сумма). Поля, которых в записи нет, остаются
+ * `null`: `cacheWrite` у Codex не наблюдается никогда (в логе нет такого счётчика) и нулём не
+ * подменяется. `input_tokens` у Codex уже включает кэш, поэтому он же — полный вход, а вход без кэша
+ * известен, только если известен и кэш.
  */
-function codexTokens(payload: RawRecord): TokenTotals | null {
+function codexCounters(payload: RawRecord) {
   const info = asRecord(payload['info']);
   const total = info === null ? null : asRecord(info['total_token_usage']);
   if (total === null) return null;
 
-  const cacheRead = tokenCount(total, 'cached_input_tokens');
+  const totalInput = observedCount(total, 'input_tokens');
+  const cacheRead = observedCount(total, 'cached_input_tokens');
   return {
-    input: Math.max(0, tokenCount(total, 'input_tokens') - cacheRead),
-    output: tokenCount(total, 'output_tokens'),
+    input: totalInput === null || cacheRead === null ? null : Math.max(0, totalInput - cacheRead),
+    output: observedCount(total, 'output_tokens'),
     cacheRead,
-    cacheWrite: 0,
+    cacheWrite: null,
+    totalInput,
   };
 }
 
@@ -69,6 +71,18 @@ function isSpawnedMeta(payload: RawRecord): boolean {
 }
 
 /**
+ * Родитель порождённого треда по родным признакам `session_meta`: `parent_thread_id` либо, у подагента,
+ * `source.subagent.thread_spawn.parent_thread_id`. По времени и cwd родителя не угадываем.
+ */
+function parentThreadId(payload: RawRecord): string | null {
+  const direct = str(payload, 'parent_thread_id');
+  if (direct !== null) return direct;
+  const source = asRecord(payload['source']);
+  const spawn = asRecord(asRecord(source?.['subagent'])?.['thread_spawn']);
+  return str(spawn, 'parent_thread_id');
+}
+
+/**
  * Индексирует один rollout-лог Codex в общую модель SessionIndex.
  *
  * Формат другой во всём (см. specs/runners.md): вся мета в одной записи
@@ -90,9 +104,12 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
   let endedAt: string | null = null;
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
+  let lastCounters = null as ReturnType<typeof codexCounters>;
+  const ledger = createUsageLedger();
   let lastTurnEvent: SessionIndex['lastTurnEvent'];
-  let tokens: TokenTotals | null = null;
   let spawned = false;
+  let parentId: string | null = null;
+  let forkedFrom: string | null = null;
 
   const onRecord = (raw: RawRecord): void => {
     const type = str(raw, 'type');
@@ -115,6 +132,8 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
         version ??= str(payload, 'cli_version');
         gitBranch ??= str(asRecord(payload['git']), 'branch');
         spawned ||= isSpawnedMeta(payload);
+        parentId ??= parentThreadId(payload);
+        forkedFrom ??= str(payload, 'forked_from_id');
         break;
       }
 
@@ -151,7 +170,15 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
             lastUserRecordAt = at;
           }
         }
-        if (kind === 'token_count') tokens = codexTokens(payload) ?? tokens;
+        if (kind === 'token_count') {
+          // Накопитель сессии: одна нить на лог. Падение значения без доказанного сброса учёт не
+          // суммирует и не угадывает — итог остаётся наибольшим и помечается неполным.
+          const counters = codexCounters(payload);
+          if (counters !== null) {
+            lastCounters = counters;
+            ledger.observe({ kind: 'cumulative', stream: 'rollout', counters, at });
+          }
+        }
         break;
       }
 
@@ -165,6 +192,18 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
     startedAt !== null && endedAt !== null
       ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
       : null;
+
+  // `tokens` — для показа: неизвестное поле показывается нулём, а в `usage` остаётся null. Запись в кэш у
+  // Codex не наблюдается никогда, поэтому здесь по-прежнему 0.
+  const tokens: TokenTotals | null =
+    lastCounters === null
+      ? null
+      : {
+          input: lastCounters.input ?? 0,
+          output: lastCounters.output ?? 0,
+          cacheRead: lastCounters.cacheRead ?? 0,
+          cacheWrite: 0,
+        };
 
   const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
 
@@ -196,8 +235,12 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
     // Субагентов у Codex нет как явления.
     subsessionCount: 0,
     tokens,
+    usage: ledger.summary(),
     provider: 'codex',
     ...(spawned ? { spawned: true } : {}),
+    ...(parentId === null ? {} : { parentId }),
+    ...(forkedFrom === null ? {} : { forkedFrom }),
+    ...(firstUserMessage !== null && isPointerText(firstUserMessage) ? { firstPromptPointer: true as const } : {}),
   };
 }
 

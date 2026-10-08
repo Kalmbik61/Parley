@@ -27,13 +27,14 @@ import type {
 import type { ActionId } from './keybindings.js';
 import type { WorkLayout } from './layout-types.js';
 import type { NotesFile } from './notes-types.js';
+import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
 export type HostStatus =
   | { state: 'connecting' }
   /** `methods: null` — хост до этапа 3: ответ `hello` без списка методов (спека 3.2). */
-  | { state: 'connected'; hostVersion: string; methods: string[] | null }
+  | { state: 'connected'; hostVersion: string; methods: string[] | null; features?: string[] | null }
   | { state: 'mismatch'; hostVersion: string; liveSessions: number | null }
   | { state: 'disconnected'; reason: string };
 
@@ -145,6 +146,18 @@ export interface ParleyBridge {
      * папку проекта; незнакомая работа — отказ с кодом `not_found`.
      */
     revealWork(projectPath: string, workId: string): Promise<void>;
+    /** Main-only status/exclusive creation in a known project's root. */
+    openBacklog: (projectPath: string) => Promise<{ opened: boolean }>;
+    /** Main-only: opens one accepted journal revision (`file` is a journal file name, never a path) of a known project. */
+    openDecision: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
+    /**
+     * Main-only: opens one known file of the project's shared state directory (`file` is a path relative to it, such as
+     * `memory.md` or `plans/<name>.md`, never absolute) when that directory lives outside the project folder.
+     */
+    openSharedFile: (projectPath: string, file: string) => Promise<{ opened: boolean }>;
+    parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
+    /** Save as recipe: main пишет только `.parley/recipes/<имя>.md` известного проекта и открывает файл; занятое имя — `exists`. */
+    saveRecipe(request: RecipeSaveRequest): Promise<RecipeSaveResult>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное
      * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.

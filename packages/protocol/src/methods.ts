@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
+import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
 import type {
   FeedCardState,
   FeedItem,
@@ -8,8 +10,35 @@ import type {
   ProjectChanges,
   WorktreeDiff,
 } from '@parley/core';
+import type { CapabilitySnapshot } from './capability-snapshot.js';
+import { capabilityPluginMethodSchemas } from './capability-plugin-actions.js';
+import type { CapabilityPluginMethodResults } from './capability-plugin-actions.js';
+import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
+import type { CapabilityActionResult } from './capability-actions.js';
+import { planMethodSchemas } from './plan-actions.js';
+import type { PlanMethodResults } from './plan-actions.js';
+import { journalMethodSchemas } from './journal.js';
+import type { JournalMethodResults } from './journal.js';
+import { memoryMethodSchemas } from './memory.js';
+import type { MemoryMethodResults } from './memory.js';
+import { historyMethodSchemas } from './history.js';
+import type { HistoryMethodResults } from './history.js';
+import { contextPageMethodSchemas } from './context-pages.js';
+import type { ContextPageMethodResults } from './context-pages.js';
+import { backlogMethodSchemas } from './backlog.js';
+import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
+import type { FeedDecisions } from './feed.js';
 import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+
+/** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
+const recipeSnapshot = z
+  .object({
+    id: z.string().min(1).max(300),
+    name: z.string().min(1).max(300),
+    playbook: z.string().refine((text) => new TextEncoder().encode(text).length <= 1024 * 1024),
+  })
+  .strict();
 
 export const sessionRef = z.object({
   projectPath: z.string(),
@@ -19,6 +48,23 @@ export const sessionRef = z.object({
 
 /** Края названия работы: пробелы и невидимые символы формата (ZWSP, ZWNJ, ZWJ, WJ, BOM). */
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
+
+/**
+ * Новое название работы или комнаты (`works.rename`, `rooms.rename`). Предел — по кодовым точкам: `.max(120)` zod
+ * считает UTF-16, эмодзи шло бы за два. Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
+ * заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что у `renameWork` в core: невидимые
+ * символы формата по краям считаются пробелами, иначе название из одних ZWSP прошло бы.
+ */
+const renameTitle = z
+  .string()
+  .refine((title) => title.length <= 480, { abort: true })
+  .transform((title) => title.replace(TITLE_EDGES, ''))
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .refine((title) => [...title].length <= 120),
+  );
 
 /** Режимы, которые окно выбирает само: цикл Shift+Tab (auto — когда модель его даёт) без обхода разрешений. */
 export const permissionModeChoice = z.enum(['default', 'acceptEdits', 'plan', 'auto']);
@@ -34,7 +80,16 @@ export const EFFORT_TOKEN_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
-  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string() }),
+  ...capabilityPluginMethodSchemas,
+  ...capabilitySkillMethodSchemas,
+  ...backlogMethodSchemas,
+  ...planMethodSchemas,
+  ...journalMethodSchemas,
+  ...memoryMethodSchemas,
+  ...historyMethodSchemas,
+  ...contextPageMethodSchemas,
+  // `features` — что клиент умеет сверх протокола 1 (`COMPACT_WORKS_FEATURE`): старый клиент поля не шлёт.
+  hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
   'providers.list': z.object({}),
@@ -46,30 +101,15 @@ export const METHODS = {
   'works.list': z.object({}),
   'works.create': z.object({ projectPath: z.string(), title: z.string(), goal: z.string() }),
   'works.delete': z.object({ projectPath: z.string(), workId: z.string() }),
-  // Предел — по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два.
-  // Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
-  // заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что
-  // у `renameWork` в core: невидимые символы формата по краям считаются
-  // пробелами, иначе название из одних ZWSP прошло бы.
-  'works.rename': z.object({
-    projectPath: z.string(),
-    workId: z.string(),
-    title: z
-      .string()
-      .refine((title) => title.length <= 480, { abort: true })
-      .transform((title) => title.replace(TITLE_EDGES, ''))
-      .pipe(
-        z
-          .string()
-          .min(1)
-          .refine((title) => [...title].length <= 120),
-      ),
-  }),
+  'works.rename': z.object({ projectPath: z.string(), workId: z.string(), title: renameTitle }),
   'works.setStatus': z.object({
     projectPath: z.string(),
     workId: z.string(),
     status: z.enum(['active', 'done', 'archived']),
   }),
+  'roles.list': z.object({ projectPath: z.string(), ref: sessionRef.optional() }),
+  // Каталог рецептов комнат: встроенные и рецепты выбранного проекта (спека рецептов, 5–6).
+  'recipes.list': z.object({ projectPath: z.string().min(1) }).strict(),
   'sessions.create': z.object({
     projectPath: z.string(),
     workId: z.string().nullable(),
@@ -77,6 +117,8 @@ export const METHODS = {
     label: z.string(),
     task: z.string(),
     parent: z.string().nullable(),
+    role: z.object({ source: z.enum(['builtin', 'claude', 'codex']), name: z.string().min(1).max(4096) }).nullable().optional(),
+    agent: z.string().min(1).max(4096).optional(),
     worktree: z.boolean().optional(),
     // Модель и усилие из диалога запуска (дизайн комнат, 3.2). Провайдер без флага их отбрасывает
     // — окно узнаёт об этом из `providers.list`. Модель — `id` из списка провайдера
@@ -90,8 +132,9 @@ export const METHODS = {
       .string()
       .max(200)
       .regex(/^(?:[^\s-]\S*)?$/)
+      .nullable()
       .optional(),
-    effort: z.string().regex(EFFORT_TOKEN_RE).optional(),
+    effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -108,6 +151,11 @@ export const METHODS = {
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
+  'capabilities.get': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.refresh': z.object({ projectPath: z.string().min(1) }).strict(),
+  'capabilities.mcp.add': capabilityMcpAdd,
+  'capabilities.mcp.remove': capabilityMcpTarget,
+  'capabilities.mcp.check': capabilityMcpTarget,
   'capabilities.list': z.object({ projectPath: z.string().min(1), provider: z.string().min(1) }),
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
@@ -133,6 +181,11 @@ export const METHODS = {
     // комнаты пуста, пока человек не напишет в неё задачу. Без флага приглашения уходят, как прежде:
     // сессии уже работают и о комнате иначе не узнают. Старый хост поле отбросит.
     quiet: z.boolean().optional(),
+    // Режим комнаты (планы и режимы): без него комната свободная, как прежде. Старый хост поле отбросит.
+    mode: z.enum(['free', 'checklist', 'verified']).optional(),
+    // Снимок рецепта на момент создания (спека рецептов, 6.2): хост кладёт его в комнату как есть, правка
+    // файла рецепта комнату потом не меняет. Лишние поля не принимаются.
+    recipe: recipeSnapshot.optional(),
   }),
   // Дизайн комнат, 3.2: человек вводит сессию в комнату; она уходит из прочих комнат работы. Уже
   // участник и нигде больше — `bad_request`; состоящая и в других комнатах (старая карта, решение 4)
@@ -143,6 +196,13 @@ export const METHODS = {
     roomId: z.string(),
     sessionId: z.string(),
   }),
+  // Управление комнатой из сайдбара. Название — по правилу `works.rename`: пустое после обрезки не проходит схему,
+  // и прежнее остаётся. «Make lead»: участник, не закрытый и не ведущий уже, — правила сверяет хост (`bad_request`).
+  // Удаление уносит комнату с лентой, а её сессии остаются обычными сессиями работы: удалить и их окно просит
+  // отдельно, через `sessions.delete` каждой, до `rooms.delete` (`RoomRowMenu`).
+  'rooms.rename': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), title: renameTitle }),
+  'rooms.setLead': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), sessionId: z.string() }),
+  'rooms.delete': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
   // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
   // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
@@ -156,7 +216,9 @@ export const METHODS = {
     action: z.enum(['accept', 'return']),
     note: z.string().max(4000).optional(),
     rev: z.number().int().min(0).optional(),
-  }),
+    planId: z.string().regex(/^pl-\d+$/).max(128).optional(),
+    planRev: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).refine(value => (value.planId === undefined) === (value.planRev === undefined)),
   'rooms.send': z.object({
     projectPath: z.string(),
     workId: z.string(),
@@ -210,9 +272,10 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results {
+export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
-  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[] };
+  /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
+  hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
@@ -278,6 +341,8 @@ export interface Results {
   'works.delete': { ok: true };
   'works.rename': { ok: true };
   'works.setStatus': { ok: true };
+  'roles.list': import('@parley/core').RoleList;
+  'recipes.list': import('@parley/core').RecipeCatalogView;
   'sessions.create': { ref: SessionRef };
   'sessions.resume': { ok: true };
   'sessions.stop': { ok: true };
@@ -301,6 +366,11 @@ export interface Results {
   'sessions.setModel': { model: string; effort: string | null; restarted: boolean };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
+  'capabilities.get': CapabilitySnapshot;
+  'capabilities.refresh': CapabilitySnapshot;
+  'capabilities.mcp.add': CapabilityActionResult;
+  'capabilities.mcp.remove': CapabilityActionResult;
+  'capabilities.mcp.check': CapabilityActionResult;
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
@@ -312,6 +382,10 @@ export interface Results {
   'rooms.create': { roomId: string };
   /** `messageId` — системная строка ленты «@s04 joined the room». */
   'rooms.addMember': { messageId: string };
+  'rooms.rename': { ok: true };
+  /** `messageId` — системная строка ленты «@s03 is now the lead». */
+  'rooms.setLead': { messageId: string };
+  'rooms.delete': { ok: true };
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };
@@ -329,7 +403,14 @@ export interface Results {
    * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.
    * `mode` — режим разрешений сессии (сырая строка CLI), `null` — не известен.
    */
-  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number; mode: string | null };
+  'feed.snapshot': {
+    items: FeedItem[];
+    revision: number;
+    schemaVersion: number;
+    mode: string | null;
+    /** Кто ответит на одобрения сессии; нет поля — как `window` (Claude, спека 2026-10-07, 5.7). */
+    decisions?: FeedDecisions | null;
+  };
   'feed.subscribe': { ok: true };
   'feed.unsubscribe': { ok: true };
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */

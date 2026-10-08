@@ -44,6 +44,25 @@ describe('findInterrupted', () => {
     expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' }]);
   });
 
+  it('сессия codex без строк notify в журнале событий не считается прерванной', async () => {
+    // У Codex журнал `events/` не пишет никто (`notify` не подменяется): журнала нет (null) или он пуст.
+    const entry = entryOf([{ id: 's-01', lifecycle: 'sleeping' }]);
+
+    expect(await findInterrupted([entry], async () => null)).toEqual([]);
+    expect(await findInterrupted([entry], async () => [])).toEqual([]);
+  });
+
+  it('архивная работа в список не идёт: её сессии до Reopen не поднимаются', async () => {
+    const entry = {
+      projectPath: '/tmp/p',
+      map: { work: { id: 'w-01', status: 'archived' }, sessions: [{ id: 's-01', lifecycle: 'sleeping' }] },
+    } as unknown as WorkEntry;
+
+    const refs = await findInterrupted([entry], async () => [event('UserPromptSubmit')]);
+
+    expect(refs).toEqual([]);
+  });
+
   it('строки ожидания wait_for (их пишет MCP-сервер, не Claude) конец хода не меняют', async () => {
     const journals: Record<string, readonly EventRecord[] | null> = {
       // Ход закончился, а запоздалый конец ожидания дописан после Stop: не прервана.

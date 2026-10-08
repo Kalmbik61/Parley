@@ -31,8 +31,14 @@
  *
  * Строка — цель броска сессии (кусок 7, 2.5): сессию, которой в комнате нет, бросают на строку — `rooms.addMember`, комната
  * разворачивается. Подсветка — только у цели, на которую бросить можно (`use-drop-target.ts`): в свою комнату нельзя.
+ *
+ * Меню по правой кнопке — `RoomRowMenu`: «Rename» (поле на месте названия, `RoomInlineRename`) и «Delete…». Его триггер
+ * сливается с узлом строки, как у `SessionRowMenu`: ссылка цели броска и обработчики строки остаются, тултип шапки —
+ * атрибут `title`. Строки участников — со своим меню («Make lead» у не ведущего): правая кнопка на участнике открывает
+ * его меню, а не меню комнаты.
  */
 
+import { useState } from 'react';
 import { ChevronDown, Hash } from 'lucide-react';
 import type { WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
@@ -49,7 +55,11 @@ import { roomKey, roomTabState } from '../lib/room-view.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
+import { RoomInlineRename } from './InlineRename.js';
+import { RoomRowMenu } from './RoomRowMenu.js';
 import { SessionRow } from './SessionRow.js';
+import { planProgress } from '../components/rooms/PlanPanel.js';
+import type { RoomPlan } from '@parley/core';
 import type { CardRoomRow } from './sort.js';
 import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
@@ -61,6 +71,7 @@ export interface RoomRowProps {
   workId: string;
   bridge: ParleyBridge;
   row: CardRoomRow;
+  plan?: RoomPlan | null;
   /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
   unread: number;
   /** Среди них есть упоминание человека `@human` (`WorkAttention.roomMentions`). */
@@ -105,6 +116,7 @@ export function RoomRow({
   workId,
   bridge,
   row,
+  plan,
   unread,
   mentioned,
   activity,
@@ -125,6 +137,7 @@ export function RoomRow({
   const stop = useCursorStop(workKey, null, false, room.id);
   // Цель броска сессии (кусок 7, 2.5, `rooms.addMember`): вся строка, вместе со строками участников.
   const { setNodeRef: setDropRef, over } = useSidebarDropTarget(workKey, { kind: 'room-row', roomId: room.id });
+  const [renaming, setRenaming] = useState(false);
 
   const selected = tab === 'selected';
   const expanded = override ?? tab !== null;
@@ -154,6 +167,7 @@ export function RoomRow({
   };
 
   return (
+    <RoomRowMenu workKey={workKey} projectPath={projectPath} workId={workId} row={row} bridge={bridge} onRename={() => setRenaming(true)}>
     <div
       ref={setDropRef}
       role="treeitem"
@@ -204,7 +218,12 @@ export function RoomRow({
       <div title={tooltip} className="flex h-[18px] items-center gap-1.5">
         {pending ? <AgentStateDot state="blocked" lifecycle="active" /> : <span className="inline-block size-3 shrink-0" />}
         <Hash className="size-[13px] shrink-0 text-work-sidebar-muted-foreground" aria-hidden="true" />
-        <span className={cn('min-w-0 flex-1 truncate', bold ? 'font-bold' : 'font-normal')}>{title}</span>
+        {renaming ? (
+          <RoomInlineRename projectPath={projectPath} workId={workId} room={room} bridge={bridge} onDone={() => setRenaming(false)} />
+        ) : (
+          <span className={cn('min-w-0 flex-1 truncate', bold ? 'font-bold' : 'font-normal')}>{title}</span>
+        )}
+        {plan ? <span data-room-plan-progress="" className="shrink-0 text-[11px]" title={planProgress(plan)}>{planProgress(plan)}</span> : null}
         {word === '' ? null : <span className={cn('shrink-0 text-[11px]', pending ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>}
         <button
           type="button"
@@ -259,11 +278,13 @@ export function RoomRow({
               selected={session.id === selectedSessionId}
               onOpen={openerFor(session.id)}
               inRoom
+              roomId={room.id}
               lead={session.id === row.lead}
             />
           ))}
         </div>
       ) : null}
     </div>
+    </RoomRowMenu>
   );
 }

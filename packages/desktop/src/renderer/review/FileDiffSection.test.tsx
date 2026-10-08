@@ -128,4 +128,9 @@ describe('FileDiffSection', () => {
     expect(title.className).toContain('truncate');
     expect(title.className).toContain('min-w-0');
   });
+
+  it('заголовок — значок файла по пути (спека значков 3.4)', () => {
+    render(<FileDiffSection {...props(M('src/package.json'), { live: false })} />);
+    expect(document.querySelector('img[data-file-icon]')?.getAttribute('src')).toMatch(/nodejs\.svg$/);
+  });
 });

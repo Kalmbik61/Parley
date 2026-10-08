@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it, vi } from 'vitest';
 import type { EventsLog } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { WATCH_SETTLE_MS } from '../watch-settle.js';
 import type { ActivityService } from './activity-service.js';
 
 /**
@@ -147,9 +148,9 @@ describe('запись журнала, о которой наблюдатель 
     const { ref, journal } = await freshSession();
     const since = Date.now();
     const a = await started();
-    // Первое чтение и повторное после наблюдателя журналов прошли, а индекс ещё строит список сессий
+    // Первое чтение и все дочитывания после наблюдателя журналов прошли, а индекс ещё строит список сессий
     // (в работе — гигабайты истории, секунды).
-    await waitFor(() => reads >= 2);
+    await waitFor(() => reads >= 1 + WATCH_SETTLE_MS.length, 10_000);
 
     // Хук пришёл, когда индекс заводил свои наблюдатели: поток пересоздан снова, уведомления нет.
     await appendFile(journal, SESSION_START);

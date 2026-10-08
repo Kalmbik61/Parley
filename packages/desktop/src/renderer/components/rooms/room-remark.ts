@@ -255,7 +255,70 @@ export function remarkMentions(options?: { lineBreaks?: boolean; humanChips?: bo
   return (tree: MdNode): void => expandChildren(tree, lineBreaks, humanChips);
 }
 
+/** Кандидат в путь: подряд идущие буквы, цифры и `._@+~/-`; что из этого путь, решает `isPathToken`. */
+const PATH_RUN = /[\w.@+~/-]+/g;
+/** Хвост, который к пути не относится: точка или запятая в конце фразы, двоеточие перед пояснением. */
+const PATH_TRAILER = /[.,;:!?]+$/;
+/** Последний сегмент с расширением файла, можно со строками: `store.py`, `rate_limit.py:40-72`. */
+const FILE_SEGMENT = /\.[A-Za-z][A-Za-z0-9]{0,9}(?::\d+(?:-\d+)?)?$/;
+/** Корни проекта, за которыми идёт путь и без расширения: `src/features/documents`. */
+const PROJECT_ROOTS = new Set(['src', 'packages', 'apps', 'lib', 'libs', 'test', 'tests', 'docs', 'e2e', 'scripts']);
+
+/**
+ * Путь к файлу или папке — по строгому правилу, чтобы дроби и перечисления через слэш (`200/201/204`,
+ * `guest/patient/administrator`, `PDF/JPEG/PNG`, `and/or`) остались текстом. Путь — это сегменты через `/` с хотя бы
+ * одной латинской буквой и одно из: файл с расширением в конце, начало `~/`, `./`, `../` или `/`, первая папка-точка
+ * (`.omc/…`, `.parley/…`) или корень проекта (`src/…`, `packages/…`). Путь папки без такого признака
+ * (`features/documents/api`) не узнаётся: отличить его от перечисления нечем.
+ */
+export function isPathToken(token: string): boolean {
+  if (!token.includes('/') || token.includes('//') || !/[A-Za-z]/.test(token)) return false;
+  const segments = token.replace(/^(?:~|\.{1,2})?\//, '').replace(/\/$/, '').split('/');
+  if (segments.length < 2 || segments.some((segment) => segment === '')) return false;
+  if (/^(?:~|\.{1,2})?\//.test(token)) return true;
+  const [first = ''] = segments;
+  if (/^\.[A-Za-z][\w-]*$/.test(first) || PROJECT_ROOTS.has(first)) return true;
+  return FILE_SEGMENT.test(segments[segments.length - 1] ?? '');
+}
+
+/** Текстовый узел → текст и `inlineCode` на месте путей. */
+function codePathsIn(value: string): MdNode[] {
+  const out: MdNode[] = [];
+  let last = 0;
+  for (const match of value.matchAll(PATH_RUN)) {
+    const token = match[0].replace(PATH_TRAILER, '');
+    const start = match.index ?? 0;
+    if (!isPathToken(token)) continue;
+    if (start > last) out.push({ type: 'text', value: value.slice(last, start) });
+    out.push({ type: 'inlineCode', value: token });
+    last = start + token.length;
+  }
+  if (last === 0) return [{ type: 'text', value }];
+  if (last < value.length) out.push({ type: 'text', value: value.slice(last) });
+  return out;
+}
+
+function codePathsChildren(parent: MdNode): void {
+  if (parent.children === undefined) return;
+  parent.children = parent.children.flatMap((child) => {
+    if (child.type === 'text' && child.value !== undefined && child.literal !== true) return codePathsIn(child.value);
+    if (!LITERAL_PARENTS.has(child.type)) codePathsChildren(child);
+    return [child];
+  });
+}
+
+/**
+ * Плагин remark: пути к файлам и папкам — `code` (письма Parley и системные строки ленты, `RoomMessage`). Код и ссылки
+ * не трогаются: путь в обратных кавычках уже код, а в адресе ссылки — часть адреса. Стоит до `remarkMentions`: тот режет
+ * текст на упоминания и строки, а пути внутри строки целиком.
+ */
+export function remarkCodePaths() {
+  return (tree: MdNode): void => codePathsChildren(tree);
+}
+
 export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkReveal, remarkMentions];
+/** Письма Parley и системные строки: пути — кодом (`remarkCodePaths`). */
+const CODE_PATH_REMARK_PLUGINS: PluggableList = [remarkGfm, remarkReveal, remarkCodePaths, remarkMentions];
 export const INLINE_REMARK_PLUGINS: PluggableList = [
   remarkGfm,
   remarkReveal,
@@ -275,9 +338,12 @@ const PLAIN_HUMAN_INLINE_REMARK_PLUGINS: PluggableList = [
 
 /**
  * Список плагинов для вида (`inline` — строчный вид плашки решений) и правила `@human` (`humanChips`). Списки
- * готовые и каждый раз те же: по ним `RoomMarkdown` решает, нужен ли новый разбор.
+ * готовые и каждый раз те же: по ним `RoomMarkdown` решает, нужен ли новый разбор. Пути кодом (`codePaths`) — только у
+ * сообщения ленты целиком с чипом «@you», так их и рисует `RoomMessage` для писем Parley; в остальных видах флаг не
+ * нужен и не действует.
  */
-export function remarkPluginsFor(inline: boolean, humanChips: boolean): PluggableList {
+export function remarkPluginsFor(inline: boolean, humanChips: boolean, codePaths = false): PluggableList {
+  if (codePaths && !inline && humanChips) return CODE_PATH_REMARK_PLUGINS;
   if (humanChips) return inline ? INLINE_REMARK_PLUGINS : REMARK_PLUGINS;
   return inline ? PLAIN_HUMAN_INLINE_REMARK_PLUGINS : PLAIN_HUMAN_REMARK_PLUGINS;
 }

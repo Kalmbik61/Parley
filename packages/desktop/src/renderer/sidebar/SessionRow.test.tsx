@@ -26,6 +26,12 @@ import { SessionRow } from './SessionRow.js';
 const openAgentCard = vi.hoisted(() => vi.fn());
 vi.mock('../chat/open-agent.js', () => ({ openAgentCard }));
 
+// Места в правом сайдбаре нет — прежнее поведение (карточка в ленте); с местом строка ведёт в панель Agents (open-agents.test).
+vi.mock('../shell/RightSidebar.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shell/RightSidebar.js')>()),
+  rightSidebarHasRoom: () => false,
+}));
+
 const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
 const KEY = workKey(PROJECT, WORK);
@@ -199,11 +205,13 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(row('s-01').style.paddingLeft).toBe('8px');
   });
 
-  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием', () => {
+  it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием, но не уже 5ch (номер S01…)', () => {
     const label = 'я'.repeat(40);
     renderRow(makeSession('s-01', label), { activity: 'working' });
     const name = screen.getByText(`S01 ${label}`);
-    expect(name.className).toContain('min-w-0');
+    // Не `min-w-0`: рядом с чипом роли название схлопывалось в ноль (жалоба 2026-10-07) — теперь первым сжимается чип.
+    expect(name.className).toContain('min-w-[5ch]');
+    expect(name.className).not.toMatch(/\bmin-w-0\b/);
     expect(name.className).toContain('flex-1');
     expect(name.className).toContain('truncate');
     expect(screen.getByText(S.states.working).className).toContain('shrink-0');
@@ -254,6 +262,20 @@ describe('SessionRow — участник комнаты (кусок 5)', () => 
     cleanup();
     inRoom(makeSession('s-01', 'исполнитель'), false);
     expect(row().querySelector('[data-lead]')).toBeNull();
+  });
+
+  it('времени последнего события у участника нет (жалоба 2026-10-07: у ведущего с ролью оно выходило за рамку комнаты); у обычной строки есть', () => {
+    const session = makeSession('s-01', 'исполнитель');
+    const activity = makeActivity({ projectPath: PROJECT, workId: WORK, sessionId: session.id }, 'working', {
+      lastEventAt: '2026-09-27T09:57:00.000Z',
+    });
+    render(
+      <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={session} depth={3} activity={activity} now={NOW} draggable selected={false} onOpen={() => {}} inRoom lead />,
+    );
+    expect(row().textContent).not.toContain('3m');
+    cleanup();
+    renderRow(session, { activity: 'working' });
+    expect(row().textContent).toContain('3m');
   });
 
   it('обычная строка сессии звезды не знает: lead без комнаты не рисуется, если его не просили', () => {
@@ -450,6 +472,90 @@ describe('SessionRow — метка новой сессии (раунд испр
     cleanup();
     renderRow(makeSession('s-02', 'исполнитель'));
     expect(row('s-02').textContent).toContain('S02 исполнитель');
+  });
+});
+
+// Агенту комнаты пришли письма: название сессии прежнее, рядом мигает значок письма, пока агент их не прочёл.
+describe('SessionRow — значок новых писем агента', () => {
+  const REF = { projectPath: PROJECT, workId: WORK, sessionId: 's-01' };
+  const metricsOf = (unread: number): LiveMetrics => ({ tokensIn: 1, tokensOut: 1, durationMs: null, unread, subagents: 0, model: null });
+  const rowWith = (metrics: LiveMetrics | null, session = makeSession('s-01', 'new session')): JSX.Element => (
+    <SessionRow
+      workKey={KEY}
+      projectPath={PROJECT}
+      workId={WORK}
+      bridge={BRIDGE}
+      session={session}
+      depth={0}
+      activity={makeActivity(REF, 'idle', { metrics })}
+      now={NOW}
+      draggable
+      selected={false}
+      onOpen={() => {}}
+    />
+  );
+  const marker = (): HTMLElement | null => row().querySelector<HTMLElement>('[data-agent-unread]');
+
+  it('unread > 0 — мигающий значок «Has new messages» после названия; название прежнее', () => {
+    render(rowWith(metricsOf(2)));
+    const found = marker();
+    expect(found).not.toBeNull();
+    expect(found?.getAttribute('title')).toBe(S.sidebar.agentUnread);
+    expect(found?.getAttribute('aria-label')).toBe('Has new messages');
+    expect(found?.querySelector('svg.lucide-mail')?.classList.contains('size-[11px]')).toBe(true);
+    // Мигает, но не под `prefers-reduced-motion`; не сжимается — сжимается название.
+    expect(found?.className).toContain('animate-pulse');
+    expect(found?.className).toContain('motion-reduce:animate-none');
+    expect(found?.className).toContain('shrink-0');
+    expect(found?.className).toContain('text-accent-700');
+    expect(screen.getByText('S01 New session').className).toContain('truncate');
+    expect(row().textContent).not.toContain('New messages');
+  });
+
+  it('писем нет, метрик ещё нет — значка нет', () => {
+    render(rowWith(metricsOf(0)));
+    expect(marker()).toBeNull();
+    cleanup();
+    render(rowWith(null));
+    expect(marker()).toBeNull();
+  });
+
+  it('агент прочёл письма — значок ушёл, название то же', () => {
+    const view = render(rowWith(metricsOf(1), makeSession('s-01', 'ревьюер')));
+    expect(marker()).not.toBeNull();
+    view.rerender(rowWith(metricsOf(0), makeSession('s-01', 'ревьюер')));
+    expect(marker()).toBeNull();
+    expect(row().textContent).toContain('S01 ревьюер');
+  });
+
+  it('спящей и ожидающей запуска письма ждут — значок есть; закрытой не доставляются — значка нет', () => {
+    for (const lifecycle of ['sleeping', 'pending'] as const) {
+      render(rowWith(metricsOf(1), makeSession('s-01', 'a', { lifecycle })));
+      expect(marker(), lifecycle).not.toBeNull();
+      cleanup();
+    }
+    render(rowWith(metricsOf(1), makeSession('s-01', 'a', { lifecycle: 'closed' })));
+    expect(marker()).toBeNull();
+  });
+
+  it('участник развёрнутой комнаты — та же строка, тот же значок', () => {
+    render(
+      <SessionRow
+        workKey={KEY}
+        projectPath={PROJECT}
+        workId={WORK}
+        bridge={BRIDGE}
+        session={makeSession('s-01', 'new session')}
+        depth={0}
+        activity={makeActivity(REF, 'working', { metrics: metricsOf(1) })}
+        now={NOW}
+        draggable
+        selected={false}
+        onOpen={() => {}}
+        inRoom
+      />,
+    );
+    expect(marker()).not.toBeNull();
   });
 });
 

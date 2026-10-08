@@ -1,11 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
+import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
@@ -53,6 +54,18 @@ const otherSession = { clearStorageData: vi.fn(), clearCache: vi.fn() };
 const designMode = {
   start: vi.fn().mockResolvedValue(null),
   cancel: vi.fn().mockResolvedValue(undefined),
+};
+/** Журнал и эмуляция моста (спека 2026-10-07, 3.5): подменены — мост проверяет гостя и аргументы. */
+const inspector = {
+  snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
+  clear: vi.fn<(id: number) => void>(),
+  ready: vi.fn<(id: number) => Promise<void>>(async () => {}),
+  responseBody: vi.fn<(id: number, requestId: string, limit: number) => Promise<ResponseBody | null>>(async () => null),
+};
+const emulation = {
+  set: vi.fn<(id: number, spec: ViewportSpec | null, area: { width: number; height: number }) => Promise<{ scale: number }>>(async () => ({
+    scale: 0.5,
+  })),
 };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
@@ -206,6 +219,8 @@ function setup(
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
       designMode,
+      inspector,
+      emulation,
     },
   });
 
@@ -1128,6 +1143,66 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     await ipcMain.invoke('browser:pick-cancel', 7);
     expect(designMode.cancel).toHaveBeenCalledWith(7);
   });
+
+  it('devtools-snapshot, devtools-clear и devtools-ready (спека 2026-10-07, 3.5; спайк 0.1): не гость раздела — bad_request; без журнала — unavailable', async () => {
+    inspector.snapshot.mockClear();
+    inspector.clear.mockClear();
+    inspector.ready.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const id of [1, 404, 8, 9, 7.5, '7', null]) {
+      expect(await codeOf(ipcMain.invoke('browser:devtools-snapshot', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:devtools-clear', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:devtools-ready', id)), String(id)).toBe('bad_request');
+    }
+    expect(inspector.snapshot).not.toHaveBeenCalled();
+    expect(inspector.ready).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('browser:devtools-snapshot', 7)).toEqual({ epoch: 0, capture: 'unavailable', console: [], network: [] });
+    const journal: DevtoolsSnapshot = { epoch: 2, capture: 'late', console: [], network: [] };
+    inspector.snapshot.mockReturnValueOnce(journal);
+    expect(await ipcMain.invoke('browser:devtools-snapshot', 7)).toEqual(journal);
+    expect(inspector.snapshot).toHaveBeenLastCalledWith(7);
+    await ipcMain.invoke('browser:devtools-clear', 7);
+    expect(inspector.clear).toHaveBeenCalledWith(7);
+    await ipcMain.invoke('browser:devtools-ready', 7);
+    expect(inspector.ready).toHaveBeenCalledWith(7);
+  });
+
+  it('response-body: requestId — непустая строка до 256 знаков; предел тела — 1 МБ', async () => {
+    inspector.responseBody.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const requestId of ['', 'r'.repeat(257), 42, null]) {
+      expect(await codeOf(ipcMain.invoke('browser:response-body', 7, requestId)), String(requestId)).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:response-body', 1, '1.2'))).toBe('bad_request');
+    expect(inspector.responseBody).not.toHaveBeenCalled();
+    inspector.responseBody.mockResolvedValueOnce({ text: '{}', base64: false, truncated: false });
+    expect(await ipcMain.invoke('browser:response-body', 7, '1.2')).toEqual({ text: '{}', base64: false, truncated: false });
+    expect(inspector.responseBody).toHaveBeenCalledWith(7, '1.2', 1_048_576);
+  });
+
+  it('set-viewport: размер — null или верный ViewportSpec, поле — положительные конечные числа; ответ — scale', async () => {
+    emulation.set.mockClear();
+    const { ipcMain } = browserSetup();
+    const area = { width: 800, height: 600 };
+    const bad: Array<[unknown, unknown]> = [
+      [{ preset: 'phone', rotated: false, dpr: 2 }, area],
+      [{ preset: 'mobile-m', rotated: false, dpr: 4 }, area],
+      [{ width: 100, height: 600, mobile: false, dpr: 1 }, area],
+      [{ preset: 'mobile-m', rotated: false, dpr: 2 }, { width: 0, height: 600 }],
+      [null, { width: Number.NaN, height: 600 }],
+      [null, null],
+    ];
+    for (const [spec, size] of bad) {
+      expect(await codeOf(ipcMain.invoke('browser:set-viewport', 7, spec, size)), JSON.stringify([spec, size])).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:set-viewport', 1, null, area))).toBe('bad_request');
+    expect(emulation.set).not.toHaveBeenCalled();
+    const mobile = { preset: 'mobile-m', rotated: false, dpr: 2 };
+    expect(await ipcMain.invoke('browser:set-viewport', 7, mobile, area)).toEqual({ scale: 0.5 });
+    expect(emulation.set).toHaveBeenLastCalledWith(7, mobile, area);
+    await ipcMain.invoke('browser:set-viewport', 7, null, area);
+    expect(emulation.set).toHaveBeenLastCalledWith(7, null, area);
+  });
 });
 
 describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
@@ -1163,5 +1238,289 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     expect(sent).toHaveLength(3);
     windowEvents.emit('closed');
     expect(statusListeners.size).toBe(0);
+  });
+});
+
+describe('app:parley-md project boundary', () => {
+  let project: string;
+  let roots: RootsRegistry;
+  let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-md-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+
+  it('status is read-only; explicit Create is idempotent and preserves occupied content', async () => {
+    const { ipcMain, connection } = setup({ roots });
+    vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:parley-md', project, false)).toEqual({ exists: false, created: false });
+    expect(await readdir(project)).toEqual([]);
+    expect(await ipcMain.invoke('app:parley-md', project, true)).toEqual({ exists: true, created: true });
+    await writeFile(path.join(project, 'PARLEY.md'), 'HUMAN RULES');
+    expect(await ipcMain.invoke('app:parley-md', project, true)).toEqual({ exists: true, created: false });
+    expect(await readFile(path.join(project, 'PARLEY.md'), 'utf8')).toBe('HUMAN RULES');
+  });
+
+  it('rejects bad arguments and unknown projects before filesystem creation', async () => {
+    const { ipcMain, connection } = setup({ roots });
+    vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const args of [[project, 'true'], [project + '\0', true], [42, true], ['/not-a-known-project', true]]) {
+      await expect(ipcMain.invoke('app:parley-md', ...args)).rejects.toThrow();
+    }
+    expect(await readdir(project)).toEqual([]);
+  });
+
+  it('refuses accounting through a state directory symlink outside the project', async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), 'parley-md-outside-'));
+    try {
+      await symlink(outside, path.join(project, '.parley'));
+      const { ipcMain, connection } = setup({ roots });
+      vi.mocked(connection.call).mockResolvedValue(snapshot);
+      await expect(ipcMain.invoke('app:parley-md', project, true)).rejects.toThrow();
+      expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(project)).toEqual(['.parley']);
+    } finally { await rm(outside, { recursive: true, force: true }); }
+  });
+});
+
+
+describe('app:open-backlog fixed project file boundary', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  it('opens only the regular canonical backlog file of a known project without creating state on missing files', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow(); expect(await readdir(project)).toEqual([]);
+    await mkdir(path.join(project, '.parley')); const file = path.join(project, '.parley', 'backlog.md'); await writeFile(file, 'Human backlog');
+    expect(await ipcMain.invoke('app:open-backlog', project)).toEqual({ opened: true }); expect(openPath).toHaveBeenCalledWith(file);
+    expect(await readFile(file, 'utf8')).toBe('Human backlog');
+  });
+  it('rejects arbitrary paths, unsafe argument forms, directories, and symlink targets before editor delivery', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0']) await expect(ipcMain.invoke('app:open-backlog', value)).rejects.toThrow();
+    await mkdir(path.join(project, '.parley', 'backlog.md'), { recursive: true }); await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'backlog.md'), { recursive: true });
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await symlink(outside, path.join(project, '.parley', 'backlog.md')); await expect(ipcMain.invoke('app:open-backlog', project)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('returns a fixed safe error when the editor is unavailable', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await mkdir(path.join(project, '.parley')); await writeFile(path.join(project, '.parley', 'backlog.md'), 'Task');
+    openPath.mockResolvedValue('/private editor error');
+    const error = await Promise.resolve(ipcMain.invoke('app:open-backlog', project)).catch((value: unknown) => value);
+    expect(String(error)).not.toContain('/private editor error');
+  });
+});
+
+
+it('OpenBacklog resolves a known linked participant project to its corresponding main backlog file', async () => {
+  const run = (await import('node:util')).promisify((await import('node:child_process')).execFile);
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-linked-ipc-')));
+  const main = path.join(root, 'main'), participant = path.join(root, 'participant');
+  await mkdir(main);
+  try {
+    await run('git', ['init', '-b', 'main', main]);
+    await run('git', ['-C', main, 'config', 'user.name', 'Fixture']); await run('git', ['-C', main, 'config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await run('git', ['-C', main, 'add', 'README.md']); await run('git', ['-C', main, 'commit', '-m', 'fixture']);
+    await run('git', ['-C', main, 'worktree', 'add', '-b', 'participant', participant]);
+    await mkdir(path.join(main, '.parley')); await writeFile(path.join(main, '.parley', 'backlog.md'), 'Shared main backlog');
+    const snapshot = { entries: [{ projectPath: participant, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    const roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:open-backlog', participant)).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledWith(path.join(main, '.parley', 'backlog.md'));
+    await expect(readFile(path.join(participant, '.parley', 'backlog.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+describe('app:open-decision fixed accepted revision boundary', () => {
+  const FIRST = '2026-10-05-w-01-r-01-p-01-rev-00.md';
+  const SECOND = '2026-10-06-w-01-r-01-p-01-rev-01.md';
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-decision-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    await mkdir(path.join(project, '.parley', 'decisions'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'decisions', FIRST), 'First accepted revision');
+    await writeFile(path.join(project, '.parley', 'decisions', SECOND), 'Second accepted revision');
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  /** Хост подтверждает перечисленные файлы; остальные не знает. */
+  function host(openable: string[]) {
+    const made = setup({ roots });
+    vi.mocked(made.connection.call).mockImplementation((async (method: string, params: { query?: string }) => method === 'works.list' ? snapshot
+      : { decisions: openable.filter(file => file === params.query).map(file => ({ file, openable: true })), total: 1, partial: false, errors: [] }) as never);
+    return made;
+  }
+  it('opens exactly the requested accepted revision, confirmed by the host list, and nothing else', async () => {
+    const { ipcMain, connection, openPath } = host([FIRST, SECOND]);
+    expect(await ipcMain.invoke('app:open-decision', project, FIRST)).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledTimes(1); expect(openPath).toHaveBeenCalledWith(path.join(project, '.parley', 'decisions', FIRST));
+    await ipcMain.invoke('app:open-decision', project, SECOND);
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'decisions', SECOND));
+    expect(connection.call).toHaveBeenCalledWith('decisions.list', { projectPath: project, query: FIRST, limit: 10 });
+  });
+  it('refuses a file the host does not confirm as an openable accepted revision', async () => {
+    const { ipcMain, openPath } = host([]);
+    await expect(ipcMain.invoke('app:open-decision', project, FIRST)).rejects.toThrow();
+    const unlisted = host([FIRST]);
+    await expect(unlisted.ipcMain.invoke('app:open-decision', project, SECOND)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(unlisted.openPath).not.toHaveBeenCalled();
+  });
+  it('rejects paths, foreign names, unsafe argument forms and unknown projects before any lookup or editor delivery', async () => {
+    const { ipcMain, connection, openPath } = host([FIRST]);
+    for (const file of [42, '../' + FIRST, '/etc/passwd', 'notes.md', FIRST + 'x', `sub/${FIRST}`, FIRST + '\0', 'a'.repeat(300) + '.md'])
+      await expect(ipcMain.invoke('app:open-decision', project, file)).rejects.toThrow();
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0'])
+      await expect(ipcMain.invoke('app:open-decision', value, FIRST)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled();
+    expect(vi.mocked(connection.call).mock.calls.some(call => call[0] === 'decisions.list')).toBe(false);
+  });
+  it('refuses a symlinked or non-regular journal file even when the host lists it', async () => {
+    const { ipcMain, openPath } = host([FIRST, SECOND]);
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await rm(path.join(project, '.parley', 'decisions', FIRST)); await symlink(outside, path.join(project, '.parley', 'decisions', FIRST));
+    await expect(ipcMain.invoke('app:open-decision', project, FIRST)).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'decisions', SECOND)); await mkdir(path.join(project, '.parley', 'decisions', SECOND));
+    await expect(ipcMain.invoke('app:open-decision', project, SECOND)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('a missing file and a failing editor give the same fixed safe error', async () => {
+    const { ipcMain, openPath } = host([FIRST]);
+    openPath.mockResolvedValue('/private editor error');
+    const failed = await Promise.resolve(ipcMain.invoke('app:open-decision', project, FIRST)).catch((value: unknown) => value);
+    expect(String(failed)).not.toContain('/private editor error');
+    await rm(path.join(project, '.parley', 'decisions', FIRST));
+    const missing = await Promise.resolve(ipcMain.invoke('app:open-decision', project, FIRST)).catch((value: unknown) => value);
+    expect(String(missing)).not.toContain(project);
+  });
+});
+
+
+describe('app:open-shared-file known shared state files', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  const PLAN = 'w-01-r-01-pl-01-rev-00-abc.md';
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-shared-file-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    await mkdir(path.join(project, '.parley', 'plans'), { recursive: true });
+    await writeFile(path.join(project, '.parley', 'memory.md'), 'Memory'); await writeFile(path.join(project, '.parley', 'plans', PLAN), 'Plan');
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+  const host = () => { const made = setup({ roots }); vi.mocked(made.connection.call).mockResolvedValue(snapshot); return made; };
+
+  it('opens memory.md and a plan of the shared directory of a known project', async () => {
+    const { ipcMain, openPath } = host();
+    expect(await ipcMain.invoke('app:open-shared-file', project, 'memory.md')).toEqual({ opened: true });
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'memory.md'));
+    await ipcMain.invoke('app:open-shared-file', project, `plans/${PLAN}`);
+    expect(openPath).toHaveBeenLastCalledWith(path.join(project, '.parley', 'plans', PLAN));
+  });
+  it('rejects parent segments, absolute paths, unknown files and unsafe argument forms before any lookup or editor delivery', async () => {
+    const { ipcMain, openPath } = host();
+    for (const file of [42, '../memory.md', '../../etc/passwd', '/etc/passwd', path.join(project, '.parley', 'memory.md'), 'plans/../memory.md', 'plans/../../x.md',
+      'preferences.json', 'memory-suggestions.json', 'plans/sub/x.md', 'plans/.hidden.md', 'plans', 'memory.md\0', 'memory.md ', 'decisions/' + 'a'.repeat(300) + '.md'])
+      await expect(ipcMain.invoke('app:open-shared-file', project, file)).rejects.toThrow();
+    for (const value of [42, '../private', '/not-a-known-project', project + '\0'])
+      await expect(ipcMain.invoke('app:open-shared-file', value, 'memory.md')).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled();
+  });
+  it('refuses symlinked files, a symlinked subdirectory and non-regular files', async () => {
+    const { ipcMain, openPath } = host();
+    const outside = path.join(project, 'human.txt'); await writeFile(outside, 'Private');
+    await rm(path.join(project, '.parley', 'memory.md')); await symlink(outside, path.join(project, '.parley', 'memory.md'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, 'memory.md')).rejects.toThrow();
+    await rm(path.join(project, '.parley', 'plans'), { recursive: true }); await mkdir(path.join(project, 'elsewhere'));
+    await writeFile(path.join(project, 'elsewhere', PLAN), 'Foreign'); await symlink(path.join(project, 'elsewhere'), path.join(project, '.parley', 'plans'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, `plans/${PLAN}`)).rejects.toThrow();
+    await mkdir(path.join(project, '.parley', 'backlog.md'));
+    await expect(ipcMain.invoke('app:open-shared-file', project, 'backlog.md')).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readFile(outside, 'utf8')).toBe('Private');
+  });
+  it('refuses an unknown project and gives the same safe error for a missing file and a failing editor', async () => {
+    const { ipcMain, openPath } = host();
+    await expect(ipcMain.invoke('app:open-shared-file', path.join(project, 'other'), 'memory.md')).rejects.toThrow();
+    openPath.mockResolvedValue('/private editor error');
+    const failed = await Promise.resolve(ipcMain.invoke('app:open-shared-file', project, 'memory.md')).catch((value: unknown) => value);
+    expect(String(failed)).not.toContain('/private editor error'); expect(String(failed)).not.toContain(project);
+    const missing = await Promise.resolve(ipcMain.invoke('app:open-shared-file', project, 'history-shared/w-01-r-01.md')).catch((value: unknown) => value);
+    expect(String(missing)).not.toContain(project);
+  });
+  it('a linked worktree project opens the file of the main copy shared directory, never its own', async () => {
+    const run = (await import('node:util')).promisify((await import('node:child_process')).execFile);
+    const main = path.join(project, 'main'), participant = path.join(project, 'participant');
+    await mkdir(main);
+    await run('git', ['init', '-b', 'main', main]);
+    await run('git', ['-C', main, 'config', 'user.name', 'Fixture']); await run('git', ['-C', main, 'config', 'user.email', 'fixture@example.invalid']);
+    await writeFile(path.join(main, 'README.md'), 'Fixture'); await run('git', ['-C', main, 'add', 'README.md']); await run('git', ['-C', main, 'commit', '-m', 'fixture']);
+    await run('git', ['-C', main, 'worktree', 'add', '-b', 'participant', participant]);
+    await mkdir(path.join(main, '.parley')); await writeFile(path.join(main, '.parley', 'memory.md'), 'Shared main memory');
+    snapshot = { entries: [{ projectPath: participant, map: { work: { id: 'w-01' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+    const { ipcMain, openPath } = host();
+    expect(await ipcMain.invoke('app:open-shared-file', participant, 'memory.md')).toEqual({ opened: true });
+    expect(openPath).toHaveBeenCalledWith(path.join(main, '.parley', 'memory.md'));
+    await expect(readFile(path.join(participant, '.parley', 'memory.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+
+describe('app:save-recipe project recipe boundary', () => {
+  let project: string; let roots: RootsRegistry; let snapshot: WorksSnapshot;
+  const agents = [
+    { role: 'builtin:planner', worktree: false, lead: true, count: 1 },
+    { role: 'builtin:executor', worktree: true, lead: false, count: 1 },
+  ];
+  const request = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({
+    projectPath: project, file: 'payments-change', name: 'Payments change', description: 'Plan and build', mode: 'verified', agents, playbook: 'Ask first.\n', replace: false, ...patch });
+  const file = (): string => path.join(project, '.parley', 'recipes', 'payments-change.md');
+  beforeEach(async () => {
+    project = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-save-recipe-ipc-')));
+    snapshot = { entries: [{ projectPath: project, map: { work: { id: 'w-1' }, sessions: [] } }], branches: {} } as unknown as WorksSnapshot;
+    roots = createRootsRegistry({ list: async () => snapshot, onChange: () => () => {}, onConnected: () => () => {} });
+  });
+  afterEach(async () => { await rm(project, { recursive: true, force: true }); });
+
+  it('writes only the fixed recipe file of a known project and opens it', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    expect(await ipcMain.invoke('app:save-recipe', request())).toEqual({ status: 'saved', id: 'project:payments-change', opened: true });
+    expect(openPath).toHaveBeenCalledWith(file());
+    expect(await readFile(file(), 'utf8')).toContain('name: "Payments change"');
+    expect(await readdir(path.join(project, '.parley', 'recipes'))).toEqual(['payments-change.md']);
+  });
+
+  it('does not overwrite an existing file without an explicit replace', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    await ipcMain.invoke('app:save-recipe', request());
+    const before = await readFile(file(), 'utf8'); openPath.mockClear();
+    expect(await ipcMain.invoke('app:save-recipe', request({ description: 'Changed' }))).toEqual({ status: 'exists' });
+    expect(await readFile(file(), 'utf8')).toBe(before); expect(openPath).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('app:save-recipe', request({ description: 'Changed', replace: true }))).toMatchObject({ status: 'saved' });
+    expect(await readFile(file(), 'utf8')).toContain('description: "Changed"');
+  });
+
+  it('rejects a file name with ../ or a slash, and arbitrary projects, before touching the disk', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    for (const bad of [request({ file: '../escape' }), request({ file: '../../etc/x' }), request({ file: 'a/b' }), request({ file: '/abs' }), request({ file: 'a\\b' }),
+      request({ file: 'x.md' }), request({ projectPath: '/not-a-known-project' }), request({ projectPath: '../private' }), 42, null])
+      await expect(ipcMain.invoke('app:save-recipe', bad)).rejects.toThrow();
+    expect(openPath).not.toHaveBeenCalled(); expect(await readdir(project)).toEqual([]);
+  });
+
+  it('keeps the saved recipe when the editor cannot open it, and reports that', async () => {
+    const { ipcMain, connection, openPath } = setup({ roots }); vi.mocked(connection.call).mockResolvedValue(snapshot);
+    openPath.mockResolvedValue('/private editor error');
+    expect(await ipcMain.invoke('app:save-recipe', request())).toEqual({ status: 'saved', id: 'project:payments-change', opened: false });
+    expect(await readFile(file(), 'utf8')).toContain('Payments change');
   });
 });

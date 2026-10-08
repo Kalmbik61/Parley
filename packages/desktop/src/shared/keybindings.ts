@@ -10,12 +10,12 @@ import { S } from './strings.js';
 export type MenuName = 'app' | 'edit' | 'view' | 'workspace' | 'tab' | 'terminal';
 export type ActionId =
   | 'palette.open' | 'files.quickOpen' | 'files.search'
-  | 'work.new' | 'session.new' | 'room.new'
+  | 'work.new' | 'session.new' | 'room.new' | 'project.capabilities'
   | 'work.goto.1' | 'work.goto.2' | 'work.goto.3' | 'work.goto.4' | 'work.goto.5'
   | 'work.goto.6' | 'work.goto.7' | 'work.goto.8' | 'work.goto.9'
   | 'work.prev' | 'work.next' | 'works.showArchived'
   | 'history.back' | 'history.forward'
-  | 'sidebar.left.toggle' | 'sidebar.right.toggle' | 'sidebar.files' | 'sidebar.changes'
+  | 'sidebar.left.toggle' | 'sidebar.right.toggle' | 'sidebar.files' | 'sidebar.changes' | 'sidebar.agents'
   | 'group.splitRight' | 'group.splitDown' | 'group.prev' | 'group.next'
   | 'tab.close' | 'tab.reopen' | 'tab.prev' | 'tab.next' | 'tab.mruNext' | 'tab.mruPrev'
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
@@ -24,7 +24,8 @@ export type ActionId =
   | 'attention.next' | 'wake.toggle' | 'host.restart'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
-  | 'browser.find' | 'browser.zoomIn' | 'browser.zoomOut' | 'browser.zoomReset'; // when: 'browser', menu: null
+  | 'browser.find' | 'browser.zoomIn' | 'browser.zoomOut' | 'browser.zoomReset' // when: 'browser', menu: null
+  | 'browser.devtools' | 'browser.console'; // when: 'browser', menu: null (спека 2026-10-07, 4.9)
 
 export interface ActionDef {
   id: ActionId;
@@ -51,6 +52,7 @@ function paletteOnly(id: ActionId, title: string, keywords: string[]): ActionDef
 
 /** Таблица спеки 9.6 целиком. Порядок — порядок пунктов в меню (6.1b). */
 export const ACTIONS: readonly ActionDef[] = [
+  paletteOnly('project.capabilities', S.actions.capabilities, ['project', 'skills', 'mcp', 'plugins']),
   { id: 'settings.open', title: S.actions.settings, keywords: ['preferences', 'options'], keys: 'CmdOrCtrl+,', menu: 'app', when: 'always', inPalette: true },
 
   { id: 'find', title: S.actions.find, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },
@@ -66,6 +68,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'sidebar.right.toggle', title: S.actions.toggleRightSidebar, keywords: ['sidebar', 'right', 'hide', 'show'], keys: 'CmdOrCtrl+L', menu: 'view', when: 'always', inPalette: true },
   { id: 'sidebar.files', title: S.actions.showFiles, keywords: ['explorer', 'tree', 'files'], keys: 'CmdOrCtrl+Shift+E', menu: 'view', when: 'always', inPalette: true },
   { id: 'sidebar.changes', title: S.actions.showChanges, keywords: ['git', 'diff', 'changes'], keys: 'CmdOrCtrl+Shift+G', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.agents', title: S.actions.showAgents, keywords: ['agents', 'subagents', 'tasks'], keys: 'CmdOrCtrl+Shift+A', menu: 'view', when: 'always', inPalette: true },
 
   { id: 'work.new', title: S.actions.newWorkspace, keywords: ['create', 'workspace'], keys: 'CmdOrCtrl+N', menu: 'workspace', when: 'always', inPalette: true },
   { id: 'session.new', title: S.actions.newSession, keywords: ['create', 'agent', 'session', 'room'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },
@@ -108,6 +111,11 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'browser.zoomIn', title: S.actions.zoomIn, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true, repeatable: true },
   { id: 'browser.zoomOut', title: S.actions.zoomOut, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true, repeatable: true },
   { id: 'browser.zoomReset', title: S.actions.actualSize, keywords: ['browser', 'zoom', 'reset'], keys: 'CmdOrCtrl+0', menu: null, when: 'browser', inPalette: true },
+  // Панель Console | Network вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3, 4.9). Из
+  // страницы их пересылает main; с фокусом в строке и панели вкладки — её обработчик (`BrowserSurface`): рендерер окна
+  // действия `browser` не ловит.
+  { id: 'browser.devtools', title: S.actions.toggleDevtools, keywords: ['browser', 'devtools', 'console', 'network', 'inspect'], keys: 'CmdOrCtrl+Alt+I', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.console', title: S.actions.showConsole, keywords: ['browser', 'devtools', 'console', 'logs'], keys: 'CmdOrCtrl+Alt+J', menu: null, when: 'browser', inPalette: true },
 ];
 
 export interface KeyLike {

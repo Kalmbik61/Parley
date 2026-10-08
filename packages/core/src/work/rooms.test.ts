@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { unreadFor } from './letters.js';
-import { addSession, removeSession, setResult, transitionSession } from './map.js';
+import { addMessage, addSession, parseMap, removeSession, setResult, transitionSession } from './map.js';
+import { reservePlanEffects } from './plan-effects.js';
+import { resolveProposal, setProposal } from './proposals.js';
 import {
   addMember,
   addMemberByLead,
   addRoom,
   addRoomOriginMessage,
+  deleteRoom,
   isDescendant,
   isMember,
   isRoomClosed,
@@ -13,10 +16,12 @@ import {
   leaveOtherRooms,
   liveLead,
   nextRoomId,
+  renameRoom,
   roomLead,
   RoomRuleError,
+  setRoomLead,
 } from './rooms.js';
-import { HUMAN, SYSTEM, type Room, type WorkMap } from './types.js';
+import { HUMAN, PARLEY, SYSTEM, type Room, type WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -65,7 +70,9 @@ describe('addRoom', () => {
       members: ['s-02', 's-03'],
       createdAt: '2026-09-26T10:05:00.000Z',
       lead: null,
+      mode: 'free',
       proposal: null,
+      recipe: null,
     });
     expect(map.rooms).toEqual([room]);
   });
@@ -544,5 +551,246 @@ describe('addRoomOriginMessage', () => {
 
     for (const id of ['s-01', 's-02', 's-03', 's-04']) expect(unreadFor(map, id)).toEqual([]);
     expect(line.readBy).toEqual({ [HUMAN]: NOW });
+  });
+});
+
+describe('addRoom: снимок рецепта', () => {
+  const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Lead playbook' };
+
+  it('снимок копируется: правка исходного объекта комнату не меняет', () => {
+    const map = emptyMap();
+    const source = { ...recipe };
+    const room = addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe: source });
+    source.playbook = 'changed later';
+    source.name = 'Other';
+    expect(room.recipe).toEqual(recipe);
+  });
+
+  it('без рецепта — recipe: null', () => {
+    expect(addRoom(emptyMap(), { title: 'x', creator: HUMAN, members: [] }).recipe).toBeNull();
+  });
+
+  it('снимок переживает запись на диск и чтение', () => {
+    const map = emptyMap();
+    addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe });
+    expect(parseMap(JSON.stringify(map), 'map.json').rooms[0]?.recipe).toEqual(recipe);
+  });
+
+  it('старая карта без поля recipe читается как комната без рецепта', () => {
+    const map = emptyMap();
+    const room = addRoom(map, { title: 'x', creator: HUMAN, members: [] });
+    const raw = JSON.parse(JSON.stringify(map)) as { rooms: Record<string, unknown>[] };
+    delete raw.rooms[0]?.['recipe'];
+    expect(parseMap(JSON.stringify(raw), 'map.json').rooms[0]).toEqual({ ...room, recipe: null });
+  });
+
+  it('снимок неверной формы — отказ чтения карты', () => {
+    const map = emptyMap();
+    addRoom(map, { title: 'x', creator: HUMAN, members: [], recipe });
+    for (const bad of [{ ...recipe, extra: 1 }, { id: 'a', name: 'b' }, { ...recipe, name: '' }, { ...recipe, playbook: 5 }, 'text']) {
+      const raw = JSON.parse(JSON.stringify(map)) as { rooms: Record<string, unknown>[] };
+      raw.rooms[0]!['recipe'] = bad;
+      expect(() => parseMap(JSON.stringify(raw), 'map.json')).toThrow('invalid room recipe');
+    }
+  });
+});
+
+describe('renameRoom', () => {
+  it('края обрезаются, как у названия работы: пробелы и невидимые символы формата', () => {
+    const map = twoRooms();
+    renameRoom(map, 'r-01', '  \u200BПлатежи и возвраты\u2060 ');
+    expect(map.rooms[0]?.title).toBe('Платежи и возвраты');
+    // Системной строки нет: название — не событие ленты.
+    expect(map.messages).toEqual([]);
+  });
+
+  it('пустое, из пробелов или из одних ZWSP — отказ, прежнее название остаётся; нет комнаты — отказ', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+    for (const title of ['', '   ', '\u200B\u200B']) {
+      expect(() => renameRoom(map, 'r-01', title)).toThrow(RoomRuleError);
+    }
+    expect(() => renameRoom(map, 'r-09', 'x')).toThrow(/is not in the map/);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe('setRoomLead', () => {
+  const NOW = '2026-10-07T12:00:00.000Z';
+
+  it('участник становится ведущим: строка человеку, письма parley новому и прежнему ведущему в комнате', () => {
+    const map = twoRooms();
+    const { line, letters } = setRoomLead(map, 'r-01', 's-02', NOW);
+
+    expect(map.rooms[0]?.lead).toBe('s-02');
+    expect(liveLead(map, map.rooms[0] as Room)).toBe('s-02');
+    expect(line).toMatchObject({ roomId: 'r-01', from: SYSTEM, to: [HUMAN], text: '@s02 is now the lead', readBy: { [HUMAN]: NOW } });
+    expect(letters).toHaveLength(2);
+    expect(letters[0]).toMatchObject({
+      roomId: 'r-01',
+      from: PARLEY,
+      to: ['s-02'],
+      kind: 'note',
+      text: 'You now lead room r-01 "Возвраты": the human made you the lead. Collect the participants\' positions and bring the human a decision with propose_decision (read_guide topic: lead).',
+    });
+    expect(letters[1]).toMatchObject({
+      roomId: 'r-01',
+      from: PARLEY,
+      to: ['s-01'],
+      text: '@s02 now leads room r-01 "Возвраты": the human changed the lead. You are a regular participant now (read_guide topic: member).',
+    });
+    // Агентам письма непрочитаны — их поднимет будильник; человеку о своём действии «нового» нет.
+    expect(unreadFor(map, 's-02')).toEqual([letters[0]]);
+    expect(unreadFor(map, 's-01')).toEqual([letters[1]]);
+    expect(letters.every((letter) => letter.readBy[HUMAN] === NOW)).toBe(true);
+  });
+
+  it('создатель-сессия может стать ведущим; ведущий-подменщик закрытого получает письмо как прежний', () => {
+    const map = emptyMap();
+    for (const label of ['a', 'b', 'c']) addSession(map, { provider: 'claude', label, task: 'x' });
+    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02', 's-03'], lead: 's-02' });
+    transitionSession(map, 's-02', 'closed');
+    // Назначенный s-02 закрыт — ведёт первый живой из members, s-03.
+    expect(liveLead(map, map.rooms[0] as Room)).toBe('s-03');
+
+    const { letters } = setRoomLead(map, 'r-01', 's-01', NOW);
+    expect(map.rooms[0]?.lead).toBe('s-01');
+    expect(letters.map((letter) => letter.to)).toEqual([['s-01'], ['s-03']]);
+  });
+
+  it('ждущее решение прежнего ведущего остаётся в слоте', () => {
+    const map = twoRooms();
+    const { proposalId } = setProposal(map, 'r-01', 's-01', 'План', NOW);
+    setRoomLead(map, 'r-01', 's-02', NOW);
+    expect(map.rooms[0]?.proposal).toMatchObject({ id: proposalId, from: 's-01', text: 'План' });
+  });
+
+  it('не участник, человек, закрытая, неизвестная сессия и комната, уже ведущий — RoomRuleError, карта не тронута', () => {
+    const map = twoRooms();
+    addMember(map, 'r-01', 's-04', NOW);
+    transitionSession(map, 's-04', 'closed');
+    const before = JSON.stringify(map);
+
+    const cases: Array<[string, string, RegExp]> = [
+      ['r-01', 's-03', /not a participant/],
+      ['r-01', HUMAN, /not a participant/],
+      ['r-01', 's-04', /is closed/],
+      ['r-01', 's-09', /not a participant/],
+      ['r-09', 's-02', /is not in the map/],
+      ['r-01', 's-01', /already leads/],
+      // Ведущий по записи без `lead` — первый из members: он «уже ведущий».
+      ['r-02', 's-03', /already leads/],
+    ];
+    for (const [roomId, sessionId, message] of cases) {
+      expect(() => setRoomLead(map, roomId, sessionId, NOW)).toThrow(RoomRuleError);
+      expect(() => setRoomLead(map, roomId, sessionId, NOW)).toThrow(message);
+    }
+    expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe('deleteRoom', () => {
+  const NOW = '2026-10-07T12:00:00.000Z';
+
+  /** Две комнаты из `twoRooms`, живые s-01 (active) и s-02 (sleeping); s-03, s-04 не запущены. Лента и письма. */
+  function roomsWithFeed(): WorkMap {
+    const map = twoRooms();
+    transitionSession(map, 's-01', 'active');
+    transitionSession(map, 's-02', 'active');
+    transitionSession(map, 's-02', 'sleeping');
+    addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', text: 'задача' });
+    addMessage(map, { from: 's-01', to: ['s-03'], text: 'прямое' });
+    addMessage(map, { from: HUMAN, to: [], roomId: 'r-02', text: 'другая' });
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'позиция' });
+    return map;
+  }
+
+  it('уходят комната, её лента и решение; прочее остаётся; живым участникам — прямое письмо parley', () => {
+    const map = roomsWithFeed();
+    setProposal(map, 'r-01', 's-01', 'План', NOW);
+    const letters = deleteRoom(map, 'r-01', NOW);
+
+    expect(map.rooms.map((room) => room.id)).toEqual(['r-02']);
+    expect(map.messages.slice(0, 2).map((message) => message.text)).toEqual(['прямое', 'другая']);
+    expect(letters.map((letter) => letter.to)).toEqual([['s-01'], ['s-02']]);
+    for (const letter of letters) {
+      expect(letter).toMatchObject({
+        roomId: null,
+        from: PARLEY,
+        kind: 'note',
+        text: 'The human deleted room r-01 "Возвраты": you now work as a regular session of this workspace.',
+      });
+    }
+    expect(map.messages.slice(2)).toEqual(letters);
+    expect(unreadFor(map, 's-01')).toEqual([letters[0]]);
+    // Сессии остались в карте обычными сессиями работы.
+    expect(map.sessions.map((session) => session.id)).toEqual(['s-01', 's-02', 's-03', 's-04']);
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).not.toThrow();
+  });
+
+  it('не запущенный, закрытый и состоящий в другой комнате (старая карта) участник письма не получает', () => {
+    const map = roomsWithFeed();
+    addMember(map, 'r-01', 's-04', NOW);
+    transitionSession(map, 's-02', 'closed');
+    // Старая карта: s-01 числится и в r-02.
+    (map.rooms[1] as Room).members.push('s-01');
+
+    expect(deleteRoom(map, 'r-01', NOW)).toEqual([]);
+  });
+
+  it('номера комнаты, писем и решения не переиспользуются', () => {
+    const map = roomsWithFeed();
+    setProposal(map, 'r-01', 's-01', 'План', NOW);
+    deleteRoom(map, 'r-02', NOW);
+    const letters = deleteRoom(map, 'r-01', NOW);
+    // В карте осталось одно письмо m-02, а по одному списку письма parley получили бы m-03 и m-04 — id ушедших.
+    expect(map.messages.map((message) => message.id)).toEqual(['m-02', 'm-05', 'm-06']);
+    expect(letters.map((letter) => letter.id)).toEqual(['m-05', 'm-06']);
+    expect(addMessage(map, { from: HUMAN, to: ['s-01'], text: 'ещё' }).id).toBe('m-07');
+    expect(addRoom(map, { title: 'новая', creator: HUMAN, members: ['s-01'] }).id).toBe('r-03');
+    expect(setProposal(map, 'r-03', 's-01', 'Новое', NOW).proposalId).toBe('p-02');
+    expect(parseMap(JSON.stringify(map), 'map.json').work.messageSeq).toBe(4);
+  });
+
+  it('план комнаты, его доставка и счётчик ресурсов уходят; снятые копии для .parley остаются; карта читается', () => {
+    const map = roomsWithFeed();
+    transitionSession(map, 's-03', 'active');
+    addRoom(map, { title: 'План', creator: HUMAN, members: ['s-03', 's-04'], lead: 's-03', mode: 'checklist' });
+    const plan = { mode: 'checklist' as const, goal: 'Готово', items: [{ id: 1, title: 'Пункт', owner: 's-03', scope: 'src/a.ts' }] };
+    const proposal = setProposal(map, 'r-03', 's-03', 'Решение', NOW, { plan });
+    resolveProposal(map, 'r-03', proposal.proposalId, 'accept', { rev: 0, planId: map.rooms[2]!.proposal!.plan!.id, planRev: 0 }, NOW);
+    reservePlanEffects(map, 20, NOW);
+    map.resources = {
+      seq: 2,
+      spawned: 2,
+      spawnedByRoom: { 'r-03': 1, 'r-01': 1 },
+      attempts: [
+        { id: 'a-0001', kind: 'spawn', state: 'spent', at: NOW, actor: 's-03', session: 's-04', room: 'r-03', owner: 'o' },
+        { id: 'a-0002', kind: 'spawn', state: 'spent', at: NOW, actor: 's-01', session: 's-02', room: 'r-01', owner: 'o' },
+      ],
+    };
+    expect(map.plans).toHaveLength(1);
+    expect(map.planEffects?.length).toBeGreaterThan(0);
+    const exports = { plans: map.planExports, decisions: map.decisionExports };
+    expect(exports.plans?.length).toBeGreaterThan(0);
+    expect(exports.decisions?.length).toBeGreaterThan(0);
+
+    deleteRoom(map, 'r-03', NOW);
+
+    expect(map.plans).toEqual([]);
+    expect(map.planEffects).toEqual([]);
+    expect({ plans: map.planExports, decisions: map.decisionExports }).toEqual(exports);
+    expect(map.work.planSeq).toBe(1);
+    expect(map.resources.spawnedByRoom).toEqual({ 'r-01': 1 });
+    expect(map.resources.attempts.map((attempt) => attempt.room)).toEqual([null, 'r-01']);
+    // Без плана карта иначе не прошла бы проверку `validatePlanStorage`.
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).not.toThrow();
+  });
+
+  it('нет комнаты — RoomRuleError, карта не тронута', () => {
+    const map = roomsWithFeed();
+    const before = JSON.stringify(map);
+    expect(() => deleteRoom(map, 'r-09', NOW)).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
   });
 });

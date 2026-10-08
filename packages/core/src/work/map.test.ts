@@ -44,8 +44,10 @@ describe('addSession', () => {
       agent: 'reviewer',
     });
 
-    expect(plain.agent).toBeNull();
-    expect(roled.agent).toBe('reviewer');
+    expect(plain.role).toBeNull();
+    expect(Object.hasOwn(plain, 'agent')).toBe(false);
+    expect(roled.role).toEqual({ source: 'claude', name: 'reviewer' });
+    expect(Object.hasOwn(roled, 'agent')).toBe(false);
   });
 
   it('модель и усилие запуска (spawn_session) пишутся, когда заданы; без них ключей в записи нет', () => {
@@ -275,7 +277,7 @@ describe('transitionSession', () => {
 describe('parseMap', () => {
   it('читает карту нужной формы', () => {
     const map = emptyMap();
-    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual({ ...map, plans: [] });
   });
 
   it('карта v1 поднимается до v2 поле в поле (три сессии и пять писем, как в w-0010)', () => {
@@ -421,12 +423,15 @@ describe('parseMap', () => {
       const rest = { ...session };
       delete rest['status'];
       delete rest['history'];
+      rest['role'] = typeof rest['agent'] === 'string' ? { source: 'claude', name: rest['agent'] } : null;
+      delete rest['agent'];
       return rest;
     };
     expect(parsed).toEqual({
       schemaVersion: 2,
       work: v1.work,
       rooms: [],
+      plans: [],
       sessions: [
         {
           ...strip(s1),
@@ -583,7 +588,7 @@ describe('parseMap', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'план', task: 't', model: 'opus', effort: 'xhigh' });
     const raw = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
-    for (const effort of ['hi gh', 'x"', '"x', 'HIGH', '', 'a'.repeat(33), 3, null, ['low']]) {
+    for (const effort of ['hi gh', 'x"', '"x', 'HIGH', '', 'a'.repeat(33), 3, ['low']]) {
       raw.sessions[0]!['effort'] = effort;
 
       const parsed = parseMap(JSON.stringify(raw), 'map.json');
@@ -591,6 +596,17 @@ describe('parseMap', () => {
       expect('effort' in (parsed.sessions[0] ?? {}), JSON.stringify(effort)).toBe(false);
       expect(parsed.sessions[0]?.model).toBe('opus');
     }
+  });
+
+  it('effort: null — явный «Default» (снимает умолчание роли): при чтении карты остаётся', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't', model: 'opus', effort: 'xhigh' });
+    const raw = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+    raw.sessions[0]!['effort'] = null;
+
+    const parsed = parseMap(JSON.stringify(raw), 'map.json');
+    expect(parsed.sessions[0]?.effort).toBeNull();
+    expect(parsed.sessions[0]?.model).toBe('opus');
   });
 
   it('уровни каталогов в карте читаются как есть: xhigh, max, ultra', () => {
@@ -648,7 +664,7 @@ describe('parseMap', () => {
     it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
       const parsed = parseMap(withRooms([oldRoom]), 'map.json');
 
-      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null });
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free', recipe: null });
     });
 
     it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
@@ -667,7 +683,7 @@ describe('parseMap', () => {
       const written = { ...oldRoom, lead: 's-03', proposal };
 
       const parsed = parseMap(withRooms([written]), 'map.json');
-      expect(parsed.rooms[0]).toEqual(written);
+      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', recipe: null, proposal: { ...proposal, kind: 'decision' } });
       expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
     });
 
@@ -816,5 +832,24 @@ describe('removeSession', () => {
     expect(() => removeSession(map, 's-99')).toThrow(/s-99/);
     expect(map.sessions).toHaveLength(3);
     expect(map.work.deletedSessions).toBeUndefined();
+  });
+});
+
+describe('role-only normalized records', () => {
+  it('rejects agent plus role before mutation and never persists computed defaults', () => {
+    const map = emptyMap();
+    expect(() => addSession(map, { provider: 'claude', label: '', task: '', agent: 'legacy', role: null })).toThrow('agent-and-role-conflict');
+    expect(map.sessions).toHaveLength(0);
+    const session = addSession(map, { provider: 'codex', label: '', task: '', role: { source: 'builtin', name: 'planner' } });
+    expect(session).toMatchObject({ role: { source: 'builtin', name: 'planner' } });
+    expect(Object.hasOwn(session, 'model')).toBe(false); expect(Object.hasOwn(session, 'effort')).toBe(false);
+  });
+  it('migrates exact legacy identity once and removes agent on read', () => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: '', task: '' });
+    delete session.role; session.agent = 'two words';
+    const migrated = parseMap(JSON.stringify(map), 'map.json');
+    expect(migrated.sessions[0]?.role).toEqual({ source: 'claude', name: 'two words' });
+    expect(JSON.stringify(migrated)).not.toContain('"agent"');
   });
 });

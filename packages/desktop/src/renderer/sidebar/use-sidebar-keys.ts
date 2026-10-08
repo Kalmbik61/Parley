@@ -278,8 +278,9 @@ export function useSidebarKeys({ listRef, activeWorkKey, onActivateWork, onShowC
       const element = event.target as HTMLElement;
 
       if (event.key === 'F10' && event.shiftKey) {
-        // У строки комнаты меню нет: `menuReturn` остался бы висеть, и закрытие чужого меню вернуло бы фокус ей.
-        if (roomId !== null) return;
+        // Строка комнаты без своего меню (хост не знает `rooms.rename` и `rooms.delete`, `RoomRowMenu`): `menuReturn`
+        // остался бы висеть, и закрытие чужого меню вернуло бы фокус ей.
+        if (roomId !== null && !element.hasAttribute('data-room-menu')) return;
         event.preventDefault();
         useSidebarCursorStore.setState({ menuReturn: current });
         const rect = element.getBoundingClientRect();

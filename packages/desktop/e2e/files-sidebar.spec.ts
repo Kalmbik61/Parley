@@ -100,10 +100,21 @@ for (const size of [
       await expect(longFile).toBeVisible();
       await expect(longFile).toHaveAttribute('title', LONG_FILE);
       await expect(sidebar.locator(`[data-tree-path="${LONG_DIR}"]`)).toBeVisible();
+      // Спека значков 7.3: значки грузятся из сборки — плагин, относительный путь и CSP вместе.
+      const loaded = (img: HTMLImageElement): boolean => img.complete && img.naturalWidth > 0;
+      const srcIcon = sidebar.locator('[data-tree-path="src"] img[data-file-icon]');
+      await expect(srcIcon).toHaveAttribute('src', /folder-src\.svg$/);
+      await expect.poll(() => srcIcon.evaluate(loaded)).toBe(true);
       expect(await overflowOf(window)).toEqual([]);
 
       await sidebar.getByText('src', { exact: true }).click();
       await sidebar.getByText('app.ts', { exact: true }).click();
+      const appIcon = sidebar.locator('[data-tree-path="src/app.ts"] img[data-file-icon]');
+      await expect(appIcon).toHaveAttribute('src', /typescript\.svg$/);
+      await expect.poll(() => appIcon.evaluate(loaded)).toBe(true);
+      await expect(sidebar.locator('[data-tree-path="src"] img[data-file-icon]')).toHaveAttribute('src', /folder-src-open\.svg$/);
+      const tabIcon = window.getByRole('tab', { name: /app\.ts/ }).locator('img[data-file-icon]');
+      await expect.poll(() => tabIcon.evaluate(loaded)).toBe(true);
       await expect(window.locator('.monaco-editor .view-lines').first()).toContainText('export const answer = 42;');
       await expect(window.getByText("Couldn't show layout")).toHaveCount(0);
       expect(await overflowOf(window)).toEqual([]);

@@ -12,6 +12,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, groups } from '../layout/tree.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { useUiStore } from '../store/ui.js';
 import { useFilesStore } from './store.js';
 import { Tree } from './Tree.js';
 
@@ -220,5 +221,48 @@ describe('Tree — облик Organic (1.8)', () => {
     fireEvent.click(await screen.findByText('src'));
     const nested = (await screen.findByText('lib.ts')).closest('[data-tree-path]') as HTMLElement;
     expect(nested.style.paddingLeft).toBe('26px');
+  });
+});
+
+describe('Tree — значки (спека значков 3.1)', () => {
+  const rowOf = (name: string): Element | null | undefined => screen.getByText(name).closest('[data-tree-path]');
+  const iconOf = (name: string): string | null | undefined => rowOf(name)?.querySelector('img[data-file-icon]')?.getAttribute('src');
+
+  beforeEach(() => useUiStore.setState({ dark: true }));
+
+  it('папка: шеврон и значок папки, у раскрытой — свой; файл: значок по имени', async () => {
+    bridge.setDir(ROOT, '', [entry('src', { kind: 'dir' }), entry('package.json')]);
+    bridge.setDir(ROOT, 'src', [entry('main.ts')]);
+    renderTree();
+    await screen.findByText('package.json');
+    expect(iconOf('src')).toBe('file-icons/folder-src.svg');
+    expect(iconOf('package.json')).toBe('file-icons/nodejs.svg');
+
+    fireEvent.click(screen.getByText('src'));
+    await screen.findByText('main.ts');
+    expect(iconOf('src')).toBe('file-icons/folder-src-open.svg');
+    expect(iconOf('main.ts')).toBe('file-icons/typescript.svg');
+  });
+
+  it('значки в одном столбике: у файла пустое место под шеврон, затем значок', async () => {
+    bridge.setDir(ROOT, '', [entry('src', { kind: 'dir' }), entry('a.ts')]);
+    renderTree();
+    await screen.findByText('a.ts');
+    const file = rowOf('a.ts');
+    expect(file?.children[0]?.childElementCount).toBe(0);
+    expect(file?.children[1]?.tagName).toBe('IMG');
+    const folder = rowOf('src');
+    expect(folder?.children[0]?.querySelector('svg')).not.toBeNull();
+    expect(folder?.children[1]?.tagName).toBe('IMG');
+  });
+
+  it('симлинк на файл — Link2 вместо значка; симлинк на папку — значок папки по имени (фокус ревью 3)', async () => {
+    bridge.setDir(ROOT, '', [entry('docs', { kind: 'symlink', target: 'dir' }), entry('readme', { kind: 'symlink', target: 'file' })]);
+    renderTree();
+    await screen.findByText('readme');
+    const link = rowOf('readme');
+    expect(link?.querySelector('img[data-file-icon]')).toBeNull();
+    expect(link?.children[1]?.querySelector('svg')).not.toBeNull();
+    expect(iconOf('docs')).toBe('file-icons/folder-docs.svg');
   });
 });

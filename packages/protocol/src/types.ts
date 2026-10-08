@@ -1,4 +1,4 @@
-import type { WorkEntry } from '@parley/core';
+import type { UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -126,6 +126,13 @@ export type MailWait =
 
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
+  /**
+   * Токены с происхождением: кэш (`null` — не сообщено), полный вход, источник, время наблюдения,
+   * устарелость и полнота (P36). Без нативных id и путей. Поля нет у хоста более ранней версии: окно
+   * показывает `tokensIn`/`tokensOut` как раньше. Это токены, а не деньги и не доля лимита подписки.
+   */
+  usage?: UsageSummary;
+  /** Вход без кэша; `null` — не известен. */
   tokensIn: number | null;
   tokensOut: number | null;
   durationMs: number | null;
@@ -155,6 +162,16 @@ export type NoticeKind =
   | 'map-corrupt'
   | 'hooks-missing'
   | 'launch-failed'
+  | 'parley-md-created'
+  | 'parley-md-unreadable'
+  | 'parley-md-truncated'
+  | 'provider-override-gap'
+  | 'role-missing'
+  | 'memory-truncated'
+  | 'memory-unreadable'
+  | 'plan-effect-failed'
+  | 'role-truncated'
+  | 'recipe-playbook-truncated'
   | 'pointer-timeout'
   | 'pointer-cancelled'
   | 'resume-failed'
@@ -165,7 +182,9 @@ export type NoticeKind =
   | 'startup-wait'
   // Скилл `parley` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
-  | 'skill-foreign';
+  | 'skill-foreign'
+  // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
+  | 'snapshot-too-large';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -212,6 +231,10 @@ export type ErrorCode =
  *   проекта (подменён агентом): git в нём не запускается (раунд fix-final-a, п. 1);
  * - `works-unreadable` (`internal`) — первое чтение работ хостом отказало, снимка нет до перезапуска
  *   хоста (раунд lane-r5);
+ * - `client-upgrade-required` (`conflict`) — клиент без `compact-works`, а прежний полный снимок не влезает в кадр:
+ *   обновите окно (P35);
+ * - `snapshot-too-large` (`internal`) — даже компактный снимок работ не влезает в кадр (тысячи сессий или комнат):
+ *   хост его не шлёт, окну остаётся сказать об этом человеку (P35).
  * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
  *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
  *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
@@ -223,6 +246,8 @@ export const HOST_ERROR_REASONS = {
   worktreeMissing: 'worktree-missing',
   worktreeCorrupt: 'worktree-corrupt',
   worksUnreadable: 'works-unreadable',
+  clientUpgradeRequired: 'client-upgrade-required',
+  snapshotTooLarge: 'snapshot-too-large',
   busy: 'busy',
 } as const;
 
@@ -238,4 +263,9 @@ export interface ProtocolError {
 export interface WorksSnapshot {
   entries: WorkEntry[];
   branches: Record<string, string | null>;
+  /**
+   * Номер снимка в жизни хоста: растёт на каждую рассылку. Окно применяет только снимок новее уже применённого, и
+   * поздно пришедший старый ответ `works.list` не откатывает свежее событие. Нет поля — хост до P35.
+   */
+  revision?: number;
 }

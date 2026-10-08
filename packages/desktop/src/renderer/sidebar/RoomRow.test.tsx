@@ -14,6 +14,7 @@ import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { roomKey } from '../lib/room-view.js';
 import { workKey } from '../lib/tree-order.js';
+import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
@@ -106,8 +107,8 @@ beforeEach(() => {
   useLayoutStore.setState({ activeWorkKey: null, layouts: {} });
   useProvidersStore.setState({
     providers: [
-      { id: 'claude', label: 'Claude', available: true, version: null },
-      { id: 'codex', label: 'OpenAI Codex', available: true, version: null },
+      { id: 'claude', label: 'Claude', available: true, version: null, limits: null },
+      { id: 'codex', label: 'OpenAI Codex', available: true, version: null, limits: null },
     ],
   });
 });
@@ -222,7 +223,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
   });
 
   it('неизвестный провайдер — метка хоста из providers.list, а без неё — сам id; значок — буква', () => {
-    useProvidersStore.setState({ providers: [{ id: 'gemini', label: 'Gemini CLI', available: true, version: null }] });
+    useProvidersStore.setState({ providers: [{ id: 'gemini', label: 'Gemini CLI', available: true, version: null, limits: null }] });
     const entry = fourAgents({ members: ['s-01', 's-02'] }, { sessions: [makeSession('s-01', 'a', { provider: 'gemini' }), makeSession('s-02', 'b', { provider: 'mystery' })] });
     renderRow(entry);
     expect(badges().map((badge) => badge.getAttribute('title'))).toEqual(['1 Gemini CLI agent', '1 mystery agent']);
@@ -657,5 +658,71 @@ describe('RoomRow — упоминание человека (Parley 0.3.0)', () 
     expect(screen.getByText(S.sidebar.roomDecision).className).toContain('text-accent-800');
     expect(header().textContent).not.toContain('@you');
     expect(header().textContent).not.toContain('2 new');
+  });
+});
+
+it('shows done progress without changing the room title or decision/unread indicators',()=>{
+ const entry=makeWork('w-01',{projectPath:PROJECT,rooms:[room()],sessions:sessions('s-01')});
+ const plan: import('@parley/core').RoomPlan={id:'pl-01',roomId:'r-01',rev:1,mode:'checklist',status:'active',goal:'Ship',items:[{id:1,title:'One',owner:'s-01',scope:'x',after:[],criteria:[],verifier:null,status:'done',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null};
+ renderRow(entry,{plan,unread:2}); expect(screen.getByText('1/1 done')).toBeTruthy();expect(screen.getByText('Возвраты')).toBeTruthy();expect(screen.getByText('2 new')).toBeTruthy();
+});
+
+describe('RoomRow — меню строки: Rename и Make lead участника', () => {
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['rooms.rename', 'rooms.delete', 'rooms.setLead'] } });
+    useUiStore.setState({ sidebarHolds: {} });
+    BRIDGE.setHandler('rooms.rename', () => ({ ok: true as const }));
+  });
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  const renames = (): unknown[] => BRIDGE.calls.filter((call) => call.method === 'rooms.rename').map((call) => call.params);
+
+  it('правая кнопка на строке — меню комнаты; Rename — поле на месте названия, Enter зовёт rooms.rename', async () => {
+    renderRow(fourAgents());
+    const before = renames().length;
+    fireEvent.contextMenu(header());
+    fireEvent.click(screen.getByText('Rename'));
+
+    const input = screen.getByRole('textbox', { name: 'Room name' }) as HTMLInputElement;
+    expect(header().contains(input)).toBe(true);
+    expect(input.value).toBe('Возвраты');
+    fireEvent.change(input, { target: { value: 'Платежи' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(renames().slice(before)).toEqual([{ projectPath: PROJECT, workId: WORK, roomId: 'r-01', title: 'Платежи' }]);
+    // Поле закрылось; название — из снимка, его обновит `works.changed`.
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('пустое название хосту не уходит, остаётся прежнее', () => {
+    renderRow(fourAgents());
+    const before = renames().length;
+    fireEvent.contextMenu(header());
+    fireEvent.click(screen.getByText('Rename'));
+    const input = screen.getByRole('textbox', { name: 'Room name' });
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(renames()).toHaveLength(before);
+    expect(header().textContent).toContain('Возвраты');
+  });
+
+  it('правая кнопка на участнике развёрнутой комнаты — его меню с Make lead, а не меню комнаты; у ведущего пункта нет', () => {
+    act(() => useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true));
+    renderRow(fourAgents());
+    const member = memberRows().find((element) => element.dataset['sessionId'] === 's-02') as HTMLElement;
+    fireEvent.contextMenu(member);
+    expect(screen.getByText('Make lead')).toBeTruthy();
+    expect(screen.queryByText('Rename')).toBeNull();
+    cleanup();
+
+    act(() => useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true));
+    renderRow(fourAgents());
+    const lead = memberRows().find((element) => element.dataset['sessionId'] === 's-01') as HTMLElement;
+    fireEvent.contextMenu(lead);
+    expect(screen.getByText('Open')).toBeTruthy();
+    expect(screen.queryByText('Make lead')).toBeNull();
   });
 });

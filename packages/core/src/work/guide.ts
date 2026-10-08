@@ -34,6 +34,40 @@ const TITLE = '# Parley: how to use it';
 
 const SECTIONS: readonly GuideSection[] = [
   {
+    topic: 'plans',
+    summary: 'accepted plans: exact revisions, owner evidence, independent verification and human completion',
+    text: `## Accepted plans
+
+Room mode is free, checklist or verified. Free keeps the existing conversation workflow.
+The live lead may raise it with set_room_mode(room, mode, reason); only the human lowers it.
+In checklist and verified, the live lead calls propose_decision(room, text, plan).
+The plan contains mode, goal, numbered items (title, owner, scope, after), optional
+backlog IDs, and in verified mode criteria and an independent verifier. For an
+amendment include the exact current plan id and rev. Do not start before human acceptance.
+The accepted plan in get_map is authoritative. Use its exact planId/rev for every action.
+Owners call plan_update(planId, rev, item, status, note?) to start or block work;
+blocked requires a reason. Work only within the accepted scope. If a skill is useful,
+load it through your native CLI when available; role and human rules still apply.
+Submit truthful evidence with plan_submit(planId, rev, item, evidence: {text, artifacts}); artifacts are paths, never fabricated verification.
+Checklist submission completes an item. In verified mode the independent verifier
+calls plan_verify(planId, rev, item, verdict: verified|returned, note). The owner
+cannot verify their own work. Without a named verifier the live lead may verify if
+independent. A returned item is reworked and submitted again. Closed/deleted owners
+block unsatisfied work; the human or lead proposes an amendment to reassign it.
+Once verified work is complete, the live lead collects outstanding findings into
+backlog suggestions and calls propose_completion(planId, rev, summary). Equivalent:
+propose_decision(room, text: summary, kind: completion, planId, rev). Only the human
+accepts completion. A return keeps evidence/history and asks for a corrected summary.
+Parley sends durable assignments within the existing message and wake limits.
+The host drains rate-held queues and performs auto-wake. Without the host, MCP reserves
+and flushes immediately; held assignments remain pending until a later plan mutation or
+host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
+exports and linked backlog closures are captured separately from the map transaction;
+a disk/conflict failure stays pending. Human Retry retries the original captured intent,
+never overwrites an edited/reopened backlog row or an immutable foreign snapshot.
+A revision conflict means refresh get_map and use the accepted current revision.`,
+  },
+  {
     topic: 'overview',
     summary: 'what a workspace, a session, the workspace map and the session tree are',
     text: `## Overview
@@ -69,12 +103,38 @@ explicit consent — for example, the words "wrap up".`,
   {
     topic: 'tools',
     summary:
-      'get_map, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
+      'get_map, backlog, remember/memory_read/search_history, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
     text: `## Tools
 
-\`get_map\` — the whole map: sessions with their \`lifecycle\`/\`result\`, rooms, summaries,
-artifacts, messages, plus the list of registry providers with a mark telling whether the
-command is in PATH. Call it first: session and room ids come from here.
+\`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
+plan revisions, unread counts and message cursors, plus the list of registry providers with a
+mark telling whether the command is in PATH. Call it first: session and room ids come from
+here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
+with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02", field: "task" |
+"summary" | "history" | "artifacts"}\`; \`{room: "r-01"}\` (the room in full, with its whole
+decision); \`{field: "messages", room: "r-01", kind?: "decision"}\` — the messages, newest first,
+\`cursor\` goes on to older ones; \`{field: "message", id: "m-12"}\` — one long message;
+\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project.
+
+\`backlog_list(filter?, text?)\` — read this project's backlog; filter is open (default),
+taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.
+\`backlog_suggest(kind, title, details?, why)\` — one finding outside your task: bug, debt or
+idea, with a reason. Check backlog_list first; do not expand your task. The project rule
+answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID. These tools
+cannot edit, remove or close existing items. Before completion, collect worthwhile loose
+ends as suggestions. A project with its own TODOS.md specifies its policy in PARLEY.md.
+
+\`remember(kind, fact, details?, why, onHumanRequest?)\` — one lasting project fact, lesson or
+agreement (kind: fact, lesson, agreement): short, one per call, with a reason; not what the
+code, git, PARLEY.md or CLAUDE.md already say. The human accepts it first: the answer is
+suggested: ms-NN. Set onHumanRequest only when the human has just asked you to remember it:
+the answer is remembered: m-NNN, and the human sees that you claimed their request. A repeat
+answers already remembered. The phrases of the project memory already come with your
+instructions (the Project memory block); \`memory_read(ids?)\` adds the details of all entries
+or of the given ids. \`search_history(query, scope?, limit?)\` — the past of this project: all
+words of the query in one entry; scope is decisions, memory, plans, backlog, history, sessions
+or all (default); limit 1 to 30. Before something big, search for earlier decisions and
+lessons. It does not search skills.
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
@@ -83,7 +143,7 @@ brief and the human in the window. Artifacts are result files; the path is alway
 to the project root; the contents are not copied into the map, only the path and the kind
 ("plan", "report", "patch").
 
-\`spawn_session(provider, label, task, contextFrom, agent, worktree, model, effort)\` — a new
+\`spawn_session(provider, label, task, contextFrom, role, agent, worktree, model, effort)\` — a new
 session in this same workspace. A \`pending\` record is created and a brief is written; the
 process starts by itself as soon as the record appears in the map — nobody needs to be
 called. Prefer \`spawn_session\` to your own subagents when a subtask of this topic lives
@@ -91,10 +151,16 @@ longer than one turn, must run in parallel with yours, or its result is needed b
 else: such a session is visible in the window and has its own report and its own history.
 A short exploration or a local edit is cheaper with your own subagent.
 
-\`agent\` is optional and sets the session's role: it is the name of a Claude Code agent
-definition — the file \`.claude/agents/<name>.md\` of the project or
-\`~/.claude/agents/<name>.md\`. Parley does not accept a name without such a file, and the
-field cannot be passed to a provider that does not accept roles.
+\`list_roles()\` lists builtin and native roles in your current working folder. It returns
+source-qualified ids, descriptions and defaults, without prompts or definition paths.
+\`role\` is optional: pass an id from \`list_roles\`. Provider is optional with a role;
+builtin roles supply a default provider, while a native role requires its own CLI.
+Parley validates the role and mandatory delivery before writing the new session.
+Do not pass both \`role\` and \`agent\`.
+
+\`agent\` is the legacy alias for a native Claude role: its exact metadata.name,
+not the filename. Native Claude applies its prompt, tools and defaults through --agent.
+A native definition with a restricted tools list must retain mcp__parley__* to coordinate.
 
 \`worktree\` is optional: \`true\` — the session works in its own git worktree, on a separate
 branch, and its edits do not touch the project's working copy until the human merges the
@@ -171,7 +237,9 @@ decision. Who it is shows in \`get_map\` — the room's \`lead\` field (\`null\`
 of \`members\`"; if the lead is closed, the first live participant leads).
 
 The human sets a task for everyone in the room — the human's message (\`from: human\`)
-without \`@sNN\` mentions. If you are the lead:
+without \`@sNN\` mentions. Such a message arrives from \`check_inbox\` / \`wait_for("inbox")\` marked
+\`toEveryone: true\`, with a \`roomTask\` field — your \`role\`, the \`lead\`, \`proposalWaiting\` and a \`hint\`
+with what to do. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
 
 1. Collect the positions: each participant answers in the room with one message. Wait for
    them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
@@ -194,7 +262,7 @@ without \`@sNN\` mentions. If you are the lead:
    accepted, and the decision has already been sent to the room in your name as a
    \`kind: decision\` message. \`Returned for rework: <note>\` (without a note —
    \`Returned for rework.\`) means returned for rework.
-5. Accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
+5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
    part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. The
    participants' reports will come to you in the room; you hand in the result of the whole
    work with your own \`report\`.
@@ -219,7 +287,9 @@ returns an error.`,
     summary: 'room participant: speak up in one message, wait for your part, report to the lead',
     text: `### Room participant
 
-The human set a task for everyone in the room. Then:
+The human set a task for everyone in the room. Such a message arrives from \`check_inbox\` /
+\`wait_for("inbox")\` marked \`toEveryone: true\`, with a \`roomTask\` field — your \`role\`, the \`lead\`,
+\`proposalWaiting\` and a \`hint\` with what to do. Then:
 
 - Speak up in one message: \`send_message\` with \`room\` and no \`to\` — your position, the
   risks, what you can take. Not in parts and not in ten messages: the lead builds the
@@ -450,7 +520,22 @@ your permission settings yourself.`,
 ];
 
 /** Весь гид: заголовок и все разделы по порядку — то, что `read_guide` отдаёт без темы. */
-export const GUIDE = `${TITLE}\n\n${SECTIONS.map((section) => section.text).join('\n\n')}\n`;
+export function guide(skillNavigator = false): string {
+  return `${TITLE}\n\n${SECTIONS.map(section => sectionText(section, skillNavigator)).join('\n\n')}\n`;
+}
+
+function sectionText(section: GuideSection, skillNavigator: boolean): string {
+  if (!skillNavigator) return section.text;
+  const hint = section.topic === 'tools'
+    ? 'find_skill searches native skills by task words, if needed. An empty result or an unverified loading route is valid: continue without a skill, or use the full native CLI list. Load a match only by the native route in its result; your role and permissions take precedence.'
+    : section.topic === 'lead'
+      ? 'Before proposing a plan, you may use find_skill with query and for (a participant session id in this workspace) to check which native skills fit their task. This is optional: a skill may be unnecessary, or its loading route unavailable.'
+      : '';
+  return hint ? `${section.text}\n\n${hint}` : section.text;
+}
+
+/** Default guide has no navigator hints, including for older sessions. */
+export const GUIDE = guide();
 
 /** Темы гида в порядке разделов: имя и строка «что внутри». */
 export const GUIDE_TOPICS: readonly { topic: string; summary: string }[] = SECTIONS.map(
@@ -458,7 +543,7 @@ export const GUIDE_TOPICS: readonly { topic: string; summary: string }[] = SECTI
 );
 
 /** Текст одного раздела гида; `null` — такой темы нет. */
-export function guideTopic(topic: string): string | null {
+export function guideTopic(topic: string, skillNavigator = false): string | null {
   const section = SECTIONS.find((candidate) => candidate.topic === topic);
-  return section === undefined ? null : `${section.text}\n`;
+  return section === undefined ? null : `${sectionText(section, skillNavigator)}\n`;
 }

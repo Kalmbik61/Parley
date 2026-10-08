@@ -1,22 +1,29 @@
-import { METHODS, NOTIFICATIONS } from '@parley/protocol';
+import { lstat, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { createParleyMd, sharedProjectPaths } from '@parley/core';
+import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@parley/protocol';
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
+import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
 import type { HostConnection } from './host-connection.js';
 import { LayoutTooLargeError } from './layout-store.js';
+import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
 import { isNotesFile } from '../shared/notes-types.js';
-import { isSessionId } from '../shared/work-keys.js';
+import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { createDesignMode } from './browser/design-mode.js';
+import type { Emulation } from './browser/emulation.js';
+import type { Inspector } from './browser/inspector.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -198,11 +205,27 @@ export interface RegisterIpcOptions {
     session: Pick<Session, 'clearStorageData' | 'clearCache'>;
     /** Выбор элемента Design Mode (кусок 9.3a, спека 12.3): main/browser/design-mode.ts#createDesignMode. */
     designMode: ReturnType<typeof createDesignMode>;
+    /** Журнал консоли и сети гостей (спека 2026-10-07, 3.3): main/browser/inspector.ts#createInspector. */
+    inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
+    /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
+    emulation: Pick<Emulation, 'set'>;
   };
 }
 
 /** Запрос поиска по странице — до 1000 символов (план, «Числа»). */
 const MAX_FIND_TEXT = 1000;
+/** Журнала у гостя нет (захват не подключался): мост отдаёт пустой с `unavailable`, а не null (спека 3.5). */
+const NO_JOURNAL: DevtoolsSnapshot = { epoch: 0, capture: 'unavailable', console: [], network: [] };
+/** requestId CDP — строка вида `1234.56`: длиннее — не наш. */
+const MAX_REQUEST_ID = 256;
+/** Место под страницу — CSS-пиксели окна, с запасом на любой экран. */
+const MAX_AREA = 100_000;
+
+function viewportArea(value: unknown): { width: number; height: number } | null {
+  if (!isRecord(value)) return null;
+  const side = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= MAX_AREA;
+  return side(value.width) && side(value.height) ? { width: value.width, height: value.height } : null;
+}
 /** Ответ browser.find — не дольше 2 с (план): found-in-page с finalUpdate может не прийти. */
 const FIND_TIMEOUT_MS = 2000;
 
@@ -496,6 +519,106 @@ export function registerIpc(options: RegisterIpcOptions): void {
     answerClose(event.sender, answer);
   });
 
+  ipcMain.handle('app:open-backlog', withIpcError(async (_event, projectPath: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768)
+      throw new HostError('bad_request', 'Invalid backlog request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      // This fixed file is authorized through the proven shared project context, not an arbitrary path API.
+      const paths = await sharedProjectPaths(projectPath);
+      const info = await lstat(paths.backlog);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(paths.backlog) !== paths.backlog)
+        throw new HostError('bad_request', 'The backlog file is unavailable.');
+      const result = await openPath(paths.backlog);
+      if (result) throw new HostError('internal', 'The backlog file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The backlog file could not be opened.'); }
+  }));
+
+  // One accepted journal revision. The renderer names a file, never a path: the host list must confirm that exact file
+  // as an accepted (or retained) revision, then the fixed canonical location is checked before the editor opens it.
+  ipcMain.handle('app:open-decision', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !DECISION_FILE_NAME.test(file))
+      throw new HostError('bad_request', 'Invalid decision request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const listed = await connection.call('decisions.list', { projectPath, query: file, limit: 10 }) as Result<'decisions.list'>;
+      if (!listed.decisions.some(row => row.file === file && row.openable))
+        throw new HostError('not_found', 'The accepted revision is unavailable.');
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.decisions, file);
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The decision file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The decision file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The decision file could not be opened.'); }
+  }));
+
+  // Файл общего каталога состояния проекта, когда тот лежит вне папки проекта (linked worktree): окно называет путь
+  // относительно каталога, только из известного набора (SHARED_FILE_PATH). Каталог строит main сам; ссылки и подмена отсекаются.
+  ipcMain.handle('app:open-shared-file', withIpcError(async (_event, projectPath: unknown, file: unknown) => {
+    if (!isValidPathArg(projectPath) || !path.isAbsolute(projectPath) || projectPath.length > 32768 ||
+      typeof file !== 'string' || file.length > 255 || !SHARED_FILE_PATH.test(file))
+      throw new HostError('bad_request', 'Invalid shared file request.');
+    try {
+      const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+      const entry = snapshot.entries.find(item => item.projectPath === projectPath);
+      if (!entry) throw new HostError('not_found', 'Project not found.');
+      await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+      const paths = await sharedProjectPaths(projectPath);
+      const target = path.join(paths.dir, ...file.split('/'));
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(target) !== target)
+        throw new HostError('bad_request', 'The shared file is unavailable.');
+      const result = await openPath(target);
+      if (result) throw new HostError('internal', 'The shared file could not be opened.');
+      return { opened: true };
+    } catch { throw new HostError('internal', 'The shared file could not be opened.'); }
+  }));
+
+  // Save as recipe: окно присылает данные рецепта и основу имени файла, не путь. Пишется только файл рецепта в каталоге
+  // рецептов известного проекта; занятое имя без `replace` — ответ `exists`, файл не тронут (спека рецептов, 5.2).
+  ipcMain.handle('app:save-recipe', withIpcError(async (_event, request: unknown) => {
+    const input = parseRecipeSaveRequest(request);
+    if (input === null) throw new HostError('bad_request', 'Invalid recipe request.');
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find(item => item.projectPath === input.projectPath);
+    if (!entry) throw new HostError('not_found', 'Project not found.');
+    await roots.rootPath({ workKey: projectWorkKey(input.projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const written = await writeProjectRecipe(input);
+    if (written.status === 'exists') return { status: 'exists' };
+    // Файл уже записан: отказ редактора рецепт не отменяет, окно скажет, что он не открылся.
+    let opened = false;
+    try { opened = !(await openPath(written.file)); } catch { /* сохранённый рецепт остаётся */ }
+    return { status: 'saved', id: written.id, opened };
+  }));
+
+  ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
+    if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
+      throw new HostError('bad_request', 'invalid PARLEY.md request');
+    }
+    const snapshot = await connection.call('works.list', {}) as Result<'works.list'>;
+    const entry = snapshot.entries.find((item) => item.projectPath === projectPath);
+    if (entry === undefined) throw new HostError('not_found', 'project not found');
+    // Use the same canonical project boundary as the file editor, never a worktree or arbitrary path.
+    await roots.rootPath({ workKey: projectWorkKey(projectPath, entry.map.work.id), spec: { kind: 'project' } });
+    const result = create ? await createParleyMd(projectPath) : { created: false };
+    if ('receiptError' in result && result.receiptError) console.warn('[parley] PARLEY.md accounting could not be completed; automatic recreation is suppressed');
+    let exists = false;
+    try { await lstat(path.join(projectPath, 'PARLEY.md')); exists = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    return { exists, created: result.created };
+  }));
+
   ipcMain.handle(
     'app:reveal-work',
     withIpcError(async (_event, projectPath: unknown, workId: unknown) => {
@@ -582,6 +705,49 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => {
       await browser.session.clearStorageData();
       await browser.session.clearCache();
+    }),
+  );
+
+  // Консоль и сеть (спека 2026-10-07-browser-devtools-agent-design.md, 3.5): тот же страж гостя, аргументы — до инспектора.
+  ipcMain.handle(
+    'browser:devtools-snapshot',
+    withIpcError(async (_event, id: unknown) => browser.inspector.snapshot(browserGuest(browser, id).id) ?? NO_JOURNAL),
+  );
+
+  ipcMain.handle(
+    'browser:devtools-clear',
+    withIpcError(async (_event, id: unknown) => {
+      browser.inspector.clear(browserGuest(browser, id).id);
+    }),
+  );
+
+  // Спайк 0.1, вариант D: окно ждёт включения доменов, прежде чем открыть адрес вкладки. Адрес через мост не ходит.
+  ipcMain.handle(
+    'browser:devtools-ready',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.inspector.ready(browserGuest(browser, id).id);
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:response-body',
+    withIpcError(async (_event, id: unknown, requestId: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof requestId !== 'string' || requestId === '' || requestId.length > MAX_REQUEST_ID) {
+        throw new HostError('bad_request', 'invalid request id');
+      }
+      return browser.inspector.responseBody(guest.id, requestId, DEVTOOLS_LIMITS.panelBody);
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:set-viewport',
+    withIpcError(async (_event, id: unknown, spec: unknown, area: unknown) => {
+      const guest = browserGuest(browser, id);
+      const viewport = spec === null ? null : isViewportSpec(spec) ? spec : undefined;
+      const size = viewportArea(area);
+      if (viewport === undefined || size === null) throw new HostError('bad_request', 'invalid viewport');
+      return browser.emulation.set(guest.id, viewport, size);
     }),
   );
 

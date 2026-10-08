@@ -96,14 +96,19 @@ let nextHelloId = 1;
 export async function hello(
   client: TestClient,
   token: string,
-  overrides: { protocol?: number; client?: string } = {},
+  overrides: { protocol?: number; client?: string; features?: string[] } = {},
 ): Promise<RawMessage> {
   const id = nextHelloId;
   nextHelloId += 1;
   client.send({
     id,
     method: 'hello',
-    params: { token, protocol: overrides.protocol ?? PROTOCOL_VERSION, client: overrides.client ?? 'test' },
+    params: {
+      token,
+      protocol: overrides.protocol ?? PROTOCOL_VERSION,
+      client: overrides.client ?? 'test',
+      ...(overrides.features === undefined ? {} : { features: overrides.features }),
+    },
   });
   return client.next();
 }

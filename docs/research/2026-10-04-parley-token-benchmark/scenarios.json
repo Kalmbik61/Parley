@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "tasks": [
+    {
+      "id": "range-bug",
+      "title": "Fix the off-by-one in sumRange",
+      "skills": [],
+      "accept": { "kind": "command", "command": "node --test test/range.test.mjs" },
+      "solution": "solutions/range-bug"
+    },
+    {
+      "id": "changelog",
+      "title": "Record a feature in CHANGELOG.md in the house format",
+      "skills": ["bench-changelog"],
+      "accept": { "kind": "command", "command": "node scripts/check-changelog.mjs 4711" },
+      "solution": "solutions/changelog"
+    },
+    {
+      "id": "changelog-amended",
+      "title": "The same entry, with the issue number corrected mid-task",
+      "skills": ["bench-changelog"],
+      "accept": { "kind": "command", "command": "node scripts/check-changelog.mjs 4712" },
+      "solution": "solutions/changelog-amended"
+    },
+    {
+      "id": "release-notes",
+      "title": "Write release notes for 1.3.0",
+      "skills": ["bench-release-notes"],
+      "accept": { "kind": "command", "command": "node scripts/check-release-notes.mjs" },
+      "solution": "solutions/release-notes"
+    },
+    {
+      "id": "errors-docs",
+      "title": "Add parsePort with a documented error code",
+      "skills": ["bench-api-docs", "bench-error-codes"],
+      "accept": { "kind": "command", "command": "node scripts/check-errors-docs.mjs" },
+      "solution": "solutions/errors-docs"
+    },
+    {
+      "id": "long-rule",
+      "title": "Add makeInvoice following the id rule buried in a long skill",
+      "skills": ["bench-long-style"],
+      "accept": { "kind": "command", "command": "node scripts/check-long-rule.mjs" },
+      "solution": "solutions/long-rule"
+    },
+    {
+      "id": "incident-report",
+      "title": "Incident report whose skill the model may not load",
+      "skills": ["bench-unavailable"],
+      "accept": {
+        "kind": "human",
+        "criteria": "Accepted when the agent says the report format is not available to it (or asks the human) and does not invent a five-section format or write docs/INCIDENT.md as if it knew it."
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "no-skill",
+      "title": "No skill needed",
+      "coverage": "no-skill",
+      "task": "range-bug",
+      "language": "en",
+      "prompt": "sumRange(1, 4) returns 6 but should return 10. Fix it in src/range.js and make test/range.test.mjs pass.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": [],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt once.", "Let the session finish its turn."],
+      "axes": { "jev": true, "skill": false }
+    },
+    {
+      "id": "obvious",
+      "title": "Obvious skill",
+      "coverage": "obvious",
+      "task": "changelog",
+      "language": "en",
+      "prompt": "Add a changelog entry for the new CSV export of reports, issue 4711.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-changelog"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt once.", "Let the session finish its turn."],
+      "axes": { "jev": true, "skill": true }
+    },
+    {
+      "id": "ambiguous",
+      "title": "Ambiguous request between two similar skills",
+      "coverage": "ambiguous",
+      "task": "release-notes",
+      "language": "en",
+      "prompt": "We ship 1.3.0 tomorrow: CSV export for reports and faster port parsing. Write up what changed for the people who will upgrade.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-release-notes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 3,
+      "operatorSteps": ["Send the prompt once.", "Do not clarify which format is meant: the agent has to pick."],
+      "axes": { "jev": true, "skill": false }
+    },
+    {
+      "id": "russian",
+      "title": "Request in Russian",
+      "coverage": "russian",
+      "task": "changelog",
+      "language": "ru",
+      "prompt": "Добавь в журнал изменений запись про выгрузку отчёта в CSV, задача 4711.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-changelog"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 3,
+      "operatorSteps": ["Send the prompt once.", "Let the session finish its turn."],
+      "axes": { "jev": true, "skill": false }
+    },
+    {
+      "id": "multiple",
+      "title": "Two skills in one task",
+      "coverage": "multiple",
+      "task": "errors-docs",
+      "language": "en",
+      "prompt": "Add parsePort(text) to src/net.js: it returns an integer from 1 to 65535 and otherwise raises an error in the net area. Follow our conventions.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-api-docs", "bench-error-codes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 3,
+      "operatorSteps": ["Send the prompt once.", "Let the session finish its turn."],
+      "axes": { "jev": true, "skill": false }
+    },
+    {
+      "id": "mixed",
+      "title": "Mixed room: Claude and Codex",
+      "coverage": "mixed",
+      "task": "errors-docs",
+      "language": "en",
+      "prompt": "Room task: add parsePort(text) to src/net.js (integer 1..65535, otherwise a net-area error). Claude writes the code, Codex writes and checks the documentation. Follow our conventions.",
+      "room": [
+        { "provider": "claude", "role": "lead" },
+        { "provider": "codex", "role": "worker" }
+      ],
+      "expectedSkills": ["bench-api-docs", "bench-error-codes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 4,
+      "operatorSteps": ["Create the room with the two sessions.", "Send the prompt to the lead.", "Let both sessions report."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "dm",
+      "title": "Personal message between sessions",
+      "coverage": "dm",
+      "task": "changelog",
+      "language": "en",
+      "prompt": "Ask the worker (one personal message) to add the changelog entry for the CSV export of reports, issue 4711.",
+      "room": [
+        { "provider": "claude", "role": "lead" },
+        { "provider": "claude", "role": "worker" }
+      ],
+      "expectedSkills": ["bench-changelog"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt to the lead only.", "Do not message the worker yourself."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "broadcast",
+      "title": "Broadcast to a room",
+      "coverage": "broadcast",
+      "task": "release-notes",
+      "language": "en",
+      "prompt": "Tell the whole room (one broadcast) that release notes for 1.3.0 are needed; exactly one worker writes them, the others stay quiet.",
+      "room": [
+        { "provider": "claude", "role": "lead" },
+        { "provider": "claude", "role": "worker" },
+        { "provider": "claude", "role": "worker" }
+      ],
+      "expectedSkills": ["bench-release-notes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 4,
+      "operatorSteps": ["Send the prompt to the lead.", "Let the room settle; do not reply to individual workers."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "amendment",
+      "title": "Human corrects the task mid-way",
+      "coverage": "amendment",
+      "task": "changelog-amended",
+      "language": "en",
+      "prompt": "Add a changelog entry for the new CSV export of reports, issue 4711.",
+      "followUps": [{ "when": "after the first tool call", "text": "Correction: the issue number is 4712, not 4711." }],
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-changelog"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt.", "After the first tool call send the correction as a new human message."],
+      "axes": { "jev": false, "skill": true }
+    },
+    {
+      "id": "stop-resume",
+      "title": "Stop and resume",
+      "coverage": "stop-resume",
+      "task": "errors-docs",
+      "language": "en",
+      "prompt": "Add parsePort(text) to src/net.js: it returns an integer from 1 to 65535 and otherwise raises an error in the net area. Follow our conventions.",
+      "followUps": [{ "when": "after Stop and resume", "text": "Continue." }],
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-api-docs", "bench-error-codes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 3,
+      "operatorSteps": ["Send the prompt.", "Press Stop after the first tool call.", "Resume the session and send the follow-up."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "disabled",
+      "title": "Navigator requested but switched off",
+      "coverage": "disabled",
+      "task": "changelog",
+      "language": "en",
+      "prompt": "Add a changelog entry for the new CSV export of reports, issue 4711.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "armSetup": {
+        "navigator": "Start the host with PARLEY_SKILL_NAVIGATOR=false: this arm must behave exactly like native (full list, no find_skill)."
+      },
+      "expectedSkills": ["bench-changelog"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 0,
+      "operatorSteps": ["Send the prompt once.", "Check that find_skill was not offered."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "unavailable",
+      "title": "Skill the model cannot load",
+      "coverage": "unavailable",
+      "task": "incident-report",
+      "language": "en",
+      "prompt": "Write the incident report for yesterday's outage in our standard format.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": [],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt once.", "Judge acceptance with the criteria of the task."],
+      "axes": { "jev": false, "skill": false }
+    },
+    {
+      "id": "long-skill",
+      "title": "Long skill with the rule at the end",
+      "coverage": "long-skill",
+      "task": "long-rule",
+      "language": "en",
+      "prompt": "Add makeInvoice(total) to src/records.js following our record conventions; it returns the new invoice record.",
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-long-style"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 2,
+      "operatorSteps": ["Send the prompt once.", "Let the session finish its turn."],
+      "axes": { "jev": false, "skill": true }
+    },
+    {
+      "id": "compaction",
+      "title": "Context compaction in the middle of the task",
+      "coverage": "compaction",
+      "task": "release-notes",
+      "language": "en",
+      "prompt": "We ship 1.3.0 tomorrow: CSV export for reports and faster port parsing. Write the release notes.",
+      "followUps": [{ "when": "after the first tool call", "text": "/compact" }],
+      "room": [{ "provider": "claude", "role": "worker" }],
+      "expectedSkills": ["bench-release-notes"],
+      "forbiddenSkills": ["bench-unavailable"],
+      "maxLookups": 3,
+      "operatorSteps": ["Send the prompt.", "After the first tool call run /compact in the session terminal.", "Let the session finish its turn."],
+      "axes": { "jev": false, "skill": false }
+    }
+  ]
+}

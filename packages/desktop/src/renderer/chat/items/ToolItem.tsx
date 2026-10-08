@@ -91,9 +91,12 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
               {item.patchTruncated === true ? <Note>{S.chat.patchTruncated}</Note> : null}
             </>
           )}
-          <span className="text-xs text-muted-foreground">{S.chat.result}</span>
+          {/* Законченный вызов без результата (правка файла Codex: в журнале у неё нет вывода) — без раздела Result. */}
+          {item.response === undefined && item.status !== 'running' ? null : (
+            <span className="text-xs text-muted-foreground">{S.chat.result}</span>
+          )}
           {item.response === undefined ? (
-            <span className="text-xs text-muted-foreground">{S.chat.noResult}</span>
+            item.status === 'running' ? <span className="text-xs text-muted-foreground">{S.chat.noResult}</span> : null
           ) : (
             <>
               <pre data-testid="chat-tool-result" className={cn(PRE, 'max-h-60')}>

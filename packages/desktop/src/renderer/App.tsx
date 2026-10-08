@@ -11,6 +11,7 @@ import { isTargetVisible, wireAttentionNotifications } from './attention/notify.
 import { WindowNotes } from './attention/WindowNotes.js';
 import { hostMethods } from './lib/capabilities.js';
 import { useSidebarSectionsStore } from './sidebar/use-sidebar-sections.js';
+import { openParleyEditor } from './sidebar/SectionMenu.js';
 import { S } from '../shared/strings.js';
 import { WindowCloseQuestion } from './files/SaveChangesDialog.js';
 import { AppShell } from './shell/AppShell.js';
@@ -188,6 +189,13 @@ export function App(): JSX.Element {
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),
+      bridge.on('host.notice', (notice) => {
+        if (notice.kind !== 'parley-md-created' || notice.ref === null) return;
+        const ref = notice.ref;
+        toast(S.sidebar.parleyMdCreated, { action: { label: S.sidebar.parleyMdOpen,
+          onClick: () => openParleyEditor(ref.projectPath, ref.workId),
+        } });
+      }),
       // Провайдеры строки статуса (Organic, 1.1): один `providers.list` на подключение, а после
       // обрыва этот эффект заводится заново — список и версии CLI перечитываются.
       useProvidersStore.getState().init(bridge),

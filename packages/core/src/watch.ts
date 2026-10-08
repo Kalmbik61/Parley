@@ -48,10 +48,7 @@ export function claudeSource(
     resolve: sessionFileForPath,
     async index(file, sourceRoot) {
       const discovered = await discoverSession(file, sourceRoot);
-      return indexSessionFile(file, sourceRoot, {
-        adapter,
-        subsessionCount: discovered.subagents.length,
-      });
+      return indexSessionFile(file, sourceRoot, { adapter, subagents: discovered.subagents });
     },
   };
 }

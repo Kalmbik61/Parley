@@ -215,7 +215,8 @@ test.describe('подключение провайдеров на изолиро
     const list = await call<WorkList>(window, 'works.list', {});
     const flash = list.entries.find((entry) => entry.map.work.id === workId)!.map.sessions.find((session) => session.label === 'flash from dialog')!;
     const flashRef = { projectPath: project, workId, sessionId: flash.id };
-    expect(await launchOf(flashRef)).toMatchObject({ model: FLASH_MODEL, settingsModel: FLASH_MODEL, firstKey: true, secondKey: false, settings: 'settings-glm.json' });
+    // Навигатор навыков включён по умолчанию: у сессии свой файл настроек `settings/<id>.json`.
+    expect(await launchOf(flashRef)).toMatchObject({ model: FLASH_MODEL, settingsModel: FLASH_MODEL, firstKey: true, secondKey: false, settings: `${flash.id}.json` });
     await call(window, 'sessions.stop', { ref: flashRef });
     await call(window, 'sessions.resume', { ref: flashRef });
     // Модель из диалога хранится в карте (нормалайзер 2026-10-06, 5.5): resume идёт с ней, а не с моделью по умолчанию.
@@ -265,7 +266,7 @@ test.describe('подключение провайдеров на изолиро
     await expect(window.getByTestId('chat-view')).toHaveCount(0);
     await expect(window.getByRole('radio', { name: 'Chat', exact: true })).toBeVisible();
     expect(await launchOf(ref)).toMatchObject({
-      settings: 'settings-glm.json', settingsModel: DEFAULT_MODEL, model: DEFAULT_MODEL,
+      settings: `${ref.sessionId}.json`, settingsModel: DEFAULT_MODEL, model: DEFAULT_MODEL,
       managedByHost: true, authPresent: true, firstKey: true, secondKey: false,
       hookCapability: true, hookToken: false, capabilitySettings: true,
       channels: false, mcp: true, systemPrompt: true, settingsHaveKey: false,
@@ -315,7 +316,7 @@ test.describe('подключение провайдеров на изолиро
     const ordinary = await create(window, workId, 'claude', 'ordinary after save');
     await openSession(window, ordinary);
     expect(await launchOf(ordinary)).toMatchObject({
-      settings: 'settings.json', authPresent: false, fakeKeyAnywhere: false, firstKey: false, secondKey: false,
+      settings: `${ordinary.sessionId}.json`, authPresent: false, fakeKeyAnywhere: false, firstKey: false, secondKey: false,
       managedByHost: false, hookToken: true, hookCapability: false, capabilitySettings: false,
       trustedEndpoint: false, trustedAliases: false, settingsHaveKey: false,
     });

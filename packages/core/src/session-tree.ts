@@ -111,10 +111,7 @@ export async function buildSessionTree(
   adapter: SchemaAdapter = adapterV1,
 ): Promise<SessionTree> {
   const [session, subsessions, workflows] = await Promise.all([
-    indexSessionFile(discovered.file, root, {
-      adapter,
-      subsessionCount: discovered.subagents.length,
-    }),
+    indexSessionFile(discovered.file, root, { adapter, subagents: discovered.subagents }),
     Promise.all(discovered.subagents.map((subagent) => indexSubsession(subagent, adapter))),
     readSessionWorkflows(discovered.file),
   ]);
@@ -153,7 +150,7 @@ export async function buildIndex(
   const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
     indexSessionFile(session.file, root, {
       adapter,
-      subsessionCount: session.subagents.length,
+      subagents: session.subagents,
       ...(signal === undefined ? {} : { signal }),
     }),
   );

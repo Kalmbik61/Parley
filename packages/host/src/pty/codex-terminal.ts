@@ -70,7 +70,7 @@ export function classifyTitle(title: string): CodexSignal {
  * классификация — по началу строки, и узкая: `Approval requested: <команда>` и `Codex wants to edit
  * <файл>` — одобрение; `Agent turn complete` без ответа — конец хода. С ответом агента вместо этой
  * фразы (`agent-turn-complete` кладёт в текст до двухсот знаков ответа) уведомление не узнаётся:
- * конец хода тогда подтверждают заголовок `Ready`, `notify` и `task_complete` в логе.
+ * конец хода тогда подтверждают заголовок `Ready` и `task_complete` в журнале (`notify` человека не подменяется, спека 2026-10-07, 5.5).
  */
 export function classifyNotification(text: string): CodexSignal {
   const trimmed = text.trim();

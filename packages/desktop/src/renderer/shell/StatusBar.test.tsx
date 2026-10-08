@@ -685,6 +685,46 @@ describe('StatusBar — длинные значения (кусок 9b)', () => 
     expect(limitsWeight).toBeGreaterThanOrEqual(versionWeight * 10_000);
   });
 
+  // Сегмент — кнопка поповера, и строка делит нехватку между кнопками целиком, пропорционально вес × ширина: порядок «лимиты,
+  // версия, имя» держится только внутри кнопки. Сегмент, которому нечего отдать, кроме имени (недоступный GLM), получал свою
+  // долю и терял имя, пока у соседей текст лимитов ещё широк (E2E `limits.spec.ts`, 800×500 с тремя провайдерами).
+  it('сегмент из значка и имени (недоступный GLM) сжимается последним: у сегментов с лимитами или версией вес на порядки больше', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: both }),
+        provider({ id: 'codex', label: 'Codex', version: '0.44.0' }),
+        provider({ id: 'glm', label: 'GLM', available: false }),
+      ],
+    });
+    const { container } = renderPlain();
+    const weight = (el: Element): number => Number(/\bshrink-\[(\d+)\]/.exec(el.className)?.[1] ?? 1);
+    const [claude, codex, glm] = segments(container) as [HTMLElement, HTMLElement, HTMLElement];
+    expect(weight(glm)).toBe(1);
+    expect(weight(claude)).toBeGreaterThanOrEqual(weight(glm) * 10_000);
+    expect(weight(codex)).toBeGreaterThanOrEqual(weight(glm) * 10_000);
+  });
+
+  // С таким весом кнопка сжималась бы до нуля раньше, чем начнёт сжиматься сегмент из одного имени, и её значок с полоской
+  // налезали бы на соседей. Пол — то, что в кнопке не сжимается: значок 14, зазоры 7 между частями, блок лимитов (4 + трек 44).
+  it('у сегмента с лимитами или версией есть пол — значок, зазоры и блок лимитов; у сегмента из одного имени пола нет', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', version: '2.1.276', limits: both }),
+        provider({ id: 'codex', label: 'Codex', limits: both }),
+        provider({ id: 'zeta', label: 'Zeta', version: '1.0.0' }),
+        provider({ id: 'omega', label: 'Omega' }),
+      ],
+    });
+    const { container } = renderPlain();
+    const floor = (id: string): string =>
+      container.querySelector<HTMLElement>(`[data-provider-segment="${id}"]`)!.style.minWidth;
+    expect(floor('claude')).toBe(`${14 + 7 * 3 + 4 + 44}px`);
+    expect(floor('codex')).toBe(`${14 + 7 * 2 + 4 + 44}px`);
+    expect(floor('zeta')).toBe(`${14 + 7 * 2}px`);
+    expect(floor('omega')).toBe('');
+    expect(floor('glm')).toBe('');
+  });
+
   it('у имени и версии нет потолков ширины: длинная метка показывается целиком, пока место есть; порядок сжатия держат веса и min-w-0', () => {
     useProvidersStore.setState({ providers: [provider({ ...long, limits: both })] });
     renderPlain();

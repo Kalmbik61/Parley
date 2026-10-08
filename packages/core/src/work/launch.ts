@@ -9,29 +9,46 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { homedir } from 'node:os';
+import { realpath } from 'node:fs/promises';
+import { loadConfig } from '../config.js';
+import { codexHookFlags } from './codex-hooks.js';
+import { findRunnerBinary } from './find-binary.js';
+import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
-import { isServiceText } from '../session-index.js';
+import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv } from '../names.js';
 import {
+  EFFORT_TOKEN,
   loadProviders,
   providerCompatibilityError,
   isClaudeCode,
+  claudeConfigDirFor,
   resumeCommand,
   startCommand,
   type EffortLevel,
   type ProviderEntry,
   type RunnerSubstitutions,
 } from '../providers.js';
+import { prepareSessionRole, sessionRole, roleId, assertRoleDelivery, projectSkillRunnerContext } from './agents.js';
+import type { RoleCatalog } from '../roles/types.js';
+import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
-import { writeBrief } from './brief.js';
+import { loadBrief, writeBrief } from './brief.js';
 import { systemGuidance } from './guidance.js';
+import { readParleyMd } from './parley-md.js';
+import { readProjectMemory } from './project-memory.js';
+import type { MemoryItem } from './project-memory.js';
+import { leadRecipeBlock } from './recipe-lead.js';
+import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
-import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
-import { ensureStateDir } from './state-dir.js';
+import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
+import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
 
@@ -50,17 +67,30 @@ export interface LaunchOptions {
    */
   prompt?: string;
   /**
-   * Модель и усилие из диалога окна. Доезжают только до провайдера, у которого в шаблоне есть
-   * их подстановки (`supportsModel`, `supportsEffort`). Перекрывают выбор, записанный в карте
-   * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`; без них берётся записанный.
+   * Явный выбор модели и усилия для запуска перекрывает выбор, записанный в карте
+   * (`WorkSession.model`, `.effort`), — и при запуске, и при `resume`. Нет выбора — умолчание
+   * текущей роли, без роли — умолчание CLI; `null` — явный «Default»: снимает умолчание роли, флага
+   * нет. Хост сохраняет в карте только явный выбор из окна или MCP, без вычисленных умолчаний роли.
+   * Доезжает только до провайдера, у которого в шаблоне запуска есть подстановки (`supportsModel`,
+   * `supportsEffort`). У GLM без модели берётся настроенная модель: tier aliases не дают Claude
+   * Code восстановить её самому. Выбор Chat /model отдельно не сохраняется.
    */
-  model?: string;
-  effort?: EffortLevel;
+  model?: string | null;
+  roleCatalog?: RoleCatalog;
+  requiredPermissions?: RequiredRolePermissions;
+  effort?: EffortLevel | null;
   /**
    * Адрес приёмника хуков хоста: с ним файл `--settings` получает HTTP-хуки ленты (вид «Chat»,
    * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
    */
   hookUrl?: string;
+  /**
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook`. Вместе с `hookUrl` и настройкой
+   * `codexApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6).
+   */
+  codexHookCommand?: string;
+  /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
+  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -77,6 +107,8 @@ export interface LaunchPlan {
   providerSessionId: string | null;
   /** Что в запуске пошло не так, оставшись запуском: строка статуса покажет `⚑`. */
   warnings: string[];
+  /** Safe warning codes for host logging and deduplicated notices. */
+  diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -90,27 +122,19 @@ async function entryOf(provider: string): Promise<ProviderEntry> {
   return entry;
 }
 
-const briefFile = (projectPath: string, workId: string, sessionId: string): string =>
-  path.join(workPaths(projectPath, workId).briefs, `${sessionId}.md`);
-
 /**
  * Бриф сессии с диска. Между созданием записи и запуском файл можно править
- * своим редактором — поэтому он читается заново при каждом запуске (решение №1).
- * Файла нет (карту принесли из другого проекта) — собираем его заново.
+ * своим редактором — поэтому он читается заново при каждом запуске (решение №1). Но бриф версионирован
+ * (`brief.ts`): записанный под старую карту (другая задача, комнаты, роли, решения) пересобирается, а правленный
+ * руками остаётся. Файла нет (карту принесли из другого проекта) — собираем его заново.
  */
 export async function readBrief(
   projectPath: string,
   workId: string,
   sessionId: string,
 ): Promise<string> {
-  const file = briefFile(projectPath, workId, sessionId);
-  try {
-    return await readFile(file, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    await writeBrief(projectPath, await readMap(projectPath, workId), sessionId);
-    return readFile(file, 'utf8');
-  }
+  const loaded = await loadBrief(projectPath, workId, sessionId, { create: true });
+  return (loaded as NonNullable<typeof loaded>).text;
 }
 
 /**
@@ -122,12 +146,7 @@ async function writtenBrief(
   workId: string,
   sessionId: string,
 ): Promise<string | null> {
-  try {
-    return await readFile(briefFile(projectPath, workId, sessionId), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return null;
-  }
+  return (await loadBrief(projectPath, workId, sessionId, { create: false }))?.text ?? null;
 }
 
 /**
@@ -176,10 +195,23 @@ async function plan(
   mode: LaunchMode,
   options: LaunchOptions = {},
 ): Promise<LaunchPlan> {
+  // Immutable for this launch and its MCP child, including resume.
+  const { config: launchConfig } = await loadConfig();
+  const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
+  const skillNavigator = launchConfig.skillNavigator;
+  // GLM — тот же Claude Code, но хост срезает у него `CLAUDE_CONFIG_DIR` (provider-env.ts): конфигурация — `~/.claude`.
+  const claudeConfigEnv = claudeConfigDirFor(entry, process.env);
   const incompatibility = providerCompatibilityError(entry);
   if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
+  const cwd = session.worktree?.path ?? projectPath;
+
+  const role = await prepareSessionRole(cwd, entry, { roleId: roleId(sessionRole(session)), provider: session.provider, mode: 'existing',
+    ...(options.model === undefined && session.model === undefined ? {} : { model: options.model === undefined ? session.model! : options.model }),
+    ...(options.effort === undefined && session.effort === undefined ? {} : { effort: options.effort === undefined ? session.effort! : options.effort }),
+    ...(options.requiredPermissions ? { requiredPermissions: options.requiredPermissions } : {}),
+  }, options.roleCatalog);
 
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
   // промпт, а не первым сообщением, и агент ждёт запроса пользователя
@@ -196,13 +228,13 @@ async function plan(
     (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId)));
   let providerSessionId: string | null = null;
 
-  // Файл хуков нужен тому, кто его принимает (`claude --settings`); один на
-  // работу, потому что команда хука не зависит от сессии (дизайн 4.2).
+  // Navigator launches isolate the generated settings file per session; off keeps the work path.
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
 
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
   // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
   const warnings: string[] = [];
+  const diagnostics: NonNullable<LaunchPlan['diagnostics']> = role.warnings.map(() => ({ code: 'role-missing', message: 'The saved role is no longer available. Parley kept the explicit session choices and started without role defaults.' }));
   const channel = options.channel === true && template.includes('{channel}');
   // Молчим про чужих провайдеров: push — возможность Claude Code, у codex и GLM
   // `{channel}` в шаблоне нет и быть не должно.
@@ -210,11 +242,74 @@ async function plan(
     warnings.push(NO_CHANNEL_WARNING);
   }
 
+  // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
+  const nativeClaudeRole = role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true);
+  // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
+  const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
+
+  // Native context of the launch is computed before the command: the Codex reduction needs it confirmed.
+  // Only the actual chosen template/environment enters the LOCAL descriptor.
+  let nativeVerified = false;
+  let nativeDescriptor: NativeContextDescriptor | null = null;
+  if (skillNavigator) {
+    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
+    let descriptor: NativeContextDescriptor | null = null;
+    try {
+      const homeDir = await realpath(process.env.HOME ?? homedir());
+      const roots: NativeContextDescriptor['roots'] = { homeDir };
+      if (process.env.CODEX_HOME) roots.codexHome = await realpath(path.resolve(cwd, process.env.CODEX_HOME));
+      if (claudeConfigEnv) roots.claudeConfigDir = await realpath(path.resolve(cwd, claudeConfigEnv));
+      const nativeCommand = entry.id === 'codex' && projection.verified ? await findRunnerBinary(entry.runner.command, process.env) : undefined;
+      descriptor = { version: 1, revision: nativeContextRevision, provider: session.provider, cwd: await realpath(cwd),
+        verified: projection.verified && nativeCommand !== undefined, ...(nativeCommand ? { command: nativeCommand } : {}),
+        configArgs: projection.configArgs, roots };
+    } catch { /* Unreadable roots/binary do not invent a native context. */ }
+    const written = descriptor !== null && await writeNativeContext(projectPath, workId, session.id, descriptor);
+    nativeVerified = written && descriptor?.verified === true;
+    if (nativeVerified) nativeDescriptor = descriptor;
+  }
+
+  // Сокращение родного списка скиллов — только при навигаторе и только там, где путь загрузки подтверждён
+  // (спека, 6.1): иначе список остаётся полным.
+  let skillList: 'names' | 'removed' | undefined;
+  let codexListUnread = false;
+  let disablePlugins: string[] = [];
+  if (skillNavigator && isClaudeCode(entry)) {
+    const claude = await claudeSkillReduction({
+      nativeRole: nativeClaudeRole,
+      mcpRoute,
+      settingsFile: template.includes('{settingsFile}'),
+      cwd,
+      configDir: claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : path.join(process.env.HOME ?? homedir(), '.claude'),
+    });
+    if (claude.reduced) { skillList = 'names'; disablePlugins = claude.disablePlugins; }
+  } else if (skillNavigator && entry.id === 'codex' && mcpRoute) {
+    // Запись `codex` в providers.json заменяет шаблон целиком: без `{skillCatalog}` флаг не дойдёт, список остаётся полным.
+    if (!template.includes('{skillCatalog}')) {
+      diagnostics.push({
+        code: 'provider-override-gap',
+        message: 'Custom Codex runner has no {skillCatalog}; add this placeholder so the skill navigator can shorten the native skill list. The full list stays enabled.',
+      });
+    } else if (nativeVerified && nativeDescriptor !== null) {
+      // Каталог `find_skill` — состав из `skills/list` самого Codex: он и есть родной список, покрытие полное.
+      // Список убирается, только когда каталог ещё и сохранён для MCP-сервера сессии (с ревизией этого запуска):
+      // не прочитан или не сохранился — список остаётся.
+      const { roots } = nativeDescriptor;
+      const catalog = await codexSkillRoute.catalog({ cwd: nativeDescriptor.cwd, command: nativeDescriptor.command!, configArgs: nativeDescriptor.configArgs,
+        env: { ...process.env, HOME: roots.homeDir, CODEX_HOME: roots.codexHome ?? path.join(roots.homeDir, '.codex') } });
+      if (catalog !== null && await writeNativeSkillCatalog(projectPath, workId, session.id, nativeContextRevision, catalog)) skillList = 'removed';
+      else codexListUnread = true;
+    }
+  }
+
   // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
   // `PARLEY_*` и `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
   const params = {
     workDir: paths.dir,
     sessionId: session.id,
+    skillNavigator,
+    skillListReduced: skillList !== undefined,
+    nativeContextRevision,
     env: process.env,
     ...(channel ? { channel } : {}),
   };
@@ -223,7 +318,7 @@ async function plan(
   // значением `-c`, и лишний файл ему незачем.
   const file =
     entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel)
+      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, { skillNavigator, skillListReduced: skillList !== undefined, nativeContextRevision })
       : null;
   const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
 
@@ -234,47 +329,110 @@ async function plan(
   // Code живёт в процессе, а не в транскрипте, как и системная вставка (5.1).
   // Проверка имени осталась там, где создавалась запись, — второй раз файл
   // агента читать нечего.
-  if (session.agent !== null) subs.agent = session.agent;
+  if (role.nativeAgent !== null) subs.agent = role.nativeAgent;
+  if (role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(role.sandboxMode)}`;
+  if (role.readOnly && isClaudeCode(entry)) subs.disallowedTools = 'Edit,Write,NotebookEdit';
+  assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(skillNavigator ? { sessionId: session.id } : {}),
+      ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
       ...(entry.runner.settingsModel === undefined
         ? {}
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
     });
   }
-  // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
-  // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
-  // журналов хоста не встанет на каталог, которого нет.
-  if (template.includes('{notify}')) {
-    await ensureStateDir(projectPath);
-    await mkdir(paths.events, { recursive: true });
-    subs.notify = codexNotifyOverride();
+  if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
+  // Хуки Codex — только по согласию человека (`codexApprovals`, по умолчанию выключено): без доверия в `/hooks`
+  // Codex остановил бы старт экраном ревью.
+  if (
+    entry.id === 'codex' &&
+    launchConfig.codexApprovals &&
+    options.hookUrl !== undefined &&
+    options.codexHookCommand !== undefined
+  ) {
+    subs.codexHooks = codexHookFlags(options.codexHookCommand);
   }
-  // Системная вставка гида идёт во всех трёх режимах, включая `resume`:
-  // системный промпт живёт в процессе, а не в транскрипте, и собирается заново
-  // при каждом запуске (план от 2026-09-06, раздел A).
-  if (template.includes('{systemPrompt}')) {
-    const guidance = systemGuidance(await readMap(projectPath, workId), session.id);
-    // Бриф тихой сессии идёт этим же путём и при `resume`: транскрипт начинается
-    // с сообщения пользователя, контекста родителя в нём нет.
+  const hasSystemLayer = template.includes('{systemPrompt}');
+  const hasDeveloperLayer = template.includes('{developerInstructions}');
+  if (options.layer?.role?.trim()) {
+    const deliverable = nativeClaudeRole
+      ? role.nativeAgent !== null && template.includes('{agent}')
+      : hasSystemLayer || hasDeveloperLayer;
+    if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
+  }
+  if (entry.id === 'codex' && !hasDeveloperLayer) {
+    diagnostics.push({
+      code: 'provider-override-gap',
+      message: 'Custom Codex runner has no {developerInstructions}; add this placeholder to deliver the Parley session layer through Codex.',
+    });
+  }
+  // One current layer for launch/new/resume; only its provider channel differs.
+  let blockBytes;
+  if (hasSystemLayer || hasDeveloperLayer) {
+    const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
-    subs.systemPrompt = brief === null ? guidance : `${guidance}\n\n${brief}`;
+    const parley = await readParleyMd(projectPath);
+    diagnostics.push(...parley.warnings);
+    let memoryItems: MemoryItem[] = [];
+    try { memoryItems = (await readProjectMemory(projectPath)).items; }
+    catch { diagnostics.push({ code: 'memory-unreadable', message: 'Parley could not read project memory; resolve memory.md conflicts or access errors before the next launch.' }); }
+    const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
+      ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
+      : '';
+    // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.
+    const recipeBlock = leadRecipeBlock(map, session.id);
+    const layer = buildSessionLayer({
+      ...options.layer,
+      playbook: recipeBlock ?? '',
+      isLead: recipeBlock !== null,
+      ...(role.role ? { role: role.roleText } : {}),
+      nativeClaudeRole,
+      guidance: systemGuidance(map, session.id, {
+        skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        ...(skillList === undefined ? {} : { skillList }),
+        // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
+        omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
+      }),
+      bridge,
+      ...(brief === null ? {} : { brief }),
+      parleyMd: parley.text,
+      memoryItems,
+    });
+    blockBytes = layer.blockBytes;
+    diagnostics.push(...layer.warnings);
+    if (hasSystemLayer) subs.systemPrompt = layer.text;
+    if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
   }
 
-  // Модель и усилие — из выбора запуска, а без него из карты, во всех режимах, включая `resume`:
-  // Claude Code при `--resume` effort не восстанавливает (спека нормалайзера, 5.4). Нет ни того ни
-  // другого — подстановки нет, флаг выпадает, и CLI берёт своё. GLM без выбора берёт настроенную
-  // модель: tier aliases не дают Claude Code восстановить её самому.
-  const model = options.model ?? session.model ?? entry.runner.settingsModel;
-  if (model !== undefined) subs.model = model;
-  const effort = options.effort ?? session.effort;
-  if (effort !== undefined) subs.effort = effort;
+  // Модель и усилие считает роль (`prepareSessionRole` выше): явный выбор запуска, иначе записанный в
+  // карте, иначе умолчание роли; `null` — явный «Default», флага нет. Ставятся во всех режимах, включая
+  // `resume`: Claude Code при `--resume` effort не восстанавливает (спека нормалайзера, 5.4). Нет
+  // значения — подстановки нет, флаг выпадает, и CLI берёт своё. GLM без модели берёт настроенную:
+  // tier aliases не дают Claude Code восстановить её самому.
+  const model = role.model ?? entry.runner.settingsModel;
+  if (model !== undefined && model !== null) subs.model = model;
+  if (role.effort !== null) {
+    if (!EFFORT_TOKEN.test(role.effort)) throw new Error('invalid-role-effort');
+    subs.effort = role.effort;
+  }
 
   if (resuming) {
     subs.providerSessionId = session.providerSessionId as string;
-    if (options.prompt !== undefined && template.includes('{prompt}')) subs.prompt = options.prompt;
+    // Бриф возобновлённой сессии заново не посылается: разговор помнит старый. Изменился он с тех пор (задача,
+    // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
+    // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
+    let notice = '';
+    if (!quiet && template.includes('{prompt}')) {
+      const loaded = await loadBrief(projectPath, workId, session.id, { create: false });
+      if (loaded?.refreshed) {
+        notice = `Your brief changed (revision ${loaded.previous ?? 'none'} is outdated): the task, rooms, roles or decisions were amended. Call get_map for the current state before continuing.`;
+      }
+    }
+    const prompt = [notice, options.prompt ?? ''].filter((part) => part !== '').join('\n\n');
+    if (prompt !== '' && template.includes('{prompt}')) subs.prompt = prompt;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
@@ -292,19 +450,39 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  validateLayerArguments(args, blockBytes, subs.systemPrompt);
+  if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
+    warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
+  }
+  warnings.push(...diagnostics.map((warning) => warning.message));
   return {
     command,
     args,
     // Сессия в своём worktree живёт там во всех режимах, включая `resume`:
     // `claude --resume` ищет транскрипт по каталогу, а не по id (спецификация 8.1).
-    cwd: session.worktree !== null ? session.worktree.path : projectPath,
+    cwd,
     // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
     // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
     // прежней сборки читают `HARNAS_*` (R3).
-    env: { ...entry.runner.env, ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id }) },
+    env: {
+      ...entry.runner.env,
+      ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
+        ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
+      ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
+    },
     providerSessionId,
     warnings,
+    diagnostics,
   };
+}
+
+async function codexBridgeApplies(cwd: string): Promise<boolean> {
+  const isFile = async (name: string): Promise<boolean> => {
+    try { return (await stat(path.join(cwd, name))).isFile(); }
+    catch { return false; }
+  };
+  const [claude, agents, override] = await Promise.all(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'].map(isFile));
+  return claude === true && agents === false && override === false;
 }
 
 /** Запуск `pending` сессии: бриф стартовым промптом (дизайн 4.3). */
@@ -356,18 +534,22 @@ const RUSSIAN_UNTITLED_WORK = 'без названия'; // cyrillic-ok: мет�
 /**
  * Ярлык быстрой сессии, ещё не переименованной: `NEW_LABEL` или его прежняя русская запись. Служебный
  * текст Claude Code (`<local-command-caveat>…`) — тоже не имя: его ставил автозаголовок сборок до 0.2.0
- * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново.
+ * сессиям, начатым со слеш-команды, и такой ярлык автозаголовок переименует заново. Указатель на письма
+ * (`New messages (1) in r-01 "…". Call check_inbox.`) — тоже не имя: его ставил автозаголовок сборок до
+ * 0.7.0 включительно агентам комнаты, запущенным без задачи; хост возвращает такой ярлык к `NEW_LABEL`
+ * (`resetPointerLabel`).
  */
 export function isNewLabel(label: string): boolean {
-  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label);
+  return label === NEW_LABEL || label === RUSSIAN_NEW_LABEL || isServiceText(label) || isPointerText(label);
 }
 
 /**
  * Заголовок работы, ещё не названной: `UNTITLED_WORK` или его прежняя русская запись. Служебный текст Claude
- * Code — тоже не название: автозаголовок сборок до 0.2.0 ставил его безымянной работе вместе с ярлыком сессии.
+ * Code и указатель на письма — тоже не название: автозаголовок прежних сборок ставил их безымянной работе
+ * вместе с ярлыком сессии.
  */
 export function isUntitledWork(title: string): boolean {
-  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title);
+  return title === UNTITLED_WORK || title === RUSSIAN_UNTITLED_WORK || isServiceText(title) || isPointerText(title);
 }
 
 export interface NewSessionResult {
@@ -422,9 +604,27 @@ export async function createChildSession(
 }
 
 /**
+ * Заголовок для автозаголовка из записи индекса логов; `null` — назвать сессию нечем. Разговор, начатый
+ * указателем на письма (`firstPromptPointer`: агент комнаты без задачи, первым ему пришла почта), имени из
+ * лога не получает: заголовок из реплики — сам указатель, а `ai-title` Claude генерирует по первому запросу
+ * («Проверка входящих сообщений») и это тоже не имя. Исключение — `custom-title`: его пишет только `/rename`
+ * человека в Claude Code, это явный выбор имени, а не пересказ первого запроса. Заголовок из реплики, который
+ * сам указатель (указатель пришёл последним), тоже не берётся — дождёмся `ai-title`.
+ */
+export function autoTitleOf(
+  index: Pick<SessionIndex, 'title' | 'titleSource' | 'firstPromptPointer'> | undefined,
+): string | null {
+  if (index === undefined || index.title === null) return null;
+  if (index.titleSource === 'custom') return index.title;
+  if (index.firstPromptPointer === true || isPointerText(index.title)) return null;
+  return index.title;
+}
+
+/**
  * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
  * заголовок работы `UNTITLED_WORK` обновляются из него один раз (5.1).
  * Переименованную руками сессию не трогаем — её ярлык уже не `NEW_LABEL`.
+ * Указатель на письма именем не ставится ни при каком источнике (`isPointerText`).
  */
 export async function applyAutoTitle(
   projectPath: string,
@@ -432,12 +632,32 @@ export async function applyAutoTitle(
   sessionId: string,
   title: string,
 ): Promise<void> {
+  if (isPointerText(title)) return;
   await updateMap(projectPath, workId, (map) => {
     const session = map.sessions.find((item) => item.id === sessionId);
     if (session === undefined || !isNewLabel(session.label)) return;
     session.label = title;
     if (isUntitledWork(map.work.title)) map.work.title = title;
   });
+}
+
+/**
+ * Ярлык-указатель (автозаголовок сборок до 0.7.0 включительно назвал агента комнаты текстом
+ * `New messages (1) in r-01 "…". Call check_inbox.`) → снова `NEW_LABEL`, а такой же заголовок работы →
+ * `UNTITLED_WORK`. Чинится сама карта, один раз: её читают и окно, и агенты (`get_map`, бриф), и нормализовать
+ * ярлык в каждом читателе пришлось бы во многих местах. Не событие работы — `updatedAt` не сдвигается.
+ */
+export async function resetPointerLabel(projectPath: string, workId: string, sessionId: string): Promise<void> {
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      const session = map.sessions.find((item) => item.id === sessionId);
+      if (session !== undefined && isPointerText(session.label)) session.label = NEW_LABEL;
+      if (isPointerText(map.work.title)) map.work.title = UNTITLED_WORK;
+    },
+    { touch: false },
+  );
 }
 
 /** Новая сессия работы: запись `pending` и бриф по общему шаблону (раздел 5). */
@@ -490,6 +710,7 @@ export async function startSession(
   sessionId: string,
   providerSessionId: string | null,
   started?: StartedProcess,
+  nativeContextRevision?: string,
 ): Promise<void> {
   await updateMap(projectPath, workId, (map) => {
     const current = map.sessions.find((candidate) => candidate.id === sessionId);
@@ -504,6 +725,8 @@ export async function startSession(
     session.startedAtProcess = started.startedAtProcess;
     session.launchedBy = started.launchedBy;
   });
+  // A descriptor failure closes availability only; it never breaks the established launch.
+  if (started !== undefined) await stampNativeContext(projectPath, workId, sessionId, started, nativeContextRevision).catch(() => {});
 }
 
 /**

@@ -54,6 +54,8 @@ export async function findInterrupted(
 ): Promise<SessionRef[]> {
   const found: SessionRef[] = [];
   for (const entry of entries) {
+    // Архивную работу хост не поднимает до Reopen — предлагать её сессии некому.
+    if (entry.map.work.status === 'archived') continue;
     for (const session of entry.map.sessions) {
       // Живые и закрытые не прерваны; `pending` ещё не начинала.
       if (session.lifecycle !== 'sleeping') continue;

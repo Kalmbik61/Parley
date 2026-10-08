@@ -29,6 +29,7 @@ import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
 import { errorText, S } from '../../shared/strings.js';
 import { rootKey as rootKeyOf } from '../../shared/work-keys.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { FileTypeIcon } from '../components/FileTypeIcon.js';
 import { fileDocuments } from '../files/quick-open.js';
 import { filesRootSpec, useFilesStore } from '../files/store.js';
 import { openFile } from '../files/Tree.js';
@@ -70,6 +71,7 @@ const ICONS: Record<Exclude<PaletteIcon, 'terminal'>, typeof Folder> = {
 
 function RowIcon({ doc }: { doc: PaletteDoc }): JSX.Element {
   if (doc.state !== undefined) return <AgentStateDot state={doc.state} />;
+  if (doc.filePath !== undefined) return <FileTypeIcon path={doc.filePath} />;
   const Icon = doc.icon === 'terminal' ? SquareTerminal : ICONS[doc.icon];
   return <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
 }

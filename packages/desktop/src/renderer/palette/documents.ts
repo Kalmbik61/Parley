@@ -56,6 +56,8 @@ export interface PaletteDoc {
   order: number;
   state?: DotState; // сессии — их точка; работы — по уровню внимания
   icon: PaletteIcon;
+  /** Файл (вкладка файла, ⌘P): путь для значка по имени (спека значков 3.3) — название вкладки бывает обрезано. */
+  filePath?: string;
   /** Работы: последний переход к работе в истории — пустой запрос берёт по нему четыре последние. */
   visitedAt?: number | null;
   /** Вес названия в очках; по умолчанию 1.5 (спека 9.2), имя файла — 2 (спека 10.2). */
@@ -151,6 +153,7 @@ export function buildDocuments(input: {
             order: base + index,
             ...(session === undefined ? {} : { state: sessionState(session) }),
             icon: meta.icon,
+            ...(tab.kind === 'file' ? { filePath: tab.path } : {}),
             run: open(tab),
           });
         });

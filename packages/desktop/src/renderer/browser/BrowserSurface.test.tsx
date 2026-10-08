@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { WorkEntry } from '@parley/core';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
@@ -18,11 +18,16 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { useLayoutStore } from '../layout/store.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
-import { findTab } from '../layout/tree.js';
+import { findTab, updateTab } from '../layout/tree.js';
 import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
 import { toast } from 'sonner';
 import type { PickResult } from '../../shared/browser-types.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { consoleEntry, devtoolsBatch, networkEntry } from '../test-utils/devtools-fixtures.js';
+import { useDevtoolsStore } from './devtools/store.js';
+import type { ViewportSpec } from '../../shared/browser-devtools.js';
+import { DEFAULT_UI } from '../../shared/ui-types.js';
+import { useUiStore } from '../store/ui.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -121,6 +126,12 @@ function layoutUrlOfTab(): string | undefined {
   return tab?.kind === 'browser' ? tab.url : undefined;
 }
 
+function tabOfLayout(): TabSpec | undefined {
+  const layout = useLayoutStore.getState().layouts[WORK_KEY];
+  const found = layout === undefined ? null : findTab(layout, TAB);
+  return found?.group.tabs[found.index];
+}
+
 function tabTitle(): string | null | undefined {
   return document.querySelector(`[role="tab"][data-tab-id="${TAB}"]`)?.textContent;
 }
@@ -136,6 +147,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+  useDevtoolsStore.setState({ tabs: {} });
+  useUiStore.setState({ ui: DEFAULT_UI });
   useLayoutStore.setState({
     activeWorkKey: null,
     layouts: {},
@@ -209,14 +222,15 @@ describe('BrowserSurface (тест 3)', () => {
     expect(view.goBack).toHaveBeenCalledTimes(1);
   });
 
-  it('DevTools — browser.openDevTools(webContentsId); отказ — тост, окно живо', async () => {
+  it('⋯ → Open full DevTools — browser.openDevTools(webContentsId); до dom-ready ⋯ неактивна', () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 9);
-    const devTools = screen.getByRole('button', { name: 'DevTools' }) as HTMLButtonElement;
-    expect(devTools.disabled).toBe(true);
+    const more = screen.getByRole('button', { name: 'More browser actions' }) as HTMLButtonElement;
+    expect(more.disabled).toBe(true);
     fire(view, 'dom-ready');
-    fireEvent.click(devTools);
+    fireEvent.keyDown(more, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open full DevTools' }));
     expect(bridge.browserCalls).toContainEqual({ method: 'openDevTools', args: [9] });
   });
 
@@ -244,7 +258,7 @@ describe('BrowserSurface (тест 3)', () => {
 });
 
 describe('BrowserSurface — новая вкладка (тест 5)', () => {
-  it('без адреса: webview нет, фокус в адресной строке; Enter с localhost:5173 — updateTab и webview с этим src', () => {
+  it('без адреса: webview нет, фокус в адресной строке; Enter с localhost:5173 — updateTab и webview (src about:blank) для этого адреса', () => {
     setBrowserTab('');
     requestAddressFocus(TAB);
     renderWork();
@@ -255,7 +269,7 @@ describe('BrowserSurface — новая вкладка (тест 5)', () => {
     fireEvent.change(field, { target: { value: 'localhost:5173' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(layoutUrlOfTab()).toBe('http://localhost:5173');
-    expect(webview()?.getAttribute('src')).toBe('http://localhost:5173');
+    expect(webview()?.getAttribute('src')).toBe('about:blank');
   });
 
   it('пустая вкладка из восстановленной раскладки фокус не забирает (перенос 9.2a)', () => {
@@ -282,12 +296,16 @@ describe('BrowserSurface — новая вкладка (тест 5)', () => {
 });
 
 describe('BrowserSurface — src один раз (тесты 6, 7)', () => {
-  it('did-navigate-in-page — новый url в раскладке, id прежний, src и loadURL не тронуты; Enter живой страницы — loadURL', () => {
+  it('did-navigate-in-page — новый url в раскладке, id прежний, src и loadURL не тронуты; Enter живой страницы — loadURL', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview());
     const setAttribute = vi.spyOn(view, 'setAttribute');
     fire(view, 'dom-ready');
+    // Единственный loadURL до адресной строки — первая загрузка после захвата (вариант D).
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    view.loadURL.mockClear();
 
     fire(view, 'did-navigate-in-page', { url: 'http://localhost:5173/#/next', isMainFrame: true });
     expect(layoutUrlOfTab()).toBe('http://localhost:5173/#/next');
@@ -301,7 +319,7 @@ describe('BrowserSurface — src один раз (тесты 6, 7)', () => {
     fireEvent.change(field, { target: { value: 'localhost:5173/other' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(view.loadURL).toHaveBeenCalledWith('http://localhost:5173/other');
-    expect(view.getAttribute('src')).toBe('http://localhost:5173/');
+    expect(view.getAttribute('src')).toBe('about:blank');
     expect(setAttribute.mock.calls.filter(([name]) => name === 'src')).toEqual([]);
   });
 
@@ -540,5 +558,411 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
     expect(screen.getByTestId('design-mode-card')).toBeTruthy();
     fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
     expect(screen.queryByTestId('design-mode-card')).toBeNull();
+  });
+});
+
+describe('BrowserSurface — строка вкладки (спека 2026-10-07, 4.1, 4.2)', () => {
+  it('счётчики — из журнала вкладки; ⋯ → Clear console and network — devtoolsClear(id), журнал пуст', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 9, network: [networkEntry('fail', { status: 500 })] })));
+    expect(screen.getByTestId('devtools-errors').textContent).toBe('1');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear console and network' }));
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsClear', args: [9] });
+    expect(useDevtoolsStore.getState().tabs[TAB]?.network).toEqual([]);
+    expect(screen.queryByTestId('devtools-errors')).toBeNull();
+  });
+
+  it('размер из меню — в раскладку вкладки (TabSpec.viewport); Fit — поля нет', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    expect(tabOfLayout()).toEqual({ kind: 'browser', id: TAB, url: 'http://localhost:5173/', viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fit' }));
+    expect(tabOfLayout()).toEqual({ kind: 'browser', id: TAB, url: 'http://localhost:5173/' });
+  });
+});
+
+const MOBILE_M: ViewportSpec = { preset: 'mobile-m', rotated: false, dpr: 2 };
+
+/** RO с размерами: поле страницы — 800×600, вкладка целиком и прочее — 800×700. */
+class SizedResizeObserver {
+  private readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+  observe(target: Element): void {
+    const rect = target.matches('[data-testid="browser-field"]') ? { width: 800, height: 600 } : { width: 800, height: 700 };
+    this.callback([{ target, contentRect: rect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+  }
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+function setBrowserTabSized(url: string, viewport: ViewportSpec): void {
+  setBrowserTab(url);
+  useLayoutStore.getState().apply(WORK_KEY, (layout) => updateTab(layout, TAB, { viewport }));
+}
+
+describe('BrowserSurface — журнал (спека 2026-10-07, 3.5; Фокус ревью 4)', () => {
+  it('пачка до dom-ready не применяется; на dom-ready — снимок своего гостя; дальше — только его пачки', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 7);
+    act(() => bridge.emitDevtools(devtoolsBatch({ webContentsId: 7, console: [consoleEntry(1, { text: 'early' })] })));
+    expect(useDevtoolsStore.getState().tabs[TAB]).toBeUndefined();
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [consoleEntry(1, { text: 'early' })], network: [] });
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsSnapshot', args: [7] });
+    expect(useDevtoolsStore.getState().tabs[TAB]?.console.map((item) => item.text)).toEqual(['early']);
+    act(() => bridge.emitDevtools(devtoolsBatch({ webContentsId: 7, console: [consoleEntry(2, { level: 'error', text: 'late' })] })));
+    act(() => bridge.emitDevtools(devtoolsBatch({ webContentsId: 8, console: [consoleEntry(3, { text: 'foreign' })] })));
+    expect(useDevtoolsStore.getState().tabs[TAB]?.console.map((item) => item.text)).toEqual(['early', 'late']);
+    expect(screen.getByTestId('devtools-errors').textContent).toBe('1');
+  });
+
+  it('кнопка строки — панель; ⌘⌥I в адресной строке — спрятать; ⌘⌥J — сразу Console; закрытие вкладки — журнал убран', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Console and network' }));
+    expect(screen.getByTestId('devtools-panel')).toBeTruthy();
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'ˆ', code: 'KeyI', metaKey: true, altKey: true });
+    expect(screen.queryByTestId('devtools-panel')).toBeNull();
+    act(() => useDevtoolsStore.getState().patch(TAB, { view: 'network' }));
+    fireEvent.keyDown(address, { key: '∆', code: 'KeyJ', metaKey: true, altKey: true });
+    expect(useDevtoolsStore.getState().tabs[TAB]).toMatchObject({ open: true, view: 'console' });
+    cleanup();
+    expect(useDevtoolsStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('⌘⌥I и ⌘⌥J с фокусом внутри панели вкладки — тоже ловит поверхность (ревью задачи 10)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'network'));
+    const panel = screen.getByTestId('devtools-panel');
+    fireEvent.keyDown(panel, { key: '∆', code: 'KeyJ', metaKey: true, altKey: true });
+    expect(useDevtoolsStore.getState().tabs[TAB]).toMatchObject({ open: true, view: 'console' });
+    fireEvent.keyDown(screen.getByTestId('devtools-panel'), { key: 'ˆ', code: 'KeyI', metaKey: true, altKey: true });
+    expect(screen.queryByTestId('devtools-panel')).toBeNull();
+  });
+
+  it('открытие панели снимает журнал заново: в болтливой консоли пачки отдают только свежее', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const snapshots = (): number => bridge.browserCalls.filter((call) => call.method === 'devtoolsSnapshot').length;
+    const before = snapshots();
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [consoleEntry(1), consoleEntry(2)], network: [] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Console and network' }));
+    });
+    expect(snapshots()).toBe(before + 1);
+    expect(useDevtoolsStore.getState().tabs[TAB]?.console).toHaveLength(2);
+  });
+
+  it('late — в панели «Reload to capture earlier requests», Reload — reload() страницы', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 7);
+    bridge.setDevtoolsSnapshot({ epoch: 1, capture: 'late', console: [], network: [] });
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'console'));
+    const panel = screen.getByTestId('devtools-panel');
+    expect(within(panel).getByRole('status').textContent).toContain('Reload to capture earlier requests');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Reload' }));
+    expect(view.reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BrowserSurface — размер вьюпорта (спека 2026-10-07, 4.2)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', SizedResizeObserver);
+  });
+
+  it('Mobile M: setViewport(id, размер, место под страницу); тот же webview — по scale и по центру; подпись с процентом', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    bridge.setViewportScale(0.5);
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls).toContainEqual({ method: 'setViewport', args: [7, MOBILE_M, { width: 768, height: 548 }] });
+    expect(webview()).toBe(view);
+    expect([view.style.left, view.style.top, view.style.width, view.style.height]).toEqual(['307px', '107px', '187px', '406px']);
+    expect(screen.getByTestId('viewport-label').textContent).toContain('375 × 812 · 2x · 50%');
+  });
+
+  it('Fit после размера — setViewport(id, null), webview во всё поле, подписи нет; Fit сразу — main не зовётся', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    await act(async () => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => updateTab(layout, TAB, { viewport: null }));
+    });
+    expect(bridge.browserCalls.filter((call) => call.method === 'setViewport').at(-1)?.args.slice(0, 2)).toEqual([7, null]);
+    expect(view.style.width).toBe('');
+    expect(screen.queryByTestId('viewport-label')).toBeNull();
+    cleanup();
+    bridge = createFakeBridge();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls.some((call) => call.method === 'setViewport')).toBe(false);
+  });
+
+  it('мобильный размер на документе без касаний — «Reload to apply touch»; после перезагрузки подсказки нет (спайк 0.3)', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/' });
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Reload to apply touch' }));
+    expect(view.reload).toHaveBeenCalledTimes(1);
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/' });
+    expect(screen.queryByRole('button', { name: 'Reload to apply touch' })).toBeNull();
+  });
+
+  it('перезапуск вкладки с Mobile (вариант D): about:blank → devtoolsReady → setViewport → loadURL → did-navigate — ложной подсказки «Reload to apply touch» нет ни до, ни после', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    const view = arm(webview(), 7);
+    // Пустая страница документ вкладки не заменяет: касания у неё не спрашивают.
+    fire(view, 'did-navigate', { url: 'about:blank' });
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    expect(screen.getByTestId('viewport-label')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reload to apply touch' })).toBeNull();
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/' });
+    expect(screen.queryByRole('button', { name: 'Reload to apply touch' })).toBeNull();
+  });
+
+  it('высота панели — из ui.json; ручка пишет новую в настройки окна', async () => {
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, browser: { devtoolsHeight: 300 } } });
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'console'));
+    expect(screen.getByTestId('devtools-panel').style.height).toBe('300px');
+    const handle = screen.getByRole('separator', { name: 'Resize panel' });
+    fireEvent.pointerDown(handle, { pointerId: 1, clientY: 500 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 450 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 450 });
+    expect(useUiStore.getState().ui.browser.devtoolsHeight).toBe(350);
+    expect(screen.getByTestId('devtools-panel').style.height).toBe('350px');
+  });
+
+  it('клик по ручке без сдвига — высота 40 % по умолчанию в ui.json не замораживается (ревью задачи 13)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'console'));
+    expect(screen.getByTestId('devtools-panel').style.height).toBe('280px');
+    const original = useUiStore.getState().patchUi;
+    const patchUi = vi.fn();
+    useUiStore.setState({ patchUi });
+    try {
+      const handle = screen.getByRole('separator', { name: 'Resize panel' });
+      fireEvent.pointerDown(handle, { pointerId: 1, clientY: 500 });
+      fireEvent.pointerUp(handle, { pointerId: 1, clientY: 500 });
+    } finally {
+      useUiStore.setState({ patchUi: original });
+    }
+    expect(patchUi).not.toHaveBeenCalled();
+    expect(useUiStore.getState().ui.browser.devtoolsHeight).toBeNull();
+  });
+
+  it('тот же размер из меню (повторный выбор пресета) — раскладка и main не трогаются (ревью задачи 14)', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const tabBefore = tabOfLayout();
+    const applied = (): number => bridge.browserCalls.filter((call) => call.method === 'setViewport').length;
+    const before = applied();
+    expect(before).toBeGreaterThan(0);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    await act(async () => {});
+    expect(tabOfLayout()).toBe(tabBefore);
+    expect(applied()).toBe(before);
+    // Другой размер по-прежнему доходит и до раскладки, и до main.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile L/ }));
+    await act(async () => {});
+    expect(tabOfLayout()).toMatchObject({ viewport: { preset: 'mobile-l', rotated: false, dpr: 2 } });
+    expect(applied()).toBe(before + 1);
+  });
+
+  it('m4: setViewport отказал → выбор Fit в меню всё равно шлёт сброс setViewport(id, null, поле)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    const setViewport = vi.spyOn(bridge.browser, 'setViewport').mockRejectedValue({ code: 'failed', message: 'boom' });
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith('[parley] setViewport failed', { code: 'failed', message: 'boom' });
+    setViewport.mockClear();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fit' }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledWith(7, null, { width: 768, height: 548 });
+    error.mockRestore();
+  });
+
+  it('m4: setViewport отказал → повторный выбор того же пресета шлёт setViewport заново; после успеха повтор снова пропускается', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    const setViewport = vi.spyOn(bridge.browser, 'setViewport').mockRejectedValue({ code: 'failed', message: 'boom' });
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    setViewport.mockClear();
+    setViewport.mockResolvedValue({ scale: 1 });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledTimes(1);
+    expect(setViewport).toHaveBeenCalledWith(7, MOBILE_M, { width: 768, height: 548 });
+    // Теперь размер стоит: тот же выбор снова ничего не шлёт.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    await act(async () => {});
+    expect(setViewport).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it('m5: захват пропал — сцена без ужатой коробки и подписи, страница во всё поле; вернулся — setViewport заново и сцена снова с размером', async () => {
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    bridge.setViewportScale(0.5);
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    const sent = (): number => bridge.browserCalls.filter((call) => call.method === 'setViewport').length;
+    expect(view.style.width).toBe('187px');
+    expect(screen.getByTestId('viewport-label')).toBeTruthy();
+    const before = sent();
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 7, capture: 'unavailable' })));
+    await act(async () => {});
+    expect(view.style.width).toBe('');
+    expect(screen.queryByTestId('viewport-label')).toBeNull();
+    expect(sent()).toBe(before);
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 7, capture: 'on' })));
+    await act(async () => {});
+    expect(sent()).toBe(before + 1);
+    expect(view.style.width).toBe('187px');
+    expect(screen.getByTestId('viewport-label').textContent).toContain('50%');
+  });
+});
+
+describe('BrowserSurface — первая загрузка после захвата (спайк 0.1, вариант D; Фокус ревью 6)', () => {
+  it('webview стартует с about:blank; адрес вкладки — на первом dom-ready и только после devtoolsReady; дальше не повторяется', async () => {
+    setBrowserTab('http://localhost:5173/app');
+    let release: () => void = () => {};
+    bridge.setDevtoolsReady(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    renderWork();
+    const view = arm(webview(), 7);
+    expect(view.getAttribute('src')).toBe('about:blank');
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsReady', args: [7] });
+    expect(view.loadURL).not.toHaveBeenCalled();
+    await act(async () => release());
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/app']]);
+    // dom-ready открытой страницы ничего не открывает: ни ожидания захвата, ни повторной загрузки.
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL).toHaveBeenCalledTimes(1);
+    expect(bridge.browserCalls.filter((call) => call.method === 'devtoolsReady')).toHaveLength(1);
+  });
+
+  it('devtoolsReady отказал — страница всё равно открывается', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTab('http://localhost:5173/');
+    bridge.setDevtoolsReady({ code: 'failed', message: 'boom' });
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    warn.mockRestore();
+  });
+
+  it('dom-ready чистого гостя пропущен (слушатели встали позже события) — страница открывается без события, по готовности гостя (F3)', async () => {
+    // До dom-ready `getWebContentsId()` бросает; здесь гость уже готов — метод есть на любом элементе.
+    const methods = { getWebContentsId: () => 7, loadURL: vi.fn(async () => {}), canGoBack: () => false, canGoForward: () => false };
+    for (const [name, value] of Object.entries(methods)) Object.defineProperty(HTMLElement.prototype, name, { configurable: true, value });
+    try {
+      setBrowserTab('http://localhost:5173/app');
+      renderWork();
+      await act(async () => {});
+      expect(useBrowserStore.getState().tabs[TAB]?.webContentsId).toBe(7);
+      expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsReady', args: [7] });
+      expect(methods.loadURL.mock.calls).toEqual([['http://localhost:5173/app']]);
+    } finally {
+      for (const name of Object.keys(methods)) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+  });
+
+  it('размер вкладки ставится до первой загрузки: loadURL ждёт ответа setViewport, касания не опоздают к документу (F4)', async () => {
+    vi.stubGlobal('ResizeObserver', SizedResizeObserver);
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    const answers: Array<() => void> = [];
+    const setViewport = vi.spyOn(bridge.browser, 'setViewport').mockImplementation(
+      () => new Promise((resolve) => answers.push(() => resolve({ scale: 1 }))),
+    );
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsReady', args: [7] });
+    expect(setViewport).toHaveBeenCalledWith(7, MOBILE_M, { width: 768, height: 548 });
+    expect(view.loadURL).not.toHaveBeenCalled();
+    await act(async () => answers.forEach((answer) => answer()));
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    expect(Math.min(...setViewport.mock.invocationCallOrder)).toBeLessThan(view.loadURL.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it('setViewport перед первой загрузкой отказал — страница всё равно открывается', async () => {
+    vi.stubGlobal('ResizeObserver', SizedResizeObserver);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    vi.spyOn(bridge.browser, 'setViewport').mockRejectedValue({ code: 'failed', message: 'boom' });
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    expect(warn).toHaveBeenCalledWith('[parley] viewport is not set before the first page', { code: 'failed', message: 'boom' });
+    error.mockRestore();
+    warn.mockRestore();
   });
 });

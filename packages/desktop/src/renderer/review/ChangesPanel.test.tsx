@@ -933,3 +933,17 @@ describe('ChangesPanel — облик Organic (1.8)', () => {
     expect(header.className).toContain('hover:text-accent-foreground');
   });
 });
+
+describe('Значки файлов (спека значков 3.4)', () => {
+  it('строка — значок по пути; у переименованного — по новому имени (фокус ревью 4)', async () => {
+    bridge.setHandler('worktrees.diff', () =>
+      diff({ files: [file('package.json'), { path: 'src/b.ts', status: 'R', oldPath: 'src/b.js', additions: 1, deletions: 0 }] }),
+    );
+    renderPanel();
+    await screen.findByText('package.json');
+    const iconOf = (text: string): string | null | undefined =>
+      screen.getByText(text).closest('button')?.querySelector('img[data-file-icon]')?.getAttribute('src');
+    expect(iconOf('package.json')).toMatch(/nodejs\.svg$/);
+    expect(iconOf('src/b.ts')).toMatch(/typescript\.svg$/);
+  });
+});

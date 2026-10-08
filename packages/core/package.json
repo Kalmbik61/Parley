@@ -1,6 +1,6 @@
 {
   "name": "@parley/core",
-  "version": "0.6.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -8,7 +8,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./names": "./dist/names.js",
-    "./feed-turn": "./dist/feed/turn.js"
+    "./feed-turn": "./dist/feed/turn.js",
+    "./resource-policy": "./dist/work/resource-policy.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -21,6 +22,8 @@
     "parley-mcp": "./dist/mcp/server.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "smol-toml": "1.9.0",
+    "yaml": "2.9.1"
   }
 }

@@ -37,6 +37,8 @@ import { overrideValue, overrideVariable } from './work/find-binary.js';
  */
 const CODEX_TUI_ARGS = [
   '-c',
+  'project_doc_fallback_filenames=["CLAUDE.md"]',
+  '-c',
   'tui.terminal_title=["spinner","status","session-id"]',
   '-c',
   'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -1233,10 +1235,9 @@ describe('commandBinary', () => {
 });
 
 describe('codex: запуск и возобновление (спека комнат Organic, 3.6)', () => {
-  /** Что launch кладёт в подстановки: MCP и notify — готовые значения `-c`. */
+  /** Что launch кладёт в подстановки: MCP — готовое значение `-c`. */
   const subs = {
     mcpConfig: 'mcp_servers.parley={command="/usr/bin/node",args=["/h/mcp/server.js"],env={PARLEY_WORK_DIR="/p/.parley/works/w-0001",PARLEY_SESSION_ID="s-02"},startup_timeout_sec=30,tool_timeout_sec=1860}',
-    notify: 'notify=["/usr/bin/node","/h/work/codex-notify-bin.js"]',
     model: 'gpt-6-sol',
     effort: 'high' as const,
     prompt: '# Работа w-0001',
@@ -1252,6 +1253,8 @@ describe('codex: запуск и возобновление (спека комн
         '-c',
         subs.mcpConfig,
         '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
+        '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
         'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -1259,8 +1262,6 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_method="osc9"',
         '-c',
         'tui.notification_condition="always"',
-        '-c',
-        subs.notify,
         '--model',
         'gpt-6-sol',
         '-c',
@@ -1285,6 +1286,8 @@ describe('codex: запуск и возобновление (спека комн
         '-c',
         subs.mcpConfig,
         '-c',
+        'project_doc_fallback_filenames=["CLAUDE.md"]',
+        '-c',
         'tui.terminal_title=["spinner","status","session-id"]',
         '-c',
         'tui.notifications=["approval-requested","agent-turn-complete"]',
@@ -1292,8 +1295,6 @@ describe('codex: запуск и возобновление (спека комн
         'tui.notification_method="osc9"',
         '-c',
         'tui.notification_condition="always"',
-        '-c',
-        subs.notify,
         'New messages (1). Call check_inbox.',
       ],
     });
@@ -1305,7 +1306,7 @@ describe('codex: запуск и возобновление (спека комн
       providerSessionId: 'uuid-1',
       prompt: undefined,
     } as never).args;
-    expect(args.at(-1)).toBe(subs.notify);
+    expect(args.at(-1)).toBe('tui.notification_condition="always"');
     expect(args).not.toContain('--model');
     expect(args).not.toContain('model_reasoning_effort="high"');
   });
@@ -1315,14 +1316,58 @@ describe('codex: запуск и возобновление (спека комн
     expect(resumed.join(' ')).not.toMatch(/--model|model_reasoning_effort|gpt-6-sol/);
   });
 
-  it('без notify (нет значения) уходит и его -c: висячего флага не остаётся', () => {
-    const args = startCommand(PROVIDERS.codex, { ...subs, notify: undefined } as never).args;
-    expect(args.join(' ')).not.toContain('notify=');
-    // Каждый `-c` в конце пары имеет значение.
-    args.forEach((arg, index) => {
-      if (arg === '-c') expect(args[index + 1]).toBeDefined();
-    });
-    expect(args.at(-1)).toBe('# Работа w-0001');
+  it('в запуске нет notify: ни `-c notify=`, ни неподставленного `{notify}`; висячего флага не остаётся', () => {
+    for (const args of [startCommand(PROVIDERS.codex, subs).args, resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'u' }).args]) {
+      expect(args.some((arg) => arg.startsWith('notify='))).toBe(false);
+      expect(args).not.toContain('{notify}');
+      // Каждый `-c` в конце пары имеет значение.
+      args.forEach((arg, index) => {
+        if (arg === '-c') expect(args[index + 1]).toBeDefined();
+      });
+    }
+    expect(startCommand(PROVIDERS.codex, subs).args.at(-1)).toBe('# Работа w-0001');
+  });
+
+  it('старая запись реестра с `{notify}`: подстановки нет, пара `-c {notify}` выпадает', () => {
+    expect(substituteArgs(['-c', 'a=1', '-c', '{notify}'], {})).toEqual(['-c', 'a=1']);
+  });
+
+  it('{skillCatalog}: без значения пара выпадает и аргументы прежние, со значением — отдельное -c для запуска и resume', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{skillCatalog}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{skillCatalog}');
+    expect(PROVIDERS.claude.runner.args).not.toContain('{skillCatalog}');
+    const plain = startCommand(PROVIDERS.codex, subs).args;
+    expect(plain.join(' ')).not.toContain('skills.include_instructions');
+    const resume = { ...subs, providerSessionId: 'uuid-1' };
+    expect(resumeCommand(PROVIDERS.codex, resume).args.join(' ')).not.toContain('skills.include_instructions');
+    const off = { ...subs, skillCatalog: 'skills.include_instructions=false' };
+    for (const [without, withFlag] of [
+      [plain, startCommand(PROVIDERS.codex, off).args],
+      [resumeCommand(PROVIDERS.codex, resume).args, resumeCommand(PROVIDERS.codex, { ...resume, ...off }).args],
+    ] as const) {
+      expect(withFlag).toHaveLength(without.length + 2);
+      const at = withFlag.indexOf('skills.include_instructions=false');
+      expect(withFlag[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(withFlag[at]!).value).toBe(false);
+      expect(withFlag.filter((_, index) => index !== at && index !== at - 1)).toEqual(without);
+    }
+    expect(substituteArgs(['-c', '{skillCatalog}', 'x'], {})).toEqual(['x']);
+  });
+
+  it('{codexHooks}: массив разворачивается на месте и в запуске, и в resume; без значения элемент выпадает без соседнего -c', () => {
+    expect(PROVIDERS.codex.runner.args).toContain('{codexHooks}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{codexHooks}');
+    expect(PROVIDERS.claude.runner.args).not.toContain('{codexHooks}');
+    const plain = startCommand(PROVIDERS.codex, subs).args;
+    expect(plain.join(' ')).not.toContain('hooks.');
+    const hooks = ['-c', 'hooks.Stop=[]', '-c', 'hooks.SessionStart=[]'];
+    const withHooks = startCommand(PROVIDERS.codex, { ...subs, codexHooks: hooks }).args;
+    expect(withHooks).toHaveLength(plain.length + hooks.length);
+    expect(withHooks.slice(withHooks.indexOf('hooks.Stop=[]') - 1, withHooks.indexOf('hooks.Stop=[]') + 3)).toEqual(hooks);
+    const resume = { ...subs, providerSessionId: 'uuid-1' };
+    expect(resumeCommand(PROVIDERS.codex, { ...resume, codexHooks: hooks }).args).toContain('hooks.SessionStart=[]');
+    expect(substituteArgs(['-c', 'a=1', '{codexHooks}'], {})).toEqual(['-c', 'a=1']);
+    expect(substituteArgs(['-c', 'a=1', '{codexHooks}'], { codexHooks: ['-c', 'b=2'] })).toEqual(['-c', 'a=1', '-c', 'b=2']);
   });
 
   it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
@@ -1331,7 +1376,7 @@ describe('codex: запуск и возобновление (спека комн
       resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
     ]) {
       const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
-      // Запуск: MCP, заголовок, уведомления, способ, условие, notify, усилие; resume — те же без усилия.
+      // Запуск: MCP, заголовок, уведомления, способ, условие, усилие; resume — те же без усилия.
       expect(overrides.length).toBeGreaterThanOrEqual(6);
       for (const override of overrides) {
         expect(() => parseTomlAssignment(override), override).not.toThrow();
@@ -1346,7 +1391,7 @@ describe('codex: запуск и возобновление (спека комн
       expect(byKey['tui.notifications']).toEqual(['approval-requested', 'agent-turn-complete']);
       expect(byKey['tui.notification_method']).toBe('osc9');
       expect(byKey['tui.notification_condition']).toBe('always');
-      expect(byKey['notify']).toEqual(['/usr/bin/node', '/h/work/codex-notify-bin.js']);
+      expect(byKey['notify']).toBeUndefined();
     }
   });
 
@@ -1406,18 +1451,34 @@ describe('codex: запуск и возобновление (спека комн
     const template = [
       ...(PROVIDERS.codex.runner.args ?? []),
       ...(PROVIDERS.codex.runner.resumeArgs ?? []),
-    ].join(' ');
+    ].join(' ').replaceAll('{codexHooks}', '');
     expect(template).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks|trust/i);
   });
 
-  it('подстановка {notify} понимается реестром и не путается с {mcpConfig}', () => {
-    expect(PROVIDERS.codex.runner.args).toContain('{notify}');
-    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{notify}');
-    expect(substituteArgs(['-c', '{notify}'], { notify: 'notify=["a"]' })).toEqual([
-      '-c',
-      'notify=["a"]',
-    ]);
+  it('реестр не содержит подстановки {notify}', () => {
+    expect(PROVIDERS.codex.runner.args).not.toContain('{notify}');
+    expect(PROVIDERS.codex.runner.resumeArgs).not.toContain('{notify}');
     expect(PROVIDERS.claude.runner.args).not.toContain('{notify}');
+  });
+});
+
+describe('Codex developer layer channel', () => {
+  it('the whole assignment is one argument on launch and resume and parses as TOML', () => {
+    const text = 'quote " \\\nЖ🙂';
+    const assignment = `developer_instructions=${JSON.stringify(text)}`;
+    for (const args of [startCommand(PROVIDERS.codex, { developerInstructions: assignment }).args,
+      resumeCommand(PROVIDERS.codex, { providerSessionId: 'id', developerInstructions: assignment }).args]) {
+      const at = args.indexOf(assignment);
+      expect(at).toBeGreaterThan(0);
+      expect(args[at - 1]).toBe('-c');
+      expect(parseTomlAssignment(assignment)).toEqual({ key: ['developer_instructions'], value: text });
+      expect(args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
+    }
+  });
+
+  it('an absent developer assignment drops its introducing -c, never another supplied flag', () => {
+    expect(substituteArgs(['-c', '{developerInstructions}', '-c', '{skillCatalog}'], { skillCatalog: 'skills.include_instructions=false' }))
+      .toEqual(['-c', 'skills.include_instructions=false']);
   });
 });
 
