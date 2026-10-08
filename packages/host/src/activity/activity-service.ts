@@ -6,9 +6,10 @@
  * (дизайн TUI v2, 4.2, 4.3, 5.1).
  *
  * Опроса нет: пересчёт идёт по событиям наблюдателей (журнал хуков, лог
- * провайдера, список работ) и по одному таймеру на сессию — на момент, когда
- * истечёт порог тишины, если сессия сейчас `working`. Планового `setInterval` в
- * файле нет и не должно быть (приёмка куска 1.5).
+ * провайдера, список работ), по одному таймеру на сессию — на момент, когда
+ * истечёт порог тишины, если сессия сейчас `working`, — и по дочитыванию
+ * журналов после новых наблюдателей (`watch-settle`). Планового `setInterval`
+ * в файле нет и не должно быть (приёмка куска 1.5).
  */
 
 import { existsSync } from 'node:fs';
@@ -56,7 +57,7 @@ import {
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
-import { createSettler, type Settler } from '../watch-settle.js';
+import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
@@ -238,8 +239,6 @@ interface WorkWatch {
   journal: EventsLog;
   /** `null` — каталога `events/` ещё нет или наблюдение сломалось: ждём повтора. */
   watcher: EventsWatcher | null;
-  /** Дочитывание журналов после создания наблюдателя (`watch-settle`); `null` — наблюдателя нет. */
-  settler: Settler | null;
 }
 
 export function createActivityService(
@@ -292,6 +291,14 @@ export function createActivityService(
   let stopped = false;
   let unsubscribeWorks: (() => void) | undefined;
   let unsubscribeLog: (() => void) | undefined;
+  /**
+   * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
+   * новом наблюдателе: запись, сделанная в этот миг, не доходит ни до одного наблюдателя процесса (опыт
+   * 2026-10-06: 3 записи из 150, если в миг записи заводится наблюдатель другого каталога). Поэтому после
+   * новых наблюдателей — своих журналов и индекса логов — перечитываются журналы всех работ, а не только той,
+   * чей наблюдатель заведён.
+   */
+  const catchUp = createSettler(() => settleAllJournals());
 
   function clearSilenceTimer(key: string): void {
     const timer = silenceTimers.get(key);
@@ -699,7 +706,8 @@ export function createActivityService(
   /**
    * Наблюдение за журналами работы. `renewed` — наблюдатель только что заведён:
    * всё, что хуки успели дописать до него, никто не прочёл, журналы работы
-   * нужно перечитать.
+   * нужно перечитать. Дописанное, пока наблюдатель включался и пересоздавал поток
+   * FSEvents, перечитает `catchUp`.
    *
    * `createWork` каталога `events/` не заводит — его создаёт запись настроек
    * при запуске сессии, а `watchEvents` на несуществующий каталог падает один
@@ -714,7 +722,7 @@ export function createActivityService(
     const eventsDir = workPaths(entry.projectPath, entry.map.work.id).events;
     let watch = workWatches.get(wk);
     if (watch === undefined) {
-      watch = { journal: openEvents(eventsDir), watcher: null, settler: null };
+      watch = { journal: openEvents(eventsDir), watcher: null };
       workWatches.set(wk, watch);
     }
     if (watch.watcher !== null || !existsSync(eventsDir)) return { watch, renewed: false };
@@ -737,7 +745,6 @@ export function createActivityService(
             current.watcher.close();
             current.watcher = null;
           }
-          current.settler?.cancel();
         },
       },
     );
@@ -746,9 +753,9 @@ export function createActivityService(
       return { watch, renewed: false };
     }
     watch.watcher = watcher;
-    // Хук, дописанный в окно включения наблюдателя, он теряет: журналы работы перечитываются ещё несколько раз.
-    watch.settler = createSettler(() => settleJournals(entry.projectPath, entry.map.work.id));
-    watch.settler.schedule();
+    // Хук, дописанный в окно включения наблюдателя, теряет и он, и наблюдатели других работ: журналы
+    // перечитываются ещё несколько раз.
+    catchUp.schedule();
     return { watch, renewed: true };
   }
 
@@ -774,6 +781,15 @@ export function createActivityService(
     recompute(ref);
   }
 
+  /**
+   * Дочитывание всех журналов после новых наблюдателей (`catchUp`): иначе потерянная строка ждала бы
+   * следующей записи того же журнала — у свежей сессии это первый хук, без которого хост не пускает
+   * отправку из окна (`hookedSince`).
+   */
+  function settleAllJournals(): void {
+    for (const entry of works.snapshot().entries) settleJournals(entry.projectPath, entry.map.work.id);
+  }
+
   /** Работы и сессии, которых в свежем снимке больше нет: состояние не копится вечно. */
   function pruneRemoved(snapshot: WorksSnapshot): void {
     const validSessions = new Set<string>();
@@ -790,7 +806,6 @@ export function createActivityService(
     for (const [wk, watch] of Array.from(workWatches)) {
       if (validWorks.has(wk)) continue;
       watch.watcher?.close();
-      watch.settler?.cancel();
       workWatches.delete(wk);
     }
 
@@ -860,7 +875,8 @@ export function createActivityService(
       // Не ждём: полный список сессий провайдера может читать гигабайты истории
       // (`~/.claude/projects`), а старт хоста ждать это не должен — до готовности
       // индекса activity просто не видит страховки по логу и живёт одними хуками.
-      void logIndex.start().catch((error: unknown) => {
+      // Готовый индекс заводит свои наблюдатели, и журналы перечитываются ещё раз.
+      void logIndex.start().then(() => catchUp.schedule(), (error: unknown) => {
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
@@ -971,15 +987,13 @@ export function createActivityService(
       stopped = true;
       unsubscribeWorks?.();
       unsubscribeLog?.();
+      catchUp.cancel();
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);
-      for (const watch of workWatches.values()) {
-        watch.watcher?.close();
-        watch.settler?.cancel();
-      }
+      for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();
       logIndex.stop();
     },
