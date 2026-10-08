@@ -173,6 +173,14 @@ describe('системная вставка', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 
+  it('комнаты: check_inbox помечает задачу человека всем полем roomTask — роль, ведущий, подсказка; потолок в четырнадцать строк не тронут', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
+
+    expect(line).toContain('(check_inbox marks it with roomTask: your role, the lead, a hint)');
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
   it('send_message: replyTo — id сообщения, на которое отвечают в комнате; строка прежняя, потолок в четырнадцать строк не тронут', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('send_message'));

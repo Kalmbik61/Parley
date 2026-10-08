@@ -32,7 +32,7 @@ import {
   supportsModel,
 } from '../providers.js';
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
-import { writeBrief } from '../work/brief.js';
+import { LEAD_ROLE, memberRole, writeBrief } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
   PAGE_MAX_BYTES,
@@ -71,11 +71,12 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
-import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms } from '../work/rooms.js';
+import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms, liveLead } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
-import { participantLabel, threadOf } from '../work/thread.js';
+import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
 import {
+  HUMAN,
   MESSAGE_KINDS,
   SYSTEM,
   type Artifact,
@@ -241,7 +242,39 @@ const messageView = (message: Message, map: WorkMap) => {
     room: room === null ? null : { id: room.id, title: room.title },
     // Ответ несёт id сообщения, на которое написан (Parley 0.3.0); у прочих писем ключа нет совсем.
     ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
+    // Рассылка комнаты (пустой `to`): агент иначе видит письмо без адресата и не отличает «всем» от случайного.
+    ...(message.to.length === 0 ? { toEveryone: true } : {}),
   };
+};
+
+/**
+ * Роль получателя в комнате, когда человек поставил задачу всем: приезжает вместе с письмом. Тихий старт
+ * (сессии окна запускаются раньше комнаты) пишет бриф до того, как комната существует, и раздела «Role in
+ * the room» в нём нет; а в самом письме не было ни адресата, ни роли — агенты начинали работу параллельно,
+ * не дожидаясь ведущего. Роль считаем по живому ведущему (`liveLead`), а не по брифу: она верна и для
+ * участника, добавленного позже, и после смены ведущего. Тексты — те же `LEAD_ROLE` и `memberRole`, что в брифе.
+ * Нет ведущего (комната закрыта) — `undefined`: роли раздавать некому.
+ */
+function roomTaskOf(map: WorkMap, message: Message, recipientId: string) {
+  if (message.from !== HUMAN || message.roomId === null || message.to.length > 0) return undefined;
+  const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+  if (room === undefined) return undefined;
+  const lead = liveLead(map, room);
+  if (lead === null) return undefined;
+  const isLead = lead === recipientId;
+  return {
+    role: isLead ? ('lead' as const) : ('member' as const),
+    lead,
+    leadLabel: participantLabel(map, lead),
+    proposalWaiting: room.proposal != null,
+    hint: isLead ? LEAD_ROLE : memberRole(sessionMention(recipientId)),
+  };
+}
+
+/** Письмо в ответе `check_inbox` и `wait_for("inbox")`: `messageView` и, для задачи человека всем, `roomTask`. */
+const inboxView = (message: Message, map: WorkMap, recipientId: string) => {
+  const roomTask = roomTaskOf(map, message, recipientId);
+  return { ...messageView(message, map), ...(roomTask === undefined ? {} : { roomTask }) };
 };
 
 /**
@@ -919,7 +952,7 @@ async function waitFor(
       const messages = unreadFor(map, sessionId);
       return messages.length === 0
         ? null
-        : { state: 'message', messages: messages.map((message) => messageView(message, map)) };
+        : { state: 'message', messages: messages.map((message) => inboxView(message, map, sessionId)) };
     };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
@@ -1086,7 +1119,7 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
     messages = inbox.map((message) => ({ ...message }));
     for (const message of inbox) message.readBy[sessionId] = at;
   });
-  return { messages: messages.map((message) => messageView(message, map)) };
+  return { messages: messages.map((message) => inboxView(message, map, sessionId)) };
 }
 
 async function createRoom(

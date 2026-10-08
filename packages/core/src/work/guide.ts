@@ -237,7 +237,9 @@ decision. Who it is shows in \`get_map\` — the room's \`lead\` field (\`null\`
 of \`members\`"; if the lead is closed, the first live participant leads).
 
 The human sets a task for everyone in the room — the human's message (\`from: human\`)
-without \`@sNN\` mentions. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
+without \`@sNN\` mentions. Such a message arrives from \`check_inbox\` / \`wait_for("inbox")\` marked
+\`toEveryone: true\`, with a \`roomTask\` field — your \`role\`, the \`lead\`, \`proposalWaiting\` and a \`hint\`
+with what to do. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
 
 1. Collect the positions: each participant answers in the room with one message. Wait for
    them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
@@ -285,7 +287,9 @@ returns an error.`,
     summary: 'room participant: speak up in one message, wait for your part, report to the lead',
     text: `### Room participant
 
-The human set a task for everyone in the room. Then:
+The human set a task for everyone in the room. Such a message arrives from \`check_inbox\` /
+\`wait_for("inbox")\` marked \`toEveryone: true\`, with a \`roomTask\` field — your \`role\`, the \`lead\`,
+\`proposalWaiting\` and a \`hint\` with what to do. Then:
 
 - Speak up in one message: \`send_message\` with \`room\` and no \`to\` — your position, the
   risks, what you can take. Not in parts and not in ten messages: the lead builds the

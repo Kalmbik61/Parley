@@ -102,6 +102,12 @@ describe('заглушка скилла parley: тело', () => {
     );
   });
 
+  it('правило про задачу человека всем: письмо приходит с roomTask — роль, ведущий, подсказка', () => {
+    expect(body).toMatch(
+      /The human's task for everyone in a room arrives from `check_inbox` marked `toEveryone: true` with `roomTask` \(your role, the lead, a hint\): follow it\./,
+    );
+  });
+
   it('правило про ответы в комнате (Parley 0.3.0): replyTo с id сообщения, человеку — без to, @human — простым текстом и по делу', () => {
     // Агент, который не открыл тему `rooms`, всё равно должен ответить с цитатой и не звать человека через `to`.
     expect(body).toMatch(
