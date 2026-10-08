@@ -9,6 +9,7 @@
 
 **Устройство:**
 - main подключает `webContents.debugger` к каждому гостю-браузеру (`main/browser/inspector.ts`). Подключает страж `guard.ts` на `web-contents-created` гостя. Инспектор ведёт кольца консоли и сети по вкладке и эпохи документов главного фрейма. Окну-хозяину гостя он шлёт пачки событием `browser:devtools`, как `browser:favicon`;
+- гость стартует с `about:blank` (спайк 0.1, вариант D): отладчик подключается к пустому гостю, `Inspector.ready` отвечает, когда домены включены, окно зовёт `devtoolsReady` и только потом открывает адрес вкладки. Так журнал видит документ и подресурсы первой загрузки;
 - эмуляция размера (`main/browser/emulation.ts`) — `Emulation.setDeviceMetricsOverride` со `scale`, касания и мобильный UA. Команды идут через тот же инспектор и его закрытый список `CDP_ALLOWED`;
 - окно держит копию журнала по вкладке (`renderer/browser/devtools/store.ts`): снимок `devtoolsSnapshot` на `dom-ready`, дальше пачки своего гостя. Окно рисует панель, меню размеров и новую строку вкладки. При эмуляции оно ставит тот же узел `<webview>` по центру нейтрального поля размером ширина×scale на высота×scale.
 
@@ -32,7 +33,15 @@ pnpm typecheck && pnpm lint
 pnpm --filter @parley/desktop e2e   # после pnpm build; исходные красные, если есть, — туда же
 ```
 
-**Сверка с этапом 0:** итог и исходный прогон пишет сюда задача 1.
+**Сверка с этапом 0 (задача 1, 2026-10-08):** отчёт `docs/research/2026-10-08-browser-stage0.md`, раздел «Что сделать в планах A–D» → «План A».
+- **0.1 — вариант D** (решение человека 2026-10-08).
+  - По критерию плана прошли A, B и C (по 10 из 10), но A и B теряют подресурсы первой загрузки — стили, картинки и скрипты из HTML (0 из 10), у C — 9 из 10, у D — 10 из 10.
+  - `<webview>` стартует с `about:blank`, main подключает отладчик и ждёт `enable`, окно после `devtoolsReady` открывает адрес вкладки.
+  - Правки: задачи 4, 5, 7, 16, 17, 18, 19 и «Расхождения с индексом», п. 10–11.
+- **0.3 — `cdp` прошёл всё** (5 из 5), умолчание стоит.
+  - Касания включаются только с новым документом: окно предлагает «Reload to apply touch», `reload()` само не делает. Эмуляция переживает `reload`, переход на другой origin и `goBack`: повтор команд не нужен.
+  - Правок кода нет. Размер картинки со страницы при эмуляции — размер вида × DPR (Mobile M 2x — 750×1624): пометка в задачах 6 и 18.
+- **Исходный прогон** (73bdc7e, 2026-10-08): сборка зелёная; тесты — file-icons 18, core 2870, protocol 218, host 1273, desktop 5188 (и 3 пропущенных). E2E исходно не снимались: задача 17 прогоняет соседние спеки браузера, задача 19 — весь набор.
 
 ## Глобальные ограничения
 
@@ -62,7 +71,7 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
 
 ## Фокус ревью
 
-Пять случаев, которые спека подразумевает, а прямые тесты задач легко пропустят. Первый и второй — из «Фокуса ревью» индекса (его пункты 1 и 5), остальные три — свои у этапа A. Под каждый в задаче-владельце есть тест.
+Шесть случаев, которые спека подразумевает, а прямые тесты задач легко пропустят. Первый и второй — из «Фокуса ревью» индекса (его пункты 1 и 5), остальные четыре — свои у этапа A. Под каждый в задаче-владельце есть тест.
 
 1. **Очень болтливая консоль** (индекс, п. 1). Тысячи сообщений в секунду не топят окно:
    - пачки идут не чаще раза в 150 мс и не больше 200 записей;
@@ -81,7 +90,7 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
    - Строки сети и браузера видны в списке, но второй раз не считаются.
 
    Тест — задача 9, `devtoolsCounters`. E2E задачи 17 ждёт ровно 6.
-4. **Записи до `dom-ready` не теряются.** Инспектор пишет с первой загрузки, а окно узнаёт id гостя только на `dom-ready`. Пачки до этого отбрасывает фильтр по id, их возвращает снимок `devtoolsSnapshot` на `dom-ready`.
+4. **Записи до `dom-ready` не теряются.** Инспектор пишет с подключения, а окно узнаёт id гостя только на первом `dom-ready` — пустой страницы. Пачки до этого отбрасывает фильтр по id, их возвращает снимок `devtoolsSnapshot` на `dom-ready`. Страница вкладки при варианте D открывается позже (п. 6), поэтому её записи идут уже к известному id.
 
    Тест — задача 16: пачка до `dom-ready` не применяется; после — снимок с ней на месте; пачки чужого гостя не применяются.
 5. **Документ навигации — уже в новой эпохе.** `Network.requestWillBeSent` документа приходит раньше `Page.frameNavigated`. Без переноса по `loaderId` было бы две беды:
@@ -89,6 +98,12 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
    - `capture` всегда был бы `late`.
 
    Тест — задача 4: запрос с `loaderId` нового документа — в новой эпохе и `capture: 'on'`; без него — `late`.
+6. **Первая загрузка: подресурсы в журнале, пустой записи истории нет** (спайк 0.1, вариант D). Гость подключён раньше страницы, но это два шага: подключение к `about:blank` и открытие адреса.
+   - Страница открывается только после `devtoolsReady`. Иначе стили, картинки и скрипты из HTML прошли бы мимо журнала (у вариантов A и B — 0 из 10).
+   - Пустая страница не остаётся в истории гостя: «назад» после первой загрузки неактивна, в том числе когда страница не загрузилась.
+   - Отказ или тайм-аут захвата страницу не держит: она открывается, вкладка получает `capture: 'unavailable'`.
+
+   Тесты: задача 4 — `ready` и первая загрузка после пустой страницы; задача 5 — страж и пустая запись; задача 16 — `devtoolsReady` перед `loadURL`, в том числе после отказа; задача 17 — E2E без перезагрузки (стиль и картинка в Network, «назад» неактивна).
 
 ---
 
@@ -98,210 +113,55 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
 - 0.1 — когда подключать CDP;
 - 0.3 — механизм эмуляции.
 
-Остальные спайки — для этапов B–D.
+Остальные спайки — для этапов B–D. Сверка сделана по отчёту этапа 0: правки уже внесены в задачи ниже, исполнитель читает их исправленными. Задача сводится к записи итога.
 
 **Файлы:**
-- Читать: `docs/research/2026-10-*-browser-stage0.md`
+- Читать: `docs/research/2026-10-08-browser-stage0.md`
 - Изменить: этот план — абзац «Сверка с этапом 0» в шапке
 
-- [ ] **Шаг 1. Найти отчёт.**
+- [x] **Шаг 1. Найти отчёт.**
 
 ```bash
 ls docs/research/2026-10-*-browser-stage0.md
 ```
 
-  Ожидание: один файл. План этапа 0 называет его `2026-10-08-browser-stage0.md`, но дата в имени — день прогона. Файла нет — этап 0 не влит: остановиться и спросить человека.
+  Результат: один файл, `docs/research/2026-10-08-browser-stage0.md`.
 
-- [ ] **Шаг 2. Спайк 0.1 — момент подключения.** Прочитать раздел «0.1» отчёта и строку таблицы.
-  - **Умолчание плана:**
-    - `attach()` в задаче 4 сразу зовёт `connect()`, то есть подключение на `web-contents-created`;
-    - `enable` уходят без ожидания, у каждой команды тайм-аут `CDP_COMMAND_MS`;
-    - документ первой загрузки не увиден — `capture: 'late'`.
-  - **Итог A (вариант A дал 10 из 10)** — ничего не менять.
-  - **Итог B (подключение на первом `did-start-loading`):**
-    - в задаче 4, шаг 4, в конце функции `attach` строку `connect(journal, contents);` заменить на:
+- [x] **Шаг 2. Спайк 0.1 — момент подключения: вариант D.** Отчёт, раздел «0.1» и строка таблицы; решение человека 2026-10-08.
+  - **Итог отчёта.** По критерию плана прошли A, B и C (по 10 из 10), D тоже. Критерий не смотрит на подресурсы, а они решают:
 
-```ts
-    // Спайк 0.1, итог B: до начала загрузки `enable` висят — подключение на первом did-start-loading.
-    contents.once('did-start-loading', () => {
-      if (!contents.isDestroyed()) connect(journal, contents);
-    });
-```
+    | Вариант | Документ, `fetch`, XHR | Стиль, картинки, скрипт из HTML |
+    |---|---|---|
+    | A (`web-contents-created`) | 10/10 | 0/10 |
+    | B (`did-start-loading`) | 10/10 | 0/10 |
+    | C (`dom-ready` + `reload()`) | 10/10 | 9/10 |
+    | D (`about:blank`, подключение, адрес) | 10/10 | 10/10 |
 
-    - в задаче 4, шаг 1, в `setup()` сразу после `inspector.attach(...)` добавить `guest.contents.emit('did-start-loading');`;
-    - в начало `describe('подключение …')` добавить тест:
+    По правилу плана остался бы A, но он теряет подресурсы первой загрузки. Человек выбрал D.
+  - **Что делает вариант D:**
+    - `<webview>` стартует с `src="about:blank"`; страж пускает такой `src` (задача 5);
+    - main подключает отладчик на `web-contents-created`, пока гость пуст, и включает домены; `Inspector.ready(id)` отвечает, когда все четыре `enable` ответили, отказали или вышли по `CDP_COMMAND_MS` (задача 4);
+    - окно на первом `dom-ready` (пустой страницы) зовёт `bridge.browser.devtoolsReady(id)` и после ответа открывает адрес вкладки методом `loadURL` у `<webview>` (задачи 7 и 16). Отказ или тайм-аут захвата страницу дольше `CDP_COMMAND_MS` не держат;
+    - `capture: 'late'` остаётся только для повторного подключения к живой странице (после отказа `attach` или `detach`). Окно показывает там «Reload to capture earlier requests» (задача 13);
+    - пустая страница не остаётся в истории гостя: страж убирает первую запись (задача 5).
+  - **Где правки:** задача 4 (`ready`, тесты), задача 5 (`sanitizeWebviewAttach`, пустая запись истории), задача 7 (`devtoolsReady`), задача 16 (`BrowserSurface`), задача 17 (E2E без перезагрузки, стиль и картинка в журнале), задача 18 (документы), задача 19 (ручная проверка).
+  - **Отличия от формулировки отчёта** («main ждёт `enable`, затем `loadURL`») — в «Расхождения с индексом», п. 10 и 11.
 
-```ts
-  it('спайк 0.1, итог B: до did-start-loading отладчик не подключается', () => {
-    const clock = fakeClock();
-    const guest = fakeGuest(7);
-    const inspector = createInspector({ fromId: () => guest.contents as unknown as WebContents, now: clock.now, setTimer: clock.setTimer });
-    inspector.attach(guest.contents as unknown as WebContents);
-    expect(guest.dbg.attach).not.toHaveBeenCalled();
-    guest.contents.emit('did-start-loading');
-    expect(guest.dbg.attach).toHaveBeenCalledWith('1.3');
-  });
-```
+- [x] **Шаг 3. Спайк 0.3 — эмуляция: `cdp` прошёл всё, умолчание стоит.** Отчёт, раздел «0.3».
+  - **Итог отчёта.** `cdp` — 5 из 5 по всем пунктам; `electron` (`enableDeviceEmulation`) теряет эмуляцию после `reload`, UA не меняет. Клик человека (`guest.sendInputEvent` в координатах вида) попадает 5 из 5 у обоих, поэтому вписанная страница остаётся уменьшенной по `scale`.
+  - **Решения:**
+    - механизм — CDP: `viewportCommands` (задача 6) ставит `Emulation.setDeviceMetricsOverride` со `scale`, `setTouchEmulationEnabled` и `setUserAgentOverride`;
+    - касания включаются только с новым документом, поэтому окно предлагает «Reload to apply touch» (задачи 10 и 16), само `reload()` не делает: перезагрузка сбрасывает состояние формы и страницы разработчика;
+    - эмуляция переживает `reload`, переход на другой origin (127.0.0.1 → localhost) и `goBack` — 3 из 3, повтор команд на навигации не нужен.
+  - **Правок кода нет.** Одна пометка для этапа C: размер картинки со страницы при эмуляции — размер вида × DPR (Mobile M 2x — 750×1624), `scale` на него не влияет. Она записана комментарием в задаче 6 и в спеке окна (задача 18, шаг 3).
 
-  - **Итог C (подключение на `dom-ready`, без автоматического `reload()`):**
-    - те же три правки, что у итога B, только с событием `'dom-ready'` вместо `'did-start-loading'`, в коде и в тестах;
-    - на `dom-ready` у гостя уже есть адрес, поэтому `connect()` сам ставит `capture: 'late'`. Окно показывает «Reload to capture earlier requests» (задача 13);
-    - в тест итога добавить:
+- [x] **Шаг 4. Итог записан в шапку плана** — абзац «Сверка с этапом 0».
 
-```ts
-    guest.contents.getURL.mockReturnValue('http://localhost:5173/');
-    guest.contents.emit('dom-ready');
-    expect(inspector.snapshot(7)?.capture).toBe('late');
-```
-
-  - E2E задачи 17 при любом итоге перезагружает страницу до проверок. Её правка не нужна.
-
-- [ ] **Шаг 3. Спайк 0.3 — эмуляция.** Прочитать раздел «0.3» отчёта.
-  - **Умолчание плана:**
-    - `viewportCommands` в задаче 6: `Emulation.setDeviceMetricsOverride` со `scale`, `setTouchEmulationEnabled`, `setUserAgentOverride`;
-    - в задаче 16 окно ставит `<webview>` размером ширина×scale на высота×scale по центру поля;
-    - касания включаются только с новым документом (так показал проверочный запуск). Поэтому подпись размера предлагает «Reload to apply touch» (задача 16).
-  - **`cdp` прошёл всё, отчёт выбрал «окно предлагает перезагрузить»** — умолчание стоит.
-  - **`cdp` прошёл всё, отчёт выбрал «окно делает `reload()` само»:**
-    - задача 16, `BrowserSurface.tsx`: убрать `appliedMobileRef`, `docMobile` и `setDocMobile` в обработчике `did-navigate`, `touchStale` и кнопку в подписи;
-    - после объявления `reload` вставить:
-
-```tsx
-  // Спайк 0.3: касания включаются только с новым документом — смена мобильности перезагружает страницу.
-  const mobileRef = useRef<boolean | null>(null);
-  const reloadRef = useRef(reload);
-  reloadRef.current = reload;
-  useEffect(() => {
-    const previous = mobileRef.current;
-    mobileRef.current = appliedMobile;
-    if (previous !== null && previous !== appliedMobile) reloadRef.current();
-  }, [appliedMobile]);
-```
-
-    - задача 10: убрать строку `touchReload`;
-    - задача 16: тест «мобильный размер на документе без касаний — «Reload to apply touch»…» заменить тестом «смена мобильности — `reload()` страницы». В нём Mobile M после Fit даёт `view.reload` один раз;
-    - задача 18, README: вместо `touch applies from the next page load ("Reload to apply touch")` написать `switching to or from a mobile size reloads the page`.
-  - **`cdp` прошёл, а касания работают и без перезагрузки:**
-    - задача 16: убрать `appliedMobile`, `appliedMobileRef`, `docMobile`, `setDocMobile` в обработчике `did-navigate`, `touchStale` и кнопку в подписи; эффект не вставлять; тест «мобильный размер на документе без касаний…» удалить;
-    - задача 10: убрать `touchReload`;
-    - задача 18: в README и в 12.1 спеки окна убрать фразы о «Reload to apply touch».
-  - **Эмуляция `cdp` пропадает после `reload`** — в задаче 6 заменить `createEmulation` повтором команд на навигации главного фрейма:
-
-```ts
-export function createEmulation(deps: { inspector: Pick<Inspector, 'send' | 'onEvent'> }): Emulation {
-  const state = new Map<number, { spec: ViewportSpec; area: ViewportArea; off: () => void }>();
-  const apply = async (id: number, spec: ViewportSpec | null, area: ViewportArea): Promise<number> => {
-    const { commands, scale } = viewportCommands(spec, area);
-    for (const { method, params } of commands) await deps.inspector.send(id, method, params);
-    return scale;
-  };
-  return {
-    async set(id, spec, area) {
-      const scale = await apply(id, spec, area);
-      state.get(id)?.off();
-      state.delete(id);
-      if (spec !== null) {
-        // Спайк 0.3: эмуляция не переживает новый документ — повтор на навигации главного фрейма.
-        const off = deps.inspector.onEvent(id, 'Page.frameNavigated', (params) => {
-          const frame = (params as { frame?: { parentId?: string } }).frame;
-          const current = state.get(id);
-          if (frame === undefined || frame.parentId !== undefined || current === undefined) return;
-          apply(id, current.spec, current.area).catch((error: unknown) => console.warn('[parley] viewport re-apply failed', error));
-        });
-        state.set(id, { spec, area, off });
-      }
-      return { scale };
-    },
-    current: (id) => state.get(id)?.spec ?? null,
-  };
-}
-```
-
-    - в `emulation.test.ts` фальшивому инспектору добавить `onEvent`, который запоминает слушателя;
-    - и тест: после `set(7, MOBILE_M, AREA)` событие главного фрейма даёт ещё три `send`, подфрейма — ни одного; после `set(7, null, AREA)` событий не слушают.
-  - **`cdp` не прошёл, `electron` прошёл** — в задаче 6 метрики ставит Electron, касания и UA остаются за CDP:
-
-```ts
-export function createEmulation(deps: { inspector: Pick<Inspector, 'send'>; fromId(id: number): WebContents | null }): Emulation {
-  const state = new Map<number, { spec: ViewportSpec; area: ViewportArea }>();
-  const watched = new Set<number>();
-  const apply = async (id: number, spec: ViewportSpec | null, area: ViewportArea): Promise<number> => {
-    const contents = deps.fromId(id);
-    if (contents === null) throw new Error(`no browser guest: ${id}`);
-    const { commands, scale } = viewportCommands(spec, area);
-    if (spec === null) {
-      contents.disableDeviceEmulation();
-    } else {
-      const size = viewportSize(spec);
-      contents.enableDeviceEmulation({
-        screenPosition: size.mobile ? 'mobile' : 'desktop',
-        screenSize: { width: size.width, height: size.height },
-        viewPosition: { x: 0, y: 0 },
-        deviceScaleFactor: size.dpr,
-        viewSize: { width: size.width, height: size.height },
-        scale,
-      });
-    }
-    for (const { method, params } of commands) {
-      if (method === 'Emulation.setDeviceMetricsOverride' || method === 'Emulation.clearDeviceMetricsOverride') continue;
-      await deps.inspector.send(id, method, params);
-    }
-    // Спайк 0.3: enableDeviceEmulation не переживает загрузку — повтор на каждой.
-    if (!watched.has(id)) {
-      watched.add(id);
-      contents.on('did-finish-load', () => {
-        const current = state.get(id);
-        if (current !== undefined) apply(id, current.spec, current.area).catch((error: unknown) => console.warn('[parley] viewport re-apply failed', error));
-      });
-      contents.once('destroyed', () => {
-        watched.delete(id);
-        state.delete(id);
-      });
-    }
-    return scale;
-  };
-  return {
-    async set(id, spec, area) {
-      const scale = await apply(id, spec, area);
-      if (spec === null) state.delete(id);
-      else state.set(id, { spec, area });
-      return { scale };
-    },
-    current: (id) => state.get(id)?.spec ?? null,
-  };
-}
-```
-
-    - импорты: `import type { WebContents } from 'electron';` и `viewportSize` из `shared/browser-devtools.js`;
-    - в задаче 7 вызов в `main/index.ts`: `createEmulation({ inspector, fromId: (id) => webContents.fromId(id) ?? null })`;
-    - тесты `createEmulation` в задаче 6 получают фальшивое `contents` со шпионами `enableDeviceEmulation`, `disableDeviceEmulation` и `on`/`once` (EventEmitter);
-    - проверки: метрики идут в `enableDeviceEmulation`, через `send` — только касания и UA, `did-finish-load` повторяет `enableDeviceEmulation`.
-  - **Клик человека промахивается во вписанной странице у обоих механизмов** — страница не уменьшается:
-    - задача 6, `viewportCommands`: строки с `fit` и `scale` заменить на
-
-```ts
-  // Спайк 0.3: во вписанной странице клик человека промахивается — натуральная величина, поле прокручивается.
-  const scale = 1;
-```
-
-    - и ожидание теста «Mobile M 2x в поле 800×600» поменять на `scale: 1`;
-    - задача 16, класс поля страницы: `cn('relative min-h-0 flex-1', stage === null ? 'overflow-hidden' : 'overflow-auto bg-muted')`;
-    - сужение функции записать в отчёт этапа и в README (задача 18): «страница не уменьшается, поле прокручивается».
-  - **В `control` спайка не попал ни один способ клика** — план не меняется. Клик проверяется руками в задаче 19, шаг 2: Mobile M, клик мышью по кнопке страницы.
-
-- [ ] **Шаг 4. Записать итог в шапку плана.** Абзац «Сверка с этапом 0» заменить таким:
-
-```markdown
-**Сверка с этапом 0 (задача 1, <дата>):** отчёт `docs/research/<файл>`. 0.1 — <итог>; правки: <задачи и шаги или «нет»>. 0.3 — <итог>; правки: <…>. Исходный прогон: core <N>, protocol <N>, host <N>, desktop <N>; E2E — <«все зелёные» или список красных>.
-```
-
-  Числа — из команд «Где работать». Сами правки задач вносятся в тексте этого плана, в шагах, которые названы выше. Так исполнитель каждой задачи читает уже исправленный код.
-
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add docs/specs/2026-10-07-browser-devtools-agent-plan-a-devtools.md
-git commit -m "docs(spec): план этапа A браузера — сверка с этапом 0" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "docs(plan): этап A — итоги этапа 0 (вариант D подключения CDP)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1240,9 +1100,10 @@ git commit -m "feat(desktop): перевод событий CDP в записи 
 - Берёт: функции и типы `cdp-entries.ts` (задача 3); `DEVTOOLS_LIMITS`, `CaptureState`, `ConsoleEntry`, `NetworkEntry`, `DevtoolsBatch`, `DevtoolsSnapshot`, `ResponseBody` (задача 2).
 - Отдаёт (контракт индекса):
   - `CdpMethod`, `CDP_ALLOWED`, `Inspector`, `createInspector(deps)`;
-  - сверх индекса — `CDP_COMMAND_MS` (тайм-аут команды; см. «Расхождения с индексом»).
+  - сверх индекса — `CDP_COMMAND_MS` (тайм-аут команды) и `Inspector.ready` (см. «Расхождения с индексом», п. 1 и 10).
 - Поведение `Inspector`:
-  - `attach` — один раз на гостя;
+  - `attach` — один раз на гостя; подключается сразу, пока гость пуст (спайк 0.1, вариант D);
+  - `ready` — когда все четыре `enable` ответили, отказали или вышли по тайм-ауту; журнала нет — сразу;
   - `snapshot` — копии записей колец, `null` у неизвестного гостя;
   - `clear` — следующая пачка с `reset: true`;
   - `responseBody` — `null`, если тела нет;
@@ -1314,7 +1175,8 @@ function quietWarnings(): void {
 /** Отказ команды CDP обрабатывается в микрозадаче. */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup(options: { url?: string; attachError?: boolean; hang?: boolean } = {}) {
+/** `gates` — ответы на команды CDP по одному: каждая команда кладёт сюда функцию, которая её разрешает. */
+function setup(options: { url?: string; attachError?: boolean; hang?: boolean; gates?: Array<() => void> } = {}) {
   const clock = fakeClock();
   const guest = fakeGuest(7, options.url);
   if (options.attachError === true) {
@@ -1323,6 +1185,15 @@ function setup(options: { url?: string; attachError?: boolean; hang?: boolean } 
     });
   }
   if (options.hang === true) guest.dbg.sendCommand.mockImplementation(() => new Promise<unknown>(() => {}));
+  if (options.gates !== undefined) {
+    const gates = options.gates;
+    guest.dbg.sendCommand.mockImplementation(
+      () =>
+        new Promise<unknown>((resolve) => {
+          gates.push(() => resolve({}));
+        }),
+    );
+  }
   const inspector = createInspector({
     fromId: (id) => (id === 7 && !guest.contents.isDestroyed() ? (guest.contents as unknown as WebContents) : null),
     now: clock.now,
@@ -1356,7 +1227,7 @@ function mainFrame(loaderId: string, url = 'http://localhost:5173/next', extra: 
   return { type: 'Navigation', frame: { id: 'F1', loaderId, url }, ...extra };
 }
 
-describe('подключение (спека 3.3, спайк 0.1 — умолчание)', () => {
+describe('подключение (спека 3.3, спайк 0.1 — вариант D: к пустому гостю, страницу открывает окно после ready)', () => {
   it('гость: debugger.attach(1.3), enable Runtime, Log, Page и Network с буферами раздела 8', () => {
     const { dbg, inspector } = setup();
     expect(dbg.attach).toHaveBeenCalledWith('1.3');
@@ -1409,6 +1280,58 @@ describe('подключение (спека 3.3, спайк 0.1 — умолч�
     expect(dbg.attach).toHaveBeenCalledTimes(1);
     contents.emit('destroyed');
     expect(inspector.snapshot(7)).toBeNull();
+  });
+
+  it('ready: не раньше ответа на все четыре enable', async () => {
+    const gates: Array<() => void> = [];
+    const { inspector } = setup({ gates });
+    let ready = false;
+    void inspector.ready(7).then(() => {
+      ready = true;
+    });
+    expect(gates).toHaveLength(4);
+    for (const open of gates.slice(0, 3)) open();
+    await settle();
+    expect(ready).toBe(false);
+    gates[3]?.();
+    await settle();
+    expect(ready).toBe(true);
+    expect(inspector.snapshot(7)?.capture).toBe('on');
+  });
+
+  it('ready: зависший enable отпускает по тайм-ауту CDP_COMMAND_MS, capture unavailable; журнала нет — готово сразу', async () => {
+    quietWarnings();
+    const { clock, inspector } = setup({ hang: true });
+    let ready = false;
+    void inspector.ready(7).then(() => {
+      ready = true;
+    });
+    clock.tick(CDP_COMMAND_MS - 1);
+    await settle();
+    expect(ready).toBe(false);
+    clock.tick(1);
+    await settle();
+    expect(ready).toBe(true);
+    expect(inspector.snapshot(7)?.capture).toBe('unavailable');
+    await expect(inspector.ready(8)).resolves.toBeUndefined();
+  });
+
+  it('вариант D: подключение к пустому гостю, потом первая загрузка — документ, стиль и картинка в одной эпохе, capture on', () => {
+    const { cdp, inspector } = setup();
+    // Гость ещё не грузился (getURL() === ''): захват не поздний.
+    expect(inspector.snapshot(7)?.capture).toBe('on');
+    cdp('Page.frameNavigated', mainFrame('LB', 'about:blank'));
+    cdp('Network.requestWillBeSent', request('doc', 'http://localhost:5173/', { loaderId: 'L1', type: 'Document' }));
+    cdp('Network.requestWillBeSent', request('css', 'http://localhost:5173/app.css', { loaderId: 'L1', type: 'Stylesheet' }));
+    cdp('Network.requestWillBeSent', request('img', 'http://localhost:5173/logo.svg', { loaderId: 'L1', type: 'Image' }));
+    cdp('Page.frameNavigated', mainFrame('L1', 'http://localhost:5173/'));
+    const snapshot = inspector.snapshot(7);
+    expect(snapshot?.network.map((entry) => [entry.id, entry.kind, entry.epoch])).toEqual([
+      ['doc', 'document', 2],
+      ['css', 'stylesheet', 2],
+      ['img', 'image', 2],
+    ]);
+    expect(snapshot?.capture).toBe('on');
   });
 });
 
@@ -1757,7 +1680,8 @@ describe('события для этапов B и D', () => {
 /**
  * Инспектор вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3; индекс плана, «Общие имена»).
  *
- * `webContents.debugger` подключается к каждому гостю-браузеру на `web-contents-created` (`guard.ts`, спайк 0.1):
+ * `webContents.debugger` подключается к каждому гостю-браузеру на `web-contents-created` (`guard.ts`), пока гость
+ * пуст (спайк 0.1, вариант D: `<webview>` стартует с `about:blank`, окно открывает адрес вкладки после `ready`):
  * `Runtime`, `Log`, `Page` и `Network` с буферами раздела 8. События переводит `cdp-entries.ts`; журнал — кольца на
  * вкладку (1000 сообщений, 500 запросов), одинаковые сообщения подряд — одна запись с `count`. Эпоха — номер документа
  * главного фрейма: растёт на `Page.frameNavigated` без `parentId`, и запросы с `loaderId` нового документа (сам
@@ -1765,8 +1689,9 @@ describe('события для этапов B и D', () => {
  *
  * Окну журнал идёт пачками (`onBatch`) не чаще раза в 150 мс и не больше 200 записей — сверх них самые свежие
  * изменения; остальное отдаёт `snapshot`. Команды CDP — только из `CDP_ALLOWED`, у каждой тайм-аут: без страницы
- * `enable` висит (проба 1.4). Не подключился или отцепился — `capture: 'unavailable'` и новая попытка на следующей
- * навигации главного фрейма.
+ * `enable` висит (проба 1.4). `ready` отвечает, когда все четыре `enable` отработали — ответом, отказом или
+ * тайм-аутом. Не подключился или отцепился — `capture: 'unavailable'` и новая попытка на следующей навигации
+ * главного фрейма.
  */
 import type { WebContents } from 'electron';
 import {
@@ -1817,11 +1742,16 @@ export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Emulation.setUserAgentOverride',
 ]);
 
-/** Тайм-аут команды CDP (умолчание спайка 0.1): без страницы `enable` висит. */
+/** Тайм-аут команды CDP (спайк 0.1): без страницы `enable` висит; дольше него `ready` страницу вкладки не держит. */
 export const CDP_COMMAND_MS = 10_000;
 
 export interface Inspector {
   attach(contents: WebContents): void;
+  /**
+   * Подключение закончено: все `enable` ответили, отказали или вышли по `CDP_COMMAND_MS` (спайк 0.1, вариант D).
+   * Окно открывает адрес вкладки после этого. Журнала нет или гость уничтожен — готово сразу; не бросает.
+   */
+  ready(id: number): Promise<void>;
   snapshot(id: number): DevtoolsSnapshot | null;
   clear(id: number): void;
   responseBody(id: number, requestId: string, limit: number): Promise<ResponseBody | null>;
@@ -1841,6 +1771,8 @@ interface NetRecord {
 interface Journal {
   id: number;
   attached: boolean;
+  /** Все `enable` последнего подключения отработали; до подключения и после его отказа — уже готово. */
+  ready: Promise<void>;
   epoch: number;
   capture: CaptureState;
   nextId: number;
@@ -2116,15 +2048,22 @@ export function createInspector(deps: {
       return;
     }
     journal.attached = true;
-    // Повторное подключение к живой странице: её запросы до этого прошли мимо.
+    // Первое подключение — к пустому гостю (адрес '' или about:blank): страница ещё не грузилась. Повторное — к
+    // живой странице: её запросы до этого прошли мимо.
     const url = contents.getURL();
     setCapture(journal, url === '' || url === 'about:blank' ? 'on' : 'late');
-    for (const [method, params] of ENABLE) {
-      command(contents, method, params).catch((error: unknown) => {
-        console.warn(`[parley] devtools ${method} failed`, error);
-        setCapture(journal, 'unavailable');
-      });
-    }
+    // Отказ и тайм-аут `enable` не бросают, а ставят `unavailable`: ready не должен держать страницу вкладки.
+    journal.ready = Promise.all(
+      ENABLE.map(([method, params]) =>
+        command(contents, method, params).then(
+          () => undefined,
+          (error: unknown) => {
+            console.warn(`[parley] devtools ${method} failed`, error);
+            setCapture(journal, 'unavailable');
+          },
+        ),
+      ),
+    ).then(() => undefined);
   }
 
   function attach(contents: WebContents): void {
@@ -2132,6 +2071,7 @@ export function createInspector(deps: {
     const journal: Journal = {
       id: contents.id,
       attached: false,
+      ready: Promise.resolve(),
       epoch: 0,
       capture: 'on',
       nextId: 1,
@@ -2169,6 +2109,9 @@ export function createInspector(deps: {
 
   return {
     attach,
+    async ready(id) {
+      await journals.get(id)?.ready;
+    },
     snapshot(id) {
       const journal = journals.get(id);
       if (journal === undefined) return null;
@@ -2231,7 +2174,7 @@ export function createInspector(deps: {
 }
 ```
 
-- [ ] **Шаг 5. Запустить — проходит.** Команда шага 3 → PASS (27 тестов). Затем `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 5. Запустить — проходит.** Команда шага 3 → PASS (30 тестов). Затем `pnpm --filter @parley/desktop typecheck` → без ошибок.
 
   Если `typecheck` не принимает слушателя `contents.on('did-start-navigation', (details) => …)`, сверить с `guard.ts`: там тот же обработчик читает `details.url` и `details.isMainFrame`. У `details` в Electron 44 есть и `isSameDocument`.
 
@@ -2239,14 +2182,14 @@ export function createInspector(deps: {
 
 ```bash
 git add packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts
-git commit -m "feat(desktop): инспектор CDP вкладок браузера — журнал консоли и сети, эпохи, пачки окну" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): инспектор CDP вкладок браузера — журнал консоли и сети, эпохи, пачки окну, ready" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
 ## Задача 5. Инспектор у гостя и пачки окну
 
-Инспектор подключается к гостю из стража, первым его обработчиком. Пачки идут окну-хозяину гостя тем же путём, что `browser:favicon` и `browser:open-tab`.
+Инспектор подключается к гостю из стража, первым его обработчиком. Пачки идут окну-хозяину гостя тем же путём, что `browser:favicon` и `browser:open-tab`. Страж пускает `<webview>` с `src` `about:blank` (спайк 0.1, вариант D) и убирает из истории гостя пустую первую запись.
 
 **Файлы:**
 - Изменить:
@@ -2259,7 +2202,8 @@ git commit -m "feat(desktop): инспектор CDP вкладок браузе
 - Берёт: `createInspector`, `Inspector` (задача 4); `installBrowserGuard`, `guardGuest` (`guard.ts`).
 - Отдаёт:
   - `BrowserGuardDeps.inspect(contents: WebContents): void`;
-  - `forwardBatches(inspector: Pick<Inspector, 'onBatch'>, fromId: (id: number) => WebContents | null): () => void` — событие `browser:devtools` с `DevtoolsBatch`.
+  - `forwardBatches(inspector: Pick<Inspector, 'onBatch'>, fromId: (id: number) => WebContents | null): () => void` — событие `browser:devtools` с `DevtoolsBatch`;
+  - `sanitizeWebviewAttach` пускает `src` `about:blank` (точное совпадение) наравне с http(s); страж убирает пустую первую запись истории гостя.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -2267,6 +2211,31 @@ git commit -m "feat(desktop): инспектор CDP вкладок браузе
   - перед `const install = …` добавить `const inspect = vi.fn<(contents: WebContents) => void>();`;
   - в объект `installBrowserGuard({ … })` после `fetchFavicon,` — строку `inspect,`;
   - в возвращаемый объект после `fetchFavicon,` — тоже `inspect,`.
+
+  В `guard.test.ts` ещё две правки под вариант D (спайк 0.1):
+  - в `describe('sanitizeWebviewAttach (тест 3)')` из теста «чужой partition, без partition, src file:, пустой и не-http — false» убрать строку
+    `expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'about:blank' })).toBe(false);` — теперь такой `src` прикрепляется. После этого теста добавить:
+
+```ts
+  it('спайк 0.1, вариант D: src about:blank прикрепляется; about:blank с хвостом, about:srcdoc, data:, blob: и чужой раздел — нет', () => {
+    expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'about:blank' })).toBe(true);
+    for (const src of ['about:blank#x', 'about:blank?x', 'about:srcdoc', 'data:text/html,x', 'blob:https://x/1']) {
+      expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src }), src).toBe(false);
+    }
+    expect(sanitizeWebviewAttach(evil(), { partition: 'persist:other', src: 'about:blank' })).toBe(false);
+  });
+```
+
+  - в `fakeContents` перед `const contents = Object.assign(emitter, {` добавить `const historyUrls = ['about:blank'];` — история гостя; одной записи страж не трогает. В объект после `hostWebContents: { send: vi.fn() },`:
+
+```ts
+    historyUrls,
+    navigationHistory: {
+      length: vi.fn(() => historyUrls.length),
+      getEntryAtIndex: vi.fn((index: number) => ({ url: historyUrls[index] ?? '', title: '' })),
+      removeEntryAtIndex: vi.fn((index: number) => historyUrls.splice(index, 1).length === 1),
+    },
+```
 
   В конец файла:
 
@@ -2283,6 +2252,49 @@ describe('журнал гостя (спека 2026-10-07, 3.3)', () => {
     guard.created(fakeContents(43, 'remote'));
     guard.created(fakeContents(1, 'window'));
     expect(guard.inspect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('пустая запись истории гостя (спайк 0.1, вариант D; Фокус ревью 6)', () => {
+  function guestWith(urls: string[]) {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guest.historyUrls.splice(0, guest.historyUrls.length, ...urls);
+    guard.created(guest);
+    return guest;
+  }
+
+  it('первая страница после about:blank: пустая запись убрана, и только один раз', () => {
+    const guest = guestWith(['about:blank', 'http://127.0.0.1:5173/']);
+    guest.emit('did-navigate', fakeEvent(), 'about:blank');
+    expect(guest.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/');
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+    expect(guest.historyUrls).toEqual(['http://127.0.0.1:5173/']);
+    guest.historyUrls.unshift('about:blank');
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/next');
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('страница не загрузилась (did-fail-load главного фрейма) — запись тоже убрана; подфрейм — нет', () => {
+    const guest = guestWith(['about:blank', 'http://127.0.0.1:5173/']);
+    guest.emit('did-fail-load', fakeEvent(), -102, 'ERR_CONNECTION_REFUSED', 'http://ads.test/', false);
+    expect(guest.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    guest.emit('did-fail-load', fakeEvent(), -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:5173/', true);
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+  });
+
+  it('записи страницы ещё нет — ждёт её; первая запись не пустая (восстановленная история) — историю не трогает', () => {
+    const early = guestWith(['about:blank']);
+    early.emit('did-fail-load', fakeEvent(), -3, 'ERR_ABORTED', 'http://127.0.0.1:5173/', true);
+    expect(early.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    early.historyUrls.push('http://127.0.0.1:5173/');
+    early.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/');
+    expect(early.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+
+    const restored = guestWith(['http://127.0.0.1:5173/a', 'http://127.0.0.1:5173/b']);
+    restored.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/b');
+    expect(restored.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
   });
 });
 ```
@@ -2318,7 +2330,7 @@ describe('forwardBatches (пачки окну-хозяину гостя)', () =>
 
 - [ ] **Шаг 2. Запустить — падает.**
 
-  `pnpm --filter @parley/desktop exec vitest run src/main/browser/guard.test.ts src/main/browser/inspector.test.ts` → FAIL: `deps.inspect` не зовётся, `forwardBatches` не экспортирован.
+  `pnpm --filter @parley/desktop exec vitest run src/main/browser/guard.test.ts src/main/browser/inspector.test.ts` → FAIL: `deps.inspect` не зовётся, `forwardBatches` не экспортирован, `about:blank` не прикрепляется, пустая запись истории не убирается.
 
 - [ ] **Шаг 3. Реализовать.**
   - **`guard.ts`:**
@@ -2336,6 +2348,37 @@ describe('forwardBatches (пачки окну-хозяину гостя)', () =>
   // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
   // (спайк 0.1).
   deps.inspect(contents);
+```
+
+    - вариант D (спайк 0.1): рядом с `isHttpUrl` добавить `const BLANK_PAGE = 'about:blank';`, а в конце `sanitizeWebviewAttach` комментарий и последнюю строку заменить:
+
+```ts
+  // Пустого src не бывает: <webview> монтируется с about:blank (вариант D: страницу вкладки окно открывает после
+  // включения журнала) или с адресом http(s) (9.2a). Точное совпадение: about:blank#x и прочее — отказ.
+  return params.partition === BROWSER_PARTITION && (params.src === BLANK_PAGE || isHttpUrl(params.src));
+```
+
+    - в `setWindowOpenHandler` комментарий «about:blank вкладки не открывает: …» заменить на `// about:blank вкладки не открывает: вкладка без адреса http(s) — заглушка, а не страница.`; поведение то же;
+    - в `guardGuest` перед комментарием «Favicon качает main (9.2a)…» убрать пустую запись истории:
+
+```ts
+  // Вариант D (спайк 0.1): гость стартует с about:blank, и первая страница ложится в историю второй записью — «назад»
+  // вело бы в пустую страницу. Первая загрузка главного фрейма, состоявшаяся или нет, убирает пустую запись
+  // (проверено на Electron 44.4.5: `canGoBack` после этого false). Записи страницы ещё нет — ждём следующего события.
+  let blankPruned = false;
+  const pruneBlankEntry = (): void => {
+    if (blankPruned) return;
+    const history = contents.navigationHistory;
+    if (history.length() < 2) return;
+    blankPruned = true;
+    if (history.getEntryAtIndex(0).url === BLANK_PAGE) history.removeEntryAtIndex(0);
+  };
+  contents.on('did-navigate', (_event, url) => {
+    if (url !== BLANK_PAGE) pruneBlankEntry();
+  });
+  contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
+    if (isMainFrame) pruneBlankEntry();
+  });
 ```
 
   - **`inspector.ts`** — в конец файла:
@@ -2382,7 +2425,7 @@ import { createInspector, forwardBatches } from './browser/inspector.js';
 
 ```bash
 git add packages/desktop/src/main/browser/guard.ts packages/desktop/src/main/browser/guard.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): инспектор подключается к гостю из стража, пачки журнала — окну-хозяину" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): инспектор подключается к гостю из стража, пачки журнала — окну-хозяину; страж пускает about:blank и убирает пустую запись истории" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2411,7 +2454,7 @@ import { createEmulation, viewportCommands } from './emulation.js';
 const MOBILE_M: ViewportSpec = { preset: 'mobile-m', rotated: false, dpr: 2 };
 const AREA = { width: 800, height: 600 };
 
-describe('viewportCommands (спека 4.2, спайк 0.3 — умолчание)', () => {
+describe('viewportCommands (спека 4.2, спайк 0.3 — механизм cdp)', () => {
   it('Fit — эмуляция, касания и подмена UA сняты; scale 1', () => {
     expect(viewportCommands(null, AREA)).toEqual({
       commands: [
@@ -2493,10 +2536,15 @@ describe('createEmulation', () => {
 ```ts
 // packages/desktop/src/main/browser/emulation.ts
 /**
- * Размер вьюпорта вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.2; индекс, спайк 0.3 —
- * умолчание): `Emulation.setDeviceMetricsOverride` со `scale` для вписывания в поле, касания и мобильный UA. Команды
+ * Размер вьюпорта вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.2; спайк 0.3 — механизм
+ * `cdp`): `Emulation.setDeviceMetricsOverride` со `scale` для вписывания в поле, касания и мобильный UA. Команды
  * идут через инспектор — его закрытый список и тайм-аут. Окно ставит `<webview>` размером ширина×scale на
  * высота×scale по центру поля страницы.
+ *
+ * Эмуляция переживает `reload`, переход на другой origin и `goBack` (спайк 0.3, 3 из 3): повтор команд не нужен.
+ * Касания включаются только с новым документом — окно предлагает «Reload to apply touch». Размер картинки со
+ * страницы при эмуляции — размер вида × DPR, а не размер на экране: `scale` его не уменьшает (Mobile M 2x даёт
+ * 750×1624). Это пригодится снимку этапа C.
  *
  * Этап C добавит `withTemporary` (снимок агента в другом размере): размер и поле вкладки для возврата лежат в `state`.
  */
@@ -2587,7 +2635,7 @@ git commit -m "feat(desktop): эмуляция размеров вкладки �
 **Файлы:**
 - Изменить:
   - `packages/desktop/src/shared/browser-types.ts` (`BrowserApi`);
-  - `packages/desktop/src/main/ipc.ts` (`RegisterIpcOptions.browser`, четыре канала);
+  - `packages/desktop/src/main/ipc.ts` (`RegisterIpcOptions.browser`, пять каналов);
   - `packages/desktop/src/preload/index.ts`;
   - `packages/desktop/src/renderer/test-utils/fake-bridge.ts`;
   - `packages/desktop/src/main/index.ts`.
@@ -2605,11 +2653,12 @@ git commit -m "feat(desktop): эмуляция размеров вкладки �
     | `responseBody(id, requestId): Promise<ResponseBody \| null>` | `browser:response-body` |
     | `onDevtools(listener): () => void` | событие `browser:devtools` |
     | `setViewport(id, spec, area): Promise<{ scale: number }>` | `browser:set-viewport` |
+    | `devtoolsReady(id): Promise<void>` — сверх индекса, спайк 0.1 (вариант D); «Расхождения с индексом», п. 10 | `browser:devtools-ready` |
 
-  - **`RegisterIpcOptions.browser`** — поля `inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody'>` и `emulation: Pick<Emulation, 'set'>`.
+  - **`RegisterIpcOptions.browser`** — поля `inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>` и `emulation: Pick<Emulation, 'set'>`.
   - **`FakeBridge`:**
-    - `setDevtoolsSnapshot(snapshot)`, `emitDevtools(batch)`, `setResponseBody(answer)`, `setViewportScale(scale)`;
-    - вызовы `devtoolsSnapshot`, `devtoolsClear`, `responseBody` и `setViewport` пишутся в `browserCalls`.
+    - `setDevtoolsSnapshot(snapshot)`, `emitDevtools(batch)`, `setResponseBody(answer)`, `setViewportScale(scale)`, `setDevtoolsReady(answer)`;
+    - вызовы `devtoolsSnapshot`, `devtoolsClear`, `devtoolsReady`, `responseBody` и `setViewport` пишутся в `browserCalls`.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -2622,6 +2671,7 @@ git commit -m "feat(desktop): эмуляция размеров вкладки �
 const inspector = {
   snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
   clear: vi.fn<(id: number) => void>(),
+  ready: vi.fn<(id: number) => Promise<void>>(async () => {}),
   responseBody: vi.fn<(id: number, requestId: string, limit: number) => Promise<ResponseBody | null>>(async () => null),
 };
 const emulation = {
@@ -2635,15 +2685,18 @@ const emulation = {
   - в конец `describe('мост browser:* (тест 8 куска 9.1)', …)`:
 
 ```ts
-  it('devtools-snapshot и devtools-clear (спека 2026-10-07, 3.5): не гость раздела — bad_request; без журнала — unavailable', async () => {
+  it('devtools-snapshot, devtools-clear и devtools-ready (спека 2026-10-07, 3.5; спайк 0.1): не гость раздела — bad_request; без журнала — unavailable', async () => {
     inspector.snapshot.mockClear();
     inspector.clear.mockClear();
+    inspector.ready.mockClear();
     const { ipcMain } = browserSetup();
     for (const id of [1, 404, 8, 9, 7.5, '7', null]) {
       expect(await codeOf(ipcMain.invoke('browser:devtools-snapshot', id)), String(id)).toBe('bad_request');
       expect(await codeOf(ipcMain.invoke('browser:devtools-clear', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:devtools-ready', id)), String(id)).toBe('bad_request');
     }
     expect(inspector.snapshot).not.toHaveBeenCalled();
+    expect(inspector.ready).not.toHaveBeenCalled();
     expect(await ipcMain.invoke('browser:devtools-snapshot', 7)).toEqual({ epoch: 0, capture: 'unavailable', console: [], network: [] });
     const journal: DevtoolsSnapshot = { epoch: 2, capture: 'late', console: [], network: [] };
     inspector.snapshot.mockReturnValueOnce(journal);
@@ -2651,6 +2704,8 @@ const emulation = {
     expect(inspector.snapshot).toHaveBeenLastCalledWith(7);
     await ipcMain.invoke('browser:devtools-clear', 7);
     expect(inspector.clear).toHaveBeenCalledWith(7);
+    await ipcMain.invoke('browser:devtools-ready', 7);
+    expect(inspector.ready).toHaveBeenCalledWith(7);
   });
 
   it('response-body: requestId — непустая строка до 256 знаков; предел тела — 1 МБ', async () => {
@@ -2723,6 +2778,12 @@ const emulation = {
    */
   devtoolsSnapshot(webContentsId: number): Promise<DevtoolsSnapshot>;
   devtoolsClear(webContentsId: number): Promise<void>;
+  /**
+   * Захват включён (спайк 0.1, вариант D): все `enable` ответили, отказали или вышли по тайм-ауту. `<webview>` стартует
+   * с about:blank; окно зовёт это на его первый `dom-ready` и только потом открывает адрес вкладки, иначе подресурсы
+   * первой загрузки прошли бы мимо журнала. Журнала нет — готово сразу.
+   */
+  devtoolsReady(webContentsId: number): Promise<void>;
   /** Тело ответа до 1 МБ (`DEVTOOLS_LIMITS.panelBody`); null — Chromium его уже вытеснил. */
   responseBody(webContentsId: number, requestId: string): Promise<ResponseBody | null>;
   /** Пачки журнала всех гостей окна (событие browser:devtools); вкладка берёт свои по webContentsId. */
@@ -2744,7 +2805,7 @@ import type { Inspector } from './browser/inspector.js';
 
 ```ts
     /** Журнал консоли и сети гостей (спека 2026-10-07, 3.3): main/browser/inspector.ts#createInspector. */
-    inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody'>;
+    inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
 ```
@@ -2779,6 +2840,14 @@ function viewportArea(value: unknown): { width: number; height: number } | null 
     'browser:devtools-clear',
     withIpcError(async (_event, id: unknown) => {
       browser.inspector.clear(browserGuest(browser, id).id);
+    }),
+  );
+
+  // Спайк 0.1, вариант D: окно ждёт включения доменов, прежде чем открыть адрес вкладки. Адрес через мост не ходит.
+  ipcMain.handle(
+    'browser:devtools-ready',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.inspector.ready(browserGuest(browser, id).id);
     }),
   );
 
@@ -2827,6 +2896,7 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
     devtoolsSnapshot: (webContentsId: number) =>
       ipcRenderer.invoke('browser:devtools-snapshot', webContentsId) as Promise<DevtoolsSnapshot>,
     devtoolsClear: (webContentsId: number) => ipcRenderer.invoke('browser:devtools-clear', webContentsId) as Promise<void>,
+    devtoolsReady: (webContentsId: number) => ipcRenderer.invoke('browser:devtools-ready', webContentsId) as Promise<void>,
     responseBody: (webContentsId: number, requestId: string) =>
       ipcRenderer.invoke('browser:response-body', webContentsId, requestId) as Promise<ResponseBody | null>,
     onDevtools: (listener: (batch: DevtoolsBatch) => void) => {
@@ -2850,6 +2920,8 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
   setResponseBody(answer: ResponseBody | null | IpcErrorInfo): void;
   /** scale ответа browser.setViewport; по умолчанию 1. */
   setViewportScale(scale: number): void;
+  /** Ответ browser.devtoolsReady (спайк 0.1): промис, который тест разрешает сам, или отказ с code; по умолчанию готово. */
+  setDevtoolsReady(answer: Promise<void> | IpcErrorInfo): void;
 ```
 
     - в `createFakeBridge` рядом с `pickCalls`:
@@ -2859,6 +2931,7 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
   const devtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
   let responseBodyAnswer: ResponseBody | null | IpcErrorInfo = null;
   let viewportScale = 1;
+  let devtoolsReadyAnswer: Promise<void> | IpcErrorInfo = Promise.resolve();
 ```
 
     - в возвращаемый объект после `pickCalls,`:
@@ -2876,6 +2949,9 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
     setViewportScale: (scale) => {
       viewportScale = scale;
     },
+    setDevtoolsReady: (answer) => {
+      devtoolsReadyAnswer = answer;
+    },
 ```
 
     - в объект `browser: { … }` после `onFocus`:
@@ -2887,6 +2963,12 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
       },
       devtoolsClear: async (webContentsId) => {
         browserCalls.push({ method: 'devtoolsClear', args: [webContentsId] });
+      },
+      devtoolsReady: async (webContentsId) => {
+        browserCalls.push({ method: 'devtoolsReady', args: [webContentsId] });
+        const answer = devtoolsReadyAnswer;
+        if ('code' in answer) throw answer;
+        await answer;
       },
       responseBody: async (webContentsId, requestId) => {
         browserCalls.push({ method: 'responseBody', args: [webContentsId, requestId] });
@@ -2918,7 +3000,7 @@ ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
 
 ```bash
 git add packages/desktop/src/shared/browser-types.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/preload packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): мост browser — журнал консоли и сети, тело ответа, размер вьюпорта" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): мост browser — журнал консоли и сети, тело ответа, размер вьюпорта, готовность захвата" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -6287,7 +6369,7 @@ git commit -m "feat(desktop): строка вкладки браузера — �
 **Интерфейсы:**
 - Берёт:
   - `DevtoolsPanel` (задача 13); `useDevtoolsStore` (задача 9);
-  - `bridge.browser.devtoolsSnapshot`, `onDevtools`, `setViewport` (задача 7);
+  - `bridge.browser.devtoolsSnapshot`, `devtoolsReady`, `onDevtools`, `setViewport` (задача 7);
   - `DEVTOOLS_PANEL`, `useUiStore#patchUi` (задача 8, `renderer/store/ui.ts`);
   - `ACTIONS`, `matchesAccelerator` (`shared/keybindings.ts`).
 - Отдаёт:
@@ -6353,6 +6435,39 @@ import { useUiStore } from '../store/ui.js';
 ```
 
   - в общий `afterEach` файла — `useUiStore.setState({ ui: DEFAULT_UI });`;
+  - два существующих теста правятся под вариант D (спайк 0.1): `<webview>` монтируется с `src="about:blank"`, адрес вкладки открывается на первом `dom-ready` после `devtoolsReady`:
+    - в `describe('BrowserSurface — новая вкладка (тест 5)')`, в тесте «без адреса: webview нет, фокус в адресной строке; Enter с localhost:5173 — updateTab и webview с этим src», заголовок закончить на `… updateTab и webview (src about:blank) для этого адреса`, а последнюю строку заменить на `expect(webview()?.getAttribute('src')).toBe('about:blank');`;
+    - в `describe('BrowserSurface — src один раз (тесты 6, 7)')` тест «did-navigate-in-page — …» заменить целиком:
+
+```tsx
+  it('did-navigate-in-page — новый url в раскладке, id прежний, src и loadURL не тронуты; Enter живой страницы — loadURL', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview());
+    const setAttribute = vi.spyOn(view, 'setAttribute');
+    fire(view, 'dom-ready');
+    // Единственный loadURL до адресной строки — первая загрузка после захвата (вариант D).
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    view.loadURL.mockClear();
+
+    fire(view, 'did-navigate-in-page', { url: 'http://localhost:5173/#/next', isMainFrame: true });
+    expect(layoutUrlOfTab()).toBe('http://localhost:5173/#/next');
+    expect(webview()).toBe(view);
+    fire(view, 'did-navigate-in-page', { url: 'http://localhost:5173/frame', isMainFrame: false });
+    expect(layoutUrlOfTab()).toBe('http://localhost:5173/#/next');
+    expect(setAttribute.mock.calls.filter(([name]) => name === 'src')).toEqual([]);
+    expect(view.loadURL).not.toHaveBeenCalled();
+
+    const field = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.change(field, { target: { value: 'localhost:5173/other' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(view.loadURL).toHaveBeenCalledWith('http://localhost:5173/other');
+    expect(view.getAttribute('src')).toBe('about:blank');
+    expect(setAttribute.mock.calls.filter(([name]) => name === 'src')).toEqual([]);
+  });
+```
+
   - в конец файла:
 
 ```tsx
@@ -6510,9 +6625,47 @@ describe('BrowserSurface — размер вьюпорта (спека 2026-10-0
     expect(screen.getByTestId('devtools-panel').style.height).toBe('350px');
   });
 });
+
+describe('BrowserSurface — первая загрузка после захвата (спайк 0.1, вариант D; Фокус ревью 6)', () => {
+  it('webview стартует с about:blank; адрес вкладки — на первом dom-ready и только после devtoolsReady; дальше не повторяется', async () => {
+    setBrowserTab('http://localhost:5173/app');
+    let release: () => void = () => {};
+    bridge.setDevtoolsReady(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    renderWork();
+    const view = arm(webview(), 7);
+    expect(view.getAttribute('src')).toBe('about:blank');
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsReady', args: [7] });
+    expect(view.loadURL).not.toHaveBeenCalled();
+    await act(async () => release());
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/app']]);
+    // dom-ready открытой страницы ничего не открывает: ни ожидания захвата, ни повторной загрузки.
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL).toHaveBeenCalledTimes(1);
+    expect(bridge.browserCalls.filter((call) => call.method === 'devtoolsReady')).toHaveLength(1);
+  });
+
+  it('devtoolsReady отказал — страница всё равно открывается', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setBrowserTab('http://localhost:5173/');
+    bridge.setDevtoolsReady({ code: 'failed', message: 'boom' });
+    renderWork();
+    const view = arm(webview(), 7);
+    fire(view, 'dom-ready');
+    await act(async () => {});
+    expect(view.loadURL.mock.calls).toEqual([['http://localhost:5173/']]);
+    warn.mockRestore();
+  });
+});
 ```
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/stage.test.ts src/renderer/browser/BrowserSurface.test.tsx` → FAIL: нет `stage.js`, снимка на `dom-ready`, панели и эмуляции.
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/stage.test.ts src/renderer/browser/BrowserSurface.test.tsx` → FAIL: нет `stage.js`, снимка на `dom-ready`, панели, эмуляции и `devtoolsReady`.
 
 - [ ] **Шаг 3. Реализовать геометрию.**
 
@@ -6684,6 +6837,7 @@ export function useViewport(input: {
 - [ ] **Шаг 5. Переписать поверхность.** `BrowserSurface.tsx` целиком. Это прежний файл с правками задачи 15 и новыми частями:
   - замер поля и вкладки;
   - журнал гостя и эмуляция;
+  - первая загрузка после захвата (спайк 0.1, вариант D): `src="about:blank"` и `devtoolsReady` перед `loadURL`;
   - поле с подписью;
   - панель;
   - клавиши ⌘⌥I и ⌘⌥J.
@@ -6701,11 +6855,12 @@ export function useViewport(input: {
  * Программный доступ к странице — только у main (спека 12.2): Design Mode (9.3b) тоже идёт мостом —
  * `pickStart` и `pickCancel`, а не `executeJavaScript` у `<webview>`.
  *
- * `src` ставится один раз, при монтировании `<webview>` (первый адрес http(s) вкладки). Гость сам
- * пишет в `src` адрес коммита, а любое присвоение `src` — новая загрузка: проп `src={url}`
- * перезагружал бы страницу на каждом переходе SPA и делал бы «назад» новой навигацией. Адрес идёт
- * только из страницы в раскладку (`updateTab`), обратно — нет; адресная строка живой страницы —
- * `loadURL`.
+ * `<webview>` монтируется один раз, при первом адресе http(s) вкладки, и с `src="about:blank"` (спайк 0.1, вариант D):
+ * к пустому гостю main уже подключил отладчик, а адрес вкладки окно открывает на первом `dom-ready` после
+ * `devtoolsReady` — иначе подресурсы первой загрузки (стили, картинки, скрипты из HTML) прошли бы мимо журнала.
+ * Гость сам пишет в `src` адрес коммита, а любое присвоение `src` — новая загрузка: проп с адресом вкладки
+ * перезагружал бы страницу на каждом переходе SPA и делал бы «назад» новой навигацией. Адрес идёт только из
+ * страницы в раскладку (`updateTab`), обратно — нет; адресная строка живой страницы — `loadURL`.
  *
  * Консоль, сеть и размер (спека 2026-10-07-browser-devtools-agent-design.md, 4.1–4.3, 4.9):
  * - журнал гостя — снимок и пачки main (`devtools/use-devtools-feed.ts`); панель — снизу вкладки, высота общая
@@ -6757,6 +6912,9 @@ type WebviewEvent = Event & { url?: string; title?: string; isMainFrame?: boolea
 
 /** `net::ERR_ABORTED`: загрузку прервали (новый переход, Stop, скачивание) — это не ошибка страницы. */
 const ERR_ABORTED = -3;
+
+/** Стартовая страница `<webview>` (спайк 0.1, вариант D): страж пускает такой `src`, адрес вкладки открывается позже. */
+const BLANK_SRC = 'about:blank';
 
 /**
  * Атрибуты `<webview>` строками: React 18 булев `allowpopups` у тега без дефиса не выводит, а
@@ -6812,6 +6970,8 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
   const fieldRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
   const readyRef = useRef(false);
+  // Адрес вкладки уже открывали после захвата (спайк 0.1): повторные dom-ready страницы его не открывают.
+  const firstPageRef = useRef(false);
   // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
   const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
@@ -6819,8 +6979,8 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
   const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
   const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
 
-  // Первый адрес http(s) — и только он — становится `src`. Без адреса (новая вкладка) и с чужим
-  // адресом (раскладку правили руками) — заглушка: страж main отверг бы такой `src` (9.1).
+  // Первый адрес http(s) — и только он — открывается в `<webview>`. Без адреса (новая вкладка) и с чужим
+  // адресом (раскладку правили руками) — заглушка: открывать нечего.
   const [src, setSrc] = useState<string | null>(() => (isHttpUrl(url) ? url : null));
   if (src === null && isHttpUrl(url)) setSrc(url);
 
@@ -6904,13 +7064,29 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
       const safe = next === undefined ? null : layoutUrl(next);
       if (safe !== null) useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { url: safe }));
     };
+    // Первая страница вкладки (спайк 0.1, вариант D): `<webview>` стартует с about:blank, main к его первому dom-ready
+    // уже подключил отладчик и ждёт ответов enable. Адрес открываем после `devtoolsReady`: иначе подресурсы первой
+    // загрузки прошли бы мимо журнала. Отказ захвата страницу не держит.
+    const openFirstPage = (id: number): void => {
+      if (firstPageRef.current) return;
+      firstPageRef.current = true;
+      const open = (): void => {
+        view.loadURL(src).catch((error: unknown) => console.warn('[parley] first page load failed', error));
+      };
+      bridge.browser.devtoolsReady(id).then(open, (error: unknown) => {
+        console.warn('[parley] devtools capture is not ready, opening the page anyway', error);
+        open();
+      });
+    };
 
     const listeners: Record<string, (event: WebviewEvent) => void> = {
       // Раньше dom-ready getWebContentsId() бросает.
       'dom-ready': () => {
         readyRef.current = true;
-        update({ webContentsId: view.getWebContentsId() });
+        const id = view.getWebContentsId();
+        update({ webContentsId: id });
         history();
+        openFirstPage(id);
       },
       'did-start-loading': () => update({ loading: true, crashed: false, loadFailed: false }),
       'did-stop-loading': () => update({ loading: false }),
@@ -6940,7 +7116,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
     return () => {
       for (const [type, listener] of Object.entries(listeners)) view.removeEventListener(type, listener);
     };
-  }, [src, tabId, workKey]);
+  }, [bridge, src, tabId, workKey]);
 
   // Favicon качает main (CSP окна внешних картинок не пускает) и шлёт всем вкладкам окна; своя — по id гостя.
   useEffect(
@@ -7105,10 +7281,11 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
           <div data-testid="browser-placeholder" className="h-full w-full bg-background" />
         ) : (
           // Белая подложка: гость прозрачен, и страница без своего фона легла бы на тёмную тему окна. При эмуляции —
-          // тот же узел, другие класс и стиль: новый узел перезагрузил бы гостя.
+          // тот же узел, другие класс и стиль: новый узел перезагрузил бы гостя. `src` всегда about:blank: адрес вкладки
+          // открывает openFirstPage (вариант D).
           <webview
             ref={setView}
-            src={src}
+            src={BLANK_SRC}
             className={stage === null ? 'flex h-full w-full bg-white' : 'absolute flex bg-white shadow-md'}
             {...(stage === null ? {} : { style: { left: stage.left, top: stage.top, width: stage.width, height: stage.height } })}
             {...WEBVIEW_ATTRIBUTES}
@@ -7205,7 +7382,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
 
 ```bash
 git add packages/desktop/src/renderer/browser
-git commit -m "feat(desktop): поверхность браузера — журнал гостя, панель снизу, эмуляция размера, ⌘⌥I и ⌘⌥J" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): поверхность браузера — журнал гостя, панель снизу, эмуляция размера, ⌘⌥I и ⌘⌥J, первая загрузка после захвата" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -7221,7 +7398,7 @@ git commit -m "feat(desktop): поверхность браузера — жур
   - приёмы `browser-page.spec.ts`: `menu`, `guestUrls`, ввод в гостя `sendInputEvent`.
 - Покрывает:
   - спека 10 — E2E 1, 5 и 7;
-  - «Фокус ревью» — п. 2 и 3.
+  - «Фокус ревью» — п. 2, 3 и 6.
 
 - [ ] **Шаг 1. Написать E2E.**
 
@@ -7241,6 +7418,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Консоль, сеть и размеры вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, раздел 10: E2E 1, 5, 7).
  * - Страница своего сервера пишет в консоль, бросает исключение и отказ промиса, ходит за 500 с JSON, за 404 и на чужой
  *   origin без CORS: панель показывает всё это, счётчики верны, тело 500 читается; ⌘⌥I и ⌘⌥J работают из страницы.
+ *   Стиль и картинка из HTML видны в сети с первой загрузки, без перезагрузки; «назад» после неё неактивна
+ *   (спайк 0.1, вариант D).
  * - Mobile M даёт странице `innerWidth` 375 и переживает перезапуск окна.
  * - 800×500 при DPR 1 и 2 с длинными адресом, работой и сессией: строка и панель не вылезают за края.
  * Внешних сайтов нет — два своих сервера на 127.0.0.1 (второй — «чужой origin» для CORS). Настоящий `claude` не
@@ -7255,9 +7434,12 @@ const shots = path.resolve(dirname, '../test-results/browser-devtools');
 const LONG_TITLE = `devtools-workspace-${'w'.repeat(41)}`;
 const LONG_LABEL = `devtools-session-${'s'.repeat(43)}`;
 
-/** Страница: консоль всех уровней, исключение, отказ промиса, 500, 404 и CORS; значок — data:, без лишнего запроса. */
+/**
+ * Страница: консоль всех уровней, исключение, отказ промиса, 500, 404 и CORS; значок — data:, без лишнего запроса.
+ * Стиль и картинка из HTML (оба 200, счётчик ошибок не меняют) проверяют подресурсы первой загрузки (спайк 0.1).
+ */
 function devtoolsPage(corsOrigin: string): string {
-  return `<!doctype html><title>Devtools page</title><link rel="icon" href="data:,">
+  return `<!doctype html><title>Devtools page</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/app.css">
 <script>
   console.log('hello', { theme: 'dark', items: [1, 2] });
   console.warn('careful');
@@ -7268,7 +7450,7 @@ function devtoolsPage(corsOrigin: string): string {
   fetch('/missing').catch(() => {});
   fetch('${corsOrigin}/data').catch(() => {});
 </script>
-<p>devtools page</p>`;
+<img src="/logo.svg" alt="" width="1" height="1"><p>devtools page</p>`;
 }
 
 function listen(server: Server): Promise<string> {
@@ -7350,6 +7532,14 @@ test.describe('консоль, сеть и размеры вкладки бра�
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(devtoolsPage(corsOrigin));
         return;
       }
+      if (pathname === '/app.css') {
+        res.writeHead(200, { 'content-type': 'text/css' }).end('body { margin: 0; }');
+        return;
+      }
+      if (pathname === '/logo.svg') {
+        res.writeHead(200, { 'content-type': 'image/svg+xml' }).end('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+        return;
+      }
       res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
     });
     origin = await listen(server);
@@ -7401,18 +7591,19 @@ test.describe('консоль, сеть и размеры вкладки бра�
     await expect.poll(() => guestUrls(electronApp)).toEqual([url]);
   }
 
-  test('панель: консоль, исключения, 500, 404 и CORS; счётчики 6 и 1; тело 500; ⌘⌥I и ⌘⌥J из страницы (E2E 1)', async () => {
+  test('панель: консоль, исключения, 500, 404 и CORS; счётчики 6 и 1; тело 500; подресурсы первой загрузки; ⌘⌥I и ⌘⌥J из страницы (E2E 1)', async () => {
     const { electronApp, window } = await launch();
     await setSize(electronApp, 1400, 900);
     await expect(window.getByTestId('landing')).toBeVisible();
     await openWork(window, 'e2e-devtools', 'agent');
+    // Без перезагрузки (спайк 0.1, вариант D): гость стартует с about:blank, страница открывается после включения журнала.
     await openPage(electronApp, window, `${origin}/`);
-    // Перезагрузка: записи с первого запроса и при позднем захвате первой загрузки (спайк 0.1).
-    await window.getByTestId('browser-chrome').getByRole('button', { name: 'Reload' }).click();
 
     // Красный — console.error, исключение, отказ промиса, 500, 404 и CORS; жёлтый — console.warn (Фокус ревью 3).
     await expect(window.getByTestId('devtools-errors')).toHaveText('6');
     await expect(window.getByTestId('devtools-warnings')).toHaveText('1');
+    // Пустая страница не осталась в истории (Фокус ревью 6): «назад» после первой загрузки неактивна.
+    await expect(window.getByTestId('browser-chrome').getByRole('button', { name: 'Back' })).toBeDisabled();
 
     // ⌘⌥I из страницы — панель, ещё раз — спрятана; ⌘⌥J — сразу на Console.
     const panel = window.getByTestId('devtools-panel');
@@ -7435,6 +7626,10 @@ test.describe('консоль, сеть и размеры вкладки бра�
     await expect(request('/api/fail')).toContainText('500');
     await expect(request('/missing')).toContainText('404');
     await expect(request('/data')).toContainText('CORS');
+    // Подресурсы первой загрузки (Фокус ревью 6): стиль и картинка из HTML видны без перезагрузки, захват не поздний.
+    await expect(request('/app.css')).toContainText('200');
+    await expect(request('/logo.svg')).toContainText('200');
+    await expect(panel.getByRole('status')).toHaveCount(0);
     await request('/api/fail').click();
     await panel.getByRole('tab', { name: 'Response' }).click();
     await expect(panel.getByTestId('response-body')).toContainText('"error": "db down"');
@@ -7468,8 +7663,7 @@ test.describe('консоль, сеть и размеры вкладки бра�
       await openWork(window, LONG_TITLE, LONG_LABEL);
       const prefix = `${origin}/long/`;
       await openPage(electronApp, window, prefix + 'a'.repeat(300 - prefix.length));
-      // Как в E2E 1: перезагрузка — запись с первого запроса и при позднем захвате (спайк 0.1).
-      await window.getByTestId('browser-chrome').getByRole('button', { name: 'Reload' }).click();
+      // Как в E2E 1: без перезагрузки, журнал первой загрузки полный.
       await expect(window.getByTestId('devtools-errors')).toHaveText('6');
 
       await window.getByRole('button', { name: 'Console and network' }).click();
@@ -7519,6 +7713,8 @@ test.describe('консоль, сеть и размеры вкладки бра�
   - **Ошибок не 6.** Сначала посмотреть строки консоли в панели. Ошибка без `networkRequestId` (так может прийти строка CORS) — строка браузера, счётчик её не считает: так и задумано (Фокус ревью 3). Если в счёт попало лишнее, проверить `origin` записи в `consoleFromLog` (задача 3), а не менять ожидание теста.
   - **⌘⌥I из страницы не дошёл.** Проверить в `app.evaluate`, что у `before-input-event` гостя `input.alt === true`. Синтетическое нажатие может прийти без `code`; тогда реестр узнаёт клавишу по `key` (`matchesAccelerator`).
   - **DPR не 2.** Проверить, что ключ дошёл до Chromium: `app.commandLine.hasSwitch('force-device-scale-factor')` в `electronApp.evaluate`.
+  - **Нет `/app.css` или `/logo.svg` в Network, ошибок не 6.** Гость начал грузиться раньше, чем домены включились. Проверить, что окно зовёт `devtoolsReady` до `loadURL` (задача 16) и что у `<webview>` `src` — `about:blank`.
+  - **«Назад» активна после первой загрузки.** Страж не убрал пустую запись: проверить `pruneBlankEntry` (задача 5) и порядок событий — `did-navigate` страницы приходит раньше, чем окно спрашивает `canGoBack`.
 
 - [ ] **Шаг 3. Прогнать соседние E2E браузера** — правка строки и поверхности их не должна задеть.
 
@@ -7601,8 +7797,6 @@ console and network".
 | Console and network of a browser tab; open it on Console | ⌘⌥I; ⌘⌥J — in the page or the tab's bar | — |
 ```
 
-  Если задача 1 выбрала «страница не уменьшается» (спайк 0.3), в пункте о размере вместо `is scaled down, with a percent in the label, when it does not fit` написать `does not shrink: the area scrolls when the page is larger than the tab`.
-
 - [ ] **Шаг 3. Спека окна, 12.1.** Список под «Строка над страницей, 36px:» заменить:
 
 ```markdown
@@ -7612,8 +7806,9 @@ console and network".
 - размер вьюпорта: Fit, Mobile S 320×568, Mobile M 375×812, Mobile L 430×932, Tablet 768×1024, Laptop 1280×800,
   Desktop 1440×900, Custom… (200–3840 × 200–2400), Rotate, DPR 1x/2x/3x. Страница стоит по центру нейтрального
   поля с подписью «375 × 812 · 2x»; не влезает — уменьшена, в подписи процент. Мобильные размеры — с касаниями и
-  мобильным UA; касания включаются с новым документом («Reload to apply touch»). Размер хранится у вкладки
-  (`TabSpec.viewport`), у Fit поля нет;
+  мобильным UA; касания включаются с новым документом («Reload to apply touch»). Уменьшает страницу только показ в
+  окне: сама страница видит заданный размер, а картинка с неё (снимок этапа C) — размер вида × DPR, у Mobile M 2x это
+  750 × 1624 (спайк 0.3). Размер хранится у вкладки (`TabSpec.viewport`), у Fit поля нет;
 - ⌖ Design Mode;
 - консоль: значок со счётчиками — красный (ошибки консоли, исключения и упавшие запросы текущей страницы) и
   жёлтый (предупреждения консоли), нули не показываются; показывает и прячет панель Console | Network (⌘⌥I; ⌘⌥J —
@@ -7640,7 +7835,9 @@ console and network".
 
 ```markdown
 - **Инспектор CDP** (`main/browser/inspector.ts`, спека 2026-10-07-browser-devtools-agent-design.md, 3.3).
-  - Страж подключает `webContents.debugger` к каждому гостю на `web-contents-created`, до первой загрузки.
+  - Страж подключает `webContents.debugger` к каждому гостю на `web-contents-created`, до первой загрузки: `<webview>`
+    стартует с `src` `about:blank` (страж пускает такой `src`), а адрес вкладки окно открывает после `devtoolsReady`,
+    когда домены включены (спайк 0.1, вариант D). Пустая первая запись истории гостя убирается.
   - Инспектор ведёт журнал консоли и сети для панели вкладки: кольца на вкладку, эпохи документов, пачки окну
     событием `browser:devtools`.
   - Команды — только из закрытого списка `CDP_ALLOWED`: `enable`/`disable` доменов `Runtime`, `Log`, `Page`,
@@ -7668,12 +7865,13 @@ console and network".
   // Консоль, сеть и размер (спека 2026-10-07-browser-devtools-agent-design.md, 3.5; этап A)
   devtoolsSnapshot(webContentsId: number): Promise<DevtoolsSnapshot>;  // журнала нет — пустой, capture 'unavailable'
   devtoolsClear(webContentsId: number): Promise<void>;
+  devtoolsReady(webContentsId: number): Promise<void>;  // все enable отработали: после этого окно открывает адрес вкладки
   responseBody(webContentsId: number, requestId: string): Promise<ResponseBody | null>;  // до 1 МБ; null — тело вытеснено
   onDevtools(listener: (batch: DevtoolsBatch) => void): () => void;  // пачки ~150 мс, до 200 записей
   setViewport(webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }): Promise<{ scale: number }>;  // null — Fit
 ```
 
-  - После блока к пунктам о `webContentsId` добавить пункт: «Типы журнала и размеров — `shared/browser-devtools.ts`. Каналы — `browser:devtools-snapshot`, `browser:devtools-clear`, `browser:response-body`, `browser:set-viewport`, событие `browser:devtools`.».
+  - После блока к пунктам о `webContentsId` добавить пункт: «Типы журнала и размеров — `shared/browser-devtools.ts`. Каналы — `browser:devtools-snapshot`, `browser:devtools-clear`, `browser:devtools-ready`, `browser:response-body`, `browser:set-viewport`, событие `browser:devtools`.».
 
 - [ ] **Шаг 7. Проверить документы.** `pnpm --filter @parley/desktop exec vitest run src/release-docs.test.ts` → PASS.
 
@@ -7705,6 +7903,7 @@ git commit -m "docs: консоль, сеть и размеры вкладки �
     - Network: «Failed only», детали 500, «Response» с отформатированным JSON;
     - «Custom…»: поля в поповере берут фокус, Esc закрывает;
     - Mobile M: клик мышью по кнопке страницы попадает (спайк 0.3), «Reload to apply touch» включает касания;
+    - первая загрузка без перезагрузки (спайк 0.1, вариант D): стиль и картинки страницы в Network, «назад» неактивна; страница на закрытом порту — «Couldn't load page», «назад» тоже неактивна;
     - ⌘⌥I в странице, в адресной строке и в фильтре панели;
     - «⋯ → Open full DevTools» при открытой панели: журнал панели продолжает идти (проба 1.4 спеки);
     - ручка высоты над страницей: страница мышь не перехватывает.
@@ -7714,7 +7913,7 @@ git commit -m "docs: консоль, сеть и размеры вкладки �
 - [ ] **Шаг 4. Спека окна** — 12.1, 12.4, 12.5 и абзац об инспекторе в 12.2 сделаны в задаче 18. Сверить с кодом: имена каналов, пределы, порядок строки.
 
 - [ ] **Шаг 5. Ревью ветки свежим ревьюером** (навык superpowers:requesting-code-review).
-  - Ревьюеру — этот план, индекс и спеку; в фокусе — пять пунктов «Фокуса ревью».
+  - Ревьюеру — этот план, индекс и спеку; в фокусе — шесть пунктов «Фокуса ревью».
   - Правки по ревью — отдельными коммитами.
 
 - [ ] **Шаг 6. Push ветки `feat/browser-devtools`, PR во встроенном браузере** (`gh` не установлен).
@@ -7728,7 +7927,7 @@ git commit -m "docs: консоль, сеть и размеры вкладки �
 
 Имена индекса план не переименовывает. Ниже — места, где индекс молчит или где код требует уточнения, и что предлагает план.
 
-1. **Тайм-аут команды CDP (10 с).** Это умолчание спайка 0.1, а не предел раздела 8. В `DEVTOOLS_LIMITS`, форму которого задаёт индекс, его нет. План держит его константой `CDP_COMMAND_MS` в `main/browser/inspector.ts`.
+1. **Тайм-аут команды CDP (10 с).** Это число спайка 0.1 (дольше него `Inspector.ready` страницу вкладки не держит), а не предел раздела 8. В `DEVTOOLS_LIMITS`, форму которого задаёт индекс, его нет. План держит его константой `CDP_COMMAND_MS` в `main/browser/inspector.ts`.
    - Если правило «чисел мимо констант нет» распространяется и на него, индексу стоит дописать `commandMs: 10_000` в `DEVTOOLS_LIMITS`, а `inspector.ts` — брать его оттуда.
 2. **`devtoolsSnapshot` без журнала.** По индексу `Inspector.snapshot(id)` отдаёт `DevtoolsSnapshot | null`, а мост по спеке 3.5 — объект.
    - План: канал `browser:devtools-snapshot` превращает `null` в `{ epoch: 0, capture: 'unavailable', console: [], network: [] }`.
@@ -7751,3 +7950,11 @@ git commit -m "docs: консоль, сеть и размеры вкладки �
    - План считает ошибки консоли (`'console'`), исключения (`'exception'`), ошибки браузера без запроса (`'browser'` — нарушение CSP и прочее) и упавшие запросы (`isFailed`).
    - Строки сети (`'network'`) видны в списке красными, но в счётчик не идут. Иначе одна 500 или CORS считалась бы дважды: «Failed to load resource…» плюс сам запрос. Строку CORS задача 3 относит к `'network'`, потому что у неё есть `networkRequestId`.
    - Решение принято при сверке индекса 2026-10-07: первая версия плана не считала и CSP. Тест — задача 9.
+10. **`Inspector.ready` и `devtoolsReady` (спайк 0.1, вариант D).** Отчёт этапа 0: «main подключает отладчик, ждёт `enable`, затем `loadURL`». Индекс не знает ни метода инспектора, ни канала. План добавляет `Inspector.ready(id)`, канал `browser:devtools-ready` и `bridge.browser.devtoolsReady(id)`.
+    - Адрес вкладки открывает окно (`loadURL` у `<webview>`) на первом `dom-ready` пустой страницы, после ответа `devtoolsReady`. Порядок тот же, что в отчёте: сначала ответы `enable`, потом загрузка.
+    - Вариант «main зовёт `loadURL` сам» отвергнут: мосту пришлось бы принимать адрес и открывать его в госте. Сейчас у моста нет ни одного метода навигации, и страж по-прежнему проверяет всё, что идёт в гостя (спека окна 12.2).
+    - `ready` не бросает: отказ и тайм-аут `enable` дают `capture: 'unavailable'`, страница открывается не позже чем через `CDP_COMMAND_MS`.
+11. **Пустая запись истории гостя (спайк 0.1, вариант D).** Отчёт её не упоминает. Проверка на Electron 44.4.5:
+    - после `about:blank` и `loadURL` у гостя две записи, «назад» ведёт на пустую страницу; если страница не загрузилась (порт закрыт), то же самое, при этом `did-navigate` нет, есть `did-fail-load`;
+    - `navigationHistory.removeEntryAtIndex(0)` на первом `did-navigate` страницы или `did-fail-load` главного фрейма оставляет одну запись, и `canGoBack` false.
+    - Страж убирает запись сам (задача 5); E2E задачи 17 проверяет, что «назад» неактивна.
