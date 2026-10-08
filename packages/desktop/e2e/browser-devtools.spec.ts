@@ -300,6 +300,13 @@ test.describe('консоль, сеть и размеры вкладки бра�
     await expect(panel.getByTestId('request-body')).toContainText('"a": 1');
     await panel.getByRole('tab', { name: 'Response' }).click();
     await expect(panel.getByTestId('response-body')).toContainText('"error": "db down"');
+
+    // ⌘⌥J отличается от ⌘⌥I (ревью задачи 17): при открытой панели на Network он переводит её на Console, а не закрывает.
+    await expect(panel.getByRole('tab', { name: 'Network' })).toHaveAttribute('data-state', 'active');
+    await pressInGuest(electronApp, `${origin}/`, 'J', ['meta', 'alt']);
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('tab', { name: 'Console' })).toHaveAttribute('data-state', 'active');
+    await expect(panel.getByRole('tab', { name: 'Network' })).toHaveAttribute('data-state', 'inactive');
   });
 
   test('Mobile M: в странице innerWidth 375 и подпись размера; размер переживает перезапуск окна (E2E 5)', async () => {
