@@ -684,7 +684,9 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   can open it with "New browser tab" in the palette, the "+" on the tab bar, ⌘-click on an
   address in the terminal, or a Markdown/PDF link; a page's `window.open` opens a tab next to
   it, not a window. There are the buttons "Back" / "Forward", "Reload" (or "Stop" while
-  loading) and "DevTools". In the address bar, `localhost…` becomes `http://` and an address
+  loading), the viewport size, the console with error and warning counters, and "⋯" with
+  "Open full DevTools" (Chromium DevTools in its own window) and "Clear console and network".
+  In the address bar, `localhost…` becomes `http://` and an address
   with a dot becomes `https://`; anything else gives "Enter an address — search isn't
   supported" (there is no search); `file:` is not opened ("Local files can't be opened here").
   "Page crashed" and "Couldn't load page" show an error with "Reload". Downloads use the
@@ -692,6 +694,30 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   all workspaces at once, not only for the tabs of one; they are cleared in Settings →
   Browser → "Clear browser data". ⌘J, ⌘W and the other window shortcuts also work from inside
   the page;
+- the console and network of a browser tab: the console button (⌘⌥I; ⌘⌥J opens the panel on
+  Console) shows a panel at the bottom of the tab, and its height is shared by all tabs.
+  Console lists the page's messages, exceptions and the browser's own lines with the levels
+  "Errors", "Warnings", "Info" and "Debug" (off by default), a text filter, "×N" for repeats in a
+  row, the stack of an error, the extra lines of a multi-line message of any level, objects as a
+  short preview and "Copy". Network lists the requests with "All", "Fetch/XHR", "Doc", "JS",
+  "CSS", "Img", "Other", "Failed only" and a URL filter; a request opens "Headers", "Payload" and
+  "Response" — the body up to 1 MB, loaded on click; "Body is no longer available" means Chromium
+  has already dropped it — and "Copy URL". With a request open, the list narrows to "Status" and
+  "Name" (on a narrow panel the details lie over the list). The red counter on the button counts
+  the console errors, exceptions, the browser's own errors (a CSP violation, say) and failed
+  requests of the current page, each failed request once; the yellow one counts the console
+  warnings; a counter reads "999+" past 999. Without "Preserve log" a new page clears the panel.
+  A tab keeps up to 1000 messages and 500 requests. "Reload to capture earlier requests" means
+  the page began loading before the capture; "Capture unavailable — reload the page" means it
+  could not attach; both notes have a "Reload" button. Headers and bodies are shown as they are:
+  it is your browser, nothing goes to an agent;
+- the viewport size of a browser tab: "Fit" (the default), "Mobile S" 320×568, "Mobile M" 375×812,
+  "Mobile L" 430×932, "Tablet" 768×1024, "Laptop" 1280×800, "Desktop" 1440×900, "Custom…"
+  (200–3840 × 200–2400), "Rotate" and 1x/2x/3x. Mobile sizes and "Tablet" emulate touch and a
+  mobile user agent; touch applies from the next page load (a "Reload to apply touch" button
+  appears next to the label). The page stands in the middle of the tab with a label like
+  "375 × 812 · 2x" and is scaled down, with a percent in the label, when it does not fit. The size
+  is kept with the tab and survives a restart;
 - Design Mode: the ⌖ in the bar above the page; a click on an element gives a card with a
   thumbnail, the selector and the text. Esc or a second ⌖ clears the selection, and clicks on
   the page work again. "Send to agent ▾" gives the session you choose a block: the address,
@@ -737,6 +763,7 @@ In an input field, text editing stays with the field (⌘A, ⌘C, ⌘V, ⌘X, �
 | Paste an image from the clipboard | ⌘V — in the terminal, with no text on the clipboard | — |
 | Open a link at once | ⌘-click — on a link in the terminal | — |
 | Browser page zoom | ⌘+ / ⌘− / ⌘0 | — |
+| Console and network of a browser tab; open it on Console | ⌘⌥I; ⌘⌥J — in the page, the tab's bar or the panel | — |
 | Settings | ⌘, | Parley |
 | Next session that needs you; pause auto-wake; restart host; theme; new room; archived workspaces; new browser tab | no shortcut | palette |
 

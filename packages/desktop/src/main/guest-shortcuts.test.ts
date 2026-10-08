@@ -55,6 +55,15 @@ describe('forwardGuestShortcuts (тест 7)', () => {
     ]);
   });
 
+  it('⌘⌥I и ⌘⌥J из страницы (спека 2026-10-07, 4.9) — гасятся в госте и уходят окну', () => {
+    const guest = fakeGuest();
+    const send = vi.fn<(id: ActionId) => void>();
+    forwardGuestShortcuts(guest.contents, send);
+    expect(guest.input({ key: 'ˆ', code: 'KeyI', meta: true, alt: true })).toBe(true);
+    expect(guest.input({ key: '∆', code: 'KeyJ', meta: true, alt: true })).toBe(true);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['browser.devtools', 'browser.console']);
+  });
+
   it('keyUp и isComposing — не трогаются', () => {
     const guest = fakeGuest();
     const send = vi.fn<(id: ActionId) => void>();

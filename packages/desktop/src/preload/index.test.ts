@@ -100,4 +100,16 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
   });
+
+  it('browser.onDevtools: пачка приходит подписчику, отписка снимает его (спека 2026-10-07, 3.5)', async () => {
+    const bridge = await loadPreload();
+    const listener = vi.fn();
+    const off = bridge.browser.onDevtools(listener);
+    const batch = { webContentsId: 7, epoch: 0, capture: 'on', reset: false, console: [], network: [] };
+    emit('browser:devtools', batch);
+    off();
+    emit('browser:devtools', batch);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(batch);
+  });
 });

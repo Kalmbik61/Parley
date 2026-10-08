@@ -18,6 +18,7 @@ import type { Appearance, RightSidebarTab } from '../../shared/ui-types.js';
 import type { AttentionTarget } from '../attention/next.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
+import { useDevtoolsStore } from '../browser/devtools/store.js';
 import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
@@ -193,6 +194,15 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     if (page === null) return;
     if (zoom === undefined) useBrowserStore.getState().update(page.tabId, { findOpen: true });
     else ctx.bridge.browser.zoom(page.webContentsId, zoom).catch((error: unknown) => console.warn('[parley] browser zoom', error));
+    return;
+  }
+  // Панель Console | Network (спека 2026-10-07, 4.3): ⌘⌥I — показать или спрятать, ⌘⌥J — сразу на Console. Цель — та
+  // же вкладка браузера активной группы; без страницы — ничего.
+  if (id === 'browser.devtools' || id === 'browser.console') {
+    const page = ctx.browser.active();
+    if (page === null) return;
+    if (id === 'browser.devtools') useDevtoolsStore.getState().toggle(page.tabId);
+    else useDevtoolsStore.getState().show(page.tabId, 'console');
     return;
   }
   if (id.startsWith('tab.goto.') && active !== null) {

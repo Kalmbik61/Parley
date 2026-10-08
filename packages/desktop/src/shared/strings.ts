@@ -1286,7 +1286,6 @@ export const S = {
     localFile: "Local files can't be opened here",
     reload: 'Reload',
     stop: 'Stop',
-    devTools: 'DevTools',
     pageCrashed: 'Page crashed',
     /** Главный фрейм не загрузился (`did-fail-load`, fix-9). */
     loadFailed: "Couldn't load page",
@@ -1295,6 +1294,95 @@ export const S = {
     designMode: 'Design Mode',
     sendToAgent: 'Send to agent',
     pickAgain: 'Pick again',
+    /**
+     * Панель Console | Network и кнопка строки (спека 2026-10-07-browser-devtools-agent-design.md, 4.1, 4.3, 4.4).
+     * Сообщения, адреса, заголовки и тела страницы — данные, идут как есть.
+     */
+    devtools: {
+      toggle: 'Console and network',
+      console: 'Console',
+      network: 'Network',
+      more: 'More browser actions',
+      openFull: 'Open full DevTools',
+      clearAll: 'Clear console and network',
+      preserveLog: 'Preserve log',
+      clear: 'Clear',
+      close: 'Close panel',
+      resize: 'Resize panel',
+      levels: { error: 'Errors', warning: 'Warnings', info: 'Info', debug: 'Debug' },
+      filterConsole: 'Filter',
+      filterUrl: 'Filter URL',
+      kinds: { all: 'All', fetch: 'Fetch/XHR', doc: 'Doc', js: 'JS', css: 'CSS', img: 'Img', other: 'Other' },
+      failedOnly: 'Failed only',
+      errors: (count: number): string => `${count} ${count === 1 ? 'error' : 'errors'}`,
+      warnings: (count: number): string => `${count} ${count === 1 ? 'warning' : 'warnings'}`,
+      repeated: (count: number): string => `×${count}`,
+      expand: 'Show stack',
+      collapse: 'Hide stack',
+      /** Слоты этапа B (спека 4.3–4.5): кнопки есть, только когда передан колбэк доставки. */
+      addToChat: 'Add to chat',
+      addErrorsToChat: 'Add errors to chat',
+      navigatedTo: (url: string): string => `Navigated to ${url}`,
+      navigated: 'Navigated to a new page',
+      empty: 'No messages',
+      emptyNetwork: 'No requests',
+      late: 'Reload to capture earlier requests',
+      unavailable: 'Capture unavailable — reload the page',
+      columns: { status: 'Status', method: 'Method', name: 'Name', type: 'Type', size: 'Size', time: 'Time' },
+      status: { cors: 'CORS', blocked: 'blocked', failed: 'failed', canceled: '(canceled)', pending: '(pending)' },
+      fromCache: '(cache)',
+      bytes: (bytes: number): string =>
+        bytes < 1024 ? `${bytes} B` : bytes < 1_048_576 ? `${(bytes / 1024).toFixed(1)} kB` : `${(bytes / 1_048_576).toFixed(1)} MB`,
+      ms: (ms: number): string => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`),
+      details: {
+        headers: 'Headers',
+        payload: 'Payload',
+        response: 'Response',
+        general: 'General',
+        responseHeaders: 'Response headers',
+        requestHeaders: 'Request headers',
+        url: 'URL',
+        method: 'Method',
+        status: 'Status',
+        remoteAddress: 'Remote address',
+        query: 'Query',
+        body: 'Body',
+        noPayload: 'No payload',
+        loadResponse: 'Load response',
+        loading: 'Loading…',
+        bodyGone: 'Body is no longer available',
+        truncated: (limit: string): string => `Showing the first ${limit}`,
+        binary: (size: string, type: string): string => (type === '' ? `Binary data, ${size}` : `Binary data, ${size}, ${type}`),
+        copyUrl: 'Copy URL',
+        close: 'Close details',
+      },
+    },
+    /** Меню размера вкладки и подпись поля (спека 2026-10-07, 4.2). */
+    viewport: {
+      menu: 'Viewport size',
+      fit: 'Fit',
+      presets: {
+        'mobile-s': 'Mobile S',
+        'mobile-m': 'Mobile M',
+        'mobile-l': 'Mobile L',
+        tablet: 'Tablet',
+        laptop: 'Laptop',
+        desktop: 'Desktop',
+      },
+      size: (width: number, height: number): string => `${width}×${height}`,
+      custom: 'Custom…',
+      rotate: 'Rotate',
+      dpr: (dpr: number): string => `${dpr}x`,
+      width: 'Width',
+      height: 'Height',
+      apply: 'Apply',
+      customRange: (min: number, maxWidth: number, maxHeight: number): string =>
+        `Width ${min}–${maxWidth}, height ${min}–${maxHeight}`,
+      label: (width: number, height: number, dpr: number, percent: number | null): string =>
+        `${width} × ${height} · ${dpr}x${percent === null ? '' : ` · ${percent}%`}`,
+      /** Касания включаются с новым документом (спайк 0.3). */
+      touchReload: 'Reload to apply touch',
+    },
   },
 
   /**
@@ -1418,6 +1506,8 @@ export const S = {
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
     actualSize: 'Actual size',
+    toggleDevtools: 'Toggle console and network',
+    showConsole: 'Show console',
   },
 
   /**
@@ -1513,6 +1603,9 @@ export const S = {
       discardWorktree: 'discard worktree',
       openDevTools: 'open DevTools',
       pickElement: 'pick element',
+      setViewport: 'set the viewport size',
+      clearDevtools: 'clear console and network',
+      loadResponse: 'load the response',
     },
     /** Действие работы (⌘T, ⌘W, разделение…) без активной работы — тост (кусок 6.3). */
     noActiveWorkspace: 'No active workspace',

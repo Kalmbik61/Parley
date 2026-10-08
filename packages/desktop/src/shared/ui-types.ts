@@ -17,6 +17,12 @@ export interface VoiceUi {
   language: string;
 }
 
+/** Вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3): высота панели Console | Network — общая. */
+export interface BrowserUi {
+  /** null — 40 % высоты вкладки (`DEVTOOLS_PANEL.defaultShare`). */
+  devtoolsHeight: number | null;
+}
+
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
 
 export interface UiFile {
@@ -44,6 +50,8 @@ export interface UiFile {
   dismissedUpdate: string | null;
   /** Голосовой ввод (спека 2026-10-06, 3.1). */
   voice: VoiceUi;
+  /** Вкладки браузера (спека 2026-10-07, 4.3). */
+  browser: BrowserUi;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -62,6 +70,7 @@ export const DEFAULT_UI: UiFile = {
   checkForUpdates: true,
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
+  browser: { devtoolsHeight: null },
 };
 
 /**
@@ -76,6 +85,9 @@ export const LEFT_SIDEBAR = { min: 220, max: 500, initial: 288 } as const;
  * граница; верхнюю держит рендерер при ресайзе (этап 2 плана окна).
  */
 export const RIGHT_SIDEBAR = { min: 220, initial: 320, reserveCenter: 320 } as const;
+
+/** Панель Console | Network (спека 2026-10-07, 4.3): не ниже 120 px, по умолчанию 40 % вкладки. Верх держит окно. */
+export const DEVTOOLS_PANEL = { minHeight: 120, defaultShare: 0.4 } as const;
 
 /**
  * Ширина правого сайдбара в окне (раунд main-r2, п. 7): центру остаётся не меньше
@@ -145,6 +157,13 @@ function normalizeVoice(value: unknown): VoiceUi {
   };
 }
 
+function normalizeBrowser(value: unknown): BrowserUi {
+  const source = isRecord(value) ? value : {};
+  // Высоты вкладки ui.json не знает: здесь — только низ; верх держит окно (`renderer/browser/stage.ts#panelHeight`).
+  const height = isFiniteNumber(source.devtoolsHeight) ? Math.max(Math.round(source.devtoolsHeight), DEVTOOLS_PANEL.minHeight) : null;
+  return { devtoolsHeight: height };
+}
+
 function normalizeNotifications(value: unknown): UiFile['notifications'] {
   const source = isRecord(value) ? value : {};
   const bool = (key: keyof UiFile['notifications']): boolean =>
@@ -193,5 +212,6 @@ export function normalizeUi(raw: unknown): UiFile {
     dismissedUpdate:
       typeof source.dismissedUpdate === 'string' ? source.dismissedUpdate : DEFAULT_UI.dismissedUpdate,
     voice: normalizeVoice(source.voice),
+    browser: normalizeBrowser(source.browser),
   };
 }

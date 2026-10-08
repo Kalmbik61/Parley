@@ -22,9 +22,11 @@ import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
 import { createDesignMode } from './browser/design-mode.js';
+import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
+import { createInspector, forwardBatches } from './browser/inspector.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
@@ -309,6 +311,13 @@ if (!gotLock) {
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
       guestScript: guestPickScript,
     });
+    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
+    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя.
+    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
+    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
+    const emulation = createEmulation({ inspector });
+    // Журнал снят вместе с гостем — размер его вкладки тоже.
+    inspector.onDestroyed((id) => emulation.forget(id));
     installBrowserGuard({
       app,
       // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
@@ -335,6 +344,7 @@ if (!gotLock) {
       // Сессией раздела браузера, а не окна: куки и прокси — страницы, а не приложения.
       fetchFavicon: (iconUrl, pageUrl) =>
         fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
+      inspect: (contents) => inspector.attach(contents),
     });
 
     mainWindow = openWindow();
@@ -453,6 +463,8 @@ if (!gotLock) {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
         designMode,
+        inspector,
+        emulation,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

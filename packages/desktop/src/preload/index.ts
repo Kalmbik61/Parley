@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
@@ -42,6 +43,7 @@ const confirmCloseListeners = new Set<() => void>();
 const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
 const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+const browserDevtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
@@ -115,6 +117,10 @@ ipcRenderer.on('browser:favicon', (_event, e: BrowserFavicon) => {
 
 ipcRenderer.on('browser:focus', (_event, e: { webContentsId: number }) => {
   for (const listener of browserFocusListeners) listener(e);
+});
+
+ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
+  for (const listener of browserDevtoolsListeners) listener(batch);
 });
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
@@ -314,6 +320,18 @@ const bridge = {
       browserFocusListeners.add(listener);
       return () => browserFocusListeners.delete(listener);
     },
+    devtoolsSnapshot: (webContentsId: number) =>
+      ipcRenderer.invoke('browser:devtools-snapshot', webContentsId) as Promise<DevtoolsSnapshot>,
+    devtoolsClear: (webContentsId: number) => ipcRenderer.invoke('browser:devtools-clear', webContentsId) as Promise<void>,
+    devtoolsReady: (webContentsId: number) => ipcRenderer.invoke('browser:devtools-ready', webContentsId) as Promise<void>,
+    responseBody: (webContentsId: number, requestId: string) =>
+      ipcRenderer.invoke('browser:response-body', webContentsId, requestId) as Promise<ResponseBody | null>,
+    onDevtools: (listener: (batch: DevtoolsBatch) => void) => {
+      browserDevtoolsListeners.add(listener);
+      return () => browserDevtoolsListeners.delete(listener);
+    },
+    setViewport: (webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }) =>
+      ipcRenderer.invoke('browser:set-viewport', webContentsId, spec, area) as Promise<{ scale: number }>,
   },
   voice: {
     listModels: () => ipcRenderer.invoke('voice:list-models') as Promise<VoiceModelId[]>,

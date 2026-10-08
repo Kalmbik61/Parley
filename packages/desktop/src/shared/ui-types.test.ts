@@ -159,3 +159,17 @@ describe('fitRightSidebar', () => {
     expect(normalizeUi({ rightSidebar: { open: true, width: 320, tab: 'terminal' } }).rightSidebar.tab).toBe('files');
   });
 });
+
+describe('раздел browser (спека 2026-10-07, 4.3)', () => {
+  it('по умолчанию высоты панели нет — 40 % вкладки', () => {
+    expect(normalizeUi({}).browser).toEqual({ devtoolsHeight: null });
+  });
+
+  it('высота — целое не ниже 120; мусор — по умолчанию', () => {
+    expect(normalizeUi({ browser: { devtoolsHeight: 300.4 } }).browser.devtoolsHeight).toBe(300);
+    expect(normalizeUi({ browser: { devtoolsHeight: 40 } }).browser.devtoolsHeight).toBe(120);
+    for (const value of [Number.NaN, Infinity, '300', null, {}]) {
+      expect(normalizeUi({ browser: { devtoolsHeight: value } }).browser.devtoolsHeight, String(value)).toBeNull();
+    }
+  });
+});

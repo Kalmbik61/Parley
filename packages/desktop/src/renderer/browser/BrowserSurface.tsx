@@ -1,3 +1,4 @@
+// packages/desktop/src/renderer/browser/BrowserSurface.tsx
 /**
  * Поверхность вкладки браузера (кусок 9.2a, спека 12.1, 12.2): строка над страницей и
  * `<webview>` в слое поверхностей работы (`layout/SurfaceLayer.tsx`), привязанные CSS-якорем к телу
@@ -9,29 +10,45 @@
  * Программный доступ к странице — только у main (спека 12.2): Design Mode (9.3b) тоже идёт мостом —
  * `pickStart` и `pickCancel`, а не `executeJavaScript` у `<webview>`.
  *
- * `src` ставится один раз, при монтировании `<webview>` (первый адрес http(s) вкладки). Гость сам
- * пишет в `src` адрес коммита, а любое присвоение `src` — новая загрузка: проп `src={url}`
- * перезагружал бы страницу на каждом переходе SPA и делал бы «назад» новой навигацией. Адрес идёт
- * только из страницы в раскладку (`updateTab`), обратно — нет; адресная строка живой страницы —
- * `loadURL`.
+ * `<webview>` монтируется один раз, при первом адресе http(s) вкладки, и с `src="about:blank"` (спайк 0.1, вариант D):
+ * к пустому гостю main уже подключил отладчик, а адрес вкладки окно открывает на первом `dom-ready` после
+ * `devtoolsReady` — иначе подресурсы первой загрузки (стили, картинки, скрипты из HTML) прошли бы мимо журнала.
+ * Гость сам пишет в `src` адрес коммита, а любое присвоение `src` — новая загрузка: проп с адресом вкладки
+ * перезагружал бы страницу на каждом переходе SPA и делал бы «назад» новой навигацией. Адрес идёт только из
+ * страницы в раскладку (`updateTab`), обратно — нет; адресная строка живой страницы — `loadURL`.
+ *
+ * Консоль, сеть и размер (спека 2026-10-07-browser-devtools-agent-design.md, 4.1–4.3, 4.9):
+ * - журнал гостя — снимок и пачки main (`devtools/use-devtools-feed.ts`); панель — снизу вкладки, высота общая
+ *   (`ui.json`); ⌘⌥I и ⌘⌥J с фокусом в строке или панели ловит этот компонент;
+ * - размер — из раскладки (`TabSpec.viewport`): эмуляцию ставит main (`use-viewport.ts`), а окно ставит тот же узел
+ *   `<webview>` размером ширина×scale на высота×scale по центру нейтрального поля с подписью.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
+import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../shared/keybindings.js';
 import { errorText, S } from '../../shared/strings.js';
+import { cn } from '../lib/cn.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
+import { useUiStore } from '../store/ui.js';
 import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserChrome } from './BrowserChrome.js';
 import { DesignModeCard } from './DesignModeCard.js';
+import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
+import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
+import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
+import { fitArea, panelHeight, STAGE, stageBox, type FieldSize } from './stage.js';
 import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
+import { useViewport } from './use-viewport.js';
 
 /** Методы `<webview>` Electron, которые зовёт окно; до `dom-ready` они бросают. */
 interface WebviewElement extends HTMLElement {
@@ -51,6 +68,9 @@ type WebviewEvent = Event & { url?: string; title?: string; isMainFrame?: boolea
 /** `net::ERR_ABORTED`: загрузку прервали (новый переход, Stop, скачивание) — это не ошибка страницы. */
 const ERR_ABORTED = -3;
 
+/** Стартовая страница `<webview>` (спайк 0.1, вариант D): страж пускает такой `src`, адрес вкладки открывается позже. */
+const BLANK_SRC = 'about:blank';
+
 /**
  * Атрибуты `<webview>` строками: React 18 булев `allowpopups` у тега без дефиса не выводит, а
  * @types/react типизирует его как boolean. Без атрибута Electron гасит `window.open` и
@@ -62,11 +82,32 @@ const WEBVIEW_ATTRIBUTES = {
   allowpopups: 'true',
 } as Record<string, string>;
 
+/**
+ * Клавиши панели (спека 2026-10-07, 4.9) — из реестра. В странице их пересылает main; с фокусом в строке или панели
+ * вкладки — этот обработчик: рендерер окна действия `browser` не ловит (`keys/handler.ts#whenAllows`).
+ */
+const PANEL_KEYS = ACTIONS.filter((action) => action.id === 'browser.devtools' || action.id === 'browser.console');
+
+function panelKey(event: KeyLike): ActionId | null {
+  return PANEL_KEYS.find((action) => action.keys !== null && matchesAccelerator(action.keys, event))?.id ?? null;
+}
+
+/** Те же поля — тот же размер: пресет и свой размер одной величины остаются разными записями раскладки. */
+function sameViewport(a: ViewportSpec | null, b: ViewportSpec | null): boolean {
+  if (a === null || b === null) return a === b;
+  if ('preset' in a || 'preset' in b) {
+    return 'preset' in a && 'preset' in b && a.preset === b.preset && a.rotated === b.rotated && a.dpr === b.dpr;
+  }
+  return a.width === b.width && a.height === b.height && a.mobile === b.mobile && a.dpr === b.dpr;
+}
+
 export interface BrowserSurfaceProps {
   workKey: string;
   tabId: string;
   /** Адрес вкладки из раскладки; '' — новая вкладка. */
   url: string;
+  /** Размер вьюпорта вкладки (`TabSpec.viewport`, спека 2026-10-07, 4.2); null — Fit. */
+  viewport: ViewportSpec | null;
   groupId: string;
   visible: boolean;
   bridge: ParleyBridge;
@@ -88,16 +129,22 @@ const IDLE: BrowserTabState = {
   pick: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const fieldRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
   const readyRef = useRef(false);
+  // Адрес вкладки уже открывали после захвата (спайк 0.1): повторные dom-ready страницы его не открывают.
+  const firstPageRef = useRef(false);
   // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
   const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
+  const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
+  const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
+  const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
 
-  // Первый адрес http(s) — и только он — становится `src`. Без адреса (новая вкладка) и с чужим
-  // адресом (раскладку правили руками) — заглушка: страж main отверг бы такой `src` (9.1).
+  // Первый адрес http(s) — и только он — открывается в `<webview>`. Без адреса (новая вкладка) и с чужим
+  // адресом (раскладку правили руками) — заглушка: открывать нечего.
   const [src, setSrc] = useState<string | null>(() => (isHttpUrl(url) ? url : null));
   if (src === null && isHttpUrl(url)) setSrc(url);
 
@@ -105,6 +152,50 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
   // пустой вкладки восстановленной раскладки. Просьба читается при монтировании и снимается эффектом.
   const [addressFocus] = useState(() => wantsAddressFocus(tabId));
   useEffect(() => clearAddressFocus(tabId), [tabId]);
+
+  // Поле страницы и вкладка целиком (спека 2026-10-07, 4.2, 4.3): поле — место под страницу при эмуляции, вкладка —
+  // предел высоты панели. Размеры — из ResizeObserver: CSS-якорь меняет их без React.
+  const [field, setField] = useState<FieldSize | null>(null);
+  const [rootHeight, setRootHeight] = useState(0);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const fieldNode = fieldRef.current;
+    if (root === null || fieldNode === null || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver((items) => {
+      for (const item of items) {
+        if (item.target === root) setRootHeight(item.contentRect.height);
+        else setField({ width: item.contentRect.width, height: item.contentRect.height });
+      }
+    });
+    observer.observe(root);
+    observer.observe(fieldNode);
+    return () => observer.disconnect();
+  }, []);
+
+  // Свежие значения для первой загрузки: `openFirstPage` живёт в эффекте слушателей и состояние не перечитывает.
+  const fieldSizeRef = useRef(field);
+  fieldSizeRef.current = field;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  // Журнал гостя: снимок на dom-ready и при открытии панели, дальше — пачки своего гостя (Фокус ревью 4).
+  useDevtoolsFeed(bridge, tabId, state.webContentsId, devtools.open);
+  const { applied, failed: viewportFailed, retry: retryViewport } = useViewport({
+    bridge,
+    webContentsId: state.webContentsId,
+    viewport,
+    field,
+    captureLost: devtools.capture === 'unavailable',
+  });
+  const stage = applied === null || field === null ? null : stageBox(field, applied.spec, applied.scale);
+  // Касания включаются с новым документом (спайк 0.3): мобильный размер на странице без них — подсказка «Reload».
+  // `docMobile` — как была настроена эмуляция в момент, когда открылся документ вкладки; null — документа ещё нет
+  // (пустая страница варианта D не в счёт), и спрашивать о касаниях рано.
+  const appliedMobile = applied !== null && viewportSize(applied.spec).mobile;
+  const appliedMobileRef = useRef(appliedMobile);
+  appliedMobileRef.current = appliedMobile;
+  const [docMobile, setDocMobile] = useState<boolean | null>(null);
+  const touchStale = stage !== null && docMobile !== null && appliedMobile !== docMobile;
 
   // Якорные свойства — через `setProperty`, как у терминала: в `CSSProperties` @types/react 18 их нет.
   useLayoutEffect(() => {
@@ -145,22 +236,54 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
       const safe = next === undefined ? null : layoutUrl(next);
       if (safe !== null) useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { url: safe }));
     };
+    // Первая страница вкладки (спайк 0.1, вариант D): `<webview>` стартует с about:blank, main к его первому dom-ready
+    // уже подключил отладчик и ждёт ответов enable. Адрес открываем после `devtoolsReady`: иначе подресурсы первой
+    // загрузки прошли бы мимо журнала. Размер вкладки — тоже до загрузки: касания включаются только с новым документом
+    // (спайк 0.3), а `useViewport` ставит размер кадром позже. Отказ того и другого страницу не держит: `useViewport`
+    // повторит размер сам, а журнал останется без раннего.
+    const openFirstPage = async (id: number): Promise<void> => {
+      if (firstPageRef.current) return;
+      firstPageRef.current = true;
+      try {
+        await bridge.browser.devtoolsReady(id);
+      } catch (error) {
+        console.warn('[parley] devtools capture is not ready, opening the page anyway', error);
+      }
+      const spec = viewportRef.current;
+      const area = fieldSizeRef.current;
+      if (spec !== null && area !== null) {
+        try {
+          await bridge.browser.setViewport(id, spec, fitArea(area));
+        } catch (error) {
+          console.warn('[parley] viewport is not set before the first page', error);
+        }
+      }
+      try {
+        await view.loadURL(src);
+      } catch (error) {
+        console.warn('[parley] first page load failed', error);
+      }
+    };
 
     const listeners: Record<string, (event: WebviewEvent) => void> = {
       // Раньше dom-ready getWebContentsId() бросает.
       'dom-ready': () => {
         readyRef.current = true;
-        update({ webContentsId: view.getWebContentsId() });
+        const id = view.getWebContentsId();
+        update({ webContentsId: id });
         history();
+        void openFirstPage(id);
       },
       'did-start-loading': () => update({ loading: true, crashed: false, loadFailed: false }),
       'did-stop-loading': () => update({ loading: false }),
       'page-title-updated': (event) => update({ title: event.title ?? null }),
       // Новый документ: заголовок и значок прежней страницы ему не принадлежат.
       // Карточка и выбор прошлой страницы к новой не относятся; main и сам ответит выбору null (9.3a).
+      // Касания у нового документа — как у эмуляции в этот миг (спайк 0.3); пустая страница документом вкладки не считается.
       'did-navigate': (event) => {
         saveUrl(event.url);
         pickTokenRef.current += 1;
+        if (event.url !== BLANK_SRC) setDocMobile(appliedMobileRef.current);
         update({ title: null, favicon: null, pick: 'off' });
         history();
       },
@@ -176,10 +299,19 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
       },
     };
     for (const [type, listener] of Object.entries(listeners)) view.addEventListener(type, listener);
+    // Слушатели могли встать позже `dom-ready` пустой страницы (несколько вкладок поднимаются разом, рендерер занят):
+    // событие не повторится, и вкладка осталась бы пустой с отключёнными кнопками. До `dom-ready` `getWebContentsId()`
+    // бросает — это безопасная проба; `openFirstPage` повторного открытия не допустит.
+    try {
+      view.getWebContentsId();
+      listeners['dom-ready']?.(new Event('dom-ready'));
+    } catch {
+      /* гость ещё не готов — придёт событие */
+    }
     return () => {
       for (const [type, listener] of Object.entries(listeners)) view.removeEventListener(type, listener);
     };
-  }, [src, tabId, workKey]);
+  }, [bridge, src, tabId, workKey]);
 
   // Favicon качает main (CSP окна внешних картинок не пускает) и шлёт всем вкладкам окна; своя — по id гостя.
   useEffect(
@@ -229,6 +361,28 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
     });
   };
 
+  // «⋯ → Clear console and network» и «Clear» панели (спека 2026-10-07, 4.1, 4.3): журнал окна — сразу, main — мостом.
+  const clearDevtools = (): void => {
+    useDevtoolsStore.getState().clear(tabId);
+    const id = state.webContentsId;
+    if (id === null) return;
+    bridge.browser.devtoolsClear(id).catch((error: unknown) => {
+      console.error('[parley] devtoolsClear failed', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.clearDevtools));
+    });
+  };
+
+  // Размер вьюпорта (спека 2026-10-07, 4.2) — в раскладку: он переживает перезапуск; эмуляцию ставит useViewport.
+  const setViewport = (next: ViewportSpec | null): void => {
+    // Повторный выбор того же пресета не меняет ни раскладку, ни эмуляцию — если прошлая попытка удалась.
+    // После отказа тот же выбор (в том числе Fit) шлёт команды заново.
+    if (sameViewport(next, viewport)) {
+      if (viewportFailed) retryViewport();
+      return;
+    }
+    useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { viewport: next }));
+  };
+
   // Design Mode (спека 12.3): выбор — только по ⌖ или «Pick again» человека.
   const startPick = (): void => {
     const id = state.webContentsId;
@@ -272,6 +426,13 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
   };
 
   const live = src !== null && state.webContentsId !== null;
+  const panel = panelHeight(devtoolsHeight, rootHeight);
+  const commitPanelHeight = (height: number): void => {
+    // Клик по ручке без сдвига не должен превращать 40 % по умолчанию в сохранённое число.
+    if (height === panel.height) return;
+    const ui = useUiStore.getState();
+    ui.patchUi({ browser: { ...ui.ui.browser, devtoolsHeight: height } });
+  };
 
   return (
     <div
@@ -281,12 +442,19 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
       style={{ visibility: visible ? 'visible' : 'hidden' }}
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
-      // Esc при фокусе в окне (после клика по ⌖ он на кнопке): в странице Esc ловит сам скрипт выбора.
       onKeyDown={(event) => {
+        // Esc при фокусе в окне (после клика по ⌖ он на кнопке): в странице Esc ловит сам скрипт выбора.
         if (event.key === 'Escape' && picking) {
           event.preventDefault();
           cancelPick();
+          return;
         }
+        // ⌘⌥I и ⌘⌥J с фокусом в строке или панели вкладки (спека 2026-10-07, 4.9).
+        const action = live ? panelKey(event.nativeEvent) : null;
+        if (action === null) return;
+        event.preventDefault();
+        if (action === 'browser.console') useDevtoolsStore.getState().show(tabId, 'console');
+        else useDevtoolsStore.getState().toggle(tabId);
       }}
     >
       <BrowserChrome
@@ -304,13 +472,41 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
         onDevTools={openDevTools}
         picking={picking}
         onDesignMode={picking ? cancelPick : startPick}
+        viewport={viewport}
+        onViewport={setViewport}
+        devtoolsOpen={devtools.open}
+        counters={counters}
+        onToggleDevtools={() => useDevtoolsStore.getState().toggle(tabId)}
+        onClearDevtools={clearDevtools}
       />
-      <div className="relative min-h-0 flex-1">
+      <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (
           <div data-testid="browser-placeholder" className="h-full w-full bg-background" />
         ) : (
-          // Белая подложка: гость прозрачен, и страница без своего фона легла бы на тёмную тему окна.
-          <webview ref={setView} src={src} className="flex h-full w-full bg-white" {...WEBVIEW_ATTRIBUTES} />
+          // Белая подложка: гость прозрачен, и страница без своего фона легла бы на тёмную тему окна. При эмуляции —
+          // тот же узел, другие класс и стиль: новый узел перезагрузил бы гостя. `src` всегда about:blank: адрес вкладки
+          // открывает openFirstPage (вариант D).
+          <webview
+            ref={setView}
+            src={BLANK_SRC}
+            className={stage === null ? 'flex h-full w-full bg-white' : 'absolute flex bg-white shadow-md'}
+            {...(stage === null ? {} : { style: { left: stage.left, top: stage.top, width: stage.width, height: stage.height } })}
+            {...WEBVIEW_ATTRIBUTES}
+          />
+        )}
+        {stage === null ? null : (
+          <div
+            data-testid="viewport-label"
+            className="pointer-events-none absolute inset-x-0 flex items-center justify-center gap-1 text-[11px] text-muted-foreground"
+            style={{ top: stage.top - STAGE.label, height: STAGE.label }}
+          >
+            <span>{stage.label}</span>
+            {touchStale ? (
+              <button type="button" onClick={reload} className="pointer-events-auto underline">
+                {S.browser.viewport.touchReload}
+              </button>
+            ) : null}
+          </div>
         )}
         {state.findOpen && state.webContentsId !== null ? (
           // Полоса поиска (⌘F в странице, 9.2b) — поверх страницы, как у терминала.
@@ -359,6 +555,19 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
           </div>
         ) : null}
       </div>
+      {devtools.open ? (
+        <DevtoolsPanel
+          tabId={tabId}
+          webContentsId={state.webContentsId}
+          pageUrl={url}
+          bridge={bridge}
+          height={panel.height}
+          maxHeight={panel.max}
+          onResize={commitPanelHeight}
+          onReload={reload}
+          onClear={clearDevtools}
+        />
+      ) : null}
     </div>
   );
 }
