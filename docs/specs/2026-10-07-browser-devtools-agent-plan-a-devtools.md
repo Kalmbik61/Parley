@@ -7711,7 +7711,7 @@ test.describe('консоль, сеть и размеры вкладки бра�
   `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/browser-devtools.spec.ts` → PASS (4 теста).
 
   Если не сходится:
-  - **Ошибок не 6.** Сначала посмотреть строки консоли в панели. Ошибка без `networkRequestId` (так может прийти строка CORS) — строка браузера, счётчик её не считает: так и задумано (Фокус ревью 3). Если в счёт попало лишнее, проверить `origin` записи в `consoleFromLog` (задача 3), а не менять ожидание теста.
+  - **Ошибок не 6.** Сначала посмотреть строки консоли в панели. Строка CORS без `networkRequestId` попала бы в `browser` и посчиталась второй раз: строка CORS — это `category: 'cors'`, задача 3 относит её к `network` (Фокус ревью 3). Если в счёт попало лишнее, проверить `origin` записи в `consoleFromLog` (задача 3), а не менять ожидание теста.
   - **⌘⌥I из страницы не дошёл.** Проверить в `app.evaluate`, что у `before-input-event` гостя `input.alt === true`. Синтетическое нажатие может прийти без `code`; тогда реестр узнаёт клавишу по `key` (`matchesAccelerator`).
   - **DPR не 2.** Проверить, что ключ дошёл до Chromium: `app.commandLine.hasSwitch('force-device-scale-factor')` в `electronApp.evaluate`.
   - **Нет `/app.css` или `/logo.svg` в Network, ошибок не 6.** Гость начал грузиться раньше, чем домены включились. Проверить, что окно зовёт `devtoolsReady` до `loadURL` (задача 16) и что у `<webview>` `src` — `about:blank`.
