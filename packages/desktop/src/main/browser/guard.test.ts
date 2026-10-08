@@ -71,8 +71,15 @@ describe('sanitizeWebviewAttach (тест 3)', () => {
     expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'file:///x' })).toBe(false);
     expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: '' })).toBe(false);
     expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION })).toBe(false);
-    expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'about:blank' })).toBe(false);
     expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'javascript:alert(1)' })).toBe(false);
+  });
+
+  it('спайк 0.1, вариант D: src about:blank прикрепляется; about:blank с хвостом, about:srcdoc, data:, blob: и чужой раздел — нет', () => {
+    expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src: 'about:blank' })).toBe(true);
+    for (const src of ['about:blank#x', 'about:blank?x', 'about:srcdoc', 'data:text/html,x', 'blob:https://x/1']) {
+      expect(sanitizeWebviewAttach(evil(), { partition: BROWSER_PARTITION, src }), src).toBe(false);
+    }
+    expect(sanitizeWebviewAttach(evil(), { partition: 'persist:other', src: 'about:blank' })).toBe(false);
   });
 });
 
@@ -92,6 +99,7 @@ function fakeEvent<T extends object>(extra: T = {} as T): T & { preventDefault: 
 function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
   const emitter = new EventEmitter();
   let openHandler: ((details: { url: string }) => { action: string }) | null = null;
+  const historyUrls = ['about:blank'];
   const contents = Object.assign(emitter, {
     id,
     getType: () => type,
@@ -104,6 +112,12 @@ function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
     getURL: vi.fn(() => 'http://127.0.0.1:5173/page'),
     isDestroyed: vi.fn(() => false),
     hostWebContents: { send: vi.fn() },
+    historyUrls,
+    navigationHistory: {
+      length: vi.fn(() => historyUrls.length),
+      getEntryAtIndex: vi.fn((index: number) => ({ url: historyUrls[index] ?? '', title: '' })),
+      removeEntryAtIndex: vi.fn((index: number) => historyUrls.splice(index, 1).length === 1),
+    },
     openHandler: (url: string) => {
       if (openHandler === null) throw new Error('setWindowOpenHandler не позвали');
       return openHandler({ url });
@@ -130,6 +144,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
   const forwardShortcuts = vi.fn((): (() => void) => unforward);
   const isMain = vi.fn(isMainWindow);
   const fetchFavicon = vi.fn<(iconUrl: string, pageUrl: string) => Promise<string | null>>(async () => null);
+  const inspect = vi.fn<(contents: WebContents) => void>();
   const install = (): void =>
     installBrowserGuard({
       app: app as unknown as Pick<App, 'on'>,
@@ -139,6 +154,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
       forwardShortcuts,
       download,
       fetchFavicon,
+      inspect,
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -154,6 +170,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
     unforward,
     isMain,
     fetchFavicon,
+    inspect,
     created,
     requestHandler: () => requestHandler,
     checkHandler: () => checkHandler,
@@ -454,5 +471,63 @@ describe('фокус гостя (тест 10 куска 9.2b)', () => {
     guard.created(window);
     window.emit('focus');
     expect(window.hostWebContents.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('журнал гостя (спека 2026-10-07, 3.3)', () => {
+  it('гость — inspect(contents) один раз и раньше прочих обработчиков; окно и DevTools — нет', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+    expect(guard.inspect).toHaveBeenCalledTimes(1);
+    expect(guard.inspect).toHaveBeenCalledWith(guest);
+    // До первой загрузки (спайк 0.1): раньше setWindowOpenHandler и навигации.
+    expect(guard.inspect.mock.invocationCallOrder[0]).toBeLessThan(guest.setWindowOpenHandler.mock.invocationCallOrder[0] ?? 0);
+    guard.created(fakeContents(43, 'remote'));
+    guard.created(fakeContents(1, 'window'));
+    expect(guard.inspect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('пустая запись истории гостя (спайк 0.1, вариант D; Фокус ревью 6)', () => {
+  function guestWith(urls: string[]) {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guest.historyUrls.splice(0, guest.historyUrls.length, ...urls);
+    guard.created(guest);
+    return guest;
+  }
+
+  it('первая страница после about:blank: пустая запись убрана, и только один раз', () => {
+    const guest = guestWith(['about:blank', 'http://127.0.0.1:5173/']);
+    guest.emit('did-navigate', fakeEvent(), 'about:blank');
+    expect(guest.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/');
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+    expect(guest.historyUrls).toEqual(['http://127.0.0.1:5173/']);
+    guest.historyUrls.unshift('about:blank');
+    guest.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/next');
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('страница не загрузилась (did-fail-load главного фрейма) — запись тоже убрана; подфрейм — нет', () => {
+    const guest = guestWith(['about:blank', 'http://127.0.0.1:5173/']);
+    guest.emit('did-fail-load', fakeEvent(), -102, 'ERR_CONNECTION_REFUSED', 'http://ads.test/', false);
+    expect(guest.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    guest.emit('did-fail-load', fakeEvent(), -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:5173/', true);
+    expect(guest.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+  });
+
+  it('записи страницы ещё нет — ждёт её; первая запись не пустая (восстановленная история) — историю не трогает', () => {
+    const early = guestWith(['about:blank']);
+    early.emit('did-fail-load', fakeEvent(), -3, 'ERR_ABORTED', 'http://127.0.0.1:5173/', true);
+    expect(early.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
+    early.historyUrls.push('http://127.0.0.1:5173/');
+    early.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/');
+    expect(early.navigationHistory.removeEntryAtIndex).toHaveBeenCalledWith(0);
+
+    const restored = guestWith(['http://127.0.0.1:5173/a', 'http://127.0.0.1:5173/b']);
+    restored.emit('did-navigate', fakeEvent(), 'http://127.0.0.1:5173/b');
+    expect(restored.navigationHistory.removeEntryAtIndex).not.toHaveBeenCalled();
   });
 });

@@ -42,6 +42,8 @@ export function navigationVerdict(url: string, frame: 'main' | 'sub'): NavVerdic
   }
 }
 
+const BLANK_PAGE = 'about:blank';
+
 function isHttpUrl(url: string | undefined): boolean {
   if (url === undefined) return false;
   try {
@@ -75,8 +77,9 @@ export function sanitizeWebviewAttach(
   webPreferences.webviewTag = false;
   // Иначе alert, confirm и prompt любой страницы шли бы нативным диалогом от имени приложения.
   webPreferences.disableDialogs = true;
-  // Пустого src не бывает: <webview> монтируется только с адресом http(s) (9.2a).
-  return params.partition === BROWSER_PARTITION && isHttpUrl(params.src);
+  // Пустого src не бывает: <webview> монтируется с about:blank (вариант D: страницу вкладки окно открывает после
+  // включения журнала) или с адресом http(s) (9.2a). Точное совпадение: about:blank#x и прочее — отказ.
+  return params.partition === BROWSER_PARTITION && (params.src === BLANK_PAGE || isHttpUrl(params.src));
 }
 
 /** will-attach-webview главного окна: createMainWindow зовёт до loadFile. */
@@ -87,9 +90,16 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 }
 
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
-function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon'>): void {
+function guardGuest(
+  contents: WebContents,
+  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect'>,
+): void {
+  // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
+  // (спайк 0.1).
+  deps.inspect(contents);
+
   contents.setWindowOpenHandler(({ url }) => {
-    // about:blank вкладки не открывает: <webview> с таким src не прикрепится ни сразу, ни после перезапуска.
+    // about:blank вкладки не открывает: вкладка без адреса http(s) — заглушка, а не страница.
     if (isHttpUrl(url) && navigationVerdict(url, 'main') === 'allow') {
       deps.openTab({ url, openerWebContentsId: contents.id });
     }
@@ -118,6 +128,24 @@ function guardGuest(contents: WebContents, deps: Pick<BrowserGuardDeps, 'openTab
   });
   // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
   contents.once('destroyed', deps.forwardShortcuts(contents));
+
+  // Вариант D (спайк 0.1): гость стартует с about:blank, и первая страница ложится в историю второй записью — «назад»
+  // вело бы в пустую страницу. Первая загрузка главного фрейма, состоявшаяся или нет, убирает пустую запись
+  // (проверено на Electron 44.4.5: `canGoBack` после этого false). Записи страницы ещё нет — ждём следующего события.
+  let blankPruned = false;
+  const pruneBlankEntry = (): void => {
+    if (blankPruned) return;
+    const history = contents.navigationHistory;
+    if (history.length() < 2) return;
+    blankPruned = true;
+    if (history.getEntryAtIndex(0).url === BLANK_PAGE) history.removeEntryAtIndex(0);
+  };
+  contents.on('did-navigate', (_event, url) => {
+    if (url !== BLANK_PAGE) pruneBlankEntry();
+  });
+  contents.on('did-fail-load', (_event, _code, _description, _url, isMainFrame) => {
+    if (isMainFrame) pruneBlankEntry();
+  });
 
   // Favicon качает main (9.2a): CSP окна внешних картинок не пускает. Ответ — окну-хозяину гостя,
   // рендерер находит вкладку по webContentsId. Гость мог умереть, пока значок качался.
@@ -154,6 +182,8 @@ interface BrowserGuardDeps {
   download(item: DownloadItem, source: WebContents): void;
   /** Favicon гостя в data: (9.2a); index.ts — favicon.ts с fetch сессии раздела. null — значка нет. */
   fetchFavicon(iconUrl: string, pageUrl: string): Promise<string | null>;
+  /** Журнал консоли и сети гостя (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): index.ts — `inspector.attach`. */
+  inspect(contents: WebContents): void;
 }
 
 /**

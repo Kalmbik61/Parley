@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEVTOOLS_LIMITS, type DevtoolsBatch } from '../../shared/browser-devtools.js';
-import { CDP_ALLOWED, CDP_COMMAND_MS, createInspector } from './inspector.js';
+import { CDP_ALLOWED, CDP_COMMAND_MS, createInspector, forwardBatches } from './inspector.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -761,5 +761,30 @@ describe('события для этапов B и D', () => {
     cdp('Page.frameNavigated', mainFrame('L3'));
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(mainFrame('L2'));
+  });
+});
+
+describe('forwardBatches (пачки окну-хозяину гостя)', () => {
+  it('пачка — событием browser:devtools окну-хозяину своего гостя; чужой и мёртвый гость — никуда', () => {
+    const listeners: Array<(batch: DevtoolsBatch) => void> = [];
+    const send = vi.fn<(channel: string, batch: DevtoolsBatch) => void>();
+    const guest = { isDestroyed: vi.fn(() => false), hostWebContents: { send } };
+    const off = forwardBatches(
+      {
+        onBatch: (listener) => {
+          listeners.push(listener);
+          return () => {};
+        },
+      },
+      (id) => (id === 7 ? (guest as unknown as WebContents) : null),
+    );
+    const batch: DevtoolsBatch = { webContentsId: 7, epoch: 1, capture: 'on', reset: false, console: [], network: [] };
+    listeners[0]?.(batch);
+    expect(send).toHaveBeenCalledWith('browser:devtools', batch);
+    listeners[0]?.({ ...batch, webContentsId: 8 });
+    guest.isDestroyed.mockReturnValue(true);
+    listeners[0]?.(batch);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(typeof off).toBe('function');
   });
 });

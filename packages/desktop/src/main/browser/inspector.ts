@@ -563,3 +563,12 @@ export function createInspector(deps: {
     },
   };
 }
+
+/** Пачки — окну-хозяину гостя событием `browser:devtools`, как favicon и `browser:open-tab` (`guard.ts`). */
+export function forwardBatches(inspector: Pick<Inspector, 'onBatch'>, fromId: (id: number) => WebContents | null): () => void {
+  return inspector.onBatch((batch) => {
+    const guest = fromId(batch.webContentsId);
+    if (guest === null || guest.isDestroyed()) return;
+    guest.hostWebContents?.send('browser:devtools', batch);
+  });
+}

@@ -25,6 +25,7 @@ import { createDesignMode } from './browser/design-mode.js';
 import { fetchFavicon } from './browser/favicon.js';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
+import { createInspector, forwardBatches } from './browser/inspector.js';
 import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
@@ -309,6 +310,10 @@ if (!gotLock) {
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
       guestScript: guestPickScript,
     });
+    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
+    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя.
+    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
+    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
     installBrowserGuard({
       app,
       // К моменту will-attach-webview mainWindow уже присвоен — и у окна, пересозданного на activate.
@@ -335,6 +340,7 @@ if (!gotLock) {
       // Сессией раздела браузера, а не окна: куки и прокси — страницы, а не приложения.
       fetchFavicon: (iconUrl, pageUrl) =>
         fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
+      inspect: (contents) => inspector.attach(contents),
     });
 
     mainWindow = openWindow();
