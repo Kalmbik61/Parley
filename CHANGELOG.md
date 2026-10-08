@@ -6,6 +6,10 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.9.0
+
+The browser tab gets a console and network panel and viewport sizes: the page's messages, exceptions and requests with their bodies are visible right in the tab, errors and failed requests are counted on the button, and the page can be emulated at phone, tablet and laptop sizes. On macOS the first hook of a new session is no longer lost.
+
 ### Added
 
 - **Console and network in the browser tab.** The console button in the tab's bar (⌘⌥I; ⌘⌥J opens it on
@@ -24,6 +28,13 @@ All notable changes to Parley are documented in this file.
 
 - The "DevTools" button of a browser tab moved to "⋯" → "Open full DevTools"; the same menu has "Clear console
   and network".
+
+### Fixed
+
+- **The first hook of a new session is no longer lost on macOS.** A hook written at the moment the host set up
+  a new file watcher could be missed, so the session's state lagged behind and sending text or changing effort
+  answered "blocked" until the agent wrote its next hook. The host now reads the session logs once more a second
+  after it sets up new watchers.
 
 ## 0.8.1
 
