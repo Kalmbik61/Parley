@@ -300,6 +300,15 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     }
   });
 
+  it('панель браузера (спека 2026-10-07, 4.9): реализована, без методов хоста; ⌘⌥I рендерер окна не ловит — клавиша у гостя', () => {
+    for (const id of ['browser.devtools', 'browser.console'] as const) {
+      expect(IMPLEMENTED_ACTIONS.has(id)).toBe(true);
+      expect(isActionAvailable(id, new Set())).toBe(true);
+    }
+    expect(resolveAction(cmd('ˆ', 'KeyI', { altKey: true }), 'other', false)).toBeNull();
+    expect(resolveAction(cmd('∆', 'KeyJ', { altKey: true }), 'input', false)).toBeNull();
+  });
+
   it('browser.newTab реализован (9.2a) и доступен без методов хоста', () => {
     expect(IMPLEMENTED_ACTIONS.has('browser.newTab')).toBe(true);
     expect(isActionAvailable('browser.newTab', new Set())).toBe(true);

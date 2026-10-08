@@ -77,7 +77,7 @@ describe('buildMenuTemplate (тест 1)', () => {
 
   it('у browser.*, tab.goto.N и tab.mru* пунктов нет, у files.quickOpen — есть', () => {
     const labels = allItems(buildMenuTemplate(() => {})).map((item) => item.label);
-    for (const absent of ['Tab 1', 'Tab 9', 'Next recent tab', 'Previous recent tab', 'Find in page', 'Zoom in', 'Zoom out', 'Actual size']) {
+    for (const absent of ['Tab 1', 'Tab 9', 'Next recent tab', 'Previous recent tab', 'Find in page', 'Zoom in', 'Zoom out', 'Actual size', 'Toggle console and network', 'Show console']) {
       expect(labels).not.toContain(absent);
     }
     expect(labels).toContain('Go to file');
