@@ -167,9 +167,17 @@ describe('системная вставка', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
 
-    expect(line).toMatch(/task for everyone in the room \(an answer is needed even if the message is a note\)/);
+    expect(line).toMatch(/task for everyone in the room \(an answer is needed even if the message is a note[;)]/);
     // Строка check_inbox осталась как была: исключение оговорено там, где велено отвечать.
     expect(text).toContain('answer with send_message only to a question');
+    expect(text.split('\n').length).toBeLessThanOrEqual(14);
+  });
+
+  it('комнаты: check_inbox помечает задачу человека всем полем roomTask — роль, ведущий, подсказка; потолок в четырнадцать строк не тронут', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
+
+    expect(line).toContain('; check_inbox marks it with roomTask: your role, the lead, a hint)');
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 

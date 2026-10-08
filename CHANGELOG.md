@@ -10,6 +10,10 @@ All notable changes to Parley are documented in this file.
 
 - **The `PARLEY.md` template says what not to write there.** Its opening comment now explains that Parley's own rules (rooms, messages, reports) reach agents without the file, so it holds only the team's rules for the project. Only new templates change: an existing `PARLEY.md` is left as it is.
 
+### Fixed
+
+- **Room agents learn their role from the human's task itself.** A task written to a room for everyone now reaches each agent marked as a task for everyone, with its role (lead or member), the lead and a short hint: speak up in one message and wait for the lead, or collect positions and propose a decision. Before, rooms created from the window started their agents before the room existed, so the agents saw a bare task and started working in parallel without agreeing. The terminal pointer says "(a task for everyone)", and a restarted agent already gets its role from its brief, which is rebuilt from the map at launch.
+
 ## 0.8.0
 
 Agents and Codex in Chat: the Agents panel shows what each agent of a session is doing, a Codex session opens as a conversation, and Codex approvals can be answered in the window. Rooms can be renamed, deleted and given a new lead from the sidebar and take attached files; plan letters are laid out by section, room agents keep their names, the New session or room dialog explains its fields, the backlog can live in `TODOS.md`, and archiving a workspace stops its agents. The Codex chat is checked by tests with a stub Codex; the live checks are still open (see "What is not proven yet").

@@ -6,7 +6,7 @@
  * решение по снимку состояния.
  */
 
-import type { Message, Room, WorkSession } from './types.js';
+import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
 import type { SessionActivity } from './activity.js';
 
 export interface DeliveryInput {
@@ -64,7 +64,8 @@ export type DeliveryAction =
  * Текст указателя (план, кусок 3.5): сколько писем и откуда — прямые, одна
  * комната с названием, несколько комнат списком, комнаты вместе с прямыми.
  * Названия у нескольких комнат нет: строка набирается в чужой терминал и
- * должна оставаться короткой, подробности отдаст `check_inbox`.
+ * должна оставаться короткой, подробности отдаст `check_inbox`. Среди писем задача человека всем
+ * (от человека, в комнату, без адресата) — голова получает пометку: агент узнаёт о ней ещё до `check_inbox`.
  */
 export function pointerText(letters: readonly Message[], rooms: readonly Room[]): string {
   const tail = 'Call check_inbox.';
@@ -73,15 +74,18 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
     ...new Set(letters.flatMap((message) => (message.roomId === null ? [] : [message.roomId]))),
   ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const direct = letters.some((message) => message.roomId === null);
+  const task = letters.some((message) => message.from === HUMAN && message.roomId !== null && message.to.length === 0)
+    ? ' (a task for everyone)'
+    : '';
 
   if (roomIds.length === 0) return `${head}. ${tail}`;
-  if (direct) return `${head} in ${roomIds.join(', ')} and direct. ${tail}`;
-  if (roomIds.length > 1) return `${head} in ${roomIds.join(', ')}. ${tail}`;
+  if (direct) return `${head} in ${roomIds.join(', ')} and direct${task}. ${tail}`;
+  if (roomIds.length > 1) return `${head} in ${roomIds.join(', ')}${task}. ${tail}`;
 
   const id = roomIds[0] as string;
   const room = rooms.find((candidate) => candidate.id === id);
   // Комнаты в карте нет (письмо пережило её) — хватит и id.
-  return room === undefined ? `${head} in ${id}. ${tail}` : `${head} in ${id} "${room.title}". ${tail}`;
+  return room === undefined ? `${head} in ${id}${task}. ${tail}` : `${head} in ${id} "${room.title}"${task}. ${tail}`;
 }
 
 /** Указатель целиком (`pointerText`): голова со счётом, необязательное «in r-…», хвост `Call check_inbox.`. */

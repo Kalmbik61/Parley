@@ -10,6 +10,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { PROVIDERS, selectableModels } from '../providers.js';
 import { clearSecret, writeSecret } from '../secrets.js';
+import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
   addMessage,
@@ -24,7 +25,7 @@ import { planLaunch } from '../work/launch.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import { decisionsOf, threadOf } from '../work/thread.js';
+import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
@@ -2177,6 +2178,145 @@ describe('send_message и check_inbox в комнате', () => {
     expect(refused.text).toContain('too many messages');
     // Была бы рассылка на два письма (по адресату), лимит исчерпался бы на первом вызове.
     expect((await readMapFile()).messages).toHaveLength(2);
+  });
+
+  describe('задача человека всем: роль приходит вместе с письмом (roomTask)', () => {
+    interface TaskView {
+      text: string;
+      toEveryone?: boolean;
+      roomTask?: {
+        role: string;
+        lead: string;
+        leadLabel: string;
+        proposalWaiting: boolean;
+        hint: string;
+      };
+    }
+    const TASK = 'Делаем вход по паролю';
+
+    /** Письмо человека в r-01: без `to` — задача всем, с `to` — адресное. */
+    const humanSays = (to: string[] = []): Promise<unknown> =>
+      updateMap(project, workId, (map) => {
+        addMessage(map, { from: HUMAN, to, text: TASK, roomId: 'r-01' });
+      });
+
+    const inboxOf = async (client: Client): Promise<TaskView[]> =>
+      (await callOk(client, 'check_inbox'))['messages'] as TaskView[];
+
+    it('ведущему и участнику: toEveryone и roomTask с ролью, ведущим и подсказкой', async () => {
+      const { owner, a } = await roomSetup();
+      await humanSays();
+      const leadLabel = participantLabel(await readMapFile(), 's-01');
+
+      const [forLead] = await inboxOf(owner);
+      expect(forLead).toMatchObject({ text: TASK, toEveryone: true });
+      expect(forLead?.roomTask).toEqual({
+        role: 'lead',
+        lead: 's-01',
+        leadLabel,
+        proposalWaiting: false,
+        hint: LEAD_ROLE,
+      });
+
+      const [forMember] = await inboxOf(a);
+      expect(forMember).toMatchObject({ text: TASK, toEveryone: true });
+      expect(forMember?.roomTask).toEqual({
+        role: 'member',
+        lead: 's-01',
+        leadLabel,
+        proposalWaiting: false,
+        hint: memberRole('@s02'),
+      });
+      expect(forMember?.roomTask?.hint).toContain('@s02');
+    });
+
+    it('адресное письмо человека в комнате — без toEveryone и без roomTask', async () => {
+      const { a } = await roomSetup();
+      await humanSays(['s-02']);
+
+      const [letter] = await inboxOf(a);
+      expect(letter?.text).toBe(TASK);
+      expect(letter).not.toHaveProperty('toEveryone');
+      expect(letter).not.toHaveProperty('roomTask');
+    });
+
+    it('рассылка агента: toEveryone есть, roomTask нет — роль раздаёт только человек', async () => {
+      const { owner, a } = await roomSetup();
+      await callOk(owner, 'send_message', { room: 'r-01', text: 'раздаю части' });
+
+      const [letter] = await inboxOf(a);
+      expect(letter).toMatchObject({ text: 'раздаю части', toEveryone: true });
+      expect(letter).not.toHaveProperty('roomTask');
+    });
+
+    it('прямое письмо агента вне комнаты — без toEveryone', async () => {
+      const { owner, a } = await roomSetup();
+      await callOk(owner, 'send_message', { to: 's-02', text: 'лично тебе' });
+
+      const [letter] = await inboxOf(a);
+      expect(letter?.text).toBe('лично тебе');
+      expect(letter).not.toHaveProperty('toEveryone');
+      expect(letter).not.toHaveProperty('roomTask');
+    });
+
+    it('решение уже ждёт: proposalWaiting — true и у ведущего, и у участника', async () => {
+      const { owner, a } = await roomSetup();
+      await callOk(owner, 'propose_decision', { room: 'r-01', text: 'Делаем через очередь.' });
+      await humanSays();
+
+      expect((await inboxOf(owner))[0]?.roomTask).toMatchObject({ role: 'lead', proposalWaiting: true });
+      expect((await inboxOf(a))[0]?.roomTask).toMatchObject({ role: 'member', proposalWaiting: true });
+    });
+
+    it('wait_for("inbox") отдаёт тот же roomTask, что и check_inbox', async () => {
+      const { a } = await roomSetup();
+      await humanSays();
+
+      const waited = await callOk(a, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+      const fromWait = (waited['messages'] as TaskView[])[0];
+      const [fromInbox] = await inboxOf(a);
+
+      expect(fromWait).toMatchObject({ text: TASK, toEveryone: true });
+      expect(fromWait?.roomTask).toBeDefined();
+      expect(fromWait?.roomTask).toEqual(fromInbox?.roomTask);
+    });
+
+    it('в комнате нет живых участников — roomTask нет, письмо и toEveryone остаются', async () => {
+      const { owner, a } = await roomSetup();
+      await humanSays();
+      await callOk(owner, 'close_session', { target: 's-02' });
+      await callOk(owner, 'close_session', { target: 's-03' });
+      await callOk(owner, 'close_session', { target: 's-01' });
+
+      const [letter] = await inboxOf(a);
+      expect(letter).toMatchObject({ text: TASK, toEveryone: true });
+      expect(letter).not.toHaveProperty('roomTask');
+    });
+
+    it('ведущий закрыт: роль считается по живому ведущему, а не по записи комнаты', async () => {
+      const { owner, a, b } = await roomSetup();
+      await humanSays();
+      await callOk(owner, 'close_session', { target: 's-01' });
+
+      // Ведущим становится первый живой из members — s-02.
+      const forNewLead = (await inboxOf(a))[0]?.roomTask;
+      expect(forNewLead).toMatchObject({ role: 'lead', lead: 's-02', hint: LEAD_ROLE });
+      expect((await inboxOf(b))[0]?.roomTask).toMatchObject({
+        role: 'member',
+        lead: 's-02',
+        hint: memberRole('@s03'),
+      });
+    });
+
+    it('read_room показывает toEveryone, но roomTask не добавляет: это чтение контекста, не доставка', async () => {
+      const { owner } = await roomSetup();
+      await humanSays();
+
+      const feed = (await callOk(owner, 'read_room', { room: 'r-01' }))['messages'] as TaskView[];
+      const task = feed.find((message) => message.text === TASK);
+      expect(task).toMatchObject({ toEveryone: true });
+      expect(task).not.toHaveProperty('roomTask');
+    });
   });
 });
 
