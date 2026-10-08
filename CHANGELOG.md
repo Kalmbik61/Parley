@@ -6,6 +6,10 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.8.1
+
+Room agents learn their role from the human's task itself: a task written to a room for everyone now reaches each agent marked as such, with its role, the lead and a hint, so agents no longer start working in parallel before the lead has collected positions. The `PARLEY.md` template now says what not to write there.
+
 ### Changed
 
 - **The `PARLEY.md` template says what not to write there.** Its opening comment now explains that Parley's own rules (rooms, messages, reports) reach agents without the file, so it holds only the team's rules for the project. Only new templates change: an existing `PARLEY.md` is left as it is.
