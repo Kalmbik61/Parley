@@ -198,10 +198,26 @@ describe('consoleFromLog (Log.entryAdded)', () => {
     });
   });
 
-  it('строка с networkRequestId (CORS) — тоже network; verbose — debug; прочие — browser', () => {
+  it('обе строки CORS — network: «Access to fetch…» (javascript, category cors, без networkRequestId) и парная сетевая; verbose — debug; прочие — browser', () => {
+    // Настоящая форма Chromium: первая строка приходит от javascript, без id запроса, и признак у неё один — category.
     expect(
-      consoleFromLog({ entry: { source: 'javascript', level: 'error', text: 'Access to fetch has been blocked by CORS policy', networkRequestId: '12.3' } }).origin,
+      consoleFromLog({
+        entry: {
+          source: 'javascript',
+          level: 'error',
+          category: 'cors',
+          text: "Access to fetch at 'http://localhost:3000/api' from origin 'http://localhost:5173' has been blocked by CORS policy",
+          url: 'http://localhost:5173/',
+        },
+      }).origin,
     ).toBe('network');
+    expect(
+      consoleFromLog({
+        entry: { source: 'network', level: 'error', category: 'cors', text: 'Failed to load resource: net::ERR_FAILED', networkRequestId: '12.3' },
+      }).origin,
+    ).toBe('network');
+    // Правило по networkRequestId самостоятельно: строка с id запроса — про запрос, откуда бы ни пришла.
+    expect(consoleFromLog({ entry: { source: 'other', level: 'error', text: 'x', networkRequestId: '12.4' } }).origin).toBe('network');
     expect(consoleFromLog({ entry: { source: 'violation', level: 'verbose', text: 'slow handler' } })).toMatchObject({ origin: 'browser', level: 'debug' });
     expect(consoleFromLog({ entry: { source: 'deprecation', level: 'warning', text: 'old API' } })).toMatchObject({ origin: 'browser', level: 'warning' });
   });
@@ -249,6 +265,9 @@ describe('сеть (спека 3.3, раздел 8)', () => {
   it('remoteAddress: IPv4 с портом, IPv6 в скобках, без адреса — null', () => {
     expect(remoteAddress({ remoteIPAddress: '127.0.0.1', remotePort: 5173 })).toBe('127.0.0.1:5173');
     expect(remoteAddress({ remoteIPAddress: '::1', remotePort: 5173 })).toBe('[::1]:5173');
+    // Настоящая форма Chromium: IPv6 приходит уже в скобках — вторых не добавляем.
+    expect(remoteAddress({ remoteIPAddress: '[::1]', remotePort: 5173 })).toBe('[::1]:5173');
+    expect(remoteAddress({ remoteIPAddress: '[::1]' })).toBe('[::1]');
     expect(remoteAddress({})).toBeNull();
   });
 

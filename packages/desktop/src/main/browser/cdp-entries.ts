@@ -75,6 +75,8 @@ export interface LogParams {
     lineNumber?: number;
     stackTrace?: StackTrace;
     networkRequestId?: string;
+    /** `cors` — у строки «Access to fetch… blocked by CORS policy»: она идёт от javascript и без `networkRequestId`. */
+    category?: string;
   };
 }
 
@@ -237,7 +239,10 @@ export function consoleFromLog(params: LogParams): ConsoleDraft {
   return {
     level,
     // «Failed to load resource…» и CORS — строки про запрос: красный счётчик считает сам запрос (Фокус ревью 3).
-    origin: entry.source === 'network' || typeof entry.networkRequestId === 'string' ? 'network' : 'browser',
+    origin:
+      entry.source === 'network' || entry.category === 'cors' || typeof entry.networkRequestId === 'string'
+        ? 'network'
+        : 'browser',
     text: clip(entry.text ?? '', DEVTOOLS_LIMITS.consoleText),
     location: topOf(stack) ?? placeOf(entry.url, entry.lineNumber, 0),
     stack,
@@ -269,11 +274,11 @@ export function failureOf(data: Record<string, unknown>): NetworkFailure {
   return { reason: 'net', text: errorText };
 }
 
-/** Адрес сервера ответа; IPv6 — в скобках, как в адресной строке. */
+/** Адрес сервера ответа; IPv6 — в скобках, как в адресной строке (Chromium отдаёт его уже в скобках). */
 export function remoteAddress(response: Record<string, unknown>): string | null {
   const ip = response.remoteIPAddress;
   if (typeof ip !== 'string' || ip === '') return null;
-  const host = ip.includes(':') ? `[${ip}]` : ip;
+  const host = ip.includes(':') && !ip.startsWith('[') ? `[${ip}]` : ip;
   return typeof response.remotePort === 'number' ? `${host}:${response.remotePort}` : host;
 }
 
