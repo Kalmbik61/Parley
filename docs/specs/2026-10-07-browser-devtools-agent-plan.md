@@ -162,7 +162,8 @@ export function redactBody(text: string, mimeType: string | null, limit?: number
 // packages/desktop/src/shared/context-markdown.ts (B; fence пользуются C и D)
 export function fence(text: string, info?: string): string;
 export type ContextKind = 'element' | 'console' | 'request' | 'errors' | 'annotations';
-export const CONTEXT_LIMITS: { markdown: 262_144; body: 4096; errors: 50; annotations: 20; comment: 2000; annotationHtml: 1024; label: 40; annotationFullPage: 8000 };
+export const CONTEXT_LIMITS: { markdown: 262_144; body: 4096; errors: 50; annotations: 20; comment: 2000; annotationHtml: 1024; label: 40 };
+// снимок аннотаций — видимая часть (этап 0, 0.7): своей границы «вся страница» у него нет
 
 // packages/desktop/src/shared/loopback.ts (C; пользуются C и D)
 export function isLoopbackUrl(url: string): boolean;
@@ -200,6 +201,18 @@ export interface Emulation {
   withTemporary<T>(id: number, spec: ViewportSpec, run: () => Promise<T>): Promise<T>; // C
 }
 export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation; // этап C расширит выборку, если withTemporary понадобится onEvent
+
+// packages/desktop/src/main/browser/guest-dom.js (B; адаптация Orca, stablyai/orca b1cd858) — помощники DOM скриптов
+// страницы в изолированном мире 1001 (guest-pick.js, guest-annotate.js; D может ставить его перед своим скриптом):
+globalThis.__parleyDom = Object.freeze({
+  LIMITS,               // зеркало PICK_LIMITS: selectorLinks 12, selector 1024, text 500, html 4096
+  selectorOf(el),       // кратчайший уникальный суффикс пути: 'form#f', 'section.card:nth-of-type(2) > p'
+  textOf(el),           // не больше 80 текстовых узлов, до LIMITS.text
+  htmlOf(el, max),      // без script/style/on*/srcdoc, секретов полей и query у href/src/action; max + 1 символ
+  stylesOf(el, keys),   // вычисленные стили по списку ключей
+});
+// main ставит его в одну строку перед скриптом режима: executeJavaScriptInIsolatedWorld(PICK_WORLD_ID,
+// [{ code: guestDomScript + '\n' + modeScript }]) — значение строки даёт скрипт режима.
 
 // packages/desktop/src/main/browser/context-files.ts (B)
 export function contextDir(home?: string): string; // drops/context
@@ -284,8 +297,8 @@ export const AGENT_LIMITS: {
   - `browser.devtools` — `CmdOrCtrl+Alt+I` (A);
   - `browser.console` — `CmdOrCtrl+Alt+J` (A);
   - `browser.select` — `CmdOrCtrl+Shift+C` (B);
-  - `browser.annotate` — `CmdOrCtrl+Shift+A` (B).
-  - Рендерер действия с `when: 'browser'` сам не ловит (`keys/handler.ts#whenAllows`): из страницы их пересылает main. С фокусом в самом окне (адресная строка, панель, фильтры) те же сочетания реестра ловит `BrowserSurface` (`onKeyDown` корня поверхности) — так в плане A для ⌘⌥I и ⌘⌥J и так же в B для ⌘⇧C и ⌘⇧A.
+  - `browser.annotate` — `CmdOrCtrl+Alt+A` (B; ⌘⇧A с PR #34 занят действием `sidebar.agents`).
+  - Рендерер действия с `when: 'browser'` сам не ловит (`keys/handler.ts#whenAllows`): из страницы их пересылает main. С фокусом в самом окне (адресная строка, панель, фильтры) те же сочетания реестра ловит `BrowserSurface` (`onKeyDown` корня поверхности) — так в плане A для ⌘⌥I и ⌘⌥J и так же в B для ⌘⇧C и ⌘⌥A.
 - **Пространства строк:**
   - A — `S.browser.devtools.*`, `S.browser.viewport.*`;
   - B — `S.browser.target.*`, `S.browser.select.*`, `S.browser.annotate.*`, `S.contextFile.*`;
@@ -306,7 +319,7 @@ export const AGENT_LIMITS: {
 | 0.4 Ввод CDP | `Input.*` в CSS-пикселях вьюпорта страницы (с эмуляцией — эмулированного) | поправка на `scale` | D: задача действий | иначе: точка ввода × `scale` (у мобильной эмуляции при масштабе страницы × `scale ÷ zoom`); перед клавиатурой гостю нужен фокус ([0.4](../research/2026-10-08-browser-stage0.md#04-ввод-через-cdp)) |
 | 0.5 Картинка MCP | ответ — блок `image` и текст с путём | у Codex — только текст с путём; скилл велит `view_image` | C: задача `browser_screenshot`; D: скилл | умолчание стоит: Claude Code и Codex видят блок `image` (2026-10-08). Codex без `default_tools_approval_mode` у сервера отклоняет вызов в `exec` — решение об одобрении инструментов Parley в живых проверках D ([0.5](../research/2026-10-08-browser-stage0.md#05-картинка-mcp-claude-code-и-codex)) |
 | 0.6 React | `REACT_INFO_FN` по спеке 3.8 | у React 19 — только имена, без источника | B: задача Select | умолчание стоит для React 18; у React 19 — правило разбора `_debugStack` из отчёта; `getNodeForLocation` берёт координаты документа ([0.6](../research/2026-10-08-browser-stage0.md#06-компонент-react-и-источник)) |
-| 0.7 Снимки | элемент и аннотации снимает `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в CSS-пикселях — эмуляцию учитывает сам | `capturePage` с пересчётом на `scale` и `getZoomFactor()`, только видимая часть | B: задачи Select и аннотаций | иначе: запасной путь B (`capturePage`, множитель `zoom × scale`), аннотации — видимая часть; `fullPage` у C — `unsupported` ([0.7](../research/2026-10-08-browser-stage0.md#07-снимок-всей-страницы-и-обрезка-элемента)) |
+| 0.7 Снимки | элемент и аннотации снимает `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в CSS-пикселях — эмуляцию учитывает сам | `capturePage` с пересчётом на `scale` и `getZoomFactor()`, только видимая часть | B: задачи Select и аннотаций | иначе: элемент B — CDP `clip` в координатах документа × `getZoomFactor()`, высота не больше поверхности вида (решение 2026-10-08), запасной — `capturePage()` видимой части с измеренным множителем (по Orca); аннотации — видимая часть; `fullPage` у C — `unsupported` ([0.7](../research/2026-10-08-browser-stage0.md#07-снимок-всей-страницы-и-обрезка-элемента)) |
 
 ### Предварительные факты — проверочный запуск 2026-10-07
 

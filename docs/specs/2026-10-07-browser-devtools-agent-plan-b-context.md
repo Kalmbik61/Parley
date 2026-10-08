@@ -8,12 +8,17 @@
 - окно строит Markdown файла-контекста по английским шаблонам `S.contextFile` (`shared/context-markdown.ts`); секреты маскирует `shared/redact.ts`;
 - main пишет файл в `~/.parley/desktop/drops/context/` (`main/browser/context-files.ts`): права 0600, имя `<вид>-<метка>-<4 hex>.md`, снимок `.png` переезжает рядом из `drops/`;
 - путь уходит в цель «To» вкладки (`TabSpec.target`): сессия с Chat — чип над полем (`useChatUiStore.attachments`), сессия без Chat — строка в ввод CLI без Enter (`sendWithToast(…, submit: false)`), комната — чип над полем комнаты (`composerAttachments`);
-- Select (замена Design Mode): скрипт выбора отдаёт точку клика и ⇧, main по точке дочитывает через CDP роль, имя и компонент React (`REACT_INFO_FN`) и снимает элемент `Page.captureScreenshot`;
-- Annotate: скрипт меток `guest-annotate.js` в мире 1001, редактор комментария и лоток — в окне, «Add to chat» — один `.md` и один `.png` с номерами меток.
+- скрипты страницы стоят на общем DOM-экстракторе `guest-dom.js` (по Orca: кратчайший уникальный селектор, ограниченный обход текста, очистка URL) и исполняются только в изолированном мире 1001;
+- Select (замена Design Mode, ⌘⇧C): скрипт выбора отдаёт точку клика, ⇧ и прокрутку; main по точке документа дочитывает через CDP роль, имя и компонент React (`REACT_INFO_FN`, поиск компонента — по Orca, React 19 — правило этапа 0) и снимает элемент обрезкой `Page.captureScreenshot` (запасной путь — `capturePage` по Orca);
+- Annotate (⌘⌥A): скрипт меток `guest-annotate.js` со слоем номеров по Orca (закрытый shadow-корень, пересчёт раз в кадр), редактор комментария — Radix-поповер у метки и лоток — в окне (каркасы — по Orca), «Add to chat» — один `.md` и один `.png` видимой части с номерами меток.
 
-**Стек:** Electron 44.4.5 (CDP 1.3 через `webContents.debugger`, инспектор этапа A), React 18, zustand 5, Radix (`ui/dropdown-menu.tsx`), `lucide-react` 1.48, `sonner` 2; vitest + Testing Library + jsdom; Playwright `_electron`.
+**Стек:** Electron 44.4.5 (CDP 1.3 через `webContents.debugger`, инспектор этапа A), React 18, zustand 5, Radix (`ui/dropdown-menu.tsx`, `ui/popover.tsx`), `lucide-react` 1.48, `sonner` 2; vitest + Testing Library + jsdom; Playwright `_electron`.
 
 **Спека:** `docs/specs/2026-10-07-browser-devtools-agent-design.md` — разделы 2 (п. 4–7), 3.5 (строки этапа B), 3.6, 3.8, 4.5, 4.6, 4.7, 4.9, 6, 8, 9, 10. **Индекс плана** (обязательный контракт имён): `docs/specs/2026-10-07-browser-devtools-agent-plan.md`. Исполнитель читает спеку, индекс и этот файл. План этапа A — `docs/specs/2026-10-07-browser-devtools-agent-plan-a-devtools.md`: имена A в этом плане сверены с ним. Этап B начинается после слияния A и при расхождении берёт имена из кода A.
+
+**Опоры, уже учтённые в задачах:**
+- итоги этапа 0 — `docs/research/2026-10-08-browser-stage0.md` (раздел «Что сделать в планах A–D», «План B»): React 19, координаты документа для `getNodeForLocation`, снимок элемента и снимок аннотаций; где что в задачах — таблица задачи 1;
+- код Orca — `stablyai/orca`, коммит `b1cd858` (MIT, Copyright (c) 2026 Lovecast Inc.); что взято, что нет и почему — `docs/research/2026-10-08-orca-plan-b-delta.md`. Адаптированный код уже записан в задачах 2, 15, 16, 19 и 22: исполнитель переносит его из плана, а не заново из Orca.
 
 **Где работать:**
 - ветка `feat/browser-context`, worktree `.claude/worktrees/browser-context`, от свежего `origin/master` с влитым этапом A:
@@ -39,110 +44,80 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
 
 Действуют все пункты «Глобальных ограничений» индекса. Для этапа B особо:
 
-- **Ничего не уходит агенту само.** «Add to chat», Select и аннотации только кладут вложение. Сессия без Chat получает строку через `sendWithToast(…, submit: false)`: Enter нажимает человек.
-- **Строки окна** — английские, в `packages/desktop/src/shared/strings.ts`: `S.browser.target.*`, `S.browser.select.*`, `S.browser.annotate.*`. Тексты для агента — `S.contextFile.*`. `S.designBlock` и строки Design Mode (`S.browser.designMode`, `sendToAgent`, `pickAgain`) удаляются (задачи 16 и 17). Страж — `packages/desktop/src/english-ui.test.ts`.
+- **Ничего не уходит агенту само.** «Add to chat», Select и аннотации только кладут вложение. Сессия без Chat получает строку через `sendWithToast(…, submit: false)`: Enter нажимает человек. Из кода Orca не переносятся запись в буфер обмена по клику, голые клавиши `c`/`s` во время выбора и меню «Send» лотка с отправкой агенту.
+- **Строки окна** — английские, в `packages/desktop/src/shared/strings.ts`: `S.browser.target.*`, `S.browser.select.*`, `S.browser.annotate.*`. Тексты для агента — `S.contextFile.*`. `S.designBlock` и строки Design Mode (`S.browser.designMode`, `sendToAgent`, `pickAgain`) удаляются (задачи 17 и 18). Строки Orca (`translate(…)`) не переносятся. Страж — `packages/desktop/src/english-ui.test.ts`.
 - **Комментарии, названия тестов, описания коммитов** — по-русски. Коммит — `git commit -m "<тип>(<область>): …" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`.
 - **Данные страницы** в файле-контексте — только в ограде `fence()` после строки `S.contextFile.pageDataNote`. Текст окна (заголовок, URL, размер, путь снимка) и текст человека (комментарии аннотаций) — вне ограды.
-- **Маска** — одна, `shared/redact.ts`; в панели человека её нет. URL в шапке — `origin + pathname`; в `request` URL идёт с query, но значения секретных параметров заменены.
-- **Пределы** — `CONTEXT_LIMITS` (`shared/context-markdown.ts`) и прежние `PICK_LIMITS` (`main/browser/design-mode.ts`). Новых чисел мимо констант нет.
+- **Маска** — одна, `shared/redact.ts`; в панели человека её нет. URL в шапке — `origin + pathname`; в `request` URL идёт с query, но значения секретных параметров заменены. Маска Orca по значению (`SECRET_PATTERNS`) не переносится.
+- **Пределы** — `CONTEXT_LIMITS` (`shared/context-markdown.ts`), `PICK_LIMITS` (`main/browser/design-mode.ts`) и `REACT_LIMITS` (`main/browser/react-info.ts`). Новых чисел мимо констант нет; бюджеты Orca (`GRAB_BUDGET`) не переносятся. Зеркало `PICK_LIMITS` в `guest-dom.js` сверяет тест.
 - **CDP** — только `Inspector.send` этапа A с закрытым списком `CDP_ALLOWED`. `Runtime.callFunctionOn` — только с `REACT_INFO_FN` (проверка `cdpCallAllowed`). `Runtime.evaluate` нет.
-- **Скрипты страницы** (`guest-pick.js`, `guest-annotate.js`) — только в изолированном мире 1001 и только по действию человека. Их данные — данные страницы: main проверяет форму и длины.
+- **Скрипты страницы** (`guest-dom.js`, `guest-pick.js`, `guest-annotate.js`) — только в изолированном мире 1001 и только по действию человека; события с `isTrusted: false` ничего не выбирают и не ставят. `executeJavaScript` мира страницы в main нет (у Orca так исполнен весь выбор). Их данные — данные страницы: main проверяет форму и длины. Своих `console.*` в скриптах страницы нет: инспектор A пишет все `Runtime.consoleAPICalled` в журнал Console человека.
+- **Код Orca** — `stablyai/orca`, коммит `b1cd858`, MIT. Только копия с адаптацией, записанная в задачах: в шапке каждого файла — строка «Адаптация Orca `<путь>` (stablyai/orca b1cd858, MIT)», файл назван в `NOTICE` (задача 26, страж `notice.test.ts`). Не переносятся: исполнение в главном мире страницы, полноэкранный перехватчик кликов, `console.debug` моста меток, `shouldSkipReactName` целиком, «богатый» payload (`nearbyText`, `nearbyElements`, `ancestorPath`, `elementPath`, `fullPath`, `selectedText`, `attributes` — в спеке 3.6 их нет), подсветка выбора Orca (подсветка — наша, спека 4.6), сторы `useAppStore`, `translate`, `window.api`.
+- **Клавиши** — Select `CmdOrCtrl+Shift+C` (⌘⇧C), Annotate `CmdOrCtrl+Alt+A` (⌘⌥A, рядом с ⌘⌥I и ⌘⌥J панели браузера). ⌘⇧A занят действием `sidebar.agents` (PR #34) и остаётся ему.
 - **`drops/context/`** — права 0600, очистка через 7 суток вместе с `drops/`. Пути `drops/` в раскладку не пишутся: `TabSpec.target` хранит только id сессии или комнаты.
 - **Визуальные проверки** — 800×500, длинные адрес, название работы, ярлыки сессий и название комнаты; DPR 1 и 2 (`--force-device-scale-factor=2`).
 - **Имена этапа A** в задачах — из плана A. Если код A назвал проп или метод иначе, исполнитель берёт имя кода, логику — эту, и пишет расхождение в отчёт этапа (задача 1, шаг 4).
 
 ## Фокус ревью
 
-Пять случаев, которые прямые тесты задач легко пропустят. Под каждый — тест в задаче-владельце.
+Шесть случаев, которые прямые тесты задач легко пропустят. Под каждый — тест в задаче-владельце.
 
-1. **Секреты в упавшем запросе** (п. 2 индекса). `Authorization: Bearer …`, `?token=…`, `"password"` во вложенном JSON-теле запроса, `Set-Cookie` и `"session"` в ответе попадают в `request`-контекст только как `<redacted>`. JSON-тело, обрезанное источником, в файл не идёт вовсе: маску на него не наложить. Тесты — задачи 2 (`redact.test.ts`), 4 (`context-markdown.test.ts`, «Фокус ревью 1») и 23 (E2E: секреты не попали в файл на диске).
-2. **Узкое окно и длинные значения** (п. 5 индекса). 800×500, адрес из 300 символов, название работы, ярлык сессии и название комнаты по 60 символов: кнопка «To» не вылезает за строку и режет имя многоточием, меню «To» в пределах окна, пункты режутся. Тесты — задача 12 (`TargetMenu.test.tsx`) и задача 23 (E2E, DPR 1 и 2).
-3. **Ограда против данных и текста человека.** Страница отдала серию из пяти обратных кавычек и строку «```», а человек написал в комментарии «```». Данные огорожены шестью кавычками, комментарий стоит цитатой вне ограды и не открывает её. Тесты — задача 3 (`fence`) и задача 5 (`annotations`).
-4. **Подменённая функция в `Runtime.callFunctionOn`.** Вызов с любой функцией, кроме `REACT_INFO_FN`, отклоняется до `debugger.sendCommand`; в коде main нет других вызовов. Тест — задача 14 (`inspector.test.ts`).
-5. **Быстрые ⇧-клики и Undo пачки.** Два элемента подряд в одну цель — два чипа в порядке кликов и один тост «2 elements added to …»; «Undo» убирает оба пути; добавление в другую цель — новый тост. Тесты — задача 11 (`deliver.test.ts`) и задача 16 (`BrowserSurface.test.tsx`).
+1. **Секреты в упавшем запросе** (п. 2 индекса). `Authorization: Bearer …`, `?token=…`, `"password"` во вложенном JSON-теле запроса, `Set-Cookie` и `"session"` в ответе попадают в `request`-контекст только как `<redacted>`. JSON-тело, обрезанное источником, в файл не идёт вовсе: маску на него не наложить. Тесты — задачи 3 (`redact.test.ts`), 5 (`context-markdown.test.ts`, «Фокус ревью 1») и 24 (E2E: секреты не попали в файл на диске).
+2. **Узкое окно и длинные значения** (п. 5 индекса). 800×500, адрес из 300 символов, название работы, ярлык сессии и название комнаты по 60 символов: кнопка «To» не вылезает за строку и режет имя многоточием, меню «To» в пределах окна, пункты режутся; редактор комментария — в пределах поля страницы. Тесты — задача 13 (`TargetMenu.test.tsx`) и задача 24 (E2E, DPR 1 и 2; редактор — в E2E 4).
+3. **Ограда против данных и текста человека.** Страница отдала серию из пяти обратных кавычек и строку «```», а человек написал в комментарии «```». Данные огорожены шестью кавычками, комментарий стоит цитатой вне ограды и не открывает её. Тесты — задача 4 (`fence`) и задача 6 (`annotations`).
+4. **Подменённая функция в `Runtime.callFunctionOn`.** Вызов с любой функцией, кроме `REACT_INFO_FN`, отклоняется до `debugger.sendCommand`; в коде main нет других вызовов. Тест — задача 15 (`inspector.test.ts`).
+5. **Быстрые ⇧-клики и Undo пачки.** Два элемента подряд в одну цель — два чипа в порядке кликов и один тост «2 elements added to …»; «Undo» убирает оба пути; добавление в другую цель — новый тост. Тесты — задача 12 (`deliver.test.ts`) и задача 17 (`BrowserSurface.test.tsx`).
+6. **Код Orca без его слабостей.** Скрипты страницы — только в изолированном мире 1001: в коде main нет `executeJavaScript` мира страницы. События, созданные страницей (`isTrusted: false`), ничего не выбирают, не ставят метку и не гасятся. Ничего не уходит само: в лотке нет «Send» и «Copy», буфер обмена не трогается. Каждый файл с пометкой Orca назван в `NOTICE`. Тесты — задача 16 (рамочный тест в `design-mode.test.ts`), задачи 2 и 19 (`guest-pick.test.ts`, `guest-annotate.test.ts`: недоверенные события), задача 22 (`AnnotationTray.test.tsx`: нет Send и Copy), задача 26 (`notice.test.ts`).
 
 ---
 
-## Задача 1. Сверка с этапом 0 и с кодом этапа A
+## Задача 1. Сверка с этапом 0, кодом этапа A и Orca
 
-Итоги спайков 0.6 и 0.7 меняют задачи 14, 15 и 19. Имена этапа A в задачах взяты из его плана; если код A от плана отошёл, это касается задач 8, 12–16, 22 и 23. Задача кода не пишет: она решает, по какой ветке идут эти задачи, и записывает решение в отчёт этапа (описание PR).
+Решения этапа 0 уже внесены в задачи этого плана, клавиша Annotate выбрана (⌘⌥A), код Orca берётся с коммита `b1cd858`. Задача кода не пишет: она проверяет, что опоры на месте, и записывает расхождения в отчёт этапа (описание PR). Имена этапа A в задачах взяты из его плана; если код A от плана отошёл, это касается задач 9, 13–17, 23 и 24.
 
-**Файлы:** только чтение — `docs/research/2026-10-*-browser-stage0.md`, код этапа A.
+**Файлы:** только чтение — `docs/research/2026-10-08-browser-stage0.md`, `docs/research/2026-10-08-orca-plan-b-delta.md`, код этапа A, клон Orca.
 
-- [ ] **Шаг 1. Найти и прочитать отчёт этапа 0.**
+- [ ] **Шаг 1. Решения этапа 0 — где они в плане.** Прочитать в отчёте этапа 0 разделы «0.4», «0.6», «0.7» и «Что сделать в планах A–D» → «План B». Отчёта нет — этап B не начинается: сообщить пользователю. Сверить с таблицей:
+
+  | Решение этапа 0 | Где в плане |
+  |---|---|
+  | React 18 — `_debugSource` (0.6) | задача 15, `REACT_INFO_FN`, тест «React 18» |
+  | React 19 — правило `parseDebugStack` по первым 6 строкам `_debugStack`, пометка approx. (0.6) | задача 15, `REACT_INFO_FN`, тест «React 19» со стеком из отчёта |
+  | `DOM.getNodeForLocation` вернул сам элемент (0.6), но в координатах документа — точка + `scrollX/Y`, без `scale` эмуляции (0.4) | задача 15 (`documentPoint` в `guest-data.ts`), задачи 16 и 20 (`elementInfo` получает точку документа) |
+  | снимок элемента: основной — CDP `clip` в координатах документа × `getZoomFactor()` с `captureBeyondViewport`, высота клипа не больше поверхности вида; запасной — `capturePage` (0.7, решение 2026-10-08) | задача 16 (`captureClip`, `cropRect`, `snapshot`). Множитель запасного пути измеряется по Orca (ширина картинки / ширина вьюпорта), поэтому `Emulation.scale(id)` этапу B не нужен |
+  | снимок аннотаций — только видимая часть; `CONTEXT_LIMITS.annotationFullPage` и тест «страница длиннее 8000 px» удалены (0.7) | задачи 4 и 20 |
+  | вариант D подключения CDP (0.1): `<webview>` стартует с `about:blank` | этап A; B только пользуется |
+
+  Отчёт говорит иначе, чем таблица, — стоп, сообщить пользователю.
+
+- [ ] **Шаг 2. Клон Orca на `b1cd858`.** Он нужен только для сверки: адаптированный код уже записан в задачах 2, 15, 16, 19 и 22, и исполнитель переносит его из плана, а не из Orca.
 
 ```bash
-ls docs/research/ | grep browser-stage0
+ORCA="${TMPDIR:-/tmp}/orca-b1cd858"
+[ -d "$ORCA/.git" ] || git clone https://github.com/stablyai/orca "$ORCA"
+git -C "$ORCA" checkout --quiet b1cd858
+git -C "$ORCA" log -1 --format='%h %s'
+head -3 "$ORCA/LICENSE"
+ls "$ORCA/src/main/browser/grab-guest-foundation-script.ts" \
+  "$ORCA/src/main/browser/grab-guest-content-script.ts" \
+  "$ORCA/src/main/browser/grab-guest-element-context-script.ts" \
+  "$ORCA/src/main/browser/grab-guest-react-script.ts" \
+  "$ORCA/src/main/browser/browser-grab-screenshot.ts" \
+  "$ORCA/src/shared/browser-annotation-viewport-bridge.ts" \
+  "$ORCA/src/renderer/src/components/browser-pane/annotate/pending-browser-annotation-card.tsx" \
+  "$ORCA/src/renderer/src/components/browser-pane/annotate/browser-page-annotation-tray.tsx" \
+  "$ORCA/src/renderer/src/components/browser-pane/describe-page/browser-annotation-geometry.ts"
 ```
 
-  Прочитать разделы «0.6», «0.7» и «Что сделать в планах A–D». Отчёта нет — этап B не начинается: сообщить пользователю.
+  Ожидание: `b1cd858…`, «MIT License» и «Copyright (c) 2026 Lovecast Inc.», все девять файлов на месте. Сети нет — шаг пропустить и записать в отчёт: задачам он не нужен.
 
-- [ ] **Шаг 2. Спайк 0.6 (React, `getNodeForLocation`).** По умолчанию — `REACT_INFO_FN` из задачи 14 как есть. Иначе:
+- [ ] **Шаг 3. Клавиши.**
 
-  | Итог спайка | Что поменять |
-  |---|---|
-  | React 18 и 19 — как ожидалось | ничего |
-  | у React 19 правила источника нет | задача 14, шаг 3: в `REACT_INFO_FN` функция `sourceOf` теряет ветку `_debugStack` — остаётся только `_debugSource` (код ниже); в `react-info.test.ts` тест «React 19» ждёт `source: null, approx: false` |
-  | у React 19 правило другое (иной вид строк стека) | задача 14, шаг 3: регулярное выражение в `sourceOf` заменить правилом из отчёта; пометка `approx: true` остаётся; тестовую строку стека в `react-info.test.ts` взять из отчёта |
-  | `getNodeForLocation` вернул обёртку или текстовый узел | задачи 14 и 15: узел ищется по селектору, а не по точке (код ниже); `CDP_ALLOWED` получает `DOM.getDocument`, `DOM.performSearch`, `DOM.getSearchResults`, `DOM.discardSearchResults` |
-  | перед вызовами нужен `DOM.getDocument` | задача 14, `elementInfo`: после `DOM.enable` вызвать `await inspector.send(id, 'DOM.getDocument', { depth: 0 })`; метод — в список задачи 14 |
-
-  Вариант «только `_debugSource`» для `sourceOf` в `REACT_INFO_FN`:
-
-```js
-    var sourceOf = function (fiber) {
-      var debugSource = fiber && fiber._debugSource;
-      if (debugSource && typeof debugSource.fileName === 'string') {
-        return { source: debugSource.fileName + (typeof debugSource.lineNumber === 'number' ? ':' + debugSource.lineNumber : ''), approx: false };
-      }
-      return null;
-    };
+```bash
+grep -n "CmdOrCtrl+Shift+A\|CmdOrCtrl+Alt+A\|CmdOrCtrl+Shift+C" packages/desktop/src/shared/keybindings.ts
 ```
 
-  Вариант «узел по селектору» — замена начала `elementInfo` (задача 14) после `if (point === null) return {};`:
-
-```ts
-    await inspector.send(id, 'DOM.enable');
-    await inspector.send(id, 'DOM.getDocument', { depth: 0 });
-    const search = await inspector.send<{ searchId?: unknown; resultCount?: unknown }>(id, 'DOM.performSearch', { query: selector });
-    if (typeof search.searchId !== 'string') return {};
-    try {
-      if (search.resultCount !== 1) return {};
-      const found = await inspector.send<{ nodeIds?: unknown }>(id, 'DOM.getSearchResults', { searchId: search.searchId, fromIndex: 0, toIndex: 1 });
-      const nodeId = Array.isArray(found.nodeIds) ? found.nodeIds[0] : undefined;
-      if (typeof nodeId !== 'number') return {};
-      const described = await inspector.send<{ node?: { backendNodeId?: unknown } }>(id, 'DOM.describeNode', { nodeId });
-      backendNodeId = described.node?.backendNodeId;
-    } finally {
-      await inspector.send(id, 'DOM.discardSearchResults', { searchId: search.searchId }).catch(() => undefined);
-    }
-```
-
-  Селектор `guest-pick.js` строится с `:nth-of-type`, поэтому обычно находит ровно один узел. Не один — данных нет, как при несовпадении по точке. `point` в `PickResult` при этом остаётся: он нужен этапу D.
-
-- [ ] **Шаг 3. Спайк 0.7 (снимки).** По умолчанию — `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в задачах 15 и 19. Иначе:
-
-  | Итог спайка | Что поменять |
-  |---|---|
-  | метка, заголовок и обрезка — как ожидалось | ничего |
-  | обрезка элемента вне видимой части пуста или со сдвигом | задача 15: в `snapshot` убрать ветку CDP — остаётся запасной `capturePage(captureRect(…))`; множитель — `getZoomFactor() × scale` эмуляции (ниже); тест «CDP-снимок» в `design-mode.test.ts` заменить тестом «`capturePage` с масштабом и эмуляцией» |
-  | снимок всей страницы двоит фиксированный заголовок или теряет метку | задача 19: в `capture` всегда ветка видимой части — `{ format: 'png' }` без `captureBeyondViewport` и `clip`; `CONTEXT_LIMITS.annotationFullPage` (задача 3) удалить вместе с тестом «страница длиннее 8000 px» |
-
-  Масштаб эмуляции для запасного пути. `Emulation` этапа A (`main/browser/emulation.ts`) отдаёт `set` и `current`, а размер и поле вкладки держит в `state`. Ему добавляется метод:
-
-```ts
-    /** Во сколько раз страница уменьшена под поле (спека 4.2); без эмуляции — 1. */
-    scale: (id) => {
-      const saved = state.get(id);
-      return saved === undefined ? 1 : viewportCommands(saved.spec, saved.area).scale;
-    },
-```
-
-  - в интерфейс `Emulation` — `scale(id: number): number;` (то же имя и та же формула, что у задачи 9 плана D: если B его добавил, D не дублирует), в `emulation.test.ts` — тест «Mobile M (375×812) в поле 800×406 — scale 0.5; после set(null) — 1»;
-  - в `createDesignMode` (задача 15) — зависимость `scaleOf(id: number): number`, а `snapshot` зовёт `captureRect(pick.rect, pick.viewport, contents.getZoomFactor() * deps.scaleOf(id))`;
-  - в `main/index.ts` — `scaleOf: (id) => emulation.scale(id)`: `emulation` создаётся выше `createDesignMode` вместе с инспектором (задача 15, шаг 5).
-
-  Это добавление к индексу — в отчёт этапа.
+  Ожидание: одна строка — `sidebar.agents` с `CmdOrCtrl+Shift+A`; `CmdOrCtrl+Alt+A` и `CmdOrCtrl+Shift+C` нет. Иначе — стоп, сообщить пользователю: клавиши задач 17 и 23 придётся выбрать заново.
 
 - [ ] **Шаг 4. Сверить имена этапа A с кодом.**
 
@@ -155,28 +130,463 @@ grep -n "fieldRef\|browser-field\|viewport\|<DevtoolsPanel\|onKeyDown\|pickToken
 grep -n "browser-chrome\|ICON_BUTTON\|onDesignMode\|<ViewportMenu" packages/desktop/src/renderer/browser/BrowserChrome.tsx
 grep -n "patchBrowser\|parseViewport\|case 'browser'" packages/desktop/src/renderer/layout/tree.ts
 grep -n "devtoolsSnapshot\|responseBody" packages/desktop/src/shared/browser-types.ts
-grep -n "createDesignMode\|createInspector\|forwardBatches\|createEmulation" packages/desktop/src/main/index.ts
+grep -n "createDesignMode\|createInspector\|forwardBatches\|createEmulation\|guestPickScript" packages/desktop/src/main/index.ts
 grep -n "addToChat\|addErrorsToChat\|presets" packages/desktop/src/shared/strings.ts
+grep -n "portalContainer\|PopoverPrimitive.Portal" packages/desktop/src/renderer/ui/popover.tsx
 ```
 
   Ожидание — по плану A:
-  - `CDP_ALLOWED: ReadonlySet<CdpMethod>` в `inspector.ts`; его проверяют и `send`, и внутренняя `command`. Тест A «закрытый список этапа A…» сверяет список целиком и ждёт, что `Runtime.callFunctionOn` в нём нет (его правит задача 14). В `inspector.test.ts` есть `setup()` с гостем id 7 и `dbg.sendCommand`;
+  - `CDP_ALLOWED: ReadonlySet<CdpMethod>` в `inspector.ts`; его проверяют и `send`, и внутренняя `command`. Тест A «закрытый список этапа A…» сверяет список целиком и ждёт, что `Runtime.callFunctionOn` в нём нет (его правит задача 15). В `inspector.test.ts` есть `setup()` с гостем id 7 и `dbg.sendCommand`;
   - слоты панели: у `DevtoolsPanel` — `onAddConsoleToChat?`, `onAddRequestToChat?`, `onAddErrorsToChat?: () => void`; у `ConsoleView`, `NetworkView`, `RequestDetails` — `onAddToChat?`. Кнопки и строки (`S.browser.devtools.addToChat`, `addErrorsToChat`) — у A; «Add errors to chat» видна, пока `devtoolsCounters(tab).errors > 0`;
   - журнал окна — `useDevtoolsStore` (`renderer/browser/devtools/store.ts`): `TabDevtools`, `EMPTY_DEVTOOLS`, `visibleConsole`, `devtoolsCounters`; фикстуры — `test-utils/devtools-fixtures.ts`;
   - `BrowserSurface`: проп `viewport: ViewportSpec | null`, слой страницы — `fieldRef` (`[data-testid="browser-field"]`), `<DevtoolsPanel …/>` под ним. В `onKeyDown` корня Esc снимает выбор, а ⌘⌥I и ⌘⌥J идут через `panelKey`. В `did-navigate` есть `pickTokenRef.current += 1`;
   - `BrowserChrome`: корень — `[data-testid="browser-chrome"]`, порядок — адрес, `ViewportMenu`, ⌖ (своя разметка с `aria-label={S.browser.designMode}`), консоль, «⋯»; константа `ICON_BUTTON`;
   - `tree.ts`: `patchBrowser(tab, patch)` и `parseViewport`; мусор в `viewport` — вкладка без размера;
   - мост: `devtoolsSnapshot(id): Promise<DevtoolsSnapshot>` (без `null`), `responseBody(id, requestId): Promise<ResponseBody | null>`; в подставном мосте — `setResponseBody`, `setDevtoolsSnapshot`;
-  - `main/index.ts`: `inspector`, `forwardBatches` и `emulation` создаются сразу после `createDesignMode`, задача 15 переносит их выше;
-  - строки `S.browser.viewport.presets` (имена пресетов) — у A.
+  - `main/index.ts`: `guestScript: guestPickScript` у `createDesignMode`; `inspector`, `forwardBatches` и `emulation` создаются сразу после `createDesignMode`, задача 16 переносит их выше;
+  - строки `S.browser.viewport.presets` (имена пресетов) — у A;
+  - `ui/popover.tsx`: `portalContainer` нет, `PopoverPrimitive.Portal` без `container` — его добавляет задача 22.
 
   Расхождение — в отчёт этапа: задачи ниже берут имя A.
 
-- [ ] **Шаг 5. Записать решения** (ветки шагов 2 и 3 и расхождения шага 4) в черновик описания PR этапа. Коммита нет.
+- [ ] **Шаг 5. Записать** итоги шагов 1–4 (расхождения с A, клон Orca есть или нет) в черновик описания PR этапа. Коммита нет.
 
 ---
 
-## Задача 2. Маска секретов `shared/redact.ts`
+## Задача 2. Общий DOM-экстрактор скриптов страницы `guest-dom.js` (по Orca)
+
+Помощники DOM для скриптов выбора и меток — один файл, адаптация трёх скриптов Orca: кратчайший уникальный селектор (у Orca `buildSelector` с фильтром хэшированных классов), ограниченный обход текста (`getBoundedText`) и очистка URL в HTML (`sanitizeUrl`). У Orca они исполняются в главном мире страницы; здесь — в изолированном мире 1001, вместе со скриптом режима. Прежние `selectorOf`, `isSecretField` и `cleanHtml` скрипта выбора переезжают сюда, и `guest-annotate.js` (задача 19) их не копирует.
+
+**Файлы:**
+- Создать: `packages/desktop/src/main/browser/guest-dom.js`
+- Изменить: `packages/desktop/src/main/browser/guest-pick.js`, `packages/desktop/src/main/index.ts`, `eslint.config.js`
+- Тесты: `packages/desktop/src/main/browser/guest-dom.test.ts` (новый), `packages/desktop/src/main/browser/guest-pick.test.ts`
+
+**Интерфейсы:**
+- Берёт: `PICK_LIMITS` (`design-mode.ts`) — только в тесте, для сверки зеркала.
+- Отдаёт (мир 1001 страницы): `globalThis.__parleyDom = Object.freeze({ LIMITS, selectorOf(el), textOf(el), htmlOf(el, max), stylesOf(el, keys) })`:
+  - `LIMITS` — зеркало `PICK_LIMITS`: `selectorLinks` 12, `selector` 1024, `text` 500, `html` 4096;
+  - `selectorOf` — кратчайший уникальный суффикс пути от элемента вверх до `body`: `form#f`, `button.save.primary`, `section.card:nth-of-type(2) > p`; не больше 12 звеньев и 1024 символов;
+  - `textOf` — текст не больше чем из 80 текстовых узлов, узлы через пробел, пробелы схлопнуты, `script`/`style`/`noscript`/`template` не читаются, до 500 символов;
+  - `htmlOf(el, max)` — HTML без `script`, `style`, `on*`, `srcdoc` и значений секретных полей; у `href`, `src`, `action` — без query и hash, чужая схема — пустая строка; на символ длиннее `max`;
+  - `stylesOf(el, keys)` — вычисленные стили по списку ключей вызывающего.
+- Подключение: main ставит текст `guest-dom.js` перед скриптом режима в одну строку и исполняет её одним `WebSource` в `executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, …)` (шаг 5). Значение строки — значение последнего выражения, то есть промис режима. Второй `WebSource` не нужен (какой результат Electron отдаёт при двух источниках, не проверялось). Повторный запуск помощники не подменяет.
+- Формат селектора меняется: `body > main.page > form#f` → `form#f`. `selectorTail` (задача 5) и сверка узла (задача 15) смотрят только последнее звено, метка файла — тоже (`button.save`, `button-save`).
+- Не берём у Orca: `SECRET_PATTERNS`/`containsSecret` (маска — `redact.ts`), `getHtmlSnippet` (снимает только `<script>`), `getAccessibility` (роль и имя — из CDP, задача 15), `getSelectedText`, `nearbyText`, `ancestorPath` и прочий «богатый» payload, бюджеты `GRAB_BUDGET`, снос чужого `window.__orcaGrab` (в изолированный мир страница не пишет).
+
+- [ ] **Шаг 1. Написать падающие тесты.**
+
+```ts
+// packages/desktop/src/main/browser/guest-dom.test.ts
+// @vitest-environment jsdom
+// vitest.config.ts даёт src/main/** среду node, а помощники живут в странице — им нужен DOM.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PICK_LIMITS } from './design-mode.js';
+
+// Путь, а не URL: в jsdom глобальный URL — его, и readFileSync такой не примет.
+const domScript = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'guest-dom.js'), 'utf8');
+
+interface Dom {
+  LIMITS: { selectorLinks: number; selector: number; text: number; html: number };
+  selectorOf(el: Element): string;
+  textOf(el: Element): string;
+  htmlOf(el: Element, max: number): string;
+  stylesOf(el: Element, keys: readonly string[]): Record<string, string>;
+}
+
+/** Скрипт как в госте (первым в строке скрипта режима): ставит `__parleyDom`, если его ещё нет. */
+function dom(): Dom {
+  (0, eval)(domScript);
+  return (globalThis as unknown as { __parleyDom: Dom }).__parleyDom;
+}
+
+function $(selector: string): Element {
+  const el = document.querySelector(selector);
+  if (el === null) throw new Error(`нет ${selector}`);
+  return el;
+}
+
+beforeEach(() => {
+  delete (globalThis as { __parleyDom?: unknown }).__parleyDom;
+});
+
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+describe('guest-dom.js — помощники DOM скриптов выбора и меток (адаптация Orca)', () => {
+  it('пределы — зеркало PICK_LIMITS main; второй запуск помощники не подменяет', () => {
+    const first = dom();
+    expect(first.LIMITS).toEqual({
+      selectorLinks: PICK_LIMITS.selectorLinks,
+      selector: PICK_LIMITS.selector,
+      text: PICK_LIMITS.text,
+      html: PICK_LIMITS.html,
+    });
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(dom()).toBe(first);
+  });
+
+  it('селектор — кратчайший уникальный суффикс: id сразу, иначе до двух классов, :nth-of-type — только когда нужен', () => {
+    document.body.innerHTML = `
+      <main class="page">
+        <form id="f"><button class="save primary large" type="button">Save</button></form>
+        <section class="card"><p>a</p></section>
+        <section class="card"><p>b</p></section>
+      </main>`;
+    const { selectorOf } = dom();
+    expect(selectorOf($('form'))).toBe('form#f');
+    expect(selectorOf($('button'))).toBe('button.save.primary');
+    expect(selectorOf($('main'))).toBe('main.page');
+    expect(selectorOf($('section:nth-of-type(2) > p'))).toBe('section.card:nth-of-type(2) > p');
+    expect(selectorOf(document.body)).toBe('body');
+  });
+
+  it('уникальность проверяется в порядке звеньев (у Orca с третьего звена — нет): лишнего :nth-of-type нет', () => {
+    document.body.innerHTML = '<ul class="x"><li><a>1</a></li></ul><ul class="y"><li><a>2</a></li></ul>';
+    expect(dom().selectorOf(document.querySelectorAll('a')[1] as Element)).toBe('ul.y > li > a');
+  });
+
+  it('хэши CSS-modules и css-xxxx в селектор не идут; Tailwind-классы экранированы', () => {
+    document.body.innerHTML = '<div class="css-1q2w3e Button_root__a1B2c3 md:flex py-1.5"><span>x</span></div><div><span>y</span></div>';
+    expect(dom().selectorOf($('div'))).toBe('div.md\\:flex.py-1\\.5');
+  });
+
+  it('текст: узлы через пробел, пробелы схлопнуты, script и style не читаются; не больше 80 узлов и LIMITS.text', () => {
+    document.body.innerHTML = '<div id="t"><script>window.leak = 1</script><style>.x{}</style><b>Sa</b>ve\n\n  now</div>';
+    const { textOf, LIMITS } = dom();
+    expect(textOf($('#t'))).toBe('Sa ve now');
+    const many = document.createElement('div');
+    for (let index = 0; index < 200; index += 1) {
+      const span = document.createElement('span');
+      span.textContent = 'x';
+      many.append(span);
+    }
+    document.body.append(many);
+    expect(textOf(many)).toBe(Array.from({ length: 80 }, () => 'x').join(' '));
+    const long = document.createElement('p');
+    long.textContent = 'y'.repeat(LIMITS.text + 100);
+    document.body.append(long);
+    expect(textOf(long)).toBe('y'.repeat(LIMITS.text));
+  });
+
+  it('HTML: без script, style, on* и srcdoc; секретные поля пусты; у href, src и action нет query и hash, чужая схема — пусто', () => {
+    document.body.innerHTML = `
+      <form id="f" action="/login?next=/admin#x" onsubmit="steal()">
+        <input type="password" value="secret">
+        <input type="hidden" name="csrf" value="tok">
+        <input autocomplete="cc-number" value="4111">
+        <input autocomplete="section-a new-password" value="pw2">
+        <textarea autocomplete="one-time-code">123456</textarea>
+        <input type="text" name="nick" value="visible">
+        <a href="/cb?token=abc#frag">back</a>
+        <a href="javascript:alert(1)">evil</a>
+        <img src="https://cdn.example/a.png?sig=zzz">
+        <script>window.leak = 1</script><style>.x{}</style>
+        <div srcdoc="leak-srcdoc">frame</div>
+      </form>`;
+    const { htmlOf } = dom();
+    const html = htmlOf($('#f'), 4096);
+    for (const secret of ['secret', 'tok', '4111', 'pw2', '123456', 'abc', 'frag', 'next=', 'sig=', 'alert', 'leak', 'steal']) {
+      expect(html, secret).not.toContain(secret);
+    }
+    for (const kept of ['value="visible"', 'action="/login"', 'href="/cb"', 'href=""', 'src="https://cdn.example/a.png"']) expect(html, kept).toContain(kept);
+    // На символ длиннее предела: так main видит обрезку и ставит пометку.
+    expect(htmlOf($('#f'), 10)).toHaveLength(11);
+  });
+
+  it('стили — только переданные ключи, вычисленными значениями', () => {
+    document.body.innerHTML = '<p id="s" style="display:flex;position:absolute">x</p>';
+    expect(dom().stylesOf($('#s'), ['display', 'position'])).toEqual({ display: 'flex', position: 'absolute' });
+  });
+});
+```
+
+  В `guest-pick.test.ts`:
+  - строку `const guestScript = readFileSync(…'guest-pick.js'), 'utf8');` заменить:
+
+```ts
+const here = path.dirname(fileURLToPath(import.meta.url));
+const guestScript = readFileSync(path.join(here, 'guest-pick.js'), 'utf8');
+const domScript = readFileSync(path.join(here, 'guest-dom.js'), 'utf8');
+```
+
+  - `runScript`:
+
+```ts
+/** Скрипт как в госте: помощники DOM и скрипт выбора одной строкой, её значение — промис выбора. */
+function runScript(): Promise<unknown> {
+  return (0, eval)(`${domScript}\n${guestScript}`) as Promise<unknown>;
+}
+```
+
+  - в тесте «клик человека: данные элемента…» `expect(result.selector).toBe('body > main.page > form#f');` заменить:
+
+```ts
+    // Кратчайший уникальный селектор (guest-dom.js, по Orca): у формы есть id.
+    expect(result.selector).toBe('form#f');
+```
+
+- [ ] **Шаг 2. Запустить — падает.**
+
+  `pnpm --filter @parley/desktop exec vitest run src/main/browser/guest-dom.test.ts src/main/browser/guest-pick.test.ts` → FAIL: `ENOENT … guest-dom.js`.
+
+- [ ] **Шаг 3. Помощники.**
+
+```js
+// packages/desktop/src/main/browser/guest-dom.js
+// Адаптация Orca `src/main/browser/grab-guest-foundation-script.ts`, `grab-guest-content-script.ts` и
+// `grab-guest-element-context-script.ts` (stablyai/orca b1cd858, MIT). Copyright (c) 2026 Lovecast Inc.; полный текст
+// лицензии — в NOTICE в корне репозитория.
+//
+// Помощники DOM для скриптов выбора и меток (`guest-pick.js`, `guest-annotate.js`; этап B браузера). Main ставит этот
+// файл в одну строку перед скриптом режима и исполняет её в изолированном мире 1001 (`PICK_WORLD_ID`): мир не видит
+// скриптов страницы, страница — его переменных, поэтому подменить помощники она не может. У Orca те же функции живут в
+// главном мире страницы; сюда перенесена только DOM-часть, она одинаково работает в любом мире. Всё, что помощники
+// достают, — данные страницы: main проверяет форму и длины заново (`validatePick`, `validateAnnotationPick`).
+//
+// Что взято у Orca и что изменено:
+// - selectorOf — `buildSelector` с помощниками: кратчайший уникальный суффикс пути, до двух «устойчивых» классов на
+//   звено (хэши CSS-modules и `css-xxxx` отброшены), `:nth-of-type` — только когда без него звено не уникально. Порядок
+//   звеньев в проверке уникальности исправлен (у Orca с третьего звена проверялась строка в другом порядке). Проверки
+//   `containsSecret` нет: маска у Parley одна — `shared/redact.ts`. Пределы — `PICK_LIMITS`, а не `GRAB_BUDGET`;
+// - textOf — `getBoundedText`: обход не больше 80 текстовых узлов без регулярок по всему тексту; текст `script`,
+//   `style`, `noscript` и `template` не читается. Пометки « (truncated)» нет: её ставит main;
+// - htmlOf — прежняя `cleanHtml` Parley (без `script`, `style`, `on*`, `srcdoc` и значений секретных полей) плюс мысль
+//   `getSafeAttributes` и `sanitizeUrl` Orca: у `href`, `src` и `action` снимаются query и hash, чужая схема
+//   (`javascript:`, `data:`) — пустая строка;
+// - stylesOf — вычисленные стили по списку ключей вызывающего (23 у Select, 10 у метки).
+//
+// Файл — одно выражение без значения: значение строки даёт скрипт режима, который стоит после него.
+(() => {
+  if (globalThis.__parleyDom !== undefined) return;
+
+  // Зеркало PICK_LIMITS (main/browser/design-mode.ts), его сверяет guest-dom.test.ts: лишнее отсюда не везём.
+  const LIMITS = Object.freeze({ selectorLinks: 12, selector: 1024, text: 500, html: 4096 });
+  const TEXT_NODES = 80;
+  const CLASSES_PER_LINK = 2;
+  const CLASS_LENGTH = 60;
+  const SKIP_TEXT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  const URL_ATTRIBUTES = new Set(['href', 'src', 'action']);
+  const SAFE_SCHEMES = new Set(['http', 'https', 'file']);
+  // Поля, чьё value уходить агенту не должно: пароли, CSRF-токены, карты, одноразовые коды.
+  const SECRET_AUTOCOMPLETE = /^(cc-.*|one-time-code|.*-password)$/i;
+
+  /** Класс, похожий на хэш сборщика (CSS-modules, styled-components): со сборкой он сменится. */
+  function looksHashy(name) {
+    return /^[A-Za-z0-9_-]{12,}$/.test(name) && /\d/.test(name) && /[A-Z]/.test(name);
+  }
+
+  function stableClasses(el) {
+    const out = [];
+    for (const name of Array.from(el.classList || [])) {
+      if (out.length >= CLASSES_PER_LINK) break;
+      if (name.length > CLASS_LENGTH || /^css-[a-z0-9]+$/i.test(name) || looksHashy(name)) continue;
+      out.push(name);
+    }
+    return out;
+  }
+
+  function linkOf(el) {
+    const tag = el.tagName.toLowerCase();
+    if (el.id) return `${tag}#${CSS.escape(el.id)}`;
+    return tag + stableClasses(el).map((name) => `.${CSS.escape(name)}`).join('');
+  }
+
+  function unique(selector) {
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch {
+      return false;
+    }
+  }
+
+  function nthOfType(el) {
+    let index = 1;
+    for (let node = el.previousElementSibling; node; node = node.previousElementSibling) {
+      if (node.tagName === el.tagName) index += 1;
+    }
+    if (index > 1) return `:nth-of-type(${index})`;
+    for (let node = el.nextElementSibling; node; node = node.nextElementSibling) {
+      if (node.tagName === el.tagName) return ':nth-of-type(1)';
+    }
+    return '';
+  }
+
+  /** Кратчайший уникальный суффикс пути от элемента вверх: не больше LIMITS.selectorLinks звеньев, до `body`. */
+  function selectorOf(el) {
+    const links = [];
+    for (let node = el; node && node.nodeType === 1 && node !== document.body && links.length < LIMITS.selectorLinks; node = node.parentElement) {
+      let link = linkOf(node);
+      if (node.parentElement && !unique([link, ...links].join(' > '))) link += nthOfType(node);
+      links.unshift(link);
+      const selector = links.join(' > ');
+      if (unique(selector)) return selector.slice(0, LIMITS.selector);
+    }
+    return (links.join(' > ') || el.tagName.toLowerCase()).slice(0, LIMITS.selector);
+  }
+
+  function isSpace(code) {
+    return (
+      code === 32 ||
+      (code >= 9 && code <= 13) ||
+      code === 160 ||
+      code === 5760 ||
+      (code >= 8192 && code <= 8202) ||
+      code === 8232 ||
+      code === 8233 ||
+      code === 8239 ||
+      code === 8287 ||
+      code === 12288 ||
+      code === 65279
+    );
+  }
+
+  /** Текст элемента: не больше TEXT_NODES текстовых узлов, пробелы схлопнуты, узлы разделены пробелом, до LIMITS.text. */
+  function textOf(el) {
+    let text = '';
+    let space = false;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.parentElement !== null && SKIP_TEXT.has(node.parentElement.tagName.toUpperCase()) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let node = walker.nextNode(), seen = 1; node !== null && seen <= TEXT_NODES && text.length < LIMITS.text; node = walker.nextNode(), seen += 1) {
+      if (text !== '') space = true;
+      const value = node.nodeValue || '';
+      for (let index = 0; index < value.length && text.length < LIMITS.text; index += 1) {
+        if (isSpace(value.charCodeAt(index))) {
+          if (text !== '') space = true;
+          continue;
+        }
+        if (space) {
+          if (text.length + 1 >= LIMITS.text) return text;
+          text += ' ';
+          space = false;
+        }
+        text += value.charAt(index);
+      }
+    }
+    return text;
+  }
+
+  function isSecretField(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea') return false;
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && (type === 'password' || type === 'hidden')) return true;
+    const tokens = (el.getAttribute('autocomplete') || '').split(/\s+/);
+    return tokens.some((token) => SECRET_AUTOCOMPLETE.test(token));
+  }
+
+  /** URL атрибута без query и hash; схема не http, https или file — пустая строка (`sanitizeUrl` Orca). */
+  function cleanUrl(value) {
+    const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(value);
+    if (scheme !== null && !SAFE_SCHEMES.has(scheme[1].toLowerCase())) return '';
+    return value.replace(/[?#][\s\S]*$/, '');
+  }
+
+  /** HTML элемента без скриптов, обработчиков и секретов полей; на символ длиннее `max` — так main видит обрезку. */
+  function htmlOf(el, max) {
+    const clone = el.cloneNode(true);
+    for (const node of clone.querySelectorAll('script, style')) node.remove();
+    for (const node of [clone, ...clone.querySelectorAll('*')]) {
+      for (const attr of Array.from(node.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith('on') || name === 'srcdoc') node.removeAttribute(attr.name);
+        else if (URL_ATTRIBUTES.has(name)) node.setAttribute(attr.name, cleanUrl(attr.value));
+      }
+      if (isSecretField(node)) {
+        node.removeAttribute('value');
+        if (node.tagName.toLowerCase() === 'textarea') node.textContent = '';
+      }
+    }
+    return clone.outerHTML.slice(0, max + 1);
+  }
+
+  /** Вычисленные стили по списку ключей (kebab-case). */
+  function stylesOf(el, keys) {
+    const computed = getComputedStyle(el);
+    const styles = {};
+    for (const key of keys) styles[key] = computed.getPropertyValue(key);
+    return styles;
+  }
+
+  globalThis.__parleyDom = Object.freeze({ LIMITS, selectorOf, textOf, htmlOf, stylesOf });
+})();
+```
+
+- [ ] **Шаг 4. Скрипт выбора на помощниках.** В `guest-pick.js`:
+  - в шапке две последние строки комментария («// Файл — одно выражение: его значение — промис, …» и «// человека — данные элемента, по Esc или отмене — null.») заменить:
+
+```js
+// Main ставит перед ним `guest-dom.js` в ту же строку (помощники DOM `globalThis.__parleyDom`, этап B браузера):
+// значение строки — значение этого файла, промис, который Electron дождётся и отдаст main. По клику
+// человека — данные элемента, по Esc или отмене — null.
+```
+
+  - константы `MAX_LINKS`, `MAX_TEXT`, `MAX_HTML` с комментарием над ними заменить:
+
+```js
+  // Помощники DOM — guest-dom.js в той же строке перед этим файлом (этап B браузера, задача 2).
+  const dom = globalThis.__parleyDom;
+```
+
+  - удалить `SECRET_AUTOCOMPLETE` с его комментарием и функции `selectorOf`, `isSecretField`, `cleanHtml`;
+  - `dataOf` заменить:
+
+```js
+  function dataOf(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      selector: dom.selectorOf(el),
+      text: dom.textOf(el),
+      // html — на символ больше предела: так main видит, что обрезано, и ставит свою пометку.
+      html: dom.htmlOf(el, dom.LIMITS.html),
+      styles: dom.stylesOf(el, STYLE_KEYS),
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      devicePixelRatio: window.devicePixelRatio,
+    };
+  }
+```
+
+  `STYLE_KEYS` (23 стиля), `BLOCKED`, оверлей с подписью `tag.class · W×H` и проверки `isTrusted` остаются как есть.
+
+- [ ] **Шаг 5. Подключение и линтер.**
+  - `main/index.ts`: рядом с `import guestPickScript from './browser/guest-pick.js?raw';` — `import guestDomScript from './browser/guest-dom.js?raw';`; в `createDesignMode({ … })` строку `guestScript: guestPickScript,` заменить:
+
+```ts
+      // Помощники DOM (guest-dom.js, по Orca) — в той же строке перед скриптом выбора: значение строки — промис выбора.
+      guestScript: `${guestDomScript}\n${guestPickScript}`,
+```
+
+  - `eslint.config.js`: блок для `guest-pick.js` заменить:
+
+```js
+  // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
+  {
+    files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js'],
+    languageOptions: {
+      globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly', NodeFilter: 'readonly' },
+    },
+  },
+```
+
+- [ ] **Шаг 6. Запустить — проходит.** Команда шага 2 → PASS (7 + 4 теста). `pnpm --filter @parley/desktop exec vitest run src/main` → PASS (Design Mode цел: `design-mode.test.ts` подставляет свой скрипт). `pnpm lint` → без ошибок. `pnpm --filter @parley/desktop typecheck` → без ошибок.
+
+- [ ] **Шаг 7. Закоммитить.**
+
+```bash
+git add packages/desktop/src/main/browser/guest-dom.js packages/desktop/src/main/browser/guest-dom.test.ts packages/desktop/src/main/browser/guest-pick.js packages/desktop/src/main/browser/guest-pick.test.ts packages/desktop/src/main/index.ts eslint.config.js
+git commit -m "feat(desktop): общие помощники DOM скриптов страницы по Orca — кратчайший уникальный селектор, ограниченный текст, очистка URL" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+## Задача 3. Маска секретов `shared/redact.ts`
 
 **Файлы:**
 - Создать: `packages/desktop/src/shared/redact.ts`
@@ -292,7 +702,7 @@ describe('redactBody', () => {
 
   `pnpm --filter @parley/desktop exec vitest run src/shared/redact.test.ts` → FAIL: `Failed to resolve import "./redact.js"`.
 
-- [ ] **Шаг 3. Добавить строку.** В `packages/desktop/src/shared/strings.ts` сразу после блока `designBlock: { … },` вставить новое пространство (задачи 3–5 его растят):
+- [ ] **Шаг 3. Добавить строку.** В `packages/desktop/src/shared/strings.ts` сразу после блока `designBlock: { … },` вставить новое пространство (задачи 4–6 его растят):
 
 ```ts
   /**
@@ -446,7 +856,7 @@ git commit -m "feat(desktop): маска секретов для файлов-к
 
 ---
 
-## Задача 3. Основа файлов-контекстов `shared/context-markdown.ts`
+## Задача 4. Основа файлов-контекстов `shared/context-markdown.ts`
 
 **Файлы:**
 - Создать: `packages/desktop/src/shared/context-markdown.ts`
@@ -457,7 +867,6 @@ git commit -m "feat(desktop): маска секретов для файлов-к
 - Берёт: `ViewportSpec` (A, `shared/browser-devtools.ts`), имена пресетов `S.browser.viewport.presets` (A).
 - Отдаёт (индекс): `fence(text, info?)`, `ContextKind`, `CONTEXT_LIMITS`.
 - Отдаёт (этап B): `CONTEXT_KINDS`, `isContextKind(value)`, `contextLabel(raw)`, `headerUrl(url)`, `viewportNote(spec)`, `SCREENSHOT_SLOT`, `fillScreenshot(markdown, pngPath)`, `cutText(text, limit)`, `ContextPart`, `assemble(parts)`, `PageMeta`, `header(title, page, screenshot)`.
-- `CONTEXT_LIMITS` получает поле `annotationFullPage: 8000` — граница снимка всей страницы (спека 4.7). Это добавление к индексу.
 
 - [ ] **Шаг 1. Написать падающий тест.**
 
@@ -563,7 +972,7 @@ describe('isContextKind', () => {
 
   `pnpm --filter @parley/desktop exec vitest run src/shared/context-markdown.test.ts` → FAIL: `Failed to resolve import "./context-markdown.js"`.
 
-- [ ] **Шаг 3. Дополнить `S.contextFile`.** В `strings.ts` блок `contextFile` (задача 2) после `truncated` дополнить:
+- [ ] **Шаг 3. Дополнить `S.contextFile`.** В `strings.ts` блок `contextFile` (задача 3) после `truncated` дополнить:
 
 ```ts
     /** Пометка над данными страницы (спека 15.1, п. 10): всё в ограде написала страница. */
@@ -601,7 +1010,7 @@ export function isContextKind(value: unknown): value is ContextKind {
   return typeof value === 'string' && (CONTEXT_KINDS as readonly string[]).includes(value);
 }
 
-/** Пределы раздела 8 спеки для файлов-контекстов; `annotationFullPage` — граница снимка всей страницы (4.7). */
+/** Пределы раздела 8 спеки для файлов-контекстов. Снимок аннотаций — видимая часть (этап 0, 0.7): своей границы у него нет. */
 export const CONTEXT_LIMITS = {
   markdown: 262_144,
   body: 4096,
@@ -610,7 +1019,6 @@ export const CONTEXT_LIMITS = {
   comment: 2000,
   annotationHtml: 1024,
   label: 40,
-  annotationFullPage: 8000,
 } as const;
 
 /** Ограда из обратных кавычек: на одну длиннее самой длинной серии внутри, не короче трёх. */
@@ -757,7 +1165,7 @@ git commit -m "feat(desktop): ограда, метки и шапка файло�
 
 ---
 
-## Задача 4. Шаблоны `element`, `console`, `request`, `errors`
+## Задача 5. Шаблоны `element`, `console`, `request`, `errors`
 
 **Файлы:**
 - Создать: `packages/desktop/src/shared/css-selector.ts`
@@ -765,10 +1173,10 @@ git commit -m "feat(desktop): ограда, метки и шапка файло�
 - Тесты: `packages/desktop/src/shared/css-selector.test.ts`, `packages/desktop/src/shared/context-markdown.test.ts`
 
 **Интерфейсы:**
-- Берёт: `ConsoleEntry`, `NetworkEntry`, `ResponseBody`, `DEVTOOLS_LIMITS` (A); `redactUrl`, `redactHeaders`, `redactBody` (задача 2); основу задачи 3.
+- Берёт: `ConsoleEntry`, `NetworkEntry`, `ResponseBody`, `DEVTOOLS_LIMITS` (A); `redactUrl`, `redactHeaders`, `redactBody` (задача 3); основу задачи 4.
 - Отдаёт:
   - `ReactComponentInfo { name: string; source: string | null; approx: boolean }` (`shared/browser-types.ts`);
-  - `SelectorTail`, `selectorTail(selector)` (`shared/css-selector.ts`) — общий разбор последнего звена селектора для метки и для сверки узла в main (задача 14);
+  - `SelectorTail`, `selectorTail(selector)` (`shared/css-selector.ts`) — общий разбор последнего звена селектора для метки и для сверки узла в main (задача 15);
   - `BuiltContext { kind; label; markdown }`, `ElementData`, `ElementContextInput`;
   - `elementLabel(selector)`, `consoleLabel(entry)`, `requestLabel(entry)`, `pageLabel(url)`;
   - `elementContext({ pick, viewportNote })`, `consoleContext({ pageUrl, entry })`, `requestContext({ pageUrl, entry, responseBody })`, `errorsContext({ pageUrl, console, requests })`.
@@ -791,6 +1199,8 @@ describe('selectorTail', () => {
   it('экранирование CSS.escape снимается: \\: и шестнадцатеричное с пробелом', () => {
     expect(selectorTail('div.md\\:flex')).toEqual({ tag: 'div', id: null, classes: ['md:flex'] });
     expect(selectorTail('span.\\31 a')).toEqual({ tag: 'span', id: null, classes: ['1a'] });
+    // Селектор guest-dom.js (задача 2, по Orca) с Tailwind-классами: `\.` и `\:` внутри имени.
+    expect(selectorTail('div.md\\:flex.py-1\\.5')).toEqual({ tag: 'div', id: null, classes: ['md:flex', 'py-1.5'] });
   });
 });
 ```
@@ -1043,7 +1453,8 @@ export interface ReactComponentInfo {
 ```ts
 // packages/desktop/src/shared/css-selector.ts
 /**
- * Последнее звено селектора `guest-pick.js` (`tag#id` или `tag.class1.class2` с `:nth-of-type`): по нему окно строит
+ * Последнее звено селектора скриптов страницы (`guest-dom.js#selectorOf`: `tag#id` или `tag.class1.class2` с
+ * `:nth-of-type`): по нему окно строит
  * метку файла-контекста (`context-markdown.ts#elementLabel`), а main сверяет узел, найденный CDP по точке клика
  * (`main/browser/element-info.ts`). Имена в селекторе экранированы `CSS.escape` — здесь обратное преобразование.
  */
@@ -1320,7 +1731,7 @@ git commit -m "feat(desktop): файлы-контексты элемента, к
 
 ---
 
-## Задача 5. Шаблон `annotations` и типы аннотаций
+## Задача 6. Шаблон `annotations` и типы аннотаций
 
 **Файлы:**
 - Изменить: `packages/desktop/src/shared/browser-types.ts` (типы меток), `packages/desktop/src/shared/context-markdown.ts`, `packages/desktop/src/shared/strings.ts`
@@ -1590,7 +2001,7 @@ git commit -m "feat(desktop): файл-контекст пачки аннота�
 
 ---
 
-## Задача 6. Запись файлов-контекстов в main и очистка `drops/context`
+## Задача 7. Запись файлов-контекстов в main и очистка `drops/context`
 
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/context-files.ts`
@@ -1598,10 +2009,10 @@ git commit -m "feat(desktop): файл-контекст пачки аннота�
 - Тесты: `packages/desktop/src/main/browser/context-files.test.ts`, `packages/desktop/src/main/drops.test.ts`
 
 **Интерфейсы:**
-- Берёт: `dropsDir` (`main/drops.ts`), `contextLabel`, `fillScreenshot`, `isContextKind`, `CONTEXT_LIMITS`, `ContextKind` (задачи 3–5), `HostError` (`main/host-connection.ts`).
+- Берёт: `dropsDir` (`main/drops.ts`), `contextLabel`, `fillScreenshot`, `isContextKind`, `CONTEXT_LIMITS`, `ContextKind` (задачи 4–6), `HostError` (`main/host-connection.ts`).
 - Отдаёт (индекс): `contextDir(home?)`, `saveContextFile({ kind, label, markdown, imagePath, dir, dropsDir })` → `{ mdPath, pngPath }`. Дополнительно — необязательный `random` для тестов, как у `saveImage`.
-- Отдаёт: `parseContextInput(value): ContextInput` (форма из окна, задача 7), `CONTEXT_SUBDIR`, `cleanupDropsTree(dir, maxAgeMs, now?)` (`main/drops.ts`).
-- Тип `ContextInput` появляется в задаче 7. Здесь `parseContextInput` возвращает `{ kind; label; markdown; imagePath }` — ту же форму.
+- Отдаёт: `parseContextInput(value): ContextInput` (форма из окна, задача 8), `CONTEXT_SUBDIR`, `cleanupDropsTree(dir, maxAgeMs, now?)` (`main/drops.ts`).
+- Тип `ContextInput` появляется в задаче 8. Здесь `parseContextInput` возвращает `{ kind; label; markdown; imagePath }` — ту же форму.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -1907,14 +2318,14 @@ git commit -m "feat(desktop): запись файлов-контекстов в 
 
 ---
 
-## Задача 7. Мост `saveContext` и канал `browser:save-context`
+## Задача 8. Мост `saveContext` и канал `browser:save-context`
 
 **Файлы:**
 - Изменить: `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/main/ipc.ts`, `packages/desktop/src/main/index.ts`, `packages/desktop/src/preload/index.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.ts`
 - Тесты: `packages/desktop/src/main/ipc.test.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.test.ts`
 
 **Интерфейсы:**
-- Берёт: `parseContextInput`, `saveContextFile`, `contextDir` (задача 6).
+- Берёт: `parseContextInput`, `saveContextFile`, `contextDir` (задача 7).
 - Отдаёт: `ContextInput { kind; label; markdown; imagePath }`, `SavedContext { mdPath; pngPath }`, `BrowserApi.saveContext(input): Promise<SavedContext>` (индекс: канал `browser:save-context`), `RegisterIpcOptions['browser'].saveContext`, `FakeBridge.setSaveContextResult(answer)`; вызовы — в `browserCalls`.
 
 - [ ] **Шаг 1. Написать падающие тесты.** В `ipc.test.ts` рядом с подставным `designMode` объявить:
@@ -2066,7 +2477,7 @@ git commit -m "feat(desktop): мост saveContext и канал browser:save-co
 
 ---
 
-## Задача 8. Цель «To» в раскладке: `BrowserTarget` у вкладки браузера
+## Задача 9. Цель «To» в раскладке: `BrowserTarget` у вкладки браузера
 
 **Файлы:**
 - Изменить: `packages/desktop/src/shared/layout-types.ts`, `packages/desktop/src/renderer/layout/tree.ts`
@@ -2187,14 +2598,14 @@ git commit -m "feat(desktop): цель «To» вкладки браузера в
 
 ---
 
-## Задача 9. Цели работы: список, умолчание и откат (`targets.ts`)
+## Задача 10. Цели работы: список, умолчание и откат (`targets.ts`)
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/context/targets.ts`
 - Тест: `packages/desktop/src/renderer/browser/context/targets.test.ts`
 
 **Интерфейсы:**
-- Берёт: `BrowserTarget` (задача 8), `sessionTag`, `sessionRowLabel` (`renderer/lib/participant.ts`), `WorkEntry` (`@parley/core`, только тип).
+- Берёт: `BrowserTarget` (задача 9), `sessionTag`, `sessionRowLabel` (`renderer/lib/participant.ts`), `WorkEntry` (`@parley/core`, только тип).
 - Отдаёт: `TargetOption { target; key; name; title; provider; mode }`, `targetKey(target)`, `targetOptions(entry, chatAvailable)`, `isTargetAlive(entry, target)`, `defaultTarget(entry, focusedSessionId)`, `resolveTarget(entry, stored, focusedSessionId)` → `{ target; fellBack }`, `targetName(entry, target)`.
 - Правила (спека 4.5): в меню — сессии работы, кроме закрытых (`lifecycle !== 'closed'`), и все комнаты. Умолчание — сессия в фокусе работы (`focusedSessionOf`), если она в списке, иначе первая живая (`lifecycle === 'active'`), иначе первая комната, иначе `null`. Сохранённая цель пропала — умолчание и `fellBack: true`.
 
@@ -2216,6 +2627,7 @@ const WORK = makeWork('w-01', {
   rooms: [makeRoom('r-01', 'review room'), makeRoom('r-02', 'design')],
 });
 
+// Сессия Codex здесь — без Chat (Codex ниже 0.160.0 или хост без `feed-codex`, PR #36): решает `feedAvailableNow`, не имя провайдера.
 const chat = (provider: string): boolean | null => (provider === 'claude' ? true : provider === 'codex' ? false : null);
 
 describe('targetOptions (спека браузера 4.5)', () => {
@@ -2369,7 +2781,7 @@ git commit -m "feat(desktop): цели «To» вкладки браузера �
 
 ---
 
-## Задача 10. Чипы файлов-контекстов, `.png` в промпте и в письме комнаты
+## Задача 11. Чипы файлов-контекстов, `.png` в промпте и в письме комнаты
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/chat/context-attachments.ts`, `packages/desktop/src/renderer/components/rooms/attachments.test.ts`
@@ -2377,12 +2789,13 @@ git commit -m "feat(desktop): цели «To» вкладки браузера �
 - Тесты: `packages/desktop/src/renderer/chat/context-attachments.test.ts`, `packages/desktop/src/renderer/chat/attachments.test.ts`, `packages/desktop/src/renderer/chat/AttachmentChip.test.tsx`, `packages/desktop/src/renderer/chat/items/items.test.tsx`
 
 **Интерфейсы:**
-- Берёт: `isContextKind`, `ContextKind` (задача 3).
+- Берёт: `isContextKind`, `ContextKind` (задача 4).
 - Отдаёт:
   - `ContextAttachment { kind; label; imagePath }`, `contextAttachment(path)` — путь `…/drops/context/<вид>-<метка>-<4 hex>.md` или `null`;
   - реестр снимков: `rememberContextImage(mdPath, pngPath)`, `contextImageOf(mdPath)`, `withContextImages(paths)`, `pairContextAttachments(paths)`, `resetContextImagesForTests()`;
   - `composePrompt` и `composeRoomMessage` добавляют известный `.png` сразу за его `.md`.
-- **Почему реестр, а не догадка по имени.** У `element` и `annotations` снимка может не быть: элемент вне видимой части, снимок не вышел, страница сменилась до «Add to chat». Упоминание несуществующего `.png` CLI не приложит, а агент получит битый путь. Знает о снимке только ответ `saveContext` (`pngPath`). Его запоминает модуль окна (`rememberContextImage` зовёт `addContext`, задача 11). Вложения Chat (`useChatUiStore`) и комнаты (`composerAttachments`) живут только в памяти окна. Реестр живёт столько же: после перезагрузки окна нет ни чипа, ни записи. Предел — 500 записей, первыми уходят старые. Агент всё равно найдёт снимок: путь стоит в шапке самого `.md` (`Screenshot: …`).
+- **Вид Chat у Codex** (PR #36, Codex 0.160.0 и новее): поле берёт те же `useChatUiStore.attachments`, но при Send отправляет их через `composeRoomMessage` (`chat/ChatView.tsx`: список «Attachments:» с путями кодом), а не упоминаниями `@"путь"`. Поэтому `.png` к контексту у Codex с Chat даёт та же правка `composeRoomMessage`; своего кода для Codex нет.
+- **Почему реестр, а не догадка по имени.** У `element` и `annotations` снимка может не быть: элемент вне видимой части, снимок не вышел, страница сменилась до «Add to chat». Упоминание несуществующего `.png` CLI не приложит, а агент получит битый путь. Знает о снимке только ответ `saveContext` (`pngPath`). Его запоминает модуль окна (`rememberContextImage` зовёт `addContext`, задача 12). Вложения Chat (`useChatUiStore`) и комнаты (`composerAttachments`) живут только в памяти окна. Реестр живёт столько же: после перезагрузки окна нет ни чипа, ни записи. Предел — 500 записей, первыми уходят старые. Агент всё равно найдёт снимок: путь стоит в шапке самого `.md` (`Screenshot: …`).
 - Чип — по пути, без реестра: миниатюра соседнего `.png` у `element` и `annotations` через `app.imageThumbnail`. Нет файла — нет миниатюры, остаётся значок.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -2751,7 +3164,7 @@ git commit -m "feat(desktop): чип файла-контекста, снимок
 
 ---
 
-## Задача 11. Доставка в цель и тост «Open» / «Undo» (`deliver.ts`)
+## Задача 12. Доставка в цель и тост «Open» / «Undo» (`deliver.ts`)
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/context/deliver.ts`
@@ -2759,7 +3172,7 @@ git commit -m "feat(desktop): чип файла-контекста, снимок
 - Тест: `packages/desktop/src/renderer/browser/context/deliver.test.ts`
 
 **Интерфейсы:**
-- Берёт: `addAttachments` (`chat/attachments.ts`), `rememberContextImage` (задача 10), `useChatUiStore`, `useUiStore`, `roomKey`, `feedAvailableNow`, `sendWithToast`, `shellQuote` (`terminal/drop.ts`), `applyFocusTarget` и `buildFocusTargetDeps` (`attention/focus-target.ts`), `updateTab`, `tabId`, `targetKey`, `targetName` (задача 9).
+- Берёт: `addAttachments` (`chat/attachments.ts`), `rememberContextImage` (задача 11), `useChatUiStore`, `useUiStore`, `roomKey`, `feedAvailableNow`, `sendWithToast`, `shellQuote` (`terminal/drop.ts`), `applyFocusTarget` и `buildFocusTargetDeps` (`attention/focus-target.ts`), `updateTab`, `tabId`, `targetKey`, `targetName` (задача 10).
 - Отдаёт:
   - `ContextDraft { kind; label; markdown; imagePath; count; onUndo? }` — файл до записи;
   - `ContextItem { kind; label; mdPath; pngPath; count; onUndo? }` — записанный;
@@ -3007,7 +3420,7 @@ const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = 
 };
 ```
 
-  - в `S.browser` после `pickAgain` (удаляется в задаче 16) дописать:
+  - в `S.browser` после `pickAgain` (удаляется в задаче 17) дописать:
 
 ```ts
     /** Цель «To» (спека браузера 4.1, 4.5): кнопка строки вкладки, меню и тост добавления. */
@@ -3275,7 +3688,7 @@ git commit -m "feat(desktop): доставка файла-контекста в 
 
 ---
 
-## Задача 12. Меню «To» в строке вкладки и цель вкладки
+## Задача 13. Меню «To» в строке вкладки и цель вкладки
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/context/TargetMenu.tsx`, `packages/desktop/src/renderer/browser/context/use-page-context.ts`
@@ -3283,7 +3696,7 @@ git commit -m "feat(desktop): доставка файла-контекста в 
 - Тесты: `packages/desktop/src/renderer/browser/context/TargetMenu.test.tsx`, `packages/desktop/src/renderer/browser/BrowserSurface.test.tsx`, `packages/desktop/src/renderer/browser/BrowserChrome.test.tsx` (A)
 
 **Интерфейсы:**
-- Берёт: `targetOptions`, `targetKey`, `targetName`, `resolveTarget` (задача 9), `addContext`, `ContextDraft`, `Delivered` (задача 11), `useFeedAvailability` (`lib/feed-view.ts`), `AgentIcon`, `focusedSessionOf`.
+- Берёт: `targetOptions`, `targetKey`, `targetName`, `resolveTarget` (задача 10), `addContext`, `ContextDraft`, `Delivered` (задача 12), `useFeedAvailability` (`lib/feed-view.ts`), `AgentIcon`, `focusedSessionOf`.
 - Отдаёт:
   - `TargetMenu({ entry, target, onChange })`;
   - `PageContext { target; setTarget(target); add(draft): Promise<Delivered> }`, `usePageContext({ bridge, workKey, tabId, entry, stored, sendDeps })` — цель вкладки, откат с тостом, одна очередь добавлений на вкладку;
@@ -3614,7 +4027,7 @@ export function usePageContext(input: PageContextInput): PageContext {
 
 - [ ] **Шаг 5. Строка вкладки.** В `BrowserChrome.tsx`:
   - в `BrowserChromeProps` — `targetMenu?: ReactNode;` с комментарием «Меню цели «To» (этап B, спека браузера 4.1): после ⌖ и ✎, перед консолью»; импорт `type ReactNode` из `react`;
-  - сразу после кнопки ⌖ (A: своя разметка с `aria-label={S.browser.designMode}`; в задаче 16 она станет Select, а в задаче 22 рядом встанет ✎) и до кнопки консоли этапа A (`aria-label={S.browser.devtools.toggle}`) — `{props.targetMenu}`.
+  - сразу после кнопки ⌖ (A: своя разметка с `aria-label={S.browser.designMode}`; в задаче 17 она станет Select, а в задаче 23 рядом встанет ✎) и до кнопки консоли этапа A (`aria-label={S.browser.devtools.toggle}`) — `{props.targetMenu}`.
 
 - [ ] **Шаг 6. Поверхность.** В `BrowserSurface.tsx`:
   - импорты: `import type { BrowserTarget } from '../../shared/layout-types.js';`, `import { TargetMenu } from './context/TargetMenu.js';`, `import { usePageContext } from './context/use-page-context.js';`;
@@ -3649,7 +4062,7 @@ git commit -m "feat(desktop): меню «To» в строке вкладки б�
 
 ---
 
-## Задача 13. «Add to chat» из Console и Network
+## Задача 14. «Add to chat» из Console и Network
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/context/actions.ts`
@@ -3661,8 +4074,8 @@ git commit -m "feat(desktop): меню «To» в строке вкладки б�
   - `ConsoleEntry`, `NetworkEntry`, `isFailed` (`shared/browser-devtools.ts`); `TabDevtools`, `EMPTY_DEVTOOLS`, `useDevtoolsStore` (`devtools/store.ts`); фикстуры `consoleEntry`, `networkEntry` (`test-utils/devtools-fixtures.ts`);
   - `bridge.browser.responseBody(id, requestId)`; в подставном мосте — `setResponseBody`, `setDevtoolsSnapshot`;
   - слоты `DevtoolsPanel`: `onAddConsoleToChat`, `onAddRequestToChat`, `onAddErrorsToChat`. Кнопки и их строки (`S.browser.devtools.addToChat`, `addErrorsToChat`) — у A: файлы панели этап B не меняет.
-- Берёт (B): шаблоны задачи 4, `ContextDraft`, `Delivered`.
-- Отдаёт: `PageContextActions { console(entry); request(entry); errors() }`, `PageContextDeps`, `createPageContextActions(deps)`, `pageErrors(tab)`, `elementDraft(pick, viewportNote)` (задача 16).
+- Берёт (B): шаблоны задачи 5, `ContextDraft`, `Delivered`.
+- Отдаёт: `PageContextActions { console(entry); request(entry); errors() }`, `PageContextDeps`, `createPageContextActions(deps)`, `pageErrors(tab)`, `elementDraft(pick, viewportNote)` (задача 17).
 - **Что берёт «Add errors to chat»** (спека 4.3: «все видимые ошибки консоли и упавшие запросы»). То же, что считает красный счётчик A (`devtoolsCounters`), но по видимым эпохам — текущей, а с «Preserve log» и прежним:
   - ошибки консоли и исключения, кроме строк сети (`origin: 'network'`): их запрос и так войдёт в файл;
   - упавшие запросы (`isFailed`).
@@ -3795,7 +4208,7 @@ describe('elementDraft', () => {
 
   В `BrowserSurface.test.tsx`:
   - импорты: `import { useUiStore } from '../store/ui.js';`, `import { roomKey } from '../lib/room-view.js';`, `import { resetDeliveryForTests } from './context/deliver.js';`, `import { useDevtoolsStore } from './devtools/store.js';` и `import { consoleEntry } from '../test-utils/devtools-fixtures.js';` (те, что A уже импортировал, не повторять);
-  - помощники рядом с `entryWith` (задача 12) и блок:
+  - помощники рядом с `entryWith` (задача 13) и блок:
 
 ```tsx
 /** Работа с одной комнатой и без сессий: цель по умолчанию — комната, вложения видны в её поле. */
@@ -3956,7 +4369,7 @@ git commit -m "feat(desktop): Add to chat из консоли и сети, вс�
 
 ---
 
-## Задача 14. CDP для Select в main: `REACT_INFO_FN`, закрытый список, роль и React
+## Задача 15. CDP для Select в main: `REACT_INFO_FN` (поиск компонента — по Orca), закрытый список, роль и React
 
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/guest-data.ts`, `packages/desktop/src/main/browser/react-info.ts`, `packages/desktop/src/main/browser/element-info.ts`
@@ -3964,13 +4377,18 @@ git commit -m "feat(desktop): Add to chat из консоли и сети, вс�
 - Тесты: `packages/desktop/src/main/browser/react-info.test.ts`, `packages/desktop/src/main/browser/element-info.test.ts`, `packages/desktop/src/main/browser/inspector.test.ts` (этапа A)
 
 **Интерфейсы:**
-- Берёт: `Inspector`, `CDP_ALLOWED`, `createInspector` (A); `selectorTail` (задача 4); `ReactComponentInfo`, `Rect` (задачи 4, 5).
+- Берёт: `Inspector`, `CDP_ALLOWED`, `createInspector` (A); `selectorTail` (задача 5); `ReactComponentInfo`, `Rect` (задачи 5, 6).
 - Отдаёт:
-  - `guest-data.ts`: `isRecord`, `finite`, `cutCodePoints`, `readRect`, `readPoint`, `Point` — разбор данных страницы для `design-mode.ts` и `annotate.ts`; первые четыре переезжают из `design-mode.ts` без изменений;
-  - `react-info.ts`: `REACT_INFO_FN`, `REACT_LIMITS = { components: 3, name: 100, source: 300 }`, `parseReactInfo(value)`;
+  - `guest-data.ts`: `isRecord`, `finite`, `cutCodePoints`, `readRect`, `readPoint`, `Point`, `documentPoint(point, scroll)` — разбор данных страницы для `design-mode.ts` и `annotate.ts`; первые четыре переезжают из `design-mode.ts` без изменений; `documentPoint` — точка документа для `DOM.getNodeForLocation` (этап 0, 0.4);
+  - `react-info.ts`: `REACT_INFO_FN`, `REACT_LIMITS = { components: 3, name: 100, source: 300, depth: 35, stackLines: 6 }`, `parseReactInfo(value)`;
   - `element-info.ts`: `CdpSender = Pick<Inspector, 'send'>`, `ElementInfo { role?; name?; react? }`, `ELEMENT_INFO_LIMITS`, `nodeMatches(node, tail)`, `withTimeout(promise, ms, fallback)`, `elementInfo(inspector, id, point, selector)`;
   - `inspector.ts`: `cdpCallAllowed(method, params)`; `CDP_ALLOWED` пополняется методами этапа B.
-- Если задача 1 выбрала другие ветки спайка 0.6, код шагов 3 и 4 меняется по её таблице.
+- Решения этапа 0 (0.6): React 18 — `_debugSource`; React 19 — правило `parseDebugStack` по первым 6 строкам `_debugStack` с пометкой approx.; `getNodeForLocation` возвращает сам элемент, но ждёт координаты документа — их строит вызывающий (`documentPoint`, задачи 16 и 20), `elementInfo` берёт точку как есть.
+- **`REACT_INFO_FN` — адаптация Orca** `src/main/browser/grab-guest-react-script.ts` (`getFiberFromElement`, `getComponentNameFromFiber`, `cleanSourcePath`, подъём по `return` из `getReactMetadata`). Функция Orca — чистый ES5 без замыканий, поэтому ложится в строку `Runtime.callFunctionOn`; в изолированном мире её не исполнить: `__reactFiber$…` лежит на обёртке узла в мире страницы. Изменено:
+  - пропуск каркаса — только точные имена (`Fragment`, `StrictMode`, `Suspense`, `Profiler`, `*.Provider`, `*.Consumer`), а объекты-контексты имени не дают вовсе; `shouldSkipReactName` Orca целиком не берём — правила по началу и концу имени (`Client…`, `Dev…`, `…Wrapper`, `…Context`) отбросили бы `ClientList`, `DevPanel`, `ButtonWrapper`;
+  - ответ — наш: до трёх компонентов изнутри наружу (`SaveButton < SettingsForm < SettingsPage`, спека 3.6), у каждого свой источник — место в его файле, где он нарисовал узел ниже по цепочке; у Orca — строка `<A> <B>` до 6 имён и один `sourceFile`;
+  - React 19 (`_debugStack`, у Orca его нет) — правило этапа 0; путь источника очищается функцией Orca: `http://localhost:5173/src/App.tsx?t=1` → `src/App.tsx`;
+  - пределы — `REACT_LIMITS` (подставлены в строку функции), а не `GRAB_BUDGET`; `containsSecret` не нужен — путь исходника не секрет, а данные страницы и так в ограде.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -4005,29 +4423,65 @@ function react18(): object {
   return { type: 'button', return: save, _debugSource: { fileName: 'src/components/SaveButton.tsx', lineNumber: 12 } };
 }
 
-describe('REACT_INFO_FN (спека браузера 3.8)', () => {
+/** Кнопка React 19: `_debugStack` — объект Error, строки стека — как в отчёте этапа 0 (0.6). */
+function react19(stack: string[]): object {
+  return { type: 'button', return: { type: SaveButton, return: null }, _debugStack: { stack: stack.join('\n') } };
+}
+
+describe('REACT_INFO_FN (спека браузера 3.8; поиск компонента — по Orca)', () => {
   it('React 18: до трёх компонентов вверх по return; источник — место в файле компонента, где он нарисовал узел ниже', () => {
-    expect(run({ __reactFiber$abc: react18() })).toEqual([
+    const chain = [
       { name: 'SaveButton', source: 'src/components/SaveButton.tsx:12', approx: false },
       { name: 'SettingsForm', source: 'src/SettingsForm.tsx:5', approx: false },
       { name: 'SettingsPage', source: 'src/SettingsPage.tsx:3', approx: false },
+    ];
+    expect(run({ __reactFiber$abc: react18() })).toEqual(chain);
+    // React 16 и 17 держат волокно под другим ключом (Orca getFiberFromElement).
+    expect(run({ __reactInternalInstance$abc: react18() })).toEqual(chain);
+  });
+
+  it('по Orca: имя forwardRef — из render, memo — из type; точные имена каркаса и контексты пропущены, ClientList и ButtonWrapper — нет', () => {
+    function ClientList(): null {
+      return null;
+    }
+    function ButtonWrapper(): null {
+      return null;
+    }
+    function Field(): null {
+      return null;
+    }
+    const memo = { type: { $$typeof: Symbol.for('react.memo'), type: ButtonWrapper }, return: null };
+    const provider = { type: { $$typeof: Symbol.for('react.memo'), displayName: 'Theme.Provider', type: Field }, return: memo };
+    const forward = { type: { $$typeof: Symbol.for('react.forward_ref'), render: ClientList }, return: provider };
+    const context = { type: { $$typeof: Symbol.for('react.context'), displayName: 'ThemeContext' }, return: forward };
+    expect(run({ __reactFiber$k: { type: 'input', return: context } })).toEqual([
+      { name: 'ClientList', source: null, approx: false },
+      { name: 'ButtonWrapper', source: null, approx: false },
     ]);
   });
 
-  it('React 19: первая строка _debugStack вне node_modules, без origin и query, с пометкой approx', () => {
-    const save = { type: SaveButton, return: null };
-    const button = {
-      type: 'button',
-      return: save,
-      _debugStack: {
-        stack: [
+  it('React 19: правило parseDebugStack этапа 0 — кадры jsxDEV и пакетов React пропущены, путь без origin и query, approx', () => {
+    // Бандл без карты исходников (стек из отчёта этапа 0, 0.6): позиция в бандле.
+    expect(
+      run({
+        __reactFiber$x: react19([
+          'Error: react-stack-top-frame',
+          '    at exports.jsxDEV (http://127.0.0.1:60724/app19.js:23792:33)',
+          '    at SaveButton (http://127.0.0.1:60724/app19.js:23824:62)',
+          '    at Object.react_stack_bottom_frame (http://127.0.0.1:60724/app19.js:21557:22)',
+        ]),
+      }),
+    ).toEqual([{ name: 'SaveButton', source: 'app19.js:23824', approx: true }]);
+    // Dev-сервер с модулями (Vite): кадр рантайма JSX из node_modules пропущен, query модуля снят.
+    expect(
+      run({
+        __reactFiber$x: react19([
           'Error: react-stack-top-frame',
           '    at exports.jsxDEV (http://localhost:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=1:250:30)',
           '    at SaveButton (http://localhost:5173/src/components/SaveButton.tsx?t=17:12:10)',
-        ].join('\n'),
-      },
-    };
-    expect(run({ __reactFiber$x: button })).toEqual([{ name: 'SaveButton', source: '/src/components/SaveButton.tsx:12', approx: true }]);
+        ]),
+      }),
+    ).toEqual([{ name: 'SaveButton', source: 'src/components/SaveButton.tsx:12', approx: true }]);
   });
 
   it('нет React — null; ловушка страницы в свойстве — null, без исключения', () => {
@@ -4160,7 +4614,7 @@ describe('withTimeout', () => {
 
   В `inspector.test.ts` (A):
   - импорты: `readdirSync`, `readFileSync` из `node:fs`, `path` из `node:path`, `fileURLToPath` из `node:url`, `cdpCallAllowed` — в импорт из `./inspector.js`, `REACT_INFO_FN` из `./react-info.js`;
-  - тест A «закрытый список этапа A; Runtime.evaluate и callFunctionOn в нём нет» сверяет список целиком. Его название → «закрытый список этапов A и B; Runtime.evaluate в нём нет»; в ожидаемый массив дописать двенадцать методов этапа B (шаг 5); строку `expect(CDP_ALLOWED.has('Runtime.callFunctionOn')).toBe(false);` удалить — метод теперь в списке, а его вызов ограничивает `cdpCallAllowed` (тесты ниже);
+  - тест A «закрытый список этапа A; Runtime.evaluate и callFunctionOn в нём нет» сверяет список целиком. Его название → «закрытый список этапов A и B; Runtime.evaluate в нём нет»; в ожидаемый массив дописать одиннадцать методов этапа B (шаг 5); строку `expect(CDP_ALLOWED.has('Runtime.callFunctionOn')).toBe(false);` удалить — метод теперь в списке, а его вызов ограничивает `cdpCallAllowed` (тесты ниже);
   - в конец файла — блок:
 
 ```ts
@@ -4177,7 +4631,6 @@ describe('закрытый список CDP — этап B (спека брау�
       'Runtime.callFunctionOn',
       'Runtime.releaseObject',
       'Page.captureScreenshot',
-      'Page.getLayoutMetrics',
     ]) {
       expect(CDP_ALLOWED.has(method), method).toBe(true);
     }
@@ -4270,6 +4723,11 @@ export function readPoint(value: unknown): Point | null {
   if (!isRecord(value) || !finite(value.x) || !finite(value.y)) return null;
   return { x: value.x, y: value.y };
 }
+
+/** Точка для `DOM.getNodeForLocation`: координаты документа — точка вьюпорта плюс прокрутка (спайк 0.4, 0.6). */
+export function documentPoint(point: Point | null, scroll: Point): Point | null {
+  return point === null ? null : { x: point.x + scroll.x, y: point.y + scroll.y };
+}
 ```
 
   В `design-mode.ts` удалить свои `isRecord`, `cutCodePoints`, `finite`, `readRect` и `type Rect`, добавить `import { cutCodePoints, finite, isRecord, readRect } from './guest-data.js';` и `import type { Rect } from '../../shared/browser-types.js';`.
@@ -4277,51 +4735,95 @@ export function readPoint(value: unknown): Point | null {
 ```ts
 // packages/desktop/src/main/browser/react-info.ts
 /**
+ * Адаптация Orca `src/main/browser/grab-guest-react-script.ts` (stablyai/orca b1cd858, MIT). Copyright (c) 2026
+ * Lovecast Inc.; полный текст лицензии — в NOTICE в корне репозитория.
+ *
  * Компонент React и источник выбранного элемента (спека браузера 3.8). `REACT_INFO_FN` — единственная функция, которую
  * main исполняет в мире страницы: через `Runtime.callFunctionOn`, и закрытый список CDP пускает этот метод только с ней
- * (`inspector.ts#cdpCallAllowed`). Функция читает свойство `__reactFiber$…` узла и поднимается по `return` до трёх
- * пользовательских компонентов (функции и классы с именем). Источник компонента — место в его файле, где он нарисовал
- * узел ниже по цепочке: `_debugSource` у React до 18 и первая строка `_debugStack` вне `node_modules` у React 19 (с
- * пометкой approx.: без source maps строка — собранного файла). Из глобалов страницы функция берёт только встроенные,
- * ошибки ловит. Всё, что она вернула, — данные страницы: форму и длины проверяет `parseReactInfo`.
+ * (`inspector.ts#cdpCallAllowed`). Свойство `__reactFiber$…` лежит на обёртке узла в мире страницы — из изолированного
+ * мира скриптов выбора его не видно, поэтому это одна функция по CDP, а не часть `guest-pick.js`.
+ *
+ * Взято у Orca: волокно по ключам `__reactFiber$` и `__reactInternalInstance$` (React 16–19), имя компонента у
+ * `forwardRef` (`type.render`) и `memo` (`type.type`), очистка пути исходника (webpack, turbopack, `http://хост/`,
+ * `file://`, query), предел подъёма — 35 звеньев. Изменено:
+ * - пропуск каркаса — только точные имена (`Fragment`, `StrictMode`, `Suspense`, `Profiler`, `*.Provider`,
+ *   `*.Consumer`): правила Orca по началу и концу имени (`Client…`, `Dev…`, `…Wrapper`, `…Context`) отбросили бы
+ *   имена приложения; объекты-контексты имени не дают вовсе;
+ * - до трёх компонентов изнутри наружу (`SaveButton < SettingsForm < SettingsPage`, спека 3.6), у каждого свой
+ *   источник — место в его файле, где он нарисовал узел ниже по цепочке (`_debugSource`), а не одно поле на элемент;
+ * - React 19 (`_debugStack`, у Orca его нет) — правило `parseDebugStack` этапа 0 (отчёт, 0.6): первые 6 строк стека,
+ *   кадры рантайма JSX и пакетов React пропущены, первый оставшийся — место создания; пометка approx.: без source maps
+ *   это позиция в собранном файле.
+ * Из глобалов страницы функция берёт только встроенные, ошибки ловит. Всё, что она вернула, — данные страницы: форму и
+ * длины проверяет `parseReactInfo`.
  */
 
 import type { ReactComponentInfo } from '../../shared/browser-types.js';
 import { cutCodePoints, isRecord } from './guest-data.js';
 
-export const REACT_LIMITS = { components: 3, name: 100, source: 300 } as const;
+/**
+ * Пределы React (спека браузера 8): до трёх компонентов, имя до 100, источник до 300. `depth` — подъём по `return` не
+ * дальше 35 звеньев (как у Orca), `stackLines` — первые 6 строк `_debugStack` (правило этапа 0).
+ */
+export const REACT_LIMITS = { components: 3, name: 100, source: 300, depth: 35, stackLines: 6 } as const;
 
 export const REACT_INFO_FN = `function () {
   try {
-    var keys = Object.keys(this);
-    var fiberKey = null;
-    for (var i = 0; i < keys.length; i += 1) {
-      if (keys[i].indexOf('__reactFiber$') === 0) {
-        fiberKey = keys[i];
-        break;
-      }
-    }
-    if (fiberKey === null) return null;
+    var LIMIT = ${REACT_LIMITS.components};
+    var DEPTH = ${REACT_LIMITS.depth};
+    var FRAMEWORK = /^(?:Fragment|StrictMode|Suspense|Profiler)$|\\.(?:Provider|Consumer)$/;
+    var FRAME = /^\\s*at (?:(.*?) \\()?(.*?):(\\d+):(\\d+)\\)?\\s*$/;
+    var SKIP_FN = /^(?:exports\\.)?(?:jsxDEV|jsxs?|createElement)$|react_stack_bottom_frame|react-stack-top-frame/;
+    var SKIP_URL = /(?:^|[\\/\\\\])(?:react|react-dom|scheduler)(?:[\\/\\\\@.\\-_]|$)|react[-_]jsx[-_]?dev[-_]?runtime|jsx-dev-runtime|\\/node_modules\\/(?:\\.vite\\/deps\\/)?react/;
+    var nameOf = function (type) {
+      if (typeof type === 'function') return type.displayName || type.name || '';
+      if (!type || typeof type !== 'object') return '';
+      if (typeof type.render === 'function') return type.displayName || type.render.displayName || type.render.name || '';
+      if (type.type) return type.displayName || nameOf(type.type);
+      return '';
+    };
+    var cleanPath = function (path) {
+      return String(path)
+        .replace(/[?#].*$/, '')
+        .replace(/^turbopack:\\/\\/\\/\\[project\\]\\//, '')
+        .replace(/^webpack-internal:\\/\\/\\/\\.\\//, '')
+        .replace(/^webpack-internal:\\/\\/\\//, '')
+        .replace(/^webpack:\\/\\/\\/\\.\\//, '')
+        .replace(/^webpack:\\/\\/\\//, '')
+        .replace(/^turbopack:\\/\\/\\//, '')
+        .replace(/^https?:\\/\\/[^/]+\\//, '')
+        .replace(/^file:\\/\\/\\//, '/')
+        .replace(/^\\([^)]+\\)\\/\\.\\//, '')
+        .replace(/^\\.\\//, '');
+    };
     var sourceOf = function (fiber) {
       var debugSource = fiber && fiber._debugSource;
       if (debugSource && typeof debugSource.fileName === 'string') {
-        return { source: debugSource.fileName + (typeof debugSource.lineNumber === 'number' ? ':' + debugSource.lineNumber : ''), approx: false };
+        return { source: cleanPath(debugSource.fileName) + (typeof debugSource.lineNumber === 'number' ? ':' + debugSource.lineNumber : ''), approx: false };
       }
       var debugStack = fiber && fiber._debugStack;
-      var lines = debugStack && typeof debugStack.stack === 'string' ? debugStack.stack.split('\\n') : [];
-      for (var j = 1; j < lines.length; j += 1) {
-        var match = /(?:[a-z]+:\\/\\/[^\\/\\s)]+)?(\\/[^\\s)?:]+)(?:\\?[^\\s):]*)?:(\\d+):\\d+\\)?\\s*$/.exec(lines[j]);
-        if (match && match[1].indexOf('/node_modules/') === -1) return { source: match[1] + ':' + match[2], approx: true };
+      var lines = debugStack && typeof debugStack.stack === 'string' ? debugStack.stack.split('\\n').slice(0, ${REACT_LIMITS.stackLines}) : [];
+      for (var i = 0; i < lines.length; i += 1) {
+        var frame = FRAME.exec(lines[i]);
+        if (!frame || SKIP_FN.test(frame[1] || '') || SKIP_URL.test(frame[2])) continue;
+        return { source: cleanPath(frame[2]) + ':' + frame[3], approx: true };
       }
       return null;
     };
+    var keys = Object.keys(this);
+    var below = null;
+    for (var k = 0; k < keys.length; k += 1) {
+      if (keys[k].indexOf('__reactFiber$') === 0 || keys[k].indexOf('__reactInternalInstance$') === 0) {
+        below = this[keys[k]];
+        break;
+      }
+    }
+    if (!below) return null;
     var out = [];
-    var below = this[fiberKey];
-    var fiber = below ? below.return : null;
-    while (fiber && out.length < 3) {
-      var type = fiber.type;
-      var name = typeof type === 'function' ? type.displayName || type.name : '';
-      if (typeof name === 'string' && name !== '') {
+    var fiber = below.return;
+    for (var depth = 0; fiber && out.length < LIMIT && depth < DEPTH; depth += 1) {
+      var name = nameOf(fiber.type);
+      if (typeof name === 'string' && name !== '' && !FRAMEWORK.test(name)) {
         var found = sourceOf(below);
         out.push({ name: name, source: found ? found.source : null, approx: found ? found.approx : false });
       }
@@ -4352,7 +4854,8 @@ export function parseReactInfo(value: unknown): ReactComponentInfo[] | undefined
 // packages/desktop/src/main/browser/element-info.ts
 /**
  * Роль, доступное имя и React выбранного элемента (спека браузера 3.8). По точке клика main находит узел через CDP
- * (`DOM.getNodeForLocation`) и сверяет его с выбранным по тегу, id и классам последнего звена селектора
+ * (`DOM.getNodeForLocation`; точка — в координатах документа, вызывающий прибавляет прокрутку через
+ * `guest-data.ts#documentPoint`, спайк 0.4) и сверяет его с выбранным по тегу, id и классам последнего звена селектора
  * (`shared/css-selector.ts`): страница могла успеть поменяться. Совпал — дочитывает роль и имя из дерева доступности и
  * компонент React функцией `REACT_INFO_FN`. Не совпал узел, нет React или не вышел вызов — соответствующих полей нет:
  * выбор от этого не ломается.
@@ -4479,7 +4982,7 @@ export async function elementInfo(inspector: CdpSender, id: number, point: { x: 
 
 - [ ] **Шаг 5. Закрытый список.** В `inspector.ts` (A):
   - импорт `import { REACT_INFO_FN } from './react-info.js';`;
-  - в набор `CDP_ALLOWED` добавить те из методов, которых в нём ещё нет, с комментарием «Этап B: выбор элемента (спека 3.8) и снимки элемента и аннотаций (4.6, 4.7)»: `'DOM.enable'`, `'DOM.disable'`, `'DOM.getNodeForLocation'`, `'DOM.describeNode'`, `'DOM.resolveNode'`, `'Accessibility.enable'`, `'Accessibility.disable'`, `'Accessibility.getPartialAXTree'`, `'Runtime.callFunctionOn'`, `'Runtime.releaseObject'`, `'Page.captureScreenshot'`, `'Page.getLayoutMetrics'`;
+  - в набор `CDP_ALLOWED` добавить те из методов, которых в нём ещё нет, с комментарием «Этап B: выбор элемента (спека 3.8) и снимки элемента и аннотаций (4.6, 4.7)»: `'DOM.enable'`, `'DOM.disable'`, `'DOM.getNodeForLocation'`, `'DOM.describeNode'`, `'DOM.resolveNode'`, `'Accessibility.enable'`, `'Accessibility.disable'`, `'Accessibility.getPartialAXTree'`, `'Runtime.callFunctionOn'`, `'Runtime.releaseObject'`, `'Page.captureScreenshot'`. `Page.getLayoutMetrics` этапу B больше не нужен (снимок аннотаций — видимая часть): его добавит этап C, если B не добавил (план C, задача 12);
   - после `CDP_ALLOWED`:
 
 ```ts
@@ -4502,24 +5005,28 @@ export function cdpCallAllowed(method: string, params?: Record<string, unknown>)
 
 ```bash
 git add packages/desktop/src/main/browser/guest-data.ts packages/desktop/src/main/browser/react-info.ts packages/desktop/src/main/browser/react-info.test.ts packages/desktop/src/main/browser/element-info.ts packages/desktop/src/main/browser/element-info.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts packages/desktop/src/main/browser/design-mode.ts
-git commit -m "feat(desktop): роль, имя и компонент React выбранного элемента через CDP; callFunctionOn только с REACT_INFO_FN" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): роль, имя и компонент React выбранного элемента через CDP (поиск компонента по Orca, React 19 по этапу 0); callFunctionOn только с REACT_INFO_FN" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 15. Select в main: точка, ⇧, снимок CDP, роль и React
+## Задача 16. Select в main: точка, ⇧, снимок CDP с запасным по Orca, роль и React
 
 **Файлы:**
 - Изменить: `packages/desktop/src/main/browser/guest-pick.js`, `packages/desktop/src/main/browser/design-mode.ts`, `packages/desktop/src/shared/browser-types.ts` (`PickResult`), `packages/desktop/src/main/index.ts`
 - Тесты: `packages/desktop/src/main/browser/guest-pick.test.ts`, `packages/desktop/src/main/browser/design-mode.test.ts`
 
 **Интерфейсы:**
-- Берёт: `elementInfo`, `withTimeout`, `CdpSender`, `ElementInfo` (задача 14); `readPoint` (задача 14); `PickViewport`, `ReactComponentInfo` (задачи 4, 5); `S.contextFile.truncated` (задача 2).
+- Берёт: `elementInfo`, `withTimeout`, `CdpSender`, `ElementInfo` (задача 15); `readPoint`, `documentPoint` (задача 15); `PickViewport`, `ReactComponentInfo`, `Rect` (задачи 5, 6); `S.contextFile.truncated` (задача 3); помощники `__parleyDom` (задача 2).
 - Отдаёт:
-  - `PickResult` (спека 3.5): `+ point: { x; y } | null`, `+ shift: boolean`, `+ viewport: PickViewport`, `+ role?`, `+ name?`, `+ react?`. Поле `viewport` — добавление к индексу: из него шапка `element` берёт строку Viewport. `thumbnail` пока остаётся, main отдаёт в нём `null`; поле уходит в задаче 16 вместе с карточкой;
-  - `createDesignMode(deps)` получает `inspector: CdpSender`; `PICK_LIMITS` — `+ captureSide: 4096`, `+ infoMs: 2000`, `− thumbnailWidth`; `ValidPick`, `captureClip(pick)`.
-- `point` — точка, по которой `elementFromPoint` в странице дал выбранный элемент: клик, а если элемент прокручивался в видимую часть — центр его видимой части. Под центром другой узел — `null`: main не гадает.
-- Если задача 1 выбрала ветку «обрезка CDP не работает» спайка 0.7, в `snapshot` остаётся только запасной путь, а тест «снимок — обрезка CDP» заменяется тестом масштаба эмуляции (задача 1, шаг 3).
+  - `PickResult` (спека 3.5): `+ point: { x; y } | null`, `+ shift: boolean`, `+ viewport: PickViewport`, `+ role?`, `+ name?`, `+ react?`. Поле `viewport` — добавление к индексу: из него шапка `element` берёт строку Viewport. `point` — в CSS-пикселях вьюпорта (точку документа строит main). `thumbnail` пока остаётся, main отдаёт в нём `null`; поле уходит в задаче 17 вместе с карточкой;
+  - `createDesignMode(deps)` получает `inspector: CdpSender`; `PICK_LIMITS` — `+ captureSide: 4096`, `+ infoMs: 2000`, `− thumbnailWidth`; `ValidPick`, `CaptureClip`, `captureClip(pick, zoom, surface)`, `cropRect(rect, viewport, bitmap)`; `captureRect` удалён.
+- `point` — точка, по которой `elementFromPoint` в странице дал выбранный элемент: клик, а если элемент прокручивался в видимую часть — центр его видимой части. Под центром другой узел — `null`: main не гадает. `scroll` — прокрутка документа в момент ответа; main прибавляет её к точке (`documentPoint`): `DOM.getNodeForLocation` ждёт координаты документа (этап 0, 0.4).
+- Снимок (этап 0, 0.7, решение 2026-10-08):
+  - основной — CDP `Page.captureScreenshot({ format: 'png', captureBeyondViewport: true, clip })`, `clip` — прямоугольник вьюпорта плюс прокрутка, умноженный на `getZoomFactor()` (без этого при масштабе 2 обрезка пуста), со `scale: 1`; страница не прокручивается, DPR эмуляции сохраняется;
+  - высота клипа — не больше поверхности вида: выше Chromium повторяет первую поверхность. Поверхность измеряется картинкой `capturePage()` видимой части: её высота в пикселях, делённая на DPR страницы (`pick.viewport.dpr`), — высота поверхности в CSS-пикселях. Без эмуляции это `innerHeight`; у Mobile M 2x, уменьшенной под поле вдвое, на экране DPR 1 — 203 вместо 812;
+  - запасной (CDP отказал или ответил пусто) — по Orca `browser-grab-screenshot.ts`: та же картинка `capturePage()` и вырезка по множителю «ширина картинки / ширина вьюпорта». Множитель измерен, а не вычислен: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле, поэтому `Emulation.scale(id)` не нужен;
+  - у Orca не берём: скрытие оверлея скриптом в главном мире (`guest-pick.js` снимает оверлей сам и ждёт два кадра), запрос `window.innerWidth` к странице (ширина — из проверенного `pick.viewport`), data-URL и потолок 2 МиБ (наружу — PNG в `drops/`, предел файла — у `saveImage`).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -4534,7 +5041,7 @@ git commit -m "feat(desktop): роль, имя и компонент React вы�
 ```
 
   - в тесте «элемент вне видимой области прокручивается к центру» тип результата — `{ rect: { y: number }; point: unknown }` и в конце `expect(result.point).toEqual({ x: 160, y: 160 });` (центр нового прямоугольника 10…310 × 100…220);
-  - новые тесты в том же `describe`:
+  - новые тесты в том же `describe` перед «новый запуск снимает прежний выбор…»:
 
 ```ts
   it('⇧-клик — shift: true (Select держит режим, спека браузера 4.6)', async () => {
@@ -4557,8 +5064,21 @@ git commit -m "feat(desktop): роль, имя и компонент React вы�
 ```
 
   В `design-mode.test.ts`:
-  - импорты: `captureClip` из `./design-mode.js`, `import type { CdpSender } from './element-info.js';`;
-  - `rawPick` — новые поля по умолчанию: `point: { x: 30, y: 40 }, shift: false, scroll: { x: 0, y: 0 },`;
+  - импорты:
+
+```ts
+import { EventEmitter } from 'node:events';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { WebContents } from 'electron';
+import { describe, expect, it, vi } from 'vitest';
+import { S } from '../../shared/strings.js';
+import { captureClip, createDesignMode, cropRect, PICK_LIMITS, PICK_WORLD_ID, pickUrl, validatePick } from './design-mode.js';
+import type { CdpSender } from './element-info.js';
+```
+
+  - `rawPick` — новые поля по умолчанию после `devicePixelRatio: 2,`: `point: { x: 30, y: 40 }, shift: false, scroll: { x: 0, y: 0 },`;
   - тест «лишнее поле выкинуто» ждёт:
 
 ```ts
@@ -4584,7 +5104,53 @@ git commit -m "feat(desktop): роль, имя и компонент React вы�
     expect(validatePick(rawPick({ shift: 'yes' }))?.shift).toBe(false);
 ```
 
-  - подставной инспектор и `setup` с новыми зависимостями:
+  - блок `describe('captureRect (тест 2 куска 9.3a)', …)` целиком заменить:
+
+```ts
+describe('cropRect — запасной снимок по Orca (вырезка из capturePage видимой части)', () => {
+  const viewport = { width: 800 };
+  const bitmap = { width: 800, height: 600 };
+
+  it('элемент целиком виден — тот же прямоугольник; частично за краем — пересечение с картинкой', () => {
+    expect(cropRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 10, y: 20, width: 100, height: 40 });
+    expect(cropRect({ x: 750, y: 20, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 750, y: 20, width: 50, height: 40 });
+    expect(cropRect({ x: -30, y: -10, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 0, y: 0, width: 70, height: 30 });
+  });
+
+  it('целиком вне картинки или пустой — null', () => {
+    expect(cropRect({ x: 900, y: 20, width: 100, height: 40 }, viewport, bitmap)).toBeNull();
+    expect(cropRect({ x: 10, y: -100, width: 100, height: 40 }, viewport, bitmap)).toBeNull();
+    expect(cropRect({ x: 10, y: 20, width: 0, height: 40 }, viewport, bitmap)).toBeNull();
+  });
+
+  it('множитель — ширина картинки / ширина вьюпорта: DPR 2 и масштаб 1,5 — ×3, без знания о них', () => {
+    expect(cropRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, { width: 2400, height: 1800 })).toEqual({ x: 30, y: 60, width: 300, height: 120 });
+  });
+});
+```
+
+  - подставной `NativeImage` вместо `fakeImage` с `toDataURL` и `resize` (миниатюры в main больше нет):
+
+```ts
+/** Подставной NativeImage: размер в пикселях картинки, crop отдаёт вырезку (запасной снимок по Orca). */
+interface FakeImage {
+  isEmpty: () => boolean;
+  getSize: () => { width: number; height: number };
+  toPNG: () => Buffer;
+  crop: ReturnType<typeof vi.fn>;
+}
+
+function fakeImage(width: number, height: number): FakeImage {
+  return {
+    isEmpty: () => width === 0,
+    getSize: () => ({ width, height }),
+    toPNG: () => Buffer.from(`png-${width}x${height}`),
+    crop: vi.fn((rect: { width: number; height: number }) => fakeImage(rect.width, rect.height)),
+  };
+}
+```
+
+  - подставной инспектор и `setup` с новой зависимостью:
 
 ```ts
 /** Подставной инспектор: ответ по имени метода CDP; Error — отказ; нет ответа — пустой объект (снимка CDP нет — capturePage). */
@@ -4616,37 +5182,77 @@ function setup(guestUrl?: string, answers: Record<string, unknown> = {}) {
 }
 ```
 
-  - в тесте «скрипт — в изолированном мире 1001…» строку про `thumbnail` заменить на `expect(result?.thumbnail).toBeNull();` и дописать `expect(result).toMatchObject({ point: { x: 30, y: 40 }, shift: false, viewport: { width: 800, height: 600, dpr: 2 } });`;
-  - тест «узкий снимок не растягивается до 320» удалить: миниатюры в main больше нет;
-  - новый блок:
+  - в тесте «скрипт — в изолированном мире 1001…» четыре последние строки (с `capturePage` по прямоугольнику, `png-800x400` и миниатюрой 320) заменить:
 
 ```ts
-describe('Select: снимок CDP, роль и React (этап B, спека 3.8, 4.6)', () => {
-  it('captureClip: прямоугольник вьюпорта плюс прокрутка, сторона не больше captureSide; пустой — null', () => {
-    expect(captureClip({ rect: { x: 10, y: 20, width: 100, height: 40 }, scroll: { x: 0, y: 2500 } })).toEqual({ x: 10, y: 2520, width: 100, height: 40, scale: 1 });
-    expect(captureClip({ rect: { x: 0, y: 0, width: 9000, height: 50 }, scroll: { x: 0, y: 0 } })?.width).toBe(PICK_LIMITS.captureSide);
-    expect(captureClip({ rect: { x: 0, y: 0, width: 0, height: 50 }, scroll: { x: 0, y: 0 } })).toBeNull();
+    // CDP снимка не дал (подставной инспектор отвечает пустым) — вырезка из capturePage() видимой части по Orca.
+    expect(guest.capturePage).toHaveBeenCalledWith();
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x40'));
+    expect(result?.thumbnail).toBeNull();
+    expect(result).toMatchObject({ point: { x: 30, y: 40 }, shift: false, viewport: { width: 800, height: 600, dpr: 2 } });
+```
+
+  - тест «узкий снимок не растягивается до 320» удалить; тест «масштаб страницы переводит CSS-пиксели в DIP» заменить:
+
+```ts
+  it('запасной снимок: множитель — ширина картинки / ширина вьюпорта (DPR, масштаб и эмуляция — измерены)', async () => {
+    const { guest, scripts, mode, scriptCalled, saveImage } = setup();
+    const view = fakeImage(1200, 900);
+    guest.capturePage.mockResolvedValueOnce(view);
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick());
+    await pending;
+    expect(view.crop).toHaveBeenCalledWith({ x: 15, y: 30, width: 150, height: 60 });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-150x60'));
+  });
+```
+
+  - тест «элемент вне видимой области — без снимка» заменить (картинку видимой части main теперь снимает всегда — это мера поверхности):
+
+```ts
+  it('элемент вне видимой области, а CDP не ответил — без снимка: вырезать из видимой части нечего', async () => {
+    const { scripts, saveImage, mode, scriptCalled } = setup();
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 900, width: 100, height: 40 } }));
+    expect((await pending)?.imagePath).toBeNull();
+    expect(saveImage).not.toHaveBeenCalled();
+  });
+```
+
+  - в конец файла:
+
+```ts
+describe('Select: снимок CDP, роль и React (этап B, спека 3.8, 4.6; решения этапа 0)', () => {
+  it('captureClip: координаты документа × масштаб страницы; высота — не больше поверхности вида; сторона — не больше captureSide', () => {
+    const pick = { rect: { x: 10, y: 20, width: 100, height: 40 }, scroll: { x: 0, y: 2500 } };
+    expect(captureClip(pick, 1, 600)).toEqual({ x: 10, y: 2520, width: 100, height: 40, scale: 1 });
+    expect(captureClip(pick, 1.5, 600)).toEqual({ x: 15, y: 3780, width: 150, height: 60, scale: 1 });
+    expect(captureClip({ rect: { x: 0, y: 0, width: 300, height: 900 }, scroll: { x: 0, y: 0 } }, 1, 203)?.height).toBe(203);
+    expect(captureClip({ rect: { x: 0, y: 0, width: 9000, height: 50 }, scroll: { x: 0, y: 0 } }, 1, 600)?.width).toBe(PICK_LIMITS.captureSide);
+    expect(captureClip({ rect: { x: 0, y: 0, width: 0, height: 50 }, scroll: { x: 0, y: 0 } }, 1, 600)).toBeNull();
   });
 
-  it('снимок — обрезка CDP Page.captureScreenshot с captureBeyondViewport; capturePage не нужен', async () => {
+  it('снимок — обрезка CDP с captureBeyondViewport; capturePage — только мера поверхности: картинка 800×400 при DPR 2 — 200 CSS-пикселей', async () => {
     const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
       'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
     });
     const pending = mode.start(7);
     await scriptCalled();
-    scripts[0]?.resolve(rawPick({ scroll: { x: 0, y: 300 } }));
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 }, scroll: { x: 0, y: 300 } }));
     expect((await pending)?.imagePath).toBe('/h/drops/a.png');
     expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: true,
-      clip: { x: 10, y: 320, width: 100, height: 40, scale: 1 },
+      clip: { x: 10, y: 320, width: 100, height: 200, scale: 1 },
     });
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('cdp-png'));
-    expect(guest.capturePage).not.toHaveBeenCalled();
+    expect(guest.capturePage).toHaveBeenCalledTimes(1);
   });
 
-  it('роль, имя и React по точке клика; точка, ⇧ и размер — в результате', async () => {
-    const { scripts, mode, scriptCalled } = setup(undefined, {
+  it('роль, имя и React — по точке документа (точка вьюпорта + прокрутка, спайк 0.4); точка, ⇧ и размер — в результате', async () => {
+    const { scripts, mode, scriptCalled, inspector } = setup(undefined, {
       'DOM.getNodeForLocation': { backendNodeId: 42 },
       'DOM.describeNode': { node: { localName: 'button', attributes: ['class', 'save'] } },
       'Accessibility.getPartialAXTree': { nodes: [{ backendDOMNodeId: 42, role: { value: 'button' }, name: { value: 'Save' } }] },
@@ -4655,7 +5261,7 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     });
     const pending = mode.start(7);
     await scriptCalled();
-    scripts[0]?.resolve(rawPick({ shift: true }));
+    scripts[0]?.resolve(rawPick({ shift: true, scroll: { x: 0, y: 300 } }));
     expect(await pending).toMatchObject({
       point: { x: 30, y: 40 },
       shift: true,
@@ -4664,6 +5270,7 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
       name: 'Save',
       react: [{ name: 'SaveButton', source: 'src/SaveButton.tsx:12', approx: false }],
     });
+    expect(inspector.send).toHaveBeenCalledWith(7, 'DOM.getNodeForLocation', { x: 30, y: 340, includeUserAgentShadowDOM: false });
   });
 
   it('роль и React не ответили за PICK_LIMITS.infoMs — выбор без них, не висит', async () => {
@@ -4683,13 +5290,24 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     }
   });
 });
+
+describe('рамочный: скрипты страницы — только в изолированном мире (Фокус ревью 6)', () => {
+  it('в коде main нет executeJavaScript мира страницы (у Orca так исполнен весь выбор)', () => {
+    const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const files = (readdirSync(mainDir, { recursive: true }) as string[]).filter((file) => /\.(ts|js)$/.test(file) && !file.includes('.test.'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) expect(readFileSync(path.join(mainDir, file), 'utf8'), file).not.toMatch(/\.executeJavaScript\(/);
+  });
+});
 ```
+
+  Остальные тесты файла (`pickUrl`, «capturePage бросил…», «saveImage не сохранил…», прерывания выбора) — без правок: снимок и данные они проверяют тем же путём.
 
 - [ ] **Шаг 2. Запустить — падает.**
 
-  `pnpm --filter @parley/desktop exec vitest run src/main/browser/guest-pick.test.ts src/main/browser/design-mode.test.ts` → FAIL: нет `point`, `shift`, `captureClip`.
+  `pnpm --filter @parley/desktop exec vitest run src/main/browser/guest-pick.test.ts src/main/browser/design-mode.test.ts` → FAIL: нет `point`, `shift`, `captureClip`, `cropRect`.
 
-- [ ] **Шаг 3. Скрипт выбора.** В `guest-pick.js`:
+- [ ] **Шаг 3. Скрипт выбора.** В `guest-pick.js` (уже на помощниках `__parleyDom`, задача 2):
   - перед `function dataOf` добавить:
 
 ```js
@@ -4711,7 +5329,7 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
       point: pointFor(el, event.clientX, event.clientY, scrolled),
       // ⇧-клик: Select остаётся включённым (спека браузера 4.6).
       shift: event.shiftKey === true,
-      // Прокрутка документа: обрезка снимка CDP — в координатах документа.
+      // Прокрутка документа: точка документа для CDP и обрезка снимка — вьюпорт плюс прокрутка (спайк 0.4, 0.7).
       scroll: { x: window.scrollX, y: window.scrollY },
 ```
 
@@ -4723,7 +5341,7 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
       finish(dataOf(el, event, scrolled));
 ```
 
-  - в шапке файла «Design Mode» → «Select (прежде Design Mode)».
+  - в шапке файла «Скрипт выбора элемента Design Mode (кусок 9.3a, спека 12.3).» → «Скрипт выбора элемента Select (прежде Design Mode; кусок 9.3a, спека 12.3, спека браузера 4.6).».
 
 - [ ] **Шаг 4. Тип результата.** В `shared/browser-types.ts` `PickResult`:
 
@@ -4735,8 +5353,8 @@ export interface PickResult {
   html: string;
   styles: Record<string, string>;
   imagePath: string | null;
-  thumbnail: string | null; // 9.3a, карточка Design Mode: main отдаёт null, поле уходит с карточкой (задача 16 этапа B)
-  /** Точка, по которой main нашёл узел через CDP (CSS-пиксели вьюпорта); `null` — под точкой не выбранный элемент. */
+  thumbnail: string | null; // 9.3a, карточка Design Mode: main отдаёт null, поле уходит с карточкой (задача 17 этапа B)
+  /** Точка, по которой main нашёл узел через CDP (CSS-пиксели вьюпорта; main прибавляет прокрутку); `null` — под точкой не выбранный элемент. */
   point: { x: number; y: number } | null;
   /** Клик с ⇧: Select остаётся включённым (спека браузера 4.6). */
   shift: boolean;
@@ -4757,31 +5375,40 @@ export interface PickResult {
 /**
  * Select в main (спека браузера 3.8, 4.6; прежде Design Mode, кусок 9.3a): выбор элемента страницы кликом человека.
  *
- * Скрипт выбора (`guest-pick.js`) исполняется в изолированном мире гостя; всё, что он вернул, — данные недоверенной
- * страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес берёт у `getURL()`, а снимок делает сам:
- * обрезкой CDP `Page.captureScreenshot` по проверенному прямоугольнику (эмуляцию и масштаб учитывает Chromium, спайк
- * 0.7), а без CDP — прежним `capturePage` видимой части. По точке клика main дочитывает роль, имя и компонент React
- * (`element-info.ts`).
+ * Скрипт выбора (`guest-pick.js` после помощников `guest-dom.js`) исполняется в изолированном мире гостя; всё, что он
+ * вернул, — данные недоверенной страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес берёт у
+ * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решение 2026-10-08): основной — обрезка CDP
+ * `Page.captureScreenshot` в координатах документа × масштаб страницы, высотой не больше поверхности вида (выше
+ * Chromium повторяет первую поверхность); запасной — `capturePage()` видимой части и вырезка по множителю «ширина
+ * картинки / ширина вьюпорта». По точке документа main дочитывает роль, имя и компонент React (`element-info.ts`).
+ *
+ * Запасной снимок (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
+ * (stablyai/orca b1cd858, MIT): множитель не вычисляется из масштаба и эмуляции, а измеряется по картинке. Изменено:
+ * ширина вьюпорта — из проверенного выбора (`pick.viewport.width`), без запроса к странице; оверлей не прячется —
+ * `guest-pick.js` снимает его сам и ждёт два кадра; вырезка — пересечением с картинкой; наружу — PNG в `drops/`, а не
+ * data-URL; потолка 2 МиБ нет — предел файла у `saveImage`. Copyright (c) 2026 Lovecast Inc.; полный текст лицензии — в
+ * NOTICE в корне репозитория.
  */
 ```
 
-  - импорты:
+  - импорты (`isRecord`, `cutCodePoints`, `finite`, `readRect` и `Rect` задача 15 уже перенесла в `guest-data.ts` и `browser-types.ts`):
 
 ```ts
 import type { NativeImage, WebContents } from 'electron';
 import type { PickResult, Rect } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
 import { elementInfo, withTimeout, type CdpSender, type ElementInfo } from './element-info.js';
-import { cutCodePoints, finite, isRecord, readPoint, readRect } from './guest-data.js';
+import { cutCodePoints, documentPoint, finite, isRecord, readPoint, readRect } from './guest-data.js';
 ```
 
   - пределы:
 
 ```ts
 /**
- * Пределы данных элемента (спека 12.3, «Числа» плана; спека браузера 8). `captureSide` — сторона обрезки снимка в
+ * Пределы данных элемента (спека 12.3, «Числа» плана; спека браузера 8). `selector` спека ограничивает только звеньями,
+ * а одно звено (класс или id) пишет страница — длина своя (fix-9). `captureSide` — сторона обрезки снимка в
  * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `infoMs` — сколько ждём
- * роль и React: страница в бесконечном цикле не держит выбор.
+ * роль и React: страница в бесконечном цикле не держит выбор. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
  */
 export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, infoMs: 2000 } as const;
 ```
@@ -4832,36 +5459,80 @@ export function validatePick(raw: unknown): ValidPick | null {
 }
 ```
 
-  - после `captureRect`:
+  - функцию `captureRect` с её комментарием заменить:
 
 ```ts
-/** Обрезка CDP в CSS-пикселях документа: прямоугольник вьюпорта плюс прокрутка; сторона — не больше `captureSide`. */
-export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>): { x: number; y: number; width: number; height: number; scale: 1 } | null {
+/** Обрезка CDP `Page.captureScreenshot`: прямоугольник в CSS-пикселях документа × масштаб страницы. */
+export interface CaptureClip extends Rect {
+  scale: 1;
+}
+
+/**
+ * Обрезка CDP (спайк 0.7, решение 2026-10-08): прямоугольник вьюпорта плюс прокрутка — координаты документа, — умноженный
+ * на масштаб страницы `zoom` (`getZoomFactor()`: без него при масштабе 2 обрезка пуста). Высота — не больше поверхности
+ * вида `surface` (CSS-пиксели): выше Chromium повторяет первую поверхность. Сторона — не больше `captureSide`.
+ */
+export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>, zoom: number, surface: number): CaptureClip | null {
   const width = Math.min(pick.rect.width, PICK_LIMITS.captureSide);
-  const height = Math.min(pick.rect.height, PICK_LIMITS.captureSide);
+  const height = Math.min(pick.rect.height, PICK_LIMITS.captureSide, surface);
   if (width < 1 || height < 1) return null;
-  return { x: Math.max(0, pick.rect.x + pick.scroll.x), y: Math.max(0, pick.rect.y + pick.scroll.y), width, height, scale: 1 };
+  return {
+    x: Math.max(0, pick.rect.x + pick.scroll.x) * zoom,
+    y: Math.max(0, pick.rect.y + pick.scroll.y) * zoom,
+    width: width * zoom,
+    height: height * zoom,
+    scale: 1,
+  };
+}
+
+/**
+ * Запасной снимок по Orca: прямоугольник элемента в пикселях картинки `capturePage()` всей видимой части. Множитель
+ * измеряется — ширина картинки / ширина вьюпорта: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле
+ * при эмуляции. Края — наружу, по пересечению с картинкой; элемент вне видимой части — null.
+ */
+export function cropRect(rect: Rect, viewport: { width: number }, bitmap: { width: number; height: number }): Rect | null {
+  const scale = bitmap.width / viewport.width;
+  const left = Math.max(0, Math.floor(rect.x * scale));
+  const top = Math.max(0, Math.floor(rect.y * scale));
+  const right = Math.min(bitmap.width, Math.ceil((rect.x + rect.width) * scale));
+  const bottom = Math.min(bitmap.height, Math.ceil((rect.y + rect.height) * scale));
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 ```
 
-  - `createDesignMode`: в `deps` добавить `inspector: CdpSender;`; функцию `snapshot` заменить:
+  - `createDesignMode`: в `deps` после `guestScript: string;` добавить `inspector: CdpSender;`; функцию `snapshot` заменить:
 
 ```ts
-  /** Снимок элемента: обрезка CDP, без неё — видимая часть через capturePage; не вышло — null, файл уйдёт без снимка. */
+  /**
+   * Снимок элемента: обрезка CDP, без неё — вырезка из `capturePage()` по Orca. Картинка видимой части снимается
+   * первой: её высота — мера поверхности вида для обрезки CDP (в CSS-пикселях — делённая на DPR страницы). Не вышло ни
+   * так, ни так — null: файл уйдёт без снимка.
+   */
   async function snapshot(contents: WebContents, id: number, pick: ValidPick): Promise<string | null> {
-    const clip = captureClip(pick);
-    if (clip === null) return null;
-    try {
-      const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
-      if (typeof shot.data === 'string' && shot.data !== '') return await deps.saveImage(Buffer.from(shot.data, 'base64'));
-    } catch (error) {
-      console.warn('[parley] select: CDP capture failed, falling back to capturePage', error);
+    const view: NativeImage | null = await contents.capturePage().then(
+      (image) => (image.isEmpty() ? null : image),
+      (error: unknown) => {
+        console.warn('[parley] select: capturePage failed', error);
+        return null;
+      },
+    );
+    const size = view === null ? null : view.getSize();
+    const surface = size === null ? pick.viewport.height : size.height / pick.viewport.dpr;
+    const clip = captureClip(pick, contents.getZoomFactor(), surface);
+    if (clip !== null) {
+      try {
+        const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
+        if (typeof shot.data === 'string' && shot.data !== '') return await deps.saveImage(Buffer.from(shot.data, 'base64'));
+      } catch (error) {
+        console.warn('[parley] select: CDP capture failed, falling back to capturePage', error);
+      }
     }
-    const rect = captureRect(pick.rect, pick.viewport, contents.getZoomFactor());
-    if (rect === null) return null;
+    if (view === null || size === null) return null;
+    const crop = cropRect(pick.rect, pick.viewport, size);
+    if (crop === null) return null;
     try {
-      const image: NativeImage = await contents.capturePage(rect);
-      return image.isEmpty() ? null : await deps.saveImage(image.toPNG());
+      return await deps.saveImage(view.crop(crop).toPNG());
     } catch (error) {
       console.warn('[parley] select capture failed', error);
       return null;
@@ -4872,9 +5543,10 @@ export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>): { x: numb
   - в обработчике ответа скрипта вместо `const shot = await snapshot(contents, pick);` и прежнего `finish({…})`:
 
 ```ts
+          // DOM.getNodeForLocation — в координатах документа (спайк 0.4, 0.6): точка вьюпорта плюс прокрутка.
           const [imagePath, info] = await Promise.all([
             snapshot(contents, id, pick),
-            withTimeout<ElementInfo>(elementInfo(deps.inspector, id, pick.point, pick.selector), PICK_LIMITS.infoMs, {}),
+            withTimeout<ElementInfo>(elementInfo(deps.inspector, id, documentPoint(pick.point, pick.scroll), pick.selector), PICK_LIMITS.infoMs, {}),
           ]);
           if (done || contents.isDestroyed()) {
             finish(null);
@@ -4899,18 +5571,18 @@ export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>): { x: numb
   - A создаёт инспектор сразу после `createDesignMode`: строки `const inspector = createInspector(…)`, `forwardBatches(inspector, …)` и `const emulation = createEmulation({ inspector })` с их комментарием переносятся выше `const designMode = createDesignMode({`. Страж (`installBrowserGuard`) по-прежнему ниже них, поэтому `inspect:` в нём работает как раньше;
   - в `createDesignMode({ … })` добавить `inspector,`.
 
-- [ ] **Шаг 6. Запустить — проходит.** Команда шага 2 → PASS. `pnpm --filter @parley/desktop exec vitest run src/main` → PASS. `pnpm --filter @parley/desktop typecheck` → без ошибок (карточка Design Mode пока жива и получает `thumbnail: null`).
+- [ ] **Шаг 6. Запустить — проходит.** Команда шага 2 → PASS. `pnpm --filter @parley/desktop exec vitest run src/main` → PASS (рамочный тест «мир страницы» смотрит весь `src/main`). `pnpm --filter @parley/desktop typecheck` → без ошибок (карточка Design Mode пока жива и получает `thumbnail: null`).
 
 - [ ] **Шаг 7. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/guest-pick.js packages/desktop/src/main/browser/guest-pick.test.ts packages/desktop/src/main/browser/design-mode.ts packages/desktop/src/main/browser/design-mode.test.ts packages/desktop/src/shared/browser-types.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): Select в main — точка и ⇧ клика, снимок CDP, роль и React" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): Select в main — точка и ⇧ клика, снимок CDP с запасным по Orca, роль и React по точке документа" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 16. Select в окне вместо карточки Design Mode, клавиша ⌘⇧C
+## Задача 17. Select в окне вместо карточки Design Mode, клавиша ⌘⇧C
 
 **Файлы:**
 - Изменить: `packages/desktop/src/renderer/browser/store.ts`, `packages/desktop/src/renderer/browser/BrowserChrome.tsx`, `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/main/browser/design-mode.ts`, `packages/desktop/src/shared/keybindings.ts`, `packages/desktop/src/renderer/keys/handler.ts`, `packages/desktop/src/renderer/palette/actions.ts`, `packages/desktop/src/shared/strings.ts`, `packages/desktop/src/renderer/review/notes/SendMenu.tsx` (шапка), `packages/desktop/src/renderer/layout/SurfaceLayer.tsx` (комментарий `sendDeps`), `packages/desktop/e2e/browser.spec.ts`
@@ -4918,13 +5590,13 @@ git commit -m "feat(desktop): Select в main — точка и ⇧ клика, �
 - Тесты: `packages/desktop/src/renderer/browser/store.test.ts`, `packages/desktop/src/renderer/browser/BrowserSurface.test.tsx`, `packages/desktop/src/renderer/browser/BrowserChrome.test.tsx` (A), `packages/desktop/src/shared/keybindings.test.ts`, `packages/desktop/src/renderer/palette/actions.test.ts`, `packages/desktop/src/main/ipc.test.ts` (форма `picked`)
 
 **Интерфейсы:**
-- Берёт: `elementDraft` (задача 13), `usePageContext` (задача 12), `viewportNote` (задача 3), `PickResult` (задача 15).
+- Берёт: `elementDraft` (задача 14), `usePageContext` (задача 13), `viewportNote` (задача 4), `PickResult` (задача 16).
 - Отдаёт:
   - `BrowserMode = 'off' | 'select' | 'annotate'`, `BrowserTabState.mode` (вместо `pick`), `toggleBrowserMode(tabId, mode)`;
   - `BrowserChromeProps`: `− picking`, `− onDesignMode`, `+ mode: BrowserMode`, `+ onSelect(): void`;
   - клавиша `browser.select` — `CmdOrCtrl+Shift+C`, `when: 'browser'`, в палитре (`S.actions.selectElement`);
   - `S.browser.select.{ button, title }`; удалены `S.browser.designMode`, `sendToAgent`, `pickAgain`; `PickResult.thumbnail` удалён.
-- Порядок строки вкладки (спека 4.1): назад, вперёд, обновить; адрес; размер (A); ⌖ Select; ✎ Annotate (задача 22); «To»; консоль (A); «⋯» (A).
+- Порядок строки вкладки (спека 4.1): назад, вперёд, обновить; адрес; размер (A); ⌖ Select; ✎ Annotate (задача 23); «To»; консоль (A); «⋯» (A).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -4949,7 +5621,7 @@ describe('BrowserTabState.mode (этап B, спека браузера 4.6, 4.7
 
   `BrowserChrome.test.tsx` (A):
   - в `renderChrome` пропсы `picking: false, onDesignMode: vi.fn()` → `mode: 'off', onSelect: vi.fn()`;
-  - в тесте порядка и в тесте «To» (задача 12) `'Design Mode'` → `'Select'`;
+  - в тесте порядка и в тесте «To» (задача 13) `'Design Mode'` → `'Select'`;
   - новый тест:
 
 ```tsx
@@ -5137,7 +5809,7 @@ describe('BrowserSurface — Select (этап B, спека браузера 4.6
 });
 ```
 
-  Помощники `roomWork`, `roomPaths`, `entryWith` и импорты доставки (`useUiStore`, `roomKey`, `resetDeliveryForTests`) — с задач 12 и 13.
+  Помощники `roomWork`, `roomPaths`, `entryWith` и импорты доставки (`useUiStore`, `roomKey`, `resetDeliveryForTests`) — с задач 13 и 14.
 
   `keybindings.test.ts`: в `ALL_ACTION_IDS` добавить `'browser.select': true,`; в тесте «действия браузера — when browser, без меню» список `['browser.find', …]` дополнить `'browser.select'`; новый тест:
 
@@ -5220,14 +5892,14 @@ function ModeButton({ label, title, pressed, disabled, onClick, children }: { la
       </ModeButton>
 ```
 
-    (`{props.targetMenu}` из задачи 12 стоит сразу за ней); импорт `type BrowserMode` из `./store.js`.
+    (`{props.targetMenu}` из задачи 13 стоит сразу за ней); импорт `type BrowserMode` из `./store.js`.
 
 - [ ] **Шаг 5. Поверхность.** В `BrowserSurface.tsx`:
   - удалить импорт `DesignModeCard`, `pickTokenRef`, функции `startPick` и `cancelPick`, `picking`, `cancelPickRef` с его эффектом и разметку `DesignModeCard`;
   - импорты: `import type { PickResult } from '../../shared/browser-types.js';` (рядом с `BROWSER_PARTITION`), `import { viewportNote } from '../../shared/context-markdown.js';`, `import { elementDraft } from './context/actions.js';`, `toggleBrowserMode` из `./store.js`;
   - в `IDLE` — `mode: 'off'` вместо `pick: 'off'`;
   - в обработчике `did-navigate`: строку `pickTokenRef.current += 1;` удалить, `update({ title: null, favicon: null, pick: 'off' })` → `update({ title: null, favicon: null, mode: 'off' })`, комментарий про карточку — «Режим Select или Annotate прошлой страницы к новой не относится; main и сам ответит выбору null». Строки касаний A (`setDocMobile(…)`) остаются;
-  - после `contextActions` (задача 13):
+  - после `contextActions` (задача 14):
 
 ```tsx
   // Select (спека браузера 4.6): выбор за выбором, пока режим включён; ⇧-клик режим держит, обычный клик снимает.
@@ -5313,7 +5985,7 @@ git rm packages/desktop/src/renderer/browser/DesignModeCard.tsx packages/desktop
     },
 ```
 
-    в `S.actions` после `actualSize` — `selectElement: 'Select element',`. `S.designBlock` остаётся до задачи 17: его ещё цитирует гид агента;
+    в `S.actions` после `actualSize` — `selectElement: 'Select element',`. `S.designBlock` остаётся до задачи 18: его ещё цитирует гид агента;
   - `review/notes/SendMenu.tsx`: в шапке убрать «его же берёт Design Mode — 9.3b, спека 12.3»;
   - `layout/SurfaceLayer.tsx`: комментарий `sendDeps` — «Отправка агенту окна (7.2) — строке «To» вкладки браузера (этап B)».
 
@@ -5338,7 +6010,7 @@ git rm packages/desktop/src/renderer/browser/DesignModeCard.tsx packages/desktop
 ```
 
 - [ ] **Шаг 8. Прежний E2E.** В `e2e/browser.spec.ts`:
-  - удалить тест «тест 4: ⌖, клик по кнопке — карточка…» — его заменяют E2E задачи 23;
+  - удалить тест «тест 4: ⌖, клик по кнопке — карточка…» — его заменяют E2E задачи 24;
   - в `openPage` и в тесте fix-9b `getByRole('button', { name: 'Design Mode' })` → `getByRole('button', { name: 'Select' })`, переменная `designMode` → `select`; строку `await expect(window.getByTestId('design-mode-card')).toHaveCount(0);` удалить;
   - шапку файла: «Браузер и Select (прежде Design Mode, кусок 9.3b; этап B браузера): ⌖ включает выбор, загрузка из страницы его снимает…; `window.open` по кнопке — вкладка рядом, окна нет; ⌘J из страницы — палитра окна. Выбор элемента в чат — `e2e/browser-context.spec.ts`».
 
@@ -5357,14 +6029,14 @@ git commit -m "feat(desktop): Select вместо карточки Design Mode �
 
 ---
 
-## Задача 17. Гид агента: файлы-контексты вместо блока Design Mode
+## Задача 18. Гид агента: файлы-контексты вместо блока Design Mode
 
 **Файлы:**
 - Изменить: `packages/core/src/work/guide.ts` (тема `window`), `packages/desktop/src/shared/strings.ts` (удалить `S.designBlock`)
 - Тесты: `packages/core/src/work/guidance.test.ts`, `packages/desktop/src/main/agent-guide-sync.test.ts`
 
 **Интерфейсы:**
-- Берёт: `S.contextFile.*` (задачи 2–5, 11).
+- Берёт: `S.contextFile.*` (задачи 3–6, 12).
 - Отдаёт: раздел «### Page context from the browser» темы `window` в `read_guide`. Строки-указатели на скилл `parley-browser` — этап D.
 
 - [ ] **Шаг 1. Написать падающие тесты.** В `guidance.test.ts` (тест «окно человека: блоки окна — слова человека…») строки про Design Mode заменить:
@@ -5452,7 +6124,7 @@ git commit -m "docs(core): гид агента — файлы-контексты
 
 ---
 
-## Задача 18. Скрипт меток `guest-annotate.js`
+## Задача 19. Скрипт меток `guest-annotate.js` (слой меток — по Orca)
 
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/guest-annotate.js`
@@ -5460,14 +6132,18 @@ git commit -m "docs(core): гид агента — файлы-контексты
 - Тест: `packages/desktop/src/main/browser/guest-annotate.test.ts`
 
 **Интерфейсы:**
-- Отдаёт (мир 1001 страницы): `globalThis.__parleyAnnotate = { pick(), cancel(), sync(pins), count(), armed(), waiting() }` (`waiting` — ждёт ли скрипт метку сейчас: по нему E2E кликает только в готовую страницу); значение файла — промис одной метки:
-  - клик — `{ kind: 'element', key, selector, text, html, styles, point, anchor, viewport }`;
+- Берёт: помощники `__parleyDom` (задача 2) — `selectorOf`, `textOf`, `htmlOf`, `stylesOf`; main ставит `guest-dom.js` в ту же строку перед этим скриптом (задача 20).
+- Отдаёт (мир 1001 страницы): `globalThis.__parleyAnnotate = { pick(), cancel(), sync(pins), count(), armed(), waiting() }` (`waiting` — ждёт ли скрипт метку сейчас: по нему E2E кликает только в готовую страницу); значение строки — промис одной метки:
+  - клик — `{ kind: 'element', key, selector, text, html, styles, point, scroll, anchor, viewport }`; `point` — во вьюпорте, `scroll` — прокрутка документа: main ищет узел по точке документа (этап 0, 0.4);
   - протяжка больше 4 px — `{ kind: 'region', key, rect, elements, anchor, viewport }`, где `rect` — в координатах документа, а `elements` — до трёх элементов под центром рамки;
   - клик по номеру готовой метки — `{ kind: 'edit', n }`;
   - Esc — `null`, режим выключен.
-- Только доверенные события (`isTrusted`). Пока режим включён, клики и протяжки страницы гасятся, даже когда метка уже отдана окну. Метки — слой с `pointer-events: none` в координатах документа. Они перерисовываются на прокрутке любого контейнера и ресайзе и остаются после `cancel()`, пока `sync([])` их не уберёт.
-- `sync(pins)` рисует номера по ключам и отдаёт `{ n, rect }`: доли вьюпорта или `null`, если элемента нет. `count()` — сколько меток нарисовано сейчас.
-- `selectorOf`, `isSecretField` и `cleanHtml` — копия функций `guest-pick.js`: скрипт — одно выражение без импортов. Ключевые стили — 10 из 23 (спека 4.7).
+- Только доверенные события (`isTrusted`). Пока режим включён, клики и протяжки страницы гасятся, даже когда метка уже отдана окну. Метки остаются после `cancel()`, пока `sync([])` их не уберёт.
+- `sync(pins)` рисует номера по ключам и отдаёт `{ n, rect }`: доли вьюпорта или `null`, если элемента нет. `count()` — сколько меток нарисовано сейчас. Ключевые стили — 10 из 23 (спека 4.7), HTML — до 1 КБ (`CONTEXT_LIMITS.annotationHtml`).
+- **Слой меток — адаптация Orca** `src/shared/browser-annotation-viewport-bridge.ts` (функция `buildBrowserAnnotationViewportBridgeScript`, слой 80–263):
+  - как у Orca: хост `position: fixed; inset: 0; pointer-events: none; contain: layout style paint` на `document.body` с **закрытым** shadow-корнем (страница меток не видит и стилями их не задевает); узлы меток по ключу создаются и убираются по списку (`updateMarkers`); положение пересчитывается раз в кадр (`requestAnimationFrame`) на прокрутке любого контейнера (`scroll` в фазе захвата) и на ресайзе (`positionMarkers`); метки за краем вьюпорта спрятаны; меток нет — хост вынут из DOM;
+  - изменено: положение метки на элементе — живой `getBoundingClientRect()` её элемента, а не `rectPage`, снятый при создании (у Orca метка не идёт за элементом во вложенном прокручиваемом контейнере); мир 1001 вместо 1207, без токена и **без `console.debug`** (инспектор A пишет все `console.*` страницы в журнал Console человека); слой **не снимается на `beforeunload`** (мир умирает вместе с документом, а скачивание и отменённый переход документ не меняют); у цели есть рамка — сплошная у элемента, пунктир у области; номер — кружок 24 px в левом верхнем углу цели, цвет `#f59e0b`.
+- Прежние копии `selectorOf`, `isSecretField` и `cleanHtml` в этом скрипте не нужны — они в `guest-dom.js`.
 
 - [ ] **Шаг 1. Написать падающий тест.**
 
@@ -5482,7 +6158,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Путь, а не URL: в jsdom глобальный URL — его, и readFileSync такой не примет.
-const guestScript = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'guest-annotate.js'), 'utf8');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const guestScript = readFileSync(path.join(here, 'guest-annotate.js'), 'utf8');
+const domScript = readFileSync(path.join(here, 'guest-dom.js'), 'utf8');
 
 /** Доверенное событие так, как его шлёт сама jsdom (см. guest-pick.test.ts). */
 const jsdomUtils = createRequire(import.meta.url)('jsdom/lib/generated/idl/utils.js') as {
@@ -5519,20 +6197,36 @@ function controller(): Controller {
   return (globalThis as unknown as { __parleyAnnotate: Controller }).__parleyAnnotate;
 }
 
-/** Скрипт как в госте: выражение, значение которого — промис одной метки. */
+/** Скрипт как в госте: помощники DOM и скрипт меток одной строкой, её значение — промис одной метки. */
 function runScript(): Promise<unknown> {
-  return (0, eval)(guestScript) as Promise<unknown>;
+  return (0, eval)(`${domScript}\n${guestScript}`) as Promise<unknown>;
 }
 
-const pins = (): number => document.querySelectorAll('[data-parley-pin]').length;
+/** Закрытый shadow-корень слоя меток: страница его не видит, тест ловит его при создании. */
+let layer: ShadowRoot | null = null;
 
-describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
+/** Номера меток, видимые сейчас: слой в документе, кружок не спрятан. */
+function badges(): HTMLElement[] {
+  if (layer === null || !layer.host.isConnected) return [];
+  return Array.from(layer.querySelectorAll<HTMLElement>('.badge')).filter((badge) => badge.style.display !== 'none');
+}
+
+const pins = (): number => badges().length;
+const nextFrame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+describe('guest-annotate.js в jsdom (спека браузера 4.7; слой меток — по Orca)', () => {
   let form: HTMLFormElement;
   let button: HTMLButtonElement;
   const pageHandler = vi.fn();
 
   beforeEach(() => {
     delete (globalThis as { __parleyAnnotate?: unknown }).__parleyAnnotate;
+    layer = null;
+    const attach = Element.prototype.attachShadow;
+    vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (this: Element, init: ShadowRootInit) {
+      layer = attach.call(this, init);
+      return layer;
+    });
     document.body.innerHTML = `
       <main class="page">
         <form class="login" id="f">
@@ -5548,23 +6242,18 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     // Чего нет в jsdom: скрипт читает это через document и элемент, как в браузере.
     document.elementFromPoint = vi.fn(() => form);
     document.elementsFromPoint = vi.fn(() => [button, form, document.querySelector('main') as Element, document.body, document.documentElement]);
-    Object.defineProperty(HTMLElement.prototype, 'innerText', {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.textContent ?? '';
-      },
-    });
     form.getBoundingClientRect = () => ({ x: 10, y: 20, width: 300, height: 120, top: 20, left: 10, right: 310, bottom: 140, toJSON: () => ({}) });
   });
 
   afterEach(() => {
     controller()?.cancel();
+    vi.restoreAllMocks();
+    // Слой меток живёт в body, рамка протяжки — прямо в <html>.
     document.body.innerHTML = '';
-    // Слой меток и рамка протяжки висят прямо в <html>.
     for (const node of Array.from(document.documentElement.children)) if (node.tagName === 'DIV') node.remove();
   });
 
-  it('клик человека — метка на элементе: данные без секретов, ключевые стили, доля вьюпорта; до страницы не дошёл; номер нарисован', async () => {
+  it('клик человека — метка на элементе: данные без секретов, ключевые стили, доля вьюпорта, прокрутка; до страницы не дошёл; номер нарисован', async () => {
     const picking = runScript();
     expect(controller().waiting()).toBe(true);
     click(button);
@@ -5573,8 +6262,9 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     expect(pick).toMatchObject({
       kind: 'element',
       key: 'a1',
-      selector: 'body > main.page > form#f',
+      selector: 'form#f',
       point: { x: 30, y: 30 },
+      scroll: { x: 0, y: 0 },
       anchor: { fx: 30 / window.innerWidth, fy: 30 / window.innerHeight },
       viewport: { width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio },
     });
@@ -5585,6 +6275,27 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     expect(pins()).toBe(1);
   });
 
+  it('по Orca: слой — закрытый shadow-корень, странице меток не видно; метка идёт за живым прямоугольником элемента, за краем — спрятана', async () => {
+    const picking = runScript();
+    click(button);
+    await picking;
+    controller().sync([{ n: 1, key: 'a1' }]);
+    expect(document.querySelector('.badge')).toBeNull();
+    expect(layer?.host.shadowRoot).toBeNull();
+    const badge = layer?.querySelector<HTMLElement>('[data-pin="1"]');
+    // Кружок 24 px с центром в левом верхнем углу элемента (10, 20).
+    expect(badge?.style.transform).toBe('translate3d(-2px,8px,0)');
+    // Элемент уехал вместе с вложенным контейнером: прокрутка любого контейнера — пересчёт в следующем кадре.
+    form.getBoundingClientRect = () => ({ x: 10, y: -40, width: 300, height: 120, top: -40, left: 10, right: 310, bottom: 80, toJSON: () => ({}) });
+    document.querySelector('main')?.dispatchEvent(new Event('scroll'));
+    await nextFrame();
+    expect(badge?.style.transform).toBe('translate3d(-2px,-52px,0)');
+    form.getBoundingClientRect = () => ({ x: 10, y: -400, width: 300, height: 120, top: -400, left: 10, right: 310, bottom: -280, toJSON: () => ({}) });
+    window.dispatchEvent(new Event('resize'));
+    await nextFrame();
+    expect(pins()).toBe(0);
+  });
+
   it('протяжка больше 4 px — рамка: прямоугольник в координатах документа и до трёх элементов под центром', async () => {
     const picking = runScript();
     dispatchTrusted(button, mouse('mousedown', { clientX: 30, clientY: 30 }));
@@ -5592,11 +6303,7 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     dispatchTrusted(button, mouse('mouseup', { clientX: 100, clientY: 80 }));
     const pick = (await picking) as Record<string, unknown>;
     expect(pick).toMatchObject({ kind: 'region', key: 'a1', rect: { x: 30, y: 30, width: 70, height: 50 }, anchor: { fx: 30 / window.innerWidth, fy: 30 / window.innerHeight } });
-    expect((pick.elements as Array<{ selector: string }>).map((item) => item.selector)).toEqual([
-      'body > main.page > form#f > button.save.primary',
-      'body > main.page > form#f',
-      'body > main.page',
-    ]);
+    expect((pick.elements as Array<{ selector: string }>).map((item) => item.selector)).toEqual(['button.save.primary', 'form#f', 'main.page']);
   });
 
   it('сдвиг не больше 4 px — это клик, а не рамка', async () => {
@@ -5607,7 +6314,7 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     expect(((await picking) as { kind: string }).kind).toBe('element');
   });
 
-  it('sync рисует номера и отдаёт доли вьюпорта; неизвестный ключ и пропавший элемент — null; count — только нарисованные', async () => {
+  it('sync рисует номера и отдаёт доли вьюпорта; неизвестный ключ и пропавший элемент — null; count — только нарисованные; пусто — слой вынут', async () => {
     const picking = runScript();
     click(button);
     await picking;
@@ -5621,6 +6328,8 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     expect(controller().sync([{ n: 1, key: 'a1' }])).toEqual([{ n: 1, rect: null }]);
     expect(controller().count()).toBe(0);
     expect(pins()).toBe(0);
+    controller().sync([]);
+    expect(layer?.host.isConnected).toBe(false);
   });
 
   it('метка отдана — следующий жест гасится и ничего не ставит; клик по номеру готовой метки — правка', async () => {
@@ -5632,7 +6341,7 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     expect(pageHandler).not.toHaveBeenCalled();
     expect(pins()).toBe(1);
     const second = runScript();
-    // Номер метки 1 — кружок 18 px с центром в левом верхнем углу элемента (10, 20).
+    // Номер метки 1 — кружок 24 px с центром в левом верхнем углу элемента (10, 20).
     click(button, 12, 22);
     expect(await second).toEqual({ kind: 'edit', n: 1 });
   });
@@ -5668,47 +6377,68 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
 });
 ```
 
+  Закрытый shadow-корень странице недоступен (`host.shadowRoot === null`), поэтому тест ловит его при создании — подменой `Element.prototype.attachShadow`.
+
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/guest-annotate.test.ts` → FAIL: `ENOENT … guest-annotate.js`.
 
 - [ ] **Шаг 3. Реализовать.**
 
 ```js
 // packages/desktop/src/main/browser/guest-annotate.js
-// Скрипт аннотаций (спека браузера 4.7). Main исполняет его в госте через executeJavaScriptInIsolatedWorld(1001) — в том
-// же изолированном мире, что guest-pick.js: страница не видит его переменных и не может ни поставить метку за человека,
-// ни снять её. DOM общий: всё, что скрипт отдаёт, — данные страницы, main их проверяет
+// Слой меток — адаптация Orca `src/shared/browser-annotation-viewport-bridge.ts` (stablyai/orca b1cd858, MIT).
+// Copyright (c) 2026 Lovecast Inc.; полный текст лицензии — в NOTICE в корне репозитория.
+//
+// Скрипт аннотаций (спека браузера 4.7). Main ставит его вслед за `guest-dom.js` одной строкой в изолированный мир 1001
+// (annotate.ts) — тот же мир, что у guest-pick.js: страница не видит его переменных и не может ни поставить метку за
+// человека, ни снять её. DOM общий: всё, что скрипт отдаёт, — данные страницы, main их проверяет
 // (annotate.ts#validateAnnotationPick).
 //
 // Метки живут дольше одного вызова: первый запуск кладёт в мир объект `globalThis.__parleyAnnotate`, следующие берут
-// его. Значение файла — промис одной метки: клик — метка на элементе, протяжка больше 4 px — рамка области, клик по
-// номеру готовой метки — её правка, Esc — null и режим выключен. Метки рисуются слоем с pointer-events: none в
-// координатах документа: так они идут за элементами при прокрутке и ресайзе и видны на снимке всей страницы.
+// его. Значение строки — промис одной метки: клик — метка на элементе, протяжка больше 4 px — рамка области, клик по
+// номеру готовой метки — её правка, Esc — null и режим выключен.
+//
+// Слой меток — как у Orca: хост `position: fixed` с `pointer-events: none` и закрытым shadow-корнем (страница меток не
+// видит и стилями их не задевает), положение пересчитывается раз в кадр (requestAnimationFrame) на прокрутке любого
+// контейнера (capture) и на ресайзе, метки за краем вьюпорта спрятаны. Отличия от Orca:
+// - метка на элементе стоит по живому getBoundingClientRect() своего элемента (по ключу), а не по прямоугольнику
+//   документа, снятому при создании: так она идёт и за элементом во вложенном прокручиваемом контейнере; рамка
+//   области — в координатах документа (спека 4.7);
+// - мир 1001, без токена и без console.debug: инспектор пишет все console.* страницы в журнал Console человека;
+// - на beforeunload слой не снимается: мир умирает вместе с документом, а скачивание и отменённый переход документ не
+//   меняют — метки должны остаться;
+// - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок в её левом верхнем углу.
 (() => {
   if (globalThis.__parleyAnnotate === undefined) {
-    // Пределы — те же, что проверяет main (annotate.ts); лишнее отсюда не везём. html — на символ больше: так main видит,
-    // что обрезано, и ставит свою пометку.
-    const MAX_LINKS = 12;
-    const MAX_TEXT = 500;
+    // Помощники DOM — guest-dom.js в той же строке перед этим файлом (задача 2).
+    const dom = globalThis.__parleyDom;
+    // HTML метки — CONTEXT_LIMITS.annotationHtml (1 КБ, спека 4.7): в пачке до 20 меток. main проверяет его заново.
     const MAX_HTML = 1024;
     const MAX_UNDER = 3;
     const DRAG_PX = 4;
-    const BADGE_PX = 18;
+    const BADGE_PX = 24;
     const COLOR = '#f59e0b';
-    // Ключевые стили метки (спека 4.7): короче, чем у Select, — в пачке до 20 меток.
+    // Ключевые стили метки (спека 4.7): короче, чем у Select.
     const STYLE_KEYS = ['display', 'position', 'width', 'height', 'margin', 'padding', 'color', 'background-color', 'font-size', 'font-weight'];
     // mousedown и mouseup ведут жест сами; остальное гасится, чтобы клик не сработал на странице.
     const BLOCKED = ['click', 'pointerdown', 'pointerup', 'dblclick', 'auxclick', 'contextmenu'];
-    // Поля, чьё value уходить агенту не должно: пароли, CSRF-токены, карты, одноразовые коды.
-    const SECRET_AUTOCOMPLETE = /^(cc-.*|one-time-code|.*-password)$/i;
+    const LAYER_CSS =
+      `.outline{position:absolute;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;will-change:transform;}` +
+      '.outline.region{border-style:dashed;}' +
+      `.badge{position:absolute;left:0;top:0;box-sizing:border-box;width:${BADGE_PX}px;height:${BADGE_PX}px;display:flex;` +
+      `align-items:center;justify-content:center;border-radius:9999px;border:1px solid rgba(255,255,255,0.95);background:${COLOR};` +
+      'color:#fff;font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 10px 24px rgba(0,0,0,.18);' +
+      'will-change:transform;user-select:none;}';
 
-    const layer = document.createElement('div');
-    layer.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:visible;z-index:2147483647;pointer-events:none;';
+    // Рамка протяжки — пока человек тянет; вне слоя, чтобы рисоваться без кадра.
     const box = document.createElement('div');
     box.style.cssText = `position:fixed;display:none;box-sizing:border-box;border:2px dashed ${COLOR};z-index:2147483647;pointer-events:none;`;
 
-    const targets = new Map();
-    let drawn = [];
-    let provisional = null;
+    const targets = new Map(); // ключ → { el } у элемента или { rect } у рамки (координаты документа)
+    const nodes = new Map(); // ключ → { outline, badge } в shadow-корне
+    let host = null;
+    let root = null;
+    let pins = []; // [{ n, key }] — по лотку окна (sync)
+    let provisional = null; // новая метка до ответа окна
     let seq = 0;
     let armed = false;
     let pending = null;
@@ -5716,80 +6446,105 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
     let dragging = false;
     let frame = 0;
 
-    function selectorOf(el) {
-      const links = [];
-      for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-        const tag = node.tagName.toLowerCase();
-        if (tag === 'body' || tag === 'html') {
-          links.unshift('body');
-          break;
-        }
-        let link = tag;
-        if (node.id) {
-          link += `#${CSS.escape(node.id)}`;
-        } else {
-          const classes = typeof node.className === 'string' ? node.className.trim().split(/\s+/).filter(Boolean) : [];
-          link += classes.map((name) => `.${CSS.escape(name)}`).join('');
-          const parent = node.parentElement;
-          if (parent) {
-            const same = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
-            if (same.length > 1) link += `:nth-of-type(${same.indexOf(node) + 1})`;
-          }
-        }
-        links.unshift(link);
+    /** Хост слоя: `position: fixed` на весь вьюпорт, закрытый shadow-корень (Orca ensureOverlay). */
+    function ensureLayer() {
+      if (host === null) {
+        host = document.createElement('div');
+        host.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;contain:layout style paint;overflow:hidden;';
+        root = host.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = LAYER_CSS;
+        root.appendChild(style);
       }
-      return links.slice(-MAX_LINKS).join(' > ');
+      // Страница могла вынуть хост из DOM (перерисовала body) — вернуть.
+      const parent = document.body || document.documentElement;
+      if (!host.isConnected && parent) parent.appendChild(host);
     }
 
-    function isSecretField(el) {
-      const tag = el.tagName.toLowerCase();
-      if (tag !== 'input' && tag !== 'textarea') return false;
-      const type = (el.getAttribute('type') || '').toLowerCase();
-      if (tag === 'input' && (type === 'password' || type === 'hidden')) return true;
-      const tokens = (el.getAttribute('autocomplete') || '').split(/\s+/);
-      return tokens.some((token) => SECRET_AUTOCOMPLETE.test(token));
-    }
-
-    function cleanHtml(el) {
-      const clone = el.cloneNode(true);
-      for (const node of clone.querySelectorAll('script, style')) node.remove();
-      for (const node of [clone, ...clone.querySelectorAll('*')]) {
-        for (const attr of Array.from(node.attributes)) {
-          const name = attr.name.toLowerCase();
-          if (name.startsWith('on') || name === 'srcdoc') node.removeAttribute(attr.name);
-        }
-        if (isSecretField(node)) {
-          node.removeAttribute('value');
-          if (node.tagName.toLowerCase() === 'textarea') node.textContent = '';
-        }
+    /** Прямоугольник цели во вьюпорте: элемент — живой, рамка — из координат документа; элемента больше нет — null. */
+    function viewRect(key) {
+      const target = targets.get(key);
+      if (target === undefined) return null;
+      if (target.rect !== undefined) {
+        return { x: target.rect.x - window.scrollX, y: target.rect.y - window.scrollY, width: target.rect.width, height: target.rect.height };
       }
-      return clone.outerHTML.slice(0, MAX_HTML + 1);
+      if (!target.el.isConnected) return null;
+      const r = target.el.getBoundingClientRect();
+      return { x: r.left, y: r.top, width: r.width, height: r.height };
     }
 
-    function textOf(el) {
-      const text = typeof el.innerText === 'string' ? el.innerText : el.textContent || '';
-      return text.replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT);
+    function shown() {
+      return provisional === null ? pins : [...pins, provisional];
     }
 
-    function stylesOf(el) {
-      const computed = getComputedStyle(el);
-      const styles = {};
-      for (const key of STYLE_KEYS) styles[key] = computed.getPropertyValue(key);
-      return styles;
+    /** Положение меток по живым прямоугольникам; без элемента и за краем вьюпорта — спрятаны (Orca positionMarkers). */
+    function positionMarkers() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      for (const pin of shown()) {
+        const node = nodes.get(pin.key);
+        if (node === undefined) continue;
+        const rect = viewRect(pin.key);
+        const visible = rect !== null && rect.x + rect.width >= 0 && rect.y + rect.height >= 0 && rect.x <= width && rect.y <= height;
+        node.outline.style.display = visible ? 'block' : 'none';
+        node.badge.style.display = visible ? 'flex' : 'none';
+        if (!visible) continue;
+        node.outline.style.width = `${rect.width}px`;
+        node.outline.style.height = `${rect.height}px`;
+        node.outline.style.transform = `translate3d(${rect.x}px,${rect.y}px,0)`;
+        node.badge.style.transform = `translate3d(${rect.x - BADGE_PX / 2}px,${rect.y - BADGE_PX / 2}px,0)`;
+      }
+    }
+
+    /** Узлы меток по списку: новые созданы, лишние убраны, номера обновлены; меток нет — хост вынут (Orca updateMarkers). */
+    function updateMarkers() {
+      const list = shown();
+      if (list.length === 0) {
+        for (const node of nodes.values()) {
+          node.outline.remove();
+          node.badge.remove();
+        }
+        nodes.clear();
+        if (host !== null) host.remove();
+        return;
+      }
+      ensureLayer();
+      const live = new Set();
+      for (const pin of list) {
+        live.add(pin.key);
+        let node = nodes.get(pin.key);
+        if (node === undefined) {
+          const outline = document.createElement('div');
+          outline.className = targets.get(pin.key).rect === undefined ? 'outline' : 'outline region';
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          root.append(outline, badge);
+          node = { outline, badge };
+          nodes.set(pin.key, node);
+        }
+        node.badge.textContent = String(pin.n);
+        node.badge.dataset.pin = String(pin.n);
+      }
+      for (const [key, node] of nodes) {
+        if (live.has(key)) continue;
+        node.outline.remove();
+        node.badge.remove();
+        nodes.delete(key);
+      }
+      positionMarkers();
+    }
+
+    /** Прокрутка любого контейнера и ресайз: положение — раз в кадр (Orca requestUpdate). */
+    function requestUpdate() {
+      if (frame !== 0 || nodes.size === 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        positionMarkers();
+      });
     }
 
     function own(el) {
-      return el === layer || el === box || layer.contains(el);
-    }
-
-    /** Прямоугольник цели в координатах документа; элемента больше нет — null. */
-    function rectOf(key) {
-      const target = targets.get(key);
-      if (target === undefined) return null;
-      if (target.rect !== undefined) return target.rect;
-      if (!target.el.isConnected) return null;
-      const r = target.el.getBoundingClientRect();
-      return { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height };
+      return el === host || el === box;
     }
 
     function viewport() {
@@ -5798,38 +6553,6 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
 
     function anchor(x, y) {
       return { fx: x / window.innerWidth, fy: y / window.innerHeight };
-    }
-
-    function drawPin(n, key) {
-      const rect = rectOf(key);
-      if (rect === null) return;
-      const region = targets.get(key).rect !== undefined;
-      const outline = document.createElement('div');
-      outline.style.cssText = `position:absolute;box-sizing:border-box;left:${rect.x}px;top:${rect.y}px;width:${rect.width}px;height:${rect.height}px;border:2px ${region ? 'dashed' : 'solid'} ${COLOR};border-radius:2px;`;
-      const badge = document.createElement('div');
-      badge.textContent = String(n);
-      badge.dataset.parleyPin = String(n);
-      badge.style.cssText = `position:absolute;left:${rect.x - BADGE_PX / 2}px;top:${rect.y - BADGE_PX / 2}px;width:${BADGE_PX}px;height:${BADGE_PX}px;border-radius:${BADGE_PX / 2}px;background:${COLOR};color:#fff;font:600 11px/${BADGE_PX}px system-ui,sans-serif;text-align:center;`;
-      layer.append(outline, badge);
-    }
-
-    function render() {
-      layer.replaceChildren();
-      for (const pin of drawn) drawPin(pin.n, pin.key);
-      if (provisional !== null) drawPin(provisional.n, provisional.key);
-    }
-
-    function schedule() {
-      if (frame !== 0) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        render();
-      });
-    }
-
-    function mount() {
-      if (!layer.isConnected) document.documentElement.appendChild(layer);
-      if (!box.isConnected) document.documentElement.appendChild(box);
     }
 
     function settle(value) {
@@ -5843,18 +6566,17 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       seq += 1;
       const key = `a${seq}`;
       targets.set(key, target);
-      provisional = { n: drawn.length + 1, key };
-      render();
+      provisional = { n: pins.length + 1, key };
+      updateMarkers();
       return key;
     }
 
+    /** Номер готовой метки под точкой: кружок BADGE_PX с центром в левом верхнем углу цели. */
     function hitPin(x, y) {
-      for (const pin of drawn) {
-        const rect = rectOf(pin.key);
+      for (const pin of pins) {
+        const rect = viewRect(pin.key);
         if (rect === null) continue;
-        const left = rect.x - window.scrollX - BADGE_PX / 2;
-        const top = rect.y - window.scrollY - BADGE_PX / 2;
-        if (x >= left && x <= left + BADGE_PX && y >= top && y <= top + BADGE_PX) return pin.n;
+        if (Math.abs(x - rect.x) <= BADGE_PX / 2 && Math.abs(y - rect.y) <= BADGE_PX / 2) return pin.n;
       }
       return null;
     }
@@ -5863,7 +6585,19 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       const el = document.elementFromPoint(x, y);
       if (!el || own(el)) return null;
       const key = remember({ el });
-      return { kind: 'element', key, selector: selectorOf(el), text: textOf(el), html: cleanHtml(el), styles: stylesOf(el), point: { x, y }, anchor: anchor(x, y), viewport: viewport() };
+      return {
+        kind: 'element',
+        key,
+        selector: dom.selectorOf(el),
+        text: dom.textOf(el),
+        html: dom.htmlOf(el, MAX_HTML),
+        styles: dom.stylesOf(el, STYLE_KEYS),
+        point: { x, y },
+        // Прокрутка документа: main ищет узел по точке документа (DOM.getNodeForLocation, спайк 0.4).
+        scroll: { x: window.scrollX, y: window.scrollY },
+        anchor: anchor(x, y),
+        viewport: viewport(),
+      };
     }
 
     function pinRegion(x0, y0, x1, y1) {
@@ -5875,7 +6609,7 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       for (const el of document.elementsFromPoint(left + width / 2, top + height / 2)) {
         if (elements.length >= MAX_UNDER) break;
         if (own(el) || el === document.documentElement || el === document.body) continue;
-        elements.push({ selector: selectorOf(el), text: textOf(el) });
+        elements.push({ selector: dom.selectorOf(el), text: dom.textOf(el) });
       }
       const rect = { x: left + window.scrollX, y: top + window.scrollY, width, height };
       const key = remember({ rect });
@@ -5904,6 +6638,7 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       if (!event.isTrusted || down === null) return;
       if (!dragging && Math.hypot(event.clientX - down.x, event.clientY - down.y) <= DRAG_PX) return;
       dragging = true;
+      if (!box.isConnected) document.documentElement.appendChild(box);
       box.style.display = 'block';
       box.style.left = `${Math.min(down.x, event.clientX)}px`;
       box.style.top = `${Math.min(down.y, event.clientY)}px`;
@@ -5950,7 +6685,6 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       window.addEventListener('mousemove', onMove, true);
       window.addEventListener('mouseup', onUp, true);
       window.addEventListener('keydown', onKey, true);
-      mount();
     }
 
     function disarm() {
@@ -5966,9 +6700,9 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
       box.style.display = 'none';
     }
 
-    // Метки идут за элементами: прокрутка любого контейнера (capture) и ресайз перерисовывают слой.
-    window.addEventListener('scroll', schedule, true);
-    window.addEventListener('resize', schedule);
+    // Метки идут за элементами: прокрутка любого контейнера (capture) и ресайз — пересчёт в следующем кадре.
+    window.addEventListener('scroll', requestUpdate, true);
+    window.addEventListener('resize', requestUpdate);
 
     globalThis.__parleyAnnotate = {
       pick() {
@@ -5983,26 +6717,20 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
         disarm();
       },
       sync(list) {
-        drawn = list.filter((pin) => targets.has(pin.key));
+        pins = list.filter((pin) => targets.has(pin.key));
         provisional = null;
-        mount();
-        render();
+        updateMarkers();
         return list.map((pin) => {
-          const rect = rectOf(pin.key);
+          const rect = viewRect(pin.key);
           if (rect === null) return { n: pin.n, rect: null };
           return {
             n: pin.n,
-            rect: {
-              x: (rect.x - window.scrollX) / window.innerWidth,
-              y: (rect.y - window.scrollY) / window.innerHeight,
-              width: rect.width / window.innerWidth,
-              height: rect.height / window.innerHeight,
-            },
+            rect: { x: rect.x / window.innerWidth, y: rect.y / window.innerHeight, width: rect.width / window.innerWidth, height: rect.height / window.innerHeight },
           };
         });
       },
       count() {
-        return drawn.filter((pin) => rectOf(pin.key) !== null).length;
+        return pins.filter((pin) => viewRect(pin.key) !== null).length;
       },
       armed() {
         return armed;
@@ -6016,20 +6744,20 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7)', () => {
 })();
 ```
 
-  В `eslint.config.js` в блоке для `guest-pick.js` список файлов дополнить: `files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-annotate.js']`, комментарий над блоком — «Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя».
+  В `eslint.config.js` в блоке скриптов страницы (задача 2) список файлов дополнить: `files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js']`.
 
-- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (7 тестов). `pnpm lint` → без ошибок. `pnpm --filter @parley/desktop exec vitest run src/english-ui.test.ts` → PASS.
+- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (8 тестов). `pnpm lint` → без ошибок. `pnpm --filter @parley/desktop exec vitest run src/english-ui.test.ts` → PASS.
 
 - [ ] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/guest-annotate.js packages/desktop/src/main/browser/guest-annotate.test.ts eslint.config.js
-git commit -m "feat(desktop): скрипт меток аннотаций в изолированном мире страницы" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): скрипт меток аннотаций в изолированном мире страницы — слой номеров по Orca" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 19. Аннотации в main и мост `annotate*`
+## Задача 20. Аннотации в main и мост `annotate*`
 
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/annotate.ts`
@@ -6037,13 +6765,15 @@ git commit -m "feat(desktop): скрипт меток аннотаций в из
 - Тесты: `packages/desktop/src/main/browser/annotate.test.ts`, `packages/desktop/src/main/ipc.test.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.test.ts`
 
 **Интерфейсы:**
-- Берёт: `PICK_WORLD_ID`, `PICK_LIMITS` (`design-mode.ts`), `elementInfo`, `withTimeout`, `CdpSender` (задача 14), помощники `guest-data.ts`, `CONTEXT_LIMITS` (задача 3), типы меток (задача 5).
+- Берёт: `PICK_WORLD_ID`, `PICK_LIMITS` (`design-mode.ts`), `elementInfo`, `withTimeout`, `CdpSender` (задача 15), помощники `guest-data.ts` с `documentPoint` (задача 15), `CONTEXT_LIMITS` (задача 4), типы меток (задача 6), `guest-dom.js` (задача 2), `guest-annotate.js` (задача 19).
 - Отдаёт:
   - `validateAnnotationPick(raw)`, `parseAnnotationPins(value)`, `createAnnotate(deps)` → `{ start, cancel, sync, capture }`;
   - `BrowserApi.annotateStart(id): Promise<AnnotationPick | null>`, `annotateCancel(id)`, `annotateSync(id, pins): Promise<AnnotationPosition[]>`, `annotateCapture(id): Promise<{ path: string | null }>` — каналы `browser:annotate-start`, `-cancel`, `-sync`, `-capture` (индекс);
   - `RegisterIpcOptions['browser'].annotate`;
   - `FakeBridge.setAnnotatePicks(picks)`, `setAnnotatePositions(positions | null)`, `setAnnotateCapture(path)`; вызовы — в `browserCalls`.
-- Снимок: меток на странице нет (новый документ) — `{ path: null }`. Иначе — `Page.captureScreenshot` всей страницы, если она не больше `CONTEXT_LIMITS.annotationFullPage` по обеим сторонам, а длиннее — видимой части. CDP не вышел — `capturePage()` видимой части.
+- Снимок (этап 0, 0.7): меток на странице нет (новый документ) — `{ path: null }`. Иначе — `Page.captureScreenshot({ format: 'png' })` видимой части: снимок всей страницы через `captureBeyondViewport` двоит фиксированный заголовок и теряет метки ниже первой поверхности вида. CDP не вышел — `capturePage()` видимой части.
+- Метка на элементе: роль, имя и React — по точке документа `documentPoint(point, scroll)` (этап 0, 0.4); `point` и `scroll` в окно не уходят.
+- Скрипт меток main ставит после помощников DOM одной строкой: `guestScript` — это `guest-dom.js` + `guest-annotate.js` (шаг 3, `main/index.ts`).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -6099,6 +6829,7 @@ describe('validateAnnotationPick (спека браузера 4.7)', () => {
       anchor: { fx: 0.1, fy: 0.2 },
       viewport: VIEWPORT,
       point: { x: 30, y: 40 },
+      scroll: { x: 0, y: 0 },
     });
   });
 
@@ -6203,8 +6934,8 @@ function setup(answers: Record<string, unknown> = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('createAnnotate.start', () => {
-  it('скрипт — в мире 1001; метка на элементе дочитана ролью и React, точка в окно не уходит', async () => {
-    const { guest, scripts, annotate, scriptCalled } = setup({
+  it('скрипт — в мире 1001; метка на элементе дочитана ролью и React по точке документа; точка и прокрутка в окно не уходят', async () => {
+    const { guest, scripts, annotate, scriptCalled, send } = setup({
       'DOM.getNodeForLocation': { backendNodeId: 42 },
       'DOM.describeNode': { node: { localName: 'button', attributes: ['class', 'save'] } },
       'Accessibility.getPartialAXTree': { nodes: [{ backendDOMNodeId: 42, role: { value: 'button' }, name: { value: 'Save' } }] },
@@ -6212,10 +6943,12 @@ describe('createAnnotate.start', () => {
     const pending = annotate.start(7);
     await scriptCalled();
     expect(guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(PICK_WORLD_ID, [{ code: 'GUEST_SCRIPT' }]);
-    scripts[0]?.resolve(rawElement());
+    scripts[0]?.resolve(rawElement({ scroll: { x: 0, y: 500 } }));
     const pick = await pending;
     expect(pick).toMatchObject({ kind: 'element', key: 'a1', role: 'button', name: 'Save' });
     expect(pick).not.toHaveProperty('point');
+    expect(pick).not.toHaveProperty('scroll');
+    expect(send).toHaveBeenCalledWith(7, 'DOM.getNodeForLocation', { x: 30, y: 540, includeUserAgentShadowDOM: false });
   });
 
   it('рамка и правка — как есть; Esc — null', async () => {
@@ -6274,20 +7007,17 @@ describe('createAnnotate.sync и capture', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('capture: страница не длиннее 8000 px — вся, с captureBeyondViewport; длиннее — видимая часть', async () => {
-    const short = setup({ 'Page.getLayoutMetrics': { cssContentSize: { width: 1280, height: 3000 } }, 'Page.captureScreenshot': { data: Buffer.from('full').toString('base64') } });
-    expect(await short.annotate.capture(7)).toEqual({ path: '/h/drops/page.png' });
-    expect(short.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: 1280, height: 3000, scale: 1 } });
-    expect(short.saveImage).toHaveBeenCalledWith(Buffer.from('full'));
-
-    const long = setup({ 'Page.getLayoutMetrics': { cssContentSize: { width: 1280, height: CONTEXT_LIMITS.annotationFullPage + 1 } }, 'Page.captureScreenshot': { data: Buffer.from('top').toString('base64') } });
-    await long.annotate.capture(7);
-    expect(long.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+  it('capture: только видимая часть — Page.captureScreenshot без clip и captureBeyondViewport (этап 0, 0.7)', async () => {
+    const { annotate, send, saveImage } = setup({ 'Page.captureScreenshot': { data: Buffer.from('visible').toString('base64') } });
+    expect(await annotate.capture(7)).toEqual({ path: '/h/drops/page.png' });
+    expect(send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+    expect(send.mock.calls.map((call) => call[1])).toEqual(['Page.captureScreenshot']);
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('visible'));
   });
 
   it('capture: CDP отказал — видимая часть через capturePage', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const { annotate, guest, saveImage } = setup({ 'Page.getLayoutMetrics': new Error('not attached') });
+    const { annotate, guest, saveImage } = setup({ 'Page.captureScreenshot': new Error('not attached') });
     expect(await annotate.capture(7)).toEqual({ path: '/h/drops/page.png' });
     expect(guest.capturePage).toHaveBeenCalledWith();
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('visible-png'));
@@ -6362,9 +7092,11 @@ describe('fake-bridge: browser.annotate* (этап B браузера)', () => {
 ```ts
 // packages/desktop/src/main/browser/annotate.ts
 /**
- * Аннотации в main (спека браузера 4.7): скрипт меток `guest-annotate.js` в изолированном мире 1001, проверка его
- * данных, роль, имя и React для меток на элементах (как у Select), перерисовка меток по лотку окна и снимок страницы
- * с номерами. Всё, что вернул скрипт, — данные страницы: форма и длины проверяются здесь (`validateAnnotationPick`).
+ * Аннотации в main (спека браузера 4.7): скрипт меток `guest-annotate.js` (после помощников `guest-dom.js`) в
+ * изолированном мире 1001, проверка его данных, роль, имя и React для меток на элементах (как у Select, по точке
+ * документа), перерисовка меток по лотку окна и снимок видимой части страницы с номерами (этап 0, 0.7: снимок всей
+ * страницы двоит фиксированный заголовок и теряет метки). Всё, что вернул скрипт, — данные страницы: форма и длины
+ * проверяются здесь (`validateAnnotationPick`).
  */
 
 import type { WebContents } from 'electron';
@@ -6381,7 +7113,7 @@ import { CONTEXT_LIMITS } from '../../shared/context-markdown.js';
 import { S } from '../../shared/strings.js';
 import { PICK_LIMITS, PICK_WORLD_ID } from './design-mode.js';
 import { elementInfo, withTimeout, type CdpSender, type ElementInfo } from './element-info.js';
-import { cutCodePoints, finite, isRecord, readPoint, readRect, type Point } from './guest-data.js';
+import { cutCodePoints, documentPoint, finite, isRecord, readPoint, readRect, type Point } from './guest-data.js';
 
 /** Ключевые стили метки на элементе (спека 4.7) — тот же список, что у `guest-annotate.js`. */
 const ANNOTATION_STYLE_KEYS = new Set(['display', 'position', 'width', 'height', 'margin', 'padding', 'color', 'background-color', 'font-size', 'font-weight']);
@@ -6392,8 +7124,8 @@ const MAX_UNDER = 3;
 const CANCEL_SCRIPT = 'globalThis.__parleyAnnotate?.cancel()';
 const COUNT_SCRIPT = 'globalThis.__parleyAnnotate?.count() ?? 0';
 
-/** Ответ скрипта после проверки: у метки на элементе — ещё точка для CDP (в окно не уходит). */
-type ValidAnnotationPick = AnnotationRegionTarget | (AnnotationElementTarget & { point: Point | null }) | { kind: 'edit'; n: number };
+/** Ответ скрипта после проверки: у метки на элементе — ещё точка и прокрутка для CDP (в окно не уходят). */
+type ValidAnnotationPick = AnnotationRegionTarget | (AnnotationElementTarget & { point: Point | null; scroll: Point }) | { kind: 'edit'; n: number };
 
 function readViewport(value: unknown): PickViewport | null {
   if (!isRecord(value)) return null;
@@ -6453,6 +7185,7 @@ export function validateAnnotationPick(raw: unknown): ValidAnnotationPick | null
     anchor,
     viewport,
     point: readPoint(raw.point),
+    scroll: readPoint(raw.scroll) ?? { x: 0, y: 0 },
   };
 }
 
@@ -6522,8 +7255,9 @@ export function createAnnotate(deps: {
             finish(pick);
             return;
           }
-          const { point, ...target } = pick;
-          const info = await withTimeout<ElementInfo>(elementInfo(deps.inspector, id, point, target.selector), PICK_LIMITS.infoMs, {});
+          // DOM.getNodeForLocation — в координатах документа (спайк 0.4, 0.6): точка вьюпорта плюс прокрутка.
+          const { point, scroll, ...target } = pick;
+          const info = await withTimeout<ElementInfo>(elementInfo(deps.inspector, id, documentPoint(point, scroll), target.selector), PICK_LIMITS.infoMs, {});
           if (done || contents.isDestroyed()) {
             finish(null);
             return;
@@ -6567,19 +7301,9 @@ export function createAnnotate(deps: {
     const count: unknown = await contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: COUNT_SCRIPT }]).catch(() => 0);
     if (typeof count !== 'number' || count < 1) return { path: null };
     try {
-      const metrics = await deps.inspector.send<{ cssContentSize?: { width?: unknown; height?: unknown } }>(id, 'Page.getLayoutMetrics');
-      const width = metrics.cssContentSize?.width;
-      const height = metrics.cssContentSize?.height;
-      // Вся страница — если она не больше ~8000 px по сторонам (спека 4.7); иначе — видимая часть.
-      const whole =
-        finite(width) && finite(height) && width > 0 && height > 0 && width <= CONTEXT_LIMITS.annotationFullPage && height <= CONTEXT_LIMITS.annotationFullPage
-          ? { x: 0, y: 0, width, height, scale: 1 }
-          : null;
-      const shot = await deps.inspector.send<{ data?: unknown }>(
-        id,
-        'Page.captureScreenshot',
-        whole === null ? { format: 'png' } : { format: 'png', captureBeyondViewport: true, clip: whole },
-      );
+      // Только видимая часть (этап 0, 0.7): снимок всей страницы через captureBeyondViewport двоит фиксированный
+      // заголовок и теряет метки ниже первой поверхности вида.
+      const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png' });
       if (typeof shot.data === 'string' && shot.data !== '') return { path: await deps.saveImage(Buffer.from(shot.data, 'base64')) };
     } catch (error) {
       console.warn('[parley] annotate: CDP capture failed, falling back to capturePage', error);
@@ -6640,11 +7364,12 @@ export function createAnnotate(deps: {
   - после `createDesignMode({ … })`:
 
 ```ts
-    // Аннотации (этап B, спека браузера 4.7): снимок страницы с метками — в drops/, как у выбора.
+    // Аннотации (этап B, спека браузера 4.7): снимок видимой части с метками — в drops/, как у выбора.
     const annotate = createAnnotate({
       fromId: (id) => webContents.fromId(id) ?? null,
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
-      guestScript: guestAnnotateScript,
+      // Помощники DOM (guest-dom.js) — в той же строке перед скриптом меток, как у выбора (задача 2).
+      guestScript: `${guestDomScript}\n${guestAnnotateScript}`,
       inspector,
     });
 ```
@@ -6731,19 +7456,19 @@ export function createAnnotate(deps: {
 
 ```bash
 git add packages/desktop/src/main/browser/annotate.ts packages/desktop/src/main/browser/annotate.test.ts packages/desktop/src/shared/browser-types.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/main/index.ts packages/desktop/src/preload/index.ts packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/renderer/test-utils/fake-bridge.test.ts
-git commit -m "feat(desktop): аннотации в main — метки, перерисовка, снимок страницы с номерами; мост annotate*" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): аннотации в main — метки, перерисовка, снимок видимой части с номерами; мост annotate*" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 20. Лоток аннотаций: состояние вкладки
+## Задача 21. Лоток аннотаций: состояние вкладки
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/annotate/store.ts`
 - Тест: `packages/desktop/src/renderer/browser/annotate/store.test.ts`
 
 **Интерфейсы:**
-- Берёт: типы меток (задача 5), `CONTEXT_LIMITS` (задача 3).
+- Берёт: типы меток (задача 6), `CONTEXT_LIMITS` (задача 4).
 - Отдаёт: `AnnotationItem { n; key; target; comment; gone; rect }`, `AnnotationEditing { n; isNew; anchor; draft }`, `AnnotateTabState { items; editing; collapsed }`, `EMPTY_ANNOTATE`, `pinsOf(items)`, `useAnnotateStore` с действиями `receive`, `setDraft`, `save`, `cancelEdit`, `startEdit`, `remove`, `clear`, `restore`, `markPositions`, `markAllGone`, `setCollapsed`, `drop`.
 - Правила: номера — 1…N без дыр (удаление перенумеровывает), не больше 20 пунктов. Новая метка сразу открывает редактор. Esc у новой метки её отменяет. Комментарий обрезается по краям и до 2000 кодовых точек. «Undo» возвращает убранную пачку перед текущими пунктами.
 
@@ -7010,19 +7735,23 @@ git commit -m "feat(desktop): состояние лотка аннотаций �
 
 ---
 
-## Задача 21. Редактор комментария и лоток аннотаций
+## Задача 22. Редактор комментария и лоток аннотаций (каркасы — по Orca)
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx`, `packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx`
-- Изменить: `packages/desktop/src/shared/strings.ts` (`S.browser.annotate`)
-- Тесты: `packages/desktop/src/renderer/browser/annotate/AnnotationEditor.test.tsx`, `packages/desktop/src/renderer/browser/annotate/AnnotationTray.test.tsx`
+- Изменить: `packages/desktop/src/renderer/ui/popover.tsx` (`portalContainer`), `packages/desktop/src/shared/strings.ts` (`S.browser.annotate`)
+- Тесты: `packages/desktop/src/renderer/browser/annotate/AnnotationEditor.test.tsx`, `packages/desktop/src/renderer/browser/annotate/AnnotationTray.test.tsx`, `packages/desktop/src/renderer/ui/ui.test.tsx`
 
 **Интерфейсы:**
-- Берёт: `AnnotationItem` (задача 20), `elementLabel` (задача 4), `CONTEXT_LIMITS`, `Button` (`ui/button.tsx`).
+- Берёт: `AnnotationItem` (задача 21), `elementLabel` (задача 5), `CONTEXT_LIMITS`, `Button` (`ui/button.tsx`), `Popover`, `PopoverAnchor`, `PopoverContent` (`ui/popover.tsx`).
 - Отдаёт:
-  - `ANNOTATION_EDITOR = { width: 288, height: 152, gap: 8 }`, `AnnotationEditor({ n, draft, at, onDraft, onSave, onDelete, onCancel })` — поле в окне у метки; `at` — уже вписанная в слой страницы точка в пикселях; что значит Delete у новой метки (отмена) и у готовой (удаление), решает вызывающий;
+  - `PopoverContent` получает необязательный проп `portalContainer?: HTMLElement | null` — куда рисовать содержимое (Radix `Portal container`), по умолчанию `document.body`;
+  - `AnnotationEditor({ n, draft, anchor, container, onDraft, onSave, onDelete, onCancel })` — Radix-поповер у метки: `anchor` — точка метки в пикселях слоя страницы, `container` — сам слой (`fieldRef` вкладки): в нём поповер рисуется и в его пределах держится. Что значит Delete у новой метки (отмена) и у готовой (удаление), решает вызывающий;
   - `annotationTargetText(target)`, `AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDelete, onClear, onAddToChat })`;
   - `S.browser.annotate.*`.
+- Своих расчётов места редактора нет: `ANNOTATION_EDITOR` и `editorAt` прежнего плана не нужны — край слоя и переворот вверх держит Radix (`collisionBoundary`, `collisionPadding`, `side="bottom"`), как у Orca.
+- **Редактор — адаптация Orca** `src/renderer/src/components/browser-pane/annotate/pending-browser-annotation-card.tsx`: якорь-точка `PopoverAnchor` в слое, поповер с `portalContainer` и `collisionBoundary`. Изменено: без «намерения» и `ToggleGroup` (спека 2.13); строки — `S.browser.annotate` вместо `translate`; Enter сохраняет (спека 4.7; у Orca — ⌘Enter), ⇧Enter — перенос; есть Delete; Esc отменяет и до вкладки не доходит; `open` без `onOpenChange` — клик мимо (в том числе в страницу, куда уходит фокус) редактор не закрывает; вместо `ImeTextarea` — `nativeEvent.isComposing`.
+- **Лоток — адаптация Orca** `src/renderer/src/components/browser-pane/annotate/browser-page-annotation-tray.tsx`: карточка внизу справа (`max-h-[45%]`, ширина `min(20rem, 100% − 1.5rem)`), список со `scrollbar-sleek`, у пункта номер-кружок, цель и комментарий, кнопки правки и удаления проступают по наведению и фокусу. Изменено: «Send» с отправкой агенту и «Copy» в буфер обмена убраны (ничего не уходит само) — внизу Clear и «Add to chat»; шапка сворачивает лоток в «N annotations»; цель — `button.save` или `Region 308 × 20`, комментарий — одной строкой, «element gone»; правка — в том же редакторе у метки, что по клику на метку (спека 4.7), а не в строке лотка; вариант `can-hover:` (его у нас нет) — `group-hover`.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -7032,15 +7761,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AnnotationEditor } from './AnnotationEditor.js';
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  document.body.innerHTML = '';
+});
 
 function props(patch: Partial<Parameters<typeof AnnotationEditor>[0]> = {}): Parameters<typeof AnnotationEditor>[0] {
-  return { n: 2, draft: 'hi', at: { left: 120, top: 40 }, onDraft: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onCancel: vi.fn(), ...patch };
+  return { n: 2, draft: 'hi', anchor: { left: 120, top: 40 }, container: null, onDraft: vi.fn(), onSave: vi.fn(), onDelete: vi.fn(), onCancel: vi.fn(), ...patch };
 }
 
-describe('AnnotationEditor (спека браузера 4.7)', () => {
-  it('поле в фокусе, до 2000 символов; Enter — Save, ⇧Enter — нет; Delete; стоит в переданной точке', () => {
-    const p = props();
+describe('AnnotationEditor (спека браузера 4.7; поповер — по Orca)', () => {
+  it('поле в фокусе, до 2000 символов; Enter — Save, ⇧Enter — нет; Delete; якорь — в переданной точке, поповер — в слое страницы', () => {
+    const layer = document.createElement('div');
+    document.body.append(layer);
+    const p = props({ container: layer });
     render(<AnnotationEditor {...p} />);
     const field = screen.getByRole('textbox', { name: 'Comment for annotation 2' });
     expect(document.activeElement).toBe(field);
@@ -7053,8 +7787,9 @@ describe('AnnotationEditor (спека браузера 4.7)', () => {
     expect(p.onSave).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     expect(p.onDelete).toHaveBeenCalledTimes(1);
-    const editor = screen.getByTestId('annotation-editor');
-    expect([editor.style.left, editor.style.top]).toEqual(['120px', '40px']);
+    expect(layer.contains(screen.getByTestId('annotation-editor'))).toBe(true);
+    const anchor = screen.getByTestId('annotation-anchor');
+    expect([anchor.style.left, anchor.style.top]).toEqual(['120px', '40px']);
   });
 
   it('Esc — отмена, до вкладки он не доходит (там Esc выключил бы режим)', () => {
@@ -7069,6 +7804,17 @@ describe('AnnotationEditor (спека браузера 4.7)', () => {
     expect(p.onCancel).toHaveBeenCalledTimes(1);
     expect(onKeyDown).not.toHaveBeenCalled();
   });
+
+  it('клик мимо (в том числе в страницу) редактор не закрывает: текст человека не теряется', async () => {
+    const p = props();
+    render(<AnnotationEditor {...p} />);
+    // Radix слушает «клик мимо» со следующего такта после открытия.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.pointerDown(document.body);
+    fireEvent.focusIn(document.body);
+    expect(p.onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('annotation-editor')).toBeTruthy();
+  });
 });
 ```
 
@@ -7082,7 +7828,8 @@ import { AnnotationTray } from './AnnotationTray.js';
 afterEach(() => cleanup());
 
 const VIEWPORT = { width: 1280, height: 800, dpr: 2 };
-const LONG = 'very long comment '.repeat(20);
+// Без пробела в конце: getByTitle сравнивает подпись после обрезки пробелов.
+const LONG = 'very long comment '.repeat(20).trim();
 
 const ITEMS: AnnotationItem[] = [
   {
@@ -7107,7 +7854,7 @@ function handlers() {
   return { onToggle: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn(), onClear: vi.fn(), onAddToChat: vi.fn() };
 }
 
-describe('AnnotationTray (спека браузера 4.7)', () => {
+describe('AnnotationTray (спека браузера 4.7; каркас — по Orca)', () => {
   it('шапка — число; пункт — номер, цель, комментарий в одну строку, «element gone»; правка и удаление по номеру', () => {
     const h = handlers();
     render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} {...h} />);
@@ -7124,6 +7871,11 @@ describe('AnnotationTray (спека браузера 4.7)', () => {
     fireEvent.click(within(tray).getByRole('button', { name: 'Delete annotation 2' }));
     expect(h.onEdit).toHaveBeenCalledWith(1);
     expect(h.onDelete).toHaveBeenCalledWith(2);
+  });
+
+  it('Фокус ревью 6: у Orca в лотке «Send» с отправкой и «Copy» в буфер — здесь их нет, ничего не уходит само', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} {...handlers()} />);
+    expect(screen.queryByRole('button', { name: /send|copy/i })).toBeNull();
   });
 
   it('свёрнут — только шапка «N annotations»; клик по ней — onToggle', () => {
@@ -7147,15 +7899,69 @@ describe('AnnotationTray (спека браузера 4.7)', () => {
 });
 ```
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/annotate` → FAIL: нет компонентов.
+  В `ui/ui.test.tsx` в конец файла (импорты `Popover`, `PopoverContent`, `PopoverTrigger`, `render`, `screen` там уже есть):
 
-- [ ] **Шаг 3. Строки.** В `S.browser` после `select` добавить:
+```tsx
+describe('ui/popover — portalContainer (этап B браузера: редактор аннотаций в слое страницы)', () => {
+  it('содержимое — в переданном узле; без него — в document.body', () => {
+    const layer = document.createElement('div');
+    document.body.append(layer);
+    const view = render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent portalContainer={layer} data-testid="in-layer">
+          Содержимое
+        </PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-layer'))).toBe(true);
+    view.unmount();
+    render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent data-testid="in-body">Содержимое</PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-body'))).toBe(false);
+    expect(document.body.contains(screen.getByTestId('in-body'))).toBe(true);
+    layer.remove();
+  });
+});
+```
+
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/annotate src/renderer/ui/ui.test.tsx` → FAIL: нет компонентов, `portalContainer` не влияет на место содержимого.
+
+- [ ] **Шаг 3. `portalContainer` у поповера.** В `ui/popover.tsx` `PopoverContent` заменить:
+
+```tsx
+/**
+ * `portalContainer` — куда рисовать содержимое (Radix `Portal container`), по умолчанию `document.body`: так редактор
+ * аннотаций рисуется в слое страницы браузера и держится в его пределах (этап B браузера, как у Orca).
+ */
+export const PopoverContent = React.forwardRef<
+  React.ElementRef<typeof PopoverPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> & { portalContainer?: HTMLElement | null }
+>(({ className, align = 'center', sideOffset = 4, portalContainer, ...props }, ref) => (
+  <PopoverPrimitive.Portal container={portalContainer}>
+    <PopoverPrimitive.Content
+      ref={ref}
+      align={align}
+      sideOffset={sideOffset}
+      className={cn(MENU_GLASS, 'w-72 p-4 outline-none', className)}
+      {...props}
+    />
+  </PopoverPrimitive.Portal>
+));
+PopoverContent.displayName = PopoverPrimitive.Content.displayName;
+```
+
+- [ ] **Шаг 4. Строки.** В `S.browser` после `select` добавить:
 
 ```ts
     /** ✎ Annotate (спека браузера 4.7): кнопка, редактор комментария и лоток. */
     annotate: {
       button: 'Annotate',
-      title: 'Annotate the page — click an element or drag over an area (⌘⇧A)',
+      title: 'Annotate the page — click an element or drag over an area (⌘⌥A)',
       tray: (count: number): string => `${count} annotation${count === 1 ? '' : 's'}`,
       region: (width: number, height: number): string => `Region ${width} × ${height}`,
       gone: 'element gone',
@@ -7174,29 +7980,35 @@ describe('AnnotationTray (спека браузера 4.7)', () => {
     },
 ```
 
-- [ ] **Шаг 4. Редактор.**
+- [ ] **Шаг 5. Редактор.**
 
 ```tsx
 // packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx
 /**
- * Редактор комментария метки (спека браузера 4.7) — в окне, а не в странице: поверх `<webview>` у метки. Поле до 2000
- * символов, Enter — Save, ⇧Enter — перенос, Delete убирает метку, Esc отменяет новую метку (у готовой — закрывает без
- * изменений) и не доходит до вкладки: там Esc выключил бы режим. Место — уже вписанная в слой страницы точка.
+ * Адаптация Orca `src/renderer/src/components/browser-pane/annotate/pending-browser-annotation-card.tsx`
+ * (stablyai/orca b1cd858, MIT). Copyright (c) 2026 Lovecast Inc.; полный текст лицензии — в NOTICE в корне репозитория.
+ *
+ * Редактор комментария метки (спека браузера 4.7) — в окне, а не в странице: Radix-поповер у точки метки над
+ * `<webview>`. Как у Orca: якорь — невидимая точка в слое страницы, поповер рисуется в этом слое (`portalContainer`),
+ * держится в его пределах (`collisionBoundary`) и у края переворачивается вверх. Изменено: без «намерения» (спека
+ * 2.13); строки — `S.browser.annotate`; Enter сохраняет (спека 4.7; у Orca — ⌘Enter), ⇧Enter — перенос; Delete
+ * убирает метку; Esc отменяет новую метку (у готовой — закрывает без изменений) и до вкладки не доходит: там Esc
+ * выключил бы режим. `open` без `onOpenChange`: клик мимо — в том числе в страницу, куда уходит фокус, — поповер не
+ * закрывает, текст человека не теряется. Вместо `ImeTextarea` Orca — `nativeEvent.isComposing`.
  */
 
-import { useEffect, useRef } from 'react';
 import { CONTEXT_LIMITS } from '../../../shared/context-markdown.js';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
-
-/** Размер редактора для вписывания в слой страницы (`BrowserSurface#editorAt`): w-72 и высота поля с кнопками. */
-export const ANNOTATION_EDITOR = { width: 288, height: 152, gap: 8 } as const;
+import { Popover, PopoverAnchor, PopoverContent } from '../../ui/popover.js';
 
 export interface AnnotationEditorProps {
   n: number;
   draft: string;
-  /** Левый верхний угол в пикселях слоя страницы. */
-  at: { left: number; top: number };
+  /** Точка метки в пикселях слоя страницы (`BrowserSurface#anchorAt`): у неё якорь поповера. */
+  anchor: { left: number; top: number };
+  /** Слой страницы: поповер рисуется в нём и не выходит за его края; `null` — `document.body`. */
+  container: HTMLElement | null;
   onDraft(text: string): void;
   onSave(): void;
   /** Новая метка — отмена, готовая — удаление. */
@@ -7204,68 +8016,80 @@ export interface AnnotationEditorProps {
   onCancel(): void;
 }
 
-export function AnnotationEditor({ n, draft, at, onDraft, onSave, onDelete, onCancel }: AnnotationEditorProps): JSX.Element {
-  const fieldRef = useRef<HTMLTextAreaElement | null>(null);
-  // Редактор открыло действие человека в странице (метка) — фокус сразу в поле.
-  useEffect(() => {
-    fieldRef.current?.focus();
-  }, []);
+export function AnnotationEditor({ n, draft, anchor, container, onDraft, onSave, onDelete, onCancel }: AnnotationEditorProps): JSX.Element {
   const label = S.browser.annotate.comment(n);
   return (
-    <div
-      data-testid="annotation-editor"
-      data-annotation={n}
-      role="dialog"
-      aria-label={label}
-      className="absolute z-20 flex w-72 flex-col gap-2 rounded-lg border border-border bg-card p-2.5 text-xs text-card-foreground shadow-lg"
-      style={{ left: at.left, top: at.top }}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape') return;
-        event.preventDefault();
-        event.stopPropagation();
-        onCancel();
-      }}
-    >
-      <textarea
-        ref={fieldRef}
+    <Popover open>
+      <PopoverAnchor asChild>
+        <span data-testid="annotation-anchor" className="pointer-events-none absolute size-px" style={{ left: anchor.left, top: anchor.top }} />
+      </PopoverAnchor>
+      <PopoverContent
+        data-testid="annotation-editor"
+        data-annotation={n}
         aria-label={label}
-        value={draft}
-        maxLength={CONTEXT_LIMITS.comment}
-        rows={3}
-        placeholder={S.browser.annotate.placeholder}
-        onChange={(event) => onDraft(event.target.value)}
+        side="bottom"
+        align="start"
+        sideOffset={8}
+        collisionBoundary={container ?? []}
+        collisionPadding={8}
+        portalContainer={container}
+        className="z-20 flex w-72 max-w-[calc(var(--radix-popover-content-available-width)-1rem)] flex-col gap-2 p-2.5 text-xs"
         onKeyDown={(event) => {
-          // Enter во время набора иероглифов (IME) подтверждает слово, а не сохраняет.
-          if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+          if (event.key !== 'Escape') return;
           event.preventDefault();
-          onSave();
+          event.stopPropagation();
+          onCancel();
         }}
-        className="min-h-16 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
-      />
-      <div className="flex items-center justify-end gap-1.5">
-        <Button type="button" variant="outline" size="xs" onClick={onDelete}>
-          {S.browser.annotate.delete}
-        </Button>
-        <Button type="button" size="xs" onClick={onSave}>
-          {S.browser.annotate.save}
-        </Button>
-      </div>
-    </div>
+      >
+        <textarea
+          aria-label={label}
+          value={draft}
+          maxLength={CONTEXT_LIMITS.comment}
+          rows={3}
+          autoFocus
+          placeholder={S.browser.annotate.placeholder}
+          onChange={(event) => onDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter во время набора иероглифов (IME) подтверждает слово, а не сохраняет.
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            onSave();
+          }}
+          className="min-h-16 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+        />
+        <div className="flex items-center justify-end gap-1.5">
+          <Button type="button" variant="outline" size="xs" onClick={onDelete}>
+            {S.browser.annotate.delete}
+          </Button>
+          <Button type="button" size="xs" onClick={onSave}>
+            {S.browser.annotate.save}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 ```
 
-- [ ] **Шаг 5. Лоток.**
+- [ ] **Шаг 6. Лоток.**
 
 ```tsx
 // packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx
 /**
- * Лоток аннотаций (спека браузера 4.7) — внизу справа вкладки, сворачивается в «N annotations». Пункт: номер, цель
- * (`button.save` или `Region 308 × 20`), комментарий одной строкой, «element gone», правка и удаление. Внизу — Clear и
- * «Add to chat»: пачка уходит одним файлом и одним снимком.
+ * Адаптация Orca `src/renderer/src/components/browser-pane/annotate/browser-page-annotation-tray.tsx`
+ * (stablyai/orca b1cd858, MIT). Copyright (c) 2026 Lovecast Inc.; полный текст лицензии — в NOTICE в корне репозитория.
+ *
+ * Лоток аннотаций (спека браузера 4.7) — внизу справа вкладки. Каркас — как у Orca: карточка со списком, у пункта
+ * номер-кружок, цель и комментарий, кнопки правки и удаления проступают по наведению и фокусу. Изменено:
+ * - «Send» с отправкой агенту и «Copy» в буфер обмена убраны — ничего не уходит само; пачку кладёт «Add to chat» внизу,
+ *   рядом с Clear;
+ * - шапка сворачивает лоток в «N annotations»; цель — `button.save` или `Region 308 × 20`, комментарий — одной
+ *   строкой, пропавший элемент — «element gone»;
+ * - правка — в редакторе у метки (тот же, что по клику на метку, спека 4.7), а не в строке лотка; без «намерения»;
+ * - строки — `S.browser.annotate`; вариант `can-hover:` (его у нас нет) заменён на `group-hover`.
  */
 
-import { ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
 import type { AnnotationTarget } from '../../../shared/browser-types.js';
 import { elementLabel } from '../../../shared/context-markdown.js';
 import { S } from '../../../shared/strings.js';
@@ -7290,35 +8114,38 @@ export interface AnnotationTrayProps {
   onAddToChat(): void;
 }
 
-const ICON = 'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground';
-
 export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDelete, onClear, onAddToChat }: AnnotationTrayProps): JSX.Element {
   const title = S.browser.annotate.tray(items.length);
   return (
     <div
       data-testid="annotation-tray"
-      className="absolute bottom-3 right-3 z-10 flex w-72 max-w-[calc(100%-24px)] flex-col rounded-lg border border-border bg-card text-xs text-card-foreground shadow-lg"
+      className="absolute bottom-3 right-3 z-10 flex max-h-[45%] w-[min(20rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
     >
       <button
         type="button"
         aria-expanded={!collapsed}
         title={collapsed ? S.browser.annotate.expand : S.browser.annotate.collapse}
         onClick={onToggle}
-        className="flex h-8 items-center justify-between gap-2 px-2.5 font-medium"
+        className="flex h-9 shrink-0 items-center gap-2 px-3 text-sm font-medium"
       >
-        <span className="truncate">{title}</span>
+        <MessageSquarePlus className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-left">{title}</span>
         {collapsed ? <ChevronUp className="size-3.5 shrink-0" aria-hidden="true" /> : <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />}
       </button>
       {collapsed ? null : (
         <>
-          <ol className="max-h-56 overflow-y-auto border-t border-border">
+          <ol className="scrollbar-sleek min-h-0 flex-1 overflow-auto border-t border-border p-1.5">
             {items.map((item) => {
               const target = annotationTargetText(item.target);
               return (
-                <li key={item.key} data-annotation={item.n} className="flex min-w-0 items-center gap-1.5 px-2.5 py-1.5">
-                  <span className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-amber-500 text-[11px] font-semibold text-white">{item.n}</span>
+                <li
+                  key={item.key}
+                  data-annotation={item.n}
+                  className="group flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent focus-within:bg-accent"
+                >
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[10px] font-semibold text-white">{item.n}</span>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-mono text-[11px]" title={target}>
+                    <div className="truncate font-mono text-[11px] text-foreground" title={target}>
                       {target}
                     </div>
                     <div className="truncate text-muted-foreground" title={item.comment}>
@@ -7326,17 +8153,19 @@ export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDel
                     </div>
                   </div>
                   {item.gone ? <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">{S.browser.annotate.gone}</span> : null}
-                  <button type="button" aria-label={S.browser.annotate.edit(item.n)} title={S.browser.annotate.edit(item.n)} onClick={() => onEdit(item.n)} className={ICON}>
-                    <Pencil className="size-3" aria-hidden="true" />
-                  </button>
-                  <button type="button" aria-label={S.browser.annotate.remove(item.n)} title={S.browser.annotate.remove(item.n)} onClick={() => onDelete(item.n)} className={ICON}>
-                    <Trash2 className="size-3" aria-hidden="true" />
-                  </button>
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={S.browser.annotate.edit(item.n)} title={S.browser.annotate.edit(item.n)} onClick={() => onEdit(item.n)}>
+                      <Pencil className="size-3" aria-hidden="true" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={S.browser.annotate.remove(item.n)} title={S.browser.annotate.remove(item.n)} onClick={() => onDelete(item.n)}>
+                      <Trash2 className="size-3" aria-hidden="true" />
+                    </Button>
+                  </div>
                 </li>
               );
             })}
           </ol>
-          <div className="flex items-center justify-end gap-1.5 border-t border-border px-2.5 py-2">
+          <div className="flex shrink-0 items-center justify-end gap-1.5 border-t border-border px-3 py-2">
             <Button type="button" variant="outline" size="xs" disabled={busy} onClick={onClear}>
               {S.browser.annotate.clear}
             </Button>
@@ -7353,18 +8182,18 @@ export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDel
 
   У пункта без комментария `title` пустой: `getByTitle(LONG)` в тесте находит только первый пункт.
 
-- [ ] **Шаг 6. Запустить — проходит.** Команда шага 2 → PASS. `pnpm --filter @parley/desktop exec vitest run src/english-ui.test.ts` → PASS. `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 7. Запустить — проходит.** Команда шага 2 → PASS. `pnpm --filter @parley/desktop exec vitest run src/english-ui.test.ts` → PASS. `pnpm --filter @parley/desktop typecheck` → без ошибок (`exactOptionalPropertyTypes`: `collisionBoundary` получает `container ?? []`, не `undefined`).
 
-- [ ] **Шаг 7. Закоммитить.**
+- [ ] **Шаг 8. Закоммитить.**
 
 ```bash
-git add packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx packages/desktop/src/renderer/browser/annotate/AnnotationEditor.test.tsx packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx packages/desktop/src/renderer/browser/annotate/AnnotationTray.test.tsx packages/desktop/src/shared/strings.ts
-git commit -m "feat(desktop): редактор комментария метки и лоток аннотаций" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx packages/desktop/src/renderer/browser/annotate/AnnotationEditor.test.tsx packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx packages/desktop/src/renderer/browser/annotate/AnnotationTray.test.tsx packages/desktop/src/renderer/ui/popover.tsx packages/desktop/src/renderer/ui/ui.test.tsx packages/desktop/src/shared/strings.ts
+git commit -m "feat(desktop): редактор комментария метки (Radix-поповер) и лоток аннотаций — каркасы по Orca, без отправки" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 22. Annotate во вкладке: цикл меток, лоток, «Add to chat», ⌘⇧A
+## Задача 23. Annotate во вкладке: цикл меток, лоток, «Add to chat», ⌘⌥A
 
 **Файлы:**
 - Создать: `packages/desktop/src/renderer/browser/annotate/use-annotate-mode.ts`
@@ -7372,11 +8201,11 @@ git commit -m "feat(desktop): редактор комментария метки
 - Тесты: `packages/desktop/src/renderer/browser/annotate/use-annotate-mode.test.ts`, `packages/desktop/src/renderer/browser/BrowserSurface.test.tsx`, `packages/desktop/src/renderer/browser/BrowserChrome.test.tsx` (A), `packages/desktop/src/shared/keybindings.test.ts`, `packages/desktop/src/renderer/palette/actions.test.ts`
 
 **Интерфейсы:**
-- Берёт: мост `annotate*` (задача 19), `useAnnotateStore`, `pinsOf`, `EMPTY_ANNOTATE` (задача 20), `AnnotationEditor`, `ANNOTATION_EDITOR`, `AnnotationTray` (задача 21), `annotationsContext` (задача 5), `usePageContext().add` (задача 12), `toggleBrowserMode` (задача 16).
+- Берёт: мост `annotate*` (задача 20), `useAnnotateStore`, `pinsOf`, `EMPTY_ANNOTATE` (задача 21), `AnnotationEditor`, `AnnotationTray` (задача 22), `annotationsContext` (задача 6), `usePageContext().add` (задача 13), `toggleBrowserMode` (задача 17).
 - Отдаёт:
   - `syncPins(bridge, tabId, webContentsId)`, `useAnnotateMode({ bridge, tabId, webContentsId, active })`, `addAnnotationsToChat({ bridge, tabId, webContentsId, pageUrl, viewportNote, add })`;
   - `BrowserChromeProps.onAnnotate(): void`, кнопка ✎ Annotate;
-  - клавиша `browser.annotate` — `CmdOrCtrl+Shift+A`, `when: 'browser'`, в палитре (`S.actions.annotatePage`); `S.errors.actions.annotate`.
+  - клавиша `browser.annotate` — `CmdOrCtrl+Alt+A` (⌘⌥A, рядом с ⌘⌥I и ⌘⌥J панели), `when: 'browser'`, в палитре (`S.actions.annotatePage`); `S.errors.actions.annotate`. ⌘⇧A занят действием `sidebar.agents` (PR #34) и остаётся ему.
 - Цикл: пока режим `annotate`, окно зовёт `annotateStart`. Метка открывает редактор, следующая — только после Save, Delete или Esc. Метки страницы перерисовываются (`annotateSync`) при каждом изменении состава лотка. Новый документ помечает пункты «element gone». После «Add to chat» лоток пуст, «Undo» в тосте возвращает пачку.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -7608,9 +8437,10 @@ describe('BrowserSurface — Annotate (этап B, спека браузера 4
 
 ```ts
 describe('browser.annotate (спека браузера 4.9)', () => {
-  it('⌘⇧A, область browser, без меню, в палитре; с ⌘⇧A заметки к диффу не спорит — та у Monaco, не в реестре', () => {
-    expect(ACTIONS.find((action) => action.id === 'browser.annotate')).toMatchObject({ keys: 'CmdOrCtrl+Shift+A', menu: null, when: 'browser', inPalette: true });
-    expect(ACTIONS.filter((action) => action.keys === 'CmdOrCtrl+Shift+A')).toHaveLength(1);
+  it('⌘⌥A, область browser, без меню, в палитре; ⌘⇧A остаётся у sidebar.agents', () => {
+    expect(ACTIONS.find((action) => action.id === 'browser.annotate')).toMatchObject({ keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true });
+    expect(ACTIONS.filter((action) => action.keys === 'CmdOrCtrl+Alt+A')).toHaveLength(1);
+    expect(ACTIONS.filter((action) => action.keys === 'CmdOrCtrl+Shift+A').map((action) => action.id)).toEqual(['sidebar.agents']);
   });
 });
 ```
@@ -7762,11 +8592,11 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
   - `keybindings.ts`: в `ActionId` — `| 'browser.annotate'`; в `ACTIONS` после `browser.select`:
 
 ```ts
-  { id: 'browser.annotate', title: S.actions.annotatePage, keywords: ['browser', 'annotate', 'comment', 'pin'], keys: 'CmdOrCtrl+Shift+A', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.annotate', title: S.actions.annotatePage, keywords: ['browser', 'annotate', 'comment', 'pin'], keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true },
 ```
 
   - `keys/handler.ts`: в `IMPLEMENTED_ACTIONS` — `'browser.annotate',`;
-  - `palette/actions.ts`: ветку Select (задача 16) заменить общей:
+  - `palette/actions.ts`: ветку Select (задача 17) заменить общей:
 
 ```ts
   // Select и Annotate (этап B браузера): режим активной вкладки браузера; вкладки нет — ничего.
@@ -7786,8 +8616,8 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
 ```
 
 - [ ] **Шаг 6. Поверхность.** В `BrowserSurface.tsx`:
-  - импорты (`useState` у A уже есть): `import type { ViewportFraction } from '../../shared/browser-types.js';`; `import { ANNOTATION_EDITOR, AnnotationEditor } from './annotate/AnnotationEditor.js';`; `import { AnnotationTray } from './annotate/AnnotationTray.js';`; `import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';`; `import { addAnnotationsToChat, useAnnotateMode } from './annotate/use-annotate-mode.js';`;
-  - после эффекта Select (задача 16):
+  - импорты (`useState` у A уже есть): `import type { ViewportFraction } from '../../shared/browser-types.js';`; `import { AnnotationEditor } from './annotate/AnnotationEditor.js';`; `import { AnnotationTray } from './annotate/AnnotationTray.js';`; `import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';`; `import { addAnnotationsToChat, useAnnotateMode } from './annotate/use-annotate-mode.js';`;
+  - после эффекта Select (задача 17):
 
 ```tsx
   // Annotate (спека браузера 4.7): цикл меток и метки страницы — по лотку; лоток вкладки живёт, пока жива вкладка.
@@ -7797,20 +8627,15 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
   const [annotateBusy, setAnnotateBusy] = useState(false);
 
   /**
-   * Метка → угол редактора в поле страницы (`fieldRef` A): доля вьюпорта по прямоугольнику `<webview>` — при эмуляции
-   * он стоит по центру поля и уменьшен, — а редактор целиком в поле.
+   * Метка → точка в поле страницы (`fieldRef` A): доля вьюпорта по прямоугольнику `<webview>` — при эмуляции он стоит по
+   * центру поля и уменьшен — плюс его сдвиг в поле, как `getBrowserOverlayAnchor` у Orca. Край поля и переворот
+   * редактора вверх держит Radix (`AnnotationEditor`, `collisionBoundary`).
    */
-  const editorAt = (anchor: ViewportFraction): { left: number; top: number } => {
-    const { width, height, gap } = ANNOTATION_EDITOR;
+  const anchorAt = (anchor: ViewportFraction): { left: number; top: number } => {
     const page = fieldRef.current?.getBoundingClientRect();
     const view = viewRef.current?.getBoundingClientRect();
-    if (page === undefined || view === undefined) return { left: gap, top: gap };
-    const left = view.left - page.left + anchor.fx * view.width;
-    const top = view.top - page.top + anchor.fy * view.height + gap;
-    return {
-      left: Math.max(gap, Math.min(left, page.width - width - gap)),
-      top: Math.max(gap, Math.min(top, page.height - height - gap)),
-    };
+    if (page === undefined || view === undefined) return { left: 0, top: 0 };
+    return { left: view.left - page.left + anchor.fx * view.width, top: view.top - page.top + anchor.fy * view.height };
   };
 
   const addAnnotations = (): void => {
@@ -7836,7 +8661,8 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
             key={`${annotate.editing.n}:${annotate.editing.isNew ? 'new' : 'edit'}`}
             n={annotate.editing.n}
             draft={annotate.editing.draft}
-            at={editorAt(annotate.editing.anchor)}
+            anchor={anchorAt(annotate.editing.anchor)}
+            container={fieldRef.current}
             onDraft={(text) => useAnnotateStore.getState().setDraft(tabId, text)}
             onSave={() => useAnnotateStore.getState().save(tabId)}
             onDelete={() => {
@@ -7871,12 +8697,12 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
 
 ```bash
 git add packages/desktop/src/renderer/browser packages/desktop/src/shared/keybindings.ts packages/desktop/src/shared/keybindings.test.ts packages/desktop/src/shared/strings.ts packages/desktop/src/renderer/keys/handler.ts packages/desktop/src/renderer/palette
-git commit -m "feat(desktop): Annotate во вкладке браузера — метки, редактор, лоток, пачка в чат, ⌘⇧A" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(desktop): Annotate во вкладке браузера — метки, редактор, лоток, пачка в чат, ⌘⌥A" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-## Задача 23. E2E: контекст в чат, Select, Annotate, узкое окно
+## Задача 24. E2E: контекст в чат, Select, Annotate, узкое окно
 
 **Файлы:**
 - Создать: `packages/desktop/e2e/browser-context.spec.ts`
@@ -7915,7 +8741,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  *
  * Страница и её ошибки — свой сервер на 127.0.0.1. Клики в госте — sendInputEvent main: доверенные, как у человека.
  * Вид Chat есть только при известной версии claude: тесты с Chat включают пробу версий (`PARLEY_SKIP_VERSION_PROBE: ''`,
- * как chat-view.spec.ts), а без неё у claude вида Chat нет — так проверяется сессия без Chat.
+ * как chat-view.spec.ts), а без неё у claude вида Chat нет — так проверяется сессия без Chat. Стаб Codex — явно 0.159.0:
+ * Chat у Codex с 0.160.0 (PR #36), и тесты не зависят от умолчания стаба.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8099,6 +8926,7 @@ test.describe('контекст из браузера в чат (этап B)', (
       PARLEY_HOME: home,
       PARLEY_CLAUDE_BIN: stubAgent,
       PARLEY_CODEX_BIN: stubCodex,
+      STUB_CODEX_VERSION: '0.159.0',
       PARLEY_GLM_BIN: path.join(home, 'no-glm'),
       PARLEY_TERMINAL_RENDERER: 'dom',
       STUB_BRACKETED: '1',
@@ -8231,6 +9059,15 @@ test.describe('контекст из браузера в чат (этап B)', (
     await clickInGuest(electronApp, url, '#save');
     const first = window.getByRole('textbox', { name: 'Comment for annotation 1' });
     await expect(first).toBeFocused();
+    // Редактор — поповер у метки (по Orca), целиком в поле страницы.
+    const editorBox = await window.getByTestId('annotation-editor').boundingBox();
+    const fieldBox = await window.getByTestId('browser-field').boundingBox();
+    expect(editorBox).not.toBeNull();
+    expect(fieldBox).not.toBeNull();
+    expect(editorBox?.x ?? -1).toBeGreaterThanOrEqual(fieldBox?.x ?? 0);
+    expect(editorBox?.y ?? -1).toBeGreaterThanOrEqual(fieldBox?.y ?? 0);
+    expect((editorBox?.x ?? 0) + (editorBox?.width ?? 0)).toBeLessThanOrEqual((fieldBox?.x ?? 0) + (fieldBox?.width ?? 0) + 0.5);
+    expect((editorBox?.y ?? 0) + (editorBox?.height ?? 0)).toBeLessThanOrEqual((fieldBox?.y ?? 0) + (fieldBox?.height ?? 0) + 0.5);
     await first.fill('Make the save button green');
     await first.press('Enter');
 
@@ -8290,7 +9127,8 @@ test.describe('контекст из браузера в чат (этап B)', (
 
   Заметки к тесту:
   - `expect(lead).toBe('s-01')` в первом тесте — страж нумерации: тосты ждут «S01». Если хост начнёт нумеровать иначе, тест упадёт на страже, а не на тостах.
-  - В тесте Annotate метка `#save` — `button-save`: у элемента есть id (`elementLabel`).
+  - В тесте Annotate метка `#save` — `button-save`: у элемента есть id (`elementLabel`). Селекторы — кратчайшие уникальные (`guest-dom.js`, задача 2): `button#save`, `button#cancel`; имена файлов `element-button-save-…` и `element-button-cancel-…` от этого не зависят.
+  - `STUB_CODEX_VERSION: '0.159.0'` — сессии Codex в этих тестах не создаются, но провайдер в списке есть; явная версия держит его без Chat при любом умолчании стаба (образец — `e2e/codex-chat.spec.ts`).
   - Снимок 800×500 ложится в `.omc/reviews/shots/` worktree — не коммитится, как у `chat-view.spec.ts`.
 
 - [ ] **Шаг 2. Запустить.**
@@ -8308,7 +9146,7 @@ git commit -m "test(desktop): E2E контекста из браузера — �
 
 ---
 
-## Задача 24. Документы: CHANGELOG, README, спека окна 12.2, 12.3 и 12.5
+## Задача 25. Документы: CHANGELOG, README, спека окна 12.2, 12.3 и 12.5
 
 **Файлы:**
 - Изменить: `CHANGELOG.md`, `README.md`, `docs/specs/2026-09-26-desktop-orca-ui-design.md`
@@ -8321,7 +9159,7 @@ git commit -m "test(desktop): E2E контекста из браузера — �
 - **Page context in chat.** The bar above a browser page has "To: S02 ▾" — the session or room
   where page context goes. ⌖ Select (⌘⇧C) adds the clicked element with its role, React
   component and source, styles, HTML and a screenshot; ⇧-click keeps selecting. ✎ Annotate
-  (⌘⇧A) puts numbered pins on elements and dashed frames on areas, each with your comment, and
+  (⌘⌥A) puts numbered pins on elements and dashed frames on areas, each with your comment, and
   the tray adds up to 20 of them as one file with one screenshot. "Add to chat" on a console
   line or a request and "Add errors to chat" in the panel header add those too. Each is a
   Markdown file in `~/.parley/desktop/drops/context` with secrets replaced by `<redacted>`; it
@@ -8345,7 +9183,7 @@ git commit -m "test(desktop): E2E контекста из браузера — �
   a session of the workspace or one of its rooms (by default, the session you worked in last).
   ⌖ Select (⌘⇧C with focus in the page) adds the element you click — its selector, role and
   accessible name, React component and source line, text, styles, HTML and a screenshot;
-  ⇧-click keeps selecting, Esc or a second ⌖ stops. ✎ Annotate (⌘⇧A): click an element or drag
+  ⇧-click keeps selecting, Esc or a second ⌖ stops. ✎ Annotate (⌘⌥A): click an element or drag
   over an area and write what is wrong; numbered pins stay on the page, the tray at the bottom
   right collects up to 20, and its "Add to chat" adds them as one file with one screenshot.
   "Add to chat" on a console line or a request in the panel, and "Add errors to chat" in the
@@ -8357,12 +9195,12 @@ git commit -m "test(desktop): E2E контекста из браузера — �
   Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent until you send it.
 ```
 
-  - абзац о теме гида `window` (задача 17): «a page element from Design Mode» → «page context from the built-in browser»;
+  - абзац о теме гида `window` (задача 18): «a page element from Design Mode» → «page context from the built-in browser»;
   - абзац о сессии без сигналов: «(a note, a Design Mode element, a file or a screenshot)» → «(a note, a page context line, a file or a screenshot)»;
   - в таблице клавиш после строки этапа A «Console and network of a browser tab…»:
 
 ```markdown
-| Select an element / annotate the page | ⌘⇧C / ⌘⇧A — with focus in the page | — |
+| Select an element / annotate the page | ⌘⇧C / ⌘⌥A — with focus in the page | — |
 ```
 
   `pnpm --filter @parley/desktop exec vitest run src/release-docs.test.ts` → PASS (английский, без прежнего имени проекта).
@@ -8373,18 +9211,22 @@ git commit -m "test(desktop): E2E контекста из браузера — �
 ### 12.3 Select (прежде Design Mode)
 
 Этап B спеки `2026-10-07-browser-devtools-agent-design.md` (4.6, 3.8) заменил Design Mode выбором с отложенным
-вложением; карточки результата больше нет.
+вложением; карточки результата больше нет. Помощники DOM скрипта выбора, поиск компонента React и запасной снимок
+адаптированы из Orca (`stablyai/orca`, коммит b1cd858, MIT) — список файлов в `NOTICE`.
 
 1. ⌖ или ⌘⇧C включают режим, кнопка подсвечена. Клик кладёт элемент в цель «To» вкладки и выключает режим, ⇧-клик
    кладёт и режим оставляет, Esc или второй ⌖ — выход. С Annotate режим не совмещается.
-2. **Внедрение** — как прежде: main (`main/browser/design-mode.ts`) выполняет `guest-pick.js` в изолированном мире
-   1001. Скрипт рисует рамку `tag.class · W×H`, гасит клик в capture-фазе и пропускает события с `isTrusted: false`.
-3. **Данные элемента** — прежняя таблица (селектор до 12 звеньев, текст 500, HTML 4096 без секретных полей, 23 стиля)
-   и новые поля: точка клика, ⇧, вьюпорт с DPR. По точке main через CDP находит узел (`DOM.getNodeForLocation`),
+2. **Внедрение** — как прежде: main (`main/browser/design-mode.ts`) выполняет `guest-pick.js` вместе с помощниками
+   `guest-dom.js` в изолированном мире 1001. Скрипт рисует рамку `tag.class · W×H`, гасит клик в capture-фазе и
+   пропускает события с `isTrusted: false`.
+3. **Данные элемента** — прежние пределы (селектор до 12 звеньев — теперь кратчайший уникальный; текст 500 — не
+   больше 80 текстовых узлов; HTML 4096 без секретных полей и без query у ссылок; 23 стиля) и новые поля: точка
+   клика, ⇧, вьюпорт с DPR. По точке документа (точка + прокрутка) main через CDP находит узел (`DOM.getNodeForLocation`),
    сверяет его с выбранным по тегу и классам и дочитывает роль и имя (`Accessibility.getPartialAXTree`) и до трёх
    компонентов React с источником (`Runtime.callFunctionOn` — только с `REACT_INFO_FN`).
-4. **Снимок** — обрезка `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в CSS-пикселях документа; без
-   CDP — `capturePage` видимой части. PNG — в `drops/`.
+4. **Снимок** — обрезка `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в координатах документа ×
+   масштаб страницы, высотой не больше поверхности вида; без CDP — `capturePage()` видимой части и вырезка по
+   измеренному множителю «ширина картинки / ширина вьюпорта». PNG — в `drops/`.
 5. **Результат** — файл-контекст `drops/context/element-<метка>-<4 hex>.md` и снимок рядом (спека браузера 3.6). Путь
    ложится в цель «To»: чип над полем Chat или комнаты, у сессии без Chat — строка в ввод CLI без Enter. Отправляет
    человек.
@@ -8430,25 +9272,129 @@ git commit -m "docs: контекст из браузера в чат — CHANGE
 
 ---
 
-## Задача 25. Завершение этапа
+## Задача 26. NOTICE и страж атрибуции кода Orca
+
+Код задач 2, 15, 16, 19 и 22 адаптирован из `stablyai/orca` (коммит `b1cd858`, MIT, Copyright (c) 2026 Lovecast Inc.). MIT требует уведомления: в шапке каждого файла уже стоит строка «Адаптация Orca … (stablyai/orca b1cd858, MIT)», здесь — раздел `NOTICE` и страж, который не даст забыть следующий такой файл.
+
+**Файлы:**
+- Изменить: `NOTICE`
+- Тест: `packages/desktop/src/notice.test.ts`
+
+**Интерфейсы:**
+- Берёт: шапки файлов задач 2, 15, 16, 19, 22.
+- Отдаёт: в разделе Orca `NOTICE` — второй источник (`https://github.com/stablyai/orca, коммит b1cd858`) и список адаптированных файлов этапа B; страж `orcaFiles()` в `notice.test.ts`: каждый файл `src/main`, `src/renderer`, `src/shared` (кроме тестов) с пометкой `stablyai/orca` назван в `NOTICE` и несёт в шапке `(stablyai/orca b1cd858, MIT)`.
+- Правообладатель и текст MIT — те же, что у форка выше в разделе (Lovecast Inc.): второй текст лицензии не нужен.
+
+- [ ] **Шаг 1. Написать падающий тест.** В `notice.test.ts`:
+  - перед `const fontsDir = …` добавить:
+
+```ts
+/**
+ * Файлы окна с пометкой `stablyai/orca` в тексте — адаптации кода Orca (этап B браузера и дальше): main, рендерер и
+ * shared, без тестов. Забытый в NOTICE файл ловит этот страж, а не ревью.
+ */
+function orcaFiles(): string[] {
+  const out: string[] = [];
+  const stack = ['main', 'renderer', 'shared'].map((dir) => path.join(desktopRoot, 'src', dir));
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === undefined) continue;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (/\.(ts|tsx|js)$/.test(entry.name) && !entry.name.includes('.test.') && readFileSync(full, 'utf8').includes('stablyai/orca')) {
+        out.push(path.relative(repoRoot, full));
+      }
+    }
+  }
+  return out.sort();
+}
+```
+
+  - перед тестом «NOTICE называет таблицу палитр терминала из Orca»:
+
+```ts
+  it('NOTICE называет каждый файл окна, адаптированный из stablyai/orca, и коммит источника; в шапке файла — та же пометка', () => {
+    expect(notice).toContain('https://github.com/stablyai/orca, коммит b1cd858');
+    const files = orcaFiles();
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      expect(notice, file).toContain(file);
+      expect(readFileSync(path.join(repoRoot, file), 'utf8'), file).toContain('(stablyai/orca b1cd858, MIT)');
+    }
+  });
+```
+
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/notice.test.ts` → FAIL: в `NOTICE` нет `https://github.com/stablyai/orca, коммит b1cd858`.
+
+- [ ] **Шаг 3. NOTICE.** В разделе «Orca»:
+  - строку `Источник: https://github.com/Kalmbik61/orca-harnas, коммит acf8e679.` заменить:
+
+```text
+Источник: https://github.com/Kalmbik61/orca-harnas, коммит acf8e679 (форк); файлы
+этапа B браузера — из https://github.com/stablyai/orca, коммит b1cd858 (ниже).
+```
+
+  - после абзаца «Файл .github/workflows/release.yml написан заново; …» (перед линией раздела shadcn/ui) — пустая строка и:
+
+```text
+Адаптированные файлы (этап B браузера — Select и Annotate; источник —
+https://github.com/stablyai/orca, коммит b1cd858; правообладатель и лицензия те
+же — MIT, Copyright (c) 2026 Lovecast Inc., полный текст выше, в этом разделе):
+- packages/desktop/src/main/browser/guest-dom.js — адаптация
+  src/main/browser/grab-guest-foundation-script.ts,
+  src/main/browser/grab-guest-content-script.ts и
+  src/main/browser/grab-guest-element-context-script.ts: кратчайший уникальный
+  селектор, ограниченный обход текста, очистка URL. Работает в изолированном
+  мире страницы, а не в главном, как у Orca.
+- packages/desktop/src/main/browser/react-info.ts — адаптация
+  src/main/browser/grab-guest-react-script.ts: поиск компонента React и пути
+  исходника; правило React 19 — своё.
+- packages/desktop/src/main/browser/design-mode.ts — запасной снимок элемента
+  по src/main/browser/browser-grab-screenshot.ts.
+- packages/desktop/src/main/browser/guest-annotate.js — слой номерных меток по
+  src/shared/browser-annotation-viewport-bridge.ts.
+- packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx — по
+  src/renderer/src/components/browser-pane/annotate/pending-browser-annotation-card.tsx.
+- packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx — по
+  src/renderer/src/components/browser-pane/annotate/browser-page-annotation-tray.tsx.
+В шапке каждого из этих файлов — строка «Адаптация Orca … (stablyai/orca
+b1cd858, MIT)».
+```
+
+  Каждый путь окна стоит в `NOTICE` целиком на одной строке: страж ищет его подстрокой.
+
+- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS. Проверка стража руками: убрать из `NOTICE` строку с `AnnotationTray.tsx` — тест падает с этим путём; вернуть строку.
+
+- [ ] **Шаг 5. Закоммитить.**
+
+```bash
+git add NOTICE packages/desktop/src/notice.test.ts
+git commit -m "docs: NOTICE — файлы этапа B браузера, адаптированные из stablyai/orca b1cd858; страж атрибуции" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+## Задача 27. Завершение этапа
 
 - [ ] Полный прогон: `pnpm build && pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm --filter @parley/desktop e2e`. Числа — против исходного прогона из «Где работать»; флейки — по списку индекса.
-- [ ] Поиск остатков — оба пусто:
+- [ ] Поиск остатков — все три пусто (третья — файлы с пометкой Orca, которых нет в `NOTICE`):
 
 ```bash
 grep -rn "DesignModeCard\|design-block\|designBlock\|design-mode-card" packages --include='*.ts' --include='*.tsx' --include='*.js'
 grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*.js' | grep -v '\.test\.'
+grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx' --include='*.js' | grep -v '\.test\.' | while read -r file; do grep -qF "$file" NOTICE || echo "нет в NOTICE: $file"; done
 ```
 - [ ] Визуальная проверка в dev-окне (`pnpm dev:desktop` — он собирает и хост): 800×500, DPR 1 и 2 (`--force-device-scale-factor=2`), длинные адрес, название работы, ярлыки сессий и название комнаты:
   - строка вкладки по спеке 4.1: размер, ⌖, ✎, «To», консоль, «⋯»; «To» режет имя;
   - меню «To» целиком в окне;
   - чипы `element` с миниатюрой в поле Chat и в поле комнаты;
-  - редактор комментария у метки и в пределах вкладки;
+  - редактор комментария — поповер у метки, в пределах поля страницы; у нижнего края — над меткой;
   - лоток, свёрнутый и развёрнутый;
   - тосты «N … added to …» с «Open» и «Undo».
-- [ ] Ручная проверка без живого агента: «Add to chat» в сессию без Chat вставляет строку и не жмёт Enter; Send в Chat уходит с `@"…md" @"…png"`. Живые проверки агентом — этап D.
-- [ ] CHANGELOG, README и спека окна (12.2, 12.3, 12.5) — задача 24: сверить строки с тем, что вышло.
-- [ ] Отчёт этапа (описание PR): ветки спайков 0.6 и 0.7 (задача 1), расхождения с этапом A, числа прогонов, список «Расхождения и добавления к индексу» ниже — для этапов C и D.
+- [ ] Ручная проверка без живого агента: «Add to chat» в сессию без Chat вставляет строку и не жмёт Enter; Send в Chat уходит с `@"…md" @"…png"`; если стоит Codex 0.160.0 или новее — Send в его Chat уходит списком «Attachments:» с `.md` и `.png`. Живые проверки агентом — этап D.
+- [ ] CHANGELOG, README и спека окна (12.2, 12.3, 12.5) — задача 25: сверить строки с тем, что вышло.
+- [ ] Отчёт этапа (описание PR): итоги задачи 1 (опоры этапа 0, клон Orca, клавиши), расхождения с этапом A, числа прогонов, список «Расхождения и добавления к индексу» ниже — для этапов C и D.
 - [ ] Ревью ветки свежим ревьюером (навык superpowers:requesting-code-review), правки по ревью.
 - [ ] Push ветки `feat/browser-context`, PR во встроенном браузере (`gh` не установлен). Описание кончается строкой `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Вливает человек.
 
@@ -8458,7 +9404,7 @@ grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*
 
 Имена индекса сохранены, имена этапа A сверены с его планом (`…-plan-a-devtools.md`). Ниже — что этап B уточняет или добавляет; этапы C и D берут это как контракт.
 
-1. **`CONTEXT_LIMITS.annotationFullPage: 8000`** — граница снимка всей страницы (спека 4.7, «~8000 px»): иначе число жило бы мимо констант.
+1. **Снимок аннотаций — видимая часть** (этап 0, 0.7: снимок всей страницы двоит фиксированный заголовок и теряет метки). `CONTEXT_LIMITS.annotationFullPage`, которое прежняя редакция плана вводила для снимка всей страницы, не вводится; из индекса оно убрано, спека 4.7 поправлена.
 2. **`redactBody(text, mimeType, limit?)`** — необязательный третий параметр: B режет тела файлов до `CONTEXT_LIMITS.body` уже после маски (C режет сам). Ещё — `unmaskableJson(text, mimeType)`. Толкование раздела 6:
    - «параметры» — это и параметры формы `application/x-www-form-urlencoded`, и фрагмента URL (`#access_token=…`); `user:pass@` из URL убирается;
    - JSON узнаётся по типу или по первой скобке;
@@ -8466,19 +9412,21 @@ grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*
 3. **`PickResult`**:
    - `+ viewport: PickViewport` — строка Viewport файла `element`;
    - `− thumbnail` — уходит вместе с карточкой;
-   - `point` бывает `null`: под точкой после прокрутки не выбранный элемент.
+   - `point` бывает `null`: под точкой после прокрутки не выбранный элемент;
+   - `point` — в CSS-пикселях вьюпорта; точку документа для `DOM.getNodeForLocation` строит main (`documentPoint`, этап 0, 0.4), в `PickResult` её нет.
 4. **Типы, которые индекс называет без формы** (`shared/browser-types.ts`): `ReactComponentInfo`, `PickViewport`, `ViewportFraction`, `Rect`, `AnnotationElementTarget`, `AnnotationRegionTarget`, `AnnotationTarget`, `AnnotationPick` (вместе с `{ kind: 'edit'; n }`), `AnnotationPin { n; key }`, `ContextInput`, `SavedContext`.
    - `AnnotationPosition.rect` — **в долях вьюпорта**, а не в пикселях. Окно переводит их по прямоугольнику `<webview>`, и ни масштаб страницы, ни эмуляция в пересчёте не участвуют.
-5. **Сигнал `human_busy` (этап D)** — режим вкладки в окне: `BrowserTabState.mode !== 'off'` (`useBrowserStore`, задача 16). Select держит его между ⇧-кликами, Annotate — пока включён режим меток, в том числе при открытом редакторе комментария. Так его и читает план D: окно сообщает main `humanBusy` вкладки (`AgentTabRegistration`). Своего реестра режимов в main B не заводит.
+5. **Сигнал `human_busy` (этап D)** — режим вкладки в окне: `BrowserTabState.mode !== 'off'` (`useBrowserStore`, задача 17). Select держит его между ⇧-кликами, Annotate — пока включён режим меток, в том числе при открытом редакторе комментария. Так его и читает план D: окно сообщает main `humanBusy` вкладки (`AgentTabRegistration`). Своего реестра режимов в main B не заводит.
 6. **CDP:**
    - `REACT_INFO_FN` лежит в `main/browser/react-info.ts`;
    - `cdpCallAllowed(method, params)` — в `inspector.ts`, его зовут `send` и внутренняя `command` (у A обе проверяли `CDP_ALLOWED.has`);
-   - B добавляет в `CDP_ALLOWED`: `DOM.enable`, `DOM.disable`, `DOM.getNodeForLocation`, `DOM.describeNode`, `DOM.resolveNode`, `Accessibility.enable`, `Accessibility.disable`, `Accessibility.getPartialAXTree`, `Runtime.callFunctionOn`, `Runtime.releaseObject`, `Page.captureScreenshot`, `Page.getLayoutMetrics`;
+   - B добавляет в `CDP_ALLOWED`: `DOM.enable`, `DOM.disable`, `DOM.getNodeForLocation`, `DOM.describeNode`, `DOM.resolveNode`, `Accessibility.enable`, `Accessibility.disable`, `Accessibility.getPartialAXTree`, `Runtime.callFunctionOn`, `Runtime.releaseObject`, `Page.captureScreenshot`. `Page.getLayoutMetrics` B не добавляет (снимок аннотаций — видимая часть) — его добавит C (план C, задача 12);
    - тест A «закрытый список этапа A» сверял список целиком и ждал, что `Runtime.callFunctionOn` в нём нет. B дописывает в него свои методы и снимает эту проверку; вызов ограничивает `cdpCallAllowed`;
    - рамочный тест «callFunctionOn только с `REACT_INFO_FN`» — в `inspector.test.ts`. Этап C, добавляя свои методы, тоже правит список в этом тесте.
 7. **Новые модули B, которыми может пользоваться D:**
    - `main/browser/guest-data.ts` (разбор данных страницы: туда переехали помощники `design-mode.ts`);
-   - `main/browser/element-info.ts` (`elementInfo`, `withTimeout`, `CdpSender`);
+   - `main/browser/element-info.ts` (`elementInfo`, `withTimeout`, `CdpSender`); `guest-data.ts#documentPoint` — точка документа для `DOM.getNodeForLocation`;
+   - `main/browser/guest-dom.js` — помощники DOM в мире 1001 (`globalThis.__parleyDom`: `LIMITS`, `selectorOf`, `textOf`, `htmlOf`, `stylesOf`); скрипт мира 1001 этапа D (точка клика агента) может ставить его перед собой той же строкой;
    - `shared/css-selector.ts` (`selectorTail`).
 8. **Файлы-контексты:**
    - `saveContextFile` принимает ещё необязательный `random` (для тестов, как `saveImage`);
@@ -8495,7 +9443,7 @@ grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*
       - в `main/index.ts` строки `inspector`, `forwardBatches` и `emulation` переезжают выше `createDesignMode`: выбору и меткам нужен инспектор;
       - в `BrowserSurface` — только ветку Esc в `onKeyDown` корня, ветка `panelKey` остаётся; ⌖ Design Mode в `BrowserChrome` становится Select, рядом встают ✎ и «To». Тесты A строки (`BrowserChrome.test.tsx`: пропсы `renderChrome`, порядок кнопок) правятся вместе с ней;
       - в `inspector.ts` — список и проверку CDP (п. 6).
-    - Только если спайк 0.7 выберет запасной путь снимка — `Emulation.scale(id)`, масштаб страницы под полем (имя и формула — как у задачи 9 плана D).
+    - `Emulation.scale(id)` B не добавляет: множитель запасного снимка измеряется по картинке `capturePage()` (по Orca), а основной снимок — CDP-клип в координатах документа × `getZoomFactor()`, высотой не больше поверхности вида. Эту же формулу берёт `elementClip` плана D (задача 13).
     - `RegisterIpcOptions['browser']` получает `saveContext` и `annotate`.
     - Снимок журнала (`devtoolsSnapshot`) этапу B не нужен: «Add errors to chat» читает журнал окна.
 11. **Строки вне пространств индекса:**
@@ -8506,7 +9454,7 @@ grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*
 12. **Гид агента (core).** B меняет тему `window` в `core/work/guide.ts`: вместо блока Design Mode — раздел «Page context from the browser»; правит `guidance.test.ts` и `agent-guide-sync.test.ts`. Строки-указатели на скилл `parley-browser` остаются этапу D.
 13. **Толкование спеки 4.7** («данные и снимок каждой метки снимаются в момент её создания»):
     - данные цели снимаются при создании метки и переживают смену документа;
-    - один `.png` снимается при «Add to chat», пока метки стоят на странице;
+    - один `.png` видимой части снимается при «Add to chat», пока метки стоят на странице;
     - после нового документа файл уходит без снимка со строкой «Screenshot: none — the page changed after annotating»;
     - отдельный снимок каждой метки при создании не делается: в файл уходит один `.png`.
 14. **«Add errors to chat»** (спека 4.3: «все видимые ошибки консоли и упавшие запросы»). Кнопка A видна, пока красный счётчик `devtoolsCounters(tab).errors` больше нуля. B отдаёт `pageErrors(tab)` — то же, что считает счётчик, но по видимым эпохам (текущей, а с «Preserve log» и прежним):
@@ -8518,3 +9466,12 @@ grep -rn "'Runtime.evaluate'" packages/desktop/src --include='*.ts' --include='*
 16. **`BrowserTabState.mode`** (`'off' | 'select' | 'annotate'`) вместо `pick`, переключатель — `toggleBrowserMode`.
     - План D (задача 1, шаг 6) ждёт флаги `pick === 'picking'` и `useAnnotateStore(…).active`. В коде B это одно поле `mode`: Select — `'select'`, Annotate — `'annotate'`. Поля `active` у лотка нет.
     - У контроллера скрипта меток есть `waiting()` — по нему E2E кликает только в готовую страницу.
+17. **Клавиша Annotate** — `CmdOrCtrl+Alt+A` (⌘⌥A) вместо `CmdOrCtrl+Shift+A` индекса: ⌘⇧A с PR #34 занят действием `sidebar.agents`. Индекс и спека 4.9 поправлены.
+18. **Код Orca** (`stablyai/orca`, коммит `b1cd858`, MIT):
+    - `guest-dom.js` (задача 2) — общий для скриптов выбора и меток; селектор — кратчайший уникальный суффикс (`form#f`, а не `body > main.page > form#f`): всё, что смотрит последнее звено (`selectorTail`, `elementLabel`, сверка узла), не меняется;
+    - `REACT_LIMITS` растёт полями `depth: 35` (подъём по `return`) и `stackLines: 6` (строки `_debugStack`); путь источника без origin и query — `src/App.tsx:12`;
+    - слой меток — закрытый shadow-корень на `document.body`, положение — по живому `getBoundingClientRect()`;
+    - `PopoverContent` (`ui/popover.tsx`) получает необязательный `portalContainer`; `ANNOTATION_EDITOR` и `editorAt` прежней редакции не вводятся;
+    - `NOTICE` называет каждый такой файл, страж — `notice.test.ts#orcaFiles`. Этапы C и D, беря код Orca, добавляют в шапку ту же пометку и строку в `NOTICE`.
+19. **Вид Chat у Codex** (PR #36, Codex 0.160.0 и новее) отправляет вложения через `composeRoomMessage` — списком «Attachments:». Спека 1.2 и 4.5 поправлены: сессия Codex с Chat — первая строка таблицы доставки; `.png` к ней даёт задача 11.
+20. **Клавиши Select и Annotate с фокусом в окне.** Индекс говорит, что ⌘⇧C и ⌘⌥A с фокусом в строке или панели вкладки ловит `BrowserSurface` (как ⌘⌥I и ⌘⌥J), а задачи 17 и 23 этого не делают: из страницы клавиши пересылает main, в окне — кнопки и палитра. Добавить их в `panelKey` — отдельное решение.
