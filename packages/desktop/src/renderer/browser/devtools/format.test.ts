@@ -27,6 +27,13 @@ describe('строки консоли (спека 4.3)', () => {
       `Uncaught Error: boom\n    at save (${APP}:10:5)`,
     );
   });
+
+  it('consoleCopyText без стека — место записи строкой «at (url:строка:столбец)»; без места — только текст', () => {
+    expect(consoleCopyText(consoleEntry(1, { text: "Refused to load 'x'", location: { url: APP, line: 7, column: 2 } }))).toBe(
+      `Refused to load 'x'\n    at (${APP}:7:2)`,
+    );
+    expect(consoleCopyText(consoleEntry(2, { text: 'plain' }))).toBe('plain');
+  });
 });
 
 describe('ячейки Network (спека 4.4)', () => {

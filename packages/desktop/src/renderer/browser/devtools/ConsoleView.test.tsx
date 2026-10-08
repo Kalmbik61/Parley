@@ -78,6 +78,15 @@ describe('ConsoleView (спека 4.3)', () => {
     expect(screen.getByTestId('console-stack').textContent).toBe('    at x (a.js:1:1)');
   });
 
+  it('многострочное сообщение любого уровня раскрывается: свёрнуто — первая строка, раскрыто — остальные', () => {
+    seed({ console: [consoleEntry(6, { text: 'a\nb' })] });
+    render(<ConsoleView tabId={TAB} />);
+    expect(screen.getByText('a')).toBeTruthy();
+    expect(screen.queryByText('b')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show stack' }));
+    expect(screen.getByTestId('console-stack').textContent).toBe('b');
+  });
+
   it('Copy — текст и стек в буфер; Add to chat — только с колбэком этапа B', () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
@@ -104,6 +113,8 @@ describe('ConsoleView (спека 4.3)', () => {
     render(<ConsoleView tabId={TAB} />);
     expect(screen.getByText('first page')).toBeTruthy();
     expect(document.querySelector('[data-console-nav]')?.textContent).toBe('Navigated to http://localhost:5173/next');
+    // Длинный адрес документа переносится, лог не получает горизонтальной прокрутки.
+    expect(document.querySelector('[data-console-nav]')?.classList.contains('[overflow-wrap:anywhere]')).toBe(true);
   });
 
   it('пусто — No messages', () => {

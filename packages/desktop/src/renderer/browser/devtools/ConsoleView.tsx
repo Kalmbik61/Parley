@@ -22,7 +22,7 @@ const STICK_PX = 16;
 
 const ROW_TONE: Readonly<Record<ConsoleLevel, string>> = {
   error: 'bg-destructive/5 text-destructive',
-  warning: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+  warning: 'bg-status-warning-background text-status-warning-text',
   info: 'text-foreground',
   debug: 'text-muted-foreground',
 };
@@ -37,8 +37,8 @@ function LevelIcon({ level }: { level: ConsoleLevel }): JSX.Element {
 function ConsoleRow({ entry, onAddToChat }: { entry: ConsoleEntry; onAddToChat: ((entry: ConsoleEntry) => void) | undefined }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [first = '', ...rest] = entry.text.split('\n');
-  // Раскрытие — у ошибки со стеком (спека 4.3): остальные строки описания, а без них — кадры стека.
-  const expandable = entry.level === 'error' && (rest.length > 0 || entry.stack.length > 1);
+  // Раскрытие: остальные строки сообщения любого уровня, а у ошибки со стеком (спека 4.3) без них — кадры стека.
+  const expandable = rest.length > 0 || (entry.level === 'error' && entry.stack.length > 1);
   const copy = (): void => {
     navigator.clipboard.writeText(consoleCopyText(entry)).catch((error: unknown) => console.warn('[parley] clipboard', error));
   };
@@ -151,7 +151,7 @@ export function ConsoleView({ tabId, onAddToChat }: ConsoleViewProps): JSX.Eleme
         ) : (
           items.map((item) =>
             item.kind === 'nav' ? (
-              <div key={`nav-${item.epoch}`} data-console-nav className="border-b border-border bg-muted/50 px-2 py-0.5 text-muted-foreground">
+              <div key={`nav-${item.epoch}`} data-console-nav className="border-b border-border bg-muted/50 px-2 py-0.5 text-muted-foreground [overflow-wrap:anywhere]">
                 {item.url === null ? S.browser.devtools.navigated : S.browser.devtools.navigatedTo(item.url)}
               </div>
             ) : (

@@ -10,9 +10,13 @@ export function frameText(frame: StackFrame): string {
   return `    at ${frame.fn} (${frame.url}:${frame.line}:${frame.column})`;
 }
 
-/** Текст строки для «Copy»: сообщение и кадры стека. */
+/** Текст строки для «Copy»: сообщение и кадры стека; без стека — место записи (SyntaxError при загрузке, строка CSP). */
 export function consoleCopyText(entry: ConsoleEntry): string {
-  return [entry.text, ...entry.stack.map(frameText)].join('\n');
+  const frames = entry.stack.map(frameText);
+  if (frames.length === 0 && entry.location !== null) {
+    frames.push(`    at (${entry.location.url}:${entry.location.line}:${entry.location.column})`);
+  }
+  return [entry.text, ...frames].join('\n');
 }
 
 /** `app.js:10` — имя файла и строка; без файла — хост; полный адрес — в подсказке строки. */
