@@ -29,6 +29,7 @@
 import { useMemo } from 'react';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
 import { TAB_TOOLBAR_PX } from '../chat/ChatToolbar.js';
 import { FeedSubscription } from '../chat/use-feed.js';
@@ -56,7 +57,7 @@ export interface SurfaceLayerProps {
 type SurfaceSpec =
   | { kind: 'terminal'; tabId: string; sessionId: string; groupId: string; visible: boolean }
   | { kind: 'feed'; tabId: string; sessionId: string }
-  | { kind: 'browser'; tabId: string; url: string; groupId: string; visible: boolean };
+  | { kind: 'browser'; tabId: string; url: string; viewport: ViewportSpec | null; groupId: string; visible: boolean };
 
 export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, sendDeps }: SurfaceLayerProps): JSX.Element {
   const layout = useLayoutStore((state) => state.layouts[workKey]);
@@ -88,7 +89,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
       for (const tab of group.tabs) {
         const visible = active && group.activeTabId === tab.id;
         if (tab.kind === 'browser') {
-          surfaces.push({ kind: 'browser', tabId: tab.id, url: tab.url, groupId: group.id, visible });
+          surfaces.push({ kind: 'browser', tabId: tab.id, url: tab.url, viewport: tab.viewport ?? null, groupId: group.id, visible });
           continue;
         }
         if (tab.kind !== 'terminal') continue;
@@ -119,6 +120,7 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
                 workKey={workKey}
                 tabId={surface.tabId}
                 url={surface.url}
+                viewport={surface.viewport}
                 groupId={surface.groupId}
                 visible={surface.visible}
                 bridge={bridge}

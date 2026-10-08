@@ -1250,7 +1250,6 @@ export const S = {
     localFile: "Local files can't be opened here",
     reload: 'Reload',
     stop: 'Stop',
-    devTools: 'DevTools',
     pageCrashed: 'Page crashed',
     /** Главный фрейм не загрузился (`did-fail-load`, fix-9). */
     loadFailed: "Couldn't load page",

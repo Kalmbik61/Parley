@@ -16,11 +16,12 @@
  * `loadURL`.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
+import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -29,6 +30,7 @@ import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserChrome } from './BrowserChrome.js';
 import { DesignModeCard } from './DesignModeCard.js';
+import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { FindBar } from './FindBar.js';
 import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
@@ -67,6 +69,8 @@ export interface BrowserSurfaceProps {
   tabId: string;
   /** Адрес вкладки из раскладки; '' — новая вкладка. */
   url: string;
+  /** Размер вьюпорта вкладки (`TabSpec.viewport`, спека 2026-10-07, 4.2); null — Fit. */
+  viewport: ViewportSpec | null;
   groupId: string;
   visible: boolean;
   bridge: ParleyBridge;
@@ -88,13 +92,15 @@ const IDLE: BrowserTabState = {
   pick: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
   const readyRef = useRef(false);
   // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
   const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
+  const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
+  const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
 
   // Первый адрес http(s) — и только он — становится `src`. Без адреса (новая вкладка) и с чужим
   // адресом (раскладку правили руками) — заглушка: страж main отверг бы такой `src` (9.1).
@@ -229,6 +235,22 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
     });
   };
 
+  // «⋯ → Clear console and network» и «Clear» панели (спека 2026-10-07, 4.1, 4.3): журнал окна — сразу, main — мостом.
+  const clearDevtools = (): void => {
+    useDevtoolsStore.getState().clear(tabId);
+    const id = state.webContentsId;
+    if (id === null) return;
+    bridge.browser.devtoolsClear(id).catch((error: unknown) => {
+      console.error('[parley] devtoolsClear failed', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.clearDevtools));
+    });
+  };
+
+  // Размер вьюпорта (спека 2026-10-07, 4.2) — в раскладку: он переживает перезапуск, эмуляцию ставит поверхность.
+  const setViewport = (next: ViewportSpec | null): void => {
+    useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { viewport: next }));
+  };
+
   // Design Mode (спека 12.3): выбор — только по ⌖ или «Pick again» человека.
   const startPick = (): void => {
     const id = state.webContentsId;
@@ -304,6 +326,12 @@ export function BrowserSurface({ workKey, tabId, url, groupId, visible, bridge, 
         onDevTools={openDevTools}
         picking={picking}
         onDesignMode={picking ? cancelPick : startPick}
+        viewport={viewport}
+        onViewport={setViewport}
+        devtoolsOpen={devtools.open}
+        counters={counters}
+        onToggleDevtools={() => useDevtoolsStore.getState().toggle(tabId)}
+        onClearDevtools={clearDevtools}
       />
       <div className="relative min-h-0 flex-1">
         {src === null ? (

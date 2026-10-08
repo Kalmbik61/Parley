@@ -23,6 +23,8 @@ import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store
 import { toast } from 'sonner';
 import type { PickResult } from '../../shared/browser-types.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { devtoolsBatch, networkEntry } from '../test-utils/devtools-fixtures.js';
+import { useDevtoolsStore } from './devtools/store.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -121,6 +123,12 @@ function layoutUrlOfTab(): string | undefined {
   return tab?.kind === 'browser' ? tab.url : undefined;
 }
 
+function tabOfLayout(): TabSpec | undefined {
+  const layout = useLayoutStore.getState().layouts[WORK_KEY];
+  const found = layout === undefined ? null : findTab(layout, TAB);
+  return found?.group.tabs[found.index];
+}
+
 function tabTitle(): string | null | undefined {
   return document.querySelector(`[role="tab"][data-tab-id="${TAB}"]`)?.textContent;
 }
@@ -136,6 +144,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+  useDevtoolsStore.setState({ tabs: {} });
   useLayoutStore.setState({
     activeWorkKey: null,
     layouts: {},
@@ -209,14 +218,15 @@ describe('BrowserSurface (тест 3)', () => {
     expect(view.goBack).toHaveBeenCalledTimes(1);
   });
 
-  it('DevTools — browser.openDevTools(webContentsId); отказ — тост, окно живо', async () => {
+  it('⋯ → Open full DevTools — browser.openDevTools(webContentsId); до dom-ready ⋯ неактивна', () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 9);
-    const devTools = screen.getByRole('button', { name: 'DevTools' }) as HTMLButtonElement;
-    expect(devTools.disabled).toBe(true);
+    const more = screen.getByRole('button', { name: 'More browser actions' }) as HTMLButtonElement;
+    expect(more.disabled).toBe(true);
     fire(view, 'dom-ready');
-    fireEvent.click(devTools);
+    fireEvent.keyDown(more, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open full DevTools' }));
     expect(bridge.browserCalls).toContainEqual({ method: 'openDevTools', args: [9] });
   });
 
@@ -540,5 +550,32 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
     expect(screen.getByTestId('design-mode-card')).toBeTruthy();
     fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
     expect(screen.queryByTestId('design-mode-card')).toBeNull();
+  });
+});
+
+describe('BrowserSurface — строка вкладки (спека 2026-10-07, 4.1, 4.2)', () => {
+  it('счётчики — из журнала вкладки; ⋯ → Clear console and network — devtoolsClear(id), журнал пуст', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    act(() => useDevtoolsStore.getState().batch(TAB, devtoolsBatch({ webContentsId: 9, network: [networkEntry('fail', { status: 500 })] })));
+    expect(screen.getByTestId('devtools-errors').textContent).toBe('1');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear console and network' }));
+    expect(bridge.browserCalls).toContainEqual({ method: 'devtoolsClear', args: [9] });
+    expect(useDevtoolsStore.getState().tabs[TAB]?.network).toEqual([]);
+    expect(screen.queryByTestId('devtools-errors')).toBeNull();
+  });
+
+  it('размер из меню — в раскладку вкладки (TabSpec.viewport); Fit — поля нет', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Mobile M/ }));
+    expect(tabOfLayout()).toEqual({ kind: 'browser', id: TAB, url: 'http://localhost:5173/', viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Viewport size' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fit' }));
+    expect(tabOfLayout()).toEqual({ kind: 'browser', id: TAB, url: 'http://localhost:5173/' });
   });
 });
