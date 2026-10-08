@@ -2,6 +2,7 @@
  * Встроенный браузер (кусок 9.1, спека 12.2, 12.5): общие для main, прелоада и рендерера
  * раздел, форма данных и мост `browser.*`.
  */
+import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from './browser-devtools.js';
 
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
 export const BROWSER_PARTITION = 'persist:harnas-browser';
@@ -43,4 +44,22 @@ export interface BrowserApi {
   onFavicon(listener: (e: BrowserFavicon) => void): () => void; // спека 12.1
   /** Гость получил фокус (focus его WebContents): окно делает его вкладку активной — клик в страницу DOM окна не видит. */
   onFocus(listener: (e: { webContentsId: number }) => void): () => void;
+  /**
+   * Журнал консоли и сети гостя (спека 2026-10-07-browser-devtools-agent-design.md, 3.5). Журнала нет (захват не
+   * подключался) — пустой с `capture: 'unavailable'`.
+   */
+  devtoolsSnapshot(webContentsId: number): Promise<DevtoolsSnapshot>;
+  devtoolsClear(webContentsId: number): Promise<void>;
+  /**
+   * Захват включён (спайк 0.1, вариант D): все `enable` ответили, отказали или вышли по тайм-ауту. `<webview>` стартует
+   * с about:blank; окно зовёт это на его первый `dom-ready` и только потом открывает адрес вкладки, иначе подресурсы
+   * первой загрузки прошли бы мимо журнала. Журнала нет — готово сразу.
+   */
+  devtoolsReady(webContentsId: number): Promise<void>;
+  /** Тело ответа до 1 МБ (`DEVTOOLS_LIMITS.panelBody`); null — Chromium его уже вытеснил. */
+  responseBody(webContentsId: number, requestId: string): Promise<ResponseBody | null>;
+  /** Пачки журнала всех гостей окна (событие browser:devtools); вкладка берёт свои по webContentsId. */
+  onDevtools(listener: (batch: DevtoolsBatch) => void): () => void;
+  /** Размер вьюпорта (спека 4.2), null — Fit; area — место под страницу в поле вкладки. Ответ — вписывание. */
+  setViewport(webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }): Promise<{ scale: number }>;
 }

@@ -7,6 +7,7 @@ import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from '
 import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
+import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -21,6 +22,8 @@ import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { createDesignMode } from './browser/design-mode.js';
+import type { Emulation } from './browser/emulation.js';
+import type { Inspector } from './browser/inspector.js';
 
 /**
  * Оборачивает обработчик `ipcMain.handle`: сквозные правила плана («Окно»)
@@ -202,11 +205,27 @@ export interface RegisterIpcOptions {
     session: Pick<Session, 'clearStorageData' | 'clearCache'>;
     /** Выбор элемента Design Mode (кусок 9.3a, спека 12.3): main/browser/design-mode.ts#createDesignMode. */
     designMode: ReturnType<typeof createDesignMode>;
+    /** Журнал консоли и сети гостей (спека 2026-10-07, 3.3): main/browser/inspector.ts#createInspector. */
+    inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
+    /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
+    emulation: Pick<Emulation, 'set'>;
   };
 }
 
 /** Запрос поиска по странице — до 1000 символов (план, «Числа»). */
 const MAX_FIND_TEXT = 1000;
+/** Журнала у гостя нет (захват не подключался): мост отдаёт пустой с `unavailable`, а не null (спека 3.5). */
+const NO_JOURNAL: DevtoolsSnapshot = { epoch: 0, capture: 'unavailable', console: [], network: [] };
+/** requestId CDP — строка вида `1234.56`: длиннее — не наш. */
+const MAX_REQUEST_ID = 256;
+/** Место под страницу — CSS-пиксели окна, с запасом на любой экран. */
+const MAX_AREA = 100_000;
+
+function viewportArea(value: unknown): { width: number; height: number } | null {
+  if (!isRecord(value)) return null;
+  const side = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0 && n <= MAX_AREA;
+  return side(value.width) && side(value.height) ? { width: value.width, height: value.height } : null;
+}
 /** Ответ browser.find — не дольше 2 с (план): found-in-page с finalUpdate может не прийти. */
 const FIND_TIMEOUT_MS = 2000;
 
@@ -686,6 +705,49 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => {
       await browser.session.clearStorageData();
       await browser.session.clearCache();
+    }),
+  );
+
+  // Консоль и сеть (спека 2026-10-07-browser-devtools-agent-design.md, 3.5): тот же страж гостя, аргументы — до инспектора.
+  ipcMain.handle(
+    'browser:devtools-snapshot',
+    withIpcError(async (_event, id: unknown) => browser.inspector.snapshot(browserGuest(browser, id).id) ?? NO_JOURNAL),
+  );
+
+  ipcMain.handle(
+    'browser:devtools-clear',
+    withIpcError(async (_event, id: unknown) => {
+      browser.inspector.clear(browserGuest(browser, id).id);
+    }),
+  );
+
+  // Спайк 0.1, вариант D: окно ждёт включения доменов, прежде чем открыть адрес вкладки. Адрес через мост не ходит.
+  ipcMain.handle(
+    'browser:devtools-ready',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.inspector.ready(browserGuest(browser, id).id);
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:response-body',
+    withIpcError(async (_event, id: unknown, requestId: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof requestId !== 'string' || requestId === '' || requestId.length > MAX_REQUEST_ID) {
+        throw new HostError('bad_request', 'invalid request id');
+      }
+      return browser.inspector.responseBody(guest.id, requestId, DEVTOOLS_LIMITS.panelBody);
+    }),
+  );
+
+  ipcMain.handle(
+    'browser:set-viewport',
+    withIpcError(async (_event, id: unknown, spec: unknown, area: unknown) => {
+      const guest = browserGuest(browser, id);
+      const viewport = spec === null ? null : isViewportSpec(spec) ? spec : undefined;
+      const size = viewportArea(area);
+      if (viewport === undefined || size === null) throw new HostError('bad_request', 'invalid viewport');
+      return browser.emulation.set(guest.id, viewport, size);
     }),
   );
 

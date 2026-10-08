@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
+import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
@@ -53,6 +54,18 @@ const otherSession = { clearStorageData: vi.fn(), clearCache: vi.fn() };
 const designMode = {
   start: vi.fn().mockResolvedValue(null),
   cancel: vi.fn().mockResolvedValue(undefined),
+};
+/** Журнал и эмуляция моста (спека 2026-10-07, 3.5): подменены — мост проверяет гостя и аргументы. */
+const inspector = {
+  snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
+  clear: vi.fn<(id: number) => void>(),
+  ready: vi.fn<(id: number) => Promise<void>>(async () => {}),
+  responseBody: vi.fn<(id: number, requestId: string, limit: number) => Promise<ResponseBody | null>>(async () => null),
+};
+const emulation = {
+  set: vi.fn<(id: number, spec: ViewportSpec | null, area: { width: number; height: number }) => Promise<{ scale: number }>>(async () => ({
+    scale: 0.5,
+  })),
 };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
@@ -206,6 +219,8 @@ function setup(
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
       designMode,
+      inspector,
+      emulation,
     },
   });
 
@@ -1127,6 +1142,66 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
 
     await ipcMain.invoke('browser:pick-cancel', 7);
     expect(designMode.cancel).toHaveBeenCalledWith(7);
+  });
+
+  it('devtools-snapshot, devtools-clear и devtools-ready (спека 2026-10-07, 3.5; спайк 0.1): не гость раздела — bad_request; без журнала — unavailable', async () => {
+    inspector.snapshot.mockClear();
+    inspector.clear.mockClear();
+    inspector.ready.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const id of [1, 404, 8, 9, 7.5, '7', null]) {
+      expect(await codeOf(ipcMain.invoke('browser:devtools-snapshot', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:devtools-clear', id)), String(id)).toBe('bad_request');
+      expect(await codeOf(ipcMain.invoke('browser:devtools-ready', id)), String(id)).toBe('bad_request');
+    }
+    expect(inspector.snapshot).not.toHaveBeenCalled();
+    expect(inspector.ready).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('browser:devtools-snapshot', 7)).toEqual({ epoch: 0, capture: 'unavailable', console: [], network: [] });
+    const journal: DevtoolsSnapshot = { epoch: 2, capture: 'late', console: [], network: [] };
+    inspector.snapshot.mockReturnValueOnce(journal);
+    expect(await ipcMain.invoke('browser:devtools-snapshot', 7)).toEqual(journal);
+    expect(inspector.snapshot).toHaveBeenLastCalledWith(7);
+    await ipcMain.invoke('browser:devtools-clear', 7);
+    expect(inspector.clear).toHaveBeenCalledWith(7);
+    await ipcMain.invoke('browser:devtools-ready', 7);
+    expect(inspector.ready).toHaveBeenCalledWith(7);
+  });
+
+  it('response-body: requestId — непустая строка до 256 знаков; предел тела — 1 МБ', async () => {
+    inspector.responseBody.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const requestId of ['', 'r'.repeat(257), 42, null]) {
+      expect(await codeOf(ipcMain.invoke('browser:response-body', 7, requestId)), String(requestId)).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:response-body', 1, '1.2'))).toBe('bad_request');
+    expect(inspector.responseBody).not.toHaveBeenCalled();
+    inspector.responseBody.mockResolvedValueOnce({ text: '{}', base64: false, truncated: false });
+    expect(await ipcMain.invoke('browser:response-body', 7, '1.2')).toEqual({ text: '{}', base64: false, truncated: false });
+    expect(inspector.responseBody).toHaveBeenCalledWith(7, '1.2', 1_048_576);
+  });
+
+  it('set-viewport: размер — null или верный ViewportSpec, поле — положительные конечные числа; ответ — scale', async () => {
+    emulation.set.mockClear();
+    const { ipcMain } = browserSetup();
+    const area = { width: 800, height: 600 };
+    const bad: Array<[unknown, unknown]> = [
+      [{ preset: 'phone', rotated: false, dpr: 2 }, area],
+      [{ preset: 'mobile-m', rotated: false, dpr: 4 }, area],
+      [{ width: 100, height: 600, mobile: false, dpr: 1 }, area],
+      [{ preset: 'mobile-m', rotated: false, dpr: 2 }, { width: 0, height: 600 }],
+      [null, { width: Number.NaN, height: 600 }],
+      [null, null],
+    ];
+    for (const [spec, size] of bad) {
+      expect(await codeOf(ipcMain.invoke('browser:set-viewport', 7, spec, size)), JSON.stringify([spec, size])).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:set-viewport', 1, null, area))).toBe('bad_request');
+    expect(emulation.set).not.toHaveBeenCalled();
+    const mobile = { preset: 'mobile-m', rotated: false, dpr: 2 };
+    expect(await ipcMain.invoke('browser:set-viewport', 7, mobile, area)).toEqual({ scale: 0.5 });
+    expect(emulation.set).toHaveBeenLastCalledWith(7, mobile, area);
+    await ipcMain.invoke('browser:set-viewport', 7, null, area);
+    expect(emulation.set).toHaveBeenLastCalledWith(7, null, area);
   });
 });
 
