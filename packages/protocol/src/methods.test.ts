@@ -639,3 +639,25 @@ describe('sessions.setModel (нормалайзер модели и effort, 5.8)
     }>();
   });
 });
+
+describe('sessions.rename (часть 2 спеки архива комнат, 15)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+  const parse = (label: unknown) => METHODS['sessions.rename'].safeParse({ ref, label });
+
+  it('ярлык по правилу works.rename: края обрезаются, пустое и длиннее 120 кодовых точек не проходят', () => {
+    expect(parse('  Ruslan​ ').data?.label).toBe('Ruslan');
+    for (const label of ['', '   ', '​⁠', '😀'.repeat(121), 5, undefined, null]) {
+      expect(parse(label).success, JSON.stringify(label)).toBe(false);
+    }
+    expect(parse('😀'.repeat(120)).success).toBe(true);
+    expect(METHODS['sessions.rename'].safeParse({ label: 'x' }).success).toBe(false);
+  });
+
+  it('параметры и результат: сессия и новый ярлык; ответ — ok', () => {
+    expectTypeOf<Params<'sessions.rename'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      label: string;
+    }>();
+    expectTypeOf<Result<'sessions.rename'>>().toEqualTypeOf<{ ok: true }>();
+  });
+});

@@ -19,7 +19,8 @@
  * `draggable` нет — тащит @dnd-kit по указателю.
  *
  * Меню по правой кнопке — `SessionRowMenu` (кусок 3.4): его триггер и триггер тултипа
- * сливаются на одном узле строки.
+ * сливаются на одном узле строки. Его «Rename» (спека архива комнат, часть 2, 15) открывает поле на месте ярлыка
+ * (`SessionInlineRename`): номер сессии остаётся перед полем, пока поле открыто, строку не тащат и тултип закрыт.
  *
  * Строка вне комнаты — ещё и цель броска другой сессии (кусок 7, 2.5): сессия на сессию — диалог «New room» из двух
  * сессий. Цель подсвечивается, только если бросок возможен (`use-drop-target.ts`); участника комнаты принимает строка
@@ -56,12 +57,13 @@ import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
 import { displayStatus, dotState, stateWord } from '../lib/dot-state.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
-import { sessionRowLabel } from '../lib/participant.js';
+import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { relativeTime } from '../lib/relative-time.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
+import { SessionInlineRename } from './InlineRename.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
 import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
@@ -119,7 +121,10 @@ export const SessionRow = memo(function SessionRow({
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
-  const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable });
+  // «Rename» меню: поле на месте ярлыка. Пока оно открыто, строку не тащат — выделение текста в поле мышью не должно
+  // начинать перетаскивание.
+  const [renaming, setRenaming] = useState(false);
+  const { setNodeRef, listeners } = useDraggable({ id: dragId, data, disabled: !draggable || renaming });
   // Цель броска другой сессии (2.5, диалог 1.6): только строка вне комнаты — участника принимает строка комнаты целиком.
   const { setNodeRef: setDropRef, over } = useSidebarDropTarget(workKey, { kind: 'session-row', sessionId: session.id }, !inRoom);
   const stop = useCursorStop(workKey, session.id, false);
@@ -218,7 +223,7 @@ export const SessionRow = memo(function SessionRow({
   }, [agents.length]);
 
   return (
-    <HoverCard open={tooltipOpen && !dragging && !agentsOpen} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
+    <HoverCard open={tooltipOpen && !dragging && !agentsOpen && !renaming} onOpenChange={onTooltipOpenChange} openDelay={600} closeDelay={100}>
       <SessionRowMenu
         workKey={workKey}
         projectPath={projectPath}
@@ -226,6 +231,7 @@ export const SessionRow = memo(function SessionRow({
         session={session}
         bridge={bridge}
         onOpen={onOpen}
+        onRename={() => setRenaming(true)}
         {...(roomId === undefined ? {} : { room: { id: roomId, lead } })}
       >
       <HoverCardTrigger asChild>
@@ -286,7 +292,14 @@ export const SessionRow = memo(function SessionRow({
         >
           <AgentStateDot state={state} lifecycle={session.lifecycle} />
           <AgentIcon provider={session.provider} size={13} />
-          <span className={cn('min-w-[5ch] flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          {renaming ? (
+            <span className="flex min-w-[12ch] flex-1 items-center gap-1.5">
+              <span className={cn('shrink-0', selected && 'font-bold')}>{sessionTag(session.id)}</span>
+              <SessionInlineRename projectPath={projectPath} workId={workId} session={session} bridge={bridge} onDone={() => setRenaming(false)} />
+            </span>
+          ) : (
+            <span className={cn('min-w-[5ch] flex-1 truncate', selected && 'font-bold')}>{label}</span>
+          )}
           <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">

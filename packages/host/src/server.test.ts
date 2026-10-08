@@ -182,6 +182,8 @@ describe('список методов в hello', () => {
     // Меню «модель · effort» в чате (спека нормалайзера, 5.9): без обоих методов смены окно меню не показывает.
     expect(methods).toContain('sessions.setEffort');
     expect(methods).toContain('sessions.setModel');
+    // Rename сессии из меню её строки: без метода окно пункта не показывает.
+    expect(methods).toContain('sessions.rename');
     client.close();
   });
 });

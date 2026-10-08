@@ -50,10 +50,10 @@ export const sessionRef = z.object({
 const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEFF]+$/g;
 
 /**
- * Новое название работы или комнаты (`works.rename`, `rooms.rename`). Предел — по кодовым точкам: `.max(120)` zod
- * считает UTF-16, эмодзи шло бы за два. Сырой предел 480 единиц UTF-16 (4 × 120) — `title.length`, O(1): отсекает
- * заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что у `renameWork` в core: невидимые
- * символы формата по краям считаются пробелами, иначе название из одних ZWSP прошло бы.
+ * Новое название работы или комнаты и ярлык сессии (`works.rename`, `rooms.rename`, `sessions.rename`). Предел —
+ * по кодовым точкам: `.max(120)` zod считает UTF-16, эмодзи шло бы за два. Сырой предел 480 единиц UTF-16 (4 × 120) —
+ * `title.length`, O(1): отсекает заведомый мусор до обрезки и обхода по кодовым точкам. Обрезка — та же, что у
+ * `renameWork` в core: невидимые символы формата по краям считаются пробелами, иначе название из одних ZWSP прошло бы.
  */
 const renameTitle = z
   .string()
@@ -140,6 +140,10 @@ export const METHODS = {
   'sessions.stop': z.object({ ref: sessionRef }),
   'sessions.delete': z.object({ ref: sessionRef, force: z.boolean().optional() }),
   'sessions.close': z.object({ ref: sessionRef }),
+  // Rename из меню строки сессии (часть 2 спеки архива комнат, 15). Ярлык — по правилу `works.rename`: пустое после
+  // обрезки не проходит схему. Сессии нет в карте — `bad_request`, как у `rooms.rename`. Старый хост метода не знает —
+  // окно по списку методов прячет пункт.
+  'sessions.rename': z.object({ ref: sessionRef, label: renameTitle }),
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
@@ -348,6 +352,7 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   'sessions.stop': { ok: true };
   'sessions.delete': { ok: true };
   'sessions.close': { ok: true };
+  'sessions.rename': { ok: true };
   'sessions.interrupted': { refs: SessionRef[] };
   /** `mode` — что показал подвал (сырая строка CLI, `null` — подвала не нашли); `verified` — сошлось с целью. */
   'sessions.setMode': { mode: string | null; verified: boolean };

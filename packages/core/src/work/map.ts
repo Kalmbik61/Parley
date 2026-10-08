@@ -3,6 +3,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
+import { defaultSessionName, NEW_LABEL } from './names.js';
 import type {
   HistoryEntry,
   Message,
@@ -105,17 +106,21 @@ export interface NewSession {
   effort?: EffortLevel | null;
 }
 
-/** Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. */
+/**
+ * Заводит в карте сессию `pending` — так её создаёт и агент, и пользователь. Пустой (после обрезки) ярлык и
+ * `NEW_LABEL` имени не дают: сессия получает `defaultSessionName` по своему номеру, как бы её ни завели.
+ */
 export function addSession(
   map: WorkMap,
   init: NewSession,
   at = new Date().toISOString(),
 ): WorkSession {
   if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
+  const id = nextSessionId(map);
   const session: WorkSession = {
-    id: nextSessionId(map),
+    id,
     provider: init.provider,
-    label: init.label,
+    label: init.label.trim() === '' || init.label === NEW_LABEL ? defaultSessionName(id) : init.label,
     task: init.task,
     parent: init.parent ?? null,
     contextFrom: init.contextFrom ?? [],

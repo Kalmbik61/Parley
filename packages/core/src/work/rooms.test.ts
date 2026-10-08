@@ -21,6 +21,7 @@ import {
   liveLead,
   nextRoomId,
   renameRoom,
+  renameSession,
   reopenRoom,
   requireOpenRoom,
   roomLead,
@@ -621,6 +622,44 @@ describe('renameRoom', () => {
     }
     expect(() => renameRoom(map, 'r-09', 'x')).toThrow(/is not in the map/);
     expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe('renameSession', () => {
+  it('края обрезаются, как у комнаты: пробелы и невидимые символы формата; системной строки нет', () => {
+    const map = twoRooms();
+    renameSession(map, 's-02', '  \u200BRuslan Backend\u2060 ');
+    expect(map.sessions[1]?.label).toBe('Ruslan Backend');
+    // Остальные сессии и комнаты не тронуты, в ленте ничего не появилось.
+    expect(map.sessions.map((session) => session.label)).toEqual(['архитектор', 'Ruslan Backend', 'ревью', 'тесты']);
+    expect(map.rooms.map((room) => room.title)).toEqual(['Возвраты', 'Ревью']);
+    expect(map.messages).toEqual([]);
+  });
+
+  it('пустое, из пробелов или из одних ZWSP — отказ, прежнее имя остаётся; нет сессии — отказ', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+    for (const label of ['', '   ', '\u200B\u200B']) {
+      expect(() => renameSession(map, 's-02', label)).toThrow(RoomRuleError);
+    }
+    expect(() => renameSession(map, 's-09', 'x')).toThrow(/is not in the map/);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('закрытую сессию тоже можно переименовать: строка в сайдбаре остаётся', () => {
+    const map = twoRooms();
+    transitionSession(map, 's-03', 'closed');
+
+    renameSession(map, 's-03', 'Reviewer');
+
+    expect(map.sessions[2]).toMatchObject({ label: 'Reviewer', lifecycle: 'closed' });
+  });
+
+  it('сессия-участник комнаты остаётся участником: меняется только ярлык', () => {
+    const map = twoRooms();
+    renameSession(map, 's-01', 'Lead');
+    expect(map.rooms[0]?.members).toEqual(['s-01', 's-02']);
+    expect(map.rooms[0]?.lead).toBe('s-01');
   });
 });
 

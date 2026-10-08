@@ -275,6 +275,19 @@ export function renameRoom(map: WorkMap, roomId: string, title: string): void {
 }
 
 /**
+ * Человек переименовывает сессию из меню её строки (`sessions.rename`). Края обрезаются по тому же правилу, что у
+ * комнаты; пустое имя — отказ, прежнее остаётся. Закрытую сессию переименовать можно: строка в сайдбаре остаётся. Как
+ * и у комнаты, системной строки в ленте нет; агенты увидят новое имя в `get_map` и в брифе при следующей сверке.
+ */
+export function renameSession(map: WorkMap, sessionId: string, label: string): void {
+  const session = map.sessions.find((candidate) => candidate.id === sessionId);
+  if (session === undefined) throw new RoomRuleError(`session ${sessionId} is not in the map`);
+  const trimmed = label.replace(TITLE_EDGES, '');
+  if (trimmed === '') throw new RoomRuleError('session label is empty');
+  session.label = trimmed;
+}
+
+/**
  * Письмо `parley` в комнате по действию человека. Человеку непрочитанным не значится — его отметка стоит с самой
  * записи, как у системной строки (`addSystemMessage`): о том, что сделал сам, «нового» у него быть не должно.
  * Адресату-сессии письмо непрочитано и будит её обычным будильником.

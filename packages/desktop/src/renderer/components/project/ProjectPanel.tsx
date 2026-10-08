@@ -14,6 +14,7 @@ import { openParleyEditor } from '../../sidebar/SectionMenu.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { RoleChip } from '../../lib/role-summary.js';
+import { sessionLabelText } from '../../lib/participant.js';
 import { BacklogPanel } from './BacklogPanel.js';
 import { DecisionsPanel } from './DecisionsPanel.js';
 import { MemoryPanel } from './MemoryPanel.js';
@@ -258,7 +259,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                 useUiStore.getState().openNewSessionDialog({ projectPath: project, workId: backlogWork.map.work.id }, {
                   room: true, backlog: { projectPath: project, id: item.id, version,
                     task: [item.title, item.details].filter(Boolean).join('\n\n') } });
-              }} renderAuthor={suggestion => suggestion.author ? <span>{suggestion.author.label} <RoleChip
+              }} renderAuthor={suggestion => suggestion.author ? <span>{sessionLabelText(suggestion.author.label, suggestion.author.sessionId)} <RoleChip
                 role={suggestion.author.role} sessionRef={{ projectPath: suggestion.author.projectPath,
                   workId: suggestion.author.workId, sessionId: suggestion.author.sessionId }} bridge={bridge} revision={suggestion.author.revision} /></span>
                 : `${suggestion.workId}/${suggestion.sessionId}`} />

@@ -27,9 +27,9 @@ vi.mock('sonner', () => ({ toast: vi.fn() }));
 let bridge: FakeBridge;
 const KEY = '/tmp/proj w-01';
 
-function renderMenu(session: WorkSession, onOpen = vi.fn(), room?: { id: string; lead: boolean }): void {
+function renderMenu(session: WorkSession, onOpen = vi.fn(), room?: { id: string; lead: boolean }, onRename = vi.fn()): void {
   render(
-    <SessionRowMenu workKey={KEY} projectPath="/tmp/proj" workId="w-01" session={session} bridge={bridge} onOpen={onOpen} {...(room === undefined ? {} : { room })}>
+    <SessionRowMenu workKey={KEY} projectPath="/tmp/proj" workId="w-01" session={session} bridge={bridge} onOpen={onOpen} onRename={onRename} {...(room === undefined ? {} : { room })}>
       <div>row</div>
     </SessionRowMenu>,
   );
@@ -85,6 +85,40 @@ describe('SessionRowMenu — пункты', () => {
     fireEvent.click(screen.getByText('Open'));
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(useUiStore.getState().sidebarHolds).toEqual({});
+  });
+});
+
+describe('SessionRowMenu — Rename (спека архива комнат, часть 2, 15)', () => {
+  const hostWith = (methods: string[]): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods } });
+  };
+
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('первый пункт меню; выбор зовёт колбэк строки, хост не зовётся — имя сохраняет поле', () => {
+    hostWith(['sessions.rename']);
+    const onRename = vi.fn();
+    renderMenu(makeSession('s-01', 'plan'), vi.fn(), undefined, onRename);
+    expect(screen.getAllByRole('menuitem')[0]?.textContent).toBe('Rename');
+    fireEvent.click(screen.getByText('Rename'));
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(bridge.calls).toEqual([]);
+    expect(useUiStore.getState().sidebarHolds).toEqual({});
+  });
+
+  it('закрытую сессию тоже можно переименовать', () => {
+    hostWith(['sessions.rename']);
+    const onRename = vi.fn();
+    renderMenu(makeSession('s-01', 'plan', { lifecycle: 'closed' }), vi.fn(), undefined, onRename);
+    fireEvent.click(screen.getByText('Rename'));
+    expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it('хост без sessions.rename — пункта нет, остальные на месте', () => {
+    hostWith([]);
+    renderMenu(makeSession('s-01', 'plan'));
+    expect(screen.queryByText('Rename')).toBeNull();
+    expect(screen.getAllByRole('menuitem')[0]?.textContent).toBe('Open');
   });
 });
 

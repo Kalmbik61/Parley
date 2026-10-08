@@ -50,6 +50,12 @@ it('registers the window-only project memory and history search methods', () => 
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('registers sessions.rename, which reads and writes the map on disk and does not wait for the works snapshot', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  expect(createHostHandlers(deps).methods['sessions.rename']).toBeTypeOf('function');
+  expect(WORKS_GATED_METHODS as readonly string[]).not.toContain('sessions.rename');
+});
+
 it('registers both explicit native skill sharing actions', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const handlers = createHostHandlers(deps);

@@ -4,7 +4,19 @@
  * здесь только разбор параметров протокола и форма ответа.
  */
 
-import { effortsFor, hookedSince, isClaudeCode, loadProviders, readMap, resolveModelEffort } from '@parley/core';
+import { existsSync } from 'node:fs';
+import {
+  effortsFor,
+  hookedSince,
+  isClaudeCode,
+  loadProviders,
+  readMap,
+  renameSession,
+  resolveModelEffort,
+  RoomRuleError,
+  updateMap,
+  workPaths,
+} from '@parley/core';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -37,6 +49,7 @@ export interface SessionHandlers {
   sessionsStop: Handler<'sessions.stop'>;
   sessionsDelete: Handler<'sessions.delete'>;
   sessionsClose: Handler<'sessions.close'>;
+  sessionsRename: Handler<'sessions.rename'>;
   sessionsInterrupted: Handler<'sessions.interrupted'>;
   sessionsSetMode: Handler<'sessions.setMode'>;
   sessionsSetEffort: Handler<'sessions.setEffort'>;
@@ -79,6 +92,28 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     sessionsClose: async (params) => {
       await deps.sessions.close(params.ref);
+      return { ok: true };
+    },
+
+    // Rename из меню строки сессии: чистая запись в карту, процесс не трогаем. Правила — в core (`renameSession`),
+    // их отказ (нет сессии, пустое имя) — `bad_request`, как у `rooms.rename`. Не событие работы: `updatedAt` стоит
+    // на месте, иначе карточка всплыла бы в начало своего ранга. Закрытую сессию тоже можно переименовать.
+    sessionsRename: async ({ ref, label }) => {
+      if (!existsSync(workPaths(ref.projectPath, ref.workId).map)) {
+        throw new HostError('bad_request', `workspace ${ref.workId} does not exist`);
+      }
+      await updateMap(
+        ref.projectPath,
+        ref.workId,
+        (map) => {
+          try {
+            renameSession(map, ref.sessionId, label);
+          } catch (error) {
+            throw error instanceof RoomRuleError ? new HostError('bad_request', error.message) : error;
+          }
+        },
+        { touch: false },
+      );
       return { ok: true };
     },
 

@@ -82,8 +82,8 @@ export interface MethodDeps {
  * чтения работ, и в этот промежуток они видели бы недочитанный снимок — пустой список, not_found
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
- * карт с диска (works.create/delete/rename/setStatus, rooms.create/addMember/rename/setLead/delete/send, mail.*,
- * worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
+ * карт с диска (works.create/delete/rename/setStatus, sessions.rename, rooms.create/addMember/rename/setLead/delete/send,
+ * mail.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
   'rooms.resolveProposal',
@@ -176,6 +176,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.stop': sessions.sessionsStop as AnyHandler,
     'sessions.delete': sessions.sessionsDelete as AnyHandler,
     'sessions.close': sessions.sessionsClose as AnyHandler,
+    'sessions.rename': sessions.sessionsRename as AnyHandler,
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,

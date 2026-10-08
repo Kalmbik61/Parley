@@ -8,6 +8,7 @@ import {
   setResult,
   transitionSession,
 } from './map.js';
+import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
 import type { Room, SessionLifecycle, WorkMap } from './types.js';
 
@@ -117,6 +118,46 @@ describe('addSession', () => {
     expect(addSession(map, { provider: 'my-cli', label: 'своя', task: 't' }).provider).toBe(
       'my-cli',
     );
+  });
+
+  it('пустой (после обрезки) ярлык и NEW_LABEL — имя по умолчанию по номеру; заданный ярлык остаётся как есть', () => {
+    const map = emptyMap();
+    const labels = ['', '  \t ', NEW_LABEL, 'бэкенд', ' ревью '].map(
+      (label) => addSession(map, { provider: 'claude', label, task: 't' }).label,
+    );
+
+    expect(labels).toEqual([
+      defaultSessionName('s-01'),
+      defaultSessionName('s-02'),
+      defaultSessionName('s-03'),
+      'бэкенд',
+      ' ревью ',
+    ]);
+    expect(labels[0]).toBe('Ralph');
+    // Имена в карте разные: в пределах работы сессии по имени различимы.
+    expect(new Set(labels.slice(0, 3)).size).toBe(3);
+  });
+
+  it('имя по номеру зависит от id, а не от числа записей: после удаления сессии номер не переиспользуется', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: '', task: 't' });
+    const second = addSession(map, { provider: 'claude', label: '', task: 't' });
+    removeSession(map, second.id);
+
+    const third = addSession(map, { provider: 'claude', label: '', task: 't' });
+
+    expect(third.id).toBe('s-03');
+    expect(third.label).toBe(defaultSessionName('s-03'));
+    expect(third.label).not.toBe(second.label);
+  });
+
+  it('NEW_LABEL на диске не переписывается: карта старой сборки читается как есть', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: '', task: 't' }).label = NEW_LABEL;
+
+    const again = parseMap(JSON.stringify(map), 'map.json');
+
+    expect(again.sessions[0]?.label).toBe(NEW_LABEL);
   });
 });
 

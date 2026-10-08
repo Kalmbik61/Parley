@@ -17,7 +17,9 @@ import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';
+import { useHostStore } from '../store/host.js';
 import { useNoticesStore } from '../store/notices.js';
+import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession } from '../test-utils/work-fixtures.js';
 import { SessionRow } from './SessionRow.js';
@@ -459,15 +461,19 @@ function DndRows({ sessions }: { sessions: WorkSession[] }): JSX.Element {
 const tooltipText = (): string | null => document.querySelector('[data-session-tooltip]')?.textContent ?? null;
 const pause = (ms: number): Promise<void> => act(() => new Promise((resolve) => setTimeout(resolve, ms)));
 
-describe('SessionRow — метка новой сессии (раунд исправлений 1 куска 3.3)', () => {
-  it('метка-страж core даёт английский текст в строке, обычная — как была', () => {
+describe('SessionRow — метка новой сессии (спека архива комнат, часть 2, 13)', () => {
+  it('метка-страж core в старой карте показывается именем по номеру сессии, обычная — как была', () => {
     renderRow(makeSession('s-01', 'new session'));
-    expect(row('s-01').textContent).toContain('S01 New session');
+    expect(row('s-01').textContent).toContain('S01 Ralph');
     expect(row('s-01').textContent).not.toContain('new session');
+    expect(row('s-01').textContent).not.toContain('New session');
+    cleanup();
+    renderRow(makeSession('s-18', 'new session'));
+    expect(row('s-18').textContent).toContain('S18 Nina');
     cleanup();
     // Карта старой сборки хранит метку по-русски — строка та же.
     renderRow(makeSession('s-01', 'новая сессия'));
-    expect(row('s-01').textContent).toContain('S01 New session');
+    expect(row('s-01').textContent).toContain('S01 Ralph');
     expect(row('s-01').textContent).not.toContain('новая сессия');
     cleanup();
     renderRow(makeSession('s-02', 'исполнитель'));
@@ -508,7 +514,7 @@ describe('SessionRow — значок новых писем агента', () =>
     expect(found?.className).toContain('motion-reduce:animate-none');
     expect(found?.className).toContain('shrink-0');
     expect(found?.className).toContain('text-accent-700');
-    expect(screen.getByText('S01 New session').className).toContain('truncate');
+    expect(screen.getByText('S01 Ralph').className).toContain('truncate');
     expect(row().textContent).not.toContain('New messages');
   });
 
@@ -800,5 +806,103 @@ describe('SessionRow — бейдж агентов (кусок 4b)', () => {
     expect(badge()?.className).toContain('h-[18px]');
     expect(badge()?.className).toContain('shrink-0');
     expect(badge()?.className).toContain('text-[10px]');
+  });
+});
+
+// Спека архива комнат, часть 2, 15: «Rename» меню строки открывает поле на месте ярлыка; номер сессии остаётся перед
+// полем, Enter сохраняет (`sessions.rename`), Esc отменяет.
+describe('SessionRow — Rename (поле на месте ярлыка)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['sessions.rename'] } });
+    useUiStore.setState({ sidebarHolds: {} });
+    BRIDGE.setHandler('sessions.rename', () => ({ ok: true as const }));
+  });
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  const renames = (): unknown[] => BRIDGE.calls.filter((call) => call.method === 'sessions.rename').map((call) => call.params);
+  const field = (): HTMLInputElement => screen.getByRole('textbox', { name: 'Session name' }) as HTMLInputElement;
+  const openRename = (id = 's-01'): void => {
+    fireEvent.contextMenu(row(id));
+    fireEvent.click(screen.getByText('Rename'));
+  };
+
+  it('Rename — первый пункт меню строки', () => {
+    renderRow(makeSession('s-01', 'plan'));
+    fireEvent.contextMenu(row());
+    expect(screen.getAllByRole('menuitem')[0]?.textContent).toBe('Rename');
+  });
+
+  it('поле встаёт на место ярлыка, номер остаётся перед ним; Enter зовёт sessions.rename с адресом сессии', async () => {
+    renderRow(makeSession('s-02', 'plan'));
+    const before = renames().length;
+    openRename('s-02');
+
+    expect(row('s-02').contains(field())).toBe(true);
+    expect(field().value).toBe('plan');
+    expect(row('s-02').textContent).toContain('S02');
+    // Ярлык текстом в строке уступил полю.
+    expect(screen.queryByText('S02 plan')).toBeNull();
+    fireEvent.change(field(), { target: { value: 'Ralph' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(renames().slice(before)).toEqual([{ ref: { projectPath: PROJECT, workId: WORK, sessionId: 's-02' }, label: 'Ralph' }]);
+    // Поле закрылось; ярлык — из снимка, его обновит `works.changed`.
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(row('s-02').textContent).toContain('S02 plan');
+  });
+
+  it('Esc отменяет: хост не зовётся, поле закрыто, ярлык прежний', () => {
+    renderRow(makeSession('s-01', 'plan'));
+    const before = renames().length;
+    openRename();
+    fireEvent.change(field(), { target: { value: 'Other' } });
+    fireEvent.keyDown(field(), { key: 'Escape' });
+
+    expect(renames()).toHaveLength(before);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(row().textContent).toContain('S01 plan');
+  });
+
+  it('пустое имя и имя без изменений хосту не уходят', () => {
+    renderRow(makeSession('s-01', 'plan'));
+    const before = renames().length;
+    openRename();
+    fireEvent.change(field(), { target: { value: '   ' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(renames()).toHaveLength(before);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    cleanup();
+
+    renderRow(makeSession('s-01', 'plan'));
+    openRename();
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(renames()).toHaveLength(before);
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('старая метка new session: поле открывается на имени по номеру, а не на «New session»', () => {
+    renderRow(makeSession('s-18', 'new session'));
+    openRename('s-18');
+    expect(field().value).toBe('Nina');
+  });
+
+  it('пока поле открыто, строка не отдаёт Enter и клик себе: сессия не открывается', () => {
+    const onOpen = vi.fn();
+    renderRow(makeSession('s-01', 'plan'), { onOpen });
+    openRename();
+    fireEvent.click(field());
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it('хост без sessions.rename — пункта нет', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: [] } });
+    renderRow(makeSession('s-01', 'plan'));
+    fireEvent.contextMenu(row());
+    expect(screen.queryByText('Rename')).toBeNull();
+    expect(screen.getByText('Open')).toBeTruthy();
   });
 });

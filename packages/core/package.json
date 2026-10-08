@@ -9,6 +9,7 @@
     ".": "./dist/index.js",
     "./names": "./dist/names.js",
     "./feed-turn": "./dist/feed/turn.js",
+    "./session-names": "./dist/work/names.js",
     "./resource-policy": "./dist/work/resource-policy.js"
   },
   "scripts": {

@@ -211,7 +211,7 @@ export function buildDocuments(input: {
         ),
         fields: [
           sessionTag(session.id),
-          sessionLabelText(session.label),
+          sessionLabelText(session.label, session.id),
           session.provider,
           ...(provider === undefined ? [] : [provider]),
           ...(session.worktree === null ? [] : [session.worktree.branch]),

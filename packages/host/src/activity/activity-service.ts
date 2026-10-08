@@ -24,6 +24,7 @@ import {
   envValue,
   isNewLabel,
   isPointerText,
+  isUntitledWork,
   linkSession,
   loadConfig,
   legacyUsage,
@@ -526,12 +527,14 @@ export function createActivityService(
     JSON.stringify(a) === JSON.stringify(b);
 
   /**
-   * Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). Разговор, начатый
-   * указателем на письма, имени из лога не получает (`autoTitleOf`); ярлык-указатель, оставленный прежними
-   * сборками, тогда возвращается к метке новой сессии — один раз на сессию.
+   * Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). Ярлык сессии меняется, только пока он
+   * `NEW_LABEL` (карты старых сборок), название работы — пока оно `untitled`: сессия с именем безымянную работу всё
+   * равно называет (спека архива комнат, раздел 14), поэтому ранний выход — когда не нужно ни то, ни другое.
+   * Разговор, начатый указателем на письма, имени из лога не получает (`autoTitleOf`); ярлык-указатель, оставленный
+   * прежними сборками, тогда возвращается к метке новой сессии — один раз на сессию.
    */
-  function maybeAutoTitle(ref: SessionRef, key: string, session: WorkSession): void {
-    if (!isNewLabel(session.label) || autoTitled.has(key)) return;
+  function maybeAutoTitle(ref: SessionRef, key: string, session: WorkSession, workTitle: string): void {
+    if (!(isNewLabel(session.label) || isUntitledWork(workTitle)) || autoTitled.has(key)) return;
     const title = autoTitleOf(logIndex.index(session));
     if (title === null) {
       if (!isPointerText(session.label) || pointerLabelReset.has(key)) return;
@@ -697,7 +700,7 @@ export function createActivityService(
       for (const listener of listeners) listener(ref, value);
     }
 
-    maybeAutoTitle(ref, key, session);
+    maybeAutoTitle(ref, key, session, entry.map.work.title);
     maybeLink(ref, key, session);
     maybeHooksMissing(ref, key, session, events);
     maybeTrustWait(ref, key, session);

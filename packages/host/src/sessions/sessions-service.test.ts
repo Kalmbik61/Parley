@@ -14,6 +14,7 @@ import {
   createPendingSession,
   createWork,
   createWorktree,
+  defaultSessionName,
   NEW_LABEL,
   plannedWorktree,
   readMap,
@@ -270,7 +271,7 @@ describe('create() + launch(): argv и окружение процесса', () 
     await service.stop(ref);
   });
 
-  it('быстрая сессия сохраняет ярлык из диалога; пустой ярлык оставляет «новую сессию»', async () => {
+  it('быстрая сессия сохраняет ярлык из диалога; пустой ярлык оставляет имя по умолчанию по номеру', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
 
@@ -294,7 +295,7 @@ describe('create() + launch(): argv и окружение процесса', () 
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === named.sessionId)?.label).toBe('бэкенд');
-    expect(map.sessions.find((s) => s.id === unnamed.sessionId)?.label).toBe(NEW_LABEL);
+    expect(map.sessions.find((s) => s.id === unnamed.sessionId)?.label).toBe(defaultSessionName(unnamed.sessionId));
 
     await service.stop(named);
     await service.stop(unnamed);
