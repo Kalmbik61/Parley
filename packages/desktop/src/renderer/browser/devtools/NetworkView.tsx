@@ -4,7 +4,8 @@
  * - Список запросов по времени начала — виртуальный: в DOM видимые строки и запас.
  * - Status: ошибки красным; без ответа — `CORS`, `blocked` или `failed`, `(canceled)` серым.
  * - Name: путь и query, у чужого origin — ещё хост.
- * - Выбор строки — детали справа, на узкой панели — поверх списка.
+ * - Выбор строки — детали справа, на узкой панели — поверх списка. Рядом с деталями список сжимается до Status и Name
+ *   (как в Chrome): шесть колонок занимают 384 px, и от половины панели Name не осталось бы ничего.
  */
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useRef, type CSSProperties } from 'react';
@@ -22,8 +23,17 @@ const ROW_PX = 24;
 /** Размер списка до первого замера (jsdom, первый кадр): первые строки есть сразу — как `review/VirtualRows.tsx`. */
 const INITIAL_RECT = { width: 600, height: 400 };
 const GRID = 'grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_4.5rem_4rem_4rem] items-center gap-2 px-2';
+const GRID_COMPACT = 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-2 px-2';
 
-function NetworkRow(props: { entry: NetworkEntry; pageUrl: string; selected: boolean; style: CSSProperties; onSelect(): void }): JSX.Element {
+function NetworkRow(props: {
+  entry: NetworkEntry;
+  pageUrl: string;
+  selected: boolean;
+  /** Рядом с деталями: только Status и Name. */
+  compact: boolean;
+  style: CSSProperties;
+  onSelect(): void;
+}): JSX.Element {
   const { entry } = props;
   const status = statusCell(entry);
   const name = nameParts(entry.url, props.pageUrl);
@@ -36,7 +46,7 @@ function NetworkRow(props: { entry: NetworkEntry; pageUrl: string; selected: boo
       title={entry.url}
       onClick={props.onSelect}
       style={props.style}
-      className={cn(GRID, 'h-6 w-full border-b border-border/60 text-left hover:bg-accent', props.selected && 'bg-accent')}
+      className={cn(props.compact ? GRID_COMPACT : GRID, 'h-6 w-full border-b border-border/60 text-left hover:bg-accent', props.selected && 'bg-accent')}
     >
       <span
         data-tone={status.tone}
@@ -44,14 +54,16 @@ function NetworkRow(props: { entry: NetworkEntry; pageUrl: string; selected: boo
       >
         {status.text}
       </span>
-      <span className="truncate">{entry.method}</span>
+      {props.compact ? null : <span className="truncate">{entry.method}</span>}
       <span className="min-w-0 truncate">
         {name.path}
         {name.host === null ? null : <span className="text-muted-foreground">{` · ${name.host}`}</span>}
       </span>
-      <span className="truncate text-muted-foreground">{entry.kind}</span>
-      <span className="truncate text-muted-foreground">{sizeText(entry)}</span>
-      <span className="truncate text-muted-foreground">{entry.durationMs === null ? '—' : S.browser.devtools.ms(entry.durationMs)}</span>
+      {props.compact ? null : <span className="truncate text-muted-foreground">{entry.kind}</span>}
+      {props.compact ? null : <span className="truncate text-muted-foreground">{sizeText(entry)}</span>}
+      {props.compact ? null : (
+        <span className="truncate text-muted-foreground">{entry.durationMs === null ? '—' : S.browser.devtools.ms(entry.durationMs)}</span>
+      )}
     </button>
   );
 }
@@ -83,6 +95,7 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
     overscan: 10,
   });
   const columns = S.browser.devtools.columns;
+  const beside = selected !== null && !narrow;
 
   return (
     <div data-testid="network-view" className="flex min-h-0 flex-1 flex-col">
@@ -98,14 +111,17 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
         <FilterInput label={S.browser.devtools.filterUrl} value={tab.urlText} onChange={(value) => patch(tabId, { urlText: value })} />
       </div>
       <div className="relative flex min-h-0 flex-1">
-        <div className={cn('flex min-h-0 min-w-0 flex-col overflow-hidden', selected !== null && !narrow ? 'w-1/2' : 'flex-1')}>
-          <div className={cn(GRID, 'h-6 shrink-0 border-b border-border text-[11px] text-muted-foreground')}>
+        <div className={cn('flex min-h-0 min-w-0 flex-col overflow-hidden', beside ? 'w-1/2' : 'flex-1')}>
+          <div
+            data-testid="network-header"
+            className={cn(beside ? GRID_COMPACT : GRID, 'h-6 shrink-0 border-b border-border text-[11px] text-muted-foreground')}
+          >
             <span>{columns.status}</span>
-            <span>{columns.method}</span>
+            {beside ? null : <span>{columns.method}</span>}
             <span>{columns.name}</span>
-            <span>{columns.type}</span>
-            <span>{columns.size}</span>
-            <span>{columns.time}</span>
+            {beside ? null : <span>{columns.type}</span>}
+            {beside ? null : <span>{columns.size}</span>}
+            {beside ? null : <span>{columns.time}</span>}
           </div>
           <div ref={scrollRef} data-testid="network-scroll" className="min-h-0 flex-1 overflow-y-auto font-mono text-[11px]">
             {rows.length === 0 ? (
@@ -121,6 +137,7 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
                       entry={entry}
                       pageUrl={pageUrl}
                       selected={entry.id === tab.selected}
+                      compact={beside}
                       style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${item.start}px)` }}
                       onSelect={() => patch(tabId, { selected: entry.id })}
                     />

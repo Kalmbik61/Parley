@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { NetworkEntry } from '../../../shared/browser-devtools.js';
+import type { NetworkEntry, ResponseBody } from '../../../shared/browser-devtools.js';
 import { networkEntry } from '../../test-utils/devtools-fixtures.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { RequestDetails } from './RequestDetails.js';
@@ -126,6 +126,68 @@ describe('RequestDetails — Response по клику (спека 4.4)', () => {
     rerender(<RequestDetails entry={networkEntry('r2')} webContentsId={7} bridge={bridge} onClose={onClose} />);
     expect(screen.getByRole('tab', { name: 'Headers' }).getAttribute('data-state')).toBe('active');
     expect(screen.queryByTestId('response-body')).toBeNull();
+  });
+});
+
+describe('RequestDetails — тело и смена запроса (спека 4.4)', () => {
+  const PENDING = networkEntry('p', { status: null, statusText: '', durationMs: null, encodedBytes: null });
+  const FINISHED = { ...PENDING, status: 200, statusText: 'OK', durationMs: 40, encodedBytes: 5 };
+
+  /** `responseBody`: первый вызов не отвечает, пока тест не вызовет `resolveFirst`; следующие сразу отвечают `later`. */
+  function deferFirstAnswer(later: ResponseBody | null): { resolveFirst(body: ResponseBody | null): void } {
+    let resolveFirst: (body: ResponseBody | null) => void = () => {};
+    let calls = 0;
+    vi.spyOn(bridge.browser, 'responseBody').mockImplementation(() => {
+      calls += 1;
+      if (calls > 1) return Promise.resolve(later);
+      return new Promise<ResponseBody | null>((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+    return { resolveFirst: (body) => resolveFirst(body) };
+  }
+
+  it('запрос ещё идёт — «gone»; закончился — снова Load response, и тело грузится', async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<RequestDetails entry={PENDING} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    await openResponse();
+    expect(screen.getByTestId('response-gone')).toBeTruthy();
+    bridge.setResponseBody({ text: 'done', base64: false, truncated: false });
+    rerender(<RequestDetails entry={FINISHED} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    expect(screen.queryByTestId('response-gone')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Response' }).getAttribute('data-state')).toBe('active');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Load response' }));
+    });
+    expect(screen.getByTestId('response-body').textContent).toBe('done');
+  });
+
+  it('запрос закончился, пока тело грузилось, — ответ «до конца» отброшен, Load response снова есть', async () => {
+    const deferred = deferFirstAnswer(null);
+    const onClose = vi.fn();
+    const { rerender } = render(<RequestDetails entry={PENDING} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    await openResponse();
+    rerender(<RequestDetails entry={FINISHED} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    await act(async () => {
+      deferred.resolveFirst(null);
+    });
+    expect(screen.queryByTestId('response-gone')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Load response' })).toBeTruthy();
+  });
+
+  it('поздний ответ прежнего запроса не затирает панель нового', async () => {
+    const deferred = deferFirstAnswer({ text: 'B body', base64: false, truncated: false });
+    const onClose = vi.fn();
+    const { rerender } = render(<RequestDetails entry={FAILED} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    await openResponse();
+    expect(screen.getByText('Loading…')).toBeTruthy();
+    rerender(<RequestDetails entry={networkEntry('r2')} webContentsId={7} bridge={bridge} onClose={onClose} />);
+    await act(async () => {
+      deferred.resolveFirst({ text: 'A body', base64: false, truncated: false });
+    });
+    expect(screen.queryByTestId('response-body')).toBeNull();
+    await openResponse();
+    expect(screen.getByTestId('response-body').textContent).toBe('B body');
   });
 });
 

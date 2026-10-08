@@ -7,7 +7,7 @@
  * Заголовки и тела — как есть: это браузер человека. Маска — только для «Add to chat» и агента (этапы B, C).
  */
 import { X } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { DEVTOOLS_LIMITS, type NetworkEntry, type ResponseBody } from '../../../shared/browser-devtools.js';
@@ -54,6 +54,11 @@ function Pairs({ pairs }: { pairs: ReadonlyArray<[string, string]> }): JSX.Eleme
   );
 }
 
+/** Запрос закончился: `loadingFinished` ставит размер и длительность, `loadingFailed` — отказ и длительность (inspector.ts). */
+function isFinished(entry: NetworkEntry): boolean {
+  return entry.failure !== null || entry.durationMs !== null || entry.encodedBytes !== null;
+}
+
 function statusLine(entry: NetworkEntry): string {
   if (entry.failure !== null) return `${statusCell(entry).text} ${entry.failure.text}`.trim();
   if (entry.status === null) return statusCell(entry).text;
@@ -61,6 +66,8 @@ function statusLine(entry: NetworkEntry): string {
 }
 
 function ResponseView({ entry, body }: { entry: NetworkEntry; body: ResponseBody }): JSX.Element {
+  // Деталь перерисовывается с каждой пачкой журнала: тело до 1 МБ не разбирается заново, пока оно то же.
+  const text = useMemo(() => (body.base64 ? '' : (prettyJson(body.text) ?? body.text)), [body.base64, body.text]);
   if (body.base64) {
     // Обрезанное тело своего размера не знает — берётся размер ответа из журнала.
     const bytes = body.truncated ? (entry.encodedBytes ?? base64Bytes(body.text)) : base64Bytes(body.text);
@@ -72,7 +79,7 @@ function ResponseView({ entry, body }: { entry: NetworkEntry; body: ResponseBody
         <p className="mb-1 text-muted-foreground">{S.browser.devtools.details.truncated(S.browser.devtools.bytes(DEVTOOLS_LIMITS.panelBody))}</p>
       ) : null}
       <pre data-testid="response-body" className="whitespace-pre-wrap break-all font-mono">
-        {prettyJson(body.text) ?? body.text}
+        {text}
       </pre>
     </>
   );
@@ -90,26 +97,29 @@ export interface RequestDetailsProps {
 export function RequestDetails({ entry, webContentsId, bridge, onClose, onAddToChat }: RequestDetailsProps): JSX.Element {
   const [view, setView] = useState<DetailsView>('headers');
   const [body, setBody] = useState<BodyState>({ kind: 'idle' });
-  // Другой запрос — свои вкладка и тело; поздний ответ прежнего отбрасывается.
-  const [shownId, setShownId] = useState(entry.id);
-  const currentId = useRef(entry.id);
-  currentId.current = entry.id;
-  if (shownId !== entry.id) {
-    setShownId(entry.id);
-    setView('headers');
+  // Другой запрос — свои вкладка и тело. Закончившийся запрос — тело заново: пока шёл, main отвечал null («gone»).
+  // Поздний ответ прежнего запроса или прежнего состояния отбрасывается.
+  const finished = isFinished(entry);
+  const [shown, setShown] = useState({ id: entry.id, finished });
+  const current = useRef(shown);
+  current.current = { id: entry.id, finished };
+  if (shown.id !== entry.id || shown.finished !== finished) {
+    setShown({ id: entry.id, finished });
+    if (shown.id !== entry.id) setView('headers');
     setBody({ kind: 'idle' });
   }
 
   const loadBody = (): void => {
     if (webContentsId === null) return;
     const requestId = entry.id;
+    const stale = (): boolean => current.current.id !== requestId || current.current.finished !== finished;
     setBody({ kind: 'loading' });
     bridge.browser.responseBody(webContentsId, requestId).then(
       (result) => {
-        if (currentId.current === requestId) setBody(result === null ? { kind: 'gone' } : { kind: 'loaded', body: result });
+        if (!stale()) setBody(result === null ? { kind: 'gone' } : { kind: 'loaded', body: result });
       },
       (error: unknown) => {
-        if (currentId.current !== requestId) return;
+        if (stale()) return;
         console.error('[parley] responseBody failed', error);
         toast(errorText(decodeIpcError(error).code, S.errors.actions.loadResponse));
         setBody({ kind: 'idle' });

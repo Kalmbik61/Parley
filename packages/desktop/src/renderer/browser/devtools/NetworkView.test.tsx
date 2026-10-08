@@ -111,6 +111,22 @@ describe('NetworkView (спека 4.4)', () => {
     expect(screen.getByTestId('request-details-pane').getAttribute('data-overlay')).toBe('true');
   });
 
+  it('рядом с деталями список сжат до Status и Name; без деталей колонки возвращаются', () => {
+    seed({ selected: 'fail' });
+    renderView();
+    expect(screen.getByTestId('network-header').textContent).toBe('StatusName');
+    expect(row('fail').textContent).toContain('/api/fail?x=1');
+    expect(row('fail').textContent).not.toContain('GET');
+    fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
+    expect(screen.getByTestId('network-header').textContent).toBe('StatusMethodNameTypeSizeTime');
+    expect(row('fail').textContent).toContain('GET');
+    cleanup();
+    // Детали поверх списка (узкая панель): список под ними остаётся с полным набором колонок.
+    seed({ selected: 'fail' });
+    renderView(true);
+    expect(screen.getByTestId('network-header').textContent).toBe('StatusMethodNameTypeSizeTime');
+  });
+
   it('пусто — No requests', () => {
     seed({ network: [] });
     renderView();
