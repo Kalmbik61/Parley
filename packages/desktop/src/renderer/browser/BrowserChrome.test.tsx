@@ -67,6 +67,18 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     expect(screen.queryByTestId('devtools-warnings')).toBeNull();
   });
 
+  it('счётчик не шире 999+: выше 999 — «999+», точное число в подсказке; 999 — как есть', () => {
+    renderChrome({ counters: { errors: 12345, warnings: 1000 } });
+    expect(screen.getByTestId('devtools-errors').textContent).toBe('999+');
+    expect(screen.getByTestId('devtools-errors').getAttribute('title')).toContain('12345');
+    expect(screen.getByTestId('devtools-warnings').textContent).toBe('999+');
+    expect(screen.getByTestId('devtools-warnings').getAttribute('title')).toContain('1000');
+    cleanup();
+    renderChrome({ counters: { errors: 999, warnings: 999 } });
+    expect(screen.getByTestId('devtools-errors').textContent).toBe('999');
+    expect(screen.getByTestId('devtools-warnings').textContent).toBe('999');
+  });
+
   it('⋯: Open full DevTools и Clear console and network', () => {
     const props = renderChrome();
     fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });

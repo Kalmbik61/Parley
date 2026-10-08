@@ -56,6 +56,13 @@ export interface BrowserChromeProps {
   onClearDevtools(): void;
 }
 
+/** Выше этого значка счётчика пишут «999+»: число в журнале не ограничено, а строка 36px и так узка. */
+const BADGE_MAX = 999;
+
+function badgeText(count: number): string {
+  return count > BADGE_MAX ? `${BADGE_MAX}+` : String(count);
+}
+
 const ICON_BUTTON =
   'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40';
 
@@ -120,18 +127,18 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
           <span
             data-testid="devtools-errors"
             title={S.browser.devtools.errors(counters.errors)}
-            className="rounded-full bg-red-500/15 px-1 text-[10px] font-medium leading-4 text-red-600 dark:text-red-400"
+            className="rounded-full bg-destructive/15 px-1 text-[10px] font-medium leading-4 tabular-nums text-destructive"
           >
-            {counters.errors}
+            {badgeText(counters.errors)}
           </span>
         ) : null}
         {counters.warnings > 0 ? (
           <span
             data-testid="devtools-warnings"
             title={S.browser.devtools.warnings(counters.warnings)}
-            className="rounded-full bg-amber-500/15 px-1 text-[10px] font-medium leading-4 text-amber-700 dark:text-amber-400"
+            className="rounded-full bg-status-warning-background px-1 text-[10px] font-medium leading-4 tabular-nums text-status-warning-text"
           >
-            {counters.warnings}
+            {badgeText(counters.warnings)}
           </span>
         ) : null}
       </button>
