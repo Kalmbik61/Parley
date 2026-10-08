@@ -6,19 +6,20 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.8.0
+
+Agents and Codex in Chat: the Agents panel shows what each agent of a session is doing, a Codex session opens as a conversation, and Codex approvals can be answered in the window. Rooms can be renamed, deleted and given a new lead from the sidebar and take attached files; plan letters are laid out by section, room agents keep their names, the New session or room dialog explains its fields, the backlog can live in `TODOS.md`, and archiving a workspace stops its agents. The Codex chat is checked by tests with a stub Codex; the live checks are still open (see "What is not proven yet").
+
 ### Added
 
 - **Chat view for Codex 0.160.0+.** A Codex session opens as a conversation like Claude Code does: the feed is read from the session log Codex writes itself (read-only), so prompts, replies, commands, file edits with diffs, subagents and turn ends show up with nothing to set up, and the Agents panel works for Codex subagents too.
 - **Answer Codex approvals in Parley (Settings → Agents, off by default).** With it on, new and resumed Codex sessions start with Parley's hooks and every approval shows as an Allow / Deny card in Chat. Codex asks once to trust the hooks ("Trust all and continue"); until then the feed shows a hint and approvals stay in the terminal. Parley writes nothing to `~/.codex`.
-
 - **Agents panel.** "N agents running" in the Chat toolbar opens an "Agents" tab in the right sidebar (⌘⇧A): the session's agents with what each is doing now, finished ones below. Click an agent to see its task, steps, tool calls as they happen, result and full transcript. The agents badge in the sidebar and in a room opens the same panel.
-
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
   session or room name, Agents, In its own worktree and Mode explains the field on hover; the
   Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
   Builtin ones against your own Claude and Codex agents, and the 🔒 of a read-only role.
 - **Manage a room from the sidebar.** A right click on a room row gives "Rename" (in place) and "Delete…": the room goes with its feed, and its sessions stay as regular sessions of the workspace, each live one told by Parley; the checkbox "Also delete its N sessions" (off by default) deletes them too, as "Delete" on a session row does. A member row of an expanded room has "Make lead": the feed shows "@s03 is now the lead", and Parley writes to the new and the previous lead. Host methods `rooms.rename`, `rooms.setLead`, `rooms.delete`; with an older host the items are hidden.
-
 - **Attachments in a room.** The room's input field has a paperclip ("Attach a file"), and files
   dropped anywhere on the room tab are attached too. They show as chips above the field (images
   as thumbnails) and are sent at the end of the message as an "Attachments:" list of absolute
@@ -39,7 +40,6 @@ All notable changes to Parley are documented in this file.
 ### Fixed
 
 - **Parley no longer replaces your Codex `notify` program** in its sessions: the end of a turn comes from the terminal and the session log instead.
-
 - Archiving a workspace now stops its running agents, so their processes no longer stay in
   memory. Until "Reopen", the host does not start the workspace's sessions: a message to an
   agent waits instead of waking it, and "Resume" is refused.
@@ -60,6 +60,15 @@ All notable changes to Parley are documented in this file.
   holds a stub `.git` without HEAD, objects or refs (GitKraken leaves one in the home folder), or
   a lone `HEAD`, `objects` or `refs` entry. Agents used to get "Backlog operation failed
   (git-context-unverified)". A broken repository higher up still blocks the backlog.
+
+### Updating
+
+The window and the host must be updated together: restart the host when the window asks ("Restart host…"). Chat for Codex needs Codex 0.160.0 or later; with an older Codex, or with a host of 0.7.0, a Codex session keeps the Terminal view, and a host of 0.7.0 also hides the new room menu items. Codex sessions get the approval hooks when they are launched or resumed after "Answer Codex approvals in Parley" is switched on. Room agents that an earlier build named "New messages …" get their name reset the first time the new host sees them.
+
+### What is not proven yet
+
+- The Codex chat and approvals are checked by unit tests and end-to-end runs with a stub Codex, not yet with a real `codex` session: the log as it is written during a turn, Stop, resume, an approval card for a file edit and Codex subagents are still to be watched live.
+- The Agents panel has not been watched live with Claude background agents.
 
 ## 0.7.0
 
