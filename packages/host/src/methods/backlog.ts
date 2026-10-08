@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   SharedStateError, inspectSharedIgnore, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
-  parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogRule, sharedProjectPaths,
+  parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
   takeBacklogItem, updateBacklogItem, removeBacklogItem, workPaths, worksIndexPath,
 } from '@parley/core';
 import type { SharedDiagnostic } from '@parley/core';
@@ -87,7 +87,8 @@ export async function readBacklogSnapshot(projectPath: string, diagnostics: Shar
     const after = await Promise.all([readSharedFile(paths.backlog), readSharedFile(paths.suggestions), readSharedFile(paths.preferences)]);
     if (before.some((file, index) => file.version !== after[index]!.version)) continue;
     const assembled = { projectPath, sharedProjectPath: paths.context.projectPath,
-      file: { relativePath: path.basename(paths.dir) === '.harnas' ? '.harnas/backlog.md' : '.parley/backlog.md', exists: before[0]!.version !== 'missing' },
+      file: { relativePath: paths.backlogChoice === 'todos' ? path.basename(paths.backlog) : path.basename(paths.dir) === '.harnas' ? '.harnas/backlog.md' : '.parley/backlog.md',
+        exists: before[0]!.version !== 'missing', choice: paths.backlogChoice, todos: paths.todosFile },
       version: before[0]!.version, items: parseBacklog(before[0]!.text),
       suggestions: suggestions.map(row => ({ id: row.id, kind: row.kind, title: row.title, details: row.details,
         why: row.why, workId: row.workId, sessionId: row.sessionId, createdAt: row.createdAt, status: 'pending' as const,
@@ -185,5 +186,6 @@ export function createBacklogHandlers(service?: BacklogService): BacklogHandlers
         ...(input.title === undefined ? {} : { title: input.title }), ...(input.details === undefined ? {} : { details: input.details }) })).diagnostics),
     'backlog.suggestions.dismiss': params => run('backlog.suggestions.dismiss', params, async input => { await dismissBacklogSuggestion(input.projectPath, input.id); }),
     'backlog.preferences.set': params => run('backlog.preferences.set', params, async input => { await setBacklogRule(input.projectPath, input.rule); }),
+    'backlog.file.set': params => run('backlog.file.set', params, async input => setBacklogFile(input.projectPath, input.file)),
   };
 }

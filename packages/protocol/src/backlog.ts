@@ -32,10 +32,16 @@ export const backlogSuggestion = z.strictObject({
   workId, sessionId, createdAt: z.string().max(128), status: z.literal('pending'), author: backlogAuthor.optional(),
 });
 export const BACKLOG_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
+export const backlogFileChoice = z.enum(['state', 'todos']);
+const todosName = z.string().regex(/^todos?\.md$/i);
 export const backlogSnapshot = z.strictObject({
   /** Requested project identity remains stable while the corresponding main folder is explicit. */
   projectPath: project, sharedProjectPath: project,
-  file: z.strictObject({ relativePath: z.enum(['.parley/backlog.md', '.harnas/backlog.md']), exists: z.boolean() }),
+  file: z.strictObject({
+    relativePath: z.union([z.enum(['.parley/backlog.md', '.harnas/backlog.md']), todosName]), exists: z.boolean(),
+    /** Absent from an older host: the window then hides the file choice. */
+    choice: backlogFileChoice.nullable().optional(), todos: todosName.nullable().optional(),
+  }),
   version, items: z.array(backlogItem).max(10000), suggestions: z.array(backlogSuggestion).max(10000),
   rule: backlogRule, diagnostics: z.array(backlogDiagnostic).max(2),
 }).refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= BACKLOG_SNAPSHOT_MAX_BYTES, { message: 'Backlog snapshot exceeds the transport budget.' });
@@ -44,6 +50,7 @@ export type BacklogSnapshot = z.infer<typeof backlogSnapshot>;
 export type BacklogDiagnostic = z.infer<typeof backlogDiagnostic>;
 export type BacklogErrorCode = z.infer<typeof backlogErrorCode>;
 export type BacklogRule = z.infer<typeof backlogRule>;
+export type BacklogFileChoice = z.infer<typeof backlogFileChoice>;
 
 const target = z.union([
   z.strictObject({ projectPath: project, workId, roomId }),
@@ -67,6 +74,7 @@ export const backlogMethodSchemas = {
   'backlog.suggestions.accept': z.strictObject({ projectPath: project, id: suggestionId, title: title.optional(), details: details.optional() }),
   'backlog.suggestions.dismiss': z.strictObject({ projectPath: project, id: suggestionId }),
   'backlog.preferences.set': z.strictObject({ projectPath: project, rule: backlogRule }),
+  'backlog.file.set': z.strictObject({ projectPath: project, file: backlogFileChoice }),
 };
 export type BacklogMethodName = keyof typeof backlogMethodSchemas;
 export type BacklogMethodParams<M extends BacklogMethodName> = z.infer<(typeof backlogMethodSchemas)[M]>;
