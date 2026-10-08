@@ -141,4 +141,19 @@ describe('createPendingHooks', () => {
     expect(() => pending.settleAll()).not.toThrow();
     expect(fine.respond).toHaveBeenCalledWith({});
   });
+
+  it('timeoutMs хука короче общего предела: {} и onTimeout через свой срок', () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pending = createPendingHooks({ onTimeout });
+    const hook = { ...held('a'), timeoutMs: 100 };
+    pending.hold(hook);
+
+    vi.advanceTimersByTime(99);
+    expect(hook.respond).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(hook.respond).toHaveBeenCalledWith({});
+    expect(onTimeout).toHaveBeenCalledWith(REF, 'a');
+    expect(pending.size()).toBe(0);
+  });
 });

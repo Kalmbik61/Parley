@@ -69,6 +69,9 @@ export interface ChatUiState {
   agentPanel: Record<string, AgentPick | null>;
   /** Раскрыт ли блок «Finished» панели по сессии. */
   finishedOpen: Record<string, boolean>;
+  /** Подсказка про хуки Codex скрыта человеком («Got it») до закрытия окна; по `refKey` сессии. */
+  hooksHintDismissed: Record<string, true>;
+  dismissHooksHint(sessionKey: string): void;
   selectAgent(sessionKey: string, pick: AgentPick | null): void;
   setFinishedOpen(sessionKey: string, open: boolean): void;
   /** Одна просьба на окно: новая заменяет прежнюю. */
@@ -99,6 +102,8 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   reveal: null,
   agentPanel: {},
   finishedOpen: {},
+  hooksHintDismissed: {},
+  dismissHooksHint: (sessionKey) => set((state) => ({ hooksHintDismissed: { ...state.hooksHintDismissed, [sessionKey]: true } })),
   selectAgent: (sessionKey, pick) => set((state) => ({ agentPanel: { ...state.agentPanel, [sessionKey]: pick } })),
   setFinishedOpen: (sessionKey, open) => set((state) => ({ finishedOpen: { ...state.finishedOpen, [sessionKey]: open } })),
   requestReveal: (sessionKey, agentId) => {
@@ -132,5 +137,5 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, finishedOpen: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, finishedOpen: {}, hooksHintDismissed: {} });
 }

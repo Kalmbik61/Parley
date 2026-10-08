@@ -1,10 +1,40 @@
-/** Ход оборвался ошибкой API (план 2026-10-01, решение 3, `StopFailure`): красная карточка с текстом. */
+/**
+ * Ход оборвался ошибкой API (план 2026-10-01, решение 3, `StopFailure`): красная карточка с текстом.
+ * Код `codex-history-in-terminal` (лента Codex, спека 2026-10-07, 5.4) — не сбой, а заметка: журнал не хранит
+ * историю до подключения Parley; строка окна и кнопка «Open terminal».
+ */
 
+import { useContext } from 'react';
 import { CircleAlert } from 'lucide-react';
 import type { FeedError } from '@parley/core';
 import { S } from '../../../shared/strings.js';
+import { updateTab } from '../../layout/tree.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { Button } from '../../ui/button.js';
+import { ChatEnvContext } from '../chat-env.js';
 
 export function ErrorItem({ item }: { item: FeedError }): JSX.Element {
+  const env = useContext(ChatEnvContext);
+  if (item.error === 'codex-history-in-terminal') {
+    const { workKey, tabId } = env ?? {};
+    return (
+      <div data-testid="chat-error" className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 [overflow-wrap:anywhere]">{S.chat.codexHistoryInTerminal}</span>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className="shrink-0"
+          onClick={() => {
+            if (workKey === undefined || tabId === undefined) return;
+            useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { view: 'terminal' }));
+          }}
+        >
+          {S.chat.openTerminal}
+        </Button>
+      </div>
+    );
+  }
   return (
     <div
       data-testid="chat-error"

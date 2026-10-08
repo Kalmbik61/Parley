@@ -9,11 +9,12 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
+import { codexHookFlags } from './codex-hooks.js';
 import { findRunnerBinary } from './find-binary.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
@@ -43,11 +44,10 @@ import type { MemoryItem } from './project-memory.js';
 import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
-import { codexNotifyOverride, mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
-import { ensureStateDir } from './state-dir.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkSession } from './types.js';
@@ -84,6 +84,11 @@ export interface LaunchOptions {
    * решение 1). Хост передаёт его только для `claude` не ниже `FEED_MIN_VERSION`; нет — файл как раньше.
    */
   hookUrl?: string;
+  /**
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook`. Вместе с `hookUrl` и настройкой
+   * `codexApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6).
+   */
+  codexHookCommand?: string;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
   layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
 }
@@ -339,14 +344,16 @@ async function plan(
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
     });
   }
-  // Конец хода Codex приходит скриптом `notify`, а тот только дописывает журнал `events/` — каталог
-  // под него заводит запуск, как `writeWorkSettings` заводит его для хуков Claude Code: наблюдатель
-  // журналов хоста не встанет на каталог, которого нет.
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
-  if (template.includes('{notify}')) {
-    await ensureStateDir(projectPath);
-    await mkdir(paths.events, { recursive: true });
-    subs.notify = codexNotifyOverride();
+  // Хуки Codex — только по согласию человека (`codexApprovals`, по умолчанию выключено): без доверия в `/hooks`
+  // Codex остановил бы старт экраном ревью.
+  if (
+    entry.id === 'codex' &&
+    launchConfig.codexApprovals &&
+    options.hookUrl !== undefined &&
+    options.codexHookCommand !== undefined
+  ) {
+    subs.codexHooks = codexHookFlags(options.codexHookCommand);
   }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');

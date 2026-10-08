@@ -12,7 +12,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
-import { FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 
 export const S = {
   plans: {
@@ -792,6 +792,8 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
+    codexApprovals: 'Answer Codex approvals in Parley',
+    codexApprovalsHint: 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
     worktreeRoot: 'Worktree root',
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
@@ -990,7 +992,14 @@ export const S = {
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
-    terminalOnly: `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    terminalOnlyFor: (provider: string): string =>
+      provider === 'codex' ? `Chat needs Codex ${CODEX_FEED_MIN_VERSION} or newer` : `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
+    /** Заметка ленты Codex: журнал не хранит историю до подключения Parley (`codex-history-in-terminal`). */
+    codexHistoryInTerminal: 'Earlier history of this session is only in Terminal',
+    openTerminal: 'Open terminal',
+    /** Строка над полем ввода Codex: хуки включены в настройках, но Codex их не одобрил (`decisions: 'terminal'`). */
+    codexHooksHint: "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks",
+    gotIt: 'Got it',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
@@ -1012,7 +1021,7 @@ export const S = {
       /** Подсказка кнопки: какие правила добавит «не спрашивать больше». */
       allowAlwaysTitle: (rules: string): string => `Adds the rule: ${rules}`,
       deny: 'Deny',
-      denyMessage: 'Tell Claude what to do instead',
+      denyMessage: 'Tell the agent what to do instead',
       showContent: 'Show content',
       hideContent: 'Hide content',
       showArguments: 'Show arguments',
@@ -1102,10 +1111,12 @@ export const S = {
     showTranscript: 'Show transcript',
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
-    queued: 'Queued — Claude reads it when the turn ends',
+    queued: 'Queued — the agent reads it when the turn ends',
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
+      codexLabel: 'Message to Codex',
+      codexPlaceholder: 'Message Codex — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',

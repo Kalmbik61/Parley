@@ -27,6 +27,7 @@ const CONFIG = {
   agentSkills: true,
   // Как у хоста по умолчанию (с 2026-10-06).
   skillNavigator: true,
+  codexApprovals: false,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -502,5 +503,42 @@ describe('SettingsDialog — вкладка Voice', () => {
     useUiStore.getState().openSettingsDialog('voice');
     openSettings(bridge);
     expect(await screen.findByRole('switch', { name: S.voice.settings.enable })).toBeTruthy();
+  });
+});
+
+describe('SettingsDialog — Codex approvals', () => {
+  it('defaults off and saves both ways', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, [key]: value === 'true' } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    const toggle = await screen.findByRole('switch', { name: 'Answer Codex approvals in Parley' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexApprovals', value: 'true' } });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexApprovals', value: 'false' } });
+  });
+
+  it('shows the env lock', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { codexApprovals: 'PARLEY_CODEX_APPROVALS' });
+    switchTo('Agents');
+    await screen.findByText(/set by PARLEY_CODEX_APPROVALS/);
+    expect((screen.getByRole('switch', { name: 'Answer Codex approvals in Parley' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('hides the field for an older host', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.codexApprovals;
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Answer Codex approvals in Parley' })).toBeNull();
   });
 });

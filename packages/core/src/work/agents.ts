@@ -44,6 +44,8 @@ function nativeConfigArgs(entry: ProviderEntry): { args: string[]; unsupported: 
     const args: string[] = [];
     for (let i = 0; i < template.length; i++) {
       const item = template[i]!;
+      // `{codexHooks}` разворачивается в готовые пары `-c hooks.*` отдельным элементом; в родной проекции его нет.
+      if (item === '{codexHooks}') continue;
       if (item === '-c' || item === '--config') {
         const value = template[++i];
         if (value === undefined) return { args: [], unsupported: true };
@@ -69,7 +71,7 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
   const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{skillCatalog}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
   for (let i = 0; i < template.length; i++) {
     const item = template[i]!;
-    if (item === '--no-daemon' || item === '{prompt}') continue;
+    if (item === '--no-daemon' || item === '{prompt}' || item === '{codexHooks}') continue;
     if (i === 0 && item === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
     if (item === '--model' && template[i + 1] === '{model}') { i++; continue; }
     if (item === '-a' && template[i + 1] === 'on-request') { i++; continue; }
@@ -131,7 +133,7 @@ function nativeRolePairs(template: readonly string[], codex: boolean): Map<strin
   const pairs = new Map<string, string[]>();
   for (let i = 0; i < template.length; i++) {
     const flag = template[i]!;
-    if (codex && flag === '--no-daemon') continue;
+    if (codex && (flag === '--no-daemon' || flag === '{codexHooks}')) continue;
     if (codex && i === 0 && flag === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
     if (flag === '{prompt}' && i === template.length - 1) continue;
     if (!valueFlags.has(flag)) return null;

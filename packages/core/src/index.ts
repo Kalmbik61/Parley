@@ -391,7 +391,7 @@ export type {
   SettingsFile,
   WorkSettingsOptions,
 } from './work/settings-file.js';
-export { FEED_MIN_VERSION, feedSupported } from './work/feed-version.js';
+export { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, codexFeedSupported, feedSupported } from './work/feed-version.js';
 export * from './feed/index.js';
 export type {
   Capabilities,

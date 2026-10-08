@@ -362,7 +362,7 @@ function toggleChatView(ctx: ActionContext, key: string, layout: WorkLayout): vo
   if (session === undefined) return;
   const available = feedAvailableNow(session.provider);
   if (!available) {
-    ctx.toast(S.chat.terminalOnly);
+    ctx.toast(S.chat.terminalOnlyFor(session.provider));
     return;
   }
   const ref = { projectPath: entry?.projectPath ?? '', workId: entry?.map.work.id ?? '', sessionId: tab.sessionId };

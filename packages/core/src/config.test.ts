@@ -34,6 +34,7 @@ describe('loadConfig', () => {
       autoLaunch: true,
       agentSkills: true,
       skillNavigator: true,
+      codexApprovals: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -70,6 +71,7 @@ describe('loadConfig', () => {
       autoLaunch: false,
       agentSkills: true,
       skillNavigator: true,
+      codexApprovals: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -91,6 +93,7 @@ describe('loadConfig', () => {
       autoLaunch: true,
       agentSkills: true,
       skillNavigator: true,
+      codexApprovals: false,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -344,6 +347,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['autoLaunch', 'AUTO_LAUNCH', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
+    ['codexApprovals', 'CODEX_APPROVALS', 'on', true],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
@@ -575,5 +579,25 @@ describe('skillNavigator setting', () => {
     await write({ skillNavigator: 'invalid' });
     const value = await loadConfig(file(), {});
     expect(value.config.skillNavigator).toBe(true); expect(value.warning).toContain('skillNavigator');
+  });
+});
+
+describe('codexApprovals setting', () => {
+  it('выключена по умолчанию; включается файлом и окружением', async () => {
+    expect(DEFAULT_CONFIG.codexApprovals).toBe(false);
+    expect((await loadConfig(file(), {})).config.codexApprovals).toBe(false);
+    await write({ codexApprovals: true });
+    expect((await loadConfig(file(), {})).config.codexApprovals).toBe(true);
+    expect((await loadConfig(file(), { PARLEY_CODEX_APPROVALS: '0' })).config.codexApprovals).toBe(false);
+    await write({});
+    expect((await loadConfig(file(), { PARLEY_CODEX_APPROVALS: '1' })).config.codexApprovals).toBe(true);
+    expect(parseSetting('codexApprovals', 'true')).toEqual({ value: true });
+    expect(parseSetting('codexApprovals', 'false')).toEqual({ value: false });
+  });
+  it('неверное значение — ошибка с именем настройки, остаётся умолчание', async () => {
+    await write({ codexApprovals: 'invalid' });
+    const value = await loadConfig(file(), {});
+    expect(value.config.codexApprovals).toBe(false);
+    expect(value.warning).toContain('codexApprovals');
   });
 });

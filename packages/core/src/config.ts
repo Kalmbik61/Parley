@@ -57,6 +57,8 @@ export interface ParleyConfig extends ResourceLimits {
    * итогам живых проверок; выключается настройкой, переключателем окна или `PARLEY_SKILL_NAVIGATOR=0`.
    */
   skillNavigator: boolean;
+  /** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */
+  codexApprovals: boolean;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
   fontFamily: string;
   /** Кегль панели терминала в пунктах: 8…32 (кусок 1.10 плана окна). */
@@ -78,6 +80,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   autoLaunch: true,
   agentSkills: true,
   skillNavigator: true,
+  codexApprovals: false,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
   fontSize: 14,
@@ -97,6 +100,7 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   autoLaunch: 'AUTO_LAUNCH',
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
+  codexApprovals: 'CODEX_APPROVALS',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
   worktreeRoot: 'WORKTREE_ROOT',
@@ -196,6 +200,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('autoLaunch', (value) => typeof value === 'boolean', 'true or false');
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
+  take('codexApprovals', (value) => typeof value === 'boolean', 'true or false');
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
   take('worktreeRoot', isWorktreeRoot, 'a non-empty string');
@@ -215,7 +220,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   // Имя, которое назвать человеку: то, под которым значение реально пришло.
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
-  const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills' | 'skillNavigator'): void => {
+  const flag = (key: 'channelPush' | 'autoLaunch' | 'agentSkills' | 'skillNavigator' | 'codexApprovals'): void => {
     const value = text(key);
     if (value === undefined) return;
     const lower = value.toLowerCase();
@@ -244,6 +249,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('autoLaunch');
   flag('agentSkills');
   flag('skillNavigator');
+  flag('codexApprovals');
 
   const fontFamily = text('fontFamily');
   if (fontFamily !== undefined) {
@@ -324,6 +330,7 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'autoLaunch',
   'agentSkills',
   'skillNavigator',
+  'codexApprovals',
 ]);
 
 /**

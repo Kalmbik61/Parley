@@ -28,6 +28,7 @@ import type { ContextPageMethodResults } from './context-pages.js';
 import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
+import type { FeedDecisions } from './feed.js';
 import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
@@ -402,7 +403,14 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
    * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.
    * `mode` — режим разрешений сессии (сырая строка CLI), `null` — не известен.
    */
-  'feed.snapshot': { items: FeedItem[]; revision: number; schemaVersion: number; mode: string | null };
+  'feed.snapshot': {
+    items: FeedItem[];
+    revision: number;
+    schemaVersion: number;
+    mode: string | null;
+    /** Кто ответит на одобрения сессии; нет поля — как `window` (Claude, спека 2026-10-07, 5.7). */
+    decisions?: FeedDecisions | null;
+  };
   'feed.subscribe': { ok: true };
   'feed.unsubscribe': { ok: true };
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */

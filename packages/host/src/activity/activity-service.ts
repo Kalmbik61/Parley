@@ -99,6 +99,8 @@ export interface ActivityService {
    * сессии нет, `providerSessionId` ещё не известен или индекс журнала не знает.
    */
   logFile(ref: SessionRef): string | null;
+  /** Журнал субагента Codex по id его треда; не найден — null. */
+  childLogFile(ref: SessionRef, threadId: string): string | null;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -887,6 +889,13 @@ export function createActivityService(
         .entry(ref.projectPath, ref.workId)
         ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
       return session === undefined ? null : (logIndex.index(session)?.file ?? null);
+    },
+    childLogFile(ref, threadId) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined) return null;
+      return logIndex.childLogs(session).find((child) => child.threadId === threadId)?.file ?? null;
     },
     terminalStarted(ref) {
       if (stopped) return;

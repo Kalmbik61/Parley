@@ -61,7 +61,8 @@ launch. Allow it once, in either of two ways:
   the window"). GLM instead needs official Claude Code 2.1.287 or newer, an active GLM Coding
   Plan and a Z.ai key you save in its provider card (see "GLM (Z.ai)");
 - Chat view (optional) needs Claude Code 2.1.286 or newer; it also works for GLM sessions,
-  whose CLI minimum is 2.1.287. Older Claude Code versions and Codex stay in the terminal;
+  whose CLI minimum is 2.1.287, and for Codex 0.160.0 or newer. Older versions stay in the
+  terminal;
 - git in `PATH`; checking merge conflicts before the merge itself needs git >= 2.38 — with an
   older git a conflict shows up only when you try to merge.
 
@@ -92,9 +93,8 @@ Then open Parley and restart the host. The window notices that the host still ru
 previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
 status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
 agents it started keep command lines that point into the old app: the status line script, the
-MCP server and the notification hook of Codex. The replacement can remove those files (the folder
-names inside the app carry dependency versions), and then status lines, limits and Codex turn
-notifications quietly stop. Until the restart macOS may also keep asking for access to a folder:
+MCP server and, with "Answer Codex approvals in Parley" on, the Codex hook launcher. The replacement can remove those files (the folder
+names inside the app carry dependency versions), and then status lines and limits quietly stop. Until the restart macOS may also keep asking for access to a folder:
 the old host and the new window are two different apps to it, and each "Allow" moves the
 permission from one to the other. Live agents are interrupted and come back through `--resume`.
 
@@ -769,11 +769,22 @@ node packages/core/dist/cli.js session <id>
 
 ### Chat view
 
-A Claude Code or GLM session tab can show the session as a conversation instead of a terminal. The
+A Claude Code, GLM or Codex session tab can show the session as a conversation instead of a terminal. The
 agent is the same unmodified CLI, running in a terminal that is hidden, not removed: the
 **Chat | Terminal** segment in the tab's toolbar switches between the two at any moment.
 Nothing is sent on your behalf: every permission, question and plan is answered by your click
 on its card, and the host never answers a hook by itself.
+
+**Codex.** Codex 0.160.0 or newer opens in Chat too. The feed is read from the session log
+Codex writes itself (`~/.codex/sessions`, read-only), not from hooks: prompts, replies, shell
+commands and file edits with diffs, subagent cards and the end of each turn. Nothing needs to
+be set up, and Parley writes nothing to `~/.codex`. Approvals stay in the terminal: while Codex
+waits for you, a banner in the feed says so and "Open terminal" takes you there. To answer them
+from Chat, turn on Settings → Agents → **Answer Codex approvals in Parley**: new and resumed
+Codex sessions then start with Parley's hooks (a launcher at `~/.parley/bin/parley-codex-hook`),
+and every permission request shows as an Allow / Deny card. Codex asks once to trust the hooks —
+choose "Trust all and continue" (or approve them later in `/hooks`); until then the feed shows a
+hint, and approvals keep working in the terminal. The setting is off by default.
 
 **What the feed shows.** Your prompts, the reply text as it streams, tool calls with their
 results and diffs, permission, question and plan cards, an agent card for each subagent
@@ -1078,7 +1089,7 @@ writes the map; agents read it and report through the MCP server.
   settings.json       Claude Code hooks for all sessions of the workspace (--settings)
   settings/<id>.json  the same for one session, only while the skill navigator is on
   events/<id>.jsonl   the session's hook log: the agent's state is derived from it
-                      (for Codex — Stop lines from its notify script)
+                      (not written for Codex: its feed and turn ends come from its session log)
   briefs/<id>.md      the session's starting prompt; edited in your own editor
   mcp/<id>.json       the MCP server config for this session
   limits/<id>.json    subscription limits from the Claude Code status line (written by its script)
@@ -1706,7 +1717,7 @@ is counted once, and an overlap that cannot be proven is left out of the sum and
     `statusline-bin.ts` — subscription limits), the event log and `activity`, liveness by
     pid, rooms and decisions (`rooms.ts`, `proposals.ts`), on-demand summaries, the guide by
     topic (`guide.ts`), the agent skill (`skill.ts` — the stub, `skill-install.ts` — the
-    installation), the Codex `notify` script (`codex-notify.ts`).
+    installation), the Codex hook flags (`codex-hooks.ts`).
   - `src/work/` also holds the project layer: the session layer and PARLEY.md (`session-layer.ts`,
     `parley-md.ts`), the byte budgets and the compact map (`context-budget.ts`,
     `context-pages.ts`), plans and rooms' modes (`plans.ts`, `plan-effects.ts`,
@@ -1820,7 +1831,8 @@ entirely, and then only its own placeholders work.
 | `{agent}` | the name of a native Claude role (`--agent`) |
 | `{disallowedTools}` | `Edit,Write,NotebookEdit` for a read-only Claude role (`--disallowedTools`) |
 | `{sandbox}` | `sandbox_mode="read-only"` for a read-only Codex role |
-| `{notify}` | the Codex `notify` script |
+| `{notify}` | no value any more: kept so that old `providers.json` entries still load, and the `-c {notify}` pair is dropped |
+| `{codexHooks}` | seven `-c hooks.<Event>=…` pairs for Codex, only with "Answer Codex approvals in Parley" on |
 | `{skillCatalog}` | `skills.include_instructions=false` for Codex, only while the skill navigator is on, the launch is confirmed and `find_skill` covers every skill of Codex's native list |
 | `{prompt}` | the starting brief, or on resume the pointer to messages |
 
@@ -1985,14 +1997,15 @@ be changed through `providers.json`.
 
 ### Codex — a room agent
 
-Codex is started by the same window and works in rooms on a par with Claude Code. Parley does
-not enable Codex hooks: Codex's unmanaged hooks run only after a one-time human review in
-`/hooks`, and Parley does not grant itself trust. It takes the state of the session from what
-Codex itself writes to the terminal and from the `notify` script.
+Codex is started by the same window and works in rooms on a par with Claude Code. By default
+Parley does not enable Codex hooks: Codex's unmanaged hooks run only after a one-time human
+review, and Parley does not grant itself trust. It takes the state of the session from what
+Codex itself writes to the terminal and from its session log. Hooks are an opt-in: see "Answer
+Codex approvals in Parley" below.
 
 **How Parley launches Codex.** Its own settings are passed only with `-c` flags in its own
 sessions: `~/.codex/config.toml` is neither read nor written, and the human's personal
-`notify` is not called in these sessions. A new session in full (what is in angle brackets is
+`notify` is neither replaced nor called by Parley: your own `notify` program keeps running as it does outside Parley. A new session in full (what is in angle brackets is
 substituted per session; `--model` and the effort only if chosen in the dialog or by `spawn_session`):
 
 ```
@@ -2005,8 +2018,8 @@ codex --no-daemon -a on-request \
   -c 'tui.notifications=["approval-requested","agent-turn-complete"]' \
   -c 'tui.notification_method="osc9"' \
   -c 'tui.notification_condition="always"' \
-  -c 'notify=["<node>","<core>/dist/work/codex-notify-bin.js"]' \
   [-c 'skills.include_instructions=false'] \
+  [-c 'hooks.<Event>=[{hooks=[{type="command",command="<home>/bin/parley-codex-hook",timeout=30}]}]' ×7] \
   [--model <model>] [-c 'model_reasoning_effort="<effort>"'] "<brief>"
 ```
 
@@ -2015,8 +2028,7 @@ last argument, and Codex restores the model, the effort and the approval policy 
 thread by itself. Only `-c` flags are used: `--no-daemon` and `-a` after `resume <id>` are not
 checked on a live Codex, and a flag-parsing refusal would break every wake-up of a sleeping
 session (any `-c` keeps the launch "embedded" anyway). The same command is printed by
-`parley-core work session new --provider codex` — with `PARLEY_*` in the server's `env` and
-the `-c notify`, which a session started by hand needs too. Why each flag:
+`parley-core work session new --provider codex`, with `PARLEY_*` in the server's `env`. Why each flag:
 
 - `--no-daemon` (launch only) — since 0.157 Codex goes through a shared background daemon by
   default, and then MCP servers and notifications would be children of the daemon with its
@@ -2049,16 +2061,18 @@ the `-c notify`, which a session started by hand needs too. Why each flag:
   `tui.notification_condition` — the state in the terminal (see below). By default
   notifications are silent while the terminal is "in focus", and for Codex in the host's pty
   there is always focus, so `always` is needed.
-- `notify` — the end of a turn via a Parley script: Codex calls it after every turn and passes
-  the `agent-turn-complete` JSON as the last argument, and the script appends to
-  `events/<id>.jsonl` a `Stop` line — the same as the Claude Code hook command — with
-  `last_assistant_message` and `thread-id`. Script errors do not bother Codex: the exit code is
-  always 0.
+- `hooks.<Event>` (SessionStart, PreToolUse, PostToolUse, PermissionRequest, SubagentStart,
+  SubagentStop, Stop) — only with "Answer Codex approvals in Parley" on (below); every one runs
+  the same launcher, `<home>/bin/parley-codex-hook`, so the text of the flags is identical
+  between launches and updates of Parley.
+
+There is no `notify` flag: Parley no longer replaces your own `notify` program in its sessions.
+The end of a turn comes from OSC 9 and from the session log (`task_complete`).
 
 Never passed and never will be: `-a never`, `--dangerously-…`, `--yolo`, `--approve-for-me`,
-`--full-auto`, `-s danger-full-access`, `-c projects=…`, `-c hooks…` — no bypass of approvals
-or of the sandbox, no self-granting of rights or trust; the `providers.test.ts` test guards
-this.
+`--full-auto`, `-s danger-full-access`, `-c projects=…` — no bypass of approvals or of the
+sandbox, no self-granting of rights or trust; the `providers.test.ts` test guards this. The
+hook flags exist only when you turn the setting on, and Codex still asks you to trust them.
 
 **What the human does.** Signing in to Codex (the sign-in screen in the session's terminal, or
 `codex login` in your own shell) and answering the trust screen for the project folder: Codex
@@ -2078,7 +2092,6 @@ across chunk boundaries (both kinds of sequences, with BEL and ST terminators):
   `Ready` — at the prompt, `[ ! ] Action Required` — "needs you";
 - OSC 9 notifications: `Approval requested: …` and `Codex wants to edit …` — "needs you",
   `Agent turn complete` — the end of a turn;
-- `notify` — the end of a turn from the event log (see above);
 - `task_started` and `task_complete` in the rollout log — the start and the end of a turn, but
   only when the entry is newer than the last terminal signal.
 
@@ -2091,20 +2104,20 @@ same path. What is important to know:
   a turn: the state stays dim (`idle`, like a fresh Claude session), but the host is aware of
   the session, so sending from the window and auto-wake are allowed. That way a background
   session (autoLaunch, `spawn_session`) does not give a false "finished" before its first
-  turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, a `Stop`
-  from `notify`, or a `task_complete` in the rollout log newer than the last terminal signal.
+  turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, or a
+  `task_complete` in the rollout log newer than the last terminal signal.
 - Under the host, the silence threshold (`silenceThresholdMs`) does not apply to a Codex
   session: the title is not written for the whole turn (a personal `tui.animations=false`, a
   long tool), and a false end of a turn means a "finished" notification in macOS and an Enter,
   instead of Tab, sent into a running turn. A turn ends with a signal or with the process exit.
 - A repeated signal of the same kind (a spinner frame, the blinking of `Action Required`)
-  corrects a mismatch: a `Stop` from `notify` written later than the last frame would override
+  corrects a mismatch: a turn end from the log written later than the last frame would override
   the terminal signal, and the next frame brings back "working" or "needs you". A repeat that
   agrees with the current state recalculates and broadcasts nothing.
-- Codex may not send `Ready` or `notify` after an answer. Then the rollout log ends the turn: a
+- Codex may not send `Ready` after an answer. Then the rollout log ends the turn: a
   `task_complete` entry newer than the last terminal signal is a `Stop`, a newer `task_started`
   is "working"; an older entry does not override a newer signal. The price: the title strings
-  and `notify` are not a public Codex interface. If the title for working stops being
+  are not a public Codex interface. If the title for working stops being
   recognized, the session stays dim ("unknown") (a check on a live Codex, item 3).
 
 **Input.** `pty.send` and auto-wake write into Codex's input field like this: a paste inside
@@ -2162,8 +2175,7 @@ above is derived from the documentation and sources of Codex 0.159 — check it 
    effort and the `on-request` approval policy are preserved from the thread, whether
    `resume <id> "<prompt>"` works, whether it asks about the directory when the cwd changes.
 7. A launch with `-c` does not bring up the shared daemon.
-8. `notify` is really called with the JSON and the `PARLEY_*` environment: a `Stop` appears in
-   the session log.
+8. (obsolete: Parley no longer sets `notify`.)
 9. Subagent logs: the shape of `source` and `parent_thread_id`, file names with "_".
 
 ## Known limitations

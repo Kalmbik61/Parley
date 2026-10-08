@@ -175,6 +175,7 @@ interface StubArgs {
     HARNAS_SESSION_ID: string | null;
     CLAUDE_CODE_SESSION_ID: string | null;
     PARLEY_HOOK_TOKEN: string | null;
+    PARLEY_HOOK_URL: string | null;
   };
 }
 
@@ -371,7 +372,6 @@ describe('create(): модель и усилие из диалога (дизай
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
-      'notify',
     ]);
     expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks/);
   });
@@ -676,7 +676,7 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
-  it('codex — даже при «подходящей» версии своей команды — без токена', async () => {
+  it('codex — при выключенной codexApprovals и «подходящей» версии — без токена', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(
       'codex',
@@ -687,6 +687,57 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     expect(registered).toEqual([]);
     expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
     expect(launched.args.argv).not.toContain('--settings');
+
+    await launched.stop();
+  });
+
+  const hookArgv = (argv: string[]): string[] => argv.filter((arg) => arg.startsWith('hooks.'));
+  const codexHookCommand = async (): Promise<string> => '/home/me/.parley/bin/parley-codex-hook';
+
+  it('codex ≥ 0.160 при выключенной codexApprovals (умолчание): ни токена, ни адреса, ни hooks.* в argv', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith(
+      'codex',
+      { hooks, providerVersions: fakeVersions({ codex: '0.160.0' }), codexHookCommand },
+      { PARLEY_CODEX_BIN: STUB },
+    );
+
+    expect(registered).toEqual([]);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(launched.args.env.PARLEY_HOOK_URL).toBeNull();
+    expect(hookArgv(launched.args.argv)).toEqual([]);
+
+    await launched.stop();
+  });
+
+  it('codex ≥ 0.160 при включённой codexApprovals: токен, адрес и 7 пар -c hooks.… в argv', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith(
+      'codex',
+      { hooks, providerVersions: fakeVersions({ codex: '0.160.0' }), codexHookCommand },
+      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_APPROVALS: '1' },
+    );
+
+    expect(registered).toHaveLength(1);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBe(registered[0]?.token);
+    expect(launched.args.env.PARLEY_HOOK_URL).toBe(HOOK_URL);
+    expect(hookArgv(launched.args.argv)).toHaveLength(7);
+    expect(launched.args.argv.join(' ')).toContain('/home/me/.parley/bin/parley-codex-hook');
+
+    await launched.stop();
+  });
+
+  it('codex 0.159 (ниже порога) даже при включённой codexApprovals — без токена и хуков', async () => {
+    const { hooks, registered } = fakeHooks();
+    const launched = await launchWith(
+      'codex',
+      { hooks, providerVersions: fakeVersions({ codex: '0.159.0' }), codexHookCommand },
+      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_APPROVALS: '1' },
+    );
+
+    expect(registered).toEqual([]);
+    expect(launched.args.env.PARLEY_HOOK_TOKEN).toBeNull();
+    expect(hookArgv(launched.args.argv)).toEqual([]);
 
     await launched.stop();
   });
