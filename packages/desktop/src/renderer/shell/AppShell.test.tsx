@@ -2231,12 +2231,14 @@ describe('AppShell — страница в окне (тесты 1 и 3 куск�
   it('тест 3: пункты browser.find и browser.zoomIn — у страницы активной вкладки активной группы', async () => {
     const { key } = await pageInSecondGroup();
     act(() => bridge.emitMenu('browser.zoomIn'));
-    expect(bridge.browserCalls).toEqual([]);
+    // Снимок журнала гостя уходит сам, как только известен id (BrowserSurface, devtoolsSnapshot): к меню он не относится.
+    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot');
+    expect(menuCalls()).toEqual([]);
     act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
     act(() => bridge.emitMenu('browser.zoomIn'));
     act(() => bridge.emitMenu('browser.find'));
     await flush();
-    expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]);
+    expect(menuCalls()).toEqual([{ method: 'zoom', args: [7, 1] }]);
     expect(useBrowserStore.getState().tabs[PAGE]?.findOpen).toBe(true);
     expect(useLayoutStore.getState().layouts[key]).toBeDefined();
   });
