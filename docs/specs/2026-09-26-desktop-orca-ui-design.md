@@ -2114,12 +2114,35 @@ interface DiffNote {
 
 ### 12.1 Вкладка браузера
 
-Строка над страницей, 36px:
+Строка над страницей, 36px (спека 2026-10-07-browser-devtools-agent-design.md, 4.1):
 - «назад», «вперёд», «перезагрузить» / «остановить»;
-- адресная строка;
+- адресная строка — на узкой вкладке сжимается первой;
+- размер вьюпорта: Fit, Mobile S 320×568, Mobile M 375×812, Mobile L 430×932, Tablet 768×1024, Laptop 1280×800,
+  Desktop 1440×900, Custom… (200–3840 × 200–2400), Rotate, DPR 1x/2x/3x. Страница стоит по центру нейтрального
+  поля с подписью «375 × 812 · 2x»; не влезает — уменьшена, в подписи процент. Мобильные размеры — с касаниями и
+  мобильным UA; касания включаются с новым документом («Reload to apply touch»). Уменьшает страницу только показ в
+  окне: сама страница видит заданный размер, а картинка с неё (снимок этапа C) — размер вида × DPR, у Mobile M 2x это
+  750 × 1624 (спайк 0.3). Размер хранится у вкладки (`TabSpec.viewport`), у Fit поля нет;
 - ⌖ Design Mode;
-- «DevTools»;
+- консоль: значок со счётчиками — красный (ошибки консоли, исключения, ошибки браузера без запроса и упавшие запросы
+  текущей страницы) и жёлтый (предупреждения консоли), нули не показываются, выше 999 — «999+»; показывает и прячет
+  панель Console | Network (⌘⌥I; ⌘⌥J — сразу Console);
+- «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network»;
 - индикатор загрузки — полоса 2px под строкой.
+
+На узкой вкладке подписи прячутся (контейнерный запрос строки), остаются значки.
+
+**Панель Console | Network** — снизу вкладки. Высота общая для вкладок (`ui.json`, `browser.devtoolsHeight`;
+минимум 120 px, по умолчанию 40 % вкладки), ручка — над панелью.
+- Console: уровни Errors, Warnings, Info, Debug (Debug выключен), фильтр по тексту, `×N` для повторов подряд,
+  раскрытие стека у ошибки и лишних строк многострочного сообщения любого уровня, объекты — кратким предпросмотром
+  CDP, «Copy».
+- Network: типы All, Fetch/XHR, Doc, JS, CSS, Img, Other, «Failed only», фильтр URL; список виртуальный, по времени
+  начала. Детали — справа (рядом с ними список сжат до Status и Name), на узкой панели поверх списка: Headers,
+  Payload, Response (тело по клику, до 1 МБ; вытесненное Chromium — «Body is no longer available»), «Copy URL».
+- «Preserve log»: без него новая страница очищает вид, с ним — разделитель «Navigated to …». Поздний захват —
+  «Reload to capture earlier requests», отказ — «Capture unavailable — reload the page».
+- Заголовки и тела — как есть: это браузер человека.
 
 **Адресная строка** (`browser/url.ts#normalizeUrl`):
 
@@ -2158,10 +2181,11 @@ interface DiffNote {
     него Electron гасит `window.open` и `target=_blank` гостя ещё до
     `setWindowOpenHandler`, и вкладка по ссылке не откроется. Обработчик всё равно
     отвечает `deny` — окон нет.
-  - Монтируется только с адресом `http(s)` (раздел 12.1).
-  - `src` ставится один раз, при монтировании: `<webview>` сам переписывает `src`
-    адресом коммита, а любое присвоение `src` — новая загрузка. Адресная строка на живой
-    странице зовёт `loadURL`.
+  - Монтируется с `src="about:blank"` при первом адресе http(s) вкладки (раздел 12.1); сам
+    адрес окно открывает `loadURL` после `devtoolsReady`.
+  - `src` ставится один раз, при монтировании, и всегда `about:blank`: `<webview>` сам
+    переписывает `src` адресом коммита, а любое присвоение `src` — новая загрузка. Адресная
+    строка на живой странице зовёт `loadURL`.
   - В главном окне: `webPreferences.webviewTag: true`.
 - **`file:` во встроенный браузер не пускается вовсе.** У схемы `file:` в Electron
   лишние права (фьюз `GrantFileProtocolExtraPrivileges` включён по умолчанию): страница
@@ -2181,7 +2205,7 @@ interface DiffNote {
     - снимаются `enableBlinkFeatures` и `experimentalFeatures`: их мог включить атрибут
       `webpreferences`;
     - любой `partition`, кроме `persist:harnas-browser`, — `preventDefault`;
-    - `src` не `http(s)` — `preventDefault`.
+    - `src` — `http(s)` или ровно `about:blank`; иначе `preventDefault`.
   - Любой другой `webContents` (гость, DevTools) на `will-attach-webview` получает
     `preventDefault`: вложенный `<webview>` мимо стража не прикрепится. «Главное окно
     или нет» решается в момент `will-attach-webview`: `web-contents-created` главного
@@ -2223,8 +2247,17 @@ interface DiffNote {
     - загрузки (`will-download`) — стандартный диалог сохранения;
     - `render-process-gone` — слой поверх страницы «Страница упала» и «Перезагрузить»:
       тело группы лежит под поверхностью.
-- **Агент браузером не управляет.** Программный доступ к странице есть только у main и
-  только по действию человека: Design Mode, DevTools.
+- **Инспектор CDP** (`main/browser/inspector.ts`, спека 2026-10-07-browser-devtools-agent-design.md, 3.3).
+  - Страж подключает `webContents.debugger` к каждому гостю на `web-contents-created`, до первой загрузки: `<webview>`
+    стартует с `src` `about:blank` (страж пускает такой `src`), а адрес вкладки окно открывает после `devtoolsReady`,
+    когда домены включены (спайк 0.1, вариант D). Пустая первая запись истории гостя убирается.
+  - Инспектор ведёт журнал консоли и сети для панели вкладки: кольца на вкладку, эпохи документов, пачки окну
+    событием `browser:devtools`.
+  - Команды — только из закрытого списка `CDP_ALLOWED`: `enable`/`disable` доменов `Runtime`, `Log`, `Page`,
+    `Network`, `Network.getResponseBody` и четыре команды `Emulation.*` для размера. `Runtime.evaluate` в нём нет.
+  - Переходы — по-прежнему методами `webContents`, их видит страж. Полный DevTools с инспектором уживается.
+- **Агент браузером не управляет.** Программный доступ к странице есть только у main: по действию человека — Design
+  Mode, DevTools и размер вьюпорта; инспектор CDP только читает консоль и сеть.
 
 ### 12.3 Design Mode
 
@@ -2302,6 +2335,18 @@ HTML:
   вкладок браузера в работе».
 - Масштаб страницы — ⌘+, ⌘−, ⌘0 при фокусе в странице (`setZoomLevel`), только на время
   жизни вкладки.
+- Журнал вкладки (спека 2026-10-07, раздел 8):
+  - до 1000 сообщений — текст до 10 000 символов, стек до 20 кадров;
+  - до 500 запросов — URL до 4096 символов, до 64 заголовков по 2 КБ, тело запроса до 64 КБ.
+- Буфер тел Chromium — 5 МБ на ответ и 50 МБ на вкладку; тело в панели — до 1 МБ.
+- Окну журнал идёт пачками раз в ~150 мс, до 200 записей.
+  - Больше 200 изменений за такт: самые давние уходят первыми, остаток — в следующих пачках.
+  - При болтливой консоли кольцо вытесняет запись раньше, чем её отправили, — такая окну не придёт, в списке
+    возможны пропуски, а счётчики закрытой панели недосчитывают.
+  - Полный журнал окно получает снимком при открытии панели.
+- После падения страницы отдельного разделителя в журнале нет: его заменяет разделитель эпохи («Navigated to …» при
+  «Preserve log»); новая страница начинает новую эпоху.
+- Размеры: Custom 200–3840 × 200–2400, DPR 1–3.
 
 ### 12.5 Мост браузера
 
@@ -2318,6 +2363,13 @@ interface BrowserApi {
   onOpenTab(listener: (e: { url: string; openerWebContentsId: number }) => void): () => void;
   onFavicon(listener: (e: { webContentsId: number; dataUrl: string }) => void): () => void;   // раздел 12.1
   onFocus(listener: (e: { webContentsId: number }) => void): () => void;   // фокус в странице, разделы 7.2, 12.2
+  // Консоль, сеть и размер (спека 2026-10-07-browser-devtools-agent-design.md, 3.5; этап A)
+  devtoolsSnapshot(webContentsId: number): Promise<DevtoolsSnapshot>;  // журнала нет — пустой, capture 'unavailable'
+  devtoolsClear(webContentsId: number): Promise<void>;
+  devtoolsReady(webContentsId: number): Promise<void>;  // все enable отработали: после этого окно открывает адрес вкладки
+  responseBody(webContentsId: number, requestId: string): Promise<ResponseBody | null>;  // до 1 МБ; null — тело вытеснено
+  onDevtools(listener: (batch: DevtoolsBatch) => void): () => void;  // пачки ~150 мс, до 200 записей
+  setViewport(webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }): Promise<{ scale: number }>;  // null — Fit
 }
 interface PickResult {
   url: string; selector: string; text: string; html: string;
@@ -2328,6 +2380,8 @@ interface PickResult {
 
 - `webContentsId` рендерер берёт у `<webview>` (`getWebContentsId()`).
 - Main проверяет, что это гость типа `webview` в разделе `persist:harnas-browser`.
+- Типы журнала и размеров — `shared/browser-devtools.ts`. Каналы — `browser:devtools-snapshot`, `browser:devtools-clear`,
+  `browser:devtools-ready`, `browser:response-body`, `browser:set-viewport`, событие `browser:devtools`.
 
 ## 13. Ошибки и граничные случаи
 

@@ -8,6 +8,17 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Console and network in the browser tab.** The console button in the tab's bar (⌘⌥I; ⌘⌥J opens it on
+  Console) shows a panel at the bottom of the tab. Console lists the page's messages and exceptions with the
+  levels Errors, Warnings, Info and Debug, a text filter, repeats as "×N", the stack of an error, the extra
+  lines of a multi-line message of any level, objects as a short preview and "Copy". Network lists the
+  requests with type filters, "Failed only" and a URL filter; a request opens Headers, Payload and Response —
+  the body up to 1 MB — and the list narrows to Status and Name beside it. A red counter on the button shows
+  the errors of the current page (console errors, exceptions and failed requests), a yellow one — the
+  warnings; each reads "999+" past 999.
+- **Viewport sizes for the browser tab.** Fit, Mobile S/M/L, Tablet, Laptop, Desktop, "Custom…", "Rotate" and
+  1x/2x/3x: the page is emulated at that size (mobile sizes with touch and a mobile user agent) and centered
+  with a "375 × 812 · 2x" label; the size stays with the tab after a restart.
 - **Field hints in the New session or room dialog.** A "?" next to Recipe, Workspace, the
   session or room name, Agents, In its own worktree and Mode explains the field on hover; the
   Mode hint lists what Free, Checklist and Verified do, and the Agents hint explains roles:
@@ -21,6 +32,8 @@ All notable changes to Parley are documented in this file.
 
 ### Changed
 
+- The "DevTools" button of a browser tab moved to "⋯" → "Open full DevTools"; the same menu has "Clear console
+  and network".
 - **Plan letters in the room feed are laid out by section.** A letter from Parley about a plan
   item shows the item's title in bold, then Scope, Criteria as a list, Evidence or the return
   note, and "Next:" with the tool names as code; paths to files and folders in Parley's letters

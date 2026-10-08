@@ -174,8 +174,10 @@ export function isLoopbackUrl(url: string): boolean;
 // packages/desktop/src/main/browser/inspector.ts (A; B и C расширяют CDP_ALLOWED и пользуются send)
 export type CdpMethod = string;
 export const CDP_ALLOWED: ReadonlySet<CdpMethod>;
+export const CDP_COMMAND_MS = 10_000;                        // тайм-аут команды CDP; именованный тайм-аут, не предел раздела 8
 export interface Inspector {
   attach(contents: WebContents): void;                       // страж на web-contents-created гостя
+  ready(id: number): Promise<void>;                          // все enable ответили, отказали или вышли по CDP_COMMAND_MS; не бросает (спайк 0.1, вариант D)
   snapshot(id: number): DevtoolsSnapshot | null;
   clear(id: number): void;
   responseBody(id: number, requestId: string, limit: number): Promise<ResponseBody | null>;
@@ -197,7 +199,7 @@ export interface Emulation {
   current(id: number): ViewportSpec | null;
   withTemporary<T>(id: number, spec: ViewportSpec, run: () => Promise<T>): Promise<T>; // C
 }
-export function createEmulation(deps: { inspector: Inspector }): Emulation;
+export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation; // этап C расширит выборку, если withTemporary понадобится onEvent
 
 // packages/desktop/src/main/browser/context-files.ts (B)
 export function contextDir(home?: string): string; // drops/context
@@ -210,12 +212,16 @@ export interface AgentOps { run(request: BrowserAgentOpEvent): Promise<BrowserAg
 export function createAgentOps(deps: AgentOpsDeps): AgentOps; // состав deps задаёт план C
 ```
 
+- Страж гостя (`main/browser/guard.ts`, A) убирает пустую первую запись истории внутренней функцией `pruneBlankEntry`: `<webview>` стартует с `about:blank` (спайк 0.1, вариант D), и без неё «назад» вело бы на пустую страницу. Наружу она не экспортируется.
+- Именованные тайм-ауты (например `CDP_COMMAND_MS`) могут жить рядом с кодом, который их использует, а не в `DEVTOOLS_LIMITS`: в том — пределы раздела 8 спеки.
+
 ### Мост окна (`bridge.browser.*`) и каналы IPC
 
 | Метод моста | Канал | Этап |
 |---|---|---|
 | `devtoolsSnapshot(id)` → `DevtoolsSnapshot`, без `null`: нет журнала — пустой с `capture: 'unavailable'` | `browser:devtools-snapshot` | A |
 | `devtoolsClear(id)` | `browser:devtools-clear` | A |
+| `devtoolsReady(id)` → `Promise<void>`: все `enable` отработали, после этого окно открывает адрес вкладки (спайк 0.1, вариант D) | `browser:devtools-ready` | A |
 | `responseBody(id, requestId)` | `browser:response-body` | A |
 | `onDevtools(listener)` | событие `browser:devtools` | A |
 | `setViewport(id, spec, area)` → `{ scale }` | `browser:set-viewport` | A |
