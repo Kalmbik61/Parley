@@ -5,6 +5,7 @@
  * «группа не помещается») — это не поломка, а обычный ответ пользователю.
  */
 
+import { isViewportSpec, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type { FileRootSpec, GroupNode, LayoutNode, TabSpec, TerminalView, WorkLayout } from '../../shared/layout-types.js';
 import { nodeId } from './ids.js';
 
@@ -28,7 +29,7 @@ export interface OpResult {
 }
 export type Edge = 'left' | 'right' | 'top' | 'bottom';
 export type Where = 'active' | { groupId: string; index?: number };
-export type TabPatch = { url?: string; view?: TerminalView };
+export type TabPatch = { url?: string; view?: TerminalView; viewport?: ViewportSpec | null };
 
 // ---- обход и поиск в дереве ------------------------------------------------
 
@@ -245,6 +246,14 @@ export function closeTab(layout: WorkLayout, tabId: string): WorkLayout {
   return { ...layout, root, activeGroupId, closedTabs };
 }
 
+/** Адрес и размер вкладки браузера; размер null — Fit: поля нет (спека 2026-10-07, 4.2). */
+function patchBrowser(tab: Extract<TabSpec, { kind: 'browser' }>, patch: TabPatch): TabSpec {
+  const next = { ...tab, url: patch.url ?? tab.url };
+  if (patch.viewport === null) delete next.viewport;
+  else if (patch.viewport !== undefined) next.viewport = patch.viewport;
+  return next;
+}
+
 /**
  * Поля вкладки без kind и id; растёт по нужде: адрес вкладки браузера (9.2) и вид вкладки сессии
  * (план 2026-10-01, решение 6). Поле чужого вида вкладки не применяется.
@@ -256,7 +265,7 @@ export function updateTab(layout: WorkLayout, tabId: string, patch: TabPatch): W
   const tab = found.group.tabs[found.index];
   if (tab === undefined) return layout;
   let next: TabSpec;
-  if (tab.kind === 'browser' && patch.url !== undefined) next = { ...tab, url: patch.url };
+  if (tab.kind === 'browser' && (patch.url !== undefined || patch.viewport !== undefined)) next = patchBrowser(tab, patch);
   else if (tab.kind === 'terminal' && patch.view !== undefined) next = { ...tab, view: patch.view };
   else return layout;
 
@@ -527,6 +536,14 @@ function parseFileRootSpec(value: unknown): FileRootSpec | null {
   return null;
 }
 
+/** Размер вкладки браузера: новый объект только из полей своего вида; мусор — null, то есть Fit. */
+function parseViewport(value: unknown): ViewportSpec | null {
+  if (!isViewportSpec(value)) return null;
+  return 'preset' in value
+    ? { preset: value.preset, rotated: value.rotated, dpr: value.dpr }
+    : { width: value.width, height: value.height, mobile: value.mobile, dpr: value.dpr };
+}
+
 function parseTabSpec(value: unknown): TabSpec | null {
   if (!isRecord(value) || typeof value.id !== 'string') return null;
   const id = value.id;
@@ -553,8 +570,12 @@ function parseTabSpec(value: unknown): TabSpec | null {
       if (root === null || typeof value.path !== 'string') return null;
       return { kind: 'file', id, root, path: value.path };
     }
-    case 'browser':
-      return typeof value.url === 'string' ? { kind: 'browser', id, url: value.url } : null;
+    case 'browser': {
+      if (typeof value.url !== 'string') return null;
+      // Мусор в размере — Fit, а не битая раскладка: размер — удобство, вкладка с адресом дороже (спека 2026-10-07, 4.2).
+      const viewport = parseViewport(value.viewport);
+      return viewport === null ? { kind: 'browser', id, url: value.url } : { kind: 'browser', id, url: value.url, viewport };
+    }
     default:
       return null;
   }

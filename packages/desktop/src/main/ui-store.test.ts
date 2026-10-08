@@ -63,6 +63,13 @@ describe('createUiStore', () => {
     expect((await store.load()).voice).toEqual({ enabled: true, model: 'base', language: 'ru' });
   });
 
+  it('browser сохраняется и читается обратно; патч других полей его не трогает (спека 2026-10-07, 4.3)', async () => {
+    const store = createUiStore(file);
+    await store.save({ browser: { devtoolsHeight: 260 } });
+    await store.save({ appearance: 'dark' });
+    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
+  });
+
   // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать
   // нетронутые подполя к DEFAULT_UI — раньше `{ sound: false }` поверх
   // «всё true, mail: false» возвращал needsYou/finished/mail к дефолтному true.

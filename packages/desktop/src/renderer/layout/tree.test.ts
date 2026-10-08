@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import type { GroupNode, LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import {
@@ -1102,6 +1103,46 @@ describe('тест 14: инвариант по диапазону (500 случ�
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(`seed=${seed} step=${step}: ${reason}`);
+    }
+  });
+});
+
+describe('размер вкладки браузера (спека 2026-10-07, 4.2)', () => {
+  const MOBILE_M: ViewportSpec = { preset: 'mobile-m', rotated: false, dpr: 2 };
+
+  it('updateTab: viewport ставится и снимается (null — Fit, поля нет); адрес не трогает размер', () => {
+    const page = browserTab('http://localhost:5173/');
+    const layout = openTab(emptyLayout(), page, 'active');
+    const sized = updateTab(layout, page.id, { viewport: MOBILE_M });
+    expect(groups(sized)[0]?.tabs[0]).toEqual({ ...page, viewport: MOBILE_M });
+    const moved = updateTab(sized, page.id, { url: 'http://localhost:5173/a' });
+    expect(groups(moved)[0]?.tabs[0]).toEqual({ ...page, url: 'http://localhost:5173/a', viewport: MOBILE_M });
+    const fit = updateTab(sized, page.id, { viewport: null });
+    expect(groups(fit)[0]?.tabs[0]).toEqual(page);
+    expect(Object.keys(groups(fit)[0]?.tabs[0] ?? {})).not.toContain('viewport');
+    expect(validateLayout(sized)).toEqual([]);
+  });
+
+  function withBrowserTab(tab: Record<string, unknown>): unknown {
+    return { root: { type: 'group', id: 'g1', tabs: [tab], activeTabId: tab.id }, activeGroupId: 'g1', closedTabs: [] };
+  }
+
+  it('parseWorkLayout: пресет и свой размер читаются, лишние поля размера выкинуты', () => {
+    const preset = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: { ...MOBILE_M, extra: 1 } }));
+    expect(preset === null ? null : groups(preset)[0]?.tabs[0]).toEqual({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: MOBILE_M });
+    const custom = { width: 1024, height: 700, mobile: false, dpr: 1 };
+    const own = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: custom }));
+    expect(own === null ? null : groups(own)[0]?.tabs[0]).toEqual({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport: custom });
+  });
+
+  it('parseWorkLayout: мусор в размере — вкладка без размера (Fit), раскладка цела', () => {
+    for (const viewport of [{ preset: 'phone', rotated: false, dpr: 2 }, { width: 10, height: 10, mobile: false, dpr: 1 }, 'mobile-m', null]) {
+      const layout = parseWorkLayout(withBrowserTab({ kind: 'browser', id: 'browser:0000c1', url: 'http://localhost:5173/', viewport }));
+      expect(layout === null ? null : groups(layout)[0]?.tabs[0], JSON.stringify(viewport)).toEqual({
+        kind: 'browser',
+        id: 'browser:0000c1',
+        url: 'http://localhost:5173/',
+      });
     }
   });
 });
