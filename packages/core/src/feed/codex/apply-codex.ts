@@ -11,14 +11,13 @@
  * `Reasoning` пропускается (thinking у Claude тоже не показывается); `ContextCompaction` — заметка `compact`; запись
  * `compacted` её не дублирует. Незнакомый тип элемента — пропуск и счётчик `skipped` для `host.log`.
  *
- * Картинки (план 2026-10-09): записи приходят после `stashFeedImages` хоста, поэтому картинка `McpToolCall` в
- * `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` даёт ссылку
- * на сам файл агента, без копии.
+ * Картинки (план 2026-10-09): записи приходят после обхода картинок хоста (`stash.ts`), поэтому картинка `McpToolCall`
+ * в `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` хост снабжает
+ * ссылкой на копию файла в хранилище (`parleyImage` элемента): файл агент переписывает, и лента, ссылайся она на путь
+ * агента, показала бы не ту картинку, которую он тогда посмотрел.
  */
 
-import { isAbsolute } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { hasStashedImage } from '../images.js';
+import { hasImageRef, hasStashedImage } from '../images.js';
 import {
   agentById,
   blocksText,
@@ -113,39 +112,14 @@ function mcpResult(result: Json): unknown {
   return hasStashedImage(content) ? content : (blocksText(content) ?? JSON.stringify(result));
 }
 
-/** Расширения картинок, которые умеет показать окно (то же правило, что `isImagePath` окна). */
-const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
-
-/** Тип картинки по расширению файла; не картинка — `null`. */
-function imageMime(file: string): string | null {
-  const extension = IMAGE_EXTENSION.exec(file)?.[1]?.toLowerCase();
-  if (extension === undefined) return null;
-  return extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : `image/${extension}`;
-}
-
 /**
- * Путь файла из `ImageView.path`. Codex пишет в журнал URL `file:///…` (так в каждой записи живых
- * журналов); обычный абсолютный путь тоже годится. Не абсолютный, чужая схема или битый URL — `null`.
+ * Сводка вызова `ImageView`: блок-картинка со ссылкой на копию файла, которую хост положил в хранилище и пометил
+ * `item.parleyImage` (`stashCodexRecord`). Метки нет или она кривая — `undefined`: вызов остаётся без результата.
+ * Путь агента (`item.path`) здесь не читается и в ленту не идёт.
  */
-function viewedFile(value: string): string | null {
-  if (/^file:/i.test(value)) {
-    try {
-      return fileURLToPath(value);
-    } catch {
-      return null;
-    }
-  }
-  return isAbsolute(value) ? value : null;
-}
-
-/**
- * Сводка вызова `ImageView`: блок-картинка со ссылкой на сам файл агента — копии нет, окно читает его по
- * пути. Путь не абсолютный или не картинка — `undefined`: вызов остаётся без результата, как раньше.
- */
-function viewedImage(value: string | null): unknown {
-  const file = value === null ? null : viewedFile(value);
-  const mime = file === null ? null : imageMime(file);
-  return file === null || mime === null ? undefined : { type: 'image', parleyImage: { path: file, mime } };
+function viewedImage(item: Json): unknown {
+  const block = { type: 'image', parleyImage: item['parleyImage'] };
+  return hasImageRef(block) ? block : undefined;
 }
 
 /** Вызов — в основную ленту или в `children` карточки субагента. */
@@ -270,7 +244,7 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
     }
     case 'ImageView': {
       const file = str(item, 'path');
-      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', viewedImage(file), endAt));
+      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', viewedImage(item), endAt));
       return;
     }
     case 'ContextCompaction': {

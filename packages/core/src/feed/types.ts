@@ -91,7 +91,7 @@ export interface FeedText extends FeedItemBase {
 
 /**
  * Картинка результата инструмента: ссылка на файл, а не байты (лента ходит по протоколу и держится
- * в памяти). Файл кладёт хост (`stashFeedImages`); у `ViewImage` Codex это сам файл агента.
+ * в памяти). Файл кладёт хост (`stashFeedImages`); у `ViewImage` Codex это копия файла агента, снятая при приёме записи.
  */
 export interface FeedImageRef {
   /** Абсолютный путь к файлу картинки. */

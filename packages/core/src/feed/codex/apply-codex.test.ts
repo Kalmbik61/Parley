@@ -226,62 +226,65 @@ describe('картинки в ленте Codex', () => {
   });
 
   describe('ImageView', () => {
-    const view = (path: unknown, id = 'view-1'): RolloutRecord => completed(1, { type: 'ImageView', id, path });
+    const AGENT_FILE = 'file:///Users/me/shots/shot.png';
+    /** Запись так, как её отдаёт хост: `stashCodexRecord` кладёт в элемент `parleyImage` — ссылку на копию файла в хранилище. */
+    const view = (extra: Record<string, unknown> = {}, path: unknown = AGENT_FILE, id = 'view-1'): RolloutRecord =>
+      completed(1, { type: 'ImageView', id, path, ...extra });
     const only = (record: RolloutRecord): FeedTool => {
       const [tool] = toolsOf(record);
       return tool as FeedTool;
     };
 
-    it('абсолютный путь к png: вызов ViewImage со ссылкой на сам файл', () => {
-      const tool = only(view('/tmp/x.png'));
+    it('хост положил копию (parleyImage): вызов ViewImage со ссылкой на копию, а не на файл агента', () => {
+      const state = feedOf(view({ parleyImage: savedRef() }));
+      const [tool] = ofKind(state.items, 'tool');
 
-      expect(tool).toMatchObject({ name: 'ViewImage', status: 'done', input: { file_path: '/tmp/x.png' } });
-      expect(tool.response?.images).toEqual([{ path: '/tmp/x.png', mime: 'image/png' }]);
-      expect(tool.response?.text).toBe('[image png]');
+      expect(tool).toMatchObject({ name: 'ViewImage', status: 'done', toolUseId: 'view-1', input: { file_path: AGENT_FILE } });
+      expect(tool?.response?.images).toEqual([savedRef()]);
+      expect(tool?.response?.text).toBe('[image png, 53 KB]');
+      // Путь агента остался только в строке вызова: окну по нему картинку не показывают.
+      expect(tool?.response?.images?.some((image) => image.path.includes('shots/shot.png'))).toBe(false);
     });
 
-    it('так Codex пишет путь на деле — file:///…; проценты в нём разбираются, ссылка ведёт на обычный путь', () => {
-      const tool = only(view('file:///Users/me/shots/my%20shot%20%281%29.png'));
-
-      expect(tool.response?.images).toEqual([{ path: '/Users/me/shots/my shot (1).png', mime: 'image/png' }]);
-      // Схема URL — без учёта регистра.
-      expect(only(view('FILE:///Users/me/a.png')).response?.images).toEqual([{ path: '/Users/me/a.png', mime: 'image/png' }]);
-    });
-
-    it('тип по расширению, регистр не важен: jpg, jpeg, gif, webp', () => {
-      const mimes = ['/a/b.jpg', '/a/b.JPEG', '/a/b.gif', '/a/b.WebP', 'file:///a/b.png'].map((path) => only(view(path)).response?.images?.[0]?.mime);
-
-      expect(mimes).toEqual(['image/jpeg', 'image/jpeg', 'image/gif', 'image/webp', 'image/png']);
-    });
-
-    it('не картинка по расширению — вызов без ссылки и без сводки, как раньше', () => {
-      for (const path of ['x.txt', '/tmp/x.txt', '/tmp/x.png.txt', '/tmp/png', '/tmp/x.svg', 'file:///tmp/x.txt']) {
-        const tool = only(view(path));
-        expect(tool).toMatchObject({ name: 'ViewImage', status: 'done' });
+    it('метки нет (хост файл не взял): вызов остаётся без ссылки и без сводки — путь агента не читается, что бы в нём ни стояло', () => {
+      for (const path of ['/tmp/x.png', AGENT_FILE, 'file:///tmp/x.p%6Eg', 'x.png', 'https://example.com/a.png', undefined, 42, '']) {
+        const tool = only(view({}, path));
+        expect(tool, String(path)).toMatchObject({ name: 'ViewImage', status: 'done' });
         expect(tool).not.toHaveProperty('response');
       }
     });
 
-    it('путь не абсолютный, чужая схема или нет пути — без ссылки, вызов остаётся', () => {
-      for (const path of ['x.png', 'shots/x.png', './x.png', 'https://example.com/a.png', 'file://remote-host/a.png', 'file:///tmp/a%2Fb.png', undefined, 42, '']) {
-        const tool = only(view(path));
-        expect(tool).toMatchObject({ name: 'ViewImage', status: 'done' });
+    it('кривая метка (не ссылка, путь за пределом схемы, размер не целое) — как будто метки нет', () => {
+      const forged: unknown[] = [
+        'x',
+        42,
+        null,
+        [],
+        { path: 5, mime: 'image/png' },
+        { path: '', mime: 'image/png' },
+        { path: '/a.png' },
+        { path: `/${'a'.repeat(FEED_IMAGE_PATH_LIMIT)}.png`, mime: 'image/png' },
+        { path: '/a.png', mime: 'image/png', bytes: -1 },
+        { path: '/a.png', mime: 'image/png', bytes: 1.5 },
+      ];
+      for (const parleyImage of forged) {
+        const tool = only(view({ parleyImage }));
+        expect(tool, JSON.stringify(parleyImage)).toMatchObject({ name: 'ViewImage', status: 'done' });
         expect(tool).not.toHaveProperty('response');
       }
     });
 
-    it('путь длиннее предела протокола — ссылки нет (схема её бы не пропустила), в тексте [image omitted]', () => {
-      const tool = only(view(`/${'a'.repeat(FEED_IMAGE_PATH_LIMIT)}.png`));
+    it('лишние поля метки срезаны: в ленту идёт ссылка из path, mime и bytes', () => {
+      const tool = only(view({ parleyImage: { ...savedRef(), base64: 'AAAA', extra: true } }));
 
-      expect(tool.response?.text).toBe('[image omitted]');
-      expect(tool.response).not.toHaveProperty('images');
+      expect(tool.response?.images).toEqual([savedRef()]);
     });
 
     it('вызов субагента: пометка в тексте, ссылки нет', () => {
-      const { update } = applyCodexRecords(subAgentState(), [view('/tmp/x.png')], emptyCodexCursor(), 'th-sub');
+      const { update } = applyCodexRecords(subAgentState(), [view({ parleyImage: savedRef() })], emptyCodexCursor(), 'th-sub');
       const card = update.state.items.find((item) => item.kind === 'agent') as FeedAgent;
 
-      expect(card.children[0]?.response?.text).toBe('[image png]');
+      expect(card.children[0]?.response?.text).toBe('[image png, 53 KB]');
       expect(card.children[0]?.response).not.toHaveProperty('images');
     });
   });
