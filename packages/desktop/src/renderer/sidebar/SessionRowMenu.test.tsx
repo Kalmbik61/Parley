@@ -66,6 +66,12 @@ describe('SessionRowMenu — пункты', () => {
     expect(writeText).toHaveBeenCalledWith('/tmp/wt/s01');
   });
 
+  it('живая сессия с итогом (report(done)): есть Stop, нет Resume', () => {
+    renderMenu(makeSession('s-01', 'plan', { result: 'done' }));
+    expect(screen.getByText('Stop')).toBeTruthy();
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+
   it('Stop — только после подтверждения; пункта «Create room with…» больше нет: комнату из сессий собирает бросок (диалог 1.6)', () => {
     bridge.setHandler('sessions.stop', () => ({ ok: true as const }));
     renderMenu(makeSession('s-01', 'plan'));
