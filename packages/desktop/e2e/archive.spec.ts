@@ -253,11 +253,11 @@ test.describe('архив комнат и проектов, 800×500 с длин
     await expect(panel.locator('[data-room-editor]')).toHaveCount(1);
     expect(await sidebarProblems(window, 'a4 после Reopen')).toEqual([]);
 
-    // Второй круг без остановки агентов и Reopen из меню строки.
+    // Второй круг и Reopen из меню строки. Агенты спят с первого круга: останавливать некого — флажка нет.
     await openRow.locator('> div').first().click({ button: 'right' });
     await window.locator('[data-room-action="archive"]').click();
     const again = window.getByRole('dialog', { name: `Archive room "${LONG_ROOM}"?` });
-    await again.getByRole('checkbox', { name: 'Also stop its 3 agents that are in no other room' }).uncheck();
+    await expect(again.getByRole('checkbox')).toHaveCount(0);
     await again.getByRole('button', { name: 'Archive', exact: true }).click();
     await expect(again).toBeHidden();
     await expect.poll(async () => (await mapOf(workId)).rooms[0]?.archivedAt ?? null).not.toBeNull();

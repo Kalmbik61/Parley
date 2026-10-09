@@ -777,6 +777,15 @@ describe('deleteRoom', () => {
     expect(() => parseMap(JSON.stringify(map), 'map.json')).not.toThrow();
   });
 
+  it('архивная комната: прощальное письмо только работающему — спящего, усыплённого архивацией, оно не будит', () => {
+    const map = roomsWithFeed();
+    archiveRoom(map, 'r-01', NOW);
+    const letters = deleteRoom(map, 'r-01', NOW);
+
+    expect(letters.map((letter) => letter.to)).toEqual([['s-01']]);
+    expect(unreadFor(map, 's-02')).toEqual([]);
+  });
+
   it('не запущенный, закрытый и состоящий в другой комнате (старая карта) участник письма не получает', () => {
     const map = roomsWithFeed();
     addMember(map, 'r-01', 's-04', NOW);

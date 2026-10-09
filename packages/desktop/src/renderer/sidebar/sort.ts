@@ -233,7 +233,9 @@ export interface CardRoomRow {
   /**
    * Сессии, которых архивация этой комнаты оставит без открытой комнаты (`agentsLeftWithoutRoom`): число во флажке
    * «Also stop its N agents…» меню строки. Не то же, что `sessions`: там — кого сайдбар поставил в комнату, а здесь —
-   * правило core по всей карте (сессия старой карты может числиться в нескольких комнатах). У архивной комнаты пусто.
+   * правило core по всей карте (сессия старой карты может числиться в нескольких комнатах). Только работающие (`active`):
+   * спящую и закрытую останавливать нечего, и «Also stop its 2 agents» над двумя спящими ничего бы не сделал. У архивной
+   * комнаты пусто.
    */
   archiveStops: WorkSession[];
 }
@@ -299,7 +301,7 @@ function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean
     sessions,
     lastAt: roomLastAt(map, room),
     archived,
-    archiveStops: archived ? [] : agentsLeftWithoutRoom(map, room),
+    archiveStops: archived ? [] : agentsLeftWithoutRoom(map, room).filter((session) => session.lifecycle === 'active'),
   };
 }
 

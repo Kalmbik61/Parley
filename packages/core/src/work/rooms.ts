@@ -393,9 +393,14 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
   }
 
   const text = `The human deleted room ${room.id} "${room.title}": you now work as a regular session of this workspace.`;
+  // Участников архивной комнаты архивация могла усыпить: прощальное письмо спящему подняло бы его будильником, поэтому
+  // у архивной комнаты письмо получают только работающие (спека архива комнат, 3.6).
+  const archived = isRoomArchived(room);
   const notified = [...new Set([room.creator, ...room.members])].filter(
     (id) =>
-      map.sessions.some((session) => session.id === id && (session.lifecycle === 'active' || session.lifecycle === 'sleeping')) &&
+      map.sessions.some(
+        (session) => session.id === id && (session.lifecycle === 'active' || (session.lifecycle === 'sleeping' && !archived)),
+      ) &&
       !map.rooms.some((other) => isMember(other, id)),
   );
   return notified.map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));

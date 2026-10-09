@@ -6,6 +6,18 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Archived rooms.** "Archive…" in a room row's menu: the feed stays readable, nobody can write to the room
+  until "Reopen", a waiting decision is dismissed and a live plan cancelled. "Also stop its N agents that are in
+  no other room" is on by default; agents left running get a letter. Archived rooms sit under "N archived rooms"
+  at the bottom of the card.
+- **Archived workspaces under a link.** A project whose workspaces are all archived stays in the sidebar with "+"
+  and "N archived" at the bottom of its group; "Remove from list…" hides it until a workspace is created there.
+- **Session names and Rename.** A session created without a name gets one by its number — S01 Ralph, S02
+  Anatoly, S03 Ruslan… — and keeps it; Claude Code's title no longer replaces it (an untitled workspace still
+  gets its title). "Rename" in a session row's menu.
+
 ## 0.9.0
 
 The browser tab gets a console and network panel and viewport sizes: the page's messages, exceptions and requests with their bodies are visible right in the tab, errors and failed requests are counted on the button, and the page can be emulated at phone, tablet and laptop sizes. On macOS the first hook of a new session is no longer lost.

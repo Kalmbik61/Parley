@@ -157,7 +157,9 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     const activeKey = useLayoutStore.getState().activeWorkKey;
     const activeProject =
       useWorksStore.getState().entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === activeKey)?.projectPath ?? null;
-    setProjectPath(initialProject ?? activeProject);
+    // Проект активной работы, убранный из списка («Remove from list…»), не предлагается: новая работа молча вернула бы его.
+    const offered = activeProject !== null && useUiStore.getState().ui.hiddenProjects.includes(activeProject) ? null : activeProject;
+    setProjectPath(initialProject ?? offered);
     setProvider(null);
     setTitle(initialTitle);
     setPrompt('');
