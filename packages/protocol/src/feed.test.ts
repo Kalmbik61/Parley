@@ -437,9 +437,11 @@ describe('feedItem: картинки результата инструмента
     expect(ok({ ...body, images: undefined })).toBe(false);
   });
 
-  it('пределы path и mime — 4096 и 100 символов', () => {
+  it('пределы path и mime — 4096 и 100 символов, и равны пределам core (ими отсекает ссылки редьюсер)', () => {
     expect(FEED_IMAGE_PATH_LIMIT).toBe(4096);
     expect(FEED_IMAGE_MIME_LIMIT).toBe(100);
+    expect(FEED_IMAGE_PATH_LIMIT).toBe(core.FEED_IMAGE_PATH_LIMIT);
+    expect(FEED_IMAGE_MIME_LIMIT).toBe(core.FEED_IMAGE_MIME_LIMIT);
   });
 
   it('вызов, который собрал core из события с картинкой, проходит схему', () => {

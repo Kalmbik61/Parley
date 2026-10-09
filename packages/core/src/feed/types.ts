@@ -30,6 +30,12 @@ export const FEED_IMAGES_PER_CALL = 6;
 export const FEED_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** Сколько хост хранит файлы картинок ленты; старше — удаляет. */
 export const FEED_IMAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Длиннее путь или тип ссылки (`FeedImageRef.path`, `mime`) схема протокола не пропустит: редьюсер такую
+ * ссылку не берёт. Пределы повторены в `packages/protocol/src/feed.ts`, равенство сверяет его тест.
+ */
+export const FEED_IMAGE_PATH_LIMIT = 4096;
+export const FEED_IMAGE_MIME_LIMIT = 100;
 
 /**
  * Сколько вложенных вызовов держит карточка субагента (`FeedAgent.children`): старые уходят,

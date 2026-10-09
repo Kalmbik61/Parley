@@ -9,11 +9,20 @@
  * `imageCount` Codex). Редьюсер потом сводит такой блок в пометку `[image png, 123 KB]` и ссылку
  * `FeedToolResponse.images` (`summarizeImageBlocks`).
  *
+ * Метки `parleyImage` / `parleyImageOmitted` ставит только этот обход: результат инструмента — чужой
+ * текст и не должен вести окно к произвольному файлу, поэтому метки, пришедшие в данных, обход снимает
+ * (читатель ниже верит меткам, потому что хост проводит через обход всё, что идёт в редьюсер).
+ *
  * Модуль чистый: ни диска, ни часов — `save` приходит снаружи.
  */
 
 import { isRecord, textOf } from '../work/events.js';
-import { FEED_IMAGES_PER_CALL, type FeedImageRef } from './types.js';
+import {
+  FEED_IMAGE_MIME_LIMIT,
+  FEED_IMAGE_PATH_LIMIT,
+  FEED_IMAGES_PER_CALL,
+  type FeedImageRef,
+} from './types.js';
 
 /**
  * Глубина, ниже которой обход не спускается. Живые записи неглубоки (в записи журнала Claude до
@@ -28,6 +37,10 @@ const IMAGE_TYPES: ReadonlySet<unknown> = new Set(['image', 'input_image']);
 const TEXT_TYPES: ReadonlySet<unknown> = new Set(['text', 'input_text']);
 /** Пометка картинки, у которой нет ссылки: хост её выбросил, ссылка кривая или картинок уже шесть. */
 const OMITTED_MARK = '[image omitted]';
+/** Ключи метки блока; ставит их только `stashFeedImages`. */
+const MARKER_KEYS: ReadonlySet<string> = new Set(['parleyImage', 'parleyImageOmitted']);
+const DATA_SCHEME = 'data:';
+const BASE64_PARAM = 'base64';
 
 type Save = (base64: string, mime: string) => FeedImageRef | null;
 
@@ -37,14 +50,22 @@ interface Payload {
   mime: string | null;
 }
 
-/** `data:<mime>[;параметры];base64,<данные>`; data-URL без base64 и прочие адреса — `null`. */
+/** Тип картинки без пробелов по краям и в нижнем регистре; не строка или пусто — `null`: тип не назван. */
+function mimeOf(value: unknown): string | null {
+  return typeof value === 'string' ? textOf(value.trim().toLowerCase()) : null;
+}
+
+/**
+ * `data:<mime>[;параметры];base64,<данные>`; схема и `base64` — без учёта регистра. data-URL без base64
+ * и прочие адреса — `null`.
+ */
 function dataUrlPayload(url: string): Payload | null {
-  if (!url.startsWith('data:')) return null;
+  if (url.slice(0, DATA_SCHEME.length).toLowerCase() !== DATA_SCHEME) return null;
   const comma = url.indexOf(',');
   if (comma === -1) return null;
-  const [mime, ...params] = url.slice('data:'.length, comma).split(';');
-  if (params.at(-1) !== 'base64') return null;
-  return { base64: url.slice(comma + 1), mime: textOf(mime) };
+  const [mime, ...params] = url.slice(DATA_SCHEME.length, comma).split(';');
+  if (params.at(-1)?.trim().toLowerCase() !== BASE64_PARAM) return null;
+  return { base64: url.slice(comma + 1), mime: mimeOf(mime) };
 }
 
 /**
@@ -61,14 +82,14 @@ function payloadOf(block: Record<string, unknown>): Payload | null {
   if (block['type'] !== 'image') return null;
   const source = block['source'];
   if (isRecord(source) && source['type'] === 'base64' && typeof source['data'] === 'string') {
-    return { base64: source['data'], mime: textOf(source['media_type']) };
+    return { base64: source['data'], mime: mimeOf(source['media_type']) };
   }
   const file = block['file'];
   if (isRecord(file) && typeof file['base64'] === 'string') {
-    return { base64: file['base64'], mime: textOf(file['type']) };
+    return { base64: file['base64'], mime: mimeOf(file['type']) };
   }
   return typeof block['data'] === 'string'
-    ? { base64: block['data'], mime: textOf(block['mimeType']) }
+    ? { base64: block['data'], mime: mimeOf(block['mimeType']) }
     : null;
 }
 
@@ -111,6 +132,11 @@ function walk(value: unknown, save: Save, depth: number): unknown {
   if (depth >= WALK_DEPTH) return value;
   let next: Record<string, unknown> | null = null;
   for (const key of Object.keys(value)) {
+    if (MARKER_KEYS.has(key)) {
+      next ??= { ...value };
+      delete next[key];
+      continue;
+    }
     const item = value[key];
     const stashed = walk(item, save, depth + 1);
     if (stashed === item) continue;
@@ -127,7 +153,11 @@ function walk(value: unknown, save: Save, depth: number): unknown {
  * — блок `{ type, parleyImageOmitted: true }`.
  *
  * Исходник не меняется. Ничего не нашлось — возвращается он сам, не копия: запись может весить
- * мегабайты. Остальные поля записи, не похожие на картинку, обход не трогает.
+ * мегабайты. Остальные поля записи, не похожие на картинку, обход не трогает — кроме ключей
+ * `parleyImage` и `parleyImageOmitted`: у каждого посещённого объекта они снимаются, а ставит их
+ * только сам обход. Поэтому он не идемпотентен: хост проводит через него сырую запись один раз, а
+ * не уже обработанную. Глубже `WALK_DEPTH` обход не идёт, метки там остаются: редьюсеры читают блоки
+ * на мелких уровнях записи.
  */
 export function stashFeedImages(value: unknown, save: Save): unknown {
   return walk(value, save, 0);
@@ -155,11 +185,15 @@ export function hasStashedImage(value: unknown): boolean {
   return Array.isArray(value) ? value.some(isStashedImage) : isStashedImage(value);
 }
 
-/** Годная ссылка из `parleyImage`; кривая — `null`, ссылка пересобрана без лишних полей. */
+/**
+ * Годная ссылка из `parleyImage`: путь и тип в пределах схемы протокола; кривая — `null`, ссылка
+ * пересобрана без лишних полей.
+ */
 function refOf(value: unknown): FeedImageRef | null {
   if (!isRecord(value)) return null;
   const { path, mime, bytes } = value;
-  if (typeof path !== 'string' || path === '' || typeof mime !== 'string') return null;
+  if (typeof path !== 'string' || path === '' || path.length > FEED_IMAGE_PATH_LIMIT) return null;
+  if (typeof mime !== 'string' || mime.length > FEED_IMAGE_MIME_LIMIT) return null;
   if (bytes === undefined) return { path, mime };
   return typeof bytes === 'number' && Number.isInteger(bytes) && bytes >= 0
     ? { path, mime, bytes }

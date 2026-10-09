@@ -30,9 +30,9 @@ export const FEED_TEXT_LIMIT = 256 * 1024;
 export const FEED_AGENT_CHILDREN = 100;
 /** = `FEED_IMAGES_PER_CALL` core: ссылок на картинки в сводке результата одного вызова. */
 export const FEED_IMAGES_PER_CALL = 6;
-/** Символов в пути к файлу картинки (`FeedImageRef.path`). */
+/** = `FEED_IMAGE_PATH_LIMIT` core: символов в пути к файлу картинки (`FeedImageRef.path`). */
 export const FEED_IMAGE_PATH_LIMIT = 4096;
-/** Символов в типе картинки (`FeedImageRef.mime`). */
+/** = `FEED_IMAGE_MIME_LIMIT` core: символов в типе картинки (`FeedImageRef.mime`). */
 export const FEED_IMAGE_MIME_LIMIT = 100;
 /**
  * = `FEED_MIN_VERSION` core: наименьшая версия `claude`, которой хост пишет HTTP-хуки ленты. Окно по

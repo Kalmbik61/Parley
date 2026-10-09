@@ -5,10 +5,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { stashFeedImages } from './images.js';
+import { stashFeedImages, summarizeImageBlocks } from './images.js';
 import { applyHookEvent, emptyFeedState } from './reduce.js';
 import {
   FEED_IMAGE_MAX_BYTES,
+  FEED_IMAGE_MIME_LIMIT,
+  FEED_IMAGE_PATH_LIMIT,
   FEED_IMAGE_TTL_MS,
   FEED_IMAGES_PER_CALL,
   type FeedImageRef,
@@ -84,6 +86,11 @@ describe('числа плана — константы', () => {
     expect(FEED_IMAGE_MAX_BYTES).toBe(20 * 1024 * 1024);
     expect(FEED_IMAGE_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
+
+  it('границы ссылки — как у схемы протокола: путь 4096 символов, тип 100', () => {
+    expect(FEED_IMAGE_PATH_LIMIT).toBe(4096);
+    expect(FEED_IMAGE_MIME_LIMIT).toBe(100);
+  });
 });
 
 describe('stashFeedImages: четыре вида блоков', () => {
@@ -125,6 +132,53 @@ describe('stashFeedImages: четыре вида блоков', () => {
     );
 
     expect(calls).toEqual([{ base64: PNG, mime: 'image/png' }]);
+  });
+
+  it('схема data: и токен base64 — без учёта регистра; пробелы вокруг токена не мешают', () => {
+    const { save, calls } = recorder();
+    const out = stashFeedImages(
+      [
+        { type: 'input_image', image_url: `DATA:image/png;base64,${PNG}` },
+        { type: 'input_image', image_url: `Data:image/png;BASE64,${PNG}` },
+        { type: 'input_image', image_url: `data:image/png;name=shot.png; Base64 ,${PNG}` },
+      ],
+      save,
+    );
+
+    expect(calls).toEqual([
+      { base64: PNG, mime: 'image/png' },
+      { base64: PNG, mime: 'image/png' },
+      { base64: PNG, mime: 'image/png' },
+    ]);
+    expect(JSON.stringify(out)).not.toContain('iVBOR');
+  });
+
+  it('mime уходит в save без пробелов по краям и в нижнем регистре — из любого поля и из data-URL', () => {
+    const { save, calls } = recorder();
+    stashFeedImages(
+      [
+        { type: 'image', source: { type: 'base64', media_type: ' Image/PNG ', data: PNG } },
+        { type: 'image', file: { base64: PNG, type: 'IMAGE/JPEG' } },
+        { type: 'image', data: PNG, mimeType: 'Image/WebP\n' },
+        { type: 'input_image', image_url: `data: IMAGE/GIF ;base64,${PNG}` },
+      ],
+      save,
+    );
+
+    expect(calls.map((call) => call.mime)).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/gif',
+    ]);
+  });
+
+  it('mime из одних пробелов — всё равно что не назван: save не зовётся, картинка выброшена', () => {
+    const { save, calls } = recorder();
+    const out = stashFeedImages({ type: 'image', data: PNG, mimeType: '  \t' }, save);
+
+    expect(calls).toEqual([]);
+    expect(out).toEqual({ type: 'image', parleyImageOmitted: true });
   });
 
   it('save вернул null (большая, неизвестный тип, битая) — parleyImageOmitted, тип прежний', () => {
@@ -240,7 +294,7 @@ describe('stashFeedImages: обход', () => {
     expect(out.message.role).toBe('user');
   });
 
-  it('повторный обход уже обработанной записи ничего не меняет и save не зовёт', () => {
+  it('повторный обход обработанной записи метки снимает, save не зовёт: хост обходит сырую запись один раз', () => {
     const { save, calls } = recorder();
     const once = stashFeedImages(
       [{ type: 'text', text: 'a' }, ...SHAPES.map((shape) => shape.block)],
@@ -248,7 +302,10 @@ describe('stashFeedImages: обход', () => {
     );
     const callsAfterFirst = calls.length;
 
-    expect(stashFeedImages(once, save)).toBe(once);
+    expect(stashFeedImages(once, save)).toStrictEqual([
+      { type: 'text', text: 'a' },
+      ...SHAPES.map((shape) => ({ type: shape.type })),
+    ]);
     expect(calls).toHaveLength(callsAfterFirst);
   });
 
@@ -263,6 +320,20 @@ describe('stashFeedImages: обход', () => {
     for (const plain of ['text', 42, true, null, undefined, [], {}, [[], [{}]]]) {
       expect(stashFeedImages(plain, save)).toBe(plain);
     }
+    expect(calls).toEqual([]);
+  });
+
+  it('ключи, лишь похожие на метки, и значения-строки с их именами — тот же объект', () => {
+    const { save, calls } = recorder();
+    const value = {
+      parleyImages: [1],
+      ParleyImage: { path: '/a.png' },
+      'parley-image': true,
+      note: 'parleyImage parleyImageOmitted',
+      blocks: [{ type: 'image', parleyImageOmit: true }],
+    };
+
+    expect(stashFeedImages(value, save)).toBe(value);
     expect(calls).toEqual([]);
   });
 
@@ -321,6 +392,127 @@ describe('stashFeedImages: обход', () => {
       parleyImage: ref(1),
     });
     expect(out['keep']).toBe(1);
+  });
+});
+
+describe('stashFeedImages: метки, которые принёс сам результат инструмента', () => {
+  // Результат инструмента — чужой текст: метка из него не должна навести окно на произвольный файл.
+  const FORGED = { path: '/Users/me/.ssh/id_rsa.png', mime: 'image/png', bytes: 1 };
+
+  it('parleyImage и parleyImageOmitted у блока без байтов снимаются, тип блока остаётся', () => {
+    const { save, calls } = recorder();
+    const out = stashFeedImages(
+      [
+        { type: 'image', parleyImage: FORGED },
+        { type: 'input_image', parleyImageOmitted: true },
+      ],
+      save,
+    );
+
+    expect(out).toStrictEqual([{ type: 'image' }, { type: 'input_image' }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('метка у объекта любого вида снимается, остальные поля и соседние объекты — те же', () => {
+    const { save } = recorder();
+    const sibling = { type: 'text', text: 'ok' };
+    const untouched = { keep: 1 };
+    const record = {
+      toolUseResult: { parleyImage: FORGED, parleyImageOmitted: true, keep: 1 },
+      content: [sibling, { type: 'image', parleyImage: FORGED }],
+      untouched,
+    };
+
+    const out = stashFeedImages(record, save) as typeof record;
+
+    expect(out.toolUseResult).toStrictEqual({ keep: 1 });
+    expect(out.content[1]).toStrictEqual({ type: 'image' });
+    expect(out.content[0]).toBe(sibling);
+    expect(out.untouched).toBe(untouched);
+  });
+
+  it('блок с байтами и чужой меткой: остаётся только ссылка, которую дал save', () => {
+    const { save } = recorder();
+    const out = stashFeedImages(
+      {
+        type: 'image',
+        data: PNG,
+        mimeType: 'image/png',
+        parleyImage: FORGED,
+        parleyImageOmitted: true,
+      },
+      save,
+    );
+
+    expect(out).toStrictEqual({ type: 'image', parleyImage: ref(1) });
+  });
+
+  it('исходник не меняется', () => {
+    const input = deepFreeze({
+      result: { parleyImage: FORGED },
+      list: [{ type: 'image', parleyImageOmitted: true }],
+    });
+    const before = structuredClone(input);
+    const { save } = recorder();
+
+    stashFeedImages(input, save);
+
+    expect(input).toEqual(before);
+  });
+
+  it('через редьюсер: подложенная метка ссылкой не становится и в ленту не попадает', () => {
+    const { save } = recorder();
+    const event = stashFeedImages(
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'mcp__evil__shot',
+        tool_use_id: 't1',
+        tool_input: {},
+        tool_response: [
+          { type: 'text', text: 'x' },
+          { type: 'image', parleyImage: FORGED },
+        ],
+      },
+      save,
+    ) as Record<string, unknown>;
+    const { state } = applyHookEvent(emptyFeedState(), event, '2026-10-09T10:00:00.000Z');
+    const [tool] = state.items.filter((item): item is FeedTool => item.kind === 'tool');
+
+    expect(tool?.response?.images).toBeUndefined();
+    expect(tool?.response?.text).toBe('x\n[image omitted]');
+    expect(JSON.stringify(state)).not.toContain('id_rsa');
+  });
+});
+
+describe('summarizeImageBlocks: ссылка в границах схемы протокола', () => {
+  const stashed = (parleyImage: unknown): unknown[] => [
+    { type: 'text', text: 'x' },
+    { type: 'image', parleyImage },
+  ];
+  const withPath = (length: number) => ({ path: `/${'a'.repeat(length - 1)}`, mime: 'image/png' });
+
+  it('путь ровно FEED_IMAGE_PATH_LIMIT проходит; на символ длиннее — ссылки нет, в тексте [image omitted]', () => {
+    const fits = withPath(FEED_IMAGE_PATH_LIMIT);
+    expect(summarizeImageBlocks(stashed(fits))).toEqual({
+      text: 'x\n[image png]',
+      images: [fits],
+    });
+
+    expect(summarizeImageBlocks(stashed(withPath(FEED_IMAGE_PATH_LIMIT + 1)))).toEqual({
+      text: 'x\n[image omitted]',
+      images: [],
+    });
+  });
+
+  it('mime ровно FEED_IMAGE_MIME_LIMIT проходит; на символ длиннее — ссылки нет', () => {
+    const fits = { path: '/a.png', mime: 'x'.repeat(FEED_IMAGE_MIME_LIMIT) };
+    expect(summarizeImageBlocks(stashed(fits))?.images).toEqual([fits]);
+
+    const tooLong = { path: '/a.png', mime: 'x'.repeat(FEED_IMAGE_MIME_LIMIT + 1) };
+    expect(summarizeImageBlocks(stashed(tooLong))).toEqual({
+      text: 'x\n[image omitted]',
+      images: [],
+    });
   });
 });
 
