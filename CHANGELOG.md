@@ -6,11 +6,24 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.11.0
+
+Screenshots an agent takes — with Chrome DevTools MCP, Claude in Chrome or Playwright, or an image it reads — now show in Chat as thumbnails under the call, and a click opens them larger. A live agent that has reported "done" no longer looks finished.
+
 ### Added
 
 - **Screenshots in Chat.** When an agent's tool returns an image — a browser screenshot from Chrome DevTools MCP,
   Claude in Chrome or Playwright, an image it read — Chat shows it as a thumbnail under the call; click to view it
   larger. Parley keeps these images in `~/.parley/feed-images` for 7 days, 1 GiB at most (the oldest go first).
+
+### Fixed
+
+- **A live agent that reported "done" shows as working.** Agents report done at the end of every turn and stay
+  alive; the sidebar, the room and the workspace card showed such a session as done, and its row menu offered
+  Resume instead of Stop. A live session now shows its activity; the reported result shows for a sleeping or
+  closed session and in the row's tooltip.
+- **Thumbnails keep their proportions on macOS.** Image thumbnails of attachments were stretched into a square;
+  they now keep the picture's aspect ratio.
 
 ## 0.10.1
 
