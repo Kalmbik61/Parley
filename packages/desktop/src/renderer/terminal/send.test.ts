@@ -53,6 +53,7 @@ describe('canResume', () => {
     ['sleeping, done', { lifecycle: 'sleeping', result: 'done' }, true],
     ['sleeping, failed', { lifecycle: 'sleeping', result: 'failed' }, true],
     ['active', { lifecycle: 'active' }, false],
+    ['active, done', { lifecycle: 'active', result: 'done' }, false],
     ['pending', { lifecycle: 'pending' }, false],
     ['closed', { lifecycle: 'closed' }, false],
     ['closed, done', { lifecycle: 'closed', result: 'done' }, false],
