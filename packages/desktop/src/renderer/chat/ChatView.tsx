@@ -89,6 +89,7 @@ import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
+import { pasteClipboardImage } from './paste-image.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
@@ -322,16 +323,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   };
 
   // Скриншот из буфера → drops/ (main) → путь; отказы — теми же тостами, что у терминала.
-  const pasteImage = useCallback(async (): Promise<string | null> => {
-    try {
-      return await bridge.app.saveDropImage('clipboard');
-    } catch (error) {
-      const { code, message } = decodeIpcError(error);
-      console.warn('[parley] saveDropImage', message);
-      toast.error(code === 'drops:too-large' ? S.terminal.imageTooLarge : errorText(code, S.errors.actions.saveScreenshot));
-      return null;
-    }
-  }, [bridge]);
+  const pasteImage = useCallback((): Promise<string | null> => pasteClipboardImage(bridge), [bridge]);
   const pickFiles = useCallback(async (): Promise<string[]> => {
     try {
       return await bridge.app.chooseFiles();

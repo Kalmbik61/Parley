@@ -143,6 +143,13 @@ describe('buildRoomModel — лента участников', () => {
     ]);
   });
 
+  it('живой участник с итогом report(done) и activity working — working, не done', () => {
+    const withResult = sessions();
+    withResult[0] = makeSession('s-01', 'архитектор', { result: 'done' });
+    const [first] = build(entryOf({ sessions: withResult }), activityMap([makeActivity(REF('s-01'), 'working')])).participants;
+    expect([first?.state, first?.word]).toEqual(['working', 'working']);
+  });
+
   it('без активности живая сессия — idle; не запущенная — «not started»; закрытая — «closed» и closed: true', () => {
     const mixed = sessions();
     mixed[1] = makeSession('s-02', 'бэкенд', { lifecycle: 'pending' });

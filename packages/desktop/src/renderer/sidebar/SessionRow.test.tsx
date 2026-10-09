@@ -96,8 +96,8 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     { name: 'ожидает запуска', session: makeSession('s-01', 'a', { lifecycle: 'pending' }), activity: null, state: 'pending', word: S.states.pending },
     { name: 'спит', session: makeSession('s-01', 'a', { lifecycle: 'sleeping' }), activity: null, state: 'exited', lifecycle: 'sleeping', word: S.states.asleep },
     { name: 'закрыта', session: makeSession('s-01', 'a', { lifecycle: 'closed' }), activity: null, state: 'exited', lifecycle: 'closed', word: S.states.closed },
-    { name: 'готово', session: makeSession('s-01', 'a', { result: 'done' }), activity: null, state: 'done', word: S.states.done },
-    { name: 'сбой', session: makeSession('s-01', 'a', { result: 'failed' }), activity: null, state: 'failed', word: S.states.failed },
+    { name: 'готово', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'done' }), activity: null, state: 'done', word: S.states.done },
+    { name: 'сбой', session: makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'failed' }), activity: null, state: 'failed', word: S.states.failed },
   ];
 
   for (const c of cases) {
@@ -113,6 +113,12 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
   it('девять пар (значок, слово) различны', () => {
     const pairs = new Set(cases.map((c) => `${c.state}/${c.lifecycle ?? ''}/${c.word}`));
     expect(pairs.size).toBe(9);
+  });
+
+  it('живая сессия с итогом report(done) и activity working — значок working и слово «working», не done', () => {
+    renderRow(makeSession('s-01', 'a', { result: 'done' }), { activity: 'working' });
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('working');
+    expect(row().textContent).toContain(S.states.working);
   });
 
   // Ревью M12: закрытая строка приглушена data-dimmed (styles/dimmed.css), а не opacity-50 —

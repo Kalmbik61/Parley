@@ -195,14 +195,19 @@ describe('WorkCard (тест 3)', () => {
     }
 
     it('failed бьёт idle, done — последним; pending — «не запущена»', () => {
-      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { result: 'failed' })] }));
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping', result: 'failed' })] }));
       expect(glyph()).toBe('failed');
       cleanup();
-      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { result: 'done' })] }));
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { lifecycle: 'sleeping', result: 'done' })] }));
       expect(glyph()).toBe('done');
       cleanup();
       renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { lifecycle: 'pending' })] }));
       expect(glyph()).toBe('pending');
+    });
+
+    it('живая сессия с итогом report(done) и activity working — значок working, не done', () => {
+      renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { result: 'done' })] }), { activity: activityMap([makeActivity(ref('s-01'), 'working')]) });
+      expect(glyph()).toBe('working');
     });
 
     it('закрытые сессии значок не задают; без живых — пустое место 12px', () => {

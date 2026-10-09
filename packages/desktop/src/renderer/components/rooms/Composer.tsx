@@ -1,7 +1,7 @@
 /**
  * Поле ввода комнаты (спека окна 2026-09-29, 1.3, 2.2, 2.3): `contentEditable` с упоминаниями `@`.
  * Подпись над полем — `To everyone` или `To S02, S03` по чипам; Enter отправляет, Shift+Enter —
- * перенос, пустое не уходит, вставка — только текст. Адресаты — упомянутые сессии; без упоминаний
+ * перенос, пустое не уходит, вставка — только текст (скриншот без текста в буфере — вложение). Адресаты — упомянутые сессии; без упоминаний
  * `to: []`, то есть всем (2.2). Текст уходит с токенами `@s02`.
  *
  * Черновик — на комнату (`draftKey`), в сторе окна (`store/ui.ts#composerDrafts`): тело вкладки при
@@ -15,7 +15,7 @@
  * Вставка и перетаскивание берут только `text/plain`: выделение из ленты приносит HTML с `data-mention`, а
  * читатель поля считает чипом любой такой узел; чипы рождает только меню упоминаний.
  *
- * Вложения (скрепка — системный выбор файлов, файлы, брошенные на вкладку комнаты, — `RoomPanel`) стоят чипами над полем и
+ * Вложения (скрепка — системный выбор файлов, скриншот из буфера (⌘V), файлы, брошенные на вкладку комнаты, — `RoomPanel`) стоят чипами над полем и
  * хранятся рядом с черновиком (`composerAttachments`); при отправке их пути уходят в конец текста списком
  * (`attachments.ts`). Сообщение из одних вложений тоже уходит. Файлы, брошенные на само поле, оно не берёт текстом:
  * бросок поднимается к вкладке и становится вложением.
@@ -32,9 +32,11 @@ import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S } from '../../../shared/strings.js';
 import { AttachmentChip } from '../../chat/AttachmentChip.js';
 import { addAttachments } from '../../chat/attachments.js';
+import { pasteClipboardImage } from '../../chat/paste-image.js';
+import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
-import { dragHasFiles } from '../../terminal/drop.js';
+import { dragHasFiles, pasteHasOnlyImage } from '../../terminal/drop.js';
 import { Button } from '../../ui/button.js';
 import { MicButton } from '../../voice/MicButton.js';
 import { useEditableDictation } from '../../voice/targets.js';
@@ -156,6 +158,11 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     refresh();
   }, [draftKey, chipLabel, refresh]);
 
+  /** Поле, выросшее выше `max-height`, держит каретку и нижний отступ на виду (`keepCaretVisible`) после каждой правки. */
+  const revealCaret = (): void => {
+    if (editorRef.current !== null) keepCaretVisible(editorRef.current);
+  };
+
   const items = menu === null ? [] : filterMentions(members, menu.context.query);
   const selected = Math.min(menu?.selected ?? 0, Math.max(0, items.length - 1));
 
@@ -166,6 +173,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     dismissedRef.current = null;
     setMenu(null);
     refresh();
+    revealCaret();
   };
 
   const submit = (): void => {
@@ -223,6 +231,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     if (event.key === 'Enter' && event.shiftKey) {
       event.preventDefault();
       insertLineBreak(editor.ownerDocument);
+      revealCaret();
       return;
     }
     if (event.key === 'Enter') {
@@ -232,10 +241,20 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
   };
 
   const onPaste = (event: ClipboardEvent<HTMLDivElement>): void => {
+    // Скриншот без текста в буфере — вложение, как из скрепки; тосты отказов — в `pasteClipboardImage`.
+    if (pasteHasOnlyImage(event.clipboardData)) {
+      event.preventDefault();
+      void pasteClipboardImage(bridge).then((saved) => {
+        if (saved !== null) setAttachments(addAttachments(useUiStore.getState().composerAttachments[draftKey] ?? [], [saved]));
+      });
+      return;
+    }
     // Вставка — только текст: разметка из буфера в поле не попадает (2.2).
     event.preventDefault();
     const text = event.clipboardData.getData('text/plain');
-    if (text !== '') insertPlainText(event.currentTarget.ownerDocument, text);
+    if (text === '') return;
+    insertPlainText(event.currentTarget.ownerDocument, text);
+    revealCaret();
   };
 
   const pickFiles = (): void => {
@@ -252,7 +271,9 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     // поля считает чипом любой такой узел — в `to[]` попал бы чужой адресат. Чипы рождает только меню.
     event.preventDefault();
     const text = event.dataTransfer.getData('text/plain');
-    if (text !== '') insertDroppedText(event.currentTarget, text, { x: event.clientX, y: event.clientY });
+    if (text === '') return;
+    insertDroppedText(event.currentTarget, text, { x: event.clientX, y: event.clientY });
+    revealCaret();
   };
 
   return (
@@ -297,7 +318,10 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
             aria-label={S.rooms.messageField}
             data-room-editor=""
             contentEditable
-            onInput={refresh}
+            onInput={() => {
+              refresh();
+              revealCaret();
+            }}
             onKeyDown={onKeyDown}
             onKeyUp={refresh}
             onClick={refresh}
