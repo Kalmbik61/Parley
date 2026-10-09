@@ -66,6 +66,22 @@ const sha24 = (bytes: Buffer): string =>
   createHash('sha256').update(bytes).digest('hex').slice(0, 24);
 const inThePast = (ms: number): Date => new Date(Date.now() - ms);
 
+/** Подпись начала файла каждого типа картинок, как её ждёт хранилище. */
+const SIGNATURES = {
+  'image/png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  'image/jpeg': Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  'image/gif': Buffer.from('GIF89a', 'latin1'),
+  'image/webp': Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]),
+} as const;
+type ImageMime = keyof typeof SIGNATURES;
+
+/** Байты «картинки» заданного типа и размера: подпись типа и заполнитель; для проверок размера и имени файла. */
+function imageBytes(mime: ImageMime, size = 64, fill = 7): Buffer {
+  const bytes = Buffer.alloc(size, fill);
+  SIGNATURES[mime].copy(bytes, 0, 0, Math.min(size, SIGNATURES[mime].length));
+  return bytes;
+}
+
 let root: string;
 let dir: string;
 
@@ -162,8 +178,8 @@ describe('save', () => {
 
   it('расширение по типу: png, jpeg — jpg, webp, gif; ссылка несёт тот же тип', () => {
     const store = createFeedImageStore({ dir });
-    const saved = (mime: string): [string, string | undefined] => {
-      const ref = store.save(b64(Buffer.from(`bytes of ${mime}`)), mime);
+    const saved = (mime: ImageMime): [string, string | undefined] => {
+      const ref = store.save(b64(imageBytes(mime)), mime);
       return [path.extname(ref?.path ?? ''), ref?.mime];
     };
 
@@ -195,6 +211,66 @@ describe('save', () => {
     }
     expect(existsSync(dir)).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('байты не того типа, что назван: текст и чужие картинки под видом PNG, JPEG, GIF, WebP — null, без файла и без предупреждения', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    const mimes = Object.keys(SIGNATURES) as ImageMime[];
+
+    for (const mime of mimes) {
+      // Текст, HTML и полуподпись не годятся ни для одного типа.
+      for (const bytes of [
+        Buffer.from('<html>not an image</html>'),
+        Buffer.from('hello'),
+        SIGNATURES[mime].subarray(0, 2),
+      ]) {
+        expect(store.save(b64(bytes), mime), `${mime}: ${bytes.toString('latin1')}`).toBeNull();
+      }
+      // Настоящая картинка другого типа — тоже нет.
+      for (const other of mimes.filter((candidate) => candidate !== mime)) {
+        expect(store.save(b64(imageBytes(other)), mime), `${other} как ${mime}`).toBeNull();
+      }
+    }
+    expect(existsSync(dir)).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'PNG: 89 50 4E 47',
+      'image/png',
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      Buffer.from([0x89, 0x50, 0x4e, 0x46]),
+    ],
+    [
+      'JPEG: FF D8 FF',
+      'image/jpeg',
+      Buffer.from([0xff, 0xd8, 0xff]),
+      Buffer.from([0xff, 0xd8, 0xfe]),
+    ],
+    ['GIF: «GIF8»', 'image/gif', Buffer.from('GIF8'), Buffer.from('GIF7')],
+    [
+      'WebP: «RIFF», 4 любых байта, «WEBP»',
+      'image/webp',
+      Buffer.concat([Buffer.from('RIFF'), Buffer.from([1, 2, 3, 4]), Buffer.from('WEBP')]),
+      Buffer.concat([Buffer.from('RIFF'), Buffer.from([1, 2, 3, 4]), Buffer.from('WEBX')]),
+    ],
+  ] as const)(
+    'граница подписи — %s: ровно она годится, на байт иная — нет',
+    (_title, mime, good, bad) => {
+      const store = createFeedImageStore({ dir });
+
+      expect(store.save(b64(good), mime)?.bytes).toBe(good.length);
+      expect(store.save(b64(bad), mime)).toBeNull();
+    },
+  );
+
+  it('WebP короче двенадцати байт — null, а не чтение за концом буфера', () => {
+    const store = createFeedImageStore({ dir });
+
+    expect(store.save(b64(Buffer.from('RIFF')), 'image/webp')).toBeNull();
+    expect(store.save(b64(Buffer.from('RIFF\0\0\0\0WEB')), 'image/webp')).toBeNull();
   });
 
   it('пустые или битые данные — null, без предупреждения и без файлов', () => {
@@ -233,17 +309,17 @@ describe('save', () => {
   it('предел maxBytes: ровно предел — файл, на байт больше — null', () => {
     const store = createFeedImageStore({ dir, maxBytes: 100 });
 
-    expect(store.save(b64(Buffer.alloc(100, 1)), 'image/png')?.bytes).toBe(100);
-    expect(store.save(b64(Buffer.alloc(101, 2)), 'image/png')).toBeNull();
+    expect(store.save(b64(imageBytes('image/png', 100, 1)), 'image/png')?.bytes).toBe(100);
+    expect(store.save(b64(imageBytes('image/png', 101, 2)), 'image/png')).toBeNull();
     expect(readdirSync(dir)).toHaveLength(1);
   });
 
   it('по умолчанию предел — FEED_IMAGE_MAX_BYTES: 21 МиБ — null, ровно 20 МиБ — файл', () => {
     const store = createFeedImageStore({ dir });
 
-    expect(store.save(b64(Buffer.alloc(21 * MIB, 3)), 'image/png')).toBeNull();
+    expect(store.save(b64(imageBytes('image/png', 21 * MIB, 3)), 'image/png')).toBeNull();
     expect(existsSync(dir)).toBe(false);
-    const ref = store.save(b64(Buffer.alloc(FEED_IMAGE_MAX_BYTES, 4)), 'image/png');
+    const ref = store.save(b64(imageBytes('image/png', FEED_IMAGE_MAX_BYTES, 4)), 'image/png');
     expect(ref?.bytes).toBe(FEED_IMAGE_MAX_BYTES);
     expect(statSync(ref?.path ?? '').size).toBe(FEED_IMAGE_MAX_BYTES);
   });

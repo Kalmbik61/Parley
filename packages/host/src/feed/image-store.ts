@@ -10,9 +10,10 @@
  * временный и переименовывается: оборванная запись не оставит обрезанную картинку под настоящим именем, а
  * сорвавшаяся не оставит и временного файла.
  *
- * Наружу ничего не бросается. Нельзя взять картинку (неизвестный тип, пустые, битые или слишком большие
- * данные) — `null` молча. Ошибка файловой системы — `null` и строка `console.warn` с кодом ошибки, без
- * данных, по одной на код: постоянный отказ (диск полон, нет прав) не печатает строку на каждую картинку.
+ * Наружу ничего не бросается. Нельзя взять картинку (неизвестный тип, байты не того типа, что назван, пустые,
+ * битые или слишком большие данные) — `null` молча. Ошибка файловой системы — `null` и строка `console.warn`
+ * с кодом ошибки, без данных, по одной на код: постоянный отказ (диск полон, нет прав) не печатает строку на
+ * каждую картинку.
  */
 
 import { createHash } from 'node:crypto';
@@ -40,6 +41,22 @@ const EXTENSIONS: ReadonlyMap<string, string> = new Map([
   ['image/jpeg', 'jpg'],
   ['image/webp', 'webp'],
   ['image/gif', 'gif'],
+]);
+/** Байты с `offset` начинаются с `text` (по одному байту на знак); короткий буфер — нет, а не чтение за его концом. */
+const startsWith = (bytes: Buffer, offset: number, text: string): boolean =>
+  bytes.toString('latin1', offset, offset + text.length) === text;
+
+/**
+ * Подпись начала файла каждого типа: байты после декодирования обязаны с неё начинаться. Тип приходит из чужого
+ * результата, а имя файла получает расширение по нему, поэтому без подписи под `<hash>.png` лёг бы любой текст,
+ * а окно потом отдало бы его системе как картинку.
+ */
+const SIGNATURES: ReadonlyMap<string, (bytes: Buffer) => boolean> = new Map([
+  ['image/png', (bytes) => startsWith(bytes, 0, '\x89PNG')],
+  ['image/jpeg', (bytes) => startsWith(bytes, 0, '\xff\xd8\xff')],
+  ['image/gif', (bytes) => startsWith(bytes, 0, 'GIF8')],
+  // «RIFF», четыре байта размера, «WEBP».
+  ['image/webp', (bytes) => startsWith(bytes, 0, 'RIFF') && startsWith(bytes, 8, 'WEBP')],
 ]);
 /** Расширение временного файла записи. */
 const TEMP_EXTENSION = 'tmp';
@@ -136,7 +153,7 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
       if (extension === undefined) return null;
       try {
         const bytes = decode(base64, maxBytes);
-        if (bytes === null) return null;
+        if (bytes === null || SIGNATURES.get(mime)?.(bytes) !== true) return null;
         const name = createHash('sha256').update(bytes).digest('hex').slice(0, NAME_HEX_LENGTH);
         const file = path.join(dir, `${name}.${extension}`);
         if (existsSync(file)) refresh(file);
