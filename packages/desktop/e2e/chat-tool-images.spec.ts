@@ -256,6 +256,35 @@ function makeShot(
   ]);
 }
 
+/**
+ * PNG, который лишь объявляет размер: структурно настоящий (подпись, IHDR с CRC, IEND), но пикселей нет — файл в
+ * сотню байт. Так выглядит «бомба»: декодер выделил бы ширина × высота × 4 байта.
+ */
+function declaredPng(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/** JPEG с JFIF и кадром SOF0 на `width`×`height`, без данных. */
+function declaredJpeg(width: number, height: number): Buffer {
+  const frame = Buffer.alloc(19);
+  frame.set([0xff, 0xc0], 0);
+  frame.writeUInt16BE(17, 2);
+  frame[4] = 8;
+  frame.writeUInt16BE(height, 5);
+  frame.writeUInt16BE(width, 7);
+  frame.set([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1], 9);
+  const jfif = [0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+  return Buffer.concat([Buffer.from([0xff, 0xd8, ...jfif]), frame, Buffer.from([0xff, 0xd9])]);
+}
+
 /** Блок картинки результата так, как его отдаёт Claude Code хуку `PostToolUse` для MCP-инструмента. */
 const imageBlock = (png: Buffer): Record<string, unknown> => ({
   type: 'image',
@@ -825,5 +854,43 @@ test.describe('скриншоты из результатов инструмен
           .toBeCloseTo(source.width / source.height, 1);
       }
     }
+  });
+
+  /**
+   * Бомба: крошечный файл объявляет в заголовке картинку, которую декодер main выделил бы гигабайтами (PNG 20000×20000,
+   * JPEG 65535×65535, сторона за 16 384). Настоящий main отвечает `null` — и на миниатюру, и на просмотр — и остаётся живым:
+   * следующий запрос за обычной картинкой получает ответ.
+   */
+  test('main не декодирует картинку с огромным размером в заголовке и остаётся живым', async () => {
+    const bombs = [
+      { file: 'bomb.png', bytes: declaredPng(20000, 20000) },
+      { file: 'bomb-wide.png', bytes: declaredPng(16385, 16) },
+      { file: 'bomb.jpg', bytes: declaredJpeg(65535, 65535) },
+    ];
+    for (const { file, bytes } of bombs) {
+      expect(bytes.length, file).toBeLessThan(300);
+      await writeFile(path.join(project, file), bytes);
+    }
+    await writeFile(path.join(project, 'small.png'), makeShot(64, 40, 1));
+    const app = await electron.launch({
+      args: [mainEntry],
+      env: { ...process.env, PARLEY_HOME: home },
+    });
+    running = app;
+    const window = await app.firstWindow();
+    await expect(window.getByTestId('landing')).toBeVisible();
+    for (const { file } of bombs) {
+      for (const maxPx of [undefined, 1600]) {
+        const answer = await window.evaluate(
+          ({ target, px }) =>
+            (globalThis as unknown as Parley).parley.app.imageThumbnail(target, px),
+          { target: path.join(project, file), px: maxPx },
+        );
+        expect(answer, `${file}, сторона ${maxPx ?? 'по умолчанию'}`).toBeNull();
+      }
+    }
+    expect(await thumbnailOf(window, path.join(project, 'small.png'))).toMatch(
+      /^data:image\/png;base64,/,
+    );
   });
 });

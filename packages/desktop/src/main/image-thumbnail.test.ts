@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +45,7 @@ function deps(patch: Partial<ThumbnailDeps> = {}): ThumbnailDeps & {
   createFromPath: ReturnType<typeof vi.fn>;
 } {
   return {
-    // Системная миниатюра квадратного ящика растягивает в него картинку: для читаемых картинок её не просят.
+    // Системная миниатюра квадратного ящика растягивает в него картинку: для PNG и JPEG её не просят.
     createThumbnailFromPath: vi.fn().mockResolvedValue(fakeImage({ width: 320, height: 320 }, 'system')),
     createFromPath: vi.fn().mockReturnValue(fakeImage({ width: 100, height: 100 }, 'read')),
     ...patch,
@@ -58,7 +58,60 @@ async function file(name: string, content: string | Buffer = 'x'): Promise<strin
   return target;
 }
 
-// Заголовки GIF и WebP, как их пишут кодировщики (проверено на файлах `sips` и `cwebp`): тесту нужны только они.
+// Заголовки форматов, как их пишут кодировщики (проверено на файлах `sips`, `cwebp` и настоящем E2E): тесту нужны
+// только они — сами пиксели никто не декодирует, `nativeImage` подставной.
+function pngHeader(width: number, height: number): Buffer {
+  const head = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(head, 0);
+  head.writeUInt32BE(13, 8);
+  head.write('IHDR', 12, 'latin1');
+  head.writeUInt32BE(width, 16);
+  head.writeUInt32BE(height, 20);
+  head.set([8, 2], 24); // 8 бит, RGB
+  return head;
+}
+
+interface JpegOptions {
+  /** Сколько байт занять сегментами APP2 (профиль цвета) до кадра. */
+  padding?: number;
+  /** Сколько байт-заполнителей `FF` поставить перед маркером кадра. */
+  fill?: number;
+  progressive?: boolean;
+  /** Положить в EXIF (APP1) встроенную миниатюру с таким кадром — со своим SOI. */
+  embedded?: { width: number; height: number };
+}
+
+function jpegHeader(width: number, height: number, options: JpegOptions = {}): Buffer {
+  const parts: Buffer[] = [Buffer.from([0xff, 0xd8])];
+  if (options.embedded !== undefined) {
+    const inner = jpegHeader(options.embedded.width, options.embedded.height);
+    const app1 = Buffer.alloc(4 + inner.length);
+    app1.set([0xff, 0xe1], 0);
+    app1.writeUInt16BE(inner.length + 2, 2);
+    inner.copy(app1, 4);
+    parts.push(app1);
+  }
+  let rest = options.padding ?? 0;
+  while (rest > 0) {
+    const body = Math.min(rest, 65533);
+    const app2 = Buffer.alloc(4 + body, 0x41);
+    app2.set([0xff, 0xe2], 0);
+    app2.writeUInt16BE(body + 2, 2);
+    parts.push(app2);
+    rest -= body;
+  }
+  if ((options.fill ?? 0) > 0) parts.push(Buffer.alloc(options.fill ?? 0, 0xff));
+  const frame = Buffer.alloc(19);
+  frame.set([0xff, options.progressive === true ? 0xc2 : 0xc0], 0);
+  frame.writeUInt16BE(17, 2);
+  frame[4] = 8;
+  frame.writeUInt16BE(height, 5);
+  frame.writeUInt16BE(width, 7);
+  frame[9] = 3;
+  parts.push(frame);
+  return Buffer.concat(parts);
+}
+
 function gifHeader(width: number, height: number): Buffer {
   const head = Buffer.alloc(13);
   head.write('GIF89a', 0, 'ascii');
@@ -101,11 +154,11 @@ describe('imageThumbnail — отказы без чтения картинки',
     expect(d.createFromPath).not.toHaveBeenCalled();
   });
 
-  it('расширение не из списка картинок — null, хотя файл есть', async () => {
+  it('расширение не из списка картинок — null, хотя файл настоящая картинка', async () => {
     const d = deps();
-    expect(await imageThumbnail(await file('notes.txt'), d)).toBeNull();
-    expect(await imageThumbnail(await file('doc.pdf'), d)).toBeNull();
-    expect(await imageThumbnail(await file('logo.svg'), d)).toBeNull();
+    expect(await imageThumbnail(await file('notes.txt', pngHeader(10, 10)), d)).toBeNull();
+    expect(await imageThumbnail(await file('doc.pdf', pngHeader(10, 10)), d)).toBeNull();
+    expect(await imageThumbnail(await file('logo.svg', pngHeader(10, 10)), d)).toBeNull();
     expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
     expect(d.createFromPath).not.toHaveBeenCalled();
   });
@@ -132,35 +185,39 @@ describe('imageThumbnail — отказы без чтения картинки',
 
   it('больше 20 МБ — null, ровно 20 МБ — читается', async () => {
     const d = deps();
-    const big = await file('big.png');
+    const big = await file('big.png', pngHeader(1280, 800));
     await truncate(big, MAX_DROP_IMAGE_BYTES + 1);
     expect(await imageThumbnail(big, d)).toBeNull();
     expect(d.createFromPath).not.toHaveBeenCalled();
 
-    const edge = await file('edge.png');
+    const edge = await file('edge.png', pngHeader(1280, 800));
     await truncate(edge, MAX_DROP_IMAGE_BYTES);
     expect(await imageThumbnail(edge, d)).toBe('data:image/png;base64,read');
   });
 });
 
 describe('imageThumbnail — миниатюра', () => {
-  it('картинку, которую Electron читает сам (PNG, JPEG), читаем сами и уменьшаем; системную миниатюру не просим', async () => {
+  it('PNG и JPEG, которые Electron читает сам, читаем сами и уменьшаем; системную миниатюру не просим', async () => {
     const d = deps();
-    const png = await file('a b.PNG');
+    const png = await file('a b.PNG', pngHeader(1280, 800));
     expect(await imageThumbnail(png, d)).toBe('data:image/png;base64,read');
-    expect(d.createFromPath).toHaveBeenCalledWith(png);
+    expect(d.createFromPath).toHaveBeenLastCalledWith(png);
+
+    const jpeg = await file('photo.jpeg', jpegHeader(1280, 800));
+    expect(await imageThumbnail(jpeg, d)).toBe('data:image/png;base64,read');
+    expect(d.createFromPath).toHaveBeenLastCalledWith(jpeg);
     expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
   });
 
   it('ссылка на картинку читается как сама картинка', async () => {
-    const real = await file('real.png');
+    const real = await file('real.png', pngHeader(100, 100));
     const link = path.join(dir, 'link.jpg');
     await symlink(real, link);
     expect(await imageThumbnail(link, deps())).toBe('data:image/png;base64,read');
   });
 
   it('мелкая картинка не растягивается', async () => {
-    const png = await file('small.png');
+    const png = await file('small.png', pngHeader(64, 48));
     const d = deps();
     const small = fakeImage({ width: 64, height: 48 });
     d.createFromPath.mockReturnValue(small);
@@ -168,11 +225,12 @@ describe('imageThumbnail — миниатюра', () => {
     expect(small.resizes).toEqual([]);
   });
 
-  it('картинка не прочиталась (пустая и не GIF/WebP) или чтение упало — null', async () => {
-    const png = await file('broken.jpeg', 'not an image');
+  it('Electron не смог декодировать (пустая картинка) или чтение упало — null: у PNG и JPEG системной миниатюры нет', async () => {
+    const png = await file('broken.jpeg', pngHeader(640, 480));
     const empty = deps();
     empty.createFromPath.mockReturnValue(fakeImage(EMPTY));
     expect(await imageThumbnail(png, empty)).toBeNull();
+    expect(empty.createThumbnailFromPath).not.toHaveBeenCalled();
 
     const throwing = deps();
     throwing.createFromPath.mockImplementation(() => {
@@ -181,11 +239,40 @@ describe('imageThumbnail — миниатюра', () => {
     expect(await imageThumbnail(png, throwing)).toBeNull();
     expect(throwing.createThumbnailFromPath).not.toHaveBeenCalled();
   });
+
+  it('не картинка по содержимому (текст, SVG, обрезанная подпись) под именем картинки — null, к Electron никто не обращался', async () => {
+    const d = deps();
+    const contents: Array<[string, Buffer | string]> = [
+      ['text.png', 'not an image at all'],
+      ['svg.png', '<svg xmlns="http://www.w3.org/2000/svg"/>'],
+      ['half.png', pngHeader(10, 10).subarray(0, 12)],
+      ['bare.jpg', Buffer.from([0xff, 0xd8])],
+      ['empty.gif', ''],
+    ];
+    for (const [name, content] of contents) {
+      expect(await imageThumbnail(await file(name, content), d), name).toBeNull();
+    }
+    expect(d.createFromPath).not.toHaveBeenCalled();
+    expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
+  });
+
+  it('формат — по заголовку, а не по расширению: WebP под именем .png уходит системе, PNG под именем .gif декодируется сам', async () => {
+    const d = deps();
+    d.createThumbnailFromPath.mockImplementation(async (_file: string, box: { width: number; height: number }) =>
+      fakeImage(box, `system-${box.width}x${box.height}`),
+    );
+
+    expect(await imageThumbnail(await file('really-webp.png', webpHeader('lossy', 1280, 800)), d)).toBe('data:image/png;base64,system-320x200');
+    expect(d.createFromPath).not.toHaveBeenCalled();
+
+    expect(await imageThumbnail(await file('really-png.gif', pngHeader(1280, 800)), d)).toBe('data:image/png;base64,read');
+    expect(d.createFromPath).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('imageThumbnail — пропорции (macOS отдавал квадрат с картинкой, растянутой в него)', () => {
   it('широкий скриншот 1280×800: по умолчанию 320×200, на 1600 — как есть, вверх не растягивается', async () => {
-    const png = await file('wide.png');
+    const png = await file('wide.png', pngHeader(1280, 800));
     const d = deps();
     d.createFromPath.mockImplementation(() => fakeImage({ width: 1280, height: 800 }));
 
@@ -195,7 +282,7 @@ describe('imageThumbnail — пропорции (macOS отдавал квадр
   });
 
   it('исходник больше запрошенной стороны: 3200×2000 → 320×200 по умолчанию и 1600×1000 на 1600', async () => {
-    const png = await file('huge.png');
+    const png = await file('huge.png', pngHeader(3200, 2000));
     const d = deps();
     d.createFromPath.mockImplementation(() => fakeImage({ width: 3200, height: 2000 }));
 
@@ -204,7 +291,7 @@ describe('imageThumbnail — пропорции (macOS отдавал квадр
   });
 
   it('высокая 400×800 уменьшается по высоте (длинной стороне): 160×320; квадрат 512×512 остаётся квадратом', async () => {
-    const png = await file('tall.png');
+    const png = await file('tall.png', pngHeader(400, 800));
     const d = deps();
     const tall = fakeImage({ width: 400, height: 800 });
     d.createFromPath.mockReturnValueOnce(tall);
@@ -216,7 +303,7 @@ describe('imageThumbnail — пропорции (macOS отдавал квадр
   });
 
   it('уменьшение называет только длинную сторону: короткую Electron считает сам, пропорции не ломаются', async () => {
-    const png = await file('both.jpg');
+    const png = await file('both.jpg', jpegHeader(1366, 768));
     const d = deps();
     const wide = fakeImage({ width: 1366, height: 768 });
     d.createFromPath.mockReturnValue(wide);
@@ -225,11 +312,10 @@ describe('imageThumbnail — пропорции (macOS отдавал квадр
   });
 });
 
-describe('imageThumbnail — GIF и WebP (Electron их сам не читает: createFromPath пуст)', () => {
-  /** Электрон не читает файл сам, зато пустую картинку на создание отдаёт без исключения. */
-  function unreadable(): ReturnType<typeof deps> {
+describe('imageThumbnail — GIF и WebP (Electron их сам не читает)', () => {
+  /** Системная миниатюра отдаёт ящик, который ей назвали; Electron GIF и WebP сам не декодирует и не вызывается. */
+  function system(): ReturnType<typeof deps> {
     const d = deps();
-    d.createFromPath.mockImplementation(() => fakeImage(EMPTY));
     d.createThumbnailFromPath.mockImplementation(async (_file: string, box: { width: number; height: number }) =>
       fakeImage(box, `system-${box.width}x${box.height}`),
     );
@@ -244,7 +330,7 @@ describe('imageThumbnail — GIF и WebP (Electron их сам не читает
   ];
 
   it.each(SAMPLES)('%s: размер берётся из заголовка, системную миниатюру просят ящиком тех же пропорций', async (name, header) => {
-    const d = unreadable();
+    const d = system();
     const wide = await file(name, header(1280, 800));
     expect(await imageThumbnail(wide, d)).toBe('data:image/png;base64,system-320x200');
     expect(d.createThumbnailFromPath).toHaveBeenLastCalledWith(wide, { width: 320, height: 200 });
@@ -264,10 +350,13 @@ describe('imageThumbnail — GIF и WebP (Electron их сам не читает
     const small = await file(name, header(40, 30));
     await imageThumbnail(small, d);
     expect(d.createThumbnailFromPath).toHaveBeenLastCalledWith(small, { width: 40, height: 30 });
+
+    // Electron GIF и WebP не читает: его декодер ни разу не звали.
+    expect(d.createFromPath).not.toHaveBeenCalled();
   });
 
   it('WebP шириной и высотой до 16384 px (14 бит в VP8, 24 бита в VP8X) читается без искажений', async () => {
-    const d = unreadable();
+    const d = system();
     const lossless = await file('max.webp', webpHeader('lossless', 16384, 100));
     await imageThumbnail(lossless, d);
     expect(d.createThumbnailFromPath).toHaveBeenLastCalledWith(lossless, { width: 320, height: 2 });
@@ -281,7 +370,7 @@ describe('imageThumbnail — GIF и WebP (Electron их сам не читает
   });
 
   it('заголовок не разобрать (мусор, обрезан, нулевой размер, чужой формат) — null, системную миниатюру не просят', async () => {
-    const d = unreadable();
+    const d = system();
     const truncated = webpHeader('lossy', 1280, 800).subarray(0, 24);
     const riffOfSomethingElse = webpHeader('lossy', 1280, 800);
     riffOfSomethingElse.write('AVI ', 8, 'ascii');
@@ -299,7 +388,6 @@ describe('imageThumbnail — GIF и WebP (Electron их сам не читает
       ['chunk.webp', unknownChunk],
       ['start-code.webp', badStartCode],
       ['zero.webp', webpHeader('lossy', 0, 800)],
-      ['png-as.gif', Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')],
     ];
     for (const [name, content] of bad) {
       expect(await imageThumbnail(await file(name, content), d), name).toBeNull();
@@ -311,28 +399,27 @@ describe('imageThumbnail — GIF и WebP (Electron их сам не читает
     const wide = await file('wide.gif', gifHeader(1280, 800));
 
     const missing = deps({ createThumbnailFromPath: undefined as never });
-    missing.createFromPath.mockReturnValue(fakeImage(EMPTY));
     expect(await imageThumbnail(wide, missing)).toBeNull();
 
     const rejected = deps({ createThumbnailFromPath: vi.fn().mockRejectedValue(new Error('no thumbnail')) });
-    rejected.createFromPath.mockReturnValue(fakeImage(EMPTY));
     expect(await imageThumbnail(wide, rejected)).toBeNull();
 
     const empty = deps({ createThumbnailFromPath: vi.fn().mockResolvedValue(fakeImage(EMPTY)) });
-    empty.createFromPath.mockReturnValue(fakeImage(EMPTY));
     expect(await imageThumbnail(wide, empty)).toBeNull();
   });
 
-  it('PNG, который Electron не прочёл, GIF/WebP-путь не подхватывает: заголовок чужой — null', async () => {
-    const d = unreadable();
-    expect(await imageThumbnail(await file('odd.png', 'junk'), d)).toBeNull();
-    expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
+  it('предел пикселей для декодирования в main их не касается: систему вне процесса просят ящиком по стороне, как обычно', async () => {
+    const d = system();
+    const wide = await file('panorama.gif', gifHeader(20000, 20000));
+
+    expect(await imageThumbnail(wide, d)).toBe('data:image/png;base64,system-320x320');
+    expect(d.createFromPath).not.toHaveBeenCalled();
   });
 });
 
 describe('imageThumbnail — размер по запросу (просмотр картинки из результата инструмента просит 1600)', () => {
   it('сторона — длинная: 5000×3000 на 64 → 64×38, по умолчанию 320×192, на 1600 → 1600×960, на 2048 → 2048×1229', async () => {
-    const png = await file('shot.png');
+    const png = await file('shot.png', pngHeader(5000, 3000));
     const d = deps();
     d.createFromPath.mockImplementation(() => fakeImage({ width: 5000, height: 3000 }));
     const sizes: string[] = [];
@@ -341,7 +428,7 @@ describe('imageThumbnail — размер по запросу (просмотр 
   });
 
   it('чужое значение (окну не доверяем) — 320: 99999, за границами, дробное, NaN, не число', async () => {
-    const png = await file('bad.png');
+    const png = await file('bad.png', pngHeader(5000, 3000));
     const d = deps();
     d.createFromPath.mockImplementation(() => fakeImage({ width: 5000, height: 3000 }));
     const bad = [99999, 2049, 63, 0, -1, 320.5, Number.NaN, Number.POSITIVE_INFINITY, '1600', null, {}, [1600], true];
@@ -351,7 +438,6 @@ describe('imageThumbnail — размер по запросу (просмотр 
   it('GIF/WebP: запрошенная сторона тоже проверяется — чужое значение читается как 320', async () => {
     const wide = await file('wide.webp', webpHeader('lossy', 5000, 3000));
     const d = deps();
-    d.createFromPath.mockReturnValue(fakeImage(EMPTY));
     for (const value of [99999, 63, 320.5, Number.NaN, '1600', {}]) await imageThumbnail(wide, d, value);
     for (const call of d.createThumbnailFromPath.mock.calls) expect(call[1]).toEqual({ width: 320, height: 192 });
     expect(d.createThumbnailFromPath).toHaveBeenCalledTimes(6);
@@ -359,11 +445,123 @@ describe('imageThumbnail — размер по запросу (просмотр 
 
   it('предел файла прежний и при большом размере: 20 МБ + 1 байт — null, расширение не из списка — null', async () => {
     const d = deps();
-    const big = await file('huge.png');
+    const big = await file('huge.png', pngHeader(1280, 800));
     await truncate(big, MAX_DROP_IMAGE_BYTES + 1);
     expect(await imageThumbnail(big, d, 2048)).toBeNull();
-    expect(await imageThumbnail(await file('notes.txt'), d, 2048)).toBeNull();
+    expect(await imageThumbnail(await file('notes.txt', pngHeader(10, 10)), d, 2048)).toBeNull();
     expect(d.createFromPath).not.toHaveBeenCalled();
     expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
+  });
+});
+
+describe('imageThumbnail — бомба: крошечный файл с огромным размером в заголовке не декодируется', () => {
+  const crafted: Array<[string, () => Buffer]> = [
+    ['PNG 20000×20000 (400 Мпикс)', () => pngHeader(20000, 20000)],
+    ['PNG 60000×60000', () => pngHeader(60000, 60000)],
+    ['PNG 16385×10 (сторона за пределом)', () => pngHeader(16385, 10)],
+    ['PNG 10×16385', () => pngHeader(10, 16385)],
+    ['JPEG 65535×65535', () => jpegHeader(65535, 65535)],
+    ['JPEG 16385×100', () => jpegHeader(16385, 100)],
+    ['JPEG 100×16385', () => jpegHeader(100, 16385)],
+    ['JPEG 20000×20000 после 200 КБ профиля цвета', () => jpegHeader(20000, 20000, { padding: 200_000 })],
+  ];
+
+  it.each(crafted)('%s — null и на миниатюру, и на просмотр; декодер не звали', async (_title, make) => {
+    const d = deps();
+    const bomb = await file('bomb.png', make());
+    // Мал: заголовок и немного сверху, а не картинка в сотни мегапикселей.
+    expect((await stat(bomb)).size).toBeLessThan(300_000);
+
+    expect(await imageThumbnail(bomb, d)).toBeNull();
+    expect(await imageThumbnail(bomb, d, 1600)).toBeNull();
+    expect(await imageThumbnail(bomb, d, 2048)).toBeNull();
+    expect(d.createFromPath).not.toHaveBeenCalled();
+    expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
+  });
+
+  it('граница по числу пикселей: 50 000 000 ровно — читается, на пиксель-столбец больше — нет; сторона 16384 читается', async () => {
+    const d = deps();
+    const allowed: Array<[string, Buffer]> = [
+      ['exact-png.png', pngHeader(8000, 6250)],
+      ['exact-jpeg.jpg', jpegHeader(8000, 6250)],
+      ['side-png.png', pngHeader(16384, 3000)],
+      ['side-jpeg.jpg', jpegHeader(3000, 16384)],
+    ];
+    for (const [name, content] of allowed) {
+      expect(await imageThumbnail(await file(name, content), d), name).toBe('data:image/png;base64,read');
+    }
+    expect(d.createFromPath).toHaveBeenCalledTimes(allowed.length);
+
+    d.createFromPath.mockClear();
+    for (const [name, content] of [
+      ['over-png.png', pngHeader(8001, 6250)],
+      ['over-jpeg.jpg', jpegHeader(7000, 7143)],
+      ['wide-png.png', pngHeader(16385, 1)],
+    ] as Array<[string, Buffer]>) {
+      expect(await imageThumbnail(await file(name, content), d), name).toBeNull();
+    }
+    expect(d.createFromPath).not.toHaveBeenCalled();
+  });
+
+  it('размер из заголовка не прочесть — PNG и JPEG не декодируются: что нельзя проверить, не читается', async () => {
+    const d = deps();
+    const noIhdr = pngHeader(100, 100);
+    noIhdr.write('IDAT', 12, 'latin1');
+    const afterData = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from([0xff, 0xda, 0x00, 0x04, 0x00, 0x00]), jpegHeader(100, 100).subarray(2)]);
+    const endedEarly = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const truncatedBeforeFrame = jpegHeader(100, 100).subarray(0, 8);
+    const noLength = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00, 0x01, 0x02]);
+    const manySegments = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      ...Array.from({ length: 300 }, () => Buffer.from([0xff, 0xe0, 0x00, 0x02])),
+      jpegHeader(100, 100).subarray(2),
+    ]);
+    const cases: Array<[string, Buffer]> = [
+      ['PNG без IHDR первым блоком', noIhdr],
+      ['PNG: IHDR обрезан', pngHeader(100, 100).subarray(0, 20)],
+      ['PNG с нулевой шириной', pngHeader(0, 100)],
+      ['JPEG: данные раньше кадра (SOS)', afterData],
+      ['JPEG: конец изображения раньше кадра', endedEarly],
+      ['JPEG обрезан до кадра', truncatedBeforeFrame],
+      ['JPEG: сегмент с длиной меньше двух', noLength],
+      ['JPEG: сегментов больше 256 до кадра', manySegments],
+      ['JPEG с нулевой высотой', jpegHeader(100, 0)],
+    ];
+    for (const [name, content] of cases) {
+      expect(await imageThumbnail(await file(`${name.replace(/\W+/g, '-')}.jpg`, content), d), name).toBeNull();
+    }
+    expect(d.createFromPath).not.toHaveBeenCalled();
+  });
+
+  describe('кадр JPEG ищется по сегментам', () => {
+    it.each([
+      ['после 200 КБ профиля цвета (три сегмента APP2)', { padding: 200_000 }],
+      ['прогрессивный (SOF2)', { progressive: true }],
+      ['после байтов-заполнителей FF перед маркером', { fill: 7 }],
+    ] as Array<[string, JpegOptions]>)('кадр %s найден: большая картинка отвергнута, обычная декодируется', async (_title, options) => {
+      const d = deps();
+      const big = await file('big.jpg', jpegHeader(20000, 20000, options));
+      const fine = await file('fine.jpg', jpegHeader(1920, 1080, options));
+
+      expect(await imageThumbnail(big, d)).toBeNull();
+      expect(d.createFromPath).not.toHaveBeenCalled();
+      expect(await imageThumbnail(fine, d)).toBe('data:image/png;base64,read');
+      expect(d.createFromPath).toHaveBeenCalledWith(fine);
+    });
+
+    it('встроенная в EXIF миниатюра маленькая, а кадр самой картинки огромный — отвергается: чужой кадр внутри сегмента не в счёт', async () => {
+      const d = deps();
+      const bomb = await file('exif-bomb.jpg', jpegHeader(30000, 30000, { embedded: { width: 160, height: 120 } }));
+
+      expect(await imageThumbnail(bomb, d)).toBeNull();
+      expect(d.createFromPath).not.toHaveBeenCalled();
+    });
+
+    it('встроенная миниатюра огромна, а кадр самой картинки обычный — идёт кадр картинки', async () => {
+      const d = deps();
+      const fine = await file('exif-fine.jpg', jpegHeader(1920, 1080, { embedded: { width: 60000, height: 60000 } }));
+
+      expect(await imageThumbnail(fine, d)).toBe('data:image/png;base64,read');
+    });
   });
 });
