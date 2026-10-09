@@ -6,6 +6,14 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
+  what the change must reach and what it could break for users; it marks a deliberate shortcut with a
+  `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
+  a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
+  launch; a copy you edited is left alone.
+
 ## 0.11.0
 
 Screenshots an agent takes — with Chrome DevTools MCP, Claude in Chrome or Playwright, or an image it reads — now show in Chat as thumbnails under the call, and a click opens them larger. A live agent that has reported "done" no longer looks finished.
