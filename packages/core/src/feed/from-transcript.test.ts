@@ -431,6 +431,60 @@ describe('feedFromTranscript: картинки результата инстру
     expect('images' in (tool.response ?? {})).toBe(false);
   });
 
+  it('Read: в toolUseResult картинка выброшена (пустая), в content — настоящая ссылка: берётся content', () => {
+    const emptied = { type: 'image', parleyImageOmitted: true };
+    const tool = toolOf([toolUse('t1', 'Read'), result('t1', [shot(1)], emptied)]);
+
+    expect(tool.response?.text).toBe('[image png, 123 KB]');
+    expect(tool.response?.images).toEqual([ref(1)]);
+  });
+
+  it('ссылка в toolUseResult, а в content картинка выброшена: берётся toolUseResult; выброшена и там и там — пометка', () => {
+    const omitted = { type: 'image', parleyImageOmitted: true };
+
+    const linked = toolOf([toolUse('t1', 'Read'), result('t1', [omitted], shot(1))]);
+    expect(linked.response?.text).toBe('[image png, 123 KB]');
+    expect(linked.response?.images).toEqual([ref(1)]);
+
+    const none = toolOf([toolUse('t1', 'Read'), result('t1', [omitted], omitted)]);
+    expect(none.response?.text).toBe('[image omitted]');
+    expect('images' in (none.response ?? {})).toBe(false);
+
+    // Ссылки в обеих половинах: как и раньше, первой идёт toolUseResult.
+    const both = toolOf([toolUse('t1', 'Read'), result('t1', [shot(2)], [shot(1)])]);
+    expect(both.response?.images).toEqual([ref(1)]);
+  });
+
+  it('настоящая форма записи Read у Claude Code 2.1.28x: file.base64 пуст, байты только в content — через stashFeedImages ссылка одна, [image omitted] нет', () => {
+    const emptied = {
+      type: 'image',
+      file: {
+        base64: '',
+        type: 'image/png',
+        originalSize: 60950,
+        dimensions: { originalWidth: 800, originalHeight: 600, displayWidth: 800, displayHeight: 600 },
+      },
+    };
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } };
+    // Как настоящее хранилище хоста: пустые данные не берёт.
+    const calls: string[] = [];
+    const save = (base64: string): FeedImageRef | null => {
+      calls.push(base64);
+      return base64 === '' ? null : ref(1);
+    };
+    const stashed = [toolUse('t1', 'Read'), result('t1', [image], emptied)].map(
+      (record) => stashFeedImages(record, save) as RawRecord,
+    );
+
+    const tool = feedFromTranscript(stashed).items.find((item): item is FeedTool => item.kind === 'tool');
+
+    // Пустая половина в хранилище не идёт дальше отказа; настоящая картинка сохранена.
+    expect([...calls].sort()).toEqual(['', PNG]);
+    expect(tool?.response?.text).toBe('[image png, 123 KB]');
+    expect(tool?.response?.images).toEqual([ref(1)]);
+    expect(JSON.stringify(tool)).not.toContain('iVBOR');
+  });
+
   it('без картинок прежний разбор: текст блоков content, если toolUseResult не объект', () => {
     const tool = toolOf([
       toolUse('t1', 'mcp__x__y'),

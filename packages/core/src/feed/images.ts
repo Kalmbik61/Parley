@@ -186,6 +186,16 @@ export function hasStashedImage(value: unknown): boolean {
 }
 
 /**
+ * Есть ли в значении блок-картинка с настоящей ссылкой, годной для ленты (та же проверка, что у сводки):
+ * сам объект или элемент массива. Пометка «выброшена» не в счёт — этим `hasStashedImage` и отличается.
+ */
+export function hasImageRef(value: unknown): boolean {
+  const linked = (block: unknown): boolean =>
+    isStashedImage(block) && refOf(block['parleyImage']) !== null;
+  return Array.isArray(value) ? value.some(linked) : linked(value);
+}
+
+/**
  * Годная ссылка из `parleyImage`: путь и тип в пределах схемы протокола; кривая — `null`, ссылка
  * пересобрана без лишних полей.
  */

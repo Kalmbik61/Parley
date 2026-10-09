@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { stashFeedImages, summarizeImageBlocks } from './images.js';
+import { hasImageRef, hasStashedImage, stashFeedImages, summarizeImageBlocks } from './images.js';
 import { applyHookEvent, emptyFeedState } from './reduce.js';
 import {
   FEED_IMAGE_MAX_BYTES,
@@ -513,6 +513,41 @@ describe('summarizeImageBlocks: ссылка в границах схемы пр
       text: 'x\n[image omitted]',
       images: [],
     });
+  });
+});
+
+describe('hasImageRef: есть ли среди блоков настоящая ссылка (а не только пометка «выброшена»)', () => {
+  const linked = { type: 'image', parleyImage: ref(1) };
+  const omitted = { type: 'image', parleyImageOmitted: true };
+
+  it('блок со ссылкой — да: сам объект, элемент массива, input_image тоже', () => {
+    expect(hasImageRef(linked)).toBe(true);
+    expect(hasImageRef([{ type: 'text', text: 'x' }, linked])).toBe(true);
+    expect(hasImageRef([{ type: 'input_image', parleyImage: ref(2) }])).toBe(true);
+  });
+
+  it('одна пометка «выброшена», кривая ссылка, необработанная картинка, текст, не блоки — нет', () => {
+    const longPath = { path: `/${'a'.repeat(FEED_IMAGE_PATH_LIMIT)}`, mime: 'image/png' };
+    const cases: unknown[] = [
+      omitted,
+      [omitted, omitted],
+      { type: 'image', parleyImage: { path: '', mime: 'image/png' } },
+      { type: 'image', parleyImage: longPath },
+      { type: 'image', parleyImage: 'not a ref' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } },
+      { type: 'text', text: 'x', parleyImage: ref(1) },
+      'text',
+      null,
+      undefined,
+      [],
+    ];
+    for (const value of cases) expect(hasImageRef(value)).toBe(false);
+  });
+
+  it('пометку «выброшена» hasStashedImage по-прежнему считает: разница только в ссылке', () => {
+    expect(hasStashedImage(omitted)).toBe(true);
+    expect(hasStashedImage([linked])).toBe(true);
+    expect(hasImageRef([omitted, linked])).toBe(true);
   });
 });
 

@@ -10,7 +10,7 @@
 import { adapterV1 } from '../adapter-v1.js';
 import type { RawRecord } from '../jsonl.js';
 import { isRecord, textOf } from '../work/events.js';
-import { hasStashedImage } from './images.js';
+import { hasImageRef, hasStashedImage } from './images.js';
 import {
   FeedDraft,
   agentByToolUse,
@@ -121,9 +121,14 @@ function onUserText(draft: FeedDraft, text: string, images: number, at: string):
 /**
  * Что идёт в сводку вызова: блоки с картинкой после `stashFeedImages` — массив или объект из
  * `toolUseResult`, а нет там — `content`; без картинок — `toolUseResult` записи, а не объект — текст
- * блоков `content` для модели.
+ * блоков `content` для модели. Картинка стоит в записи дважды, и берётся та половина, где есть настоящая
+ * ссылка: у Read в некоторых версиях Claude Code `toolUseResult.file.base64` пуст, байты лежат только в
+ * `content`, и пустая половина после хоста — пометка «выброшена». Нет ссылки нигде — пометки: сначала
+ * `toolUseResult`, потом `content`.
  */
 function responseOf(toolUseResult: unknown, content: unknown): unknown {
+  if (hasImageRef(toolUseResult)) return toolUseResult;
+  if (hasImageRef(content)) return content;
   if (hasStashedImage(toolUseResult)) return toolUseResult;
   if (hasStashedImage(content)) return content;
   return isRecord(toolUseResult) ? toolUseResult : (blocksText(content) ?? toolUseResult);
