@@ -1261,6 +1261,17 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await act(async () => {});
   }
 
+  it('длинный текст в поле: каретка в конце — поле докручено до дна вместе с нижним отступом', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    // Раскладки в jsdom нет: поле «переполнено» (600 при видимых 180), прокручено выше дна на 10px.
+    Object.defineProperty(field(), 'scrollHeight', { configurable: true, value: 600 });
+    Object.defineProperty(field(), 'clientHeight', { configurable: true, value: 180 });
+    field().scrollTop = 410;
+    type('строка\n'.repeat(30));
+    expect(field().scrollTop).toBe(420);
+  });
+
   it('вставка картинки без текста — saveDropImage, чип над полем, текст поля не меняется, браузерная вставка отменена', async () => {
     bridge.setSaveDropImage('/h/drops/a b.png');
     renderBody(makeSession('s-01', 'S01'));

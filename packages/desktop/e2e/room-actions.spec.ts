@@ -114,6 +114,42 @@ test.describe('управление комнатой из сайдбара', () 
     expect(after.messages.map((message) => message.to[0]).sort()).toEqual([...ids].sort());
   });
 
+  test('поле ввода комнаты: длинный текст вставкой — каретка и нижний отступ на виду, поле прокручено до дна (800×500)', async () => {
+    test.setTimeout(90_000);
+    const { window, workId, roomId } = await openRoom();
+    const row = window.locator(`[data-work-key="${project} ${workId}"]:not([role="tab"])`).locator(`[data-room-row="${roomId}"]`);
+    await row.getByText('Second', { exact: true }).click();
+    const field = window.getByRole('textbox', { name: 'Message', exact: true });
+    await expect(field).toBeVisible();
+    await field.click();
+    // Вставка обрабатывается самим полем (`insertPlainText` после preventDefault), буфер обмена человека тест не трогает.
+    await field.evaluate((editor) => {
+      const data = new DataTransfer();
+      data.setData('text/plain', Array.from({ length: 30 }, (_, index) => `line ${index + 1} of pasted text`).join('\n'));
+      editor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    const measured = await field.evaluate((editor) => {
+      const box = editor.getBoundingClientRect();
+      const range = window.getSelection()!.getRangeAt(0).cloneRange();
+      const rects = range.getClientRects();
+      const caret = rects.length > 0 ? rects[rects.length - 1]! : range.getBoundingClientRect();
+      return {
+        overflows: editor.scrollHeight > editor.clientHeight,
+        caretTop: caret.top - box.top,
+        caretBottom: caret.bottom - box.top,
+        clientHeight: editor.clientHeight,
+        fromBottom: editor.scrollHeight - editor.clientHeight - editor.scrollTop,
+        padding: Number.parseFloat(getComputedStyle(editor).paddingBottom),
+      };
+    });
+    expect(measured.overflows).toBe(true);
+    expect(measured.caretTop).toBeGreaterThanOrEqual(0);
+    expect(measured.caretBottom).toBeLessThanOrEqual(measured.clientHeight);
+    // Поле прокручено до дна: нижний отступ виден, последняя строка не прижата к рамке.
+    expect(measured.fromBottom).toBeLessThanOrEqual(2);
+    expect(measured.clientHeight - measured.caretBottom).toBeGreaterThanOrEqual(measured.padding - 2);
+  });
+
   test('Delete… с флажком «Also delete its N sessions» удаляет и сессии комнаты', async () => {
     test.setTimeout(90_000);
     const { window, workId, roomId } = await openRoom();

@@ -33,6 +33,7 @@ import { S } from '../../../shared/strings.js';
 import { AttachmentChip } from '../../chat/AttachmentChip.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { pasteClipboardImage } from '../../chat/paste-image.js';
+import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
 import { dragHasFiles, pasteHasOnlyImage } from '../../terminal/drop.js';
@@ -157,6 +158,11 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     refresh();
   }, [draftKey, chipLabel, refresh]);
 
+  /** Поле, выросшее выше `max-height`, держит каретку и нижний отступ на виду (`keepCaretVisible`) после каждой правки. */
+  const revealCaret = (): void => {
+    if (editorRef.current !== null) keepCaretVisible(editorRef.current);
+  };
+
   const items = menu === null ? [] : filterMentions(members, menu.context.query);
   const selected = Math.min(menu?.selected ?? 0, Math.max(0, items.length - 1));
 
@@ -167,6 +173,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     dismissedRef.current = null;
     setMenu(null);
     refresh();
+    revealCaret();
   };
 
   const submit = (): void => {
@@ -224,6 +231,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     if (event.key === 'Enter' && event.shiftKey) {
       event.preventDefault();
       insertLineBreak(editor.ownerDocument);
+      revealCaret();
       return;
     }
     if (event.key === 'Enter') {
@@ -244,7 +252,9 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     // Вставка — только текст: разметка из буфера в поле не попадает (2.2).
     event.preventDefault();
     const text = event.clipboardData.getData('text/plain');
-    if (text !== '') insertPlainText(event.currentTarget.ownerDocument, text);
+    if (text === '') return;
+    insertPlainText(event.currentTarget.ownerDocument, text);
+    revealCaret();
   };
 
   const pickFiles = (): void => {
@@ -261,7 +271,9 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     // поля считает чипом любой такой узел — в `to[]` попал бы чужой адресат. Чипы рождает только меню.
     event.preventDefault();
     const text = event.dataTransfer.getData('text/plain');
-    if (text !== '') insertDroppedText(event.currentTarget, text, { x: event.clientX, y: event.clientY });
+    if (text === '') return;
+    insertDroppedText(event.currentTarget, text, { x: event.clientX, y: event.clientY });
+    revealCaret();
   };
 
   return (
@@ -306,7 +318,10 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
             aria-label={S.rooms.messageField}
             data-room-editor=""
             contentEditable
-            onInput={refresh}
+            onInput={() => {
+              refresh();
+              revealCaret();
+            }}
             onKeyDown={onKeyDown}
             onKeyUp={refresh}
             onClick={refresh}

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { S } from '../../../shared/strings.js';
+import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
 import { useUiStore } from '../../store/ui.js';
 import { fakeDictationDeps } from '../../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -18,6 +19,8 @@ import { useDictationStore } from '../../voice/dictation-store.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
+// Раскладки в jsdom нет: докрутку проверяет её собственный тест, здесь важно, что поле зовёт её после правки.
+vi.mock('../../lib/keep-caret-visible.js', () => ({ keepCaretVisible: vi.fn() }));
 
 const MEMBERS: ComposerMember[] = [
   { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', model: 'Opus 5.5', word: 'working', lead: true },
@@ -739,6 +742,69 @@ describe('Composer — перетаскивание в поле: только т
     expect(useUiStore.getState().composerDrafts[KEY]).toBe('перетащено');
     press('Enter');
     expect(onSend).toHaveBeenCalledWith({ to: [], text: 'перетащено' });
+  });
+});
+
+describe('Composer — каретка на виду при длинном тексте', () => {
+  /** Текст поля в момент каждого вызова докрутки: она должна идти уже после вставки. */
+  let seen: string[];
+  beforeEach(() => {
+    seen = [];
+    vi.mocked(keepCaretVisible).mockReset();
+    vi.mocked(keepCaretVisible).mockImplementation((field) => {
+      seen.push(field.textContent ?? '');
+    });
+  });
+
+  it('вставка текста: докрутка зовётся для поля после вставки', () => {
+    renderComposer();
+    caret(editor(), 0);
+    fireEvent.paste(editor(), { clipboardData: { items: [], getData: (format: string) => (format === 'text/plain' ? 'просто текст' : '') } });
+    expect(keepCaretVisible).toHaveBeenLastCalledWith(editor());
+    expect(seen.at(-1)).toBe('просто текст');
+  });
+
+  it('набор с клавиатуры (input): докрутка зовётся', () => {
+    renderComposer();
+    type('abc');
+    expect(keepCaretVisible).toHaveBeenCalledWith(editor());
+    expect(seen.at(-1)).toBe('abc');
+  });
+
+  it('Shift+Enter: после переноса строки', () => {
+    renderComposer();
+    type('a');
+    vi.mocked(keepCaretVisible).mockClear();
+    press('Enter', { shiftKey: true });
+    expect(keepCaretVisible).toHaveBeenLastCalledWith(editor());
+    expect(editor().querySelector('br')).not.toBeNull();
+  });
+
+  it('сброс текста в поле: после вставки', () => {
+    renderComposer();
+    caret(editor(), 0);
+    const event = createEvent.drop(editor(), {
+      dataTransfer: { files: [], types: ['text/plain'], getData: (format: string) => (format === 'text/plain' ? 'сброшено' : '') },
+    });
+    Object.defineProperties(event, { clientX: { value: 1 }, clientY: { value: 1 } });
+    fireEvent(editor(), event);
+    expect(keepCaretVisible).toHaveBeenLastCalledWith(editor());
+    expect(seen.at(-1)).toBe('сброшено');
+  });
+
+  it('упоминание из меню: после того как чип встал в текст', () => {
+    renderComposer();
+    pickByKeys(0);
+    expect(chips()).toHaveLength(1);
+    expect(keepCaretVisible).toHaveBeenLastCalledWith(editor());
+    expect(seen.at(-1)).toContain('@S01 архитектор');
+  });
+
+  it('пустая вставка докрутку не зовёт', () => {
+    renderComposer();
+    caret(editor(), 0);
+    fireEvent.paste(editor(), { clipboardData: { items: [], getData: () => '' } });
+    expect(keepCaretVisible).not.toHaveBeenCalled();
   });
 });
 
