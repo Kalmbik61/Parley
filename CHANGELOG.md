@@ -6,6 +6,10 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.10.0
+
+A room whose work is done can be archived: its feed stays readable, nobody writes to it until you reopen it. A project no longer disappears from the sidebar when all its workspaces are archived — they sit under "N archived" at the bottom of its group, and "Remove from list…" hides the project. Sessions created without a name get a real one — S01 Ralph, S02 Anatoly, S03 Ruslan… — and any session can be renamed.
+
 ### Added
 
 - **Archived rooms.** "Archive…" in a room row's menu: the feed stays readable, nobody can write to the room
@@ -17,6 +21,11 @@ All notable changes to Parley are documented in this file.
 - **Session names and Rename.** A session created without a name gets one by its number — S01 Ralph, S02
   Anatoly, S03 Ruslan… — and keeps it; Claude Code's title no longer replaces it (an untitled workspace still
   gets its title). "Rename" in a session row's menu.
+
+### Changed
+
+- Sessions that already carry "New session" in older workspaces show the name by their number in the window;
+  Claude Code's title still renames them once, as before.
 
 ## 0.9.0
 
