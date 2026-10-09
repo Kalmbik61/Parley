@@ -22,6 +22,42 @@ import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
 import { makePng } from '../../test/png.js';
 import { createFeedImageStore } from './image-store.js';
 
+/**
+ * Настоящий «диск полон» или чужой владелец файла в тесте не получить, поэтому запись на диск и смену времени
+ * файла можно оборвать по требованию: при записи часть байтов ложится в файл, и летит ошибка. Всё остальное в
+ * `node:fs` — настоящее.
+ */
+const disk = vi.hoisted(() => ({
+  failNextWrite: null as NodeJS.ErrnoException | null,
+  failNextUtimes: null as NodeJS.ErrnoException | null,
+  failNextReaddir: null as NodeJS.ErrnoException | null,
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: ((...args: Parameters<typeof actual.writeFileSync>) => {
+      const failure = disk.failNextWrite;
+      if (failure === null) return actual.writeFileSync(...args);
+      disk.failNextWrite = null;
+      actual.writeFileSync(args[0], 'partial', { mode: 0o600 });
+      throw failure;
+    }) as typeof actual.writeFileSync,
+    utimesSync: ((...args: Parameters<typeof actual.utimesSync>) => {
+      const failure = disk.failNextUtimes;
+      if (failure === null) return actual.utimesSync(...args);
+      disk.failNextUtimes = null;
+      throw failure;
+    }) as typeof actual.utimesSync,
+    readdirSync: ((...args: Parameters<typeof actual.readdirSync>) => {
+      const failure = disk.failNextReaddir;
+      if (failure === null) return actual.readdirSync(...args);
+      disk.failNextReaddir = null;
+      throw failure;
+    }) as typeof actual.readdirSync,
+  };
+});
+
 const DAY = 24 * 60 * 60 * 1000;
 const MIB = 1024 * 1024;
 
@@ -41,6 +77,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  disk.failNextWrite = null;
+  disk.failNextUtimes = null;
+  disk.failNextReaddir = null;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -63,18 +102,53 @@ describe('save', () => {
     expect(readdirSync(dir)).toEqual([`${sha24(png)}.png`]);
   });
 
-  it('та же картинка — тот же путь, файл один и повторно не переписывается', () => {
+  it('та же картинка — тот же путь, файл один и не переписывается, а время файла обновляется', () => {
     const store = createFeedImageStore({ dir });
     const png = makePng();
     const first = store.save(b64(png), 'image/png');
-    const old = inThePast(DAY);
+    const old = inThePast(6 * DAY);
     utimesSync(first?.path ?? '', old, old);
+    const before = statSync(first?.path ?? '');
 
     const second = store.save(b64(png), 'image/png');
 
     expect(second).toEqual(first);
     expect(readdirSync(dir)).toHaveLength(1);
-    expect(Math.abs(statSync(first?.path ?? '').mtimeMs - old.getTime())).toBeLessThan(1000);
+    const after = statSync(first?.path ?? '');
+    // Тот же файл (запись через временный дала бы новый inode), но «виден» только что.
+    expect(after.ino).toBe(before.ino);
+    expect(Date.now() - after.mtimeMs).toBeLessThan(1000);
+  });
+
+  it('картинку, на которую лента ссылается снова, срок не берёт: повторная запись продлевает файлу жизнь', () => {
+    let now = Date.now();
+    const store = createFeedImageStore({ dir, now: () => now });
+    const shown = store.save(b64(makePng(40, 30, 1)), 'image/png')?.path ?? '';
+    const forgotten = store.save(b64(makePng(40, 30, 2)), 'image/png')?.path ?? '';
+    const old = new Date(now - 6 * DAY);
+    for (const file of [shown, forgotten]) utimesSync(file, old, old);
+
+    // От первой записи прошёл месяц, но живая лента снова ссылается на первую картинку: время файла берётся
+    // по часам хранилища, как и срок в sweep.
+    now += 30 * DAY;
+    store.save(b64(makePng(40, 30, 1)), 'image/png');
+    store.sweep();
+
+    expect(existsSync(shown)).toBe(true);
+    expect(existsSync(forgotten)).toBe(false);
+  });
+
+  it('время файла не обновилось (чужой владелец, только чтение) — ссылка всё равно годится, тихо', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    const png = makePng();
+    const first = store.save(b64(png), 'image/png');
+    disk.failNextUtimes = Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+
+    expect(store.save(b64(png), 'image/png')).toEqual(first);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(readdirSync(dir)).toEqual([`${sha24(png)}.png`]);
   });
 
   it('разные картинки — разные файлы', () => {
@@ -197,9 +271,66 @@ describe('save', () => {
       expect(store.save(data as unknown as string, 'image/png')).toBeNull();
     }
     expect(existsSync(dir)).toBe(false);
-    // Это не ошибка файловой системы, но предупреждение остаётся без данных: только код.
-    for (const call of warn.mock.calls)
-      expect(call).toEqual(['[parley] feed image', expect.any(String)]);
+    // Это не ошибка файловой системы, но предупреждение остаётся без данных (только код) и одно на все четыре.
+    expect(warn.mock.calls).toEqual([['[parley] feed image', 'ERR_INVALID_ARG_TYPE']]);
+  });
+
+  it('чужой результат не повод зависнуть: длинная цепочка пробелов с мусором в конце отвергается за миллисекунды', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    // Проверка base64 исполняется в onHook и при каждом севе: на таких строках она не должна расти быстрее длины.
+    const hostile = [
+      ' '.repeat(100_000) + '!',
+      '\n'.repeat(100_000) + '!',
+      ' '.repeat(50_000) + '=' + ' '.repeat(50_000) + '!',
+      ' ='.repeat(50_000),
+      'A'.repeat(100_000) + ' '.repeat(100_000) + '!',
+    ];
+
+    const started = performance.now();
+    for (const data of hostile) expect(store.save(data, 'image/png')).toBeNull();
+
+    // Квадратичная проверка тратила на первую строку несколько секунд, линейная — единицы миллисекунд.
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(existsSync(dir)).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('запись оборвалась на полпути (диск полон): временного файла не остаётся, null и одна строка с кодом; потом всё работает', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    const png = makePng();
+    disk.failNextWrite = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+
+    expect(store.save(b64(png), 'image/png')).toBeNull();
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(warn.mock.calls).toEqual([['[parley] feed image', 'ENOSPC']]);
+    // Место появилось: та же картинка ложится как обычно.
+    expect(store.save(b64(png), 'image/png')?.path).toBe(path.join(dir, `${sha24(png)}.png`));
+    expect(readdirSync(dir)).toEqual([`${sha24(png)}.png`]);
+  });
+
+  it('постоянная ошибка не засоряет журнал: одна строка на код, другой код — своя строка', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    const failWith = (code: string, seed: number): void => {
+      disk.failNextWrite = Object.assign(new Error(code), { code });
+      expect(store.save(b64(makePng(40, 30, seed)), 'image/png')).toBeNull();
+    };
+
+    failWith('ENOSPC', 1);
+    failWith('ENOSPC', 2);
+    failWith('ENOSPC', 3);
+    failWith('EIO', 4);
+    failWith('ENOSPC', 5);
+    failWith('EIO', 6);
+
+    expect(warn.mock.calls).toEqual([
+      ['[parley] feed image', 'ENOSPC'],
+      ['[parley] feed image', 'EIO'],
+    ]);
+    expect(readdirSync(dir)).toEqual([]);
   });
 });
 
@@ -252,6 +383,20 @@ describe('sweep', () => {
     now += 2 * DAY;
     store.sweep();
     expect(existsSync(file)).toBe(false);
+  });
+
+  it('каталог не читается (нет прав): исключения нет, одна строка с кодом, повтор того же кода молчит', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = createFeedImageStore({ dir });
+    const denied = (): void => {
+      disk.failNextReaddir = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      expect(() => store.sweep()).not.toThrow();
+    };
+
+    denied();
+    denied();
+
+    expect(warn.mock.calls).toEqual([['[parley] feed image', 'EACCES']]);
   });
 
   it('каталога нет — тихо: ничего не создаётся, ничего не выводится, исключения нет', () => {

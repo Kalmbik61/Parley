@@ -5,12 +5,14 @@
  * Запись синхронная (`writeFileSync`): `onHook` отвечает хуку сразу, и порядок событий нельзя менять
  * ожиданием диска. Имя — первые 24 hex sha256 байтов, поэтому та же картинка не пишется дважды (в
  * журнале Claude она стоит и в `toolUseResult`, и в `tool_result`, а журнал читается снова при каждом
- * севе). Каталог 0700, файлы 0600; файл пишется во временный и переименовывается: оборванная запись не
- * оставит обрезанную картинку под настоящим именем.
+ * севе); повторная запись лишь обновляет файлу время, чтобы картинка, на которую живая лента ссылается
+ * снова, не ушла по сроку через семь суток от первой записи. Каталог 0700, файлы 0600; файл пишется во
+ * временный и переименовывается: оборванная запись не оставит обрезанную картинку под настоящим именем, а
+ * сорвавшаяся не оставит и временного файла.
  *
  * Наружу ничего не бросается. Нельзя взять картинку (неизвестный тип, пустые, битые или слишком большие
- * данные) — `null` молча. Ошибка файловой системы — `null` и одна строка `console.warn` с кодом ошибки,
- * без данных.
+ * данные) — `null` молча. Ошибка файловой системы — `null` и строка `console.warn` с кодом ошибки, без
+ * данных, по одной на код: постоянный отказ (диск полон, нет прав) не печатает строку на каждую картинку.
  */
 
 import { createHash } from 'node:crypto';
@@ -21,6 +23,7 @@ import {
   readdirSync,
   renameSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -44,8 +47,14 @@ const TEMP_EXTENSION = 'tmp';
 const OWN_NAME = new RegExp(
   `^[0-9a-f]{${NAME_HEX_LENGTH}}\\.(?:${[...EXTENSIONS.values()].join('|')})(?:\\.${TEMP_EXTENSION})?$`,
 );
-/** Base64 в обычном или url-алфавите, с переводами строк и без паддинга; всё прочее — битые данные. */
-const BASE64 = /^[A-Za-z0-9+/_\-\s]*={0,2}\s*$/;
+/**
+ * Base64 в обычном или url-алфавите, с переводами строк и без паддинга; всё прочее — битые данные. Пробельные
+ * знаки после `=` допустимы (Node их пропускает), а в хвосте стоят только вместе с `=`: голый `\s*` рядом с
+ * `\s` в классе заставил бы движок на каждой длинной цепочке пробелов с мусором в конце перебирать все её
+ * разбиения, то есть расти квадратично. Строка здесь чужая (результат инструмента), а проверка идёт в
+ * `onHook` и при каждом севе.
+ */
+const BASE64 = /^[A-Za-z0-9+/_\-\s]*(?:=\s*){0,2}$/;
 /** Каталога нет или на его месте не каталог: убирать нечего. */
 const NOTHING_TO_SWEEP: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
 
@@ -84,12 +93,41 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
   const dir = path.resolve(options.dir);
   const now = options.now ?? Date.now;
   const maxBytes = options.maxBytes ?? FEED_IMAGE_MAX_BYTES;
+  /** Коды ошибок, о которых уже сказано. Хранилище одно на хост, так что это «раз на код за жизнь процесса». */
+  const warned = new Set<string>();
+
+  function warn(error: unknown): void {
+    const code = codeOf(error);
+    if (warned.has(code)) return;
+    warned.add(code);
+    console.warn('[parley] feed image', code);
+  }
 
   function write(file: string, bytes: Buffer): void {
     mkdirSync(dir, { recursive: true, mode: DIR_MODE });
     const temporary = `${file}.${TEMP_EXTENSION}`;
-    writeFileSync(temporary, bytes, { mode: FILE_MODE });
-    renameSync(temporary, file);
+    try {
+      writeFileSync(temporary, bytes, { mode: FILE_MODE });
+      renameSync(temporary, file);
+    } catch (error) {
+      // Недописанный временный файл (диск полон) не должен лежать до срока `sweep`, когда места и так нет.
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // Его могло и не быть.
+      }
+      throw error;
+    }
+  }
+
+  /** Файл уже лежит и годится; его время обновляется, чтобы показанная снова картинка не ушла по сроку. */
+  function refresh(file: string): void {
+    try {
+      const time = new Date(now());
+      utimesSync(file, time, time);
+    } catch {
+      // Ссылка годится и без этого: файл просто уберётся по сроку от прежней записи.
+    }
   }
 
   return {
@@ -101,10 +139,11 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
         if (bytes === null) return null;
         const name = createHash('sha256').update(bytes).digest('hex').slice(0, NAME_HEX_LENGTH);
         const file = path.join(dir, `${name}.${extension}`);
-        if (!existsSync(file)) write(file, bytes);
+        if (existsSync(file)) refresh(file);
+        else write(file, bytes);
         return { path: file, mime, bytes: bytes.length };
       } catch (error) {
-        console.warn('[parley] feed image', codeOf(error));
+        warn(error);
         return null;
       }
     },
@@ -114,8 +153,7 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
       try {
         names = readdirSync(dir);
       } catch (error) {
-        if (!NOTHING_TO_SWEEP.has(codeOf(error)))
-          console.warn('[parley] feed image', codeOf(error));
+        if (!NOTHING_TO_SWEEP.has(codeOf(error))) warn(error);
         return;
       }
       const cutoff = now() - FEED_IMAGE_TTL_MS;

@@ -1725,6 +1725,8 @@ describe('картинки результатов инструментов (пл
 
     it('без imagesDir файлы идут в feed-images дома Parley', async () => {
       const home = path.join(parleyHome(), 'feed-images');
+      // Ниже каталог удаляется: только если дом — песочница теста (`test/sandbox-home.ts`), а не настоящий ~/.parley.
+      expect(home.startsWith(`${tmpdir()}${path.sep}`)).toBe(true);
       try {
         start();
         send(pre('t1', SHOT, {}));
@@ -1737,6 +1739,28 @@ describe('картинки результатов инструментов (пл
       } finally {
         await rm(home, { recursive: true, force: true });
       }
+    });
+
+    it('вызов субагента: файл сохранён, в карточке у вызова пометка без ссылки', async () => {
+      const png = makePng(40, 30, 12);
+      start({ imagesDir });
+      const nested = { agent_id: 'ag1', agent_type: 'Explore' };
+      send(prompt('go'));
+      send(pre('a1', 'Agent', { description: 'look', prompt: 'p', subagent_type: 'Explore' }));
+      send({ hook_event_name: 'SubagentStart', session_id: SESSION, ...nested });
+      send({ ...pre('c1', SHOT, {}), ...nested });
+
+      const request = send({
+        ...shot('c1', [{ type: 'text', text: 'Took a screenshot' }, imageBlock(png)]),
+        ...nested,
+      });
+
+      expect(request.responses).toEqual([{}]);
+      const card = ofKind((await service.snapshot(REF)).items, 'agent')[0];
+      const child = card?.children[0];
+      expect(child?.response?.text).toBe('Took a screenshot\n[image png, 1 KB]');
+      expect(child?.response?.images).toBeUndefined();
+      expect(imageFiles()).toHaveLength(1);
     });
 
     it('картинка вне результата инструмента (вход вызова) на диск не идёт', async () => {
@@ -1802,6 +1826,51 @@ describe('картинки результатов инструментов (пл
       // Один файл: тот же скриншот в двух местах записи — одно имя, а картинка промпта не сохраняется.
       expect(imageFiles()).toEqual([path.basename(image?.path ?? '')]);
       expect(JSON.stringify(snapshot)).not.toContain('iVBOR');
+    });
+
+    it('Read картинки в записи, где toolUseResult.file.base64 пуст (Claude Code 2.1.28x): одна ссылка, [image omitted] нет, файл не осиротел', async () => {
+      const png = makePng(40, 30, 11);
+      const emptied = {
+        type: 'image',
+        file: {
+          base64: '',
+          type: 'image/png',
+          originalSize: png.length,
+          dimensions: { originalWidth: 40, originalHeight: 30, displayWidth: 40, displayHeight: 30 },
+        },
+      };
+      const { root, file } = await journal([
+        rec({
+          type: 'assistant',
+          uuid: 'a1',
+          timestamp: '2026-10-09T10:00:01.000Z',
+          message: {
+            id: 'm1',
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/tmp/a.png' } }],
+          },
+        }),
+        rec({
+          type: 'user',
+          uuid: 'u2',
+          timestamp: '2026-10-09T10:00:02.000Z',
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 't1', content: [imageBlock(png)] }],
+          },
+          toolUseResult: emptied,
+        }),
+      ]);
+      fakes.setLogFile(file);
+      start({ roots: () => [root], imagesDir });
+
+      const tool = ofKind((await service.snapshot(REF)).items, 'tool')[0];
+
+      expect(tool?.response?.text).toBe('[image png, 1 KB]');
+      const image = tool?.response?.images?.[0];
+      expect(readFileSync(image?.path ?? '').equals(png)).toBe(true);
+      // Единственный файл на диске — тот, на который смотрит лента.
+      expect(imageFiles()).toEqual([path.basename(image?.path ?? '')]);
     });
 
     it('те же сырые записи читаются дважды (сев и снимок субагента): ссылка оба раза, записи не тронуты', async () => {
