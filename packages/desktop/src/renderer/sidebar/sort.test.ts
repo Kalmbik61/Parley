@@ -36,7 +36,14 @@ const keysOf = (works: WorkEntry[]): string[] => works.map((e) => e.map.work.id)
 function build(
   entries: WorkEntry[],
   levels: Record<string, WorkAttention> = {},
-  opts: { pinned?: string[]; collapsed?: string[]; showDone?: boolean; showArchived?: boolean } = {},
+  opts: {
+    pinned?: string[];
+    collapsed?: string[];
+    showDone?: boolean;
+    showArchived?: boolean;
+    hidden?: string[];
+    archivedShown?: string[];
+  } = {},
 ) {
   const attention: Record<string, WorkAttention> = {};
   for (const e of entries) attention[key(e)] = levels[e.map.work.id] ?? att('idle');
@@ -47,6 +54,8 @@ function build(
     collapsed: opts.collapsed ?? [],
     showDone: opts.showDone ?? true,
     showArchived: opts.showArchived ?? false,
+    hidden: opts.hidden ?? [],
+    archivedShown: opts.archivedShown ?? [],
   });
 }
 
@@ -125,12 +134,12 @@ describe('buildSections (6)', () => {
     expect(build(list, levels).map((s) => s.title)).toEqual(['zeta', 'alpha', 'beta']);
   });
 
-  it('группы без показанных работ нет', () => {
+  it('группы без показанных работ нет — кроме группы из одних архивных (спека архива, 6.1)', () => {
     const pinnedOnly = work('/p/one', 'w1');
     const archivedOnly = work('/p/two', 'w2', 'archived');
     const doneOnly = work('/p/three', 'w3', 'done');
     const sections = build([pinnedOnly, archivedOnly, doneOnly], {}, { pinned: [key(pinnedOnly)], showDone: false });
-    expect(sections.map((s) => s.key)).toEqual(['pinned']);
+    expect(sections.map((s) => s.key)).toEqual(['pinned', '/p/two']);
   });
 
   it('закреплённая done при showDone: false пропадает и из Pinned', () => {
@@ -210,6 +219,101 @@ describe('buildSections — showArchived (тест 6 куска 6.3)', () => {
   });
 });
 
+// Спека архива комнат и проектов, 6.1 и 6.3: группа проекта живёт, пока в нём есть работа любого статуса; архивные
+// спрятаны под ссылкой «N archived»; убранный проект («Remove from list…») пропущен.
+describe('buildSections — архивные работы под ссылкой и убранные проекты (спека архива, 6.1, 6.3)', () => {
+  it('группа из одних архивных остаётся: шапка, пустой список, ссылка с числом', () => {
+    const sections = build([work('/p/a', 'w1', 'archived'), work('/p/a', 'w2', 'archived')]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toMatchObject({ kind: 'project', key: '/p/a', title: 'a', projectPath: '/p/a', collapsed: false });
+    expect(sections[0]!.works).toEqual([]);
+    expect(sections[0]!.archived).toEqual({ count: 2, shown: false });
+  });
+
+  it('у проекта без архивных работ ссылки нет', () => {
+    expect(build([work('/p/a', 'w1'), work('/p/a', 'w2', 'done')])[0]!.archived).toBeUndefined();
+  });
+
+  it('группа из одних архивных — ниже всех групп с работами', () => {
+    const sections = build([work('/p/a', 'x', 'archived'), work('/p/z', 'y')]);
+    expect(sections.map((section) => section.title)).toEqual(['z', 'a']);
+  });
+
+  it('ссылка считает архивные работы проекта, закреплённые тоже; закреплённая архивная из Pinned уходит', () => {
+    const arch = work('/p/a', 'arch', 'archived');
+    const archPinned = work('/p/a', 'archPin', 'archived');
+    const live = work('/p/a', 'live');
+    const sections = build([arch, archPinned, live], {}, { pinned: [key(archPinned)] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    // Число в шапке — по показанным, число в ссылке — по всем архивным.
+    expect(keysOf(sections[0]!.works)).toEqual(['live']);
+    expect(sections[0]!.archived).toEqual({ count: 2, shown: false });
+  });
+
+  it('проект, чья единственная неархивная работа закреплена, остаётся группой ради ссылки', () => {
+    const pin = work('/p/a', 'pin');
+    const sections = build([pin, work('/p/a', 'arch', 'archived')], {}, { pinned: [key(pin)] });
+    expect(sections.map((section) => section.key)).toEqual(['pinned', '/p/a']);
+    expect(sections[1]!.works).toEqual([]);
+    expect(sections[1]!.archived).toEqual({ count: 1, shown: false });
+  });
+
+  it('раскрытая ссылка: архивные проекта в конце группы, после done; другие проекты не затронуты', () => {
+    const list = [
+      work('/p/a', 'arch', 'archived'),
+      work('/p/a', 'done1', 'done'),
+      work('/p/a', 'act'),
+      work('/p/b', 'archB', 'archived'),
+      work('/p/b', 'actB'),
+    ];
+    const levels = { arch: att('needs-you', '2026-09-27T12:00:00.000Z') };
+    const sections = build(list, levels, { archivedShown: ['/p/a'] });
+    const a = sections.find((section) => section.key === '/p/a')!;
+    const b = sections.find((section) => section.key === '/p/b')!;
+    expect(keysOf(a.works)).toEqual(['act', 'done1', 'arch']);
+    expect(a.archived).toEqual({ count: 1, shown: true });
+    expect(keysOf(b.works)).toEqual(['actB']);
+    expect(b.archived).toEqual({ count: 1, shown: false });
+  });
+
+  it('закреплённая архивная при раскрытой ссылке проекта стоит в его группе, а не в Pinned', () => {
+    const archPinned = work('/p/a', 'archPin', 'archived');
+    const sections = build([archPinned, work('/p/a', 'live')], {}, { pinned: [key(archPinned)], archivedShown: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    expect(keysOf(sections[0]!.works)).toEqual(['live', 'archPin']);
+  });
+
+  it('общий showArchived раскрывает всё, и ссылки у групп нет', () => {
+    const sections = build([work('/p/a', 'arch', 'archived'), work('/p/a', 'act')], {}, { showArchived: true });
+    expect(keysOf(sections[0]!.works)).toEqual(['act', 'arch']);
+    expect(sections[0]!.archived).toBeUndefined();
+  });
+
+  it('hidden прячет проект из одних архивных; при showArchived он на месте', () => {
+    const list = [work('/p/a', 'w1', 'archived'), work('/p/b', 'w2')];
+    expect(build(list, {}, { hidden: ['/p/a'] }).map((section) => section.key)).toEqual(['/p/b']);
+    const all = build(list, {}, { hidden: ['/p/a'], showArchived: true });
+    expect(all.map((section) => section.key)).toEqual(['/p/b', '/p/a']);
+    expect(keysOf(all[1]!.works)).toEqual(['w1']);
+  });
+
+  it('hidden прячет и его закреплённые архивные, и раскрытую ссылку', () => {
+    const arch = work('/p/a', 'arch', 'archived');
+    expect(build([arch], {}, { hidden: ['/p/a'], pinned: [key(arch)], archivedShown: ['/p/a'] })).toEqual([]);
+  });
+
+  it('hidden не прячет проект с неархивной работой, пока окно не снимет путь из hiddenProjects', () => {
+    const sections = build([work('/p/a', 'arch', 'archived'), work('/p/a', 'act')], {}, { hidden: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    expect(keysOf(sections[0]!.works)).toEqual(['act']);
+  });
+
+  it('hidden с done-работой: done — неархивная, проект не прячется', () => {
+    const sections = build([work('/p/a', 'd', 'done')], {}, { hidden: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+  });
+});
+
 describe('visibleWorkOrder (8)', () => {
   it('Pinned первыми; свёрнутых и скрытых done нет', () => {
     const p = work('/p/b', 'pin');
@@ -267,7 +371,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
 
   it('в группе: решение (ранг 4) выше письма человеку (3), выше работающей (2), выше простаивающей (1); done — внизу даже с решением', () => {
     const { entries, attention } = fixtures();
-    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false, hidden: [], archivedShown: [] });
     expect(keysOf(sections[0]!.works)).toEqual(['w-decision', 'w-mail', 'w-busy', 'w-calm', 'w-done']);
   });
 
@@ -278,7 +382,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
     const entries = [move(calm!, '/p/a-calm'), move(busy!, '/p/b-busy'), move(letter!, '/p/c-mail'), move(decision!, '/p/d-decision')];
     const activity = activityMap([makeActivity({ projectPath: '/p/b-busy', workId: 'w-busy', sessionId: 's-01' }, 'working')]);
     const attention = Object.fromEntries(entries.map((entry) => [key(entry), workAttention(entry, activity)]));
-    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false, hidden: [], archivedShown: [] });
     // По имени папки было бы a, b, c, d — порядок задают только ранги.
     expect(sections.map((section) => section.title)).toEqual(['d-decision', 'c-mail', 'b-busy', 'a-calm']);
   });

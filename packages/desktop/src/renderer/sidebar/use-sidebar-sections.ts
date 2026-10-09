@@ -11,7 +11,7 @@
  * бы вся оболочка (раунд исправлений 1 куска 3.3, ревью A).
  */
 
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
 import type { WorkEntry } from '@parley/core';
 import { sameWorkAttention, workAttention, type WorkAttention } from '../attention/derive.js';
@@ -63,6 +63,8 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   const collapsed = useUiStore((state) => state.ui.collapsedProjects);
   const showDone = useUiStore((state) => state.ui.showDoneWorks);
   const showArchived = useUiStore((state) => state.showArchived);
+  const hidden = useUiStore((state) => state.ui.hiddenProjects);
+  const archivedShown = useUiStore((state) => state.archivedShownProjects);
   const hovering = useUiStore((state) => state.sidebarHovering);
 
   // Структурное разделение: работа, чьё внимание не изменилось, сохраняет прежний объект, а
@@ -88,9 +90,19 @@ export function useSidebarSectionsSync(): SidebarSection[] {
   }, [entries, byRef]);
   previous.current = attention;
   const fresh = useMemo(
-    () => buildSections({ entries, attention, pinned, collapsed, showDone, showArchived }),
-    [entries, attention, pinned, collapsed, showDone, showArchived],
+    () => buildSections({ entries, attention, pinned, collapsed, showDone, showArchived, hidden, archivedShown }),
+    [entries, attention, pinned, collapsed, showDone, showArchived, hidden, archivedShown],
   );
+
+  // Убранный из списка проект возвращается, как только в нём появляется неархивная работа (спека архива, 6.3): новая из
+  // диалога, от агента или CLI, Reopen в режиме «показать всё». Писатель один и живёт при свёрнутом сайдбаре, поэтому
+  // правило здесь, а не в диалоге создания: работу в скрытом проекте создаёт не только он.
+  useEffect(() => {
+    if (hidden.length === 0) return;
+    const live = new Set(entries.filter((entry) => entry.map.work.status !== 'archived').map((entry) => entry.projectPath));
+    const rest = hidden.filter((path) => !live.has(path));
+    if (rest.length !== hidden.length) useUiStore.getState().patchUi({ hiddenProjects: rest });
+  }, [entries, hidden]);
   const sections = useDeferredOrder(fresh, hovering, MAX_DEFER_MS);
 
   // Layout-эффект, а не обычный: читатели получают новый порядок до отрисовки кадра,

@@ -325,6 +325,16 @@ export const S = {
     /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
     archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
     hideArchivedRooms: 'Hide archived rooms',
+    /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
+    archivedWorks: (n: number): string => `${n} archived`,
+    hideArchivedWorks: 'Hide archived',
+    /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
+    removeFromList: 'Remove from list…',
+    /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
+    removeFromListBlocked: 'Archive its workspaces first',
+    removeProjectTitle: (folder: string): string => `Remove "${folder}" from the list?`,
+    removeProjectDescription: 'Its workspaces stay on disk. The project comes back when a workspace is created in it.',
+    removeProjectConfirm: 'Remove',
     /** Тултип `✉N` карточки: непрочитанные человеком письма работы. */
     unreadMail: (n: number): string => (n === 1 ? '1 unread message to you' : `${n} unread messages to you`),
     /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
@@ -437,7 +447,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
-    archiveConfirmDescription: 'Running agents will be stopped. Bring it back with "Show archived workspaces" in the palette, then "Reopen" it to resume them.',
+    archiveConfirmDescription: 'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,

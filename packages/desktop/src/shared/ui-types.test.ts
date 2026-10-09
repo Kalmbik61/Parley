@@ -173,3 +173,22 @@ describe('раздел browser (спека 2026-10-07, 4.3)', () => {
     }
   });
 });
+
+// Спека архива комнат и проектов, 6.3: проекты, убранные из списка пунктом «Remove from list…».
+describe('hiddenProjects (спека архива, 6.3)', () => {
+  it('по умолчанию пусто; файл прежней версии без ключа читается с пустым списком', () => {
+    expect(DEFAULT_UI.hiddenProjects).toEqual([]);
+    expect(normalizeUi({}).hiddenProjects).toEqual([]);
+    expect(normalizeUi({ version: 1, appearance: 'dark' }).hiddenProjects).toEqual([]);
+  });
+
+  it('список строк сохраняется как есть, как collapsedProjects', () => {
+    expect(normalizeUi({ hiddenProjects: ['/p/a', '/p/b'] }).hiddenProjects).toEqual(['/p/a', '/p/b']);
+  });
+
+  it('значения чужого типа и списки с не-строками — по умолчанию', () => {
+    for (const garbage of ['/p/a', 1, null, {}, [1], ['/p/a', null], [['/p/a']]]) {
+      expect(normalizeUi({ hiddenProjects: garbage }).hiddenProjects, JSON.stringify(garbage)).toEqual([]);
+    }
+  });
+});

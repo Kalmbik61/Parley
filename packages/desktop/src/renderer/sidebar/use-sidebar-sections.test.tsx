@@ -129,3 +129,74 @@ describe('структурное разделение и снимок (раун�
     expect(useSidebarSectionsStore.getState().entries).toBe(next);
   });
 });
+
+// Спека архива комнат и проектов, 6.1 и 6.3: убранные из списка проекты и раскрытая ссылка «N archived».
+describe('hiddenProjects и ссылка «N archived» (спека архива, 6.1, 6.3)', () => {
+  const gone = '/p/gone';
+  const archivedOnly = makeWork('w-arch', { projectPath: gone, status: 'archived' });
+  const keysIn = (sections: ReturnType<typeof useSidebarSections>): string[] => sections.map((section) => section.key);
+
+  beforeEach(() => {
+    useWorksStore.setState({ entries: [a, b, archivedOnly], branches: {}, loading: false, error: null });
+    useUiStore.setState({ ui: { ...DEFAULT_UI, hiddenProjects: [gone] }, showArchived: false, archivedShownProjects: [] });
+  });
+
+  it('убранный проект из одних архивных не попадает в секции, его путь остаётся в ui', () => {
+    const { result } = renderHook(() => useSidebarSectionsSync());
+    expect(keysIn(result.current)).toEqual(['/p/one']);
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([gone]);
+  });
+
+  it('общий показ архивных («Show archived workspaces») показывает и убранный проект, путь остаётся', () => {
+    const { result } = renderHook(() => useSidebarSectionsSync());
+    act(() => useUiStore.getState().toggleShowArchived());
+    expect(keysIn(result.current)).toEqual(['/p/one', gone]);
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([gone]);
+  });
+
+  it('в убранном проекте появилась неархивная работа (от агента или CLI) — путь снимается из hiddenProjects, проект возвращается', () => {
+    const { result } = renderHook(() => useSidebarSectionsSync());
+    act(() => useWorksStore.setState({ entries: [a, b, archivedOnly, makeWork('w-new', { projectPath: gone })] }));
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([]);
+    expect(keysIn(result.current)).toContain(gone);
+  });
+
+  it('Reopen архивной работы и работа в статусе done тоже возвращают проект', () => {
+    renderHook(() => useSidebarSectionsSync());
+    act(() => useWorksStore.setState({ entries: [a, b, makeWork('w-arch', { projectPath: gone, status: 'done' })] }));
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([]);
+  });
+
+  it('новая архивная работа проект не возвращает, а чужие убранные пути остаются', () => {
+    useUiStore.setState({ ui: { ...DEFAULT_UI, hiddenProjects: [gone, '/p/other'] } });
+    const { result } = renderHook(() => useSidebarSectionsSync());
+    act(() => useWorksStore.setState({ entries: [a, b, archivedOnly, makeWork('w-arch2', { projectPath: gone, status: 'archived' })] }));
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([gone, '/p/other']);
+    expect(keysIn(result.current)).toEqual(['/p/one']);
+
+    // Вернулся только /p/gone, а /p/other без работ остаётся убранным.
+    act(() => useWorksStore.setState({ entries: [a, b, archivedOnly, makeWork('w-live', { projectPath: gone })] }));
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual(['/p/other']);
+  });
+
+  it('пока работы не загрузились, путь не снимается', () => {
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+    renderHook(() => useSidebarSectionsSync());
+    expect(useUiStore.getState().ui.hiddenProjects).toEqual([gone]);
+  });
+
+  it('раскрытая ссылка проекта вносит его архивные работы в секцию, спрятанная — убирает', () => {
+    useUiStore.setState({ ui: DEFAULT_UI });
+    const { result } = renderHook(() => useSidebarSectionsSync());
+    const section = () => result.current.find((item) => item.key === gone);
+    expect(section()?.works).toEqual([]);
+    expect(section()?.archived).toEqual({ count: 1, shown: false });
+
+    act(() => useUiStore.getState().setProjectArchivedShown(gone, true));
+    expect(section()?.works.map((entry) => entry.map.work.id)).toEqual(['w-arch']);
+    expect(section()?.archived).toEqual({ count: 1, shown: true });
+
+    act(() => useUiStore.getState().setProjectArchivedShown(gone, false));
+    expect(section()?.works).toEqual([]);
+  });
+});

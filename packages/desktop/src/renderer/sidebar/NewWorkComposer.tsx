@@ -117,6 +117,7 @@ export interface NewWorkComposerProps {
 
 export function NewWorkComposer({ open, projectPath: initialProject, title: initialTitle, bridge, onOpenChange }: NewWorkComposerProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
+  const hiddenProjects = useUiStore((state) => state.ui.hiddenProjects);
   const [projectPath, setProjectPath] = useState<string | null>(initialProject);
   const [chosenFolders, setChosenFolders] = useState<string[]>([]);
   const [title, setTitle] = useState('');
@@ -203,7 +204,11 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     };
   }, [open, bridge, projectPath]);
 
-  const knownProjects = [...new Set([...entries.map((entry) => entry.projectPath), ...chosenFolders])].sort();
+  // Убранные из списка проекты («Remove from list…», спека архива, 6.3) в выборе не показываются. Исключение — выбранный
+  // сейчас (от «+» заголовка в режиме «показать всё») и добавленный через «Choose a folder…»: иначе выбор не был бы виден.
+  const knownProjects = [...new Set([...entries.map((entry) => entry.projectPath), ...chosenFolders])]
+    .filter((path) => !hiddenProjects.includes(path) || path === projectPath || chosenFolders.includes(path))
+    .sort();
 
   const chooseFolder = async (): Promise<void> => {
     const dir = await bridge.app.chooseFolder();

@@ -21,6 +21,12 @@ export interface SidebarSection {
   projectPath: string | null;
   works: WorkEntry[];                   // показанные в секции, уже отсортированы
   collapsed: boolean;
+  /**
+   * Ссылка «N archived» внизу группы проекта (спека архива комнат и проектов, 6.1): `count` — все архивные работы
+   * проекта, закреплённые тоже; `shown` — раскрыты ли они в этой группе. Нет поля — ссылки нет: архивных работ у проекта
+   * нет, либо включён общий показ архивных (палитра «Show archived workspaces») и раскрывать нечего.
+   */
+  archived?: { count: number; shown: boolean };
 }
 
 const PINNED_KEY = 'pinned';
@@ -41,7 +47,7 @@ export function compareWorks(a: { attention: WorkAttention; createdAt: string },
 }
 
 /** Имя папки — последний сегмент пути, хвостовой `/` не в счёт. */
-function folderName(projectPath: string): string {
+export function folderName(projectPath: string): string {
   const parts = projectPath.split('/').filter((part) => part !== '');
   return parts.at(-1) ?? projectPath;
 }
@@ -52,10 +58,15 @@ export function buildSections(input: {
   pinned: string[]; collapsed: string[]; showDone: boolean;
   /** false — archived скрыты, как в 3.2; true — в конце своей секции, после done (кусок 6.3, спека 6.7). */
   showArchived: boolean;
+  /** Проекты, убранные из списка («Remove from list…», `ui.json.hiddenProjects`); при `showArchived` показаны все. */
+  hidden: string[];
+  /** Проекты, чья ссылка «N archived» раскрыта: их архивные работы показаны в конце группы, остальных проектов это не касается. */
+  archivedShown: string[];
 }): SidebarSection[] {
   const { entries, attention, showDone, showArchived } = input;
   const pinned = new Set(input.pinned);
   const collapsed = new Set(input.collapsed);
+  const archivedShown = new Set(input.archivedShown);
 
   // Работе без посчитанного внимания — `off` со временем карты (`attentionOf` в derive.ts).
   const attentionOf = (entry: WorkEntry): WorkAttention => attentionIn(attention, entry);
@@ -79,21 +90,45 @@ export function buildSections(input: {
       return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
     });
 
-  const shown = entries.filter(
-    (entry) =>
-      (showArchived || entry.map.work.status !== 'archived') && (showDone || entry.map.work.status !== 'done'),
-  );
+  const isArchived = (entry: WorkEntry): boolean => entry.map.work.status === 'archived';
+
+  // Архивные работы проекта — все, закреплённые тоже: их число стоит в ссылке «N archived» (6.1). Закреплённая
+  // архивная из «Закреплённых» уходит, а в ссылке своего проекта остаётся.
+  const archivedCount = new Map<string, number>();
+  const liveProjects = new Set<string>();
+  for (const entry of entries) {
+    if (isArchived(entry)) archivedCount.set(entry.projectPath, (archivedCount.get(entry.projectPath) ?? 0) + 1);
+    else liveProjects.add(entry.projectPath);
+  }
+
+  // Убранный проект скрыт, только пока в нём нет неархивных работ: окно снимает путь из `hiddenProjects`
+  // эффектом (`use-sidebar-sections.ts`), но кадр до него работа с агентами скрытой остаться не должна.
+  const hidden = new Set(input.hidden.filter((path) => !liveProjects.has(path)));
+  const skipped = (projectPath: string): boolean => !showArchived && hidden.has(projectPath);
+
+  const shown = entries.filter((entry) => {
+    const { status } = entry.map.work;
+    if (skipped(entry.projectPath)) return false;
+    const archivedVisible = showArchived || archivedShown.has(entry.projectPath);
+    return (archivedVisible || status !== 'archived') && (showDone || status !== 'done');
+  });
 
   const pinnedWorks: WorkEntry[] = [];
   const byProject = new Map<string, WorkEntry[]>();
   for (const entry of shown) {
-    if (pinned.has(workKey(entry.projectPath, entry.map.work.id))) {
+    // В «Закреплённые» архивная идёт только при общем показе архивных; при раскрытой ссылке проекта она в его группе.
+    if (pinned.has(workKey(entry.projectPath, entry.map.work.id)) && (!isArchived(entry) || showArchived)) {
       pinnedWorks.push(entry);
       continue;
     }
     const list = byProject.get(entry.projectPath);
     if (list === undefined) byProject.set(entry.projectPath, [entry]);
     else list.push(entry);
+  }
+  // Группа из одних архивных остаётся (6.1): шапка, «+», пустой список и ссылка. Проекту не нужна показанная работа —
+  // достаточно архивной, иначе он пропадал бы из сайдбара вместе с последней работой.
+  for (const projectPath of archivedCount.keys()) {
+    if (!skipped(projectPath) && !byProject.has(projectPath)) byProject.set(projectPath, []);
   }
 
   // Ранг группы — по показанным в ней работам: закреплённая поднимает «Закреплённые»,
@@ -107,6 +142,12 @@ export function buildSections(input: {
       ...works.filter((entry) => entry.map.work.status !== 'archived').map((entry) => ATTENTION_RANK[attentionOf(entry).level]),
     );
 
+  // Ссылка «N archived»: при общем показе архивных раскрывать нечего, и ссылки нет.
+  const archivedLink = (projectPath: string): Pick<SidebarSection, 'archived'> => {
+    const count = archivedCount.get(projectPath) ?? 0;
+    return count === 0 || showArchived ? {} : { archived: { count, shown: archivedShown.has(projectPath) } };
+  };
+
   const projects: SidebarSection[] = [...byProject.entries()]
     .map(([projectPath, works]) => ({
       rank: groupRank(works),
@@ -117,6 +158,7 @@ export function buildSections(input: {
         projectPath,
         works: sortWorks(works),
         collapsed: collapsed.has(projectPath),
+        ...archivedLink(projectPath),
       },
     }))
     .sort((a, b) => {

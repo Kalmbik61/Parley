@@ -33,6 +33,12 @@ export interface UiFile {
   activeWorkKey: string | null;
   pinnedWorks: string[];
   collapsedProjects: string[];
+  /**
+   * Проекты, убранные из списка пунктом «Remove from list…» (спека архива комнат и проектов, 6.3): путь проекта.
+   * Сайдбар их не рисует; в индексе хоста проекты остаются, и как только в скрытом появляется неархивная работа, окно
+   * убирает путь отсюда само.
+   */
+  hiddenProjects: string[];
   showDoneWorks: boolean;
   notifications: { needsYou: boolean; finished: boolean; mail: boolean; sound: boolean };
   diffView: 'inline' | 'split';
@@ -62,6 +68,7 @@ export const DEFAULT_UI: UiFile = {
   activeWorkKey: null,
   pinnedWorks: [],
   collapsedProjects: [],
+  hiddenProjects: [],
   showDoneWorks: true,
   notifications: { needsYou: true, finished: true, mail: true, sound: true },
   diffView: 'split',
@@ -194,6 +201,7 @@ export function normalizeUi(raw: unknown): UiFile {
     collapsedProjects: isStringArray(source.collapsedProjects)
       ? source.collapsedProjects
       : DEFAULT_UI.collapsedProjects,
+    hiddenProjects: isStringArray(source.hiddenProjects) ? source.hiddenProjects : DEFAULT_UI.hiddenProjects,
     showDoneWorks:
       typeof source.showDoneWorks === 'boolean' ? source.showDoneWorks : DEFAULT_UI.showDoneWorks,
     notifications: normalizeNotifications(source.notifications),
