@@ -22,6 +22,16 @@ export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 export const FEED_TEXT_LIMIT = 256 * 1024;
 
 /**
+ * Сколько картинок одного результата инструмента лента показывает (`FeedToolResponse.images`); лишние
+ * в сводке стоят пометкой `[image omitted]`.
+ */
+export const FEED_IMAGES_PER_CALL = 6;
+/** Картинка тяжелее (после декодирования base64) в ленту не попадает: хост её не сохраняет. */
+export const FEED_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+/** Сколько хост хранит файлы картинок ленты; старше — удаляет. */
+export const FEED_IMAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * Сколько вложенных вызовов держит карточка субагента (`FeedAgent.children`): старые уходят,
  * `toolCount` считает все. Вложенный вызов — строка-сводка, полный — в журнале субагента, поэтому и
  * строки его входа, и сводка результата короче, чем у вызова в общем потоке, а хунков диффа у него
@@ -71,12 +81,30 @@ export interface FeedText extends FeedItemBase {
   truncated?: boolean;
 }
 
+/**
+ * Картинка результата инструмента: ссылка на файл, а не байты (лента ходит по протоколу и держится
+ * в памяти). Файл кладёт хост (`stashFeedImages`); у `ViewImage` Codex это сам файл агента.
+ */
+export interface FeedImageRef {
+  /** Абсолютный путь к файлу картинки. */
+  path: string;
+  /** `image/png`, `image/jpeg`, `image/webp` или `image/gif`. */
+  mime: string;
+  /** Размер файла в байтах, если известен. */
+  bytes?: number;
+}
+
 /** Сводка результата инструмента: первые `FEED_RESULT_LIMIT` символов и полный размер. */
 export interface FeedToolResponse {
   text: string;
   /** Полная длина сводки в символах, до усечения. */
   size: number;
   truncated: boolean;
+  /**
+   * Картинки результата, по порядку, не больше `FEED_IMAGES_PER_CALL`; в `text` на их месте стоят
+   * пометки `[image png, 123 KB]`. Нет поля — картинок нет. У вложенного вызова субагента его нет.
+   */
+  images?: FeedImageRef[];
 }
 
 /** Хунк `structuredPatch` правки: строки с префиксами ` `, `-`, `+`. */

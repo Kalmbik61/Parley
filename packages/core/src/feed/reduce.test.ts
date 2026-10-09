@@ -15,10 +15,12 @@ import {
   closeFeedTurn,
   emptyFeedState,
   settleCards,
+  toolResponseOf,
 } from './reduce.js';
 import type {
   FeedAgent,
   FeedDecision,
+  FeedImageRef,
   FeedItem,
   FeedNotice,
   FeedPermissionCard,
@@ -33,6 +35,7 @@ import {
   FEED_AGENT_TEXT_LIMIT,
   FEED_CHILD_INPUT_LIMIT,
   FEED_CHILD_RESULT_LIMIT,
+  FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
@@ -1223,5 +1226,198 @@ describe('режим разрешений в ленте (план 2026-10-01, р
       AT,
     ).state;
     expect(state.permissionMode).toBeNull();
+  });
+});
+
+describe('картинки в сводке результата инструмента (план 2026-10-09, Task 1)', () => {
+  const AT = '2026-10-09T10:00:00.000Z';
+  const ref = (n: number, bytes?: number): FeedImageRef => ({
+    path: `/home/.parley/feed-images/img${n}.png`,
+    mime: 'image/png',
+    ...(bytes === undefined ? {} : { bytes }),
+  });
+  /** Блок, который хост оставил на месте картинки (`stashFeedImages`). */
+  const shot = (n: number, bytes?: number) => ({ type: 'image', parleyImage: ref(n, bytes) });
+  const omitted = { type: 'image', parleyImageOmitted: true };
+  const text = (value: string) => ({ type: 'text', text: value });
+  const KB = 1024;
+
+  it('массив «текст + картинка + текст» — текст с пометкой по порядку и одна ссылка, без JSON', () => {
+    const response = toolResponseOf([text('Took a screenshot'), shot(1, 123 * KB), text('Done')]);
+
+    expect(response?.text).toBe('Took a screenshot\n[image png, 123 KB]\nDone');
+    expect(response?.images).toEqual([ref(1, 123 * KB)]);
+    expect(response?.size).toBe(response?.text.length);
+    expect(response?.truncated).toBe(false);
+  });
+
+  it('пометка: размер в КБ округлён, без размера — только формат, у крохотной — не меньше 1 КБ', () => {
+    expect(toolResponseOf([shot(1, 60_950)])?.text).toBe('[image png, 60 KB]');
+    expect(toolResponseOf([shot(1)])?.text).toBe('[image png]');
+    expect(toolResponseOf([shot(1, 100)])?.text).toBe('[image png, 1 KB]');
+    expect(toolResponseOf([shot(1, 0)])?.text).toBe('[image png]');
+    const jpeg = { type: 'image', parleyImage: { path: '/a/b.jpg', mime: 'image/jpeg', bytes: 2 * KB } };
+    expect(toolResponseOf([jpeg])?.text).toBe('[image jpeg, 2 KB]');
+  });
+
+  it('восемь картинок — шесть ссылок по порядку и две пометки «[image omitted]»', () => {
+    const blocks = Array.from({ length: 8 }, (_, i) => shot(i + 1, KB));
+    const response = toolResponseOf([text('shots'), ...blocks]);
+
+    expect(response?.images).toEqual([1, 2, 3, 4, 5, 6].map((n) => ref(n, KB)));
+    expect(response?.text.split('\n')).toEqual([
+      'shots',
+      ...Array.from({ length: FEED_IMAGES_PER_CALL }, () => '[image png, 1 KB]'),
+      '[image omitted]',
+      '[image omitted]',
+    ]);
+  });
+
+  it('ровно шесть картинок — все ссылки, пометок «omitted» нет', () => {
+    const response = toolResponseOf(Array.from({ length: 6 }, (_, i) => shot(i + 1)));
+
+    expect(response?.images).toHaveLength(6);
+    expect(response?.text).not.toContain('omitted');
+  });
+
+  it('parleyImageOmitted — пометка «[image omitted]» и поля images нет совсем', () => {
+    const response = toolResponseOf([text('Took a screenshot'), omitted]);
+
+    expect(response?.text).toBe('Took a screenshot\n[image omitted]');
+    expect(response).toBeDefined();
+    expect('images' in (response ?? {})).toBe(false);
+  });
+
+  it('объект Read {type:image, parleyImage}: пометка и одна ссылка', () => {
+    const response = toolResponseOf(shot(1, 60_950));
+
+    expect(response?.text).toBe('[image png, 60 KB]');
+    expect(response?.images).toEqual([ref(1, 60_950)]);
+    expect(toolResponseOf(omitted)).toEqual({ text: '[image omitted]', size: 15, truncated: false });
+  });
+
+  it('input_image тоже картинка: тип блока сохранён хостом, ссылка берётся из parleyImage', () => {
+    const response = toolResponseOf([
+      text('chart'),
+      { type: 'input_image', parleyImage: ref(1, KB) },
+      { type: 'input_image', parleyImageOmitted: true },
+    ]);
+
+    expect(response?.text).toBe('chart\n[image png, 1 KB]\n[image omitted]');
+    expect(response?.images).toEqual([ref(1, KB)]);
+  });
+
+  it('input_text — текстовый блок, как text', () => {
+    expect(toolResponseOf([{ type: 'input_text', text: 'a' }, text('b')])?.text).toBe('a\nb');
+  });
+
+  it('кривая ссылка в parleyImage — пометка «omitted», в images не попадает; лишние поля ссылки срезаны', () => {
+    const forged = [
+      { type: 'image', parleyImage: 'x' },
+      { type: 'image', parleyImage: { path: 5, mime: 'image/png' } },
+      { type: 'image', parleyImage: { path: '/a.png' } },
+      { type: 'image', parleyImage: { path: '', mime: 'image/png' } },
+      { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: -1 } },
+      { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: 1.5 } },
+    ];
+    const response = toolResponseOf([text('t'), ...forged]);
+
+    expect('images' in (response ?? {})).toBe(false);
+    expect(response?.text.split('\n')).toEqual(['t', ...forged.map(() => '[image omitted]')]);
+
+    const extra = toolResponseOf([
+      { type: 'image', parleyImage: { ...ref(1, KB), base64: 'AAAA', extra: true } },
+    ]);
+    expect(extra?.images).toEqual([ref(1, KB)]);
+  });
+
+  it('картинка без ссылки (хост не обошёл запись) — «[image omitted]», а не её байты', () => {
+    const raw = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } };
+    const response = toolResponseOf([text('a'), raw, { type: 'input_image', image_url: 'data:image/png;base64,AAAA' }]);
+
+    expect(response?.text).toBe('a\n[image omitted]\n[image omitted]');
+    expect('images' in (response ?? {})).toBe(false);
+  });
+
+  it('массив из одних текстовых блоков — их текст, не JSON', () => {
+    expect(toolResponseOf([text('first'), text('second')])?.text).toBe('first\nsecond');
+  });
+
+  it('прочие массивы — как раньше, JSON: чужие блоки, не блоки, пустой', () => {
+    const cases: unknown[] = [
+      [{ type: 'tool_reference', tool_name: 'mcp__x__y' }],
+      ['a', 'b'],
+      [text('a'), { note: 1 }],
+      [text('a'), 'stray'],
+      [],
+    ];
+    for (const value of cases) {
+      expect(toolResponseOf(value)?.text).toBe(JSON.stringify(value, null, 2));
+      expect('images' in (toolResponseOf(value) ?? {})).toBe(false);
+    }
+  });
+
+  it('прежние виды результата не задеты: строка, stdout, Read-файл, объект с type:image без ссылки', () => {
+    expect(toolResponseOf('plain')?.text).toBe('plain');
+    expect(toolResponseOf({ stdout: 'out', stderr: 'err' })?.text).toBe('out\nerr');
+    expect(toolResponseOf({ type: 'text', file: { content: 'body' } })?.text).toBe('body');
+    const unstashed = { type: 'image', file: { base64: 'AAAA', type: 'image/png' } };
+    expect(toolResponseOf(unstashed)?.text).toBe(JSON.stringify(unstashed, null, 2));
+    expect(toolResponseOf(undefined)).toBeUndefined();
+    expect(toolResponseOf(null)).toBeUndefined();
+  });
+
+  it('усечение текста не отнимает ссылки', () => {
+    const response = toolResponseOf([text('x'.repeat(50)), shot(1, KB)], 10);
+
+    expect(response?.truncated).toBe(true);
+    expect(response?.text).toHaveLength(10);
+    expect(response?.images).toEqual([ref(1, KB)]);
+  });
+
+  describe('через PostToolUse', () => {
+    const run = (events: Record<string, unknown>[]): FeedState =>
+      events.reduce<FeedState>((state, ev) => applyHookEvent(state, ev, AT).state, emptyFeedState());
+    const post = (id: string, response: unknown, agent?: string) => ({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'mcp__browser__screenshot',
+      tool_input: {},
+      tool_response: response,
+      tool_use_id: id,
+      ...(agent === undefined ? {} : { agent_id: agent, agent_type: 'Explore' }),
+    });
+    const response = [text('Took a screenshot'), shot(1, 2 * KB)];
+
+    it('вызов основного потока несёт images, и PostToolUseFailure тоже', () => {
+      const state = run([post('t1', response), { ...post('t2', response), hook_event_name: 'PostToolUseFailure' }]);
+      const [done, failed] = ofKind(state.items, 'tool');
+
+      expect(done?.status).toBe('done');
+      expect(done?.response?.images).toEqual([ref(1, 2 * KB)]);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.response?.images).toEqual([ref(1, 2 * KB)]);
+    });
+
+    it('вложенный вызов субагента: пометка в тексте остаётся, images нет', () => {
+      const state = run([
+        { hook_event_name: 'UserPromptSubmit', prompt: 'go' },
+        {
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Agent',
+          tool_use_id: 'a1',
+          tool_input: { description: 'look', prompt: 'p', subagent_type: 'Explore' },
+        },
+        { hook_event_name: 'SubagentStart', agent_id: 'ag1', agent_type: 'Explore' },
+        post('c1', response, 'ag1'),
+        post('t1', response),
+      ]);
+      const agent = ofKind(state.items, 'agent')[0] as FeedAgent;
+      const child = agent.children[0] as FeedTool;
+
+      expect(child.response?.text).toBe('Took a screenshot\n[image png, 2 KB]');
+      expect('images' in (child.response ?? {})).toBe(false);
+      // Основной вызов того же хода — с images.
+      expect((ofKind(state.items, 'tool')[0] as FeedTool).response?.images).toEqual([ref(1, 2 * KB)]);
+    });
   });
 });

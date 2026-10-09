@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RawRecord } from '../jsonl.js';
 import { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
+import { stashFeedImages } from './images.js';
 import { applyHookEvent } from './reduce.js';
-import type { FeedAgent, FeedItem, FeedPrompt, FeedTool, FeedTurn } from './types.js';
+import type { FeedAgent, FeedImageRef, FeedItem, FeedPrompt, FeedTool, FeedTurn } from './types.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -354,5 +355,143 @@ describe('interruptedAt', () => {
     expect(interruptedAt(user([{ type: 'tool_result', content: 'x' }]))).toBeNull();
     expect(interruptedAt({ type: 'assistant', timestamp: at, message: { content: '[Request interrupted by user]' } })).toBeNull();
     expect(interruptedAt({ type: 'user', message: { content: '[Request interrupted by user]' } })).toBeNull();
+  });
+});
+
+describe('feedFromTranscript: картинки результата инструмента (план 2026-10-09, Task 1)', () => {
+  const T = '2026-10-09T10:00:00.000Z';
+  const KB = 1024;
+  const PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const ref = (n: number): FeedImageRef => ({
+    path: `/home/.parley/feed-images/img${n}.png`,
+    mime: 'image/png',
+    bytes: 123 * KB,
+  });
+  /** Блок на месте картинки, как его оставляет хост (`stashFeedImages`). */
+  const shot = (n: number) => ({ type: 'image', parleyImage: ref(n) });
+  const text = (value: string) => ({ type: 'text', text: value });
+  const toolUse = (id: string, name: string): RawRecord => ({
+    type: 'assistant',
+    uuid: `a-${id}`,
+    timestamp: T,
+    message: {
+      id: `msg_${id}`,
+      role: 'assistant',
+      content: [{ type: 'tool_use', id, name, input: {} }],
+    },
+  });
+  const result = (id: string, content: unknown, toolUseResult?: unknown): RawRecord => ({
+    type: 'user',
+    uuid: `u-${id}`,
+    timestamp: T,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] },
+    ...(toolUseResult === undefined ? {} : { toolUseResult }),
+  });
+  const toolOf = (records: RawRecord[]): FeedTool =>
+    feedFromTranscript(records).items.find((item): item is FeedTool => item.kind === 'tool') as FeedTool;
+
+  it('MCP-скриншот: массив блоков в toolUseResult — текст с пометкой и ссылка в images', () => {
+    const blocks = [text('Took a screenshot'), shot(1)];
+    const tool = toolOf([
+      toolUse('t1', 'mcp__browser__screenshot'),
+      result('t1', blocks, blocks),
+    ]);
+
+    expect(tool.status).toBe('done');
+    expect(tool.response?.text).toBe('Took a screenshot\n[image png, 123 KB]');
+    expect(tool.response?.images).toEqual([ref(1)]);
+  });
+
+  it('toolUseResult не картинка (строка или нет вовсе), а картинка в content — берётся content', () => {
+    const blocks = [text('Took a screenshot'), shot(1)];
+
+    for (const toolUseResult of ['Took a screenshot', undefined, 'Error: nope']) {
+      const tool = toolOf([toolUse('t1', 'mcp__browser__screenshot'), result('t1', blocks, toolUseResult)]);
+      expect(tool.response?.text).toBe('Took a screenshot\n[image png, 123 KB]');
+      expect(tool.response?.images).toEqual([ref(1)]);
+    }
+  });
+
+  it('Read картинки: toolUseResult — объект-картинка, ссылка в images', () => {
+    const tool = toolOf([
+      toolUse('t1', 'Read'),
+      result('t1', [shot(1)], shot(1)),
+    ]);
+
+    expect(tool.response?.text).toBe('[image png, 123 KB]');
+    expect(tool.response?.images).toEqual([ref(1)]);
+  });
+
+  it('картинка, которую хост выбросил (parleyImageOmitted): пометка «[image omitted]», images нет', () => {
+    const blocks = [text('Took a screenshot'), { type: 'image', parleyImageOmitted: true }];
+    const tool = toolOf([toolUse('t1', 'mcp__browser__screenshot'), result('t1', blocks, blocks)]);
+
+    expect(tool.response?.text).toBe('Took a screenshot\n[image omitted]');
+    expect('images' in (tool.response ?? {})).toBe(false);
+  });
+
+  it('без картинок прежний разбор: текст блоков content, если toolUseResult не объект', () => {
+    const tool = toolOf([
+      toolUse('t1', 'mcp__x__y'),
+      result('t1', [text('line one'), text('line two')], 'ignored string'),
+    ]);
+
+    expect(tool.response?.text).toBe('line one\nline two');
+    expect('images' in (tool.response ?? {})).toBe(false);
+  });
+
+  it('объект toolUseResult без картинки по-прежнему идёт в сводку как есть', () => {
+    const tool = toolOf([
+      toolUse('t1', 'Bash'),
+      result('t1', 'out', { stdout: 'out', stderr: '' }),
+    ]);
+
+    expect(tool.response?.text).toBe('out');
+  });
+
+  it('картинка промпта после хоста (type сохранён) считается так же: images: 1', () => {
+    const { items } = feedFromTranscript([
+      {
+        type: 'user',
+        uuid: 'u1',
+        timestamp: T,
+        message: { role: 'user', content: [text('What is on this screenshot?'), shot(1)] },
+      },
+    ]);
+
+    expect(items).toEqual([
+      { id: 'prompt:#1', at: T, kind: 'prompt', text: 'What is on this screenshot?', images: 1 },
+    ]);
+  });
+
+  it('запись журнала с base64 после stashFeedImages: ссылка в ленте, байтов в ней нет, картинка промпта считается', () => {
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } };
+    const raw: RawRecord[] = [
+      toolUse('t1', 'mcp__browser__screenshot'),
+      result('t1', [text('Took a screenshot'), image], [text('Took a screenshot'), image]),
+      {
+        type: 'user',
+        uuid: 'u2',
+        timestamp: T,
+        message: { role: 'user', content: [text('and this one?'), image] },
+      },
+    ];
+    let saved = 0;
+    const stashed = raw.map(
+      (record) =>
+        stashFeedImages(record, () => {
+          saved += 1;
+          return ref(1);
+        }) as RawRecord,
+    );
+    const { items } = feedFromTranscript(stashed);
+
+    // Картинка стоит в записи вызова дважды (toolUseResult и content) и в промпте — три места.
+    expect(saved).toBe(3);
+    const tool = items.find((item): item is FeedTool => item.kind === 'tool');
+    expect(tool?.response?.images).toEqual([ref(1)]);
+    expect(items.find((item): item is FeedPrompt => item.kind === 'prompt')?.images).toBe(1);
+    expect(JSON.stringify(items)).not.toContain('iVBOR');
   });
 });

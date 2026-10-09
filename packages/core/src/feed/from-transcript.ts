@@ -10,6 +10,7 @@
 import { adapterV1 } from '../adapter-v1.js';
 import type { RawRecord } from '../jsonl.js';
 import { isRecord, textOf } from '../work/events.js';
+import { hasStashedImage } from './images.js';
 import {
   FeedDraft,
   agentByToolUse,
@@ -117,6 +118,17 @@ function onUserText(draft: FeedDraft, text: string, images: number, at: string):
   draft.put({ id: draft.nextId('prompt'), at, kind: 'prompt', text, images });
 }
 
+/**
+ * Что идёт в сводку вызова: блоки с картинкой после `stashFeedImages` — массив или объект из
+ * `toolUseResult`, а нет там — `content`; без картинок — `toolUseResult` записи, а не объект — текст
+ * блоков `content` для модели.
+ */
+function responseOf(toolUseResult: unknown, content: unknown): unknown {
+  if (hasStashedImage(toolUseResult)) return toolUseResult;
+  if (hasStashedImage(content)) return content;
+  return isRecord(toolUseResult) ? toolUseResult : (blocksText(content) ?? toolUseResult);
+}
+
 /** `tool_result` закрывает вызов: результат — `toolUseResult` записи, а нет его — текст для модели. */
 function onToolResult(
   draft: FeedDraft,
@@ -139,10 +151,7 @@ function onToolResult(
   if (tool === undefined) return;
   const rejected = typeof toolUseResult === 'string' && toolUseResult.startsWith(REJECTED);
   const status: FeedToolStatus = rejected ? 'rejected' : isError ? 'failed' : 'done';
-  const response = isRecord(toolUseResult)
-    ? toolUseResult
-    : (blocksText(block['content']) ?? toolUseResult);
-  draft.put(finishTool(tool, status, response, at));
+  draft.put(finishTool(tool, status, responseOf(toolUseResult, block['content']), at));
 }
 
 function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string): void {

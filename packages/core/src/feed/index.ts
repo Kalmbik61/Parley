@@ -5,6 +5,9 @@ export {
   FEED_AGENT_TEXT_LIMIT,
   FEED_CHILD_INPUT_LIMIT,
   FEED_CHILD_RESULT_LIMIT,
+  FEED_IMAGE_MAX_BYTES,
+  FEED_IMAGE_TTL_MS,
+  FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
@@ -17,6 +20,7 @@ export type {
   FeedCardState,
   FeedDecision,
   FeedError,
+  FeedImageRef,
   FeedItem,
   FeedNotice,
   FeedNoticeData,
@@ -43,6 +47,7 @@ export {
   emptyFeedState,
   settleCards,
 } from './reduce.js';
+export { stashFeedImages } from './images.js';
 export { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
 export { isHookNoise } from './noise.js';

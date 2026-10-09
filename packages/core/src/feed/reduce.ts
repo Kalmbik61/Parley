@@ -12,6 +12,7 @@
  */
 
 import { eventRecordOf, isRecord, textOf, type EventRecord } from '../work/events.js';
+import { summarizeImageBlocks } from './images.js';
 import { isHookNoise } from './noise.js';
 import {
   FEED_AGENT_CHILDREN,
@@ -138,7 +139,8 @@ export function blocksText(value: unknown): string | null {
 
 /**
  * Сводка результата инструмента: у `Bash` — вывод, у `Read` — содержимое файла, строка — как есть,
- * прочее — JSON. Усечение явное: `truncated` и полный `size`; предел — `limit`.
+ * массив блоков (результат MCP) и картинка после `stashFeedImages` — текст блоков с пометками картинок
+ * и ссылки в `images`, прочее — JSON. Усечение явное: `truncated` и полный `size`; предел — `limit`.
  */
 export function toolResponseOf(
   value: unknown,
@@ -146,7 +148,10 @@ export function toolResponseOf(
 ): FeedToolResponse | undefined {
   if (value === undefined || value === null) return undefined;
   let text: string;
-  if (typeof value === 'string') {
+  const blocks = summarizeImageBlocks(value);
+  if (blocks !== null) {
+    text = blocks.text;
+  } else if (typeof value === 'string') {
     text = value;
   } else if (
     isRecord(value) &&
@@ -171,11 +176,13 @@ export function toolResponseOf(
     text = JSON.stringify(value, null, 2);
   }
   const truncated = text.length > limit;
-  return {
+  const response: FeedToolResponse = {
     text: truncated ? text.slice(0, limit) : text,
     size: text.length,
     truncated,
   };
+  if (blocks !== null && blocks.images.length > 0) response.images = blocks.images;
+  return response;
 }
 
 /**
@@ -428,7 +435,8 @@ export function withResult(agent: FeedAgent, value: string): FeedAgent {
 
 /**
  * Закрытый вызов: статус, сводка результата и хунки. У вложенного вызова субагента сводка короче
- * (`FEED_CHILD_RESULT_LIMIT`), а хунков нет — дифф есть в журнале субагента.
+ * (`FEED_CHILD_RESULT_LIMIT`), а хунков и картинок нет — дифф есть в журнале субагента, а строка
+ * вложенного вызова миниатюр не рисует (в тексте сводки пометки картинок остаются).
  */
 export function finishTool(
   tool: FeedTool,
@@ -439,7 +447,10 @@ export function finishTool(
   const nested = tool.agentId !== undefined;
   const next: FeedTool = { ...tool, status, endedAt: at };
   const summary = toolResponseOf(response, nested ? FEED_CHILD_RESULT_LIMIT : FEED_RESULT_LIMIT);
-  if (summary !== undefined) next.response = summary;
+  if (summary !== undefined) {
+    if (nested) delete summary.images;
+    next.response = summary;
+  }
   const patch = nested ? undefined : patchOf(response);
   if (patch !== undefined) {
     next.patch = patch.hunks;
