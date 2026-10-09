@@ -115,6 +115,7 @@ export {
   setResult,
   transitionSession,
 } from './work/map.js';
+export { defaultSessionName } from './work/names.js';
 export { displayStatus } from './work/status-view.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export {
@@ -140,17 +141,23 @@ export {
   addMember,
   addMemberByLead,
   addRoom,
+  addRoomArchivedLetters,
   addRoomOriginMessage,
   addSystemMessage,
+  archiveRoom,
   deleteRoom,
   isDescendant,
   isMember,
+  isRoomArchived,
   isRoomClosed,
   joinNotice,
   leaveOtherRooms,
   liveLead,
   nextRoomId,
   renameRoom,
+  renameSession,
+  reopenRoom,
+  requireOpenRoom,
   roomLead,
   RoomRuleError,
   setRoomLead,

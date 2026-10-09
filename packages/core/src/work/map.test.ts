@@ -8,6 +8,7 @@ import {
   setResult,
   transitionSession,
 } from './map.js';
+import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
 import type { Room, SessionLifecycle, WorkMap } from './types.js';
 
@@ -117,6 +118,46 @@ describe('addSession', () => {
     expect(addSession(map, { provider: 'my-cli', label: 'своя', task: 't' }).provider).toBe(
       'my-cli',
     );
+  });
+
+  it('пустой (после обрезки) ярлык и NEW_LABEL — имя по умолчанию по номеру; заданный ярлык остаётся как есть', () => {
+    const map = emptyMap();
+    const labels = ['', '  \t ', NEW_LABEL, 'бэкенд', ' ревью '].map(
+      (label) => addSession(map, { provider: 'claude', label, task: 't' }).label,
+    );
+
+    expect(labels).toEqual([
+      defaultSessionName('s-01'),
+      defaultSessionName('s-02'),
+      defaultSessionName('s-03'),
+      'бэкенд',
+      ' ревью ',
+    ]);
+    expect(labels[0]).toBe('Ralph');
+    // Имена в карте разные: в пределах работы сессии по имени различимы.
+    expect(new Set(labels.slice(0, 3)).size).toBe(3);
+  });
+
+  it('имя по номеру зависит от id, а не от числа записей: после удаления сессии номер не переиспользуется', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: '', task: 't' });
+    const second = addSession(map, { provider: 'claude', label: '', task: 't' });
+    removeSession(map, second.id);
+
+    const third = addSession(map, { provider: 'claude', label: '', task: 't' });
+
+    expect(third.id).toBe('s-03');
+    expect(third.label).toBe(defaultSessionName('s-03'));
+    expect(third.label).not.toBe(second.label);
+  });
+
+  it('NEW_LABEL на диске не переписывается: карта старой сборки читается как есть', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: '', task: 't' }).label = NEW_LABEL;
+
+    const again = parseMap(JSON.stringify(map), 'map.json');
+
+    expect(again.sessions[0]?.label).toBe(NEW_LABEL);
   });
 });
 
@@ -664,7 +705,7 @@ describe('parseMap', () => {
     it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
       const parsed = parseMap(withRooms([oldRoom]), 'map.json');
 
-      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free', recipe: null });
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free', recipe: null, archivedAt: null });
     });
 
     it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
@@ -683,7 +724,15 @@ describe('parseMap', () => {
       const written = { ...oldRoom, lead: 's-03', proposal };
 
       const parsed = parseMap(withRooms([written]), 'map.json');
-      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', recipe: null, proposal: { ...proposal, kind: 'decision' } });
+      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', recipe: null, archivedAt: null, proposal: { ...proposal, kind: 'decision' } });
+      expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
+    });
+
+    it('archivedAt: старая комната читается открытой, записанное время переживает круг запись → чтение (архив комнат, 3.1)', () => {
+      const archivedAt = '2026-10-08T12:00:00.000Z';
+      const parsed = parseMap(withRooms([oldRoom, { ...oldRoom, id: 'r-02', archivedAt }]), 'map.json');
+
+      expect(parsed.rooms.map((room) => room.archivedAt)).toEqual([null, archivedAt]);
       expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
     });
 

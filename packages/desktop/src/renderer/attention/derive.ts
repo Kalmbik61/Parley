@@ -11,6 +11,7 @@ import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } 
 import { refKey } from '@parley/protocol';
 import { hasHumanMention } from '../components/rooms/room-remark.js';
 import { isoMs } from '../lib/iso-time.js';
+import { archivedRoomIds, isRoomArchived } from '../lib/room-archive.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 
@@ -32,10 +33,11 @@ export const ATTENTION_RANK: Record<Attention, 4 | 3 | 2 | 1 | 0> = {
  * Ждёт ли комната решения человека (спека окна 2026-09-29, 2.7): в слоте `Room.proposal` лежит решение
  * ведущего. У комнаты карты до 2026-09-29 поля `proposal` нет вовсе — это «не ждёт», а не ошибка. Одно
  * правило на карточку (значок вопроса), строку комнаты, вкладку комнаты (`layout/tab-meta.ts`), ранг работы и
- * «следующую, где нужен ты»: своего выражения `proposal ?? null` рядом с ним писать не надо.
+ * «следующую, где нужен ты»: своего выражения `proposal ?? null` рядом с ним писать не надо. Архивная комната решения не
+ * ждёт: хост очищает слот при архивации (`archiveRoom`), а правило страхует карту, где слот всё же остался.
  */
 export function roomAwaitsDecision(room: Room): boolean {
-  return (room.proposal ?? null) !== null;
+  return !isRoomArchived(room) && (room.proposal ?? null) !== null;
 }
 
 // Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
@@ -112,9 +114,15 @@ export function humanUnreadLetters(map: WorkMap): Message[] {
   return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
 }
 
-/** Упоминания человека в комнатах (`isHumanMention`) с isHumanUnread, в порядке карты: последнее — самое позднее. */
+/**
+ * Упоминания человека в комнатах (`isHumanMention`) с isHumanUnread, в порядке карты: последнее — самое позднее.
+ * Архивная комната не источник внимания (спека архива комнат, 5.3): её старые упоминания не считаются.
+ */
 export function humanUnreadMentions(map: WorkMap): Message[] {
-  return map.messages.filter((message) => isHumanUnread(message) && isHumanMention(message));
+  const archived = archivedRoomIds(map);
+  return map.messages.filter(
+    (message) => isHumanUnread(message) && isHumanMention(message) && !(message.roomId !== null && archived.has(message.roomId)),
+  );
 }
 
 /** Куда ведёт кнопка «для тебя» карточки: в почту — письма важнее — или в комнату самого позднего упоминания. */
@@ -175,7 +183,13 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
     lastEventAt = later(lastEventAt, live?.lastEventAt ?? null);
   }
 
-  for (const message of map.messages) lastEventAt = later(lastEventAt, message.at);
+  // Лента архивной комнаты — не событие работы: строка «Room archived by the human.» не поднимает карточку в сайдбаре
+  // и не меняет время в её заголовке (хост пишет архивацию без `touch`, чтобы карточка не подпрыгивала).
+  const archived = archivedRoomIds(map);
+  for (const message of map.messages) {
+    if (message.roomId !== null && archived.has(message.roomId)) continue;
+    lastEventAt = later(lastEventAt, message.at);
+  }
 
   // Комната с ждущим решением — «нужен ты», ранг 4, как blocked (спека окна 2026-09-29, 2.7): в счёт
   // «нужен ты» она входит наравне с сессией, иначе строка статуса молчала бы, а «следующая, где нужен
@@ -200,6 +214,8 @@ export function workAttention(entry: WorkEntry, activity: Record<string, Activit
   const roomsUnread: Record<string, number> = {};
   const roomMentions: Record<string, number> = {};
   for (const room of map.rooms) {
+    // Архивная комната внимания не просит (спека архива комнат, 5.3): ни счётчика, ни `@you` в её строке.
+    if (isRoomArchived(room)) continue;
     const count = roomUnreadForHuman(map, room.id);
     if (count > 0) roomsUnread[room.id] = count;
     const mentioned = mentions.filter((message) => message.roomId === room.id).length;

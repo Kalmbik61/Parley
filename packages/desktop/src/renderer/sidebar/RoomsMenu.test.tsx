@@ -85,4 +85,22 @@ describe('RoomsMenu (тест 4)', () => {
     // «@» стоит прямо перед числом непрочитанного.
     expect(mark.nextSibling?.textContent).toBe('2');
   });
+
+  it('архивные комнаты в меню не показываются, их непрочитанное не мешается в чужие числа (архив комнат, 5.3)', () => {
+    const map = makeWork('w-01', {
+      rooms: [makeRoom('r-01', 'Design'), { ...makeRoom('r-02', 'Backend'), archivedAt: '2026-10-08T12:00:00.000Z' }],
+      messages: [
+        makeLetter('m-1', { roomId: 'r-01', to: [] }),
+        makeLetter('m-2', { roomId: 'r-02', to: [], text: 'Готово, @human' }),
+      ],
+    }).map;
+    render(
+      <RoomsMenu map={map} onOpenRoom={vi.fn()}>
+        <button type="button">#</button>
+      </RoomsMenu>,
+    );
+    fireEvent.keyDown(screen.getByText('#'), { key: 'Enter' });
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+    expect(items.map((item) => item.textContent)).toEqual(['Design1']);
+  });
 });

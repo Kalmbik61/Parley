@@ -11,8 +11,7 @@
  *
  * Пустое название берётся из первого промпта (`titleFromPrompt`); пустой промпт — тихий старт агента, он ждёт задачу в
  * терминале. Ни названия, ни промпта — ошибка: названию не из чего взяться. Первый промпт — `task` первой сессии, цель
- * работы (`goal`) пуста, ярлык сессии пуст: с промптом строка сайдбара покажет `S01`, как в прототипе, а при пустом
- * промпте (тихий старт) хост поставит метку `NEW_LABEL` core — `S01 New session` до автозаголовка Claude Code.
+ * работы (`goal`) пуста, ярлык сессии пуст: хост поставит имя по номеру (`defaultSessionName` core) — `S01 Ralph`.
  *
  * «In its own worktree» (спека Orca-UI 6.6, план worktree 4.3) остаётся: виден, если `worktrees.available` для проекта.
  * «Choose a folder…» (`app.chooseFolder`) остаётся рядом с сегментом: без него в окне без работ нельзя выбрать первый проект.
@@ -118,6 +117,7 @@ export interface NewWorkComposerProps {
 
 export function NewWorkComposer({ open, projectPath: initialProject, title: initialTitle, bridge, onOpenChange }: NewWorkComposerProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
+  const hiddenProjects = useUiStore((state) => state.ui.hiddenProjects);
   const [projectPath, setProjectPath] = useState<string | null>(initialProject);
   const [chosenFolders, setChosenFolders] = useState<string[]>([]);
   const [title, setTitle] = useState('');
@@ -157,7 +157,9 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     const activeKey = useLayoutStore.getState().activeWorkKey;
     const activeProject =
       useWorksStore.getState().entries.find((entry) => workKey(entry.projectPath, entry.map.work.id) === activeKey)?.projectPath ?? null;
-    setProjectPath(initialProject ?? activeProject);
+    // Проект активной работы, убранный из списка («Remove from list…»), не предлагается: новая работа молча вернула бы его.
+    const offered = activeProject !== null && useUiStore.getState().ui.hiddenProjects.includes(activeProject) ? null : activeProject;
+    setProjectPath(initialProject ?? offered);
     setProvider(null);
     setTitle(initialTitle);
     setPrompt('');
@@ -204,7 +206,11 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     };
   }, [open, bridge, projectPath]);
 
-  const knownProjects = [...new Set([...entries.map((entry) => entry.projectPath), ...chosenFolders])].sort();
+  // Убранные из списка проекты («Remove from list…», спека архива, 6.3) в выборе не показываются. Исключение — выбранный
+  // сейчас (от «+» заголовка в режиме «показать всё») и добавленный через «Choose a folder…»: иначе выбор не был бы виден.
+  const knownProjects = [...new Set([...entries.map((entry) => entry.projectPath), ...chosenFolders])]
+    .filter((path) => !hiddenProjects.includes(path) || path === projectPath || chosenFolders.includes(path))
+    .sort();
 
   const chooseFolder = async (): Promise<void> => {
     const dir = await bridge.app.chooseFolder();
@@ -227,7 +233,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
         projectPath: work.projectPath,
         workId: work.workId,
         provider: chosen,
-        // Пустой ярлык: с промптом строка сайдбара покажет `S01`, без него хост поставит «новую сессию» (см. докблок).
+        // Пустой ярлык: хост поставит имя по номеру (см. докблок).
         label: '',
         task: prompt,
         parent: null,

@@ -631,11 +631,12 @@ export function createSessionsService(
   }
 
   /**
-   * Быстрая и дочерняя сессии core заводит с ярлыком `NEW_LABEL` и
-   * провайдером claude. Ярлык и провайдер из диалога окна должны остаться —
-   * иначе выбор человека молча терялся бы. Пустой ярлык оставляет `NEW_LABEL`,
-   * и тогда сессию переименует заголовок Claude Code (автозаголовок). Модель и
-   * усилие ложатся в запись так же, как их пишет `spawn_session`: без выбора полей нет.
+   * Быстрая и дочерняя сессии core заводит с именем по умолчанию (`addSession`
+   * ставит `defaultSessionName` вместо `NEW_LABEL`) и провайдером claude. Ярлык и
+   * провайдер из диалога окна должны остаться — иначе выбор человека молча терялся бы.
+   * Пустой ярлык оставляет имя по умолчанию: автозаголовок Claude Code его не меняет
+   * (спека архива комнат, раздел 14). Модель и усилие ложатся в запись так же, как их
+   * пишет `spawn_session`: без выбора полей нет.
    */
   async function applyChoice(ref: SessionRef, label: string, provider: string, role: SessionRole | null, choice: LaunchChoice): Promise<void> {
     const trimmed = label.trim();

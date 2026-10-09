@@ -19,7 +19,7 @@ import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { showClosedSessions, WorkCard, type WorkCardProps } from './WorkCard.js';
+import { showArchivedRooms, showClosedSessions, WorkCard, type WorkCardProps } from './WorkCard.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -811,4 +811,121 @@ it('passes active room-plan progress through the real room row',()=>{
  const entry=makeWork('w-01',{projectPath:'/tmp/proj',rooms:[makeRoom('r-01','Delivery')],sessions:[]});
  entry.map.plans=[{id:'pl-01',roomId:'r-01',rev:1,mode:'checklist',status:'active',goal:'Ship',items:[{id:1,title:'One',owner:'s-01',scope:'x',after:[],criteria:[],verifier:null,status:'ready',evidence:null,note:null,log:[]}],backlog:[],acceptedAt:'x',completedAt:null,cancelledAt:null,completionSummary:null}];
  renderCard(entry);expect(screen.getByText('0/1 done')).toBeTruthy();
+});
+
+// Архив комнат (спека 2026-10-08, 5.1): архивные комнаты уходят из основных строк под ссылку внизу карточки.
+describe('WorkCard — архивные комнаты под ссылкой (5.1)', () => {
+  const KEY = workKey('/tmp/proj', 'w-01');
+  const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, `Room ${id}`), members, lead: members[0] ?? null, ...patch });
+  const archivedRoom = (id: string, members: string[], patch: Partial<Room> = {}): Room => room(id, members, { archivedAt: ARCHIVED_AT, ...patch });
+  const sessions = () => [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c')];
+  const rowsOfCard = (): string[] =>
+    [...card().querySelectorAll<HTMLElement>('[data-session-id], [data-room-row]')].map((element) => element.getAttribute('data-room-row') ?? (element.getAttribute('data-session-id') as string));
+  const link = (): HTMLElement | null => card().querySelector<HTMLElement>('[data-archived-rooms]');
+
+  beforeEach(() => {
+    useUiStore.setState({ roomExpanded: {}, dialogs: { ...useUiStore.getState().dialogs, newSession: { open: false, work: null, room: false } } });
+    showClosedSessions(KEY, false);
+    showArchivedRooms(KEY, false);
+  });
+
+  it('архивной комнаты в основных строках нет, под ссылкой «1 archived room» её строка не выводится, пока ссылку не раскрыли', () => {
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
+    expect(rowsOfCard()).toEqual(['s-01', 's-03']);
+    expect(link()?.textContent).toBe('1 archived room');
+    expect(card().querySelector('[data-room-row]')).toBeNull();
+  });
+
+  it('число во множественном: «2 archived rooms»; нет архивных — ссылки нет', () => {
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02']), archivedRoom('r-02', [])] }));
+    expect(link()?.textContent).toBe('2 archived rooms');
+    cleanup();
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [room('r-01', ['s-02'])] }));
+    expect(link()).toBeNull();
+  });
+
+  it('клик раскрывает приглушённые строки (data-dimmed) и меняет подпись на «Hide archived rooms»; повторный — сворачивает; карточку не переключает', () => {
+    const onActivate = vi.fn();
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }), { onActivate });
+    fireEvent.click(link() as HTMLElement);
+    const row = card().querySelector('[data-room-row="r-01"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.hasAttribute('data-dimmed')).toBe(true);
+    expect(link()?.textContent).toBe('Hide archived rooms');
+    // Строка стоит под ссылкой.
+    expect((link() as HTMLElement).compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+    fireEvent.click(link() as HTMLElement);
+    expect(card().querySelector('[data-room-row]')).toBeNull();
+    expect(link()?.textContent).toBe('1 archived room');
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('раскрытая строка открывает комнату: клик по ней — onOpenRoom', () => {
+    const onOpenRoom = vi.fn();
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }), { onOpenRoom });
+    fireEvent.click(link() as HTMLElement);
+    fireEvent.click(card().querySelector('[data-room-row="r-01"]') as HTMLElement);
+    expect(onOpenRoom).toHaveBeenCalledWith('r-01');
+  });
+
+  it('сессия архивной комнаты: active — обычной строкой, sleeping — только внутри раскрытой архивной строки', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c', { lifecycle: 'sleeping' })];
+    useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
+    renderCard(makeWork('w-01', { sessions: list, rooms: [archivedRoom('r-01', ['s-02', 's-03'])] }));
+    expect(rowsOfCard()).toEqual(['s-01', 's-02']);
+    fireEvent.click(link() as HTMLElement);
+    expect(rowsOfCard()).toEqual(['s-01', 's-02', 'r-01', 's-03']);
+    expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-03"]')).not.toBeNull();
+    // Работающая s-02 в строке архивной комнаты второй раз не выводится.
+    expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-02"]')).toBeNull();
+  });
+
+  it('стоит после «N more closed» и перед «New session or room»', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })];
+    renderCard(makeWork('w-01', { sessions: list, rooms: [archivedRoom('r-01', ['s-02'])] }), { active: true });
+    const more = screen.getByText('1 more closed');
+    const add = screen.getByText(S.sidebar.newSessionOrRoom);
+    expect(more.compareDocumentPosition(link() as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect((link() as HTMLElement).compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
+  it('вид ссылки как у «N more closed»: 24px, 11px, отступ 28, вторичный цвет, основной на hover', () => {
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
+    for (const cls of ['h-6', 'pl-7', 'text-[11px]', 'rounded-full', 'text-work-sidebar-muted-foreground', 'hover:bg-foreground/6', 'hover:text-(--color-text)']) {
+      expect(link()?.className, cls).toContain(cls);
+    }
+  });
+
+  it('showArchivedRooms (→ и ← клавиатуры) раскрывает и сворачивает; вместе с «N more closed» дополнений не требует', () => {
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
+    act(() => showArchivedRooms(KEY, true));
+    expect(card().querySelector('[data-room-row="r-01"]')).not.toBeNull();
+    act(() => showArchivedRooms(KEY, false));
+    expect(card().querySelector('[data-room-row]')).toBeNull();
+  });
+
+  it('все комнаты в архиве — кнопки «#» нет (меню комнат пустое); есть открытая — кнопка на месте', () => {
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
+    expect(card().querySelector('[data-rooms]')).toBeNull();
+    cleanup();
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02']), room('r-02', ['s-03'])] }));
+    expect(card().querySelector('[data-rooms]')).not.toBeNull();
+  });
+
+  it('решение в архивной комнате (слот остался) значка вопроса карточке не даёт', () => {
+    const proposal = { id: 'p-1', from: 's-02', text: 'Решение', rev: 0, at: '2026-10-08T10:00:00.000Z' };
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'], { proposal })] }));
+    expect(card().querySelector('[data-work-glyph] [data-state="blocked"]')).toBeNull();
+  });
+
+  it('длинное название архивной комнаты не выталкивает строку: название обрезается, полный текст есть в DOM', () => {
+    const long = 'Ж'.repeat(200);
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: [{ ...archivedRoom('r-01', ['s-02']), title: long }] }));
+    fireEvent.click(link() as HTMLElement);
+    const title = within(card().querySelector('[data-room-row="r-01"]') as HTMLElement).getByText(long);
+    expect(title.className).toContain('truncate');
+    expect(title.className).toContain('min-w-0');
+  });
 });

@@ -5,6 +5,7 @@ import type { ParleyBridge } from "../../../shared/bridge.js";
 import { decodeIpcError } from "../../../shared/ipc-error.js";
 import { S } from "../../../shared/strings.js";
 import { hostMethods } from "../../lib/capabilities.js";
+import { isRoomArchived } from "../../lib/room-archive.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
 import { useHostStore } from "../../store/host.js";
@@ -37,11 +38,15 @@ export function planProgress(plan: RoomPlan): string {
   ).length;
   return P.progress(plan.mode, done, plan.items.length, basis);
 }
-/** Replies cannot settle another room/revision, connection, bridge or unmounted view. Human form text survives. */
+/**
+ * Replies cannot settle another room/revision, connection, bridge or unmounted view. Human form text survives.
+ * An archived room (`archived`) is read-only like a closed work: nothing is written to it until the human reopens it.
+ */
 function usePlanRequest(
   identity: string,
   bridge: ParleyBridge,
   workStatus: WorkEntry["map"]["work"]["status"],
+  archived = false,
 ) {
   const status = useHostStore((state) => state.status);
   const connections = useHostStore((state) => state.connections);
@@ -49,6 +54,7 @@ function usePlanRequest(
   const key = [
     identity,
     workStatus,
+    archived,
     connections,
     status.state,
     [...methods].sort().join(","),
@@ -77,7 +83,7 @@ function usePlanRequest(
     if (
       inFlight.current ||
       status.state !== "connected" ||
-      (!allowClosed && workStatus !== "active")
+      (!allowClosed && (workStatus !== "active" || archived))
     )
       return false;
     const captured = key,
@@ -125,7 +131,7 @@ function usePlanRequest(
       }
     }
   };
-  return { methods, busy, feedback, run, canMutate: workStatus === "active" };
+  return { methods, busy, feedback, run, canMutate: workStatus === "active" && !archived };
 }
 export function RoomModeControl({
   entry,
@@ -137,6 +143,7 @@ export function RoomModeControl({
   bridge: ParleyBridge;
 }): JSX.Element {
   const room = entry.map.rooms.find((room) => room.id === roomId);
+  const archived = room !== undefined && isRoomArchived(room);
   const mode = room?.mode ?? "free";
   const plan = currentRoomPlan(entry, roomId);
   const activePlan = plan?.status === "active" || plan?.status === "completing";
@@ -155,6 +162,7 @@ export function RoomModeControl({
     ].join("\0"),
     bridge,
     entry.map.work.status,
+    archived,
   );
   const canChange = action.methods.has("rooms.setMode");
   const lower =
@@ -191,7 +199,7 @@ export function RoomModeControl({
       </label>
       <span className="text-muted-foreground">{P.modeHelp[mode]}</span>
       {!canChange ? <span>{P.oldHost}</span> : null}
-      {!action.canMutate ? <span>{P.workClosed}</span> : null}
+      {!action.canMutate ? <span>{archived ? P.roomArchived : P.workClosed}</span> : null}
       {selected === null ? null : (
         <div className="basis-full space-y-2">
           {selected === "free" && activePlan ? (
@@ -381,6 +389,8 @@ export function PlanPanel({
   bridge: ParleyBridge;
 }): JSX.Element | null {
   const plan = currentRoomPlan(entry, roomId);
+  const room = entry.map.rooms.find((candidate) => candidate.id === roomId);
+  const archived = room !== undefined && isRoomArchived(room);
   const [form, setForm] = useState<ItemForm | null>(null);
   const [text, setText] = useState("");
   const [artifacts, setArtifacts] = useState("");
@@ -397,6 +407,7 @@ export function PlanPanel({
     ].join("\0"),
     bridge,
     entry.map.work.status,
+    archived,
   );
   const roomPlans = new Set(
     (entry.map.plans ?? [])
@@ -673,7 +684,7 @@ export function PlanPanel({
           )}
         </div>
       ) : null}
-      {!action.canMutate ? <p>{P.workClosed}</p> : null}
+      {!action.canMutate ? <p>{archived ? P.roomArchived : P.workClosed}</p> : null}
       {!action.methods.has("plans.submit") ||
       !action.methods.has("plans.verify") ? (
         <p>{P.oldHost}</p>

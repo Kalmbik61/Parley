@@ -1,16 +1,21 @@
 import { readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
 import { cancelledPlanLetter } from './plan-effects.js';
+import { isRoomArchived } from './rooms.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
 /**
  * Адресаты письма: `to`, а у рассылки комнаты (пустой `to`) — все участники,
  * кроме отправителя (спецификация 6.1). Создатель комнаты тоже участник, даже
  * если в `members` его не записали. Человек в адресаты не попадает: он не
- * сессия и читает всё, отметка прочтения ему не нужна.
+ * сессия и читает всё, отметка прочтения ему не нужна. Письма архивной комнаты
+ * адресатов не имеют, и с явным `to` тоже: старая лента непрочитанной не считается
+ * и сессий не будит (архив комнат, 3.4).
  */
 export function recipientsOf(message: Message, map: WorkMap): string[] {
-  if (message.roomId === null || message.to.length > 0) return message.to;
+  if (message.roomId === null) return message.to;
   const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+  if (room !== undefined && isRoomArchived(room)) return [];
+  if (message.to.length > 0) return message.to;
   if (room === undefined) return [];
   const members = new Set([room.creator, ...room.members]);
   members.delete(HUMAN);

@@ -436,16 +436,21 @@ on the "Appearance" tab; the theme can also be changed from the palette ("Theme:
   `★` for the lead. It expands by itself while a tab of the room or of one of its members is
   open in the active workspace, and the chevron overrides this until the window restarts. A
   click on the row opens the room; a click on an already open, expanded room collapses it. At
-  the bottom of a card: "N more closed" ("Hide closed" hides them) and, on the active
-  workspace, "+ New session or room". A right click on a card: "Pin"/"Unpin" · "New session" ·
+  the bottom of a card: "N more closed" ("Hide closed" hides them), "N archived rooms" and, on
+  the active workspace, "+ New session or room". A right click on a card: "Pin"/"Unpin" · "New session" ·
   "New room" · "Open mail" · "Rename" (or a double click on the name) · "Reveal in Finder" ·
   "Copy path" · "Mark as done" (for `done` and `archived` there is "Reopen" instead) ·
   "Archive" · "Delete…". A right click on a session row: "Open", "Open to the side", "Resume",
-  "Stop", "Close…" (with the confirmation "Session will no longer receive mail"), "Changes",
+  "Rename" (a field in place of the name), "Stop", "Close…" (with the confirmation "Session will
+  no longer receive mail"), "Changes",
   "Copy worktree path" (for a session with its own worktree), "Delete"; a member row of an
   expanded room also has "Make lead" (not on the lead and not on a closed session). A right
   click on a room row: "Rename" (a field in place of the name; an empty name keeps the old
-  one) and "Delete…" (see "Session conversation"). Collapsed projects,
+  one), "Archive…" ("Reopen" on an archived room) and "Delete…" (see "Session conversation").
+  A session created without a name gets one by its number — S01 Ralph, S02 Anatoly, S03 Ruslan
+  and so on — and keeps it until you rename it. A project whose workspaces are all archived stays
+  in the sidebar with "N archived" at the bottom of its group; "Remove from list…" in its menu
+  hides it until a workspace is created in it again. Collapsed projects,
   pinned workspaces and "Show done" survive a window restart. ↑/↓ in the sidebar move over
   cards and over session and room rows, and Enter opens. On a card, → and ← show and hide
   closed sessions; on a room row they expand and collapse it; ← on a session row goes to its
@@ -776,9 +781,9 @@ Enter opens the row and gives focus to its tab, ⌘Enter opens it in a new group
 and ⌘1–9 pick a row by number. An empty result offers 'Create workspace “…”' — a form with
 that name; the palette itself does not create workspaces or sessions and does not write to a
 terminal, and "Restart host…" asks for confirmation. An empty query shows the six most recent
-tabs and the four most recent workspaces. "Show archived workspaces" shows archived
-workspaces, dimmed at the end of their section, until the window restarts; to bring a
-workspace back, use "Reopen" in its menu. Archiving stops the workspace's running agents and
+tabs and the four most recent workspaces. Archived workspaces sit under "N archived" at the
+bottom of their project; "Show archived workspaces" shows all of them, dimmed at the end of
+their section, until the window restarts; to bring a workspace back, use "Reopen" in its menu. Archiving stops the workspace's running agents and
 frees their processes; until "Reopen", the host does not start its sessions, and messages to
 them wait. Archived workspaces are not counted in the counters, the badge and "Next session
 that needs you", even when shown.
@@ -1183,6 +1188,12 @@ deleted one by one exactly as with "Delete" on a session row (file tabs of their
 with the question about unsaved edits, the process, the worktree, the record), and only then
 the room; if a session cannot be deleted (a worktree with uncommitted changes), the room
 stays. Decisions, plan snapshots and room histories already written to `.parley/` stay.
+
+A room whose work is done can be archived instead: "Archive…" in the room row's menu. Its feed
+stays readable, but nobody can write to it until "Reopen"; a waiting decision is dismissed and a
+live plan cancelled. The checkbox "Also stop its N agents that are in no other room" is on by
+default; the agents left running get a letter that the room was archived. Archived rooms sit
+under "N archived rooms" at the bottom of the card.
 
 A whole workspace is removed with "Delete…" in the card menu. First its live sessions are
 stopped, then the whole `.parley/works/<id>` directory goes, with the artifacts, along with

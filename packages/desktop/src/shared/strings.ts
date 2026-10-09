@@ -17,6 +17,8 @@ import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWai
 export const S = {
   plans: {
     workClosed: 'Reopen this workspace to change the plan.',
+    /** Вместо `workClosed` у плана архивной комнаты: панель только читается. */
+    roomArchived: 'Reopen this room to change the plan.',
     title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
     revision: (n: number) => 'Revision ' + n,
     mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
@@ -320,6 +322,19 @@ export const S = {
     /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
     moreClosed: (n: number): string => `${n} more closed`,
     hideClosed: 'Hide closed',
+    /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
+    archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
+    hideArchivedRooms: 'Hide archived rooms',
+    /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
+    archivedWorks: (n: number): string => `${n} archived`,
+    hideArchivedWorks: 'Hide archived',
+    /** Пункт меню «⋯» проекта: убрать проект из списка (ничего не удаляет), `ui.json.hiddenProjects`. */
+    removeFromList: 'Remove from list…',
+    /** Тултип выключенного пункта: у проекта ещё есть неархивные работы. */
+    removeFromListBlocked: 'Archive its workspaces first',
+    removeProjectTitle: (folder: string): string => `Remove "${folder}" from the list?`,
+    removeProjectDescription: 'Its workspaces stay on disk. The project comes back when a workspace is created in it.',
+    removeProjectConfirm: 'Remove',
     /** Тултип `✉N` карточки: непрочитанные человеком письма работы. */
     unreadMail: (n: number): string => (n === 1 ? '1 unread message to you' : `${n} unread messages to you`),
     /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
@@ -345,6 +360,8 @@ export const S = {
     renameField: 'Workspace name',
     /** `aria-label` того же поля в строке комнаты (`RoomRowMenu` → «Rename»). */
     roomRenameField: 'Room name',
+    /** `aria-label` того же поля в строке сессии (`SessionRowMenu` → «Rename»). */
+    sessionRenameField: 'Session name',
     /** aria-label списка карточек — дерево «работа → сессии» для клавиатуры (спека 6.5). */
     workspaceList: 'Workspaces',
     /** Шеврон строки комнаты (спека окна 2026-09-29, 1.2) — `sidebar/RoomRow.tsx`. */
@@ -371,6 +388,8 @@ export const S = {
     addToRoomAction: 'add the session to the room',
     sessionMenu: {
       open: 'Open',
+      /** Первый пункт меню: поле на месте ярлыка, `sessions.rename` (спека архива комнат, часть 2, 15). */
+      rename: 'Rename',
       /** Кусок 3.4: сплит вправо с вкладкой терминала сессии. */
       openBeside: 'Open to the side',
       /** Кусок 3.4: только у сессии со своим worktree. */
@@ -389,6 +408,22 @@ export const S = {
     /** Меню строки комнаты по правой кнопке — `sidebar/RoomRowMenu.tsx`. */
     roomMenu: {
       rename: 'Rename',
+      archiveEllipsis: 'Archive…',
+      /** Пункт меню архивной комнаты и кнопка подтверждения архивации. */
+      reopen: 'Reopen',
+      archive: 'Archive',
+      archiveConfirmTitle: (title: string): string => `Archive room "${title}"?`,
+      archiveConfirmDescription:
+        'The room moves under "archived rooms" at the bottom of the workspace. Its feed stays readable; nobody can write to it until you reopen it.',
+      /** Дополнение к описанию, когда у комнаты ждёт ответа решение и/или идёт живой план: архивация их закрывает. */
+      archiveConfirmOpenWork: (decision: boolean, plan: boolean): string =>
+        decision && plan
+          ? ' Its pending decision will be dismissed and its plan cancelled.'
+          : decision
+            ? ' Its pending decision will be dismissed.'
+            : ' Its plan will be cancelled.',
+      /** Флажок подтверждения, включён по умолчанию: остановить агентов, у которых нет другой открытой комнаты. Остановка обратима. */
+      archiveStopAgents: (n: number): string => `Also stop its ${n} ${n === 1 ? 'agent that is' : 'agents that are'} in no other room`,
       deleteEllipsis: 'Delete…',
       deleteConfirmTitle: (title: string): string => `Delete room "${title}"?`,
       deleteConfirmDescription: 'The room and its feed will be deleted. Its sessions keep running as regular sessions of the workspace.',
@@ -412,7 +447,7 @@ export const S = {
     archive: 'Archive',
     deleteEllipsis: 'Delete…',
     archiveConfirmTitle: (title: string): string => `Archive "${title}"?`,
-    archiveConfirmDescription: 'Running agents will be stopped. Bring it back with "Show archived workspaces" in the palette, then "Reopen" it to resume them.',
+    archiveConfirmDescription: 'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
     deleteConfirmTitle: (title: string): string => `Delete "${title}"?`,
     deleteConfirmDescription: (sessions: number): string =>
       `${sessions === 1 ? '1 session' : `${sessions} sessions`} will be deleted. Running agents will be stopped.`,
@@ -596,7 +631,7 @@ export const S = {
         recipe: 'A saved room setup: roles, providers, models, the mode, worktrees and the lead, plus a playbook that only the lead gets. Built-in recipes and your own from .parley/recipes. Everything it fills stays editable.',
         workspace: 'The workspace the new agents join. A workspace is one task in a project: its sessions and rooms share one map and know about each other.',
         roomName: 'The room’s title in the sidebar and on its tab. If empty, the room is called “Room 1”, “Room 2” and so on.',
-        sessionName: 'The session’s name in the sidebar and on its tab. If empty, it is “New session” until Claude Code gives the session a title.',
+        sessionName: 'The session’s name in the sidebar and on its tab. If empty, the session gets a name by its number — Ralph, Anatoly, Ruslan and so on. Rename it any time from its menu.',
         agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
@@ -678,6 +713,10 @@ export const S = {
   rooms: {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
+    /** Метка в шапке вкладки архивной комнаты и строка вместо поля ввода (спека архива комнат, 5.2). */
+    archived: 'Archived',
+    archivedNote: 'This room is archived.',
+    reopen: 'Reopen',
     everyone: 'everyone',
     send: 'Send',
 
@@ -1548,7 +1587,7 @@ export const S = {
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',
-    /** Ярлык сессии, созданной без названия (`NEW_LABEL` core) — `lib/participant.ts`. */
+    /** Запасной ярлык `NEW_LABEL` core у сессии с id не вида `s-NN` (у остальных — имя по номеру) — `lib/participant.ts`. */
     newSession: 'New session',
     /** Название работы, созданной вместе с быстрой сессией (`UNTITLED_WORK` core) — `lib/participant.ts`. */
     untitledWorkspace: 'Untitled workspace',
@@ -1585,7 +1624,10 @@ export const S = {
       archiveWorkspace: 'archive workspace',
       deleteWorkspace: 'delete workspace',
       renameRoom: 'rename room',
+      renameSession: 'rename session',
       deleteRoom: 'delete room',
+      archiveRoom: 'archive room',
+      reopenRoom: 'reopen room',
       makeLead: 'change the room lead',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',

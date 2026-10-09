@@ -6,13 +6,16 @@
 import type { Handler } from '../context.js';
 import {
   addRoomMember,
+  archiveHumanRoom,
   createHumanRoom,
   deleteHumanRoom,
   renameHumanRoom,
+  reopenHumanRoom,
   resolveRoomProposal,
   sendHumanLetter,
   setHumanRoomLead,
 } from '../rooms/rooms-service.js';
+import type { SessionsService } from '../sessions/sessions-service.js';
 
 import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
@@ -45,6 +48,22 @@ export const roomsSetLead: Handler<'rooms.setLead'> = async (params) => ({
 
 export const roomsDelete: Handler<'rooms.delete'> = async (params) => {
   await deleteHumanRoom(params);
+  return { ok: true };
+};
+
+/**
+ * `rooms.archive` остаётся обёрткой над сервисом комнат, но ему нужны живые процессы сессий (остановка, письма только
+ * живым), поэтому обработчик строится фабрикой, как у `sessions.*`.
+ */
+export function createRoomsArchive(sessions: Pick<SessionsService, 'live' | 'stop'>): Handler<'rooms.archive'> {
+  return async (params) => {
+    await archiveHumanRoom(params, sessions);
+    return { ok: true };
+  };
+}
+
+export const roomsReopen: Handler<'rooms.reopen'> = async (params) => {
+  await reopenHumanRoom(params);
   return { ok: true };
 };
 

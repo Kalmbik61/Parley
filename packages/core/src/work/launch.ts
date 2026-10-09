@@ -44,6 +44,7 @@ import type { MemoryItem } from './project-memory.js';
 import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
+import { NEW_LABEL } from './names.js';
 import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
@@ -516,11 +517,10 @@ export function planNew(
 }
 
 /**
- * Ярлык быстрой сессии, пока не появился заголовок Claude Code (5.1). Метка-страж: она лежит в картах на
- * диске, по значению её узнают `applyAutoTitle`, хост (автозаголовок) и окно (показывает «New session»), а
- * агент видит её в брифе и в результатах MCP — поэтому английская.
+ * `NEW_LABEL` (ярлык быстрой сессии из старых карт) живёт в `names.ts`: `addSession` сверяет с ним ярлык, а этот
+ * модуль сам импортирует `map.ts`. Отсюда он по-прежнему экспортируется.
  */
-export const NEW_LABEL = 'new session';
+export { NEW_LABEL };
 /** Заголовок работы, созданной вместе с быстрой сессией (5.1); метка-страж того же рода, что `NEW_LABEL`. */
 export const UNTITLED_WORK = 'untitled';
 /**
@@ -621,9 +621,10 @@ export function autoTitleOf(
 }
 
 /**
- * Заголовок Claude Code доехал до индекса логов: ярлык быстрой сессии и
- * заголовок работы `UNTITLED_WORK` обновляются из него один раз (5.1).
- * Переименованную руками сессию не трогаем — её ярлык уже не `NEW_LABEL`.
+ * Заголовок Claude Code доехал до индекса логов: ярлык сессии, которая ещё `NEW_LABEL` (карты старых сборок),
+ * и заголовок работы `UNTITLED_WORK` обновляются из него один раз (5.1), каждый по своему признаку. Сессия с
+ * именем — из `defaultSessionName` или данным руками — ярлык не меняет: имя постоянное (спека архива комнат,
+ * раздел 14), а безымянную работу такая сессия всё равно называет.
  * Указатель на письма именем не ставится ни при каком источнике (`isPointerText`).
  */
 export async function applyAutoTitle(
@@ -635,8 +636,8 @@ export async function applyAutoTitle(
   if (isPointerText(title)) return;
   await updateMap(projectPath, workId, (map) => {
     const session = map.sessions.find((item) => item.id === sessionId);
-    if (session === undefined || !isNewLabel(session.label)) return;
-    session.label = title;
+    if (session === undefined) return;
+    if (isNewLabel(session.label)) session.label = title;
     if (isUntitledWork(map.work.title)) map.work.title = title;
   });
 }

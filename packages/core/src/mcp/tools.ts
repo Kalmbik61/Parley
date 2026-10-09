@@ -71,7 +71,7 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
-import { addMemberByLead, addRoom, isDescendant, isMember, joinNotice, leaveOtherRooms, liveLead } from '../work/rooms.js';
+import { addMemberByLead, addRoom, isDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
 import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
@@ -1058,7 +1058,8 @@ async function sendMessage(
     assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
 
     if (roomId !== null) {
-      const room = requireRoom(current, roomId);
+      // Запись в комнату: архивная отказывает текстом `RoomRuleError`. Чтение (`requireRoom`) архивную комнату отдаёт.
+      const room = requireOpenRoom(current, roomId);
       if (!isMember(room, sessionId)) {
         throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
       }
@@ -1319,12 +1320,13 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
     const result = await suggestBacklog(context.projectPath, { kind: args.kind as 'bug' | 'debt' | 'idea', title: args.title,
       why: args.why, ...(typeof args.details === 'string' ? { details: args.details } : {}), workId: context.workId, sessionId });
     let feedUnavailable = false;
-    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+    // Строка в ленту — только открытым комнатам: в архивную комнату не пишет никто, кроме человека.
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId) && !isRoomArchived(room))) {
       try {
         await updateMap(context.projectPath, context.workId, current => {
           const label = sessionId.replace(/^s-/, 'S');
           const text = `${label} ${result.status === 'added' ? 'added to' : 'suggested for'} the backlog: ${args.title as string}`;
-          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId) && !isRoomArchived(row)))
             addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
         });
       } catch { feedUnavailable = true; }
@@ -1392,7 +1394,8 @@ async function memoryTool(context: McpContext, name: string, args: Record<string
       ...(typeof args.details === 'string' ? { details: args.details } : {}), ...(request ? { onHumanRequest: true } : {}),
       workId: context.workId, sessionId });
     let feedUnavailable = false;
-    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId))) {
+    // Строка в ленту — только открытым комнатам, как у `backlog_suggest`.
+    if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId) && !isRoomArchived(room))) {
       try {
         await updateMap(context.projectPath, context.workId, current => {
           const label = sessionId.replace(/^s-/, 'S');
@@ -1400,7 +1403,7 @@ async function memoryTool(context: McpContext, name: string, args: Record<string
           const brief = fact.length > FEED_FACT_LENGTH ? `${fact.slice(0, FEED_FACT_LENGTH)}…` : fact;
           // The agent only claims that the human asked: the line says so instead of vouching for it.
           const text = result.status === 'remembered' ? `${label} remembered, saying you asked for it: ${brief}` : `${label} suggests remembering: ${brief}`;
-          for (const room of current.rooms.filter(row => row.members.includes(sessionId)))
+          for (const room of current.rooms.filter(row => row.members.includes(sessionId) && !isRoomArchived(row)))
             addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
         });
       } catch { feedUnavailable = true; }

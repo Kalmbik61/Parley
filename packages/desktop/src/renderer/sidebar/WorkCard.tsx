@@ -26,6 +26,11 @@
  * отдельной строкой не выводится, на его месте стоит строка комнаты (`RoomRow`), комнаты без живых участников — в
  * конце. Под строками активной карточки со статусом `active` — `+ New session or room`: она открывает диалог 1.5
  * (кусок 7) этой работы, как ⌘T и пункт палитры.
+ *
+ * Архивные комнаты (спека архива комнат, 5.1) в основных строках нет: внизу карточки, после «N more closed», стоит
+ * ссылка «N archived rooms» (образец — «N more closed»). Клик раскрывает под ней приглушённые строки архивных комнат
+ * (`sort.ts#archivedRows`), повторный — сворачивает; раскрытие живёт в памяти окна по ключу работы (`showArchivedRooms`),
+ * → и ← клавиатуры сайдбара раскрывают и сворачивают его вместе с закрытыми сессиями.
  */
 
 import { memo, useRef, useState } from 'react';
@@ -39,6 +44,7 @@ import { forYouTarget, roomAwaitsDecision, type WorkAttention } from '../attenti
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
+import { isRoomArchived } from '../lib/room-archive.js';
 import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
 import { workTitleText } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
@@ -50,7 +56,7 @@ import { InlineRename } from './InlineRename.js';
 import { RoomRow } from './RoomRow.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
-import { cardRows } from './sort.js';
+import { archivedRows, cardRows, type CardRoomRow } from './sort.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
@@ -110,6 +116,20 @@ export function showClosedSessions(key: string, shown: boolean): void {
   });
 }
 
+/**
+ * Раскрытая ссылка «N archived rooms» — до конца сеанса окна, по ключу работы, как «N more closed». Не состояние карточки
+ * по той же причине: виртуализатор размонтирует карточку за краем списка.
+ */
+const useExpandedArchived = create<{ keys: Record<string, true> }>(() => ({ keys: {} }));
+
+/** «N archived rooms» и «Hide archived rooms» карточки, → и ← клавиатуры сайдбара: архивные комнаты показать или спрятать. */
+export function showArchivedRooms(key: string, shown: boolean): void {
+  useExpandedArchived.setState((state) => {
+    if (shown === (state.keys[key] === true)) return state;
+    return { keys: shown ? { ...state.keys, [key]: true } : Object.fromEntries(Object.entries(state.keys).filter(([item]) => item !== key)) };
+  });
+}
+
 /** Имя папки — последний сегмент пути (как заголовок группы, `sort.ts`). */
 function folderName(projectPath: string): string {
   return projectPath.split('/').filter((part) => part !== '').at(-1) ?? projectPath;
@@ -133,6 +153,7 @@ export const WorkCard = memo(function WorkCard({
   const { projectPath, map } = entry;
   const key = workKey(projectPath, map.work.id);
   const expanded = useExpandedClosed((state) => state.keys[key] === true);
+  const archivedShown = useExpandedArchived((state) => state.keys[key] === true);
   const [renaming, setRenaming] = useState(false);
   const stop = useCursorStop(key, null, active);
   // Без `works.rename` у хоста нет ни пункта меню, ни двойного клика (спека 3.2).
@@ -161,6 +182,8 @@ export const WorkCard = memo(function WorkCard({
   const closedCount = tree.filter(({ session }) => session.lifecycle === 'closed').length;
   // Строки карточки: сессии и комнаты на месте своих участников; закрытые — только при раскрытом «N more closed».
   const rows = cardRows(map, expanded);
+  // Архивные комнаты — под ссылкой; число в ссылке — все архивные, а строки в DOM только у раскрытой.
+  const archived = archivedRows(map, expanded);
   // «N сессий» — открытые, как в макете спеки 6.3: закрытые считает строка «+N closed».
   const openCount = tree.length - closedCount;
 
@@ -175,6 +198,27 @@ export const WorkCard = memo(function WorkCard({
   // Решение ждёт человека — значок вопроса, как у blocked; правило то же, что у строки комнаты и ранга работы.
   const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
+
+  // Строка комнаты — и в основных строках, и под ссылкой архивных: одни пропсы, у архивной приглушение делает сама строка.
+  const renderRoomRow = (row: CardRoomRow): JSX.Element => (
+    <RoomRow
+      key={`room ${row.room.id}`}
+      workKey={key}
+      projectPath={projectPath}
+      workId={map.work.id}
+      bridge={bridge}
+      row={row}
+      plan={(map.plans ?? []).find(plan => plan.roomId === row.room.id && (plan.status === 'active' || plan.status === 'completing')) ?? null}
+      unread={attention.roomsUnread[row.room.id] ?? 0}
+      mentioned={(attention.roomMentions[row.room.id] ?? 0) > 0}
+      activity={activity}
+      now={now}
+      active={active}
+      selectedSessionId={selectedSessionId}
+      onOpen={() => onOpenRoom(row.room.id)}
+      openerFor={openerFor}
+    />
+  );
 
   return (
     <CardMenu entry={entry} pinned={pinned} bridge={bridge} onRename={() => setRenaming(true)} onOpenMail={onOpenMail}>
@@ -231,7 +275,7 @@ export const WorkCard = memo(function WorkCard({
             <span className="tabular-nums">{attention.humanUnread}</span>
           </button>
         ) : null}
-        {map.rooms.length > 0 ? (
+        {map.rooms.some((room) => !isRoomArchived(room)) ? (
           <RoomsMenu map={map} onOpenRoom={onOpenRoom}>
             <button
               type="button"
@@ -285,23 +329,7 @@ export const WorkCard = memo(function WorkCard({
                 onOpen={openerFor(row.session.id)}
               />
             ) : (
-              <RoomRow
-                key={`room ${row.room.id}`}
-                workKey={key}
-                projectPath={projectPath}
-                workId={map.work.id}
-                bridge={bridge}
-                row={row}
-                plan={(map.plans ?? []).find(plan => plan.roomId === row.room.id && (plan.status === 'active' || plan.status === 'completing')) ?? null}
-                unread={attention.roomsUnread[row.room.id] ?? 0}
-                mentioned={(attention.roomMentions[row.room.id] ?? 0) > 0}
-                activity={activity}
-                now={now}
-                active={active}
-                selectedSessionId={selectedSessionId}
-                onOpen={() => onOpenRoom(row.room.id)}
-                openerFor={openerFor}
-              />
+              renderRoomRow(row)
             ),
           )}
         </div>
@@ -323,6 +351,29 @@ export const WorkCard = memo(function WorkCard({
           {expanded ? S.sidebar.hideClosed : S.sidebar.moreClosed(closedCount)}
         </button>
       ) : null}
+      {archived.length > 0 ? (
+        <button
+          type="button"
+          data-archived-rooms=""
+          onClick={(event) => {
+            event.stopPropagation();
+            showArchivedRooms(key, !archivedShown);
+          }}
+          className={cn(
+            // Как «N more closed»: основной цвет на hover — явно, в приглушённой карточке он равен вторичному.
+            'flex h-6 w-full items-center rounded-full pl-7 text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
+            rows.length > 0 || closedCount > 0 ? 'mt-px' : 'mt-1.5',
+            secondary,
+          )}
+        >
+          {archivedShown ? S.sidebar.hideArchivedRooms : S.sidebar.archivedRooms(archived.length)}
+        </button>
+      ) : null}
+      {archivedShown && archived.length > 0 ? (
+        <div role="group" data-archived-rooms-list="" className="mt-px flex flex-col gap-px">
+          {archived.map(renderRoomRow)}
+        </div>
+      ) : null}
       {active && map.work.status === 'active' ? (
         <button
           type="button"
@@ -334,7 +385,7 @@ export const WorkCard = memo(function WorkCard({
           className={cn(
             // Основной цвет на hover — явно, как у «N more closed» выше: в приглушённом поддереве он равен вторичному.
             'flex h-6 w-full items-center gap-1.5 rounded-full pl-[26px] text-left text-[11px] hover:bg-foreground/6 hover:text-(--color-text)',
-            rows.length > 0 || closedCount > 0 ? 'mt-px' : 'mt-1.5',
+            rows.length > 0 || closedCount > 0 || archived.length > 0 ? 'mt-px' : 'mt-1.5',
             secondary,
           )}
         >

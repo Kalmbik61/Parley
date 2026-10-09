@@ -15,7 +15,9 @@ import {
   addMember,
   addMessage,
   addRoom,
+  addRoomArchivedLetters,
   addRoomOriginMessage,
+  archiveRoom,
   deleteRoom,
   HUMAN,
   DEFAULT_CONFIG,
@@ -30,15 +32,19 @@ import {
   leaveOtherRooms,
   ProposalConflictError,
   renameRoom,
+  reopenRoom,
+  requireOpenRoom,
   resolveProposal,
   RoomRuleError,
   setRoomLead,
   updateMap,
   workPaths,
+  type Room,
   type WorkMap,
 } from '@parley/core';
-import type { Params } from '@parley/protocol';
+import type { Params, SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
+import type { SessionsService } from '../sessions/sessions-service.js';
 
 const bad = (message: string): HostError => new HostError('bad_request', message);
 
@@ -65,6 +71,15 @@ function asHostError(error: unknown): unknown {
   if (error instanceof RoomRuleError) return bad(error.message);
   if (error instanceof ProposalConflictError || error instanceof PlanConflictError) return new HostError('conflict', error.message);
   return error;
+}
+
+/** Комната для записи в неё (`requireOpenRoom`): нет такой или она в архиве — `bad_request`. */
+function openRoom(map: WorkMap, roomId: string): Room {
+  try {
+    return requireOpenRoom(map, roomId);
+  } catch (error) {
+    throw asHostError(error);
+  }
 }
 
 /**
@@ -147,7 +162,7 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
 
 /**
  * Письмо человека. Без комнаты — ровно один адресат-сессия; в комнате адресаты
- * должны быть её участниками, пустой `to` — рассылка всем (`recipientsOf`).
+ * должны быть её участниками, пустой `to` — рассылка всем (`recipientsOf`). Комната в архиве — отказ.
  */
 export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind } = input;
@@ -155,8 +170,8 @@ export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<stri
   let messageId = '';
   await updateMap(projectPath, workId, (map) => {
     if (roomId !== null) {
-      const room = map.rooms.find((candidate) => candidate.id === roomId);
-      if (room === undefined) throw bad(`room ${roomId} is not in the map`);
+      // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
+      const room = openRoom(map, roomId);
       for (const id of to) {
         if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
@@ -287,4 +302,78 @@ export async function deleteHumanRoom(input: Params<'rooms.delete'>): Promise<vo
       throw asHostError(error);
     }
   });
+}
+
+/**
+ * Архивация комнаты из окна (`rooms.archive`): правила, строка ленты, отмена плана и очистка решения — в core
+ * (`archiveRoom`). Не событие работы: `updatedAt` стоит на месте, как у `rooms.rename` и `works.setStatus`, — человек
+ * убирает законченное с глаз, и карточка не должна всплывать в начало своего ранга.
+ *
+ * `archiveRoom` отдаёт сессии, у которых после архивации нет другой открытой комнаты. Дальше две ветки, обе — только для
+ * тех из них, у кого есть живой процесс хоста (`sessions.live`): спящей, закрытой и ещё не запущенной остановка не нужна,
+ * а письмо спящую подняло бы обратно будильником.
+ * - `stopSessions`: каждой живой — `sessions.stop`, как у кнопки Stop и у архива работы; сессия засыпает, поднимет её
+ *   Resume или письмо. Письма им не пишутся: они спят.
+ * - иначе: живым, кого не остановили, — прямое письмо `parley` (`addRoomArchivedLetters`). Оно пишется той же записью,
+ *   что и архивация, поэтому комната не остаётся архивной без письма.
+ *
+ * Запись карты уже сделана, когда начинается остановка, поэтому сбой остановки не откатывает архив: остальные сессии
+ * всё равно останавливаются, а первая ошибка уходит окну после всех. Повторный вызов для уже архивной комнаты ничего не
+ * делает (`archiveRoom` отдаёт пустой список) — ни остановки, ни писем.
+ */
+export async function archiveHumanRoom(
+  input: Params<'rooms.archive'>,
+  sessions: Pick<SessionsService, 'live' | 'stop'>,
+): Promise<void> {
+  const { projectPath, workId, roomId, stopSessions } = input;
+  assertWork(projectPath, workId);
+  const refOf = (sessionId: string): SessionRef => ({ projectPath, workId, sessionId });
+  let live: SessionRef[] = [];
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      try {
+        const orphans = archiveRoom(map, roomId);
+        live = orphans.map(refOf).filter((ref) => sessions.live(ref));
+        if (!stopSessions) {
+          addRoomArchivedLetters(
+            map,
+            roomId,
+            live.map((ref) => ref.sessionId),
+          );
+        }
+      } catch (error) {
+        throw asHostError(error);
+      }
+    },
+    { touch: false },
+  );
+  if (!stopSessions) return;
+
+  const stopped = await Promise.allSettled(live.map((ref) => sessions.stop(ref)));
+  const failed = stopped.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed !== undefined) throw failed.reason;
+}
+
+/**
+ * Возврат комнаты из архива (`rooms.reopen`): правила и строка ленты — в core (`reopenRoom`). Сессии сами не
+ * поднимаются, как и при Reopen работы. Не событие работы (`updatedAt` на месте), как у архивации и у Reopen работы
+ * (`setWorkStatus`): карточка всплывёт, когда в комнате появится первое письмо.
+ */
+export async function reopenHumanRoom(input: Params<'rooms.reopen'>): Promise<void> {
+  const { projectPath, workId, roomId } = input;
+  assertWork(projectPath, workId);
+  await updateMap(
+    projectPath,
+    workId,
+    (map) => {
+      try {
+        reopenRoom(map, roomId);
+      } catch (error) {
+        throw asHostError(error);
+      }
+    },
+    { touch: false },
+  );
 }

@@ -5,7 +5,8 @@
  * закрывается, и карточка снова показывает прежнее название из снимка.
  *
  * То же поле переименовывает комнату в её строке (`RoomInlineRename`, «Rename» меню строки комнаты) —
- * `rooms.rename`. Пустое название не уходит хосту ни там, ни там: остаётся прежнее.
+ * `rooms.rename` — и сессию (`SessionInlineRename`, «Rename» меню строки сессии) — `sessions.rename`. Пустое
+ * название не уходит хосту нигде: остаётся прежнее.
  *
  * Пока поле открыто, порядок сайдбара держится: пересортировка сдвинула бы карточку, а
  * виртуализация перемонтировала бы поле.
@@ -13,12 +14,12 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { Room, WorkEntry } from '@parley/core';
+import type { Room, WorkEntry, WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
-import { workTitleText } from '../lib/participant.js';
+import { sessionLabelText, workTitleText } from '../lib/participant.js';
 import { workKey } from '../lib/tree-order.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
 
@@ -64,6 +65,34 @@ export function RoomInlineRename({ projectPath, workId, room, bridge, onDone }: 
       method="rooms.rename"
       action={S.errors.actions.renameRoom}
       save={(title) => bridge.call('rooms.rename', { projectPath, workId, roomId: room.id, title })}
+      className="h-[18px] text-xs leading-[18px]"
+      onDone={onDone}
+    />
+  );
+}
+
+export interface SessionInlineRenameProps {
+  projectPath: string;
+  workId: string;
+  session: WorkSession;
+  bridge: ParleyBridge;
+  onDone(): void;
+}
+
+/**
+ * Поле на месте ярлыка в строке сессии (`SessionRow`): номер (`S05`) остаётся перед полем, правится только ярлык.
+ * Открывается на том, что видно в строке: старая метка `new session` — именем по номеру (`sessionLabelText`).
+ * Высота поля — как у строки комнаты: строка сессии 26px, поле 18px.
+ */
+export function SessionInlineRename({ projectPath, workId, session, bridge, onDone }: SessionInlineRenameProps): JSX.Element {
+  return (
+    <RenameField
+      title={sessionLabelText(session.label, session.id)}
+      hold={`rename ${workKey(projectPath, workId)} ${session.id}`}
+      label={S.sidebar.sessionRenameField}
+      method="sessions.rename"
+      action={S.errors.actions.renameSession}
+      save={(label) => bridge.call('sessions.rename', { ref: { projectPath, workId, sessionId: session.id }, label })}
       className="h-[18px] text-xs leading-[18px]"
       onDone={onDone}
     />
