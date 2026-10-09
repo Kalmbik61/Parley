@@ -33,7 +33,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * инструмента и семью картинками — ряд из шести миниатюр переносится, не раздвигает ленту вбок и не наезжает
  * на следующую строку. Снимки — в `test-results/chat-tool-images/` (не коммитятся).
  *
- * Пропорции картинки — отдельный тест в конце: настоящий main на macOS отдаёт миниатюру квадратом (см. там).
+ * Пропорции картинки — отдельный тест в конце: настоящий main отдаёт миниатюру и крупную версию в пропорциях исходника
+ * (на macOS системная миниатюра квадратного ящика растягивала картинку; см. там).
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -733,32 +734,35 @@ test.describe('скриншоты из результатов инструмен
   }
 
   /**
-   * Пропорции картинки в ответе main. `app.imageThumbnail` просит у системы миниатюру квадрата `side × side`, а настоящий
-   * Electron на macOS (`nativeImage.createThumbnailFromPath`) отдаёт квадрат целиком: картинка 16:10 вписана в него
-   * растяжением, без полей. Замер 2026-10-09 на источнике 1280×800 (красный блок — 20–31,3 % ширины и 8–26 % высоты):
-   * миниатюра 320×320 и 1600×1600 держит блок на тех же долях, то есть сжата по горизонтали в 1,6 раза; запрос в
-   * пропорциях исходника (320×200, 1600×1000) и `createFromPath().resize()` дают верный размер без искажений. Лента
-   * показывает 320×320 в рамке 160×120 с `object-cover` (искажена и обрезана по высоте), просмотр — квадрат 1600×1600
-   * в `max-h-[85vh]` (скриншот 16:10 виден квадратным).
+   * Пропорции картинки в ответе main (находка этого E2E, 2026-10-09). Раньше `app.imageThumbnail` просил у системы
+   * миниатюру квадрата `side × side`, а настоящий Electron на macOS (`nativeImage.createThumbnailFromPath`) вписывает
+   * картинку в названный ящик целиком, растягивая: из 1280×800 выходил квадрат 320×320 (для просмотра — 1600×1600), а лента
+   * показывала его искажённым и обрезанным. Теперь PNG и JPEG main читает сам и уменьшает по длинной стороне, а GIF и
+   * WebP, которых `createFromPath` не читает, просит у системы ящиком в пропорциях заголовка файла.
    *
-   * Тест — настоящий main без ленты: файлы разных пропорций и размеры ответа на обычную сторону и на 1600. На macOS он
-   * сейчас падает, `test.fail` держит набор зелёным и напомнит о себе, когда main починят (Playwright скажет, что
-   * тест «ожидался упавшим, но прошёл»): тогда строку с `test.fail` надо убрать. На других системах `imageThumbnail`
-   * уходит в `createFromPath` + `resize`, и тест проходит как есть.
+   * Тест — настоящий main без ленты: файлы разных пропорций и форматов, размер ответа на обычную сторону (320) и на 1600.
+   * Длинная сторона ответа — не больше запрошенной, меньшая картинка остаётся своего размера, пропорции исходника целы
+   * (допуск 2 px на округление). PNG пишет сам тест; JPEG, GIF и три вида WebP (с потерями, без потерь, расширенный
+   * VP8X) лежат в `fixtures/aspect/` как их отдали `sips` и `cwebp`, 640×400.
    */
   test('main отдаёт миниатюру и крупную версию в пропорциях исходной картинки', async () => {
-    test.fail(
-      process.platform === 'darwin',
-      'macOS: nativeImage.createThumbnailFromPath отдаёт квадрат side×side с растянутой картинкой',
-    );
-    const sources = [
+    const generated = [
       { file: 'wide.png', width: 1280, height: 800 },
       { file: 'tall.png', width: 400, height: 800 },
       { file: 'square.png', width: 512, height: 512 },
+      // Больше 1600 по длинной стороне: просмотр обязан уменьшить, а не отдать как есть.
+      { file: 'big.png', width: 3200, height: 2000 },
     ];
-    for (const source of sources) {
+    for (const source of generated) {
       await writeFile(path.join(project, source.file), makeShot(source.width, source.height, 7));
     }
+    const fixtures = path.resolve(dirname, 'fixtures/aspect');
+    const sources = [
+      ...generated.map(({ file, ...size }) => ({ path: path.join(project, file), ...size })),
+      ...['wide.jpg', 'wide.gif', 'wide-lossy.webp', 'wide-lossless.webp', 'wide-alpha.webp'].map(
+        (file) => ({ path: path.join(fixtures, file), width: 640, height: 400 }),
+      ),
+    ];
     const app = await electron.launch({
       args: [mainEntry],
       env: { ...process.env, PARLEY_HOME: home },
@@ -777,13 +781,22 @@ test.describe('скриншоты из результатов инструмен
             await image.decode();
             return { width: image.naturalWidth, height: image.naturalHeight };
           },
-          { file: path.join(project, source.file), px: maxPx },
+          { file: source.path, px: maxPx },
         );
-        const label = `${source.file} ${source.width}×${source.height}, сторона ${maxPx ?? 'по умолчанию'}`;
+        const label = `${path.basename(source.path)} ${source.width}×${source.height}, сторона ${maxPx ?? 'по умолчанию'}`;
         expect.soft(size, label).not.toBeNull();
         if (size === null) continue;
+        // Длинная сторона — запрошенная (320 по умолчанию), но не больше, чем у самой картинки.
+        const scale = Math.min(1, (maxPx ?? 320) / Math.max(source.width, source.height));
+        const expected = {
+          width: Math.round(source.width * scale),
+          height: Math.round(source.height * scale),
+        };
+        const answer = `${label}: ответ ${size.width}×${size.height}, ждали ${expected.width}×${expected.height}`;
+        expect.soft(Math.abs(size.width - expected.width), answer).toBeLessThanOrEqual(2);
+        expect.soft(Math.abs(size.height - expected.height), answer).toBeLessThanOrEqual(2);
         expect
-          .soft(size.width / size.height, `${label}: ответ ${size.width}×${size.height}`)
+          .soft(size.width / size.height, `${answer}: пропорции`)
           .toBeCloseTo(source.width / source.height, 1);
       }
     }
