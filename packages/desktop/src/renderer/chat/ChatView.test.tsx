@@ -1300,6 +1300,17 @@ describe('ChatView — вложения в поле ввода (живая пр�
     expect(chips()).toEqual([]);
   });
 
+  it('saveDropImage вернул null (main не прочитал картинку) — тост, поле и чипы пусты', async () => {
+    bridge.setSaveDropImage(null);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    fireEvent.paste(field(), { clipboardData: imageData });
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledWith(S.terminal.imageUnreadable);
+    expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
+  });
+
   it('бросок файлов на вид: подсветка data-dropping, чипы без дублей, текст поля не меняется; бросок без файлов не принимается', async () => {
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);

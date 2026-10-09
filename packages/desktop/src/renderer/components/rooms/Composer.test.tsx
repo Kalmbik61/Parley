@@ -8,12 +8,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
+import { S } from '../../../shared/strings.js';
 import { useUiStore } from '../../store/ui.js';
 import { fakeDictationDeps } from '../../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { useDictationStore } from '../../voice/dictation-store.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
+
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 const MEMBERS: ComposerMember[] = [
   { id: 's-01', label: 'S01 архитектор', rawLabel: 'архитектор', provider: 'claude', providerName: 'Claude Code', model: 'Opus 5.5', word: 'working', lead: true },
@@ -605,7 +609,7 @@ describe('Composer — отправка и сериализация (2.2)', () =
 
 describe('Composer — вставка только текстом (2.2)', () => {
   const clipboard = (plain: string, html: string) => ({
-    clipboardData: { getData: (format: string) => (format === 'text/plain' ? plain : format === 'text/html' ? html : '') },
+    clipboardData: { items: [], getData: (format: string) => (format === 'text/plain' ? plain : format === 'text/html' ? html : '') },
   });
 
   it('из буфера берётся text/plain: разметка в поле не попадает, событие погашено', () => {
@@ -901,6 +905,64 @@ describe('Composer — вложения', () => {
     press('Enter');
     await waitFor(() => expect(chips()).toEqual(['/a/one.txt']));
     expect(editor().textContent).toBe('Текст');
+  });
+
+  describe('скриншот из буфера', () => {
+    const imageData = { items: [{ kind: 'file', type: 'image/png' }], getData: () => '' };
+
+    beforeEach(() => {
+      vi.mocked(toast.error).mockClear();
+    });
+
+    it('картинка без текста — saveDropImage, чип над полем, текст в поле не попадает, вставка погашена', async () => {
+      bridge.setSaveDropImage('/h/drops/shot.png');
+      renderComposer();
+      const notPrevented = fireEvent.paste(editor(), { clipboardData: imageData });
+      expect(notPrevented).toBe(false);
+      await waitFor(() => expect(chips()).toEqual(['/h/drops/shot.png']));
+      expect(bridge.saveDropImageCalls).toEqual(['clipboard']);
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(editor().textContent).toBe('');
+    });
+
+    it('картинка к уже выбранным файлам добавляется в конец, без повторов', async () => {
+      bridge.setChosenFiles(['/a/one.txt']);
+      bridge.setSaveDropImage('/h/drops/shot.png');
+      renderComposer();
+      fireEvent.click(attach());
+      await waitFor(() => expect(chips()).toEqual(['/a/one.txt']));
+      fireEvent.paste(editor(), { clipboardData: imageData });
+      await waitFor(() => expect(chips()).toEqual(['/a/one.txt', '/h/drops/shot.png']));
+    });
+
+    it('текст вместе с картинкой — обычная вставка текста, saveDropImage не зовётся', async () => {
+      renderComposer();
+      caret(editor(), 0);
+      const notPrevented = fireEvent.paste(editor(), {
+        clipboardData: { items: [{ kind: 'string', type: 'text/plain' }, { kind: 'file', type: 'image/png' }], getData: () => 'подпись' },
+      });
+      expect(notPrevented).toBe(false);
+      await act(async () => {});
+      expect(execCommand).toHaveBeenCalledWith('insertText', false, 'подпись');
+      expect(bridge.saveDropImageCalls).toEqual([]);
+      expect(chips()).toEqual([]);
+    });
+
+    it('main не прочитал картинку (null) — тост, вложения нет', async () => {
+      bridge.setSaveDropImage(null);
+      renderComposer();
+      fireEvent.paste(editor(), { clipboardData: imageData });
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(S.terminal.imageUnreadable));
+      expect(chips()).toEqual([]);
+    });
+
+    it('слишком большая картинка — тост про предел, вложения нет', async () => {
+      bridge.setSaveDropImage({ code: 'drops:too-large', message: 'big' });
+      renderComposer();
+      fireEvent.paste(editor(), { clipboardData: imageData });
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(S.terminal.imageTooLarge));
+      expect(chips()).toEqual([]);
+    });
   });
 
   it('файлы, брошенные на поле, текстом не вставляются', () => {
