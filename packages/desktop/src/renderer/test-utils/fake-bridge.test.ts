@@ -169,4 +169,25 @@ describe('fake-bridge: app.imageThumbnail (миниатюры вложений �
     expect(await bridge.app.imageThumbnail('/b.png')).toBeNull();
     expect(bridge.thumbnailCalls).toEqual(['/a.png', '/a.png', '/b.png']);
   });
+
+  it('сторона: журнал thumbnailRequests; ответ на размер важнее общего, общий отвечает любому размеру, null на размер — тоже ответ', async () => {
+    const bridge = createFakeBridge();
+    bridge.setThumbnail('/a.png', 'SMALL');
+    bridge.setThumbnail('/a.png', 'BIG', 1600);
+    bridge.setThumbnail('/b.png', 'SMALL');
+    bridge.setThumbnail('/b.png', null, 1600);
+    expect(await bridge.app.imageThumbnail('/a.png')).toBe('SMALL');
+    expect(await bridge.app.imageThumbnail('/a.png', 1600)).toBe('BIG');
+    expect(await bridge.app.imageThumbnail('/a.png', 800)).toBe('SMALL');
+    expect(await bridge.app.imageThumbnail('/b.png', 1600)).toBeNull();
+    expect(await bridge.app.imageThumbnail('/c.png', 1600)).toBeNull();
+    expect(bridge.thumbnailRequests).toEqual([
+      { path: '/a.png', maxPx: undefined },
+      { path: '/a.png', maxPx: 1600 },
+      { path: '/a.png', maxPx: 800 },
+      { path: '/b.png', maxPx: 1600 },
+      { path: '/c.png', maxPx: 1600 },
+    ]);
+    expect(bridge.thumbnailCalls).toEqual(['/a.png', '/a.png', '/a.png', '/b.png', '/c.png']);
+  });
 });

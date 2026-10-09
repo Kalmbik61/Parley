@@ -1093,6 +1093,10 @@ export const S = {
     inputTruncated: 'Arguments truncated — open the terminal for the rest',
     patchTruncated: 'Diff truncated — open the terminal for the rest',
     images: (count: number): string => (count === 1 ? '1 image' : `${count} images`),
+    /** Картинки из результата инструмента под вызовом: подпись миниатюры и диалога просмотра, `Image 2 of 3`. */
+    toolImage: (index: number, total: number): string => `Image ${index} of ${total}`,
+    toolImageOpen: 'Open image',
+    toolImageUnavailable: 'Image unavailable',
     toolStatus: { running: 'Running', done: 'Done', failed: 'Failed', rejected: 'Rejected' },
     toolDetails: 'Show details',
     arguments: 'Arguments',

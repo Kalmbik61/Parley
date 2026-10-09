@@ -478,16 +478,26 @@ describe('registerIpc', () => {
   it('app:image-thumbnail отдаёт путь из окна модулю миниатюр как есть и возвращает его ответ; сбой доходит с кодом failed', async () => {
     const { ipcMain, imageThumbnail } = setup();
     expect(await ipcMain.invoke('app:image-thumbnail', '/h/a b.png')).toBe('data:image/png;base64,AAAA');
-    expect(imageThumbnail).toHaveBeenCalledWith('/h/a b.png');
+    expect(imageThumbnail).toHaveBeenCalledWith('/h/a b.png', undefined);
     // Проверка пути — забота модуля: чужое значение доходит до него, а не отсекается каналом.
     imageThumbnail.mockResolvedValue(null);
     expect(await ipcMain.invoke('app:image-thumbnail', { path: '/etc/passwd' })).toBeNull();
-    expect(imageThumbnail).toHaveBeenLastCalledWith({ path: '/etc/passwd' });
+    expect(imageThumbnail).toHaveBeenLastCalledWith({ path: '/etc/passwd' }, undefined);
     imageThumbnail.mockRejectedValue(new Error('boom'));
     await expect(ipcMain.invoke('app:image-thumbnail', '/h/a.png')).rejects.toSatisfy((error: unknown) => {
       expect(decodeIpcError(error)).toEqual({ code: 'failed', message: 'boom' });
       return true;
     });
+  });
+
+  it('app:image-thumbnail передаёт и второй аргумент — сторону миниатюры; её проверка тоже забота модуля, канал значение не отсекает', async () => {
+    const { ipcMain, imageThumbnail } = setup();
+    expect(await ipcMain.invoke('app:image-thumbnail', '/h/shot.png', 1600)).toBe('data:image/png;base64,AAAA');
+    expect(imageThumbnail).toHaveBeenLastCalledWith('/h/shot.png', 1600);
+    for (const foreign of [99999, '1600', null, { px: 1600 }]) {
+      await ipcMain.invoke('app:image-thumbnail', '/h/shot.png', foreign);
+      expect(imageThumbnail).toHaveBeenLastCalledWith('/h/shot.png', foreign);
+    }
   });
 
   it('app:choose-files зовёт chooseFiles и отдаёт список путей; отказ доходит с кодом failed', async () => {

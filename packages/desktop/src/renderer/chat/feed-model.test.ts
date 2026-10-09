@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { FeedItem } from '@parley/core';
 // Разбор журнала — из исходников ленты core (корневой `@parley/core` под jsdom не грузится, см. items.test.tsx).
 import { feedFromTranscript } from '../../../../core/src/feed/index.js';
-import { currentModel, firstLine, runningAgents, toolHeadline, turnActive } from './feed-model.js';
+import { currentModel, firstLine, imagesExtraPx, runningAgents, toolHeadline, turnActive } from './feed-model.js';
 
 const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../core/src/feed/fixtures');
 
@@ -136,5 +136,35 @@ describe('toolHeadline', () => {
   it('firstLine — первая непустая строка', () => {
     expect(firstLine('\n\n  # Plan\nstep')).toBe('# Plan');
     expect(firstLine('  \n')).toBeNull();
+  });
+});
+
+describe('imagesExtraPx — на сколько вызов с картинками выше обычной строки (оценка до замера)', () => {
+  const withImages = (count: number): FeedItem => ({
+    id: 'shots',
+    at: AT,
+    kind: 'tool',
+    toolUseId: 'tu',
+    name: 'mcp__chrome-devtools__take_screenshot',
+    input: {},
+    status: 'done',
+    response: {
+      text: '',
+      size: 0,
+      truncated: false,
+      ...(count === 0 ? {} : { images: Array.from({ length: count }, (_, at) => ({ path: `/f/${at}.png`, mime: 'image/png' })) }),
+    },
+  });
+
+  it('нет картинок, нет ответа, не вызов — ничего не прибавляется', () => {
+    expect(imagesExtraPx(withImages(0))).toBe(0);
+    expect(imagesExtraPx(tool('done'))).toBe(0);
+    expect(imagesExtraPx(prompt)).toBe(0);
+    expect(imagesExtraPx(agent)).toBe(0);
+  });
+
+  it('ряд из рамок 120 px с зазором 8: по 128 px на строку, в узком окне по две миниатюры в строке', () => {
+    // 1–2 картинки — одна строка, 3–4 — две, 5–6 — три: в окне 800×500 ряд из шести так и переносится.
+    expect([1, 2, 3, 4, 5, 6].map((count) => imagesExtraPx(withImages(count)))).toEqual([128, 128, 256, 256, 384, 384]);
   });
 });

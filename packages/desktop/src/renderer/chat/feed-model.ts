@@ -59,6 +59,22 @@ export function toolHeadline(name: string, input: Record<string, unknown>): Tool
   return { name, summary: null };
 }
 
+/** Высота одной строки ряда миниатюр под вызовом (`ToolImages`): рамка 120 px и зазор между строками 8 px. */
+const THUMB_LINE_PX = 128;
+/** Сколько миниатюр помещается в строку ряда в узком окне (800 px): ряд из шести переносится на три строки. */
+const THUMBS_PER_LINE = 2;
+
+/**
+ * На сколько вызов с картинками (`response.images`) выше обычной строки, px: виртуальная лента оценивает высоту строки до
+ * замера, и оценка 56 px для строки с рядом миниатюр (170–430 px) заставляла полосу прокрутки прыгать, пока строки
+ * измеряются. Оценка грубая — по две миниатюры в строке; точную высоту потом даёт замер.
+ */
+export function imagesExtraPx(item: FeedItem): number {
+  if (item.kind !== 'tool') return 0;
+  const count = item.response?.images?.length ?? 0;
+  return Math.ceil(count / THUMBS_PER_LINE) * THUMB_LINE_PX;
+}
+
 /** Первая непустая строка текста — сводка плана в карточке. */
 export function firstLine(text: string): string | null {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '');
