@@ -31,7 +31,10 @@ const disk = vi.hoisted(() => ({
   failNextWrite: null as NodeJS.ErrnoException | null,
   failNextUtimes: null as NodeJS.ErrnoException | null,
   failNextReaddir: null as NodeJS.ErrnoException | null,
-  failNextUnlink: null as NodeJS.ErrnoException | null,
+  /** Очередь отказов `unlink`: каждый вызов берёт следующий; пусто — файл удаляется по-настоящему. */
+  failUnlink: [] as NodeJS.ErrnoException[],
+  /** Сколько раз читали каталог: по числу проходов `sweep`. */
+  readdirCalls: 0,
 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -57,16 +60,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     readdir: ((...args: Parameters<typeof actual.readdir>) => {
+      disk.readdirCalls += 1;
       const failure = disk.failNextReaddir;
       if (failure === null) return actual.readdir(...args);
       disk.failNextReaddir = null;
       return Promise.reject(failure);
     }) as typeof actual.readdir,
     unlink: ((...args: Parameters<typeof actual.unlink>) => {
-      const failure = disk.failNextUnlink;
-      if (failure === null) return actual.unlink(...args);
-      disk.failNextUnlink = null;
-      return Promise.reject(failure);
+      const failure = disk.failUnlink.shift();
+      return failure === undefined ? actual.unlink(...args) : Promise.reject(failure);
     }) as typeof actual.unlink,
   };
 });
@@ -109,7 +111,8 @@ afterEach(async () => {
   disk.failNextWrite = null;
   disk.failNextUtimes = null;
   disk.failNextReaddir = null;
-  disk.failNextUnlink = null;
+  disk.failUnlink.length = 0;
+  disk.readdirCalls = 0;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -446,6 +449,8 @@ describe('mimeOfBytes — тип картинки по подписи начал
 });
 
 describe('sweep', () => {
+  const failure = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code });
+
   /** Имя, под которым хранилище кладёт файл; для файлов, подложенных руками. */
   const stored = (seed: number, ext = 'png'): string =>
     path.join(dir, `${sha24(makePng(40, 30, seed))}.${ext}`);
@@ -589,15 +594,96 @@ describe('sweep', () => {
       expect(files.every((file) => existsSync(file))).toBe(true);
     });
 
-    it('файл, который не удалился, уборку не останавливает: она идёт к следующему по возрасту', async () => {
+    it('файл, который не удалился, уборку не останавливает: она идёт к следующему по возрасту; одна строка с кодом', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const { store, files } = fourFiles(250, [10, 40, 5, 30]);
       // Самый старый (второй) не удаляется — чужой владелец, например.
-      disk.failNextUnlink = Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      disk.failUnlink.push(failure('EPERM'));
 
       await store.sweep();
 
       // 400: второй не ушёл → четвёртый (300) → первый (200 ≤ 250).
       expect(files.map((file) => existsSync(file))).toEqual([false, true, true, false]);
+      expect(warn.mock.calls).toEqual([['[parley] feed image', 'EPERM']]);
+    });
+
+    it('отказы удаления не засоряют журнал: одна строка на код, другой код — своя строка', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { store } = fourFiles(100, [10, 40, 5, 30]);
+      disk.failUnlink.push(failure('EPERM'), failure('EPERM'), failure('EIO'));
+
+      await store.sweep();
+
+      expect(warn.mock.calls).toEqual([
+        ['[parley] feed image', 'EPERM'],
+        ['[parley] feed image', 'EIO'],
+      ]);
+    });
+
+    it('файл уже убран (ENOENT: другой хост на том же доме или он сам) — это освободившееся место, а не сбой: лишнего не удаляется, строки нет', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { store, files } = fourFiles(250, [10, 40, 5, 30]);
+      // Самого старого (второго) кто-то убрал между списком каталога и удалением: наш unlink получает ENOENT.
+      disk.failUnlink.push(failure('ENOENT'));
+
+      await store.sweep();
+
+      // 400: второй «ушёл» (300) → четвёртый (200 ≤ 250) — стоп; первый, которого при сбое пришлось бы удалять, цел.
+      // (Мок отказал до настоящего удаления, поэтому второй на диске остался.)
+      expect(files.map((file) => existsSync(file))).toEqual([true, true, true, false]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('одновременные уборки', () => {
+    function manyFiles(count: number, maxTotalBytes: number) {
+      const now = Date.now();
+      const store = createFeedImageStore({ dir, now: () => now, maxTotalBytes });
+      const files = Array.from({ length: count }, (_, at) => {
+        const file = store.save(b64(imageBytes('image/png', 100, at + 1)), 'image/png')?.path ?? '';
+        const time = new Date(now - (count - at) * 60_000);
+        utimesSync(file, time, time);
+        return file;
+      });
+      return { store, files };
+    }
+
+    it('второй вызов, пока идёт первый, получает то же обещание — второго прохода по каталогу нет; после конца — новый', async () => {
+      const { store } = manyFiles(5, 1000);
+
+      const first = store.sweep();
+      const second = store.sweep();
+      expect(second).toBe(first);
+      await first;
+      expect(disk.readdirCalls).toBe(1);
+
+      const third = store.sweep();
+      expect(third).not.toBe(first);
+      await third;
+      expect(disk.readdirCalls).toBe(2);
+    });
+
+    it('перекрывшиеся вызовы не удаляют лишнего сверх предела: остаётся ровно столько, сколько влезает', async () => {
+      const { store, files } = manyFiles(40, 2000);
+
+      await Promise.all([store.sweep(), store.sweep(), store.sweep()]);
+
+      // 40 по 100 байт при пределе 2000 — двадцать самых новых; два прохода без защиты снесли бы и их.
+      expect(files.map((file) => existsSync(file))).toEqual(
+        files.map((_, at) => at >= files.length - 20),
+      );
+    });
+
+    it('сбой первого прохода не оставляет защёлку: следующий вызов снова работает', async () => {
+      const { store, files } = manyFiles(3, 100);
+      disk.failNextReaddir = failure('EACCES');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await store.sweep();
+      expect(files.every((file) => existsSync(file))).toBe(true);
+      await store.sweep();
+
+      expect(files.map((file) => existsSync(file))).toEqual([false, false, true]);
     });
   });
 });

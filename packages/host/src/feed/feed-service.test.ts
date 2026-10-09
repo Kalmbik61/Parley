@@ -2006,6 +2006,8 @@ describe('картинки результатов инструментов (пл
     });
 
     it('раз в шесть часов уборка повторяется; stop() снимает таймер', async () => {
+      // Настоящий таймер: `vi.useFakeTimers()` ниже подменяет глобальный, а первой уборке надо дать закончиться по-настоящему.
+      const realSetTimeout = globalThis.setTimeout;
       vi.useFakeTimers();
       await mkdir(imagesDir, { recursive: true });
       // Просроченный «сторож» убирается первой уборкой при создании службы: когда он исчез, список каталога этой уборки
@@ -2013,6 +2015,8 @@ describe('картинки результатов инструментов (пл
       aged(path.join(imagesDir, NAME('e')), FEED_IMAGE_TTL_MS + 60_000);
       start({ imagesDir });
       await vi.waitFor(() => expect(imageFiles()).toEqual([]));
+      // Пока первая уборка не кончилась, вызов по таймеру получил бы её же обещание (одновременно идёт один проход).
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 50));
       aged(path.join(imagesDir, NAME('c')), FEED_IMAGE_TTL_MS + 60_000);
 
       vi.advanceTimersByTime(FEED_IMAGE_SWEEP_MS - 1);

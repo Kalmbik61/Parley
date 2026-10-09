@@ -12,9 +12,10 @@
  *
  * Уборка (`sweep`) асинхронная: каталог может держать тысячи файлов, а хост живёт сессиями и хуками, и цикл событий
  * нельзя занимать удалением на секунды. Сначала уходят файлы старше `FEED_IMAGE_TTL_MS`, затем, пока все файлы вместе
- * тяжелее `FEED_IMAGE_MAX_TOTAL_BYTES`, самые старые по времени файла. `save` синхронный и уборки не ждёт: файл, который
- * он обновил в тот же миг, когда уборка его удаляет, пропадёт, и ссылка на него станет «Image unavailable»; та же
- * картинка при следующей записи ляжет заново.
+ * тяжелее `FEED_IMAGE_MAX_TOTAL_BYTES`, самые старые по времени файла. Одновременно идёт один проход: второй вызов
+ * получает обещание первого. Файл, которого к удалению уже нет (ENOENT), считается убранным, а не сбоем. `save`
+ * синхронный и уборки не ждёт: файл, который он обновил в тот же миг, когда уборка его удаляет, пропадёт, и ссылка на
+ * него станет «Image unavailable»; та же картинка при следующей записи ляжет заново.
  *
  * Наружу ничего не бросается. Нельзя взять картинку (неизвестный тип, байты не того типа, что назван, пустые,
  * битые или слишком большие данные) — `null` молча. Ошибка файловой системы — `null` и строка `console.warn`
@@ -87,7 +88,7 @@ export interface FeedImageStore {
   save: SaveFeedImage;
   /**
    * Убирает файлы старше `FEED_IMAGE_TTL_MS`, затем самые старые, пока все вместе тяжелее `maxTotalBytes`. Асинхронный;
-   * не бросает и не отклоняется.
+   * не бросает и не отклоняется. Пока проход идёт, повторный вызов возвращает то же обещание.
    */
   sweep(): Promise<void>;
 }
@@ -158,6 +159,52 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
     }
   }
 
+  /** Идущая уборка: пока она не кончилась, `sweep` отдаёт её же. */
+  let running: Promise<void> | null = null;
+
+  /** Один проход уборки: просроченные, затем самые старые, пока всё не уложится в предел. Не отклоняется. */
+  async function runSweep(): Promise<void> {
+    try {
+      let names: string[];
+      try {
+        names = await readdir(dir);
+      } catch (error) {
+        if (!NOTHING_TO_SWEEP.has(codeOf(error))) warn(error);
+        return;
+      }
+      const files: Array<{ file: string; size: number; mtimeMs: number }> = [];
+      for (const name of names) {
+        if (!OWN_NAME.test(name)) continue;
+        const file = path.join(dir, name);
+        try {
+          const info = await lstat(file);
+          if (info.isFile()) files.push({ file, size: info.size, mtimeMs: info.mtimeMs });
+        } catch {
+          // Файл ушёл сам — убирать нечего.
+        }
+      }
+      // От старых к новым: просроченные уходят первыми, затем, пока всё тяжелее предела, самые старые из свежих.
+      files.sort((a, b) => a.mtimeMs - b.mtimeMs);
+      const cutoff = now() - FEED_IMAGE_TTL_MS;
+      let total = files.reduce((sum, entry) => sum + entry.size, 0);
+      for (const entry of files) {
+        if (entry.mtimeMs >= cutoff && total <= maxTotalBytes) break;
+        try {
+          await unlink(entry.file);
+          total -= entry.size;
+        } catch (error) {
+          // Файл уже убран (другой процесс на том же доме или он сам): место свободно, как после нашего удаления, —
+          // иначе проход счёл бы его сбоем и снёс лишнее. Прочие отказы (чужой владелец, диск только для чтения):
+          // файл уберётся в следующий раз, уборка идёт к следующему по возрасту, а строка в журнал — раз на код.
+          if (codeOf(error) === 'ENOENT') total -= entry.size;
+          else warn(error);
+        }
+      }
+    } catch (error) {
+      warn(error);
+    }
+  }
+
   return {
     save(base64, mime) {
       const extension = EXTENSIONS.get(mime);
@@ -176,42 +223,14 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
       }
     },
 
-    async sweep() {
-      try {
-        let names: string[];
-        try {
-          names = await readdir(dir);
-        } catch (error) {
-          if (!NOTHING_TO_SWEEP.has(codeOf(error))) warn(error);
-          return;
-        }
-        const files: Array<{ file: string; size: number; mtimeMs: number }> = [];
-        for (const name of names) {
-          if (!OWN_NAME.test(name)) continue;
-          const file = path.join(dir, name);
-          try {
-            const info = await lstat(file);
-            if (info.isFile()) files.push({ file, size: info.size, mtimeMs: info.mtimeMs });
-          } catch {
-            // Файл ушёл сам — убирать нечего.
-          }
-        }
-        // От старых к новым: просроченные уходят первыми, затем, пока всё тяжелее предела, самые старые из свежих.
-        files.sort((a, b) => a.mtimeMs - b.mtimeMs);
-        const cutoff = now() - FEED_IMAGE_TTL_MS;
-        let total = files.reduce((sum, entry) => sum + entry.size, 0);
-        for (const entry of files) {
-          if (entry.mtimeMs >= cutoff && total <= maxTotalBytes) break;
-          try {
-            await unlink(entry.file);
-            total -= entry.size;
-          } catch {
-            // Файл не удаляется — уберётся в следующий раз; уборка идёт к следующему по возрасту.
-          }
-        }
-      } catch (error) {
-        warn(error);
-      }
+    sweep() {
+      // Пока уборка идёт, второй вызов получает её же обещание: два прохода по одному каталогу снесли бы одни и те
+      // же «самые старые» файлы дважды и лишнее сверх предела. От другого процесса на том же доме (установленное
+      // приложение и dev-сборка) это не защищает — там помогает ENOENT при удалении (см. `runSweep`).
+      running ??= runSweep().finally(() => {
+        running = null;
+      });
+      return running;
     },
   };
 }
