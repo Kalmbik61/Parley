@@ -1978,14 +1978,14 @@ describe('картинки результатов инструментов (пл
       utimesSync(file, time, time);
     };
 
-    it('при создании службы файлы старше семи суток убираются, свежие остаются', async () => {
+    it('при создании службы файлы старше семи суток убираются (асинхронно), свежие остаются', async () => {
       await mkdir(imagesDir, { recursive: true });
       aged(path.join(imagesDir, NAME('a')), FEED_IMAGE_TTL_MS + 60_000);
       aged(path.join(imagesDir, NAME('b')), 60_000);
 
       start({ imagesDir });
 
-      expect(imageFiles()).toEqual([NAME('b')]);
+      await vi.waitFor(() => expect(imageFiles()).toEqual([NAME('b')]));
     });
 
     it('таймер уборки не держит процесс хоста и взведён на шесть часов', () => {
@@ -2008,13 +2008,17 @@ describe('картинки результатов инструментов (пл
     it('раз в шесть часов уборка повторяется; stop() снимает таймер', async () => {
       vi.useFakeTimers();
       await mkdir(imagesDir, { recursive: true });
+      // Просроченный «сторож» убирается первой уборкой при создании службы: когда он исчез, список каталога этой уборки
+      // уже прочитан, и файл `c`, появившийся позже, достанется только уборке по таймеру.
+      aged(path.join(imagesDir, NAME('e')), FEED_IMAGE_TTL_MS + 60_000);
       start({ imagesDir });
+      await vi.waitFor(() => expect(imageFiles()).toEqual([]));
       aged(path.join(imagesDir, NAME('c')), FEED_IMAGE_TTL_MS + 60_000);
 
       vi.advanceTimersByTime(FEED_IMAGE_SWEEP_MS - 1);
       expect(imageFiles()).toEqual([NAME('c')]);
       vi.advanceTimersByTime(1);
-      expect(imageFiles()).toEqual([]);
+      await vi.waitFor(() => expect(imageFiles()).toEqual([]));
 
       await service.stop();
       expect(vi.getTimerCount()).toBe(0);

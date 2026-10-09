@@ -10,7 +10,7 @@ All notable changes to Parley are documented in this file.
 
 - **Screenshots in Chat.** When an agent's tool returns an image — a browser screenshot from Chrome DevTools MCP,
   Claude in Chrome or Playwright, an image it read — Chat shows it as a thumbnail under the call; click to view it
-  larger. Parley keeps these images in `~/.parley/feed-images` for 7 days.
+  larger. Parley keeps these images in `~/.parley/feed-images` for 7 days, 1 GiB at most (the oldest go first).
 
 ## 0.10.0
 

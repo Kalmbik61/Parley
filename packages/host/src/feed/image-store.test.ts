@@ -1,6 +1,6 @@
 /**
  * Хранилище картинок ленты (план 2026-10-09, Task 3): файлы в каталоге хоста, имя — первые 24 hex sha256
- * и расширение по типу, каталог 0700, файлы 0600, предел размера, sweep по сроку. Исключений наружу нет:
+ * и расширение по типу, каталог 0700, файлы 0600, предел размера, sweep по сроку и по общему пределу. Исключений наружу нет:
  * отказ — `null`, а ошибка файловой системы ещё и одна строка в консоль без данных.
  */
 
@@ -18,19 +18,20 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
+import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_MAX_TOTAL_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
 import { makePng } from '../../test/png.js';
 import { createFeedImageStore } from './image-store.js';
 
 /**
- * Настоящий «диск полон» или чужой владелец файла в тесте не получить, поэтому запись на диск и смену времени
- * файла можно оборвать по требованию: при записи часть байтов ложится в файл, и летит ошибка. Всё остальное в
- * `node:fs` — настоящее.
+ * Настоящий «диск полон», нет прав на каталог или чужой владелец файла в тесте не получить, поэтому запись на диск,
+ * смену времени файла, чтение каталога и удаление файла можно оборвать по требованию: при записи часть байтов ложится
+ * в файл, и летит ошибка. Всё остальное в `node:fs` и `node:fs/promises` — настоящее.
  */
 const disk = vi.hoisted(() => ({
   failNextWrite: null as NodeJS.ErrnoException | null,
   failNextUtimes: null as NodeJS.ErrnoException | null,
   failNextReaddir: null as NodeJS.ErrnoException | null,
+  failNextUnlink: null as NodeJS.ErrnoException | null,
 }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -49,12 +50,24 @@ vi.mock('node:fs', async (importOriginal) => {
       disk.failNextUtimes = null;
       throw failure;
     }) as typeof actual.utimesSync,
-    readdirSync: ((...args: Parameters<typeof actual.readdirSync>) => {
+  };
+});
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readdir: ((...args: Parameters<typeof actual.readdir>) => {
       const failure = disk.failNextReaddir;
-      if (failure === null) return actual.readdirSync(...args);
+      if (failure === null) return actual.readdir(...args);
       disk.failNextReaddir = null;
-      throw failure;
-    }) as typeof actual.readdirSync,
+      return Promise.reject(failure);
+    }) as typeof actual.readdir,
+    unlink: ((...args: Parameters<typeof actual.unlink>) => {
+      const failure = disk.failNextUnlink;
+      if (failure === null) return actual.unlink(...args);
+      disk.failNextUnlink = null;
+      return Promise.reject(failure);
+    }) as typeof actual.unlink,
   };
 });
 
@@ -96,6 +109,7 @@ afterEach(async () => {
   disk.failNextWrite = null;
   disk.failNextUtimes = null;
   disk.failNextReaddir = null;
+  disk.failNextUnlink = null;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -136,7 +150,7 @@ describe('save', () => {
     expect(Date.now() - after.mtimeMs).toBeLessThan(1000);
   });
 
-  it('картинку, на которую лента ссылается снова, срок не берёт: повторная запись продлевает файлу жизнь', () => {
+  it('картинку, на которую лента ссылается снова, срок не берёт: повторная запись продлевает файлу жизнь', async () => {
     let now = Date.now();
     const store = createFeedImageStore({ dir, now: () => now });
     const shown = store.save(b64(makePng(40, 30, 1)), 'image/png')?.path ?? '';
@@ -148,7 +162,7 @@ describe('save', () => {
     // по часам хранилища, как и срок в sweep.
     now += 30 * DAY;
     store.save(b64(makePng(40, 30, 1)), 'image/png');
-    store.sweep();
+    await store.sweep();
 
     expect(existsSync(shown)).toBe(true);
     expect(existsSync(forgotten)).toBe(false);
@@ -415,7 +429,15 @@ describe('sweep', () => {
   const stored = (seed: number, ext = 'png'): string =>
     path.join(dir, `${sha24(makePng(40, 30, seed))}.${ext}`);
 
-  it('файл старше 7 суток уходит, свежий остаётся; чужие файлы и каталоги не трогаются', () => {
+  it('sweep асинхронный: отдаёт обещание, которое не отклоняется', async () => {
+    const store = createFeedImageStore({ dir });
+    const result = store.sweep();
+
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  it('файл старше 7 суток уходит, свежий остаётся; чужие файлы и каталоги не трогаются', async () => {
     const now = Date.now();
     const store = createFeedImageStore({ dir, now: () => now });
     const old = store.save(b64(makePng(40, 30, 1)), 'image/png')?.path ?? '';
@@ -437,7 +459,7 @@ describe('sweep', () => {
     mkdirSync(folder);
     for (const item of [leftover, foreign, folder]) utimesSync(item, stale, stale);
 
-    store.sweep();
+    await store.sweep();
 
     expect(existsSync(old)).toBe(false);
     expect(existsSync(leftover)).toBe(false);
@@ -447,40 +469,114 @@ describe('sweep', () => {
     expect(existsSync(folder)).toBe(true);
   });
 
-  it('срок считается от now(): через 6 суток всё цело, через 8 — ничего', () => {
+  it('срок считается от now(): через 6 суток всё цело, через 8 — ничего', async () => {
     let now = Date.now();
     const store = createFeedImageStore({ dir, now: () => now });
     const file = store.save(b64(makePng()), 'image/png')?.path ?? '';
 
     now += 6 * DAY;
-    store.sweep();
+    await store.sweep();
     expect(existsSync(file)).toBe(true);
 
     now += 2 * DAY;
-    store.sweep();
+    await store.sweep();
     expect(existsSync(file)).toBe(false);
   });
 
-  it('каталог не читается (нет прав): исключения нет, одна строка с кодом, повтор того же кода молчит', () => {
+  it('каталог не читается (нет прав): исключения нет, одна строка с кодом, повтор того же кода молчит', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const store = createFeedImageStore({ dir });
-    const denied = (): void => {
+    const denied = async (): Promise<void> => {
       disk.failNextReaddir = Object.assign(new Error('permission denied'), { code: 'EACCES' });
-      expect(() => store.sweep()).not.toThrow();
+      await expect(store.sweep()).resolves.toBeUndefined();
     };
 
-    denied();
-    denied();
+    await denied();
+    await denied();
 
     expect(warn.mock.calls).toEqual([['[parley] feed image', 'EACCES']]);
   });
 
-  it('каталога нет — тихо: ничего не создаётся, ничего не выводится, исключения нет', () => {
+  it('каталога нет — тихо: ничего не создаётся, ничего не выводится, исключения нет', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    expect(() => createFeedImageStore({ dir }).sweep()).not.toThrow();
+    await expect(createFeedImageStore({ dir }).sweep()).resolves.toBeUndefined();
 
     expect(existsSync(dir)).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  describe('общий предел размера (FEED_IMAGE_MAX_TOTAL_BYTES)', () => {
+    /** Четыре файла по 100 байт; `ages` — возраст каждого в минутах (по порядку записи). */
+    function fourFiles(maxTotalBytes: number, ages: readonly number[]) {
+      const now = Date.now();
+      const store = createFeedImageStore({ dir, now: () => now, maxTotalBytes });
+      const files = ages.map((minutes, at) => {
+        const file = store.save(b64(imageBytes('image/png', 100, at + 1)), 'image/png')?.path ?? '';
+        const time = new Date(now - minutes * 60_000);
+        utimesSync(file, time, time);
+        return file;
+      });
+      return { store, files, now };
+    }
+
+    it('по умолчанию предел — гигабайт', () => {
+      expect(FEED_IMAGE_MAX_TOTAL_BYTES).toBe(1024 * 1024 * 1024);
+    });
+
+    it('всё вместе тяжелее предела — уходят самые старые по времени файла (не по имени и порядку записи), пока не уложится', async () => {
+      // Возраст: второй файл самый старый, потом четвёртый, первый и третий.
+      const { store, files } = fourFiles(250, [10, 40, 5, 30]);
+
+      await store.sweep();
+
+      // 400 > 250 → второй (самый старый): 300 > 250 → четвёртый: 200 ≤ 250 — стоп.
+      expect(files.map((file) => existsSync(file))).toEqual([true, false, true, false]);
+    });
+
+    it('ровно в пределе ничего не уходит, на байт тяжелее — уходит самый старый', async () => {
+      const { store, files } = fourFiles(400, [1, 2, 3, 4]);
+      await store.sweep();
+      expect(files.every((file) => existsSync(file))).toBe(true);
+
+      const { store: tight, files: all } = fourFiles(399, [1, 2, 3, 4]);
+      await tight.sweep();
+      expect(all.map((file) => existsSync(file))).toEqual([true, true, true, false]);
+    });
+
+    it('срок идёт первым и мимо предела: просроченный уходит, даже когда всё и так влезает; свежее остаётся', async () => {
+      const { store, files, now } = fourFiles(1000, [1, 2, 3, 4]);
+      const stale = new Date(now - FEED_IMAGE_TTL_MS - 1000);
+      utimesSync(files[3] ?? '', stale, stale);
+
+      await store.sweep();
+
+      expect(files.map((file) => existsSync(file))).toEqual([true, true, true, false]);
+    });
+
+    it('чужие файлы и каталоги в предел не входят и не удаляются', async () => {
+      const { store, files } = fourFiles(400, [1, 2, 3, 4]);
+      const foreign = path.join(dir, 'notes.txt');
+      writeFileSync(foreign, Buffer.alloc(5000));
+      const folder = path.join(dir, 'b'.repeat(24) + '.png');
+      mkdirSync(folder);
+
+      await store.sweep();
+
+      expect(existsSync(foreign)).toBe(true);
+      expect(existsSync(folder)).toBe(true);
+      expect(files.every((file) => existsSync(file))).toBe(true);
+    });
+
+    it('файл, который не удалился, уборку не останавливает: она идёт к следующему по возрасту', async () => {
+      const { store, files } = fourFiles(250, [10, 40, 5, 30]);
+      // Самый старый (второй) не удаляется — чужой владелец, например.
+      disk.failNextUnlink = Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+
+      await store.sweep();
+
+      // 400: второй не ушёл → четвёртый (300) → первый (200 ≤ 250).
+      expect(files.map((file) => existsSync(file))).toEqual([false, true, true, false]);
+    });
   });
 });

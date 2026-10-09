@@ -301,9 +301,10 @@ export function createFeedService(
   const stashCodex = (records: readonly RolloutRecord[]): RolloutRecord[] =>
     records.map((record) => stashCodexRecord(record, saveImage));
   // Старые файлы картинок убираются при создании службы и дальше раз в `FEED_IMAGE_SWEEP_MS`; хост живёт
-  // клиентами и сессиями, а не этим таймером, поэтому он не держит процесс. `stop()` его снимает.
-  imageStore.sweep();
-  const imageSweep = setInterval(() => imageStore.sweep(), FEED_IMAGE_SWEEP_MS);
+  // клиентами и сессиями, а не этим таймером, поэтому он не держит процесс. `stop()` его снимает. Уборка
+  // асинхронная и не отклоняется: службу и хуки она не ждёт.
+  void imageStore.sweep();
+  const imageSweep = setInterval(() => void imageStore.sweep(), FEED_IMAGE_SWEEP_MS);
   imageSweep.unref();
 
   const feeds = new Map<string, SessionFeed>();

@@ -10,6 +10,12 @@
  * временный и переименовывается: оборванная запись не оставит обрезанную картинку под настоящим именем, а
  * сорвавшаяся не оставит и временного файла.
  *
+ * Уборка (`sweep`) асинхронная: каталог может держать тысячи файлов, а хост живёт сессиями и хуками, и цикл событий
+ * нельзя занимать удалением на секунды. Сначала уходят файлы старше `FEED_IMAGE_TTL_MS`, затем, пока все файлы вместе
+ * тяжелее `FEED_IMAGE_MAX_TOTAL_BYTES`, самые старые по времени файла. `save` синхронный и уборки не ждёт: файл, который
+ * он обновил в тот же миг, когда уборка его удаляет, пропадёт, и ссылка на него станет «Image unavailable»; та же
+ * картинка при следующей записи ляжет заново.
+ *
  * Наружу ничего не бросается. Нельзя взять картинку (неизвестный тип, байты не того типа, что назван, пустые,
  * битые или слишком большие данные) — `null` молча. Ошибка файловой системы — `null` и строка `console.warn`
  * с кодом ошибки, без данных, по одной на код: постоянный отказ (диск полон, нет прав) не печатает строку на
@@ -17,18 +23,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  unlinkSync,
-  utimesSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, renameSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { lstat, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
+import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_MAX_TOTAL_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
 import type { FeedImageRef } from '@parley/core';
 
 /** Сколько первых hex-знаков sha256 идёт в имя файла. */
@@ -80,8 +78,11 @@ export type SaveFeedImage = (base64: string, mime: string) => FeedImageRef | nul
 export interface FeedImageStore {
   /** Кладёт картинку в файл и отдаёт ссылку; `null` — в ленту её не берём. Не бросает. */
   save: SaveFeedImage;
-  /** Убирает файлы старше `FEED_IMAGE_TTL_MS`. Не бросает. */
-  sweep(): void;
+  /**
+   * Убирает файлы старше `FEED_IMAGE_TTL_MS`, затем самые старые, пока все вместе тяжелее `maxTotalBytes`. Асинхронный;
+   * не бросает и не отклоняется.
+   */
+  sweep(): Promise<void>;
 }
 
 export interface FeedImageStoreOptions {
@@ -91,6 +92,8 @@ export interface FeedImageStoreOptions {
   now?: () => number;
   /** Предел картинки после декодирования; по умолчанию `FEED_IMAGE_MAX_BYTES`. */
   maxBytes?: number;
+  /** Предел всех файлов вместе для `sweep`; по умолчанию `FEED_IMAGE_MAX_TOTAL_BYTES`. */
+  maxTotalBytes?: number;
 }
 
 const codeOf = (error: unknown): string =>
@@ -110,6 +113,7 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
   const dir = path.resolve(options.dir);
   const now = options.now ?? Date.now;
   const maxBytes = options.maxBytes ?? FEED_IMAGE_MAX_BYTES;
+  const maxTotalBytes = options.maxTotalBytes ?? FEED_IMAGE_MAX_TOTAL_BYTES;
   /** Коды ошибок, о которых уже сказано. Хранилище одно на хост, так что это «раз на код за жизнь процесса». */
   const warned = new Set<string>();
 
@@ -165,24 +169,41 @@ export function createFeedImageStore(options: FeedImageStoreOptions): FeedImageS
       }
     },
 
-    sweep() {
-      let names: string[];
+    async sweep() {
       try {
-        names = readdirSync(dir);
-      } catch (error) {
-        if (!NOTHING_TO_SWEEP.has(codeOf(error))) warn(error);
-        return;
-      }
-      const cutoff = now() - FEED_IMAGE_TTL_MS;
-      for (const name of names) {
-        if (!OWN_NAME.test(name)) continue;
-        const file = path.join(dir, name);
+        let names: string[];
         try {
-          const info = lstatSync(file);
-          if (info.isFile() && info.mtimeMs < cutoff) unlinkSync(file);
-        } catch {
-          // Файл ушёл сам или не удаляется — уберётся в следующий раз.
+          names = await readdir(dir);
+        } catch (error) {
+          if (!NOTHING_TO_SWEEP.has(codeOf(error))) warn(error);
+          return;
         }
+        const files: Array<{ file: string; size: number; mtimeMs: number }> = [];
+        for (const name of names) {
+          if (!OWN_NAME.test(name)) continue;
+          const file = path.join(dir, name);
+          try {
+            const info = await lstat(file);
+            if (info.isFile()) files.push({ file, size: info.size, mtimeMs: info.mtimeMs });
+          } catch {
+            // Файл ушёл сам — убирать нечего.
+          }
+        }
+        // От старых к новым: просроченные уходят первыми, затем, пока всё тяжелее предела, самые старые из свежих.
+        files.sort((a, b) => a.mtimeMs - b.mtimeMs);
+        const cutoff = now() - FEED_IMAGE_TTL_MS;
+        let total = files.reduce((sum, entry) => sum + entry.size, 0);
+        for (const entry of files) {
+          if (entry.mtimeMs >= cutoff && total <= maxTotalBytes) break;
+          try {
+            await unlink(entry.file);
+            total -= entry.size;
+          } catch {
+            // Файл не удаляется — уберётся в следующий раз; уборка идёт к следующему по возрасту.
+          }
+        }
+      } catch (error) {
+        warn(error);
       }
     },
   };
