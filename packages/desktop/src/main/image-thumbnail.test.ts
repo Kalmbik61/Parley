@@ -158,3 +158,66 @@ describe('imageThumbnail — миниатюра', () => {
     expect(await imageThumbnail(png, throwing)).toBeNull();
   });
 });
+
+describe('imageThumbnail — размер по запросу (просмотр картинки из результата инструмента просит 1600)', () => {
+  it('1600 → системная миниатюра просится на 1600×1600; без размера — прежние 320', async () => {
+    const png = await file('shot.png');
+    const sized = deps();
+    expect(await imageThumbnail(png, sized, 1600)).toBe('data:image/png;base64,thumb');
+    expect(sized.createThumbnailFromPath).toHaveBeenCalledWith(png, { width: 1600, height: 1600 });
+
+    const plain = deps();
+    await imageThumbnail(png, plain);
+    await imageThumbnail(png, plain, undefined);
+    expect(plain.createThumbnailFromPath.mock.calls.map((call) => call[1])).toEqual([
+      { width: 320, height: 320 },
+      { width: 320, height: 320 },
+    ]);
+  });
+
+  it('границы 64 и 2048 принимаются как есть', async () => {
+    const png = await file('edge.png');
+    const d = deps();
+    await imageThumbnail(png, d, 64);
+    await imageThumbnail(png, d, 2048);
+    expect(d.createThumbnailFromPath.mock.calls.map((call) => call[1])).toEqual([
+      { width: 64, height: 64 },
+      { width: 2048, height: 2048 },
+    ]);
+  });
+
+  it('чужое значение (окну не доверяем) — 320: 99999, за границами, дробное, NaN, не число', async () => {
+    const png = await file('bad.png');
+    const d = deps();
+    const bad = [99999, 2049, 63, 0, -1, 320.5, Number.NaN, Number.POSITIVE_INFINITY, '1600', null, {}, [1600], true];
+    for (const value of bad) await imageThumbnail(png, d, value);
+    expect(d.createThumbnailFromPath).toHaveBeenCalledTimes(bad.length);
+    for (const call of d.createThumbnailFromPath.mock.calls) expect(call[1]).toEqual({ width: 320, height: 320 });
+  });
+
+  it('системных миниатюр нет — читаем сами и уменьшаем до запрошенной стороны, а не до 320', async () => {
+    const png = await file('wide.png');
+    const d = deps({ createThumbnailFromPath: vi.fn().mockRejectedValue(new Error('no thumbnail')) });
+    const wide = fakeImage('wide', { width: 3000, height: 2000 });
+    d.createFromPath.mockReturnValue(wide);
+    expect(await imageThumbnail(png, d, 1600)).toBe('data:image/png;base64,wide-resized');
+    expect(wide.resizes).toEqual([{ width: 1600 }]);
+
+    // Картинка меньше запрошенной стороны не растягивается, хотя на 320 её уменьшили бы.
+    const small = fakeImage('small', { width: 1000, height: 500 });
+    d.createFromPath.mockReturnValue(small);
+    expect(await imageThumbnail(png, d, 1600)).toBe('data:image/png;base64,small');
+    expect(small.resizes).toEqual([]);
+    expect(await imageThumbnail(png, d)).toBe('data:image/png;base64,small-resized');
+    expect(small.resizes).toEqual([{ width: 320 }]);
+  });
+
+  it('предел файла прежний и при большом размере: 20 МБ + 1 байт — null, расширение не из списка — null', async () => {
+    const d = deps();
+    const big = await file('huge.png');
+    await truncate(big, MAX_DROP_IMAGE_BYTES + 1);
+    expect(await imageThumbnail(big, d, 2048)).toBeNull();
+    expect(await imageThumbnail(await file('notes.txt'), d, 2048)).toBeNull();
+    expect(d.createThumbnailFromPath).not.toHaveBeenCalled();
+  });
+});

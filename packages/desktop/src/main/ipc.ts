@@ -191,8 +191,11 @@ export interface RegisterIpcOptions {
   openPath: (absPath: string) => Promise<string>;
   /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
   saveDropImage: () => Promise<string | null>;
-  /** Миниатюра картинки-вложения «Chat» (`main/image-thumbnail.ts`): путь приходит из окна как есть, проверяет сам модуль; `null` — не картинка или не читается. */
-  imageThumbnail: (absPath: unknown) => Promise<string | null>;
+  /**
+   * Миниатюра картинки «Chat» (`main/image-thumbnail.ts`): путь и сторона (`maxPx`) приходят из окна как есть, проверяет
+   * сам модуль; `null` — не картинка или не читается.
+   */
+  imageThumbnail: (absPath: unknown, maxPx: unknown) => Promise<string | null>;
   /** Число грязных буферов окна-отправителя (`app:dirty-buffers`, кусок 7.3a): main/window.ts#guardWindowClose. */
   setDirtyBuffers: (sender: WebContents, count: number) => void;
   /** Ответ окна-отправителя на `app:confirm-close` (`app:close-answer`, кусок 7.3a). */
@@ -500,11 +503,12 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
-  // Миниатюра вложения для чипов «Chat»: путь любой (файлы из Finder и скрепки лежат вне корней работ),
-  // поэтому доступ ограничен самим модулем — только картинки по расширению, обычные файлы, до 20 МБ.
+  // Миниатюра картинки для «Chat» (чипы вложений, картинки из результатов инструментов): путь любой (файлы из Finder
+  // и скрепки лежат вне корней работ), поэтому доступ ограничен самим модулем — только картинки по расширению, обычные
+  // файлы, до 20 МБ. Сторона (`maxPx`, просмотр просит 1600) тоже проверяется там: целое 64–2048, иначе 320.
   ipcMain.handle(
     'app:image-thumbnail',
-    withIpcError(async (_event, absPath: unknown) => imageThumbnail(absPath)),
+    withIpcError(async (_event, absPath: unknown, maxPx: unknown) => imageThumbnail(absPath, maxPx)),
   );
 
   // Вопрос при закрытии окна (кусок 7.3a). `send`, ответа не ждут: неверная форма — тихий отказ.
