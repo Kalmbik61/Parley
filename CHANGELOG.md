@@ -6,6 +6,16 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.10.1
+
+A screenshot pasted into a room's message field now becomes an attachment, and a long message no longer hides where you type: the message field of a room and of the Chat view follows the caret when typed or pasted text grows past its height.
+
+### Fixed
+
+- **Screenshots paste into a room.** ⌘V or Edit → Paste with an image (and no text) on the clipboard adds it as an attachment, like the paperclip. Before, the room's field took only plain text and the paste did nothing.
+- **A clipboard image that can't be read says so.** When the window sees an image on the clipboard but can't save it, the Chat view and the room show "Couldn't read the image from the clipboard" instead of doing nothing.
+- **The message field keeps the caret in view.** In a room, after pasting a long text, Shift+Enter, dropping text or picking an @-mention, the field scrolls to where you type, bottom padding included; before, a pasted text left the caret far below the visible part. In the Chat view the last line no longer sits flush against the field's border. Editing in the middle of a scrolled-up field doesn't make it jump.
+
 ## 0.10.0
 
 A room whose work is done can be archived: its feed stays readable, nobody writes to it until you reopen it. A project no longer disappears from the sidebar when all its workspaces are archived — they sit under "N archived" at the bottom of its group, and "Remove from list…" hides the project. Sessions created without a name get a real one — S01 Ralph, S02 Anatoly, S03 Ruslan… — and any session can be renamed.
