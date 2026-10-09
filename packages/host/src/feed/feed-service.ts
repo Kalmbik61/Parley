@@ -15,6 +15,12 @@
  * Лента Codex (спека 2026-10-07, 5.3): журнал хвостом (`codex-source.ts`), опрос раз в 2 с при подписчиках
  * и живом процессе, агенты — по их журналам; оборванный ход сев закрывает только без живого процесса;
  * Stop — Esc без разбора экрана.
+ *
+ * Картинки результатов инструментов (план 2026-10-09, Task 3): лента несёт ссылки на файлы, а base64 хост кладёт
+ * в `feed-images` (`image-store.ts`). Всё, что идёт в редьюсер, проходит обход картинок один раз и прямо перед
+ * ним (`stash.ts`): тело хука (`onHook`, `onCodexHook`) и записи журналов Claude и Codex перед каждым
+ * `feedFromTranscript` / `feedFromCodexRollout` / `applyCodexRecords`. Хвост журнала Claude (`readTail`) в
+ * редьюсер не идёт — из него читаются только ретраи и прерывания, — поэтому картинок там не ищут.
  */
 
 import { lstat, open } from 'node:fs/promises';
@@ -30,12 +36,14 @@ import {
   emptyCodexAgentMeta,
   emptyCodexCursor,
   emptyFeedState,
+  FEED_IMAGE_SWEEP_MS,
   feedFromCodexRollout,
   feedFromTranscript,
   forEachJsonlRecord,
   interruptedAt,
   isClaudeCode,
   loadConfig,
+  parleyHome,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -51,6 +59,7 @@ import type {
   FeedState,
   FeedUpdate,
   RawRecord,
+  RolloutRecord,
 } from '@parley/core';
 import { FEED_SCHEMA_VERSION, refKey } from '@parley/protocol';
 import type { FeedDecisions, Result, SessionRef } from '@parley/protocol';
@@ -65,6 +74,8 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { createFeedImageStore } from './image-store.js';
+import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
 /** Сколько элементов лента сессии держит (решение 2). */
 export const FEED_MAX_ITEMS = 2_000;
@@ -133,6 +144,8 @@ export interface FeedServiceOptions {
   roots?: () => readonly string[];
   /** Чтение записей журнала; тесты подставляют счётчик. */
   readRecords?: (file: string) => Promise<RawRecord[]>;
+  /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
+  imagesDir?: string;
 }
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
@@ -278,6 +291,20 @@ export function createFeedService(
     options.codexApprovals ?? (async (): Promise<boolean> => (await loadConfig()).config.codexApprovals);
   const roots = options.roots ?? (() => claudeProjectRoots());
   const readRecords = options.readRecords ?? readRecordsTail;
+
+  const imageStore = createFeedImageStore({
+    dir: options.imagesDir ?? path.join(parleyHome(), 'feed-images'),
+  });
+  const saveImage = imageStore.save;
+  const stashClaude = (records: readonly RawRecord[]): RawRecord[] =>
+    records.map((record) => stashClaudeRecord(record, saveImage));
+  const stashCodex = (records: readonly RolloutRecord[]): RolloutRecord[] =>
+    records.map((record) => stashCodexRecord(record, saveImage));
+  // Старые файлы картинок убираются при создании службы и дальше раз в `FEED_IMAGE_SWEEP_MS`; хост живёт
+  // клиентами и сессиями, а не этим таймером, поэтому он не держит процесс. `stop()` его снимает.
+  imageStore.sweep();
+  const imageSweep = setInterval(() => imageStore.sweep(), FEED_IMAGE_SWEEP_MS);
+  imageSweep.unref();
 
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
@@ -515,7 +542,7 @@ export function createFeedService(
     const feed = feedOf(ref);
     clearCodexGrace(feed);
     setDecisions(feed, 'window');
-    const update = applyCodexHookEvent(feed.state, body, at());
+    const update = applyCodexHookEvent(feed.state, stashHookBody(body, saveImage), at());
     commit(feed, update);
     const card =
       body['hook_event_name'] === 'PermissionRequest'
@@ -563,7 +590,7 @@ export function createFeedService(
     const transcript = textOf(body['transcript_path']);
     if (transcript !== null) feed.transcriptPath = transcript;
 
-    const update = applyHookEvent(feed.state, body, at());
+    const update = applyHookEvent(feed.state, stashHookBody(body, saveImage), at());
     const retry = feed.state.items.at(-1);
     if (retry?.kind === 'error' && retry.retry !== undefined && retry.retry.resolved !== true &&
       update.changes.some((item) => item.kind === 'text' || item.kind === 'prompt' || item.kind === 'turn' ||
@@ -608,7 +635,7 @@ export function createFeedService(
       try {
         const records = await readTranscript(file);
         if (records === null || feed.live || stopped) return;
-        const seeded = closeBrokenTurn(feedFromTranscript(records, { limit: maxItems }));
+        const seeded = closeBrokenTurn(feedFromTranscript(stashClaude(records), { limit: maxItems }));
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
@@ -643,7 +670,7 @@ export function createFeedService(
         const tail = createRolloutTail(file);
         const records = await tail.read();
         if (stopped) return;
-        const seeded = feedFromCodexRollout(records, { limit: maxItems });
+        const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
         const state =
@@ -693,7 +720,7 @@ export function createFeedService(
       if (codex === undefined || stopped) return;
       const records = await codex.tail.read();
       if (records.length > 0) {
-        const { update, cursor } = applyCodexRecords(feed.state, records, codex.cursor);
+        const { update, cursor } = applyCodexRecords(feed.state, stashCodex(records), codex.cursor);
         codex.cursor = cursor;
         commit(feed, update);
       }
@@ -726,7 +753,12 @@ export function createFeedService(
         // Копия истории родителя в начале журнала агента в ленту не попадает.
         if (firstRead) track.cursor = { ...track.cursor, lastOrdinal: track.meta.historyStart - 1 };
         commit(feed, withCodexAgentMeta(feed.state, item.agentId, track.meta));
-        const { update, cursor } = applyCodexRecords(feed.state, records, track.cursor, item.agentId);
+        const { update, cursor } = applyCodexRecords(
+          feed.state,
+          stashCodex(records),
+          track.cursor,
+          item.agentId,
+        );
         track.cursor = cursor;
         commit(feed, update);
       }
@@ -901,7 +933,10 @@ export function createFeedService(
       if (file === null) throw notFound();
       const records = await createRolloutTail(file).read();
       const meta = codexAgentMeta(records);
-      const { state } = feedFromCodexRollout(records, { limit: maxItems, historyStart: meta.historyStart });
+      const { state } = feedFromCodexRollout(stashCodex(records), {
+        limit: maxItems,
+        historyStart: meta.historyStart,
+      });
       return {
         items: tailByBytes(state.items, maxBytes),
         revision: 0,
@@ -914,7 +949,7 @@ export function createFeedService(
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
     const records = await readTranscript(file);
     if (records === null) throw notFound();
-    const state = feedFromTranscript(records, { limit: maxItems });
+    const state = feedFromTranscript(stashClaude(records), { limit: maxItems });
     return {
       items: tailByBytes(state.items, maxBytes),
       revision: 0,
@@ -1202,6 +1237,7 @@ export function createFeedService(
       unsubscribeExit();
       unsubscribeWorks();
       unsubscribeLogs();
+      clearInterval(imageSweep);
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

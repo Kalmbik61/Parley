@@ -4,7 +4,8 @@
  * Приёмник здесь не нужен: запрос хука — заглушка без HTTP (`hookRequest`).
  */
 
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -17,11 +18,18 @@ import type {
   FeedQuestionCard,
   RawRecord,
 } from '@parley/core';
-import { readJsonlRecords } from '@parley/core';
+import {
+  FEED_IMAGE_SWEEP_MS,
+  FEED_IMAGE_TTL_MS,
+  FEED_IMAGES_PER_CALL,
+  parleyHome,
+  readJsonlRecords,
+} from '@parley/core';
 import { FEED_SCHEMA_VERSION } from '@parley/protocol';
 import type { EventData } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
+import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
 import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
@@ -263,6 +271,8 @@ describe('снимок и дельты', () => {
   it('сессия пропала из работ: удержанным {}, лента и подписки забыты, таймеры сняты', async () => {
     vi.useFakeTimers();
     start();
+    // Один таймер у службы постоянный — уборка старых картинок; он живёт до stop(), а не до конца сессии.
+    const permanent = vi.getTimerCount();
     const client = fakeClient();
     service.subscribe(REF, client);
     send(prompt('go'));
@@ -272,7 +282,7 @@ describe('снимок и дельты', () => {
     fakes.setSessions([]);
 
     expect(request.responses).toEqual([{}]);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(permanent);
     await expect(service.snapshot(REF)).rejects.toMatchObject({ code: 'not_found' });
 
     // Та же сессия заведена заново — лента с чистого листа, старый подписчик ничего не получает.
@@ -1333,6 +1343,118 @@ describe('лента Codex', () => {
     service.interrupt(REF);
     expect(fakes.writes).toEqual(['\x1b']);
   });
+
+  describe('картинки результатов инструментов (план 2026-10-09)', () => {
+    const CAPTION = "Took a screenshot of the current page's viewport.";
+    const shotCall = (n: number, id: string, png: Buffer, thread = 'th-main') =>
+      item(n, thread, {
+        type: 'McpToolCall',
+        id,
+        server: 'chrome-devtools',
+        tool: 'take_screenshot',
+        arguments: {},
+        status: 'completed',
+        result: {
+          content: [
+            { type: 'text', text: CAPTION },
+            { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
+          ],
+        },
+      });
+    const toolsOf = (items: readonly FeedItem[]) => ofKind(items, 'tool');
+    let imagesDir: string;
+
+    beforeEach(async () => {
+      imagesDir = path.join(await tempRoot(), 'feed-images');
+    });
+
+    it('сев из журнала: McpToolCall со скриншотом — ссылка у вызова, файл на месте, base64 в ленте нет', async () => {
+      const png = makePng();
+      await writeRollout(file, [
+        meta('th-main'),
+        started(1),
+        userMessage(2, 'um1', 'снимок'),
+        shotCall(3, 'exec-1', png),
+        complete(4),
+      ]);
+      start({ imagesDir });
+
+      const snapshot = await service.snapshot(REF);
+
+      const tool = toolsOf(snapshot.items)[0];
+      expect(tool).toMatchObject({ toolUseId: 'exec-1', name: 'mcp__chrome-devtools__take_screenshot', status: 'done' });
+      expect(tool?.response?.text).toBe(`${CAPTION}\n[image png, 1 KB]`);
+      const image = tool?.response?.images?.[0];
+      expect(image).toMatchObject({ mime: 'image/png', bytes: png.length });
+      expect(path.dirname(image?.path ?? '')).toBe(imagesDir);
+      expect(readFileSync(image?.path ?? '').equals(png)).toBe(true);
+      expect(JSON.stringify(snapshot)).not.toContain('iVBOR');
+    });
+
+    it('дописанная строка с картинкой приходит дельтой со ссылкой (опрос журнала)', async () => {
+      const png = makePng(40, 30, 5);
+      await writeRollout(file, [meta('th-main'), started(1)]);
+      start({ imagesDir });
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      await service.snapshot(REF);
+
+      await appendRollout(file, [shotCall(2, 'exec-2', png)]);
+      fakes.emitLog();
+
+      await vi.waitFor(() => {
+        const tools = toolsOf(feedChanged(client).flatMap((delta) => delta.upsert));
+        expect(tools[0]?.response?.images).toHaveLength(1);
+      });
+      const delta = feedChanged(client).flatMap((entry) => entry.upsert);
+      const image = toolsOf(delta)[0]?.response?.images?.[0];
+      expect(readFileSync(image?.path ?? '').equals(png)).toBe(true);
+      expect(JSON.stringify(client.sent)).not.toContain('iVBOR');
+    });
+
+    it('агент Codex: в карточке вызов без ссылки, но с пометкой; в снимке агента — со ссылкой', async () => {
+      const png = makePng(40, 30, 6);
+      await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+      const childFile = path.join(dir, 'child.jsonl');
+      await writeRollout(childFile, [childMeta('th-child', 'th-main', 1), shotCall(3, 'cc-shot', png, 'th-child')]);
+      fakes.setChildLogFile('th-child', childFile);
+      start({ imagesDir });
+      await service.snapshot(REF);
+
+      await vi.waitFor(async () => {
+        const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+        expect(card).toMatchObject({ toolCount: 1 });
+      });
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      const nested = card?.kind === 'agent' ? card.children[0] : undefined;
+      expect(nested?.response?.text).toBe(`${CAPTION}\n[image png, 1 KB]`);
+      expect(nested?.response?.images).toBeUndefined();
+
+      const sub = await service.snapshot(REF, 'th-child');
+      const own = toolsOf(sub.items).find((tool) => tool.toolUseId === 'cc-shot');
+      expect(own?.response?.images?.[0]?.mime).toBe('image/png');
+      // Той же картинки с обоих путей — один файл.
+      expect(readdirSync(imagesDir)).toHaveLength(1);
+      expect(JSON.stringify(sub)).not.toContain('iVBOR');
+    });
+
+    it('один журнал читается снова: снимок агента дважды даёт ссылку оба раза', async () => {
+      const png = makePng(40, 30, 7);
+      await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+      const childFile = path.join(dir, 'child.jsonl');
+      await writeRollout(childFile, [childMeta('th-child', 'th-main', 1), shotCall(3, 'cc-shot', png, 'th-child')]);
+      fakes.setChildLogFile('th-child', childFile);
+      start({ imagesDir });
+
+      const first = await service.snapshot(REF, 'th-child');
+      const second = await service.snapshot(REF, 'th-child');
+
+      for (const snapshot of [first, second]) {
+        expect(toolsOf(snapshot.items)[0]?.response?.images).toHaveLength(1);
+      }
+      expect(second.items).toEqual(first.items);
+    });
+  });
 });
 
 describe('хуки Codex', () => {
@@ -1456,5 +1578,327 @@ describe('хуки Codex', () => {
     request.abandon();
     const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
     expect(card).toMatchObject({ state: 'elsewhere' });
+  });
+
+  it('PostToolUse со скриншотом в tool_response идёт через тот же обход: файл в imagesDir, хук отвечен', async () => {
+    const imagesDir = path.join(await tempRoot(), 'feed-images');
+    start({ codexApprovals: async () => true, imagesDir });
+    const png = makePng();
+
+    const request = send(
+      hook('PostToolUse', {
+        tool_name: 'mcp__chrome-devtools__take_screenshot',
+        tool_use_id: 'exec-1',
+        tool_input: {},
+        tool_response: [
+          { type: 'text', text: 'Took a screenshot' },
+          { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
+        ],
+      }),
+    );
+
+    expect(request.responses).toEqual([{}]);
+    expect(readdirSync(imagesDir)).toHaveLength(1);
+  });
+});
+
+describe('картинки результатов инструментов (план 2026-10-09)', () => {
+  const SHOT = 'mcp__chrome-devtools__take_screenshot';
+  const MIB = 1024 * 1024;
+  const imageBlock = (png: Buffer, mime = 'image/png') => ({
+    type: 'image',
+    source: { type: 'base64', media_type: mime, data: png.toString('base64') },
+  });
+  let imagesDir: string;
+
+  beforeEach(async () => {
+    imagesDir = path.join(await tempRoot(), 'feed-images');
+  });
+
+  const imageFiles = (): string[] => (existsSync(imagesDir) ? readdirSync(imagesDir) : []);
+  const toolOf = async (id: string) =>
+    ofKind((await service.snapshot(REF)).items, 'tool').find((tool) => tool.toolUseId === id);
+  const shot = (id: string, response: unknown) => post(id, SHOT, {}, response);
+
+  describe('хук Claude', () => {
+    it('PostToolUse с массивом «текст + картинка»: у вызова ссылка на файл в imagesDir, base64 нет ни в ленте, ни в дельте', async () => {
+      const png = makePng();
+      start({ imagesDir });
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      send(prompt('сними страницу'));
+      send(pre('t1', SHOT, {}));
+
+      const request = send(shot('t1', [{ type: 'text', text: 'Took a screenshot' }, imageBlock(png)]));
+
+      // Запись картинки синхронна: хук отвечен сразу, порядок событий не сдвинулся.
+      expect(request.responses).toEqual([{}]);
+      const tool = await toolOf('t1');
+      expect(tool?.response?.text).toBe('Took a screenshot\n[image png, 1 KB]');
+      const image = tool?.response?.images?.[0];
+      expect(image).toMatchObject({ mime: 'image/png', bytes: png.length });
+      expect(path.dirname(image?.path ?? '')).toBe(imagesDir);
+      expect(readFileSync(image?.path ?? '').equals(png)).toBe(true);
+      expect(ofKind(feedChanged(client).flatMap((delta) => delta.upsert), 'tool').at(-1)?.response?.images).toHaveLength(1);
+      const wire = JSON.stringify([await service.snapshot(REF), client.sent]);
+      expect(wire).not.toContain('iVBOR');
+      expect(wire).not.toContain(png.toString('base64').slice(0, 40));
+    });
+
+    it('Read картинки: объект-картинка прямо в tool_response — тоже ссылка', async () => {
+      const png = makePng(40, 30, 3);
+      start({ imagesDir });
+      send(pre('r1', 'Read', { file_path: '/tmp/a.png' }));
+
+      const picture = {
+        type: 'image',
+        file: { base64: png.toString('base64'), type: 'image/png', originalSize: png.length },
+      };
+      send(post('r1', 'Read', { file_path: '/tmp/a.png' }, picture));
+
+      const tool = await toolOf('r1');
+      expect(tool?.response?.text).toBe('[image png, 1 KB]');
+      expect(tool?.response?.images).toHaveLength(1);
+      expect(imageFiles()).toHaveLength(1);
+    });
+
+    it('больше шести картинок в результате: ссылок шесть, остальные — пометка, файлов ровно шесть', async () => {
+      start({ imagesDir });
+      const pngs = Array.from({ length: FEED_IMAGES_PER_CALL + 2 }, (_, i) => makePng(40, 30, i + 1));
+      send(pre('t1', SHOT, {}));
+
+      send(shot('t1', pngs.map((png) => imageBlock(png))));
+
+      const tool = await toolOf('t1');
+      expect(tool?.response?.images).toHaveLength(FEED_IMAGES_PER_CALL);
+      expect(tool?.response?.text.split('\n').filter((line) => line === '[image omitted]')).toHaveLength(2);
+      expect(imageFiles()).toHaveLength(FEED_IMAGES_PER_CALL);
+    });
+
+    it('огромный результат: десять картинок по мегабайту и одна битая — шесть ссылок, остальные пометки, base64 нет, лента жива', async () => {
+      start({ imagesDir });
+      const jpeg = (): Buffer => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), randomBytes(MIB)]);
+      const blocks: unknown[] = Array.from({ length: 10 }, () => imageBlock(jpeg(), 'image/jpeg'));
+      // Битая стоит третьей: она места под ссылку не занимает.
+      blocks.splice(2, 0, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: '!!!not base64!!!' } });
+      send(pre('t1', SHOT, {}));
+
+      const request = send(shot('t1', blocks));
+
+      expect(request.responses).toEqual([{}]);
+      const tool = await toolOf('t1');
+      expect(tool?.response?.images).toHaveLength(FEED_IMAGES_PER_CALL);
+      expect(tool?.response?.text.split('\n').filter((line) => line === '[image omitted]')).toHaveLength(5);
+      expect(imageFiles()).toHaveLength(FEED_IMAGES_PER_CALL);
+      const wire = JSON.stringify(await service.snapshot(REF));
+      expect(wire).not.toContain('/9j/');
+      expect(wire).not.toContain('!!!not base64!!!');
+      send(prompt('дальше'));
+      expect((await service.snapshot(REF)).items.at(-1)).toMatchObject({ kind: 'prompt', text: 'дальше' });
+    });
+
+    it('хранилище не пишет: картинка — [image omitted], одна строка в консоль с кодом, хук отвечен, лента живёт', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Родитель каталога картинок — обычный файл: создать каталог нельзя.
+        const blocker = path.join(await tempRoot(), 'blocker');
+        writeFileSync(blocker, 'x');
+        start({ imagesDir: path.join(blocker, 'feed-images') });
+        const png = makePng();
+        send(pre('t1', SHOT, {}));
+
+        const request = send(shot('t1', [{ type: 'text', text: 'Took a screenshot' }, imageBlock(png)]));
+
+        expect(request.responses).toEqual([{}]);
+        const tool = await toolOf('t1');
+        expect(tool?.response?.text).toBe('Took a screenshot\n[image omitted]');
+        expect(tool?.response?.images).toBeUndefined();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith('[parley] feed image', 'ENOTDIR');
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(png.toString('base64').slice(0, 24));
+        send(prompt('дальше'));
+        expect((await service.snapshot(REF)).items.at(-1)).toMatchObject({ kind: 'prompt', text: 'дальше' });
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('без imagesDir файлы идут в feed-images дома Parley', async () => {
+      const home = path.join(parleyHome(), 'feed-images');
+      try {
+        start();
+        send(pre('t1', SHOT, {}));
+
+        send(shot('t1', [imageBlock(makePng(40, 30, 9))]));
+
+        const image = (await toolOf('t1'))?.response?.images?.[0];
+        expect(path.dirname(image?.path ?? '')).toBe(home);
+        expect(existsSync(image?.path ?? '')).toBe(true);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+
+    it('картинка вне результата инструмента (вход вызова) на диск не идёт', async () => {
+      start({ imagesDir });
+      const input = { content: [imageBlock(makePng())] };
+
+      send(pre('w1', 'Write', input));
+      send(post('w1', 'Write', input, 'ok'));
+
+      expect(existsSync(imagesDir)).toBe(false);
+    });
+  });
+
+  describe('журнал Claude', () => {
+    const rec = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's', ...value });
+    const caption = { type: 'text', text: 'Took a screenshot' };
+    const callRecord = rec({
+      type: 'assistant',
+      uuid: 'a1',
+      timestamp: '2026-10-09T10:00:01.000Z',
+      message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: SHOT, input: {} }] },
+    });
+    /** Результат вызова: картинка и в `toolUseResult`, и в `tool_result.content`, как пишет Claude Code. */
+    const resultRecord = (png: Buffer): string =>
+      rec({
+        type: 'user',
+        uuid: 'u2',
+        timestamp: '2026-10-09T10:00:02.000Z',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [caption, imageBlock(png)] }] },
+        toolUseResult: [caption, imageBlock(png)],
+      });
+
+    async function journal(lines: string[]): Promise<{ root: string; file: string }> {
+      const root = path.join(await tempRoot(), 'projects');
+      await mkdir(path.join(root, '-proj'), { recursive: true });
+      const file = path.join(root, '-proj', 'sess.jsonl');
+      await writeFile(file, `${lines.join('\n')}\n`);
+      return { root, file };
+    }
+
+    it('сев: результат со скриншотом — ссылка, картинка промпта на диск не идёт, а счёт картинок промпта прежний', async () => {
+      const png = makePng(40, 30, 1);
+      const { root, file } = await journal([
+        rec({
+          type: 'user',
+          uuid: 'u1',
+          timestamp: '2026-10-09T10:00:00.000Z',
+          message: { role: 'user', content: [{ type: 'text', text: 'посмотри' }, imageBlock(makePng(40, 30, 2))] },
+        }),
+        callRecord,
+        resultRecord(png),
+      ]);
+      fakes.setLogFile(file);
+      start({ roots: () => [root], imagesDir });
+
+      const snapshot = await service.snapshot(REF);
+
+      expect(ofKind(snapshot.items, 'prompt')[0]).toMatchObject({ text: 'посмотри', images: 1 });
+      const tool = ofKind(snapshot.items, 'tool')[0];
+      expect(tool?.response?.text).toBe('Took a screenshot\n[image png, 1 KB]');
+      const image = tool?.response?.images?.[0];
+      expect(readFileSync(image?.path ?? '').equals(png)).toBe(true);
+      // Один файл: тот же скриншот в двух местах записи — одно имя, а картинка промпта не сохраняется.
+      expect(imageFiles()).toEqual([path.basename(image?.path ?? '')]);
+      expect(JSON.stringify(snapshot)).not.toContain('iVBOR');
+    });
+
+    it('те же сырые записи читаются дважды (сев и снимок субагента): ссылка оба раза, записи не тронуты', async () => {
+      const { root, file } = await journal([]);
+      const subagents = path.join(root, '-proj', 'sess', 'subagents');
+      await mkdir(subagents, { recursive: true });
+      await writeFile(path.join(subagents, 'agent-abc.jsonl'), '');
+      const records = [callRecord, resultRecord(makePng(40, 30, 4))].map((line) => JSON.parse(line) as RawRecord);
+      const before = structuredClone(records);
+      fakes.setLogFile(file);
+      start({ roots: () => [root], readRecords: async () => records, imagesDir });
+
+      const main = await service.snapshot(REF);
+      const sub = await service.snapshot(REF, 'abc');
+
+      for (const items of [main.items, sub.items]) {
+        expect(ofKind(items, 'tool')[0]?.response?.images).toHaveLength(1);
+      }
+      expect(records).toEqual(before);
+      expect(imageFiles()).toHaveLength(1);
+    });
+
+    it('хвост журнала читается ради ретраев и прерываний: картинок в нём не ищут, лишних файлов нет', async () => {
+      const root = await tempRoot();
+      const file = path.join(root, 'log.jsonl');
+      await writeFile(file, '');
+      fakes.setLogFile(file);
+      start({ roots: () => [root], imagesDir });
+      send(prompt('go'));
+      const startedAt = ofKind((await service.snapshot(REF)).items, 'prompt')[0]?.at ?? '';
+      const interrupt = rec({
+        type: 'user',
+        timestamp: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+        message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+      });
+
+      await writeFile(file, `${resultRecord(makePng(40, 30, 8))}\n${interrupt}\n`);
+      fakes.emitLog();
+
+      await vi.waitFor(async () => {
+        expect((await service.snapshot(REF)).items.at(-1)).toMatchObject({ kind: 'turn', interrupted: true });
+      });
+      expect(imageFiles()).toEqual([]);
+    });
+  });
+
+  describe('уборка старых файлов', () => {
+    const NAME = (letter: string): string => `${letter.repeat(24)}.png`;
+    const aged = (file: string, ms: number): void => {
+      writeFileSync(file, 'x');
+      const time = new Date(Date.now() - ms);
+      utimesSync(file, time, time);
+    };
+
+    it('при создании службы файлы старше семи суток убираются, свежие остаются', async () => {
+      await mkdir(imagesDir, { recursive: true });
+      aged(path.join(imagesDir, NAME('a')), FEED_IMAGE_TTL_MS + 60_000);
+      aged(path.join(imagesDir, NAME('b')), 60_000);
+
+      start({ imagesDir });
+
+      expect(imageFiles()).toEqual([NAME('b')]);
+    });
+
+    it('таймер уборки не держит процесс хоста и взведён на шесть часов', () => {
+      const real = globalThis.setInterval;
+      const created: Array<{ timer: NodeJS.Timeout; ms: unknown }> = [];
+      const spy = vi.spyOn(globalThis, 'setInterval').mockImplementation(((handler: () => void, ms?: number) => {
+        const timer = real(handler, ms);
+        created.push({ timer, ms });
+        return timer;
+      }) as typeof setInterval);
+      try {
+        start({ imagesDir });
+        expect(created.map((entry) => entry.ms)).toEqual([FEED_IMAGE_SWEEP_MS]);
+        expect(created[0]?.timer.hasRef()).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('раз в шесть часов уборка повторяется; stop() снимает таймер', async () => {
+      vi.useFakeTimers();
+      await mkdir(imagesDir, { recursive: true });
+      start({ imagesDir });
+      aged(path.join(imagesDir, NAME('c')), FEED_IMAGE_TTL_MS + 60_000);
+
+      vi.advanceTimersByTime(FEED_IMAGE_SWEEP_MS - 1);
+      expect(imageFiles()).toEqual([NAME('c')]);
+      vi.advanceTimersByTime(1);
+      expect(imageFiles()).toEqual([]);
+
+      await service.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      aged(path.join(imagesDir, NAME('d')), FEED_IMAGE_TTL_MS + 60_000);
+      vi.advanceTimersByTime(FEED_IMAGE_SWEEP_MS * 2);
+      expect(imageFiles()).toEqual([NAME('d')]);
+    });
   });
 });
