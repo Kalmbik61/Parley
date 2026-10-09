@@ -17,6 +17,7 @@ import { S } from '../../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { FeedList } from '../FeedList.js';
+import { ImagePreviewHost } from '../ImagePreview.js';
 import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { AgentItem, type Transcript } from './AgentItem.js';
 import { PromptItem } from './PromptItem.js';
@@ -448,11 +449,17 @@ describe('ToolItem — картинки из результата инструм
 
   const renderTool = (item: FeedTool): ReturnType<typeof render> => renderWithEnv(<ToolItem item={item} />);
 
-  /** Мост с миниатюрами обеих картинок: ряд рисует кнопки, а не значки. */
+  /** Мост с миниатюрами обеих картинок и диалогом просмотра, как в `ChatView`: ряд рисует кнопки, а не значки. */
   function renderShots(node: JSX.Element): FakeBridge {
     const fake = createFakeBridge();
     for (const shot of SHOTS) fake.setThumbnail(shot.path, `data:image/png;base64,${shot.path}`);
-    render(<ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>{node}</ChatEnvContext.Provider>);
+    render(
+      <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
+        <ImagePreviewHost bridge={fake} sessionKey="k1" visible>
+          {node}
+        </ImagePreviewHost>
+      </ChatEnvContext.Provider>,
+    );
     return fake;
   }
 
@@ -507,18 +514,14 @@ describe('ToolItem — картинки из результата инструм
   });
 
   it('в ленте ряд лежит внутри измеряемой строки: виртуализатор мерит строку целиком, миниатюры не налезают на следующую', async () => {
-    const fake = createFakeBridge();
-    for (const shot of SHOTS) fake.setThumbnail(shot.path, `data:image/png;base64,${shot.path}`);
-    render(
-      <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
-        <div style={{ height: 600 }}>
-          <FeedList
-            items={[withShots({ id: 't-shots' }), tool({ id: 't-next', toolUseId: 'tu2', input: { command: 'ls' } })]}
-            queued={[]}
-            note={null}
-          />
-        </div>
-      </ChatEnvContext.Provider>,
+    renderShots(
+      <div style={{ height: 600 }}>
+        <FeedList
+          items={[withShots({ id: 't-shots' }), tool({ id: 't-next', toolUseId: 'tu2', input: { command: 'ls' } })]}
+          queued={[]}
+          note={null}
+        />
+      </div>,
     );
     await act(async () => {});
     const row = screen.getByTestId('chat-tool-images').closest('[data-feed-id]');
@@ -529,6 +532,36 @@ describe('ToolItem — картинки из результата инструм
     expect(next).not.toBeNull();
     expect(row?.contains(next)).toBe(false);
     expect(next?.querySelector('[data-testid="chat-tool-images"]')).toBeNull();
+  });
+
+  it('просмотр переживает строку: вызов с картинкой ушёл из ленты (виртуальный список размонтировал её) — диалог открыт, картинка та же', async () => {
+    const fake = createFakeBridge();
+    for (const shot of SHOTS) fake.setThumbnail(shot.path, `data:image/png;base64,${shot.path}`);
+    fake.setThumbnail(SHOTS[0]!.path, 'data:image/png;base64,BIG', 1600);
+    const next = tool({ id: 't-next', toolUseId: 'tu2', input: { command: 'ls' } });
+    const feed = (items: readonly FeedItem[]): JSX.Element => (
+      <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
+        <ImagePreviewHost bridge={fake} sessionKey="k1" visible>
+          <div style={{ height: 600 }}>
+            <FeedList items={items} queued={[]} note={null} />
+          </div>
+        </ImagePreviewHost>
+      </ChatEnvContext.Provider>
+    );
+    const view = render(feed([withShots({ id: 't-shots' }), next]));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Image 1 of 2' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+    await waitFor(() => expect(within(dialog).getByTestId('chat-tool-image-view').getAttribute('src')).toBe('data:image/png;base64,BIG'));
+
+    view.rerender(feed([next]));
+    expect(screen.queryByTestId('chat-tool-images')).toBeNull();
+    expect(document.querySelector('[data-feed-id="t-shots"]')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Image 1 of 2' })).toBe(dialog);
+    expect(within(dialog).getByTestId('chat-tool-image-view').getAttribute('src')).toBe('data:image/png;base64,BIG');
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });
 

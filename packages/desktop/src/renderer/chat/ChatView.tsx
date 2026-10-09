@@ -47,6 +47,11 @@
  * их только человек. Серый элемент очереди хранит уже собранный текст; промпт ленты (`PromptItem`) снова
  * показывает хвостовые упоминания чипами.
  *
+ * Картинки из результатов инструментов (скриншоты MCP браузера): под вызовом миниатюры (`ToolImages`), клик открывает
+ * просмотр. Диалог просмотра один на вид и стоит над лентой (`ImagePreviewHost`), а не в строке: строка со скриншотом
+ * уходит из виртуального окна, пока человек смотрит картинку, и просмотр должен остаться. Он закрывается, когда вид
+ * уходит с экрана, сессия вида другая или работа скрыта.
+ *
  * Ход считается только у живой сессии (`live`: lifecycle `active`): у уснувшей или закрытой Stop и
  * Queue не показываются, даже если лента кончилась промптом без конца хода.
  */
@@ -83,6 +88,7 @@ import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, turnActive } from './feed-model.js';
 import { FeedList } from './FeedList.js';
+import { ImagePreviewHost } from './ImagePreview.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
 import { useChatUiStore, type Queued } from './ui-store.js';
@@ -421,14 +427,16 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             : {})}
           {...(agents.length > 0 ? { agents: { running: agents.length, onShow: showAgent } } : {})}
         />
-        <FeedList
-          items={items}
-          queued={queued}
-          note={noteOf(feed)}
-          {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
-          {...(showWorking ? { working: { since: turnStart } } : {})}
-          {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
-        />
+        <ImagePreviewHost bridge={bridge} sessionKey={sessionKey} visible={visible}>
+          <FeedList
+            items={items}
+            queued={queued}
+            note={noteOf(feed)}
+            {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
+            {...(showWorking ? { working: { since: turnStart } } : {})}
+            {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
+          />
+        </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
         {showHooksHint ? (

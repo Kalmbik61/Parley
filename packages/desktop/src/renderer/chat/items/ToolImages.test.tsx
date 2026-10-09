@@ -9,6 +9,7 @@ import type { FeedImageRef } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { ChatEnvContext } from '../chat-env.js';
+import { ImagePreviewHost } from '../ImagePreview.js';
 import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { ToolImages } from './ToolImages.js';
 
@@ -25,10 +26,13 @@ const images: FeedImageRef[] = [
   { path: B, mime: 'image/jpeg' },
 ];
 
+/** Ряд в окружении ленты и с диалогом просмотра, который в окне держит `ChatView` (`ImagePreviewHost`). */
 function renderImages(list: readonly FeedImageRef[] = images, fake: FakeBridge = createFakeBridge()): FakeBridge {
   render(
     <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
-      <ToolImages images={list} />
+      <ImagePreviewHost bridge={fake} sessionKey="k1" visible>
+        <ToolImages images={list} />
+      </ImagePreviewHost>
     </ChatEnvContext.Provider>,
   );
   return fake;
@@ -76,6 +80,8 @@ describe('ToolImages — ряд миниатюр', () => {
     expect(screen.getByRole('button', { name: 'Image 2 of 2' })).toBe(buttons[1]);
     expect(buttons.map((button) => button.querySelector('img')?.getAttribute('src'))).toEqual([SMALL_A, SMALL_B]);
     expect(buttons.map((button) => button.getAttribute('title'))).toEqual(['Open image', 'Open image']);
+    // Кнопка открывает диалог: об этом знает скринридер.
+    expect(buttons.map((button) => button.getAttribute('aria-haspopup'))).toEqual(['dialog', 'dialog']);
     expect(fake.thumbnailRequests).toEqual([
       { path: A, maxPx: undefined },
       { path: B, maxPx: undefined },
@@ -172,6 +178,21 @@ describe('ToolImages — картинку не прочесть', () => {
     expect(screen.getAllByText('Image unavailable')).toHaveLength(2);
     expect(screen.queryByTestId('chat-tool-image')).toBeNull();
     expect(screen.queryByTestId('chat-tool-image-pending')).toBeNull();
+  });
+
+  it('мост есть, а диалога просмотра нет (ряд вне `ChatView`) — миниатюры на месте, но не кнопки: нажимать некуда', async () => {
+    const fake = bridgeWithImages();
+    render(
+      <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
+        <ToolImages images={images} />
+      </ChatEnvContext.Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByTestId('chat-tool-image')).toBeNull();
+    const frames = screen.getAllByTestId('chat-tool-image-static');
+    expect(frames.map((frame) => frame.querySelector('img')?.getAttribute('src'))).toEqual([SMALL_A, SMALL_B]);
+    for (const frame of frames) expect(frame.className).toContain('h-[120px] w-[160px]');
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });
 
