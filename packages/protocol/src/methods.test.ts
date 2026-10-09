@@ -260,6 +260,29 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.delete'>>().toEqualTypeOf<{ ok: true }>();
   });
 
+  it('rooms.archive: комната и флажок stopSessions обязательны; ответ — ok', () => {
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: true }).success).toBe(true);
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: false }).success).toBe(true);
+    // Умолчание флажка — дело окна: без него хост не знает, останавливать ли агентов.
+    expect(METHODS['rooms.archive'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: 'yes' }).success).toBe(false);
+    expect(METHODS['rooms.archive'].safeParse({ projectPath: '/p', workId: 'w-0001', stopSessions: true }).success).toBe(false);
+    expectTypeOf<Params<'rooms.archive'>>().toEqualTypeOf<{
+      projectPath: string;
+      workId: string;
+      roomId: string;
+      stopSessions: boolean;
+    }>();
+    expectTypeOf<Result<'rooms.archive'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('rooms.reopen: только комната; ответ — ok', () => {
+    expect(METHODS['rooms.reopen'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.reopen'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.reopen'>>().toEqualTypeOf<{ projectPath: string; workId: string; roomId: string }>();
+    expectTypeOf<Result<'rooms.reopen'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
     const accept = { ...room, proposalId: 'p-01', action: 'accept' };
     expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);

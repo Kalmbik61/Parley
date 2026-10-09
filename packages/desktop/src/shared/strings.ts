@@ -17,6 +17,8 @@ import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWai
 export const S = {
   plans: {
     workClosed: 'Reopen this workspace to change the plan.',
+    /** Вместо `workClosed` у плана архивной комнаты: панель только читается. */
+    roomArchived: 'Reopen this room to change the plan.',
     title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
     revision: (n: number) => 'Revision ' + n,
     mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
@@ -320,6 +322,9 @@ export const S = {
     /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
     moreClosed: (n: number): string => `${n} more closed`,
     hideClosed: 'Hide closed',
+    /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
+    archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
+    hideArchivedRooms: 'Hide archived rooms',
     /** Тултип `✉N` карточки: непрочитанные человеком письма работы. */
     unreadMail: (n: number): string => (n === 1 ? '1 unread message to you' : `${n} unread messages to you`),
     /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
@@ -393,6 +398,22 @@ export const S = {
     /** Меню строки комнаты по правой кнопке — `sidebar/RoomRowMenu.tsx`. */
     roomMenu: {
       rename: 'Rename',
+      archiveEllipsis: 'Archive…',
+      /** Пункт меню архивной комнаты и кнопка подтверждения архивации. */
+      reopen: 'Reopen',
+      archive: 'Archive',
+      archiveConfirmTitle: (title: string): string => `Archive room "${title}"?`,
+      archiveConfirmDescription:
+        'The room moves under "archived rooms" at the bottom of the workspace. Its feed stays readable; nobody can write to it until you reopen it.',
+      /** Дополнение к описанию, когда у комнаты ждёт ответа решение и/или идёт живой план: архивация их закрывает. */
+      archiveConfirmOpenWork: (decision: boolean, plan: boolean): string =>
+        decision && plan
+          ? ' Its pending decision will be dismissed and its plan cancelled.'
+          : decision
+            ? ' Its pending decision will be dismissed.'
+            : ' Its plan will be cancelled.',
+      /** Флажок подтверждения, включён по умолчанию: остановить агентов, у которых нет другой открытой комнаты. Остановка обратима. */
+      archiveStopAgents: (n: number): string => `Also stop its ${n} ${n === 1 ? 'agent that is' : 'agents that are'} in no other room`,
       deleteEllipsis: 'Delete…',
       deleteConfirmTitle: (title: string): string => `Delete room "${title}"?`,
       deleteConfirmDescription: 'The room and its feed will be deleted. Its sessions keep running as regular sessions of the workspace.',
@@ -682,6 +703,10 @@ export const S = {
   rooms: {
     fallbackTitle: 'Room',
     notFound: 'Room not found',
+    /** Метка в шапке вкладки архивной комнаты и строка вместо поля ввода (спека архива комнат, 5.2). */
+    archived: 'Archived',
+    archivedNote: 'This room is archived.',
+    reopen: 'Reopen',
     everyone: 'everyone',
     send: 'Send',
 
@@ -1591,6 +1616,8 @@ export const S = {
       renameRoom: 'rename room',
       renameSession: 'rename session',
       deleteRoom: 'delete room',
+      archiveRoom: 'archive room',
+      reopenRoom: 'reopen room',
       makeLead: 'change the room lead',
       revealWorkspace: 'reveal workspace in Finder',
       openFile: 'open file',

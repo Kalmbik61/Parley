@@ -207,6 +207,13 @@ export const METHODS = {
   'rooms.rename': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), title: renameTitle }),
   'rooms.setLead': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), sessionId: z.string() }),
   'rooms.delete': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
+  // Архив комнаты (часть 1 спеки архива комнат, раздел 4): лента остаётся и читается, писать в комнату нельзя, пока
+  // человек не вернёт её. `stopSessions` — останавливать ли сессии, у которых после архивации нет другой открытой
+  // комнаты: останавливает хост (`sessions.stop` каждой живой), а тем живым, кого не остановили, пишет письмо. Флажок
+  // обязателен: умолчание («включён») задаёт окно, а не протокол. Старый хост методов не знает — окно по списку методов
+  // прячет пункты.
+  'rooms.archive': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), stopSessions: z.boolean() }),
+  'rooms.reopen': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
   // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
   // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
@@ -391,6 +398,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   /** `messageId` — системная строка ленты «@s03 is now the lead». */
   'rooms.setLead': { messageId: string };
   'rooms.delete': { ok: true };
+  'rooms.archive': { ok: true };
+  'rooms.reopen': { ok: true };
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };

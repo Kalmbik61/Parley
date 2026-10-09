@@ -141,6 +141,7 @@ export {
   addMember,
   addMemberByLead,
   addRoom,
+  addRoomArchivedLetters,
   addRoomOriginMessage,
   addSystemMessage,
   archiveRoom,

@@ -9,6 +9,7 @@ import type { Room, WorkEntry, WorkMap, WorkSession } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { ATTENTION_RANK, attentionOf as attentionIn, type WorkAttention } from '../attention/derive.js';
 import { isoMs } from '../lib/iso-time.js';
+import { agentsLeftWithoutRoom, isRoomArchived } from '../lib/room-archive.js';
 import { roomLiveLead } from '../lib/room-lead.js';
 import { roomLastAt, roomSessions } from '../lib/room-view.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
@@ -185,6 +186,14 @@ export interface CardRoomRow {
   sessions: WorkSession[];
   /** Время последнего события комнаты — справа в её строке. */
   lastAt: string;
+  /** Комната в архиве (спека архива комнат, 5.1): строка приглушена и стоит под ссылкой «N archived rooms». */
+  archived: boolean;
+  /**
+   * Сессии, которых архивация этой комнаты оставит без открытой комнаты (`agentsLeftWithoutRoom`): число во флажке
+   * «Also stop its N agents…» меню строки. Не то же, что `sessions`: там — кого сайдбар поставил в комнату, а здесь —
+   * правило core по всей карте (сессия старой карты может числиться в нескольких комнатах). У архивной комнаты пусто.
+   */
+  archiveStops: WorkSession[];
 }
 
 export type CardRow = CardSessionRow | CardRoomRow;
@@ -195,7 +204,9 @@ const createdMs = (room: Room): number => isoMs(room.createdAt) ?? Number.POSITI
 /**
  * Комната, в которой сессия стоит в сайдбаре (решение 4 спеки окна): хост с 2026-09-29 держит сессию не
  * больше чем в одной комнате, но старая карта может числить её в нескольких — тогда она стоит в комнате с
- * самым ранним `createdAt` (равные и битые даты — в порядке карты), а в остальных её строки нет.
+ * самым ранним `createdAt` (равные и битые даты — в порядке карты), а в остальных её строки нет. Открытая комната
+ * раньше архивной (спека архива комнат, 5.1): сессия, числящаяся и там и там, стоит в открытой, а в архивную попадает,
+ * только если открытой у неё нет.
  */
 function homeRooms(map: WorkMap): Map<string, Room> {
   const home = new Map<string, Room>();
@@ -204,7 +215,9 @@ function homeRooms(map: WorkMap): Map<string, Room> {
     const right = createdMs(b);
     return left === right ? 0 : left < right ? -1 : 1;
   });
-  for (const room of byCreation) {
+  const open = byCreation.filter((room) => !isRoomArchived(room));
+  const archived = byCreation.filter(isRoomArchived);
+  for (const room of [...open, ...archived]) {
     for (const session of roomSessions(map, room)) {
       if (!home.has(session.id)) home.set(session.id, room);
     }
@@ -221,42 +234,72 @@ export function homeRoomOf(map: WorkMap, sessionId: string): Room | null {
 }
 
 /**
+ * Сессия архивной комнаты, что остаётся на карточке обычной строкой (спека архива комнат, 5.1): процесс жив (`active`)
+ * или вот-вот поднимется (`pending`) — флажок «остановить» был снят, и прятать работающего агента, а с ним его
+ * внимание, под ссылку нельзя. `sleeping` и `closed` уходят вместе с комнатой.
+ */
+const staysOnCard = (session: WorkSession): boolean => session.lifecycle === 'active' || session.lifecycle === 'pending';
+
+/** Строка комнаты (`cardRows`, `archivedRows`): состав участников зависит от `home` и от того, в архиве ли комната. */
+function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number): CardRoomRow {
+  const archived = isRoomArchived(room);
+  // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
+  // Работающие участники архивной комнаты стоят на карточке своими строками (`staysOnCard`), второй раз их не выводим.
+  const sessions = roomSessions(map, room).filter(
+    (session) => home.get(session.id) === room && !(archived && staysOnCard(session)),
+  );
+  return {
+    kind: 'room',
+    room,
+    depth,
+    lead: roomLiveLead(map, room),
+    members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
+    sessions,
+    lastAt: roomLastAt(map, room),
+    archived,
+    archiveStops: archived ? [] : agentsLeftWithoutRoom(map, room),
+  };
+}
+
+/**
  * Строки карточки (спека окна 2026-09-29, 1.2, «Состав строк карточки»): сессии в порядке `treeOrder`;
  * участник комнаты отдельной строкой не выводится — на месте первого встреченного участника стоит строка
  * его комнаты; комнаты без живых участников — в конце, в порядке карты. Место комнаты задаёт её первый ЖИВОЙ
  * участник, а не первый показанный: закрытые скрыты за «N more closed», и от этого переключателя комната
  * не прыгала бы по карточке. Закрытая сессия вне комнаты — строкой, только при `showClosed`.
+ *
+ * Архивные комнаты (спека архива комнат, 5.1) в основных строках не выводятся — их даёт `archivedRows`, под ссылкой
+ * «N archived rooms». Сессия, чья домашняя комната архивная, стоит обычной строкой, если она работает (`staysOnCard`),
+ * а спящая и закрытая уходят под ссылку вместе с комнатой.
  */
 export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
   const home = homeRooms(map);
   const rows: CardRow[] = [];
   const emitted = new Set<string>();
-  const roomRow = (room: Room, depth: number): CardRoomRow => {
-    // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
-    const sessions = roomSessions(map, room).filter((session) => home.get(session.id) === room);
-    return {
-      kind: 'room',
-      room,
-      depth,
-      lead: roomLiveLead(map, room),
-      members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
-      sessions,
-      lastAt: roomLastAt(map, room),
-    };
-  };
 
   for (const { session, depth } of treeOrder(map.sessions)) {
     const live = session.lifecycle !== 'closed';
     const room = home.get(session.id);
-    if (room === undefined) {
+    const inArchive = room !== undefined && isRoomArchived(room);
+    if (room === undefined || (inArchive && staysOnCard(session))) {
       if (live || showClosed) rows.push({ kind: 'session', session, depth });
-    } else if (live && !emitted.has(room.id)) {
+    } else if (!inArchive && live && !emitted.has(room.id)) {
+      // Спящая и закрытая сессия архивной комнаты (`inArchive`) строки не получает: она уходит с комнатой под ссылку.
       emitted.add(room.id);
-      rows.push(roomRow(room, depth));
+      rows.push(buildRoomRow(map, home, showClosed, room, depth));
     }
   }
   for (const room of map.rooms) {
-    if (!emitted.has(room.id)) rows.push(roomRow(room, 0));
+    if (!emitted.has(room.id) && !isRoomArchived(room)) rows.push(buildRoomRow(map, home, showClosed, room, 0));
   }
   return rows;
+}
+
+/**
+ * Строки архивных комнат карточки (спека архива комнат, 5.1) — под ссылкой «N archived rooms», в порядке карты. Их
+ * число — число в ссылке, даже у комнаты без единого участника под ссылкой.
+ */
+export function archivedRows(map: WorkMap, showClosed: boolean): CardRoomRow[] {
+  const home = homeRooms(map);
+  return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, showClosed, room, 0));
 }

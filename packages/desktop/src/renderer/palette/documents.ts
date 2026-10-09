@@ -29,6 +29,7 @@ import { groups, openTab, openTerminalSessionIds, splitGroup } from '../layout/t
 import { displayStatus, dotState, stateWord, type DotState } from '../lib/dot-state.js';
 import { isoMs } from '../lib/iso-time.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
+import { isRoomArchived } from '../lib/room-archive.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { terminalSurfaces } from '../terminal/surface-registry.js';
@@ -227,6 +228,9 @@ export function buildDocuments(input: {
     });
 
     entry.map.rooms.forEach((room, index) => {
+      // Архивная комната не документ палитры (спека архива комнат, 5.3): открыть её можно из ссылки в карточке. Вкладка
+      // уже открытой архивной комнаты попадает в палитру как вкладка (`tabs` выше), а не как комната.
+      if (isRoomArchived(room)) return;
       const members = room.members.map((id) => {
         const member = entry.map.sessions.find((candidate) => candidate.id === id);
         return member === undefined ? sessionTag(id) : sessionRowLabel(member.id, member.label);

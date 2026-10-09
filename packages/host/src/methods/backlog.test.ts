@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addRoom, addSession, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
 
 let root: string;
@@ -93,6 +93,12 @@ describe('human backlog handlers', () => {
     const foreign = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-foreign-')));
     try { await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: { ...created, projectPath: foreign } })).rejects.toMatchObject({ code: 'bad_request' }); }
     finally { await rm(foreign, { recursive: true, force: true }); }
+    expect((await get()).items[0]!.taken).toBeUndefined();
+  });
+  it('an archived room is not a target: take is refused until the human reopens it', async () => {
+    const created = await target(); const added = await add(); const id = added.items[0]!.id!;
+    await updateMap(project, created.workId, map => { archiveRoom(map, created.roomId); });
+    await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
     expect((await get()).items[0]!.taken).toBeUndefined();
   });
   it('malformed local data and unsafe inputs produce safe fixed errors without raw content', async () => {

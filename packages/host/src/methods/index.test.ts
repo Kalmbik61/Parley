@@ -56,6 +56,15 @@ it('registers sessions.rename, which reads and writes the map on disk and does n
   expect(WORKS_GATED_METHODS as readonly string[]).not.toContain('sessions.rename');
 });
 
+it('registers rooms.archive and rooms.reopen, which read the live processes and the map on disk and do not wait for the works snapshot', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const { methods } = createHostHandlers(deps);
+  for (const name of ['rooms.archive', 'rooms.reopen'] as const) {
+    expect(methods[name]).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS as readonly string[]).not.toContain(name);
+  }
+});
+
 it('registers both explicit native skill sharing actions', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const handlers = createHostHandlers(deps);

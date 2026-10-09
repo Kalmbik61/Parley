@@ -34,10 +34,12 @@ import {
 } from './providers.js';
 import {
   createPlanHandlers,
+  createRoomsArchive,
   roomsAddMember,
   roomsCreate,
   roomsDelete,
   roomsRename,
+  roomsReopen,
   roomsResolveProposal,
   roomsSend,
   roomsSetLead,
@@ -83,7 +85,7 @@ export interface MethodDeps {
  * по сессии, ещё не сверенную живость или пустой список прерванных. Ждут `worksReady`.
  * Не ждут: pty.input/pty.resize (порядок ввода; до чтения PTY всё равно нет), чтение и запись
  * карт с диска (works.create/delete/rename/setStatus, sessions.rename, rooms.create/addMember/rename/setLead/delete/send,
- * mail.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
+ * rooms.archive/reopen, mail.*, worktrees.*), host.*, providers.*, settings.*, wake.* — снимка работ они не читают.
  */
 export const WORKS_GATED_METHODS = [
   'rooms.resolveProposal',
@@ -190,6 +192,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.rename': roomsRename as AnyHandler,
     'rooms.setLead': roomsSetLead as AnyHandler,
     'rooms.delete': roomsDelete as AnyHandler,
+    'rooms.archive': createRoomsArchive(deps.sessions) as AnyHandler,
+    'rooms.reopen': roomsReopen as AnyHandler,
     'rooms.resolveProposal': (async (params, request) => {
       const result = await roomsResolveProposal(params, request);
       // The decision is committed. Delivery failure retains pending effects and its safe notice.

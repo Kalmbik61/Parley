@@ -184,6 +184,9 @@ describe('список методов в hello', () => {
     expect(methods).toContain('sessions.setModel');
     // Rename сессии из меню её строки: без метода окно пункта не показывает.
     expect(methods).toContain('sessions.rename');
+    // Архив комнаты: без обоих методов окно пунктов Archive и Reopen не показывает (useHostSupports).
+    expect(methods).toContain('rooms.archive');
+    expect(methods).toContain('rooms.reopen');
     client.close();
   });
 });

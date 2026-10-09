@@ -511,6 +511,25 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
     expect(screen.getByRole('menu')).toBeTruthy();
     expect(screen.getByText('Pin')).toBeTruthy();
   });
+
+  it('→ и ← на карточке раскрывают и сворачивают ещё и архивные комнаты (архив комнат, 5.1)', () => {
+    const entry = makeWork('w-ka', {
+      sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'asleep', { lifecycle: 'sleeping' })],
+      rooms: [{ ...makeRoom('r-01', 'Old room'), members: ['s-02'], lead: 's-02', archivedAt: '2026-10-08T12:00:00.000Z' }],
+    });
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    const card = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+    act(() => card.focus());
+    expect(card.querySelector('[data-archived-rooms]')?.textContent).toBe('1 archived room');
+    expect(card.querySelector('[data-room-row]')).toBeNull();
+
+    fireEvent.keyDown(card, { key: 'ArrowRight' });
+    expect(card.querySelector('[data-room-row="r-01"]')).not.toBeNull();
+    fireEvent.keyDown(card, { key: 'ArrowLeft' });
+    expect(card.querySelector('[data-room-row]')).toBeNull();
+  });
 });
 
 /** Следующий по порядку Tab элемент документа после `from` (tabIndex ≥ 0, как считает браузер). */

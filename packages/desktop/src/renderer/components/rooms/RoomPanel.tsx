@@ -35,6 +35,11 @@
  * открытии комнаты лента переходит так же (`showMessage`), но сразу, без плавности и без фокуса: человек ещё
  * ничего не нажимал в ленте, и ждать нечего. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по
  * событию `scroll`), поэтому новое сообщение человека от оригинала не уводит.
+ *
+ * Архивная комната (спека архива комнат, 5.2) читается, но не пишется: в шапке метка `Archived`, вместо поля ввода строка
+ * `This room is archived.` с кнопкой `Reopen` (`rooms.reopen`), панель плана и режим комнаты только читаются
+ * (`PlanPanel.tsx`), файлы на вкладку не принимаются. Share истории работает. Вкладка архивируемой комнаты не закрывается,
+ * а переходит в этот вид.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
@@ -47,12 +52,14 @@ import { useMarkRead } from '../../attention/use-mark-read.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
+import { isRoomArchived } from '../../lib/room-archive.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
+import { Button } from '../../ui/button.js';
 import type { ActivityEntry } from '../../store/activity.js';
 import { useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
@@ -98,7 +105,9 @@ const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
   const model = buildRoomModel({ entry, roomId, providers, activity });
-  const recipe = entry.map.rooms.find((room) => room.id === roomId)?.recipe;
+  const roomRecord = entry.map.rooms.find((room) => room.id === roomId);
+  const recipe = roomRecord?.recipe;
+  const archived = roomRecord !== undefined && isRoomArchived(roomRecord);
   // Участники, которые чем-то заняты, — по строке над полем ввода. Ключ меняется, когда строка появилась,
   // исчезла или сменилась: от него зависит высота ленты.
   const busy = model?.participants.filter((participant) => participant.doing !== null) ?? [];
@@ -108,7 +117,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const now = useNow(NOW_PERIOD_MS);
-  const canResolve = useHostSupports('rooms.resolveProposal') && entry.map.work.status === 'active';
+  const canResolve = useHostSupports('rooms.resolveProposal') && entry.map.work.status === 'active' && !archived;
+  const canReopen = useHostSupports('rooms.reopen');
   // История старше хвоста, который прислал хост (P35): кнопка над лентой подгружает страницу `context.messages`.
   const canLoadEarlier = useHostSupports('context.messages');
   const earlier = earlierRemaining(entry, roomId);
@@ -354,6 +364,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         },
       );
 
+  const handleReopen = (): void => {
+    bridge.call('rooms.reopen', { projectPath: entry.projectPath, workId: entry.map.work.id, roomId }).catch((error: unknown) => {
+      console.warn('[parley] rooms.reopen', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.reopenRoom));
+    });
+  };
+
   /** Ответ человека на решение. `true` — хост принял; `false` — отказ, причина уже показана тостом. */
   const handleResolve = async (action: 'accept' | 'return', note: string): Promise<boolean> => {
     const proposal = model.proposal;
@@ -384,8 +401,9 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
     if (!dragHasFiles(event.dataTransfer)) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    setDropping(true);
+    // В архивную комнату вложения не принимаются (поля ввода нет): ни подсветки, ни копирования.
+    event.dataTransfer.dropEffect = archived ? 'none' : 'copy';
+    if (!archived) setDropping(true);
   };
   const onDragLeave = (event: DragEvent<HTMLDivElement>): void => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
@@ -394,6 +412,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     setDropping(false);
     if (!dragHasFiles(event.dataTransfer)) return;
     event.preventDefault();
+    if (archived) return;
     // Пустой путь — у `File` нет места на диске (синтетический): пропускаем.
     const paths = Array.from(event.dataTransfer.files)
       .map((file) => bridge.app.pathForFile(file))
@@ -411,7 +430,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDrop={onDrop}
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
-      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -496,7 +515,21 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           ))}
         </div>
       )}
-      <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
+      {archived ? (
+        <div
+          data-room-archived-note=""
+          className="flex shrink-0 items-center gap-3 border-t border-[color-mix(in_srgb,currentColor_12%,transparent)] px-9 py-3"
+        >
+          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{S.rooms.archivedNote}</span>
+          {canReopen ? (
+            <Button type="button" variant="outline" data-room-reopen="" onClick={handleReopen} className="shrink-0">
+              {S.rooms.reopen}
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   addMember,
   addMemberByLead,
   addRoom,
+  addRoomArchivedLetters,
   addRoomOriginMessage,
   addSystemMessage,
   archiveRoom,
@@ -1125,5 +1126,60 @@ describe('reopenRoom', () => {
 
     expect(archiveRoom(map, 'r-01', LATER)).toEqual(['s-01', 's-02']);
     expect(map.messages.filter((message) => message.text === 'Room archived by the human.')).toHaveLength(2);
+  });
+});
+
+describe('addRoomArchivedLetters', () => {
+  const NOW = '2026-10-08T12:00:00.000Z';
+  const LATER = '2026-10-08T13:00:00.000Z';
+  const TEXT = 'Room "Возвраты" was archived by the human. You are no longer in an open room.';
+
+  /** Комната «Возвраты» {s-01, s-02} в архиве: s-01 работает, s-02 спит. */
+  function archived(): { map: WorkMap; orphans: string[] } {
+    const map = twoRooms();
+    transitionSession(map, 's-01', 'active');
+    transitionSession(map, 's-02', 'active');
+    transitionSession(map, 's-02', 'sleeping');
+    return { map, orphans: archiveRoom(map, 'r-01', NOW) };
+  }
+
+  it('живой сессии — прямое письмо parley без комнаты; спящей письма нет', () => {
+    const { map, orphans } = archived();
+    const before = map.messages.length;
+
+    const letters = addRoomArchivedLetters(map, 'r-01', orphans, LATER);
+
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({ from: PARLEY, to: ['s-01'], roomId: null, kind: 'note', text: TEXT, at: LATER });
+    expect(map.messages).toHaveLength(before + 1);
+    // Письмо вне комнаты: будильник поднимет бы спящего, так что спящему его и не пишем.
+    expect(unreadFor(map, 's-01')).toHaveLength(1);
+    expect(unreadFor(map, 's-02')).toEqual([]);
+  });
+
+  it('закрытой и ещё не запущенной сессии письма нет; повтор id не удваивает письмо', () => {
+    const { map } = archived();
+    transitionSession(map, 's-03', 'closed');
+
+    // s-04 не запущена (pending), s-03 закрыта.
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-03', 's-04'], LATER)).toEqual([]);
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-01', 's-01'], LATER)).toHaveLength(1);
+  });
+
+  it('сессия, которая успела войти в другую открытую комнату, письма не получает', () => {
+    const { map, orphans } = archived();
+    addMember(map, 'r-02', 's-01', NOW);
+
+    expect(addRoomArchivedLetters(map, 'r-01', orphans, LATER)).toEqual([]);
+  });
+
+  it('пустой список и неизвестные id ничего не пишут; нет комнаты — RoomRuleError', () => {
+    const { map } = archived();
+    const before = JSON.stringify(map);
+
+    expect(addRoomArchivedLetters(map, 'r-01', [], LATER)).toEqual([]);
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-99', HUMAN], LATER)).toEqual([]);
+    expect(JSON.stringify(map)).toBe(before);
+    expect(() => addRoomArchivedLetters(map, 'r-09', ['s-01'], LATER)).toThrow(RoomRuleError);
   });
 });

@@ -37,7 +37,7 @@ import { ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
 import { useSidebarKeys } from './use-sidebar-keys.js';
 import { useSidebarAttention, useSidebarSections } from './use-sidebar-sections.js';
-import { showClosedSessions, WorkCard } from './WorkCard.js';
+import { showArchivedRooms, showClosedSessions, WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
   /** Мост для меню карточек и строк (кусок 3.4). */
@@ -181,7 +181,11 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
     listRef,
     activeWorkKey,
     onActivateWork: (key) => props.current.onActivateWork(key),
-    onShowClosed: showClosedSessions,
+    // → и ← на карточке раскрывают и сворачивают закрытые сессии и архивные комнаты разом.
+    onShowClosed: (key, shown) => {
+      showClosedSessions(key, shown);
+      showArchivedRooms(key, shown);
+    },
     // → и ← на строке комнаты — тот же ручной шеврон, что и клик по нему (правило 2.6 уступает).
     onExpandRoom: (key, roomId, expanded) => useUiStore.getState().setRoomExpanded(roomKey(key, roomId), expanded),
   });

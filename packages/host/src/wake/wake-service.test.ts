@@ -9,6 +9,7 @@ import {
   addMessage,
   addRoom,
   addSession,
+  archiveRoom,
   createWork,
   DEFAULT_RESOURCE_LIMITS,
   readMap,
@@ -968,6 +969,33 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(notices('resume-failed')).toEqual([]);
 
     await setWorkStatus(project, workId, 'active');
+    await readArgv(argsFile);
+    await waitFor(() => sessions.live(ref), 5000);
+  }, 20_000);
+
+  it('9: письмо в ленте архивной комнаты спящую не поднимает — ни подъёма, ни resume-failed; прямое письмо по-прежнему будит', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Созвон', creator: sender, members: [target], lead: sender });
+      archiveRoom(map, 'r-01');
+    });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const { sessions } = await resumeRig();
+    const ref = { projectPath: project, workId, sessionId: target };
+
+    // Письмо в архивную комнату агент или окно записать не могут (`requireOpenRoom`), но в ленте оно может оказаться
+    // (`addMessage` архив не проверяет): будильник адресатов у такой комнаты не видит.
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: sender, to: [target], roomId: 'r-01', text: 'в архивную' });
+    });
+    await settle(600);
+    expect(sessions.live(ref)).toBe(false);
+    expect(existsSync(argsFile)).toBe(false);
+    expect(notices('resume-failed')).toEqual([]);
+
+    // Контроль: стенд поднимает спящую, когда есть кого будить.
+    await sendLetter(workId, target);
     await readArgv(argsFile);
     await waitFor(() => sessions.live(ref), 5000);
   }, 20_000);

@@ -436,6 +436,32 @@ export function archiveRoom(map: WorkMap, roomId: string, at = new Date().toISOS
 }
 
 /**
+ * Письма `parley` сессиям, которых архивация комнаты оставила без открытой комнаты, а они продолжают работать
+ * (`rooms.archive` без остановки агентов, спека архива комнат, 3.6): «Room "<title>" was archived by the human. You are
+ * no longer in an open room.». Образец — прощальные письма `deleteRoom`, но письмо получает только сессия `active`:
+ * спящую оно подняло бы обратно (будильник будит адресата непрочитанного письма), закрытой и ещё не запущенной оно ни
+ * к чему. Какие из `active` живы процессом, знает хост, и остановленных им сессий он сюда не передаёт. `sessionIds` —
+ * результат `archiveRoom` той же мутации; сессия, ставшая участницей другой открытой комнаты, письма не получает: оно
+ * бы лгало. Комната должна быть в карте (название берётся из неё). Возвращает письма.
+ */
+export function addRoomArchivedLetters(
+  map: WorkMap,
+  roomId: string,
+  sessionIds: readonly string[],
+  at = new Date().toISOString(),
+): Message[] {
+  const room = findRoom(map, roomId);
+  const text = `Room "${room.title}" was archived by the human. You are no longer in an open room.`;
+  return [...new Set(sessionIds)]
+    .filter(
+      (id) =>
+        map.sessions.some((session) => session.id === id && session.lifecycle === 'active') &&
+        !map.rooms.some((other) => !isRoomArchived(other) && isMember(other, id)),
+    )
+    .map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));
+}
+
+/**
  * Человек возвращает комнату из архива (`rooms.reopen`): `archivedAt` снова `null`, в ленте строка «Room reopened by
  * the human.». Сессии сами не поднимаются, как и при Reopen работы; в комнате остаются те, кто в ней числился (правило
  * одной комнаты `leaveOtherRooms` архивную комнату не обходит). Открытая комната — ничего не меняет.

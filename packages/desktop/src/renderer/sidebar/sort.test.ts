@@ -3,7 +3,7 @@ import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStat
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { buildSections, cardRows, compareWorks, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
+import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
   return {
@@ -425,5 +425,78 @@ describe('cardRows — состав строк карточки (1.2)', () => {
     const [row] = cardRows(map(sessions('s-01'), [old], [message]), false);
     expect(row).toMatchObject({ kind: 'room', lastAt: NOW });
     expect(row?.kind === 'room' ? row.lead : 'нет строки комнаты').toBe('s-01');
+  });
+});
+
+// Архив комнат (спека 2026-10-08, 5.1): архивная комната уходит из основных строк под ссылку карточки.
+describe('cardRows и archivedRows — архивные комнаты (5.1)', () => {
+  const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
+  const sessions3 = (): WorkSession[] => ['s-01', 's-02', 's-03'].map((id) => makeSession(id, id));
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, ...patch });
+  const archivedRoom = (id: string, members: string[], patch: Partial<Room> = {}): Room => room(id, members, { archivedAt: ARCHIVED_AT, ...patch });
+  const map = (list: WorkSession[], rooms: Room[]): WorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const shape = (rows: CardRow[]): string[] =>
+    rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
+
+  it('архивная комната в основных строках не выводится, а её спящие и закрытые участники уходят вместе с ней', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
+    const state = map(list, [archivedRoom('r-01', ['s-02', 's-03'])]);
+    // Закрытая сессия не появляется строкой и при showClosed: её домашняя комната в архиве.
+    expect(shape(cardRows(state, false))).toEqual(['s-01']);
+    expect(shape(cardRows(state, true))).toEqual(['s-01']);
+  });
+
+  it('участник архивной комнаты с процессом (active, pending) остаётся обычной строкой сессии на своём месте', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c', { lifecycle: 'pending' }), makeSession('s-04', 'd', { lifecycle: 'sleeping' })];
+    const rows = cardRows(map(list, [archivedRoom('r-01', ['s-02', 's-03', 's-04'])]), false);
+    expect(shape(rows)).toEqual(['s-01', 's-02', 's-03']);
+    expect(rows.every((row) => row.kind === 'session')).toBe(true);
+  });
+
+  it('домашняя комната сессии: открытая раньше архивной, даже если архивная старше; без открытой — архивная', () => {
+    const list = sessions3();
+    const oldArchive = archivedRoom('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+    const newOpen = room('r-02', ['s-01'], { createdAt: '2026-09-29T09:00:00.000Z' });
+    const state = map(list, [oldArchive, newOpen]);
+    expect(homeRoomOf(state, 's-01')?.id).toBe('r-02');
+    expect(homeRoomOf(state, 's-02')?.id).toBe('r-01');
+    expect(homeRoomOf(state, 's-03')).toBeNull();
+    // s-01 стоит в открытой комнате строкой комнаты; s-02 (active) — обычной строкой; в архивной остаётся пусто.
+    expect(shape(cardRows(state, false))).toEqual(['r-02[s-01]', 's-02', 's-03']);
+  });
+
+  it('archivedRows: строки архивных комнат в порядке карты, у каждой archived и без archiveStops; открытые не входят', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c')];
+    const state = map(list, [archivedRoom('r-01', ['s-02']), room('r-02', ['s-03']), archivedRoom('r-03', [])]);
+    const rows = archivedRows(state, false);
+    expect(rows.map((row) => row.room.id)).toEqual(['r-01', 'r-03']);
+    expect(rows.every((row) => row.archived && row.archiveStops.length === 0)).toBe(true);
+    expect(rows[0]?.members.map((member) => member.id)).toEqual(['s-02']);
+    expect(cardRows(state, false).every((row) => row.kind === 'session' || !row.archived)).toBe(true);
+  });
+
+  it('в строке архивной комнаты нет работающих участников (они уже строки карточки); закрытые — только при showClosed', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
+    const state = map(list, [archivedRoom('r-01', ['s-01', 's-02', 's-03'])]);
+    const [hidden] = archivedRows(state, false);
+    expect(hidden?.sessions.map((member) => member.id)).toEqual(['s-02', 's-03']);
+    expect(hidden?.members.map((member) => member.id)).toEqual(['s-02']);
+    const [shown] = archivedRows(state, true);
+    expect(shown?.members.map((member) => member.id)).toEqual(['s-02', 's-03']);
+  });
+
+  it('archiveStops открытой комнаты — участники без другой открытой комнаты; архивная соседка в счёт не идёт', () => {
+    const list = sessions3();
+    const target = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+    const other = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+    const byId = (rooms: Room[]) => {
+      const rows = cardRows(map(list, rooms), false);
+      return rows.find((row): row is Extract<CardRow, { kind: 'room' }> => row.kind === 'room' && row.room.id === 'r-01');
+    };
+    // s-02 числится и в открытой r-02: остановка её не коснётся, так что при архивации r-01 остаётся только s-01.
+    expect(byId([target, other])?.archived).toBe(false);
+    expect(byId([target, other])?.archiveStops.map((member) => member.id)).toEqual(['s-01']);
+    // Соседка в архиве — она комнатой не считается: оба участника остаются без открытой комнаты.
+    expect(byId([target, { ...other, archivedAt: ARCHIVED_AT }])?.archiveStops.map((member) => member.id)).toEqual(['s-01', 's-02']);
   });
 });

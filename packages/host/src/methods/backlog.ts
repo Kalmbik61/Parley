@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  SharedStateError, inspectSharedIgnore, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
+  SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
   parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
   takeBacklogItem, updateBacklogItem, removeBacklogItem, workPaths, worksIndexPath,
 } from '@parley/core';
@@ -113,7 +113,8 @@ async function take(params: BacklogMethodParams<'backlog.take'>): Promise<Shared
   if ('roomId' in params.target) {
     const roomId = params.target.roomId;
     const room = map.rooms.find(row => row.id === roomId);
-    if (!room || isRoomClosed(map, room))
+    // Архивная комната не цель для действий (архив комнат, 5.3): писать в неё нельзя, пока человек не вернёт её.
+    if (!room || isRoomClosed(map, room) || isRoomArchived(room))
       throw new HostError('not_found', 'A live target room is required.');
     taken = `${params.target.workId}/${params.target.roomId}`;
   } else {
