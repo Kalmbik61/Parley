@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   FeedItem,
@@ -1453,6 +1453,59 @@ describe('лента Codex', () => {
         expect(toolsOf(snapshot.items)[0]?.response?.images).toHaveLength(1);
       }
       expect(second.items).toEqual(first.items);
+    });
+
+    it('ImageView: файл агента копируется в imagesDir при севе и при опросе — лента ссылается на копию, переписанный файл не подменяет прежнюю', async () => {
+      const first = makePng(40, 30, 8);
+      const agentFile = path.join(dir, 'agent-shot.png');
+      await writeFile(agentFile, first);
+      const view = (n: number, id: string) =>
+        item(n, 'th-main', { type: 'ImageView', id, path: pathToFileURL(agentFile).href });
+      await writeRollout(file, [meta('th-main'), started(1), view(2, 'iv1')]);
+      start({ imagesDir });
+      const client = fakeClient();
+      service.subscribe(REF, client);
+
+      const seeded = toolsOf((await service.snapshot(REF)).items)[0];
+      expect(seeded).toMatchObject({ name: 'ViewImage', toolUseId: 'iv1' });
+      const copy = seeded?.response?.images?.[0];
+      expect(path.dirname(copy?.path ?? '')).toBe(imagesDir);
+      expect(copy?.path).not.toBe(agentFile);
+      expect(readFileSync(copy?.path ?? '').equals(first)).toBe(true);
+
+      // Агент переписал файл по тому же пути и посмотрел снова: опрос берёт то, что лежит там теперь.
+      const second = makePng(40, 30, 9);
+      await writeFile(agentFile, second);
+      await appendRollout(file, [view(3, 'iv2')]);
+      fakes.emitLog();
+      await vi.waitFor(() => {
+        const polled = toolsOf(feedChanged(client).flatMap((delta) => delta.upsert));
+        expect(polled.find((tool) => tool.toolUseId === 'iv2')?.response?.images).toHaveLength(1);
+      });
+      const polled = toolsOf(feedChanged(client).flatMap((delta) => delta.upsert)).find(
+        (tool) => tool.toolUseId === 'iv2',
+      );
+      const again = polled?.response?.images?.[0];
+      expect(again?.path).not.toBe(copy?.path);
+      expect(readFileSync(again?.path ?? '').equals(second)).toBe(true);
+      expect(readFileSync(copy?.path ?? '').equals(first)).toBe(true);
+      expect(readdirSync(imagesDir)).toHaveLength(2);
+    });
+
+    it('ImageView: файла агента уже нет — вызов остаётся без картинки, лента живёт', async () => {
+      const gone = pathToFileURL(path.join(dir, 'gone.png')).href;
+      await writeRollout(file, [
+        meta('th-main'),
+        started(1),
+        item(2, 'th-main', { type: 'ImageView', id: 'iv1', path: gone }),
+      ]);
+      start({ imagesDir });
+
+      const tool = toolsOf((await service.snapshot(REF)).items)[0];
+
+      expect(tool).toMatchObject({ name: 'ViewImage', status: 'done' });
+      expect(tool).not.toHaveProperty('response');
+      expect(existsSync(imagesDir)).toBe(false);
     });
   });
 });

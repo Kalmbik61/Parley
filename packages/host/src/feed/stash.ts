@@ -4,7 +4,8 @@
  * диск не идут. Свой источник — свой помощник:
  * - тело хука Claude и Codex — `tool_response`;
  * - запись журнала Claude — `toolUseResult` и содержимое блоков `tool_result` в `message.content`;
- * - запись журнала Codex — `payload.item.result` вызова `McpToolCall`.
+ * - запись журнала Codex — `payload.item.result` вызова `McpToolCall`, а у `ImageView` (`view_image`) — копия
+ *   файла, который агент посмотрел (см. `stashCodexRecord`).
  *
  * У каждого вызова помощника свой счётчик: после `FEED_IMAGES_PER_CALL` удачных сохранений остальные
  * картинки получают `null` и в ленте стоят пометкой `[image omitted]`, а файлов не прибавляется.
@@ -15,8 +16,11 @@
  * возвращается сам исходник, не копия.
  */
 
-import { FEED_IMAGES_PER_CALL, stashFeedImages } from '@parley/core';
-import type { RawRecord, RolloutRecord } from '@parley/core';
+import { readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { FEED_IMAGE_MAX_BYTES, FEED_IMAGES_PER_CALL, stashFeedImages } from '@parley/core';
+import type { FeedImageRef, RawRecord, RolloutRecord } from '@parley/core';
 import type { SaveFeedImage } from './image-store.js';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -73,13 +77,71 @@ export function stashClaudeRecord(record: RawRecord, save: SaveFeedImage): RawRe
   return blocks === null ? next : { ...next, message: { ...message, content: blocks } };
 }
 
-/** Запись журнала Codex: `payload.item.result` законченного вызова `McpToolCall`. */
+/** Расширения картинок, которые берёт хранилище (то же правило, что `isImagePath` окна), и их типы. */
+const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Тип картинки по расширению файла; не картинка — `null`. */
+function imageMime(file: string): string | null {
+  const extension = IMAGE_EXTENSION.exec(file)?.[1]?.toLowerCase();
+  if (extension === undefined) return null;
+  return extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : `image/${extension}`;
+}
+
+/**
+ * Путь файла из `ImageView.path`. Codex пишет в журнал URL `file:///…` (так в каждой записи живых журналов);
+ * обычный абсолютный путь тоже годится. Не строка, не абсолютный, чужая схема или хост, битый URL — `null`.
+ * Расширение потом проверяется у этого пути, а не у строки журнала: `file:///a/x.txt?.png` — не картинка.
+ */
+function viewedFile(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  if (/^file:/i.test(value)) {
+    try {
+      return fileURLToPath(value);
+    } catch {
+      return null;
+    }
+  }
+  return path.isAbsolute(value) ? value : null;
+}
+
+/**
+ * Копия файла, который агент посмотрел (`ImageView`), в хранилище: картинка в ленте должна быть той, что агент
+ * видел тогда, а не той, что лежит по его пути теперь, — файл он переписывает, а временный каталог чистит ОС. Берётся
+ * только обычный файл-картинка по расширению, не больше `FEED_IMAGE_MAX_BYTES`. Нет такого файла, он не читается или
+ * хранилище отказало — `null`, вызов остаётся без картинки.
+ */
+function copyViewedImage(item: Record<string, unknown>, save: SaveFeedImage): FeedImageRef | null {
+  const file = viewedFile(item['path']);
+  const mime = file === null ? null : imageMime(file);
+  if (file === null || mime === null) return null;
+  try {
+    const info = statSync(file);
+    if (!info.isFile() || info.size > FEED_IMAGE_MAX_BYTES) return null;
+    return save(readFileSync(file).toString('base64'), mime);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Запись журнала Codex: `payload.item.result` законченного вызова `McpToolCall` и копия файла `ImageView`. Ссылка на
+ * копию встаёт в элемент как `parleyImage` (ключ читает `apply-codex.ts`); пришедший в данных `parleyImage` чужой и
+ * снимается всегда.
+ */
 export function stashCodexRecord(record: RolloutRecord, save: SaveFeedImage): RolloutRecord {
   const { payload } = record;
   if (payload['type'] !== 'item_completed') return record;
   const item = payload['item'];
-  if (!isRecord(item) || item['type'] !== 'McpToolCall' || item['result'] === undefined)
-    return record;
+  if (!isRecord(item)) return record;
+  if (item['type'] === 'ImageView') {
+    const ref = copyViewedImage(item, save);
+    if (ref === null && !('parleyImage' in item)) return record;
+    const next = { ...item };
+    delete next['parleyImage'];
+    if (ref !== null) next['parleyImage'] = ref;
+    return { ...record, payload: { ...payload, item: next } };
+  }
+  if (item['type'] !== 'McpToolCall' || item['result'] === undefined) return record;
   const result = stashFeedImages(item['result'], capped(save));
   if (result === item['result']) return record;
   return { ...record, payload: { ...payload, item: { ...item, result } } };

@@ -5,9 +5,29 @@
  * дважды и ссылка будет оба раза.
  */
 
-import { describe, expect, it } from 'vitest';
-import { FEED_IMAGES_PER_CALL } from '@parley/core';
-import type { FeedImageRef, RawRecord, RolloutRecord } from '@parley/core';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  applyCodexRecords,
+  emptyCodexCursor,
+  emptyFeedState,
+  FEED_IMAGE_MAX_BYTES,
+  FEED_IMAGES_PER_CALL,
+} from '@parley/core';
+import type { FeedImageRef, FeedTool, RawRecord, RolloutRecord } from '@parley/core';
+import { makePng } from '../../test/png.js';
+import { createFeedImageStore } from './image-store.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
 /** `save`, который помнит вызовы и отдаёт ссылки подряд; `refuse` — номера вызовов (с 1), которым вернуть `null`. */
@@ -314,7 +334,7 @@ describe('stashCodexRecord — result вызова McpToolCall', () => {
       id: 'um1',
       content: [text('look'), { type: 'input_image', image_url: 'data:image/png;base64,PROMPT' }],
     });
-    const viewed = completed({ type: 'ImageView', id: 'iv1', path: '/tmp/x.png' });
+    const viewed = completed({ type: 'ImageView', id: 'iv1', path: '/nonexistent-dir/x.png' });
     const started: RolloutRecord = {
       ordinal: 1,
       at: '2026-10-09T10:00:00.000Z',
@@ -379,5 +399,269 @@ describe('stashCodexRecord — result вызова McpToolCall', () => {
     expect(JSON.stringify(first)).toContain('"parleyImage"');
     expect(JSON.stringify(second)).toContain('"parleyImage"');
     expect(JSON.stringify(second)).not.toContain('parleyImageOmitted');
+  });
+});
+
+describe('stashCodexRecord — ImageView: файл, который посмотрел агент, копируется в хранилище', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'stash-view-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const view = (file: unknown, extra: Record<string, unknown> = {}): RolloutRecord => ({
+    ordinal: 7,
+    at: '2026-10-09T10:00:00.000Z',
+    type: 'event_msg',
+    payload: {
+      type: 'item_completed',
+      thread_id: 'th',
+      turn_id: 'u1',
+      item: { type: 'ImageView', id: 'iv1', path: file, ...extra },
+    },
+  });
+  const itemOf = (record: RolloutRecord): Record<string, unknown> =>
+    record.payload['item'] as Record<string, unknown>;
+  /** Файл-картинка в каталоге теста; байты зависят от `seed`. */
+  const picture = (name = 'shot.png', seed = 0): { file: string; bytes: Buffer } => {
+    const file = path.join(dir, name);
+    const bytes = makePng(40, 30, seed);
+    writeFileSync(file, bytes);
+    return { file, bytes };
+  };
+
+  it('абсолютный путь к png: байты уходят в save, в элементе встаёт parleyImage; путь агента и остальные поля на месте, исходник цел', () => {
+    const { file, bytes } = picture();
+    const source = view(file);
+    const before = structuredClone(source);
+    const { calls, save } = fakeSave();
+
+    const stashed = stashCodexRecord(source, save);
+
+    expect(calls).toEqual([[bytes.toString('base64'), 'image/png']]);
+    expect(itemOf(stashed)).toEqual({
+      type: 'ImageView',
+      id: 'iv1',
+      path: file,
+      parleyImage: {
+        path: '/img/1.png',
+        mime: 'image/png',
+        bytes: bytes.toString('base64').length,
+      },
+    });
+    expect(stashed).toEqual({ ...before, payload: { ...before.payload, item: itemOf(stashed) } });
+    expect(source).toEqual(before);
+  });
+
+  it('так Codex пишет путь на деле — file:///…; проценты разбираются, файл читается', () => {
+    const { file, bytes } = picture('my shot (1).png');
+    const url = pathToFileURL(file).href;
+    expect(url).toContain('%20');
+    const { calls, save } = fakeSave();
+
+    const stashed = stashCodexRecord(view(url), save);
+
+    expect(calls).toEqual([[bytes.toString('base64'), 'image/png']]);
+    expect(itemOf(stashed)['parleyImage']).toBeDefined();
+    // Схема URL — без учёта регистра.
+    const upper = stashCodexRecord(view(url.replace(/^file:/, 'FILE:')), save);
+    expect(itemOf(upper)['parleyImage']).toBeDefined();
+  });
+
+  it('тип по расширению, регистр не важен: jpg, jpeg, gif, webp', () => {
+    const { calls, save } = fakeSave();
+    for (const name of ['a.jpg', 'b.JPEG', 'c.gif', 'd.WebP']) {
+      picture(name);
+      stashCodexRecord(view(path.join(dir, name)), save);
+    }
+
+    expect(calls.map(([, mime]) => mime)).toEqual([
+      'image/jpeg',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+    ]);
+  });
+
+  describe('расширение проверяется у пути, в который превратился URL, а не у строки журнала', () => {
+    // Файлы лежат на диске: если проверка смотрит не туда, обход их скопирует.
+    const url = (name: string, tail = ''): string =>
+      pathToFileURL(path.join(dir, name)).href + tail;
+
+    it.each([
+      ['запрос с «.png»', 'x.txt', '?.png'],
+      ['фрагмент с «.png»', 'x.txt', '#.png'],
+      ['запрос с «.png» после png-имени, расширение txt', 'x.png.txt', '?a=.png'],
+    ])('%s — не картинка, save не зовётся', (_title, name, tail) => {
+      picture(name);
+      const { calls, save } = fakeSave();
+      const record = view(url(name, tail));
+
+      expect(stashCodexRecord(record, save)).toBe(record);
+      expect(calls).toEqual([]);
+    });
+
+    it.each([
+      [
+        'процент-кодированная «n» в расширении',
+        'x.png',
+        (u: string) => u.replace('.png', '.p%6Eg'),
+      ],
+      ['запрос после png-имени', 'x.png', (u: string) => `${u}?v=1`],
+      ['фрагмент после png-имени', 'x.png', (u: string) => `${u}#section`],
+    ])('%s — картинка', (_title, name, transform) => {
+      const { bytes } = picture(name);
+      const { calls, save } = fakeSave();
+
+      const stashed = stashCodexRecord(view(transform(url(name))), save);
+
+      expect(calls).toEqual([[bytes.toString('base64'), 'image/png']]);
+      expect(itemOf(stashed)['parleyImage']).toBeDefined();
+    });
+  });
+
+  it('путь не абсолютный, чужая схема, чужой хост, закодированный слэш или не строка — файл не читается, запись та же', () => {
+    picture('x.png');
+    const { calls, save } = fakeSave();
+    const inputs: unknown[] = [
+      'x.png',
+      './x.png',
+      'shots/x.png',
+      '~/x.png',
+      'https://example.com/a.png',
+      'file://remote-host/a.png',
+      pathToFileURL(path.join(dir, 'a-b.png')).href.replace('a-b', 'a%2Fb'),
+      undefined,
+      null,
+      42,
+      '',
+    ];
+    for (const input of inputs) {
+      const record = view(input);
+      expect(stashCodexRecord(record, save), String(input)).toBe(record);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('файла нет, каталог вместо файла, не картинка по расширению, пустой файл, больше FEED_IMAGE_MAX_BYTES — запись та же', () => {
+    // Пустой файл — единственный, что доходит до save (настоящее хранилище его отвергает): здесь save отказывает.
+    const { calls, save } = fakeSave([1]);
+    mkdirSync(path.join(dir, 'folder.png'));
+    writeFileSync(path.join(dir, 'notes.txt'), 'text');
+    writeFileSync(path.join(dir, 'logo.svg'), '<svg/>');
+    writeFileSync(path.join(dir, 'noext'), 'x');
+    writeFileSync(path.join(dir, 'empty.png'), '');
+    const huge = path.join(dir, 'huge.png');
+    writeFileSync(huge, '');
+    truncateSync(huge, FEED_IMAGE_MAX_BYTES + 1);
+
+    const names = [
+      'gone.png',
+      'folder.png',
+      'notes.txt',
+      'logo.svg',
+      'noext',
+      'empty.png',
+      'huge.png',
+    ];
+    for (const name of names) {
+      const record = view(path.join(dir, name));
+      expect(stashCodexRecord(record, save), name).toBe(record);
+    }
+    expect(calls.map(([data]) => data)).toEqual(['']);
+  });
+
+  it('хранилище отказало (null) или save бросил — запись та же, исключения нет', () => {
+    const { file } = picture();
+    const refused = view(file);
+    expect(stashCodexRecord(refused, fakeSave([1]).save)).toBe(refused);
+
+    const thrown = view(file);
+    const failing = (): FeedImageRef | null => {
+      throw new Error('disk full');
+    };
+    expect(stashCodexRecord(thrown, failing)).toBe(thrown);
+  });
+
+  it('метка parleyImage в данных чужая: снимается всегда, а при удачной копии её место занимает настоящая', () => {
+    const forged = { path: '/Users/me/.ssh/id_rsa.png', mime: 'image/png' };
+    const { calls, save } = fakeSave();
+
+    const unreadable = stashCodexRecord(
+      view(path.join(dir, 'gone.png'), { parleyImage: forged }),
+      save,
+    );
+    expect(itemOf(unreadable)).not.toHaveProperty('parleyImage');
+    expect(JSON.stringify(unreadable)).not.toContain('id_rsa');
+    expect(calls).toEqual([]);
+
+    const { file } = picture();
+    const copied = stashCodexRecord(view(file, { parleyImage: forged }), save);
+    expect(itemOf(copied)['parleyImage']).toEqual({
+      path: '/img/1.png',
+      mime: 'image/png',
+      bytes: expect.any(Number),
+    });
+  });
+
+  it('только законченный элемент: ImageView в записи item_started файл не читает', () => {
+    const { file } = picture();
+    const { calls, save } = fakeSave();
+    const started: RolloutRecord = {
+      ...view(file),
+      payload: { ...view(file).payload, type: 'item_started' },
+    };
+
+    expect(stashCodexRecord(started, save)).toBe(started);
+    expect(calls).toEqual([]);
+  });
+
+  describe('с настоящим хранилищем', () => {
+    const tool = (record: RolloutRecord): FeedTool => {
+      const { update } = applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor());
+      return update.state.items.find((item) => item.kind === 'tool') as FeedTool;
+    };
+
+    it('тот же путь, другое содержимое — две ссылки на два файла: лента показывает ту картинку, что агент посмотрел тогда', () => {
+      const store = createFeedImageStore({ dir: path.join(dir, 'store') });
+      const first = picture('shot.png', 1);
+      const one = stashCodexRecord(view(first.file), store.save);
+      // Агент переписал файл и посмотрел снова.
+      const second = picture('shot.png', 2);
+      const two = stashCodexRecord(view(second.file, { id: 'iv2' }), store.save);
+
+      const refs = [one, two].map((record) => itemOf(record)['parleyImage'] as FeedImageRef);
+      expect(refs[0]?.path).not.toBe(refs[1]?.path);
+      expect(readdirSync(path.join(dir, 'store'))).toHaveLength(2);
+      expect(readFileSync(refs[0]?.path ?? '').equals(first.bytes)).toBe(true);
+      expect(readFileSync(refs[1]?.path ?? '').equals(second.bytes)).toBe(true);
+    });
+
+    it('редьюсер читает метку хоста: вызов ViewImage ведёт на копию, а не на файл агента; файл агента можно удалить', () => {
+      const store = createFeedImageStore({ dir: path.join(dir, 'store') });
+      const { file, bytes } = picture();
+
+      const shown = tool(stashCodexRecord(view(pathToFileURL(file).href), store.save));
+      rmSync(file);
+
+      expect(shown.name).toBe('ViewImage');
+      expect(shown.response?.images).toHaveLength(1);
+      const image = shown.response?.images?.[0];
+      expect(image?.path.startsWith(path.join(dir, 'store'))).toBe(true);
+      expect(image).toMatchObject({ mime: 'image/png', bytes: bytes.length });
+      expect(readFileSync(image?.path ?? '').equals(bytes)).toBe(true);
+      expect(shown.response?.text).toMatch(/^\[image png, \d+ KB\]$/);
+    });
+
+    it('файла агента нет — вызов остаётся без картинки, как до этой возможности', () => {
+      const store = createFeedImageStore({ dir: path.join(dir, 'store') });
+
+      const shown = tool(stashCodexRecord(view(path.join(dir, 'gone.png')), store.save));
+
+      expect(shown.name).toBe('ViewImage');
+      expect(shown).not.toHaveProperty('response');
+    });
   });
 });
