@@ -175,16 +175,30 @@ async function expectDialogFits(window: Page, dialog: Locator): Promise<void> {
     const closeBox = await boxOf(dialog.getByRole('button', { name: 'Close' }));
     expect(closeBox.x).toBeGreaterThanOrEqual(dialogBox.x - 0.5);
     expect(closeBox.x + closeBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 0.5);
-    // Тело диалога не прокручивается ни вбок, ни вниз.
+    // Тело диалога (картинка лежит в нём в абсолютно расположенной обёртке) не прокручивается ни вбок, ни вниз.
     expect(
       await view
-        .locator('xpath=..')
+        .locator('xpath=../..')
         .evaluate(
           (body) => body.scrollWidth <= body.clientWidth && body.scrollHeight <= body.clientHeight,
         ),
       'тело диалога прокручивается',
     ).toBe(true);
   }).toPass({ timeout: 10_000 });
+}
+
+/**
+ * Диалог просмотра — доли окна, а не размер картинки: 90 % ширины и 85 % высоты (в пределах 1640×1240 и полей в 1 rem у
+ * края окна). Так он открывается сразу своего размера и не прыгает, когда вместо миниатюры приходит большая версия.
+ */
+async function expectDialogSizedByWindow(window: Page, dialog: Locator): Promise<void> {
+  const viewport = await window.evaluate(() => ({
+    width: globalThis.innerWidth,
+    height: globalThis.innerHeight,
+  }));
+  const box = await boxOf(dialog);
+  expect(box.width).toBeCloseTo(Math.min(viewport.width * 0.9, 1640, viewport.width - 32), 0);
+  expect(box.height).toBeCloseTo(Math.min(viewport.height * 0.85, 1240, viewport.height - 32), 0);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -462,6 +476,10 @@ test.describe('скриншоты из результатов инструмен
       // Миниатюра настоящая: картинка разобрана браузером, а не пустой тег.
       await expect.poll(() => naturalWidth(thumbImage), { timeout: 15_000 }).toBeGreaterThan(0);
       measured('миниатюра, естественный размер, px', await naturalSize(thumbImage));
+      // Миниатюра в пропорциях исходника (1280×800 → 320×200), а в рамке 160×120 вписана целиком, без обрезки.
+      const thumbNatural = await naturalSize(thumbImage);
+      expect(thumbNatural.width / thumbNatural.height).toBeCloseTo(1280 / 800, 1);
+      await expect(thumbImage).toHaveCSS('object-fit', 'contain');
       const thumbBox = await boxOf(thumb);
       expect(thumbBox.width).toBeCloseTo(THUMB.width, 0);
       expect(thumbBox.height).toBeCloseTo(THUMB.height, 0);
@@ -523,8 +541,13 @@ test.describe('скриншоты из результатов инструмен
           timeout: 15_000,
         })
         .toBeGreaterThan(Math.max(smallWidth, 320));
-      measured('просмотр, естественный размер, px', await naturalSize(view));
+      const previewNatural = await naturalSize(view);
+      measured('просмотр, естественный размер, px', previewNatural);
+      // Большая версия — в пропорциях исходника, вписана в рамку диалога целиком.
+      expect(previewNatural.width / previewNatural.height).toBeCloseTo(1280 / 800, 1);
+      await expect(view).toHaveCSS('object-fit', 'contain');
       await expectDialogFits(window, dialog);
+      await expectDialogSizedByWindow(window, dialog);
       measured('диалог просмотра, px', await boxOf(dialog));
       await shot('preview-light');
       await window.keyboard.press('Escape');
@@ -541,6 +564,7 @@ test.describe('скриншоты из результатов инструмен
       await openPreview(thumb, 'Image 1 of 1');
       await expect.poll(() => naturalWidth(view), { timeout: 15_000 }).toBeGreaterThan(smallWidth);
       await expectDialogFits(window, dialog);
+      await expectDialogSizedByWindow(window, dialog);
       await shot('preview-dark');
       await window.keyboard.press('Escape');
       await expect(dialog).toHaveCount(0);
@@ -559,7 +583,7 @@ test.describe('скриншоты из результатов инструмен
         [168, 85, 247],
       ];
       // Размеры и пропорции разные: рамка миниатюры 160×120 от них не зависит. Все длиннее 320 px, поэтому крупная версия
-      // (1600) на любой системе шире миниатюры (на системах без `createThumbnailFromPath` вниз ужимают, вверх не тянут).
+      // (до 1600) шире миниатюры: main уменьшает по длинной стороне вниз, вверх не тянет.
       const sizes = [
         { width: 640, height: 400 },
         { width: 480, height: 360 },
@@ -724,6 +748,7 @@ test.describe('скриншоты из результатов инструмен
         .toBeGreaterThan(Math.max(lastSmall, 320));
       measured('просмотр шестой, естественный размер, px', await naturalSize(lastView));
       await expectDialogFits(window, lastDialog);
+      await expectDialogSizedByWindow(window, lastDialog);
       await shot('six-preview-light');
       await window.keyboard.press('Escape');
       await expect(lastDialog).toHaveCount(0);

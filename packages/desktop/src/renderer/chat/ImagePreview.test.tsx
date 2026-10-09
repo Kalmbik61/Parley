@@ -45,6 +45,15 @@ function host(fake: FakeBridge, children: JSX.Element, props: { sessionKey?: str
 
 const openerA = (): HTMLElement => screen.getByRole('button', { name: 'open Image 1 of 2' });
 
+/** Настоящий щелчок мышью: нажатие, отпускание и `click` (Radix закрывает по клику вне диалога, а не по одному нажатию). */
+function mouseClick(target: Element): void {
+  fireEvent.pointerDown(target);
+  fireEvent.mouseDown(target);
+  fireEvent.pointerUp(target);
+  fireEvent.mouseUp(target);
+  fireEvent.click(target);
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -101,6 +110,42 @@ describe('ImagePreviewHost — открытие и закрытие', () => {
     expect(view.getAttribute('src')).toBe(SMALL_B);
   });
 
+  it('клик вне диалога (по подложке) закрывает просмотр, фокус возвращается на кнопку', async () => {
+    const fake = bridgeWithImages();
+    render(host(fake, <Opener target={A} />));
+    fireEvent.click(openerA());
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+    // Radix вешает слушатель вне диалога чуть позже открытия — так же, как человек не кликает в тот же миг.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const scrim = document.querySelector('[data-state="open"].fixed.inset-0');
+    expect(scrim).not.toBeNull();
+    expect(dialog.contains(scrim)).toBe(false);
+
+    mouseClick(scrim as Element);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(openerA());
+  });
+
+  it('клик по самой картинке просмотр не закрывает', async () => {
+    const fake = bridgeWithImages();
+    render(host(fake, <Opener target={A} />));
+    fireEvent.click(openerA());
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    mouseClick(within(dialog).getByTestId('chat-tool-image-view'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByRole('dialog', { name: 'Image 1 of 2' })).toBe(dialog);
+  });
+
   it('открытие и закрытие просмотра не перерисовывают строки: им отдана одна стабильная ссылка на просьбу', async () => {
     const fake = bridgeWithImages();
     let renders = 0;
@@ -151,6 +196,68 @@ describe('ImagePreviewHost — просмотр переживает строк�
     // Закрыли — фокусу вернуться некуда (кнопки нет), и это не падение.
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  describe('фокус при закрытии, когда строки, открывшей просмотр, уже нет', () => {
+    /** «Лента»: прокрутчик с меткой возврата фокуса; `withRow` — есть ли в нём строка с кнопкой. */
+    function Scroller({ withRow, marked = true }: { withRow: boolean; marked?: boolean }): JSX.Element {
+      return (
+        <div data-testid="feed" tabIndex={-1} {...(marked ? { 'data-preview-return': '' } : {})}>
+          {withRow ? <Opener target={A} /> : null}
+        </div>
+      );
+    }
+
+    it('строка ушла из дерева (виртуальный список) — фокус на прокрутчике ленты, а не на body', async () => {
+      const fake = bridgeWithImages();
+      const { rerender } = render(host(fake, <Scroller withRow />));
+      fireEvent.click(openerA());
+      const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+      rerender(host(fake, <Scroller withRow={false} />));
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(screen.getByTestId('feed'));
+    });
+
+    it('строка жива — фокус на ней, прокрутчик его не перехватывает', async () => {
+      const fake = bridgeWithImages();
+      render(host(fake, <Scroller withRow />));
+      fireEvent.click(openerA());
+      const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(openerA());
+    });
+
+    it('прокрутчика нет или он помечен не там — фокус никуда не прыгает и ошибки нет', async () => {
+      const fake = bridgeWithImages();
+      const { rerender } = render(host(fake, <Scroller withRow marked={false} />));
+      fireEvent.click(openerA());
+      const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+      rerender(host(fake, <Scroller withRow={false} marked={false} />));
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('прокрутчик сам ушёл из дерева (вид закрыт, пока диалог открыт) — закрытие проходит без ошибки', async () => {
+      const fake = bridgeWithImages();
+      const { rerender } = render(host(fake, <Scroller withRow />));
+      fireEvent.click(openerA());
+      const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+      rerender(host(fake, <span>вид без ленты</span>));
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement).toBe(document.body);
+    });
   });
 
   it('строка вернулась (прокрутили назад) — открытый просмотр остался один, второго не появилось', async () => {

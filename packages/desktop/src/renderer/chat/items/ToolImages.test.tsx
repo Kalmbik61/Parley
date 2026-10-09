@@ -99,6 +99,32 @@ describe('ToolImages — ряд миниатюр', () => {
     }
   });
 
+  it('миниатюра показывает картинку целиком: object-contain на нейтральной подложке, а не object-cover (скриншот не обрезается)', async () => {
+    renderImages(images, bridgeWithImages());
+    await act(async () => {});
+    for (const button of screen.getAllByTestId('chat-tool-image')) {
+      const picture = button.querySelector('img');
+      expect(picture?.className).toContain('object-contain');
+      expect(picture?.className).not.toContain('object-cover');
+      expect(button.className).toContain('bg-muted');
+    }
+  });
+
+  it('и там, где просмотра нет (ряд вне ChatView), миниатюра тоже целиком', async () => {
+    const fake = bridgeWithImages();
+    render(
+      <ChatEnvContext.Provider value={{ bridge: fake, sessionRef: REF }}>
+        <ToolImages images={images} />
+      </ChatEnvContext.Provider>,
+    );
+    await act(async () => {});
+    for (const frame of screen.getAllByTestId('chat-tool-image-static')) {
+      expect(frame.querySelector('img')?.className).toContain('object-contain');
+      expect(frame.querySelector('img')?.className).not.toContain('object-cover');
+      expect(frame.className).toContain('bg-muted');
+    }
+  });
+
   it('одна картинка — «Image 1 of 1»; шесть — шесть кнопок по порядку', async () => {
     const fake = createFakeBridge();
     const six = Array.from({ length: 6 }, (_, at): FeedImageRef => ({ path: `/h/feed-images/${at}.png`, mime: 'image/png' }));
@@ -221,8 +247,9 @@ describe('ToolImages — просмотр', () => {
 
     await act(async () => held.release(BIG_A));
     expect(view.getAttribute('src')).toBe(BIG_A);
-    // По длинной стороне в окно: ни выше 85vh, ни шире 90vw, пропорции целы.
-    for (const cls of ['max-h-[85vh]', 'max-w-[90vw]', 'object-contain']) expect(view.className).toContain(cls);
+    // Картинка вписана в рамку диалога целиком (рамка от окна, а не от картинки): пропорции целы, диалог не прыгает.
+    for (const cls of ['size-full', 'object-contain']) expect(view.className).toContain(cls);
+    expect(view.className).not.toContain('max-h-[85vh]');
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -239,17 +266,38 @@ describe('ToolImages — просмотр', () => {
     expect(fake.thumbnailRequests.filter((request) => request.maxPx !== undefined)).toEqual([{ path: B, maxPx: 1600 }]);
   });
 
-  it('диалог шире обычного (иначе большая картинка уйдёт в горизонтальную прокрутку), с заголовком для скринридера', async () => {
+  it('диалог открывается сразу своего размера — от окна, а не от картинки: миниатюра в пути не даёт скачка; с заголовком для скринридера', async () => {
     renderImages(images, bridgeWithImages());
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Image 1 of 2' }));
     const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
-    expect(dialog.className).toContain('w-fit');
+    // Рамка — доли окна с первого кадра, предел — размер большой версии и поля у края окна; `w-fit` оставил бы
+    // рамку по размеру миниатюры, а `max-w-lg` базового диалога сузил бы её до 512 px.
+    for (const cls of ['w-[90vw]', 'h-[85vh]', 'max-w-[min(1640px,calc(100vw-2rem))]', 'max-h-[min(1240px,calc(100dvh-2rem))]']) {
+      expect(dialog.className).toContain(cls);
+    }
+    expect(dialog.className).not.toContain('w-fit');
     expect(dialog.className).not.toContain('max-w-lg');
     expect(within(dialog).getByText('Image 1 of 2').className).toContain('sr-only');
     // Крестик диалога лежит поверх угла картинки: без подложки на светлом или тёмном скриншоте его не видно.
     expect(dialog.className).toContain('[&>button]:bg-background/85');
     expect(dialog.className).toContain('[&>button]:opacity-100');
+  });
+
+  it('миниатюра и большая версия стоят в одной рамке с одними классами: приход большой версии размеров не меняет', async () => {
+    const fake = bridgeWithImages();
+    const held = holdRequests(fake, (maxPx) => maxPx === 1600);
+    renderImages(images, fake);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Image 1 of 2' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 2' });
+    const view = within(dialog).getByTestId('chat-tool-image-view');
+    expect(view.getAttribute('src')).toBe(SMALL_A);
+    const placeholder = { className: view.className, frame: view.parentElement?.className, dialog: dialog.className };
+
+    await act(async () => held.release(BIG_A));
+    expect(view.getAttribute('src')).toBe(BIG_A);
+    expect({ className: view.className, frame: view.parentElement?.className, dialog: dialog.className }).toEqual(placeholder);
   });
 
   it('большая версия не пришла (null или сбой IPC) — в диалоге остаётся миниатюра', async () => {

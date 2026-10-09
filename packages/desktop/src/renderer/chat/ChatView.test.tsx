@@ -1967,6 +1967,8 @@ describe('ChatView — просмотр картинки из результат
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // Строки, открывшей просмотр, больше нет: фокус возвращается на ленту, а не пропадает в body.
+    expect(document.activeElement).toBe(screen.getByTestId('chat-feed'));
   });
 
   it('другая сессия: на соседней вкладке (s-02) просмотра из s-01 нет, и при возврате он сам не открывается', async () => {

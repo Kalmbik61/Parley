@@ -21,7 +21,10 @@ import { ChatEnvContext } from '../chat-env.js';
 import { useOpenImagePreview } from '../ImagePreview.js';
 import { useThumbnailState } from '../use-thumbnail.js';
 
-/** Рамка миниатюры: одна на кнопку и на пустую рамку, чтобы приход миниатюры не менял высоту строки ленты. */
+/**
+ * Рамка миниатюры: одна на кнопку и на пустую рамку, чтобы приход миниатюры не менял высоту строки ленты. Картинка
+ * вписана в неё целиком (`object-contain`) на нейтральной подложке: скриншот 16:10 нельзя обрезать, его смотрят целиком.
+ */
 const FRAME = 'h-[120px] w-[160px] shrink-0 overflow-hidden rounded-md border border-border bg-muted';
 
 export interface ToolImagesProps {
@@ -67,7 +70,7 @@ function ToolImage({ path, label, bridge }: { path: string; label: string; bridg
   if (openPreview === null) {
     return (
       <div data-testid="chat-tool-image-static" className={FRAME}>
-        <img src={url} alt="" className="size-full object-cover" />
+        <img src={url} alt="" className="size-full object-contain" />
       </div>
     );
   }
@@ -82,7 +85,7 @@ function ToolImage({ path, label, bridge }: { path: string; label: string; bridg
       className={cn(FRAME, 'cursor-zoom-in transition-colors hover:border-foreground/30')}
       onClick={(event) => openPreview({ path, label, thumbnail: url }, event.currentTarget)}
     >
-      <img src={url} alt="" className="size-full object-cover" />
+      <img src={url} alt="" className="size-full object-contain" />
     </button>
   );
 }
