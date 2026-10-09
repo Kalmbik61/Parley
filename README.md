@@ -821,10 +821,12 @@ hint, and approvals keep working in the terminal. The setting is off by default.
 **What the feed shows.** Your prompts, the reply text as it streams, tool calls with their
 results and diffs, permission, question and plan cards, an agent card for each subagent
 (type, description, model, status, tool calls, the final text and "Show transcript"), and
-notices: session start, `/clear`, compaction, a model switch. While the agent works and no
-text is streaming yet, a "Working…" row shows the elapsed time. A line marks the end of each
-turn; a turn interrupted with Esc ends with "Interrupted". A session that is not running shows
-the same "Resume" card as the terminal.
+notices: session start, `/clear`, compaction, a model switch. An image a tool returns — a
+browser screenshot, a picture the agent read — shows as a thumbnail under the call; click it to
+view it larger (Parley keeps these images in `~/.parley/feed-images` for 7 days). While the
+agent works and no text is streaming yet, a "Working…" row shows the elapsed time. A line marks
+the end of each turn; a turn interrupted with Esc ends with "Interrupted". A session that is
+not running shows the same "Resume" card as the terminal.
 
 **Subagents.** Besides the agent cards in the feed, running subagents show as a badge
 "N agents" in the session's row of the sidebar and on the participant's card in a room: a

@@ -6,6 +6,12 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Screenshots in Chat.** When an agent's tool returns an image — a browser screenshot from Chrome DevTools MCP,
+  Claude in Chrome or Playwright, an image it read — Chat shows it as a thumbnail under the call; click to view it
+  larger. Parley keeps these images in `~/.parley/feed-images` for 7 days.
+
 ## 0.10.0
 
 A room whose work is done can be archived: its feed stays readable, nobody writes to it until you reopen it. A project no longer disappears from the sidebar when all its workspaces are archived — they sit under "N archived" at the bottom of its group, and "Remove from list…" hides the project. Sessions created without a name get a real one — S01 Ralph, S02 Anatoly, S03 Ruslan… — and any session can be renamed.
