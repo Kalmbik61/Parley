@@ -10,8 +10,15 @@
  *
  * `Reasoning` пропускается (thinking у Claude тоже не показывается); `ContextCompaction` — заметка `compact`; запись
  * `compacted` её не дублирует. Незнакомый тип элемента — пропуск и счётчик `skipped` для `host.log`.
+ *
+ * Картинки (план 2026-10-09): записи приходят после `stashFeedImages` хоста, поэтому картинка `McpToolCall` в
+ * `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` даёт ссылку
+ * на сам файл агента, без копии.
  */
 
+import { isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { hasStashedImage } from '../images.js';
 import {
   agentById,
   blocksText,
@@ -94,6 +101,51 @@ function statusOf(item: Json): FeedToolStatus {
   if (status === 'failed' || status === 'interrupted') return 'failed';
   const code = item['exit_code'];
   return typeof code === 'number' && code !== 0 ? 'failed' : 'done';
+}
+
+/**
+ * Что идёт в сводку `McpToolCall`. Если в `result.content` есть картинка после `stashFeedImages` — сам
+ * массив: текст блоков, пометки картинок и ссылки соберёт `toolResponseOf`. Иначе, как раньше, текст
+ * блоков, а нет текста — весь `result` JSON-ом.
+ */
+function mcpResult(result: Json): unknown {
+  const content = result['content'];
+  return hasStashedImage(content) ? content : (blocksText(content) ?? JSON.stringify(result));
+}
+
+/** Расширения картинок, которые умеет показать окно (то же правило, что `isImagePath` окна). */
+const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
+
+/** Тип картинки по расширению файла; не картинка — `null`. */
+function imageMime(file: string): string | null {
+  const extension = IMAGE_EXTENSION.exec(file)?.[1]?.toLowerCase();
+  if (extension === undefined) return null;
+  return extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : `image/${extension}`;
+}
+
+/**
+ * Путь файла из `ImageView.path`. Codex пишет в журнал URL `file:///…` (так в каждой записи живых
+ * журналов); обычный абсолютный путь тоже годится. Не абсолютный, чужая схема или битый URL — `null`.
+ */
+function viewedFile(value: string): string | null {
+  if (/^file:/i.test(value)) {
+    try {
+      return fileURLToPath(value);
+    } catch {
+      return null;
+    }
+  }
+  return isAbsolute(value) ? value : null;
+}
+
+/**
+ * Сводка вызова `ImageView`: блок-картинка со ссылкой на сам файл агента — копии нет, окно читает его по
+ * пути. Путь не абсолютный или не картинка — `undefined`: вызов остаётся без результата, как раньше.
+ */
+function viewedImage(value: string | null): unknown {
+  const file = value === null ? null : viewedFile(value);
+  const mime = file === null ? null : imageMime(file);
+  return file === null || mime === null ? undefined : { type: 'image', parleyImage: { path: file, mime } };
 }
 
 /** Вызов — в основную ленту или в `children` карточки субагента. */
@@ -202,7 +254,7 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
       const server = str(item, 'server') ?? 'mcp';
       const name = str(item, 'tool') ?? 'tool';
       const args = isRecord(item['arguments']) ? item['arguments'] : {};
-      const result = isRecord(item['result']) ? (blocksText(item['result']['content']) ?? JSON.stringify(item['result'])) : undefined;
+      const result = isRecord(item['result']) ? mcpResult(item['result']) : undefined;
       const error = isRecord(item['error']) ? str(item['error'], 'message') : str(item, 'error');
       putTool(draft, agentId, finishTool(newTool(id, `mcp__${server}__${name}`, args, startAt, agentId), statusOf(item), result ?? error ?? undefined, endAt));
       return;
@@ -218,7 +270,7 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
     }
     case 'ImageView': {
       const file = str(item, 'path');
-      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', undefined, endAt));
+      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', viewedImage(file), endAt));
       return;
     }
     case 'ContextCompaction': {
