@@ -780,7 +780,10 @@ function onPostToolUse(
   const name = textOf(data['tool_name']);
   if (toolUseId === null || name === null) return;
   const raw = inputOf(data['tool_input']);
-  const response = failed ? (data['error'] ?? data['tool_response']) : data['tool_response'];
+  // Текст ошибки хука — строка. Всё прочее в `error` — не ошибка: хост обходит картинки только в `tool_response`, и метка
+  // `parleyImage` в `error` была бы чужой и вела бы окно к произвольному файлу.
+  const error = data['error'];
+  const response = failed && typeof error === 'string' ? error : data['tool_response'];
   const status: FeedToolStatus = failed ? 'failed' : 'done';
 
   if (rec.agentId !== null) {

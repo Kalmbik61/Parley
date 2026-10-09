@@ -1319,6 +1319,9 @@ describe('картинки в сводке результата инструме
       { type: 'image', parleyImage: { path: '', mime: 'image/png' } },
       { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: -1 } },
       { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: 1.5 } },
+      // Целое, но вне безопасных: схема протокола (`z.number().int()`) такой размер не пропустит.
+      { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: 2 ** 53 } },
+      { type: 'image', parleyImage: { path: '/a.png', mime: 'image/png', bytes: 1e300 } },
     ];
     const response = toolResponseOf([text('t'), ...forged]);
 
@@ -1329,6 +1332,10 @@ describe('картинки в сводке результата инструме
       { type: 'image', parleyImage: { ...ref(1, KB), base64: 'AAAA', extra: true } },
     ]);
     expect(extra?.images).toEqual([ref(1, KB)]);
+
+    // Граница безопасных целых: последний допустимый размер ссылку даёт, следующий за ним — нет.
+    expect(toolResponseOf([shot(1, Number.MAX_SAFE_INTEGER)])?.images).toEqual([ref(1, Number.MAX_SAFE_INTEGER)]);
+    expect('images' in (toolResponseOf([shot(1, 2 ** 53)]) ?? {})).toBe(false);
   });
 
   it('картинка без ссылки (хост не обошёл запись) — «[image omitted]», а не её байты', () => {
@@ -1396,6 +1403,57 @@ describe('картинки в сводке результата инструме
       expect(done?.response?.images).toEqual([ref(1, 2 * KB)]);
       expect(failed?.status).toBe('failed');
       expect(failed?.response?.images).toEqual([ref(1, 2 * KB)]);
+    });
+
+    describe('PostToolUseFailure: error берётся только строкой', () => {
+      const failure = (extra: Record<string, unknown>) => ({
+        hook_event_name: 'PostToolUseFailure',
+        tool_name: 'mcp__browser__screenshot',
+        tool_input: {},
+        tool_use_id: 't1',
+        ...extra,
+      });
+      const forged = { path: '/etc/hosts.png', mime: 'image/png' };
+
+      it('error с чужой меткой parleyImage (массив, объект, пустой tool_response) — картинок в ленте нет', () => {
+        const forgedBlock = { type: 'image', parleyImage: forged };
+        for (const error of [[forgedBlock], forgedBlock, { error: [forgedBlock] }]) {
+          const state = run([failure({ error })]);
+          const [tool] = ofKind(state.items, 'tool');
+
+          expect(tool?.status, JSON.stringify(error)).toBe('failed');
+          expect(tool?.response?.images, JSON.stringify(error)).toBeUndefined();
+          expect(JSON.stringify(state)).not.toContain('/etc/hosts.png');
+        }
+      });
+
+      it('error не строка, а настоящий tool_response есть — вызов берёт tool_response (с его картинками)', () => {
+        const state = run([failure({ error: { type: 'image', parleyImage: forged }, tool_response: response })]);
+        const [tool] = ofKind(state.items, 'tool');
+
+        expect(tool?.response?.images).toEqual([ref(1, 2 * KB)]);
+        expect(JSON.stringify(state)).not.toContain('/etc/hosts.png');
+      });
+
+      it('error — строка: текст ошибки, как раньше, и она важнее tool_response', () => {
+        const state = run([failure({ error: 'Exit code 1', tool_response: response })]);
+        const [tool] = ofKind(state.items, 'tool');
+
+        expect(tool?.response).toEqual({ text: 'Exit code 1', size: 11, truncated: false });
+      });
+
+      it('error — пустая строка, число, null, true: строка остаётся строкой, остальное считается отсутствующим', () => {
+        const [empty, number, none, yes] = [
+          '',
+          42,
+          null,
+          true,
+        ].map((error) => ofKind(run([failure({ error, tool_response: response })]).items, 'tool')[0]);
+
+        // Пустая строка — строка: текста нет, сводки тоже.
+        expect(empty?.response?.text).toBe('');
+        for (const tool of [number, none, yes]) expect(tool?.response?.images).toEqual([ref(1, 2 * KB)]);
+      });
     });
 
     it('вложенный вызов субагента: пометка в тексте остаётся, images нет', () => {

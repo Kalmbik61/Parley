@@ -205,7 +205,7 @@ function refOf(value: unknown): FeedImageRef | null {
   if (typeof path !== 'string' || path === '' || path.length > FEED_IMAGE_PATH_LIMIT) return null;
   if (typeof mime !== 'string' || mime.length > FEED_IMAGE_MIME_LIMIT) return null;
   if (bytes === undefined) return { path, mime };
-  return typeof bytes === 'number' && Number.isInteger(bytes) && bytes >= 0
+  return typeof bytes === 'number' && Number.isSafeInteger(bytes) && bytes >= 0
     ? { path, mime, bytes }
     : null;
 }

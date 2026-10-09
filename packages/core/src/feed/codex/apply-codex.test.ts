@@ -216,6 +216,22 @@ describe('картинки в ленте Codex', () => {
       expect(bare?.response?.text).toBe(JSON.stringify({ content: [{ type: 'resource', uri: 'file:///a' }] }));
     });
 
+    // Результат без картинок идёт по старому пути (`blocksText ?? JSON.stringify(result)`) — что бы ни стояло в `content`.
+    it.each([
+      ['content нет', {}, '{}'],
+      ['content: null', { content: null }, '{"content":null}'],
+      ['content — строка', { content: 'plain text' }, 'plain text'],
+      ['content — пустой массив', { content: [] }, '{"content":[]}'],
+      ['content — объект, а не массив', { content: { note: 1 } }, '{"content":{"note":1}}'],
+      ['content — не блоки', { content: [1, 'x', null] }, '{"content":[1,"x",null]}'],
+    ])('без картинок: %s', (_title, result, expected) => {
+      const record = completed(1, { type: 'McpToolCall', id: 'exec-v', server: 'srv', tool: 'tl', arguments: {}, status: 'completed', result });
+      const [tool] = toolsOf(hosted(record));
+
+      expect(tool?.response?.text).toBe(expected);
+      expect(tool?.response).not.toHaveProperty('images');
+    });
+
     it('вызов в журнале субагента: пометка в тексте карточки, ссылок у вложенного вызова нет', () => {
       const { update } = applyCodexRecords(subAgentState(), [hosted(completed(1, screenshot([TEXT, IMAGE])))], emptyCodexCursor(), 'th-sub');
       const card = update.state.items.find((item) => item.kind === 'agent') as FeedAgent;
@@ -254,7 +270,7 @@ describe('картинки в ленте Codex', () => {
       }
     });
 
-    it('кривая метка (не ссылка, путь за пределом схемы, размер не целое) — как будто метки нет', () => {
+    it('кривая метка (не ссылка, путь за пределом схемы, размер не целое или не безопасное целое) — как будто метки нет', () => {
       const forged: unknown[] = [
         'x',
         42,
@@ -266,6 +282,7 @@ describe('картинки в ленте Codex', () => {
         { path: `/${'a'.repeat(FEED_IMAGE_PATH_LIMIT)}.png`, mime: 'image/png' },
         { path: '/a.png', mime: 'image/png', bytes: -1 },
         { path: '/a.png', mime: 'image/png', bytes: 1.5 },
+        { path: '/a.png', mime: 'image/png', bytes: 2 ** 53 },
       ];
       for (const parleyImage of forged) {
         const tool = only(view({ parleyImage }));
