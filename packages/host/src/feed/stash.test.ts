@@ -5,19 +5,22 @@
  * дважды и ссылка будет оба раза.
  */
 
+import { execFileSync } from 'node:child_process';
 import {
+  constants,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   truncateSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyCodexRecords,
   emptyCodexCursor,
@@ -29,6 +32,70 @@ import type { FeedImageRef, FeedTool, RawRecord, RolloutRecord } from '@parley/c
 import { makePng } from '../../test/png.js';
 import { createFeedImageStore } from './image-store.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
+
+/**
+ * Что код делал с файлами агента: открытия с флагами, закрытия и обращения к файлу по пути (`statSync`, `readFileSync`
+ * по строке). Всё остальное в `node:fs` настоящее. Открытие FIFO без `O_NONBLOCK` заблокировало бы весь процесс
+ * (синхронный `open(2)` без писателя ждёт его вечно, и таймаут теста не сработает), поэтому обёртка такой вызов
+ * не пропускает: тест падает, а не зависает. `notRegular` выдаёт файл за не обычный (как FIFO или устройство, у
+ * которых настоящая картинка читалась бы из дескриптора).
+ */
+const fsSpy = vi.hoisted(() => ({
+  opens: [] as Array<{ file: string; flags: number; fd: number }>,
+  closes: [] as number[],
+  byPath: [] as string[],
+  blocking: [] as string[],
+  notRegular: false,
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    openSync: ((...args: Parameters<typeof actual.openSync>) => {
+      const [file, flags] = args;
+      const nonblocking = typeof flags === 'number' && (flags & actual.constants.O_NONBLOCK) !== 0;
+      if (!nonblocking && actual.statSync(file, { throwIfNoEntry: false })?.isFIFO() === true) {
+        fsSpy.blocking.push(String(file));
+        throw new Error('open(2) FIFO без O_NONBLOCK заблокировал бы процесс');
+      }
+      const fd = actual.openSync(...args);
+      fsSpy.opens.push({ file: String(file), flags: typeof flags === 'number' ? flags : -1, fd });
+      return fd;
+    }) as typeof actual.openSync,
+    closeSync: ((fd: number) => {
+      fsSpy.closes.push(fd);
+      return actual.closeSync(fd);
+    }) as typeof actual.closeSync,
+    fstatSync: ((...args: Parameters<typeof actual.fstatSync>) => {
+      const real = actual.fstatSync(...args);
+      if (!fsSpy.notRegular) return real;
+      const fake = Object.create(real) as typeof real;
+      fake.isFile = () => false;
+      return fake;
+    }) as typeof actual.fstatSync,
+    statSync: ((...args: Parameters<typeof actual.statSync>) => {
+      fsSpy.byPath.push(`statSync ${String(args[0])}`);
+      return actual.statSync(...args);
+    }) as typeof actual.statSync,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (typeof args[0] !== 'number') fsSpy.byPath.push(`readFileSync ${String(args[0])}`);
+      return actual.readFileSync(...args);
+    }) as typeof actual.readFileSync,
+  };
+});
+
+/** Начало файла каждого типа картинок (подпись) и заполнитель: для файлов, которым важен тип, а не содержимое. */
+const SIGNED = {
+  'image/png': makePng(40, 30, 3),
+  'image/jpeg': Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60, 7)]),
+  'image/gif': Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(60, 7)]),
+  'image/webp': Buffer.concat([
+    Buffer.from('RIFF'),
+    Buffer.alloc(4),
+    Buffer.from('WEBP'),
+    Buffer.alloc(60, 7),
+  ]),
+} as const;
 
 /** `save`, который помнит вызовы и отдаёт ссылки подряд; `refuse` — номера вызовов (с 1), которым вернуть `null`. */
 function fakeSave(refuse: readonly number[] = []) {
@@ -406,6 +473,11 @@ describe('stashCodexRecord — ImageView: файл, который посмот�
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'stash-view-'));
+    fsSpy.opens.length = 0;
+    fsSpy.closes.length = 0;
+    fsSpy.byPath.length = 0;
+    fsSpy.blocking.length = 0;
+    fsSpy.notRegular = false;
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -470,19 +542,66 @@ describe('stashCodexRecord — ImageView: файл, который посмот�
     expect(itemOf(upper)['parleyImage']).toBeDefined();
   });
 
-  it('тип по расширению, регистр не важен: jpg, jpeg, gif, webp', () => {
+  it('тип — по подписи содержимого, регистр расширения не важен: jpg, jpeg, gif, webp', () => {
     const { calls, save } = fakeSave();
-    for (const name of ['a.jpg', 'b.JPEG', 'c.gif', 'd.WebP']) {
-      picture(name);
+    const files: Array<[string, keyof typeof SIGNED]> = [
+      ['a.jpg', 'image/jpeg'],
+      ['b.JPEG', 'image/jpeg'],
+      ['c.gif', 'image/gif'],
+      ['d.WebP', 'image/webp'],
+    ];
+    for (const [name, mime] of files) {
+      writeFileSync(path.join(dir, name), SIGNED[mime]);
       stashCodexRecord(view(path.join(dir, name)), save);
     }
 
-    expect(calls.map(([, mime]) => mime)).toEqual([
-      'image/jpeg',
-      'image/jpeg',
-      'image/gif',
-      'image/webp',
-    ]);
+    expect(calls.map(([, mime]) => mime)).toEqual(files.map(([, mime]) => mime));
+  });
+
+  it('имя не совпадает с содержимым (curl -o x.jpg отдал WebP): берётся тип по подписи, расширение лишь пропускает файл', () => {
+    const { calls, save } = fakeSave();
+    const files: Array<[string, keyof typeof SIGNED]> = [
+      ['webp-as.jpg', 'image/webp'],
+      ['jpeg-as.png', 'image/jpeg'],
+      ['png-as.gif', 'image/png'],
+      ['gif-as.webp', 'image/gif'],
+    ];
+    for (const [name, mime] of files) {
+      writeFileSync(path.join(dir, name), SIGNED[mime]);
+      const stashed = stashCodexRecord(view(path.join(dir, name)), save);
+      expect(itemOf(stashed)['parleyImage'], name).toBeDefined();
+    }
+
+    expect(calls.map(([, mime]) => mime)).toEqual(files.map(([, mime]) => mime));
+  });
+
+  it('WebP под именем .jpg с настоящим хранилищем ложится файлом .webp', () => {
+    const store = createFeedImageStore({ dir: path.join(dir, 'store') });
+    writeFileSync(path.join(dir, 'shot.jpg'), SIGNED['image/webp']);
+
+    const stashed = stashCodexRecord(view(path.join(dir, 'shot.jpg')), store.save);
+
+    const image = itemOf(stashed)['parleyImage'] as FeedImageRef;
+    expect(image.mime).toBe('image/webp');
+    expect(path.extname(image.path)).toBe('.webp');
+    expect(readFileSync(image.path).equals(SIGNED['image/webp'])).toBe(true);
+  });
+
+  it('содержимое не картинка (текст, обрезанная подпись, пустой файл) под именем картинки — save не зовётся, запись та же', () => {
+    const { calls, save } = fakeSave();
+    const contents: Array<[string, Buffer | string]> = [
+      ['text.png', 'just some text, not an image'],
+      ['half.webp', 'RIFF'],
+      ['empty.jpg', ''],
+      ['svg.png', '<svg xmlns="http://www.w3.org/2000/svg"/>'],
+    ];
+    for (const [name, content] of contents) {
+      writeFileSync(path.join(dir, name), content);
+      const record = view(path.join(dir, name));
+      expect(stashCodexRecord(record, save), name).toBe(record);
+    }
+
+    expect(calls).toEqual([]);
   });
 
   describe('расширение проверяется у пути, в который превратился URL, а не у строки журнала', () => {
@@ -546,15 +665,15 @@ describe('stashCodexRecord — ImageView: файл, который посмот�
   });
 
   it('файла нет, каталог вместо файла, не картинка по расширению, пустой файл, больше FEED_IMAGE_MAX_BYTES — запись та же', () => {
-    // Пустой файл — единственный, что доходит до save (настоящее хранилище его отвергает): здесь save отказывает.
-    const { calls, save } = fakeSave([1]);
+    const { calls, save } = fakeSave();
     mkdirSync(path.join(dir, 'folder.png'));
     writeFileSync(path.join(dir, 'notes.txt'), 'text');
     writeFileSync(path.join(dir, 'logo.svg'), '<svg/>');
     writeFileSync(path.join(dir, 'noext'), 'x');
     writeFileSync(path.join(dir, 'empty.png'), '');
     const huge = path.join(dir, 'huge.png');
-    writeFileSync(huge, '');
+    // Начало — настоящая картинка: останавливать файл должен предел размера, а не подпись.
+    writeFileSync(huge, SIGNED['image/png']);
     truncateSync(huge, FEED_IMAGE_MAX_BYTES + 1);
 
     const names = [
@@ -570,7 +689,126 @@ describe('stashCodexRecord — ImageView: файл, который посмот�
       const record = view(path.join(dir, name));
       expect(stashCodexRecord(record, save), name).toBe(record);
     }
-    expect(calls.map(([data]) => data)).toEqual(['']);
+    expect(calls).toEqual([]);
+  });
+
+  describe('файл открывается один раз и без блокировки: путь задаёт агент, подменить его между проверкой и чтением можно', () => {
+    const POSIX = process.platform !== 'win32';
+
+    it('обычная картинка: один open с O_NONBLOCK, размер и тип проверяются по дескриптору, он закрыт; по пути stat и чтения нет', () => {
+      const { file } = picture();
+      const { calls, save } = fakeSave();
+
+      stashCodexRecord(view(file), save);
+
+      expect(fsSpy.opens).toHaveLength(1);
+      const [opened] = fsSpy.opens;
+      expect(opened?.file).toBe(file);
+      expect((opened?.flags ?? 0) & constants.O_NONBLOCK).not.toBe(0);
+      expect(fsSpy.closes).toEqual([opened?.fd]);
+      expect(fsSpy.byPath).toEqual([]);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('не обычный файл по fstat не читается и не копируется, даже если по содержимому это картинка; дескриптор закрыт', () => {
+      // FIFO или устройство с настоящей картинкой внутри: проверка `isFile` — единственное, что их останавливает.
+      const { file } = picture();
+      fsSpy.notRegular = true;
+      const { calls, save } = fakeSave();
+      const record = view(file);
+
+      expect(stashCodexRecord(record, save)).toBe(record);
+
+      expect(calls).toEqual([]);
+      expect(fsSpy.opens).toHaveLength(1);
+      expect(fsSpy.closes).toEqual([fsSpy.opens[0]?.fd]);
+    });
+
+    it.skipIf(!POSIX)(
+      'FIFO: запись та же, save не зовётся, процесс не блокируется, дескриптор закрыт',
+      () => {
+        const fifo = path.join(dir, 'pipe.png');
+        execFileSync('mkfifo', [fifo]);
+        const { calls, save } = fakeSave();
+        const record = view(fifo);
+
+        expect(stashCodexRecord(record, save)).toBe(record);
+
+        expect(calls).toEqual([]);
+        expect(fsSpy.blocking).toEqual([]);
+        expect(fsSpy.closes).toEqual(fsSpy.opens.map((opened) => opened.fd));
+      },
+      3000,
+    );
+
+    it.skipIf(!POSIX)(
+      'ссылка на FIFO и ссылка на устройство — то же: открывается без блокировки и отвергается',
+      () => {
+        const fifo = path.join(dir, 'pipe');
+        execFileSync('mkfifo', [fifo]);
+        symlinkSync(fifo, path.join(dir, 'link-to-pipe.png'));
+        symlinkSync('/dev/zero', path.join(dir, 'link-to-zero.png'));
+        const { calls, save } = fakeSave();
+
+        for (const name of ['link-to-pipe.png', 'link-to-zero.png']) {
+          const record = view(path.join(dir, name));
+          expect(stashCodexRecord(record, save), name).toBe(record);
+        }
+
+        expect(calls).toEqual([]);
+        expect(fsSpy.blocking).toEqual([]);
+        expect(fsSpy.closes).toEqual(fsSpy.opens.map((opened) => opened.fd));
+      },
+      3000,
+    );
+
+    it.skipIf(!POSIX)(
+      'ссылка на картинку по-прежнему читается как сама картинка (O_NOFOLLOW не нужен: тип проверяет подпись)',
+      () => {
+        const { file, bytes } = picture('real.png');
+        symlinkSync(file, path.join(dir, 'latest.png'));
+        const { calls, save } = fakeSave();
+
+        const stashed = stashCodexRecord(view(path.join(dir, 'latest.png')), save);
+
+        expect(calls).toEqual([[bytes.toString('base64'), 'image/png']]);
+        expect(itemOf(stashed)['parleyImage']).toBeDefined();
+      },
+    );
+
+    it.skipIf(!POSIX)(
+      'ссылка с именем картинки на чужой текстовый файл: прочитан, но по подписи не картинка — ничего не сохранено',
+      () => {
+        writeFileSync(path.join(dir, 'secrets.txt'), 'password=hunter2');
+        symlinkSync(path.join(dir, 'secrets.txt'), path.join(dir, 'looks-like.png'));
+        const store = createFeedImageStore({ dir: path.join(dir, 'store') });
+        const record = view(path.join(dir, 'looks-like.png'));
+
+        expect(stashCodexRecord(record, store.save)).toBe(record);
+
+        expect(readdirSync(dir)).not.toContain('store');
+      },
+    );
+
+    it('дескриптор закрывается всегда: save бросил, файл слишком большой, не картинка, нет доступа', () => {
+      const huge = path.join(dir, 'huge.png');
+      // Начало — настоящая картинка: останавливать файл должен предел размера, а не подпись.
+      writeFileSync(huge, SIGNED['image/png']);
+      truncateSync(huge, FEED_IMAGE_MAX_BYTES + 1);
+      writeFileSync(path.join(dir, 'text.png'), 'text');
+      const failing = (): FeedImageRef | null => {
+        throw new Error('disk full');
+      };
+
+      stashCodexRecord(view(picture('a.png').file), failing);
+      stashCodexRecord(view(huge), fakeSave().save);
+      stashCodexRecord(view(path.join(dir, 'text.png')), fakeSave().save);
+      stashCodexRecord(view(path.join(dir, 'gone.png')), fakeSave().save);
+
+      // Открыто три файла (четвёртого нет), закрыто столько же и те же дескрипторы.
+      expect(fsSpy.opens).toHaveLength(3);
+      expect([...fsSpy.closes].sort()).toEqual(fsSpy.opens.map((opened) => opened.fd).sort());
+    });
   });
 
   it('хранилище отказало (null) или save бросил — запись та же, исключения нет', () => {

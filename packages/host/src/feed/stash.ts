@@ -16,11 +16,12 @@
  * возвращается сам исходник, не копия.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FEED_IMAGE_MAX_BYTES, FEED_IMAGES_PER_CALL, stashFeedImages } from '@parley/core';
 import type { FeedImageRef, RawRecord, RolloutRecord } from '@parley/core';
+import { mimeOfBytes } from './image-store.js';
 import type { SaveFeedImage } from './image-store.js';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -77,15 +78,8 @@ export function stashClaudeRecord(record: RawRecord, save: SaveFeedImage): RawRe
   return blocks === null ? next : { ...next, message: { ...message, content: blocks } };
 }
 
-/** Расширения картинок, которые берёт хранилище (то же правило, что `isImagePath` окна), и их типы. */
+/** Расширения, по которым файл вообще рассматривается как картинка (то же правило, что `isImagePath` окна). */
 const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp)$/i;
-
-/** Тип картинки по расширению файла; не картинка — `null`. */
-function imageMime(file: string): string | null {
-  const extension = IMAGE_EXTENSION.exec(file)?.[1]?.toLowerCase();
-  if (extension === undefined) return null;
-  return extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg' : `image/${extension}`;
-}
 
 /**
  * Путь файла из `ImageView.path`. Codex пишет в журнал URL `file:///…` (так в каждой записи живых журналов);
@@ -104,22 +98,50 @@ function viewedFile(value: unknown): string | null {
   return path.isAbsolute(value) ? value : null;
 }
 
+/** Читает из открытого файла ровно `size` байт (меньше, если он оказался короче); не больше, как бы файл ни рос. */
+function readFully(fd: number, size: number): Buffer {
+  const buffer = Buffer.allocUnsafe(size);
+  let filled = 0;
+  while (filled < size) {
+    const count = readSync(fd, buffer, filled, size - filled, filled);
+    if (count === 0) break;
+    filled += count;
+  }
+  return buffer.subarray(0, filled);
+}
+
 /**
  * Копия файла, который агент посмотрел (`ImageView`), в хранилище: картинка в ленте должна быть той, что агент
- * видел тогда, а не той, что лежит по его пути теперь, — файл он переписывает, а временный каталог чистит ОС. Берётся
- * только обычный файл-картинка по расширению, не больше `FEED_IMAGE_MAX_BYTES`. Нет такого файла, он не читается или
- * хранилище отказало — `null`, вызов остаётся без картинки.
+ * видел тогда, а не той, что лежит по его пути теперь, — файл он переписывает, а временный каталог чистит ОС. Путь
+ * задаёт агент, и между проверкой пути и чтением его можно подменить на FIFO: `open(2)` FIFO без писателя блокирует
+ * хост, а в хосте живут все терминалы. Поэтому файл открывается один раз и без блокировки (`O_NONBLOCK`), а всё
+ * остальное проверяется по открытому дескриптору: обычный файл, не больше `FEED_IMAGE_MAX_BYTES`, читается ровно
+ * столько байт, сколько он весил. Ссылка по пути разворачивается (`O_NOFOLLOW` не нужен): ссылка на картинку
+ * читается как сама картинка, а ссылка на чужое не картинка по подписи и в хранилище не попадёт. Расширение лишь
+ * пускает файл дальше, тип берётся по подписи байтов. Нет такого файла, он не читается или хранилище отказало —
+ * `null`, вызов остаётся без картинки.
  */
 function copyViewedImage(item: Record<string, unknown>, save: SaveFeedImage): FeedImageRef | null {
   const file = viewedFile(item['path']);
-  const mime = file === null ? null : imageMime(file);
-  if (file === null || mime === null) return null;
+  if (file === null || !IMAGE_EXTENSION.test(file)) return null;
+  let fd: number | null = null;
   try {
-    const info = statSync(file);
+    fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    const info = fstatSync(fd);
     if (!info.isFile() || info.size > FEED_IMAGE_MAX_BYTES) return null;
-    return save(readFileSync(file).toString('base64'), mime);
+    const bytes = readFully(fd, info.size);
+    const mime = mimeOfBytes(bytes);
+    return mime === null ? null : save(bytes.toString('base64'), mime);
   } catch {
     return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Закрыть не вышло — ссылка от этого не хуже: дескриптор уйдёт с процессом.
+      }
+    }
   }
 }
 

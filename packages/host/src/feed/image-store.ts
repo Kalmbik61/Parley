@@ -56,6 +56,13 @@ const SIGNATURES: ReadonlyMap<string, (bytes: Buffer) => boolean> = new Map([
   // «RIFF», четыре байта размера, «WEBP».
   ['image/webp', (bytes) => startsWith(bytes, 0, 'RIFF') && startsWith(bytes, 8, 'WEBP')],
 ]);
+
+/** Тип картинки по подписи начала байтов; не PNG, JPEG, GIF и не WebP — `null`. */
+export function mimeOfBytes(bytes: Buffer): string | null {
+  for (const [mime, matches] of SIGNATURES) if (matches(bytes)) return mime;
+  return null;
+}
+
 /** Расширение временного файла записи. */
 const TEMP_EXTENSION = 'tmp';
 /** Имена, которые пишет само хранилище (и его недописанные временные файлы): `sweep` трогает только их. */

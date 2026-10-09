@@ -20,7 +20,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FEED_IMAGE_MAX_BYTES, FEED_IMAGE_MAX_TOTAL_BYTES, FEED_IMAGE_TTL_MS } from '@parley/core';
 import { makePng } from '../../test/png.js';
-import { createFeedImageStore } from './image-store.js';
+import { createFeedImageStore, mimeOfBytes } from './image-store.js';
 
 /**
  * Настоящий «диск полон», нет прав на каталог или чужой владелец файла в тесте не получить, поэтому запись на диск,
@@ -421,6 +421,27 @@ describe('save', () => {
       ['[parley] feed image', 'EIO'],
     ]);
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('mimeOfBytes — тип картинки по подписи начала байтов', () => {
+  it('PNG, JPEG, GIF, WebP узнаются по своей подписи (та же таблица, по которой save проверяет заявленный тип)', () => {
+    for (const mime of Object.keys(SIGNATURES) as ImageMime[]) {
+      expect(mimeOfBytes(imageBytes(mime)), mime).toBe(mime);
+    }
+  });
+
+  it('текст, пустые байты, обрезанная подпись и чужая «RIFF» (не WebP) — null', () => {
+    const riff = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE')]);
+    for (const bytes of [
+      Buffer.from('<html></html>'),
+      Buffer.alloc(0),
+      Buffer.from([0x89, 0x50]),
+      Buffer.from('RIFF'),
+      riff,
+    ]) {
+      expect(mimeOfBytes(bytes), bytes.toString('latin1')).toBeNull();
+    }
   });
 });
 
