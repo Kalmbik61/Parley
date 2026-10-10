@@ -41,6 +41,7 @@ import {
   loadConfig,
   loadProviders,
   isClaudeCode,
+  MapLockTimeoutError,
   providerReadiness,
   providerReadinessError,
   readSecret,
@@ -108,6 +109,12 @@ export interface CreateSessionInput {
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
+
+/**
+ * Попыток записать старт процесса в карту, пока `map.lock` занят: подъём всей работы после перезапуска хоста
+ * держал замок дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
+ */
+const START_WRITE_ATTEMPTS = 3;
 
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
@@ -417,13 +424,47 @@ export function createSessionsService(
     return entry;
   }
 
+  /**
+   * PTY жив, а карта говорит `sleeping`: запись старта когда-то не удалась. Окно по карте показывает Resume, а запуск
+   * на живом процессе нового не начинает — без починки кнопка молчала бы. Дописываем `active` с приметами того же процесса.
+   */
+  async function repairLive(ref: SessionRef, handle: PtyHandle): Promise<void> {
+    const key = refKey(ref);
+    launching.add(key);
+    const repaired = (async () => {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+        (candidate) => candidate.id === ref.sessionId,
+      );
+      if (session?.lifecycle !== 'sleeping') return;
+      host.log.warn('карта отставала от живого процесса — сессия снова active', { ref, pid: handle.pid });
+      await startSession(ref.projectPath, ref.workId, ref.sessionId, null, {
+        pid: handle.pid,
+        startedAtProcess: await processStartedAt(handle.pid),
+        launchedBy: 'host',
+      });
+    })();
+    // Как у запуска: выход процесса посреди починки пишет `sleeping` только после неё — иначе `active` с мёртвым pid.
+    starting.set(key, repaired.catch(() => {}));
+    try {
+      await repaired;
+    } finally {
+      starting.delete(key);
+      launching.delete(key);
+    }
+  }
+
   async function launch(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
   ): Promise<void> {
     const key = refKey(ref);
-    if (launching.has(key) || closing.has(key) || pty.get(ref) !== undefined) return;
+    if (launching.has(key) || closing.has(key)) return;
+    const live = pty.get(ref);
+    if (live !== undefined) {
+      await repairLive(ref, live);
+      return;
+    }
     launching.add(key);
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
@@ -584,11 +625,22 @@ export function createSessionsService(
       }
       const started = (async () => {
         try {
-          await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
+          const stamp = {
             pid: handle.pid,
             startedAtProcess: await processStartedAt(handle.pid),
-            launchedBy: 'host',
-          }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+            launchedBy: 'host' as const,
+          };
+          for (let attempt = 1; ; attempt += 1) {
+            try {
+              await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, stamp,
+                plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+              break;
+            } catch (error) {
+              // Замок держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
+              if (!(error instanceof MapLockTimeoutError) || attempt >= START_WRITE_ATTEMPTS) throw error;
+              host.log.warn('запись старта сессии ждёт map.lock — повтор', { ref, attempt });
+            }
+          }
         } finally {
           // Процесс уже идёт: слот потрачен, даже если запись старта в карту не удалась.
           if (attemptId !== null) await settleLaunch(ref, attemptId, 'spent');
@@ -598,6 +650,15 @@ export function createSessionsService(
       starting.set(key, started.catch(() => {}));
       try {
         await started;
+      } catch (error) {
+        // Процесс идёт, а карта о нём не знает: окно по карте показывало бы спящую рядом с живым процессом.
+        // Останавливаем — сессия снова без процесса, как и записано в карте, и Resume поднимет её заново.
+        // `starting` снимается до остановки: запись выхода ждёт его и иначе не дождалась бы.
+        starting.delete(key);
+        await stop(ref).catch((stopError: unknown) => {
+          host.log.error('процесс с незаписанным стартом не остановился', { ref, error: String(stopError) });
+        });
+        throw error;
       } finally {
         starting.delete(key);
       }

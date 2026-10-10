@@ -722,7 +722,11 @@ interface ResumeRig {
 }
 
 /** works+activity+pty+sessions+wake: будильник поднимает сессии настоящим `launch` со стабом. */
-async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRig> {
+async function resumeRig(
+  wakeOptions: WakeServiceOptions = {},
+  /** Что будильник получает вместо сервиса сессий — по умолчанию сам сервис. */
+  forWake: (sessions: SessionsService) => SessionsService = (sessions) => sessions,
+): Promise<ResumeRig> {
   // Настоящий `claude` в автотестах не запускается никогда — только стаб.
   setEnv('PARLEY_CLAUDE_BIN', STUB);
   const host = fakeHost();
@@ -730,7 +734,7 @@ async function resumeRig(wakeOptions: WakeServiceOptions = {}): Promise<ResumeRi
   const activity = createActivityService(host, works, { claudeRoot, codexRoot });
   const pty = createPtyManager(host);
   const sessions = createSessionsService(host, works, pty, activity);
-  const wake = createWakeService(host, works, activity, pty, sessions, { enterDelayMs: 30, ...wakeOptions });
+  const wake = createWakeService(host, works, activity, pty, forWake(sessions), { enterDelayMs: 30, ...wakeOptions });
 
   let stream = '';
   pty.on('output', (_ref, data) => {
@@ -929,6 +933,31 @@ describe('WakeService: подъём спящей письмом', () => {
       await settle(20);
     }
     await settle(100);
+  }, 20_000);
+
+  it('6b: запуск сам остановил процесс и ответил ошибкой — сбой сообщается раз и причиной запуска', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const reason = 'lock map.lock was not released within 3000 ms';
+    await resumeRig({}, (sessions) => ({
+      ...sessions,
+      // Как `launch`, когда старт не записался в карту: процесс поднят, остановлен, вызывающему — ошибка.
+      launch: async (ref, mode, options) => {
+        await sessions.launch(ref, mode, options);
+        await sessions.stop(ref);
+        throw new Error(reason);
+      },
+    }));
+
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: sender, to: [target], text: 'проснись' });
+    });
+
+    await waitFor(() => notices('resume-failed').length > 0, 8000);
+    // Второй отчёт — выход процесса в срок сбоя — пришёл бы следом: даём ему время.
+    await settle(500);
+    expect(noticeTexts('resume-failed')).toEqual([`S01 did not resume: ${reason}`]);
+    const systemLetters = (await readMap(project, workId)).messages.filter((m) => m.from === SYSTEM);
+    expect(systemLetters.map((m) => m.text)).toEqual([`S01 did not resume: ${reason}`]);
   }, 20_000);
 
   it('7: closed не поднимается ни письмом, ни resumeInterrupted', async () => {
