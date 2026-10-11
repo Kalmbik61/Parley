@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './letters.js';
 import { addMessage } from './map.js';
 import { createWork, readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
-import { HUMAN, type WorkMap } from './types.js';
+import { HUMAN, type Room, type WorkMap } from './types.js';
 
 /** Работа с комнатой r-01: создатель s-01, участники s-02 и s-03; s-04 вне её. */
 const mapWithRoom = (): WorkMap => ({
@@ -29,6 +29,7 @@ const mapWithRoom = (): WorkMap => ({
       createdAt: '2026-09-26T10:00:00.000Z',
       lead: null,
       proposal: null,
+      archivedAt: null,
     },
   ],
 });
@@ -68,6 +69,19 @@ describe('recipientsOf', () => {
 
     expect(recipientsOf(letter, map)).toEqual([]);
   });
+
+  it('архивная комната — адресатов нет ни у рассылки, ни у адресного письма (архив комнат, 3.4)', () => {
+    const map = mapWithRoom();
+    const broadcast = addMessage(map, { from: 's-02', to: [], text: 'x', roomId: 'r-01' });
+    const addressed = addMessage(map, { from: 's-02', to: ['s-03'], text: 'x', roomId: 'r-01' });
+    const direct = addMessage(map, { from: 's-02', to: ['s-03'], text: 'x' });
+    (map.rooms[0] as Room).archivedAt = '2026-10-08T12:00:00.000Z';
+
+    expect(recipientsOf(broadcast, map)).toEqual([]);
+    expect(recipientsOf(addressed, map)).toEqual([]);
+    // Прямое письмо вне комнат архив комнаты не касается.
+    expect(recipientsOf(direct, map)).toEqual(['s-03']);
+  });
 });
 
 describe('unreadFor', () => {
@@ -91,6 +105,19 @@ describe('unreadFor', () => {
     expect(unreadFor(map, 's-04')).toEqual([direct]);
     // Отправитель своё письмо не «читает».
     expect(unreadFor(map, 's-02')).toEqual([]);
+  });
+
+  it('письма комнаты, ушедшей в архив, непрочитанными не числятся; после возврата — снова', () => {
+    const map = mapWithRoom();
+    const broadcast = addMessage(map, { from: 's-01', to: [], text: 'всем', roomId: 'r-01' });
+    const room = map.rooms[0] as Room;
+
+    room.archivedAt = '2026-10-08T12:00:00.000Z';
+    expect(isUnreadFor(broadcast, 's-02', map)).toBe(false);
+    expect(unreadFor(map, 's-03')).toEqual([]);
+
+    room.archivedAt = null;
+    expect(unreadFor(map, 's-03')).toEqual([broadcast]);
   });
 });
 
@@ -126,6 +153,7 @@ describe('markHumanRead', () => {
         createdAt: OLD,
         lead: null,
         proposal: null,
+        archivedAt: null,
       });
       addMessage(map, { from: 's-01', to: [HUMAN], text: 'человеку' }); // m-01
       const both = addMessage(map, { from: 's-01', to: [HUMAN, 's-02'], text: 'обоим' }); // m-02

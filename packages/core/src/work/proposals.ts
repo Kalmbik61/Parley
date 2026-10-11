@@ -7,8 +7,8 @@ import { captureDecisionJournal } from './decision-journal.js';
  */
 
 import { addMessage, maxNumber } from './map.js';
-import { addSystemMessage, isRoomClosed, liveLead, RoomRuleError } from './rooms.js';
-import { acceptRoomPlan, completeRoomPlan, planRoom, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
+import { addSystemMessage, isRoomClosed, liveLead, requireOpenRoom, RoomRuleError } from './rooms.js';
+import { acceptRoomPlan, completeRoomPlan, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
 import { proposedRoomPlan } from './plans.js';
 import { HUMAN, type PlanDraft, type Room, type WorkMap } from './types.js';
 
@@ -75,7 +75,7 @@ export function setProposal(
   at = new Date().toISOString(),
   options: ProposalOptions = {},
 ): { proposalId: string; rev: number } {
-  const room = roomOf(map, roomId);
+  const room = requireOpenRoom(map, roomId);
   if (isRoomClosed(map, room)) {
     throw new RoomRuleError(`room ${roomId} is closed: it has no live participants`);
   }
@@ -139,7 +139,7 @@ export function resolveProposal(
   options: ResolveOptions = {},
   at = new Date().toISOString(),
 ): { messageId: string } {
-  let room = roomOf(map, roomId);
+  let room = requireOpenRoom(map, roomId);
   const proposal = room.proposal;
   if (proposal === null || proposal.id !== proposalId) {
     throw new ProposalConflictError(
@@ -188,7 +188,7 @@ export function resolveProposal(
 
 /** Completion is a separate, revision-bound human decision, never owner self-acceptance. */
 export function proposeCompletion(map: WorkMap, roomId: string, from: string, planId: string, rev: number, summary: string, at = new Date().toISOString()): { proposalId: string; rev: number } {
-  const room = planRoom(map, roomId); requirePlanLead(map, room, from);
+  const room = requireOpenRoom(map, roomId); requirePlanLead(map, room, from);
   const plan = map.plans?.find(plan => plan.id === planId && plan.roomId === roomId);
   if (!plan || plan.rev !== rev || plan.mode !== 'verified' || !['active', 'completing'].includes(plan.status) || !planItemsComplete(plan)) throw new PlanConflictError();
   if (!summary.trim() || summary.length > PROPOSAL_TEXT_MAX || summary.includes('\0') || Buffer.from(summary, 'utf8').toString('utf8') !== summary) throw new RoomRuleError('invalid completion summary');

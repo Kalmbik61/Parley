@@ -1,9 +1,14 @@
 /**
- * Меню строки комнаты по правой кнопке: «Rename» и «Delete…». Пункты с методами, которых хост не знает, спрятаны
- * (`useHostSupports`); без единого пункта строка меню не заводит, и правая кнопка открывает меню карточки, как раньше.
- * Ошибка хоста — тост `errorText(код, действие)`, текст хоста — только в консоль (сквозное правило E.1).
+ * Меню строки комнаты по правой кнопке. Открытая комната: «Rename», «Archive…», разделитель, «Delete…». Архивная
+ * (спека архива комнат, 5.1): «Reopen», «Rename», разделитель, «Delete…». Пункты с методами, которых хост не знает,
+ * спрятаны (`useHostSupports`); без единого пункта строка меню не заводит, и правая кнопка открывает меню карточки, как
+ * раньше. Ошибка хоста — тост `errorText(код, действие)`, текст хоста — только в консоль (сквозное правило E.1).
  *
- * «Rename» открывает поле на месте названия в строке (`RoomInlineRename`). «Delete…» спрашивает подтверждение с
+ * «Rename» открывает поле на месте названия в строке (`RoomInlineRename`). «Archive…» спрашивает подтверждение с
+ * флажком «Also stop its N agents that are in no other room», включённым по умолчанию: архивируют, когда работа
+ * закончена, а остановка обратима (сессия засыпает, её поднимает Resume или письмо). N — сессии, которых архивация
+ * оставит без открытой комнаты (`CardRoomRow.archiveStops`, правило core); их нет — флажка нет. Живое решение и живой
+ * план архивация закрывает, и описание об этом предупреждает. «Reopen» зовёт `rooms.reopen` без вопросов. «Delete…» спрашивает подтверждение с
  * флажком «Also delete its N sessions», снятым по умолчанию: комната уходит с лентой, а её сессии остаются обычными
  * сессиями работы — хост пишет живым из них, что комнаты больше нет. С флажком окно сначала удаляет сессии комнаты
  * тем же путём, что пункт «Delete» строки сессии (`SessionRowMenu`): вкладки файлов их worktree — с вопросом о правках
@@ -23,6 +28,7 @@ import { toast } from 'sonner';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
+import { roomAwaitsDecision } from '../attention/derive.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -41,21 +47,28 @@ export interface RoomRowMenuProps {
   bridge: ParleyBridge;
   /** «Rename» — поле на месте названия в строке комнаты. */
   onRename(): void;
+  /** У комнаты идёт живой план (`active`, `completing`): подтверждение архивации предупреждает, что план отменится. */
+  livePlan?: boolean;
   /** Строка — триггер ui/context-menu. */
   children: ReactNode;
 }
 
-export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRename, children }: RoomRowMenuProps): JSX.Element {
-  const { room, sessions } = row;
+export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRename, livePlan = false, children }: RoomRowMenuProps): JSX.Element {
+  const { room, sessions, archived, archiveStops } = row;
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   // «Rename» открывает поле на месте названия; закрытое меню вернуло бы фокус строке уже после того, как поле его
   // взяло, — поле потеряло бы фокус и закрылось (тот же приём, что у `CardMenu`).
   const renameChosen = useRef(false);
-  useSidebarHold(`room-menu ${workKey} ${room.id}`, open || confirm);
+  useSidebarHold(`room-menu ${workKey} ${room.id}`, open || confirm || confirmArchive);
   const canRename = useHostSupports('rooms.rename');
   const canDelete = useHostSupports('rooms.delete');
-  if (!canRename && !canDelete) return <>{children}</>;
+  const canArchive = useHostSupports('rooms.archive');
+  const canReopen = useHostSupports('rooms.reopen');
+  // Открытой комнате — «Archive…», архивной — «Reopen»: одно из двух, и только если хост умеет.
+  const canSwitch = archived ? canReopen : canArchive;
+  if (!canRename && !canDelete && !canSwitch) return <>{children}</>;
 
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
 
@@ -72,6 +85,25 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
     }
     await bridge.call('rooms.delete', { projectPath, workId, roomId: room.id });
   };
+
+  const reopenRoom = (): void => {
+    bridge.call('rooms.reopen', { projectPath, workId, roomId: room.id }).catch((error: unknown) => {
+      console.warn('[parley] rooms.reopen', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.reopenRoom));
+    });
+  };
+
+  const archiveRoom = (stopSessions: boolean): void => {
+    bridge.call('rooms.archive', { projectPath, workId, roomId: room.id, stopSessions }).catch((error: unknown) => {
+      console.warn('[parley] rooms.archive', error);
+      toast(errorText(decodeIpcError(error).code, S.errors.actions.archiveRoom));
+    });
+  };
+
+  const decision = roomAwaitsDecision(room);
+  const archiveDescription =
+    S.sidebar.roomMenu.archiveConfirmDescription +
+    (decision || livePlan ? S.sidebar.roomMenu.archiveConfirmOpenWork(decision, livePlan) : '');
 
   return (
     <>
@@ -90,6 +122,11 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
             event.preventDefault();
           }}
         >
+          {archived && canReopen ? (
+            <ContextMenuItem data-room-action="reopen" onSelect={reopenRoom}>
+              {S.sidebar.roomMenu.reopen}
+            </ContextMenuItem>
+          ) : null}
           {canRename ? (
             <ContextMenuItem
               data-room-action="rename"
@@ -101,7 +138,12 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
               {S.sidebar.roomMenu.rename}
             </ContextMenuItem>
           ) : null}
-          {canRename && canDelete ? <ContextMenuSeparator /> : null}
+          {!archived && canArchive ? (
+            <ContextMenuItem data-room-action="archive" onSelect={() => setConfirmArchive(true)}>
+              {S.sidebar.roomMenu.archiveEllipsis}
+            </ContextMenuItem>
+          ) : null}
+          {(canRename || canSwitch) && canDelete ? <ContextMenuSeparator /> : null}
           {canDelete ? (
             <ContextMenuItem data-room-action="delete" className={DESTRUCTIVE_ITEM} onSelect={() => setConfirm(true)}>
               {S.sidebar.roomMenu.deleteEllipsis}
@@ -109,6 +151,22 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
           ) : null}
         </ContextMenuContent>
       </ContextMenu>
+
+      <ConfirmDialog
+        open={confirmArchive}
+        title={S.sidebar.roomMenu.archiveConfirmTitle(title)}
+        description={archiveDescription}
+        // Флажка нет, когда останавливать некого: «Also stop its 0 agents» ничего бы не значил. Включён по умолчанию.
+        {...(archiveStops.length === 0
+          ? {}
+          : { checkbox: S.sidebar.roomMenu.archiveStopAgents(archiveStops.length), checkboxChecked: true })}
+        // Архив обратим (Reopen), поэтому кнопка обычная, а не красная, как у «Delete».
+        confirmVariant="default"
+        confirmLabel={S.sidebar.roomMenu.archive}
+        onConfirm={(stopSessions) => archiveRoom(archiveStops.length > 0 && stopSessions)}
+        onOpenChange={setConfirmArchive}
+        onCloseAutoFocus={(event) => focusSidebarItem(event, { workKey, sessionId: null, roomId: room.id })}
+      />
 
       <ConfirmDialog
         open={confirm}

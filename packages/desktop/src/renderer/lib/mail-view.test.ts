@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Message, WorkEntry, WorkSession } from '@parley/core';
-import { mailView } from './mail-view.js';
+import { isUnreadFor, mailView, recipientsOf } from './mail-view.js';
 
 function session(id: string, label: string, parent: string | null = null): WorkSession {
   return {
@@ -138,5 +138,43 @@ describe('mailView — тест 4: непрочитанность только �
     const read = view.letters.find((letter) => letter.id === 'm-read');
     expect(unread?.unread).toBe(true);
     expect(read?.unread).toBe(false);
+  });
+});
+
+// Архив комнат (спека 2026-10-08, 3.4): копия `recipientsOf` в окне держит правило core — письма архивной комнаты
+// адресатов не имеют, и с явным `to` тоже.
+describe('recipientsOf — письма архивной комнаты (архив комнат, 3.4)', () => {
+  const room = (archivedAt?: string) => ({
+    id: 'r-01',
+    title: 'R',
+    creator: 'human',
+    members: ['s-01', 's-02'],
+    createdAt: '2026-01-01',
+    lead: null,
+    proposal: null,
+    ...(archivedAt === undefined ? {} : { archivedAt }),
+  });
+  const mapWith = (archivedAt?: string) => ({
+    ...entryWith([session('s-01', 'план'), session('s-02', 'бэкенд')], []).map,
+    rooms: [room(archivedAt)],
+  });
+  const broadcast = message({ id: 'm-1', from: 's-01', to: [], at: '2026-01-01T10:00:00.000Z', roomId: 'r-01' });
+  const direct = message({ id: 'm-2', from: 's-01', to: ['s-02'], at: '2026-01-01T10:00:00.000Z', roomId: 'r-01' });
+
+  it('открытая комната: рассылка — все участники, кроме отправителя; письмо с to — to', () => {
+    expect(recipientsOf(broadcast, mapWith())).toEqual(['s-02']);
+    expect(recipientsOf(direct, mapWith())).toEqual(['s-02']);
+  });
+
+  it('архивная комната: и рассылка, и письмо с to — без адресатов, непрочитанным оно не считается', () => {
+    const archived = mapWith('2026-10-08T12:00:00.000Z');
+    expect(recipientsOf(broadcast, archived)).toEqual([]);
+    expect(recipientsOf(direct, archived)).toEqual([]);
+    expect(isUnreadFor(direct, 's-02', archived)).toBe(false);
+  });
+
+  it('письмо без комнаты архив не трогает', () => {
+    const plain = message({ id: 'm-3', from: 's-01', to: ['s-02'], at: '2026-01-01T10:00:00.000Z' });
+    expect(recipientsOf(plain, mapWith('2026-10-08T12:00:00.000Z'))).toEqual(['s-02']);
   });
 });

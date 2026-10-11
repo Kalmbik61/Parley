@@ -10,9 +10,12 @@
  *
  * «Make lead» — у участника развёрнутой комнаты, не ведущего (`★`) и не закрытого, когда хост знает `rooms.setLead`:
  * сразу, без подтверждения, — смена ведущего обратима тем же пунктом у другого участника.
+ *
+ * «Rename» — первым пунктом, когда хост знает `sessions.rename`: поле на месте ярлыка открывает строка (`SessionInlineRename`),
+ * меню лишь зовёт `onRename`. Закрытую сессию тоже можно переименовать.
  */
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { SessionStatus, WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -52,17 +55,23 @@ export interface SessionRowMenuProps {
   bridge: ParleyBridge;
   /** «Open» — как клик по строке. */
   onOpen(): void;
+  /** «Rename» — поле на месте ярлыка в строке. */
+  onRename(): void;
   /** Комната участника и ведёт ли он её (`★`): только у строки развёрнутой комнаты — для «Make lead». */
   room?: { id: string; lead: boolean };
   /** Строка — триггер ui/context-menu. */
   children: ReactNode;
 }
 
-export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, onOpen, room, children }: SessionRowMenuProps): JSX.Element {
+export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, onOpen, onRename, room, children }: SessionRowMenuProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<'stop' | 'close' | 'delete' | null>(null);
+  // «Rename» открывает поле на месте ярлыка; закрытое меню вернуло бы фокус строке уже после того, как поле его
+  // взяло, — поле потеряло бы фокус и закрылось (тот же приём, что у `RoomRowMenu`).
+  const renameChosen = useRef(false);
   useSidebarHold(`session-menu ${workKey} ${session.id}`, open || confirm !== null);
 
+  const canRename = useHostSupports('sessions.rename');
   const canSetLead = useHostSupports('rooms.setLead');
   const status = displayStatus(session);
   const closed = session.lifecycle === 'closed';
@@ -127,7 +136,27 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
     <>
       <ContextMenu onOpenChange={setOpen}>
         <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-        <ContextMenuContent onCloseAutoFocus={returnCursorFocus}>
+        <ContextMenuContent
+          onCloseAutoFocus={(event) => {
+            if (!renameChosen.current) {
+              returnCursorFocus(event);
+              return;
+            }
+            renameChosen.current = false;
+            event.preventDefault();
+          }}
+        >
+          {canRename ? (
+            <ContextMenuItem
+              data-session-action="rename"
+              onSelect={() => {
+                renameChosen.current = true;
+                onRename();
+              }}
+            >
+              {S.sidebar.sessionMenu.rename}
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem onSelect={onOpen}>{S.sidebar.sessionMenu.open}</ContextMenuItem>
           <ContextMenuItem onSelect={openBeside}>{S.sidebar.sessionMenu.openBeside}</ContextMenuItem>
           {RESUMABLE.has(status) ? (

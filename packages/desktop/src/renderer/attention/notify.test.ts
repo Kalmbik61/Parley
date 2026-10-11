@@ -514,6 +514,21 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
     expect(h.notes[0]?.title).toBe('Decision waiting for you');
   });
 
+  it('архивная комната решения не ждёт (архив комнат, 5.3): новое решение в ней молчит, а висевшая карточка гаснет', () => {
+    const archive = (r: Room): Room => ({ ...r, archivedAt: '2026-10-08T12:00:00.000Z' });
+    const h = started();
+    h.notifier.onWorks([roomsEntry([archive(room('r-01', 'Возвраты', proposal('p-01')))])]);
+    expect(h.notes).toEqual([]);
+    expect(h.windowNotes).toEqual([]);
+
+    const waiting = harness([]);
+    waiting.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', null)])]);
+    waiting.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(waiting.notes).toHaveLength(1);
+    waiting.notifier.onWorks([roomsEntry([archive(room('r-01', 'Возвраты', proposal('p-01')))])]);
+    expect(waiting.hidden).toEqual([TAG]);
+  });
+
   it('комната карты до 2026-09-29 — без lead и proposal — не ждёт решения и не ломает разбор', () => {
     const h = harness([]);
     const old = { id: 'r-01', title: 'Старая', creator: 'human', members: ['s-01'], createdAt: '2026-01-01' } as unknown as Room;
@@ -646,6 +661,15 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
       ['mention:/tmp/p w-01:r-01', 'S02 mentioned you in Mobile APP', 'Ready for review, @you'],
       ['mention:/tmp/p w-01:r-02', 'S01 mentioned you in Backend', 'API is ready, @you'],
     ]);
+  });
+
+  it('упоминание в архивной комнате не уведомляет (архив комнат, 5.3); в открытой соседке — уведомляет', () => {
+    const h = started();
+    const archived: Room = { ...room('r-01', 'Mobile APP', null), archivedAt: '2026-10-08T12:00:00.000Z' };
+    h.notifier.onWorks([withMessages([mention('m-1')], [archived])]);
+    expect(h.notes).toEqual([]);
+    h.notifier.onWorks([withMessages([mention('m-1'), mention('m-2', { roomId: 'r-02' })], [archived, room('r-02', 'Backend', null)])]);
+    expect(h.notes.map((note) => note.tag)).toEqual(['mention:/tmp/p w-01:r-02']);
   });
 
   it('не уведомляют: без @human, @humans, от человека, системное, письмо без комнаты, прочитанное', () => {

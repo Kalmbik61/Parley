@@ -1,7 +1,11 @@
 /**
- * Миниатюры картинок-вложений для чипов (`AttachmentChip`): `app.imageThumbnail` по пути, ответы — в кэше
- * на весь модуль. Строки ленты виртуализированы и размонтируются при прокрутке: без кэша миниатюры мигали бы
- * и каждый раз шёл IPC, а с кэшем уже полученная миниатюра встаёт на первой же отрисовке строки.
+ * Миниатюры картинок-вложений для чипов (`AttachmentChip`) и картинок из результатов инструментов
+ * (`ToolImages`): `app.imageThumbnail` по пути, ответы — в кэше на весь модуль. Строки ленты виртуализированы
+ * и размонтируются при прокрутке: без кэша миниатюры мигали бы и каждый раз шёл IPC, а с кэшем уже полученная
+ * миниатюра встаёт на первой же отрисовке строки.
+ *
+ * Кэш хранит миниатюру обычной стороны (без `maxPx`): просмотр на 1600 px идёт мимо него — ответы по
+ * мегабайту в кэше на 200 путей лишние.
  */
 
 import { useEffect, useState } from 'react';
@@ -32,8 +36,18 @@ function load(bridge: ParleyBridge, path: string): Entry {
   return entry;
 }
 
-/** data-URL миниатюры пути; пока она грузится, нет её или `path === null` — `null`. */
-export function useThumbnail(bridge: ParleyBridge | null, path: string | null): string | null {
+/** Миниатюра пути и признак «ответ пришёл»: `url: null` при `settled: true` — миниатюры нет, при `false` — ответ ещё идёт. */
+export interface ThumbnailState {
+  url: string | null;
+  settled: boolean;
+}
+
+/**
+ * Миниатюра пути с признаком «ответ пришёл»: там, где «ещё грузится» и «миниатюры нет» рисуются по-разному (пустая
+ * рамка против значка), иначе значок «нет картинки» мигал бы на каждой строке до прихода ответа. Нет моста или
+ * пути — ждать нечего, `settled: false`.
+ */
+export function useThumbnailState(bridge: ParleyBridge | null, path: string | null): ThumbnailState {
   const [, setSettled] = useState(0);
   useEffect(() => {
     if (bridge === null || path === null) return undefined;
@@ -46,7 +60,13 @@ export function useThumbnail(bridge: ParleyBridge | null, path: string | null): 
       mounted = false;
     };
   }, [bridge, path]);
-  return path === null ? null : (cache.get(path)?.value ?? null);
+  const value = path === null ? undefined : cache.get(path)?.value;
+  return { url: value ?? null, settled: value !== undefined };
+}
+
+/** data-URL миниатюры пути; пока она грузится, нет её или `path === null` — `null`. */
+export function useThumbnail(bridge: ParleyBridge | null, path: string | null): string | null {
+  return useThumbnailState(bridge, path).url;
 }
 
 /** Только для тестов. */

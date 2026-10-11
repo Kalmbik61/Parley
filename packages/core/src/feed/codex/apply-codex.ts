@@ -10,8 +10,14 @@
  *
  * `Reasoning` пропускается (thinking у Claude тоже не показывается); `ContextCompaction` — заметка `compact`; запись
  * `compacted` её не дублирует. Незнакомый тип элемента — пропуск и счётчик `skipped` для `host.log`.
+ *
+ * Картинки (план 2026-10-09): записи приходят после обхода картинок хоста (`stash.ts`), поэтому картинка `McpToolCall`
+ * в `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` хост снабжает
+ * ссылкой на копию файла в хранилище (`parleyImage` элемента): файл агент переписывает, и лента, ссылайся она на путь
+ * агента, показала бы не ту картинку, которую он тогда посмотрел.
  */
 
+import { hasImageRef, hasStashedImage } from '../images.js';
 import {
   agentById,
   blocksText,
@@ -94,6 +100,26 @@ function statusOf(item: Json): FeedToolStatus {
   if (status === 'failed' || status === 'interrupted') return 'failed';
   const code = item['exit_code'];
   return typeof code === 'number' && code !== 0 ? 'failed' : 'done';
+}
+
+/**
+ * Что идёт в сводку `McpToolCall`. Если в `result.content` есть картинка после `stashFeedImages` — сам
+ * массив: текст блоков, пометки картинок и ссылки соберёт `toolResponseOf`. Иначе, как раньше, текст
+ * блоков, а нет текста — весь `result` JSON-ом.
+ */
+function mcpResult(result: Json): unknown {
+  const content = result['content'];
+  return hasStashedImage(content) ? content : (blocksText(content) ?? JSON.stringify(result));
+}
+
+/**
+ * Сводка вызова `ImageView`: блок-картинка со ссылкой на копию файла, которую хост положил в хранилище и пометил
+ * `item.parleyImage` (`stashCodexRecord`). Метки нет или она кривая — `undefined`: вызов остаётся без результата.
+ * Путь агента (`item.path`) здесь не читается и в ленту не идёт.
+ */
+function viewedImage(item: Json): unknown {
+  const block = { type: 'image', parleyImage: item['parleyImage'] };
+  return hasImageRef(block) ? block : undefined;
 }
 
 /** Вызов — в основную ленту или в `children` карточки субагента. */
@@ -202,7 +228,7 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
       const server = str(item, 'server') ?? 'mcp';
       const name = str(item, 'tool') ?? 'tool';
       const args = isRecord(item['arguments']) ? item['arguments'] : {};
-      const result = isRecord(item['result']) ? (blocksText(item['result']['content']) ?? JSON.stringify(item['result'])) : undefined;
+      const result = isRecord(item['result']) ? mcpResult(item['result']) : undefined;
       const error = isRecord(item['error']) ? str(item['error'], 'message') : str(item, 'error');
       putTool(draft, agentId, finishTool(newTool(id, `mcp__${server}__${name}`, args, startAt, agentId), statusOf(item), result ?? error ?? undefined, endAt));
       return;
@@ -218,7 +244,7 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
     }
     case 'ImageView': {
       const file = str(item, 'path');
-      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', undefined, endAt));
+      putTool(draft, agentId, finishTool(newTool(id, 'ViewImage', file === null ? {} : { file_path: file }, startAt, agentId), 'done', viewedImage(item), endAt));
       return;
     }
     case 'ContextCompaction': {

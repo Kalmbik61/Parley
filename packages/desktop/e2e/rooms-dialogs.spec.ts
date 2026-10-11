@@ -19,11 +19,11 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 /**
- * Метка «new session» — `NEW_LABEL` core. Окно шлёт сессиям комнаты пустой ярлык, а хост сессии без задачи пустым его не
- * оставляет (`applyChoice`: автозаголовок Claude Code переименует такую сессию), поэтому строка сайдбара показывает
- * `S05 New session`, а не голый `S05` (правка по ревью куска 7, находка 1; спека 2.1).
+ * Окно шлёт сессиям комнаты пустой ярлык, а хост сессии без ярлыка пустым его не оставляет: `addSession` ставит имя по
+ * номеру (`defaultSessionName`, спека архива комнат, часть 2, 13) — `Ralph`, `Anatoly`…, после полного круга `Ralph 2`.
+ * Поэтому строка сайдбара показывает `S05 Roman`, а не голый `S05` (правка по ревью куска 7, находка 1; спека 2.1).
  */
-const NEW_LABEL = 'new session';
+const DEFAULT_NAME = /^[A-Z][a-z]+( \d+)?$/;
 let project = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
@@ -147,11 +147,13 @@ test.describe('диалоги комнат и перетаскивание (ку
     expect(created?.title).toBe('e2e room');
     expect(created?.members).toHaveLength(2);
     expect(created?.lead).toBe(created?.members[1]);
-    // Участники — новые сессии (не seed и не solo), без задачи; ярлык — метка хоста «new session», строка показывает её
-    // по-английски; писем-приглашений нет.
+    // Участники — новые сессии (не seed и не solo), без задачи; ярлык — имя по номеру, которое поставил хост; писем-приглашений
+    // нет.
     for (const id of created?.members ?? []) {
       expect([first, solo?.id]).not.toContain(id);
-      expect(map.sessions.find((session) => session.id === id)).toMatchObject({ task: '', label: NEW_LABEL });
+      const member = map.sessions.find((session) => session.id === id);
+      expect(member).toMatchObject({ task: '' });
+      expect(member?.label).toMatch(DEFAULT_NAME);
     }
     expect(map.messages.filter((message) => message.roomId === created?.id)).toEqual([]);
 
@@ -161,7 +163,8 @@ test.describe('диалоги комнат и перетаскивание (ку
     await expect(row).toHaveAttribute('aria-expanded', 'true');
     await expect(row.locator('[data-session-id]')).toHaveCount(2);
     for (const id of created?.members ?? []) {
-      await expect(row.locator(`[data-session-id="${id}"]`)).toContainText(`${id.replace('s-', 'S')} New session`);
+      const label = map.sessions.find((session) => session.id === id)?.label ?? '';
+      await expect(row.locator(`[data-session-id="${id}"]`)).toContainText(`${id.replace('s-', 'S')} ${label}`);
     }
     await expect(row.locator('[data-lead]')).toHaveCount(1);
     await expect(row.locator(`[data-session-id="${created?.lead ?? ''}"] [data-lead]`)).toHaveCount(1);

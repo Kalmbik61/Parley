@@ -6,11 +6,12 @@ const STATUSES: SessionStatus[] = ['pending', 'active', 'exited', 'done', 'faile
 const ACTIVITIES: Array<Activity | null> = ['working', 'blocked', 'unseen', 'idle', null];
 
 describe('displayStatus', () => {
-  // Копия core/work/status-view.ts: та же таблица, что и в её тесте.
+  // Как core/work/status-view.ts, кроме живой сессии: там итог не показываем, состояние ведёт activity.
   it.each([
     ['pending', null, 'pending'],
     ['active', null, 'active'],
-    ['active', 'done', 'done'],
+    ['active', 'done', 'active'],
+    ['active', 'failed', 'active'],
     ['sleeping', null, 'exited'],
     ['sleeping', 'failed', 'failed'],
     ['closed', null, 'exited'],

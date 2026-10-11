@@ -32,6 +32,7 @@ import { Button } from '../ui/button.js';
 import { cn } from '../lib/cn.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
+import { imagesExtraPx } from './feed-model.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
@@ -43,7 +44,7 @@ import { TurnItem } from './items/TurnItem.js';
 
 /** Лента «у низа», если до дна не больше стольких px — как у комнаты. */
 const AT_BOTTOM_PX = 48;
-/** Высота элемента до замера. */
+/** Высота элемента до замера; вызов с картинками выше на ряды миниатюр (`imagesExtraPx`). */
 const ESTIMATE_PX = 56;
 /** Размер прокрутчика до первого замера (jsdom и первый кадр). */
 const INITIAL_RECT = { width: 800, height: 600 };
@@ -165,7 +166,10 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller,
-    estimateSize: () => ESTIMATE_PX,
+    estimateSize: (index) => {
+      const row = rows[index];
+      return ESTIMATE_PX + (row !== undefined && 'item' in row ? imagesExtraPx(row.item) : 0);
+    },
     getItemKey: (index) => rows[index]?.key ?? index,
     initialRect: INITIAL_RECT,
     overscan: 6,
@@ -221,7 +225,16 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={setScroller} onScroll={onScroll} data-testid="chat-feed" className="min-h-0 flex-1 overflow-y-auto">
+      {/* Прокрутчик берёт фокус программно: просмотр картинки возвращает его сюда, если строки с миниатюрой уже нет
+          (виртуальный список её убрал). Кольца фокуса у него нет — это область, а не кнопка. */}
+      <div
+        ref={setScroller}
+        onScroll={onScroll}
+        data-testid="chat-feed"
+        data-preview-return=""
+        tabIndex={-1}
+        className="min-h-0 flex-1 overflow-y-auto outline-none"
+      >
         {note === null || rows.length > 0 ? null : (
           <div className="flex items-center gap-2 px-4 py-3">
             <p className="m-0 text-sm text-muted-foreground">{note}</p>

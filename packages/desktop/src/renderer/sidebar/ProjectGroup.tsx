@@ -15,6 +15,11 @@
  *
  * Карточки передаются детьми: при виртуализации (`WorkSidebar`) заголовок и карточки —
  * отдельные строки виртуального списка, и тогда детей нет.
+ *
+ * Внизу группы — ссылка «N archived» (`ProjectArchivedLink`, спека архива комнат и проектов, 6.1): архивные работы
+ * проекта спрятаны под ней, клик раскрывает их в конце группы, подпись становится «Hide archived». Нативная кнопка, как
+ * «N more closed» карточки: достижима по Tab, Enter и пробел нажимают её сами. При виртуализации это отдельная строка
+ * списка, а заголовок рисуется с `headerOnly`.
  */
 
 import type { ReactNode } from 'react';
@@ -22,6 +27,7 @@ import { ChevronDown, Plus } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { projectColor } from '../lib/project-color.js';
+import { useUiStore } from '../store/ui.js';
 import { SectionMenu } from './SectionMenu.js';
 import type { SidebarSection } from './sort.js';
 
@@ -30,10 +36,33 @@ export interface ProjectGroupProps {
   onToggleCollapsed(): void;
   /** «+» заголовка — форма новой работы с проектом этой группы (кусок 3.5). */
   onNewWork(projectPath: string): void;
+  /** Только заголовок виртуального списка: ссылку «N archived» тогда рисует своя строка списка, а не группа. */
+  headerOnly?: boolean;
   children?: ReactNode;
 }
 
-export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }: ProjectGroupProps): JSX.Element {
+/** Ссылка «N archived» / «Hide archived» внизу группы проекта; секции без архивных работ (нет `archived`) она не рисуется. */
+export function ProjectArchivedLink({ section }: { section: SidebarSection }): JSX.Element | null {
+  const { archived, projectPath } = section;
+  if (archived === undefined || projectPath === null || section.collapsed) return null;
+  return (
+    <button
+      type="button"
+      data-archived-works=""
+      aria-expanded={archived.shown}
+      onClick={() => useUiStore.getState().setProjectArchivedShown(projectPath, !archived.shown)}
+      className={cn(
+        // Как «N more closed» карточки: основной цвет на hover — явно, в приглушённом поддереве он равен вторичному.
+        'mt-1.5 flex h-6 w-full min-w-0 items-center rounded-full pl-2.5 pr-2 text-left text-[11px]',
+        'text-work-sidebar-muted-foreground hover:bg-foreground/6 hover:text-(--color-text)',
+      )}
+    >
+      <span className="min-w-0 truncate">{archived.shown ? S.sidebar.hideArchivedWorks : S.sidebar.archivedWorks(archived.count)}</span>
+    </button>
+  );
+}
+
+export function ProjectGroup({ section, onToggleCollapsed, onNewWork, headerOnly = false, children }: ProjectGroupProps): JSX.Element {
   return (
     <div data-section={section.key}>
       {section.kind === 'pinned' ? (
@@ -97,6 +126,7 @@ export function ProjectGroup({ section, onToggleCollapsed, onNewWork, children }
         </div>
       )}
       {children}
+      {headerOnly ? null : <ProjectArchivedLink section={section} />}
     </div>
   );
 }

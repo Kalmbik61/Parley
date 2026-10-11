@@ -280,7 +280,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       roleRevision: `${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`,
       sessionRef: { projectPath: entry.projectPath, workId: map.work.id, sessionId: id },
       label: sessionRowLabel(id, session.label),
-      rawLabel: sessionLabelText(session.label),
+      rawLabel: sessionLabelText(session.label, id),
       provider: session.provider,
       providerName: providerDisplay,
       model: model !== null && model.toLowerCase() !== providerDisplay.toLowerCase() ? model : null,

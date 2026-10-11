@@ -31,6 +31,7 @@ import {
 import { Paperclip, Square } from 'lucide-react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
+import { keepCaretVisible } from '../lib/keep-caret-visible.js';
 import { Button } from '../ui/button.js';
 import { MicButton } from '../voice/MicButton.js';
 import { useTextareaDictation } from '../voice/targets.js';
@@ -235,6 +236,8 @@ export function Composer({
           onChange={(event) => {
             setCaretAt(event.target.selectionStart);
             onTextChange(event.target.value);
+            // Набор и вставка текста (родная вставка шлёт тот же `input`): последняя строка не прижата к рамке.
+            keepCaretVisible(event.target);
           }}
           onSelect={syncCaret}
           onKeyUp={syncCaret}

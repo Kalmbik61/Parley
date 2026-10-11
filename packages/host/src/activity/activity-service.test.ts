@@ -10,7 +10,9 @@ import {
   transitionSession,
   updateMap,
   workPaths,
+  defaultSessionName,
   NEW_LABEL,
+  UNTITLED_WORK,
 } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
@@ -108,14 +110,18 @@ const labelOnDisk = async (workId: string, sessionId: string): Promise<string | 
 const hook = (name: string, extra: Record<string, unknown> = {}): string =>
   `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
 
-/** Заводит активную сессию `s-01` в новой работе и готовит каталог `events/`. */
+/**
+ * Заводит активную сессию `s-01` в новой работе и готовит каталог `events/`. `label: NEW_LABEL` — карта старой
+ * сборки (метка на диске: `addSession` сама её уже не оставляет), `label: ''` — имя по умолчанию.
+ */
 async function activeSession(over: {
   launchedBy?: 'tui' | 'cli' | 'host';
   providerSessionId?: string | null;
   label?: string;
+  workTitle?: string;
   createEventsDir?: boolean;
 } = {}): Promise<{ workId: string; ref: SessionRef }> {
-  const map = await createWork(project, { title: 'Работа' });
+  const map = await createWork(project, { title: over.workTitle ?? 'Работа' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
     const created = addSession(current, {
@@ -123,6 +129,7 @@ async function activeSession(over: {
       label: over.label ?? 'план',
       task: 'сделать',
     });
+    if (over.label === NEW_LABEL) created.label = NEW_LABEL;
     sessionId = created.id;
     created.launchedBy = over.launchedBy ?? 'host';
     if (over.providerSessionId !== undefined) created.providerSessionId = over.providerSessionId;
@@ -426,6 +433,65 @@ describe('createActivityService', () => {
       timeout: 30_000,
       interval: 25,
     });
+  }, 60_000);
+
+  /** Название работы — с диска, по той же причине, что и `labelOnDisk`. */
+  const workTitleOnDisk = async (workId: string): Promise<string> => (await readMap(project, workId)).work.title;
+
+  it('6e: сессия с именем по умолчанию в безымянной работе: ярлык не меняется, работа называется по заголовку лога', async () => {
+    const { ref, workId } = await activeSession({ label: '', workTitle: UNTITLED_WORK, providerSessionId: 's-untitled' });
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(defaultSessionName(ref.sessionId));
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-untitled.jsonl'),
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'Починить сборку', sessionId: 's-untitled' })}\n`,
+    );
+
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await vi.waitFor(async () => expect(await workTitleOnDisk(workId)).toBe('Починить сборку'), {
+      timeout: 30_000,
+      interval: 25,
+    });
+    // Имя постоянное: заголовок лога его не заменил.
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(defaultSessionName(ref.sessionId));
+
+    // Заголовок в логе изменился — ни ярлык, ни уже названная работа не меняются.
+    await appendFile(
+      path.join(claudeRoot, '-proj', 's-untitled.jsonl'),
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'Другой заголовок', sessionId: 's-untitled' })}\n`,
+    );
+    await settle(1500);
+    expect(await workTitleOnDisk(workId)).toBe('Починить сборку');
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(defaultSessionName(ref.sessionId));
+  }, 60_000);
+
+  it('6f: сессия с именем в работе с названием: заголовок лога не меняет ни ярлык, ни название', async () => {
+    const { ref, workId } = await activeSession({ label: '', providerSessionId: 's-named' });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-named.jsonl'),
+      record({ type: 'custom-title', customTitle: 'Починить сборку' }, 's-named') +
+        record(
+          {
+            type: 'assistant',
+            timestamp: '2026-10-07T10:00:05.000Z',
+            message: { id: 'msg-1', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ок' }] },
+          },
+          's-named',
+        ),
+    );
+
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    // Индекс лога доехал (модель из него в метриках): заголовок из него хост уже мог бы применить.
+    await vi.waitFor(() => expect(a.get(ref)?.metrics?.model).toBe('claude-opus-5-5'), { timeout: 30_000, interval: 25 });
+    await settle(1500);
+
+    expect(await labelOnDisk(workId, ref.sessionId)).toBe(defaultSessionName(ref.sessionId));
+    expect(await workTitleOnDisk(workId)).toBe('Работа');
   }, 60_000);
 
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {

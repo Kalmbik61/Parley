@@ -39,6 +39,12 @@ describe('блок рецепта в слое', () => {
     expect(leadRecipeBlock(map, 's-99')).toBeNull();
   });
 
+  it('архивная комната блока не даёт', () => {
+    const map = roomWithRecipe();
+    map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
+    expect(leadRecipeBlock(map, 's-01')).toBeNull();
+  });
+
   it('комната без рецепта блока не даёт', () => {
     const map = roomWithRecipe();
     map.rooms[0]!.recipe = null;
@@ -111,6 +117,16 @@ describe('reconcileRecipeLeads', () => {
     expect(sent[0]).toMatchObject({ from: PARLEY, to: ['s-01'], text: recipeLeadBlock(recipe) });
     expect(map.rooms[0]!.recipeLeadNotified).toBe('s-01');
     expect(reconcileRecipeLeads(map)).toEqual([]);
+  });
+
+  it('архивная комната: письма новому ведущему нет, записи карта не требует', () => {
+    const map = roomWithRecipe();
+    close(map, 's-01');
+    map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
+
+    expect(recipeLeadsPending(map)).toBe(false);
+    expect(reconcileRecipeLeads(map)).toEqual([]);
+    expect(map.messages).toEqual([]);
   });
 
   it('длинный плейбук в письме обрезается по строке с меткой', () => {

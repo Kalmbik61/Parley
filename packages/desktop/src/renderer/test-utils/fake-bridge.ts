@@ -120,10 +120,16 @@ export interface FakeBridge extends ParleyBridge {
   readonly saveDropImageCalls: Array<'clipboard'>;
   /** Чем ответит `app.chooseFiles` (диалог вложений поля ввода «Chat»); по умолчанию `[]`. */
   setChosenFiles(paths: string[]): void;
-  /** Ответ `app.imageThumbnail` для пути — data-URL; по умолчанию `null` (миниатюры нет, чип без картинки). */
-  setThumbnail(path: string, dataUrl: string | null): void;
+  /**
+   * Ответ `app.imageThumbnail` для пути — data-URL; по умолчанию `null` (миниатюры нет, чип без картинки). С `maxPx` —
+   * ответ только на запрос такой стороны (просмотр просит 1600), в том числе `null`; без него ответ годится любой
+   * стороне, у которой своего ответа нет.
+   */
+  setThumbnail(path: string, dataUrl: string | null, maxPx?: number): void;
   /** Вызовы `app.imageThumbnail` — пути по порядку. */
   readonly thumbnailCalls: string[];
+  /** Те же вызовы со стороной (`undefined` — без неё), по порядку. */
+  readonly thumbnailRequests: Array<{ path: string; maxPx: number | undefined }>;
   /** Ответ `files.list`; по умолчанию `[]`. Отказ — объект с code (кусок 7.1a). */
   setDir(root: FileRoot, dir: string, entries: DirEntry[] | IpcErrorInfo): void;
   /** Ответ `files.readText`; по умолчанию отказ `not_found`. */
@@ -236,7 +242,10 @@ export function createFakeBridge(): FakeBridge {
   const saveDropImageCalls: Array<'clipboard'> = [];
   let chosenFiles: string[] = [];
   const thumbnails = new Map<string, string | null>();
+  /** Ключ ответа: просто путь — для любой стороны, `путь\0сторона` — для запроса этой стороны. */
+  const thumbnailKey = (path: string, maxPx: number | undefined): string => (maxPx === undefined ? path : `${path}\0${maxPx}`);
   const thumbnailCalls: string[] = [];
+  const thumbnailRequests: Array<{ path: string; maxPx: number | undefined }> = [];
   const dirs = new Map<string, DirEntry[] | IpcErrorInfo>();
   const textFiles = new Map<string, TextFile | IpcErrorInfo>();
   const byteFiles = new Map<string, Uint8Array | IpcErrorInfo>();
@@ -344,10 +353,11 @@ export function createFakeBridge(): FakeBridge {
     setChosenFiles: (paths) => {
       chosenFiles = paths;
     },
-    setThumbnail: (path, dataUrl) => {
-      thumbnails.set(path, dataUrl);
+    setThumbnail: (path, dataUrl, maxPx) => {
+      thumbnails.set(thumbnailKey(path, maxPx), dataUrl);
     },
     thumbnailCalls,
+    thumbnailRequests,
     setDir: (root, dir, entries) => {
       dirs.set(fileKey(root, dir), entries);
     },
@@ -766,9 +776,12 @@ export function createFakeBridge(): FakeBridge {
         if (answer !== null && typeof answer === 'object') throw answer;
         return answer;
       },
-      imageThumbnail: async (path) => {
+      imageThumbnail: async (path, maxPx) => {
         thumbnailCalls.push(path);
-        return thumbnails.get(path) ?? null;
+        thumbnailRequests.push({ path, maxPx });
+        const sized = thumbnailKey(path, maxPx);
+        // Ответ на сторону, в том числе `null`, важнее общего ответа для пути.
+        return (thumbnails.has(sized) ? thumbnails.get(sized) : thumbnails.get(path)) ?? null;
       },
       setDirtyBuffers: (count) => {
         dirtyBufferCounts.push(count);

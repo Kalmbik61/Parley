@@ -472,7 +472,7 @@ if (!gotLock) {
         if ((await clipboard.readText()) !== '') return null;
         return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
-      imageThumbnail: (absPath) => imageThumbnail(absPath, nativeImage),
+      imageThumbnail: (absPath, maxPx) => imageThumbnail(absPath, nativeImage, maxPx),
       setDirtyBuffers: (sender, count) => closeGuards.get(sender)?.setDirtyCount(count),
       answerClose: (sender, answer) => closeGuards.get(sender)?.answer(answer),
       chooseFolder: async () => {

@@ -1261,6 +1261,17 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await act(async () => {});
   }
 
+  it('длинный текст в поле: каретка в конце — поле докручено до дна вместе с нижним отступом', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    // Раскладки в jsdom нет: поле «переполнено» (600 при видимых 180), прокручено выше дна на 10px.
+    Object.defineProperty(field(), 'scrollHeight', { configurable: true, value: 600 });
+    Object.defineProperty(field(), 'clientHeight', { configurable: true, value: 180 });
+    field().scrollTop = 410;
+    type('строка\n'.repeat(30));
+    expect(field().scrollTop).toBe(420);
+  });
+
   it('вставка картинки без текста — saveDropImage, чип над полем, текст поля не меняется, браузерная вставка отменена', async () => {
     bridge.setSaveDropImage('/h/drops/a b.png');
     renderBody(makeSession('s-01', 'S01'));
@@ -1296,6 +1307,17 @@ describe('ChatView — вложения в поле ввода (живая пр�
     fireEvent.paste(field(), { clipboardData: imageData });
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledWith(S.terminal.imageTooLarge);
+    expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
+  });
+
+  it('saveDropImage вернул null (main не прочитал картинку) — тост, поле и чипы пусты', async () => {
+    bridge.setSaveDropImage(null);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    fireEvent.paste(field(), { clipboardData: imageData });
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledWith(S.terminal.imageUnreadable);
     expect(field().value).toBe('');
     expect(chips()).toEqual([]);
   });
@@ -1899,5 +1921,105 @@ describe('ChatView — Claude без подсказки про хуки Codex', 
       useFeedStore.setState({ feeds: { [refKey(REF)]: { items: [prompt('p1', 'hi')], revision: 1, mode: null, decisions: 'terminal', status: 'ready' } } });
     });
     expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+  });
+});
+
+describe('ChatView — просмотр картинки из результата инструмента', () => {
+  const SHOT = '/h/feed-images/a.png';
+  const SMALL = 'data:image/png;base64,SMALL';
+  const BIG = 'data:image/png;base64,BIG';
+  const REF_B: SessionRef = { ...REF, sessionId: 's-02' };
+
+  const shotTool = (): FeedItem => ({
+    id: 't1',
+    at: AT,
+    kind: 'tool',
+    toolUseId: 'tu1',
+    name: 'mcp__chrome-devtools__take_screenshot',
+    input: {},
+    status: 'done',
+    response: { text: '[image png, 1 KB]', size: 18, truncated: false, images: [{ path: SHOT, mime: 'image/png' }] },
+  });
+
+  /** Вкладка сессии; `rerender` с другим `ref` — как переключение на соседнюю вкладку, но без размонтирования вида. */
+  function bodyOf(ref: SessionRef, patch: { active?: boolean; view?: TerminalView } = {}): JSX.Element {
+    const tab = { kind: 'terminal' as const, id: `terminal:${ref.sessionId}`, sessionId: ref.sessionId, ...(patch.view === undefined ? {} : { view: patch.view }) };
+    return (
+      <TerminalBody
+        workKey="/tmp/p w-01"
+        tab={tab}
+        session={makeSession(ref.sessionId, ref.sessionId.toUpperCase())}
+        sessionRef={ref}
+        active={patch.active ?? true}
+        bridge={bridge}
+        sendDeps={sendDeps}
+      />
+    );
+  }
+
+  function feedOf(ref: SessionRef, items: FeedItem[]): void {
+    act(() => {
+      useFeedStore.setState((state) => ({
+        feeds: { ...state.feeds, [refKey(ref)]: { items, revision: 1, mode: null, decisions: null, status: 'ready' } },
+      }));
+    });
+  }
+
+  /** Вид сессии s-01 с одним скриншотом в ленте и открытым просмотром. */
+  async function withPreviewOpen(): Promise<ReturnType<typeof render>> {
+    bridge.setThumbnail(SHOT, SMALL);
+    bridge.setThumbnail(SHOT, BIG, 1600);
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle'), makeActivity(REF_B, 'idle')]), loaded: true });
+    const view = render(bodyOf(REF));
+    feedOf(REF, [shotTool()]);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Image 1 of 1' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 1' });
+    await waitFor(() => expect(within(dialog).getByTestId('chat-tool-image-view').getAttribute('src')).toBe(BIG));
+    return view;
+  }
+
+  it('просмотр открыт, а вызов со скриншотом ушёл из ленты (виртуальный список убирает строки) — диалог остаётся и закрывается только человеком', async () => {
+    await withPreviewOpen();
+    const dialog = screen.getByRole('dialog');
+    feedOf(REF, []);
+    expect(screen.queryByRole('button', { name: 'Image 1 of 1' })).toBeNull();
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(within(dialog).getByTestId('chat-tool-image-view').getAttribute('src')).toBe(BIG);
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // Строки, открывшей просмотр, больше нет: фокус возвращается на ленту, а не пропадает в body.
+    expect(document.activeElement).toBe(screen.getByTestId('chat-feed'));
+  });
+
+  it('другая сессия: на соседней вкладке (s-02) просмотра из s-01 нет, и при возврате он сам не открывается', async () => {
+    const view = await withPreviewOpen();
+    // В s-02 тот же скриншот: просмотр не должен «прийти» вместе с картинкой.
+    feedOf(REF_B, [shotTool()]);
+    view.rerender(bodyOf(REF_B));
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Image 1 of 1' })).toBeTruthy();
+
+    view.rerender(bodyOf(REF));
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('работа ушла из видимых (контейнеры работ LRU остаются смонтированными, но скрыты) — просмотр закрыт и сам не возвращается', async () => {
+    const view = await withPreviewOpen();
+    view.rerender(bodyOf(REF, { active: false }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    view.rerender(bodyOf(REF, { active: true }));
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('вкладку переключили в Terminal — вид размонтирован, просмотр закрыт', async () => {
+    const view = await withPreviewOpen();
+    view.rerender(bodyOf(REF, { view: 'terminal' }));
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

@@ -79,6 +79,15 @@ describe('resolveSidebarDrop — сессия на строку комнаты (
     expect(resolveSidebarDrop(old, 's-02', { kind: 'room-row', roomId: 'r-02' })).toEqual({ kind: 'join', sessionId: 's-02', roomId: 'r-02' });
   });
 
+  it('архивная комната — не цель: ни join, ни из других комнат (архив комнат, 5.3)', () => {
+    const state = map();
+    state.rooms = state.rooms.map((room) => (room.id === 'r-01' ? { ...room, archivedAt: '2026-10-08T12:00:00.000Z' } : room));
+    expect(resolveSidebarDrop(state, 's-01', { kind: 'room-row', roomId: 'r-01' })).toBeNull();
+    expect(resolveSidebarDrop(state, 's-05', { kind: 'room-row', roomId: 'r-01' })).toBeNull();
+    // Открытая соседка остаётся целью.
+    expect(resolveSidebarDrop(state, 's-01', { kind: 'room-row', roomId: 'r-02' })).toEqual({ kind: 'join', sessionId: 's-01', roomId: 'r-02' });
+  });
+
   it('карта v2 без lead и proposal читается', () => {
     const legacy = makeWork('w-01', { sessions: [makeSession('s-01', 'один'), makeSession('s-02', 'два')] });
     legacy.map.rooms = [{ id: 'r-01', title: 'Старая', creator: 'human', members: ['s-02'], createdAt: '2026-09-27T08:00:00.000Z' } as never];

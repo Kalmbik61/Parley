@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { resetThumbnailCacheForTests, useThumbnail } from './use-thumbnail.js';
+import { resetThumbnailCacheForTests, useThumbnail, useThumbnailState } from './use-thumbnail.js';
 
 const PNG = 'data:image/png;base64,AAAA';
 
@@ -96,5 +96,53 @@ describe('useThumbnail', () => {
     await act(async () => {});
     expect(oldest.result.current).toBe('T0');
     expect(bridge.thumbnailCalls).toHaveLength(202);
+  });
+});
+
+describe('useThumbnailState — «ответ ещё не пришёл» отличается от «миниатюры нет»', () => {
+  it('запрос в пути — url null и settled false; пришёл data-URL — url и settled true', async () => {
+    bridge.setThumbnail('/a.png', PNG);
+    const { result } = renderHook(() => useThumbnailState(bridge, '/a.png'));
+    expect(result.current).toEqual({ url: null, settled: false });
+    await act(async () => {});
+    expect(result.current).toEqual({ url: PNG, settled: true });
+    expect(bridge.thumbnailCalls).toEqual(['/a.png']);
+  });
+
+  it('миниатюры нет (ответ null) или сбой IPC — url null, но settled true: ответ пришёл, картинки нет', async () => {
+    const missing = renderHook(() => useThumbnailState(bridge, '/gone.png'));
+    bridge.app.imageThumbnail = () => Promise.reject(new Error('ipc'));
+    const broken = renderHook(() => useThumbnailState(bridge, '/broken.png'));
+    expect([missing.result.current.settled, broken.result.current.settled]).toEqual([false, false]);
+    await act(async () => {});
+    expect(missing.result.current).toEqual({ url: null, settled: true });
+    expect(broken.result.current).toEqual({ url: null, settled: true });
+  });
+
+  it('путь уже в кэше — settled на первой же отрисовке (строку ленты вернули после прокрутки)', async () => {
+    bridge.setThumbnail('/a.png', PNG);
+    const first = renderHook(() => useThumbnailState(bridge, '/a.png'));
+    await act(async () => {});
+    first.unmount();
+    const second = renderHook(() => useThumbnailState(bridge, '/a.png'));
+    expect(second.result.current).toEqual({ url: PNG, settled: true });
+  });
+
+  it('нет моста или пути — ждать нечего: url null, settled false, запросов нет', async () => {
+    const withoutBridge = renderHook(() => useThumbnailState(null, '/a.png'));
+    const withoutPath = renderHook(() => useThumbnailState(bridge, null));
+    await act(async () => {});
+    expect(withoutBridge.result.current).toEqual({ url: null, settled: false });
+    expect(withoutPath.result.current).toEqual({ url: null, settled: false });
+    expect(bridge.thumbnailCalls).toEqual([]);
+  });
+
+  it('useThumbnail по-прежнему отдаёт только url, и кэш у них общий — один запрос на путь', async () => {
+    bridge.setThumbnail('/a.png', PNG);
+    const state = renderHook(() => useThumbnailState(bridge, '/a.png'));
+    const plain = renderHook(() => useThumbnail(bridge, '/a.png'));
+    await act(async () => {});
+    expect([state.result.current.url, plain.result.current]).toEqual([PNG, PNG]);
+    expect(bridge.thumbnailCalls).toEqual(['/a.png']);
   });
 });

@@ -15,6 +15,9 @@ import {
   FEED_AGENT_CHILDREN,
   FEED_AGENT_TEXT_LIMIT,
   FEED_CODEX_FEATURE,
+  FEED_IMAGE_MIME_LIMIT,
+  FEED_IMAGE_PATH_LIMIT,
+  FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
   FEED_MIN_VERSION,
   FEED_PATCH_LINES,
@@ -326,10 +329,11 @@ describe('пределы и версия', () => {
     expect(FEED_AGENT_TEXT_LIMIT).toBe(core.FEED_AGENT_TEXT_LIMIT);
     expect(FEED_TEXT_LIMIT).toBe(core.FEED_TEXT_LIMIT);
     expect(FEED_AGENT_CHILDREN).toBe(core.FEED_AGENT_CHILDREN);
+    expect(FEED_IMAGES_PER_CALL).toBe(core.FEED_IMAGES_PER_CALL);
     expect(FEED_MIN_VERSION).toBe(core.FEED_MIN_VERSION);
     expect(CODEX_FEED_MIN_VERSION).toBe(core.CODEX_FEED_MIN_VERSION);
     expect(FEED_CODEX_FEATURE).toBe('feed-codex');
-    expect(FEED_SCHEMA_VERSION).toBe(2);
+    expect(FEED_SCHEMA_VERSION).toBe(3);
   });
 
   it('карточка агента: вложенных вызовов не больше FEED_AGENT_CHILDREN', () => {
@@ -379,5 +383,86 @@ describe('пределы и версия', () => {
     expect(feedDecision.safeParse({ kind: 'question', answers: { Q: 'A' } }).success).toBe(true);
     expect(feedDecision.safeParse({ kind: 'plan', choice: 'manual' }).success).toBe(true);
     expect(feedDecision.safeParse({ kind: 'plan', choice: 'edit' }).success).toBe(false);
+  });
+});
+
+describe('feedItem: картинки результата инструмента (план 2026-10-09, Task 1)', () => {
+  const tool = (response: Record<string, unknown>) => ({
+    id: 'tool:t1',
+    at: iso(0),
+    kind: 'tool',
+    toolUseId: 't1',
+    name: 'mcp__browser__screenshot',
+    input: {},
+    status: 'done',
+    response,
+  });
+  const body = { text: '[image png, 1 KB]', size: 17, truncated: false };
+  const ref = (n = 1) => ({
+    path: `/home/.parley/feed-images/img${n}.png`,
+    mime: 'image/png',
+    bytes: 1024,
+  });
+  const ok = (response: Record<string, unknown>): boolean =>
+    feedItem.safeParse(tool(response)).success;
+
+  it('сводка без images — как раньше; с images проходит', () => {
+    expect(ok(body)).toBe(true);
+    expect(ok({ ...body, images: [ref()] })).toBe(true);
+  });
+
+  it('images: не больше FEED_IMAGES_PER_CALL ссылок (шесть можно, семь — ошибка)', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ref(i + 1));
+
+    expect(ok({ ...body, images: many(FEED_IMAGES_PER_CALL) })).toBe(true);
+    expect(ok({ ...body, images: many(FEED_IMAGES_PER_CALL + 1) })).toBe(false);
+    expect(FEED_IMAGES_PER_CALL).toBe(6);
+  });
+
+  it('ссылка: bytes необязателен, целое не меньше нуля; path и mime в пределах; лишнее поле нельзя', () => {
+    expect(ok({ ...body, images: [{ path: ref().path, mime: ref().mime }] })).toBe(true);
+    expect(ok({ ...body, images: [{ ...ref(), bytes: 0 }] })).toBe(true);
+    expect(ok({ ...body, images: [{ ...ref(), bytes: -1 }] })).toBe(false);
+    expect(ok({ ...body, images: [{ ...ref(), bytes: 1.5 }] })).toBe(false);
+    expect(ok({ ...body, images: [{ ...ref(), path: 'x'.repeat(FEED_IMAGE_PATH_LIMIT) }] })).toBe(true);
+    expect(ok({ ...body, images: [{ ...ref(), path: 'x'.repeat(FEED_IMAGE_PATH_LIMIT + 1) }] })).toBe(false);
+    expect(ok({ ...body, images: [{ ...ref(), mime: 'x'.repeat(FEED_IMAGE_MIME_LIMIT) }] })).toBe(true);
+    expect(ok({ ...body, images: [{ ...ref(), mime: 'x'.repeat(FEED_IMAGE_MIME_LIMIT + 1) }] })).toBe(false);
+    expect(ok({ ...body, images: [{ ...ref(), base64: 'AAAA' }] })).toBe(false);
+    expect(ok({ ...body, images: [{ path: '/a.png' }] })).toBe(false);
+    expect(ok({ ...body, images: ['/a.png'] })).toBe(false);
+  });
+
+  it('необязательное images со значением undefined не проходит: элемент — чистый JSON', () => {
+    expect(ok({ ...body, images: undefined })).toBe(false);
+  });
+
+  it('пределы path и mime — 4096 и 100 символов, и равны пределам core (ими отсекает ссылки редьюсер)', () => {
+    expect(FEED_IMAGE_PATH_LIMIT).toBe(4096);
+    expect(FEED_IMAGE_MIME_LIMIT).toBe(100);
+    expect(FEED_IMAGE_PATH_LIMIT).toBe(core.FEED_IMAGE_PATH_LIMIT);
+    expect(FEED_IMAGE_MIME_LIMIT).toBe(core.FEED_IMAGE_MIME_LIMIT);
+  });
+
+  it('вызов, который собрал core из события с картинкой, проходит схему', () => {
+    const ref1 = ref();
+    const event = core.stashFeedImages(
+      {
+        hook_event_name: 'PostToolUse',
+        tool_name: 'mcp__browser__screenshot',
+        tool_use_id: 't1',
+        tool_input: {},
+        tool_response: [
+          { type: 'text', text: 'Took a screenshot' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } },
+        ],
+      },
+      () => ref1,
+    );
+    const update = core.applyHookEvent(core.emptyFeedState(), event, iso(0));
+    const item = update.changes.find((change) => change.kind === 'tool');
+
+    expect(item?.kind === 'tool' && item.response?.images).toEqual([ref1]);
+    expect(failures(update.changes)).toEqual([]);
   });
 });

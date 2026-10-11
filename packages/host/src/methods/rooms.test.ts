@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addRoom,
   addSession,
@@ -16,11 +17,18 @@ import {
   unreadFor,
   updateMap,
 } from '@parley/core';
+import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import type { ActivityService } from '../activity/activity-service.js';
+import type { HostContext, RequestInfo } from '../context.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import { createPtyManager } from '../pty/pty-manager.js';
+import { createSessionsService } from '../sessions/sessions-service.js';
+import type { WorksService } from '../works/works-service.js';
+import { createRoomsArchive } from './rooms.js';
 
 // Каждый тест поднимает хост и ждёт письма настоящих сессий: под нагрузкой машины пяти секунд по умолчанию мало.
 vi.setConfig({ testTimeout: 30_000 });
@@ -948,5 +956,306 @@ describe('rooms.rename / rooms.setLead / rooms.delete: управление ко
     expect(map.rooms).toEqual([]);
     expect(map.sessions.map((session) => session.id)).toEqual([c]);
     expect(parleyLetters(map)).toEqual([]);
+  });
+});
+
+describe('rooms.archive / rooms.reopen: архив комнаты (часть 1 спеки архива комнат, раздел 4)', () => {
+  const ARCHIVED = 'room r-01 is archived: only the human can reopen it';
+
+  /** Комната r-01 «Возвраты» {a, b} с ведущим a, тихий старт (приглашений нет); c вне комнаты. */
+  async function withRoom() {
+    const context = await setup();
+    const [a, b, c] = context.ids as [string, string, string];
+    await call(context.client, 'rooms.create', {
+      projectPath: context.dir,
+      workId: context.workId,
+      title: 'Возвраты',
+      members: [a, b],
+      lead: a,
+      quiet: true,
+    });
+    return { ...context, a, b, c, base: { projectPath: context.dir, workId: context.workId, roomId: 'r-01' } };
+  }
+
+  it('rooms.archive: комната в архиве, в ленте одна строка, updatedAt работы на месте; повтор ничего не пишет', async () => {
+    const { client, dir, workId, base } = await withRoom();
+    const before = await readMap(dir, workId);
+
+    const response = await call(client, 'rooms.archive', { ...base, stopSessions: false });
+
+    expect(response.result).toEqual({ ok: true });
+    const map = await readMap(dir, workId);
+    expect(typeof map.rooms[0]?.archivedAt).toBe('string');
+    expect(map.work.updatedAt).toBe(before.work.updatedAt);
+    expect(map.messages.map((message) => [message.from, message.roomId, message.text])).toEqual([
+      [SYSTEM, 'r-01', 'Room archived by the human.'],
+    ]);
+
+    const again = await call(client, 'rooms.archive', { ...base, stopSessions: true });
+    expect(again.result).toEqual({ ok: true });
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(JSON.stringify(map));
+  });
+
+  it('у сессий без процесса хоста письма нет и они не тронуты: остановить некого, а письмо не живому ничего не даст', async () => {
+    const { client, dir, workId, base } = await withRoom();
+
+    // Сессии `active` по карте, но процессов хоста у них нет (запущены вне хоста): ни остановки, ни письма.
+    await call(client, 'rooms.archive', { ...base, stopSessions: false });
+
+    const map = await readMap(dir, workId);
+    expect(map.messages.filter((message) => message.from === PARLEY)).toEqual([]);
+    expect(map.sessions.map((session) => session.lifecycle)).toEqual(['active', 'active', 'active']);
+  });
+
+  it('rooms.archive: нет комнаты или работы — bad_request, карта не тронута', async () => {
+    const { client, dir, workId, base } = await withRoom();
+    const before = JSON.stringify(await readMap(dir, workId));
+
+    for (const extra of [{ roomId: 'r-09' }, { workId: 'w-9999' }]) {
+      const response = await call(client, 'rooms.archive', { ...base, stopSessions: true, ...extra });
+      expect(response.error?.code).toBe('bad_request');
+    }
+    // Схема: без флажка stopSessions метод не вызывается вовсе.
+    const noFlag = await call(client, 'rooms.archive', base);
+    expect(noFlag.error?.code).toBe('bad_request');
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(before);
+  });
+
+  it('rooms.send в архивную комнату — bad_request с причиной, лента не растёт; после rooms.reopen письмо проходит', async () => {
+    const { client, dir, workId, a, base } = await withRoom();
+    await call(client, 'rooms.archive', { ...base, stopSessions: false });
+    const archived = JSON.stringify(await readMap(dir, workId));
+
+    for (const to of [[], [a]]) {
+      const refused = await call(client, 'rooms.send', { ...base, to, text: 'ещё одно', kind: 'note' });
+      expect(refused.error).toMatchObject({ code: 'bad_request', message: ARCHIVED });
+    }
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(archived);
+
+    await call(client, 'rooms.reopen', base);
+    const sent = await call(client, 'rooms.send', { ...base, to: [a], text: 'после возврата', kind: 'note' });
+    expect(sent.error).toBeUndefined();
+    expect((await readMap(dir, workId)).messages.at(-1)).toMatchObject({ from: HUMAN, roomId: 'r-01', text: 'после возврата' });
+  });
+
+  it('rooms.send: комнаты нет — прежний bad_request с прежним текстом', async () => {
+    const { client, base } = await withRoom();
+    const refused = await call(client, 'rooms.send', { ...base, roomId: 'r-09', to: [], text: 'x', kind: 'note' });
+    expect(refused.error).toMatchObject({ code: 'bad_request', message: 'room r-09 is not in the map' });
+  });
+
+  it('прочие записи человека в архивную комнату — bad_request, карта не тронута', async () => {
+    const { client, dir, workId, b, c, base } = await withRoom();
+    await call(client, 'rooms.archive', { ...base, stopSessions: false });
+    const archived = JSON.stringify(await readMap(dir, workId));
+
+    const attempts: Array<[string, Record<string, unknown>]> = [
+      ['rooms.addMember', { ...base, sessionId: c }],
+      ['rooms.setLead', { ...base, sessionId: b }],
+      ['rooms.setMode', { ...base, mode: 'checklist', reason: 'Human choice' }],
+      ['rooms.resolveProposal', { ...base, proposalId: 'p-01', action: 'accept' }],
+    ];
+    for (const [method, params] of attempts) {
+      const response = await call(client, method, params);
+      expect([method, response.error?.code]).toEqual([method, 'bad_request']);
+    }
+    expect(JSON.stringify(await readMap(dir, workId))).toBe(archived);
+  });
+
+  it('rooms.reopen: archivedAt снова null, в ленте строка о возврате, updatedAt на месте; открытая комната — ничего не пишет', async () => {
+    const { client, dir, workId, base } = await withRoom();
+    await call(client, 'rooms.archive', { ...base, stopSessions: false });
+    const archived = await readMap(dir, workId);
+
+    const response = await call(client, 'rooms.reopen', base);
+
+    expect(response.result).toEqual({ ok: true });
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]?.archivedAt).toBeNull();
+    expect(map.work.updatedAt).toBe(archived.work.updatedAt);
+    expect(map.messages.map((message) => message.text)).toEqual(['Room archived by the human.', 'Room reopened by the human.']);
+
+    const again = await call(client, 'rooms.reopen', base);
+    expect(again.result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).messages).toHaveLength(2);
+
+    for (const extra of [{ roomId: 'r-09' }, { workId: 'w-9999' }]) {
+      const bad = await call(client, 'rooms.reopen', { ...base, ...extra });
+      expect(bad.error?.code).toBe('bad_request');
+    }
+  });
+});
+
+describe('rooms.archive: живые процессы (стаб вместо claude)', () => {
+  const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
+  const request = { client: {}, host: {} } as unknown as RequestInfo;
+  const LETTER = 'Room "Возвраты" was archived by the human. You are no longer in an open room.';
+
+  let project = '';
+  let broadcasts: Array<{ event: EventName; data: unknown }> = [];
+  let stoppers: Array<() => Promise<void>> = [];
+
+  beforeEach(async () => {
+    project = await mkdtemp(path.join(tmpdir(), 'parley-rooms-live-'));
+    broadcasts = [];
+    // Настоящий claude в автотестах не запускается никогда — стаб под тем же оверрайдом, что в проде.
+    vi.stubEnv('PARLEY_CLAUDE_BIN', STUB);
+    vi.stubEnv('PARLEY_SKILL_NAVIGATOR', '0');
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    for (const stop of stoppers) await stop();
+    stoppers = [];
+    // Процессы стаба после выхода ещё дописывают карту: повторы убирают гонку «каталог не пуст».
+    await rm(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+
+  /** Минимальный `HostContext`: сервису сессий нужны только `log` и `broadcast`. */
+  function fakeHost(): HostContext {
+    return {
+      version: '0.0.0',
+      startedAt: new Date().toISOString(),
+      paths: { dir: '', socket: '', token: '', pid: '', log: '' },
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+      clients: () => [],
+      liveSessions: () => 0,
+      broadcast: (event, data) => broadcasts.push({ event, data: data as EventData<EventName> }),
+      onShutdown: () => {},
+      shutdown: async () => {},
+      busy: () => {},
+    };
+  }
+
+  const fakeWorks = (): WorksService => ({
+    start: async () => {},
+    snapshot: () => ({ entries: [], branches: {} }),
+    entry: () => undefined,
+    firstReadDone: () => false,
+    onChange: () => () => {},
+    stop: async () => {},
+  });
+
+  const fakeActivity = (): ActivityService => ({
+    start: async () => {},
+    get: () => undefined,
+    markSeen: () => {},
+    onChange: () => () => {},
+    stop: async () => {},
+  });
+
+  const pollUntil = async (check: () => Promise<boolean>): Promise<void> => {
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('не дождались условия');
+  };
+
+  /**
+   * Три сессии с настоящим процессом-стабом; комната r-01 «Возвраты» {a, b}, c вне комнаты. `stop` — обёртка с
+   * подсмотром над настоящей остановкой сервиса сессий, `archive` — обработчик `rooms.archive` над ним.
+   */
+  async function rig() {
+    const host = fakeHost();
+    const sessions = createSessionsService(host, fakeWorks(), createPtyManager(host), fakeActivity());
+    stoppers.push(() => sessions.stopAll());
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const workId = work.work.id;
+    const refs: SessionRef[] = [];
+    for (const label of ['один', 'два', 'три']) {
+      refs.push(await sessions.create({ projectPath: project, workId, provider: 'claude', label, task: 'т', parent: null }));
+    }
+    const [a, b, c] = refs as [SessionRef, SessionRef, SessionRef];
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Возвраты', creator: HUMAN, members: [a.sessionId, b.sessionId], lead: a.sessionId });
+    });
+    const stop = vi.fn((ref: SessionRef) => sessions.stop(ref));
+    const archive = createRoomsArchive({ live: (ref) => sessions.live(ref), stop });
+    const base = { projectPath: project, workId, roomId: 'r-01' };
+    const parleyLetters = async () => (await readMap(project, workId)).messages.filter((message) => message.from === PARLEY);
+    const sleeping = async (count: number) =>
+      pollUntil(async () => (await readMap(project, workId)).sessions.filter((session) => session.lifecycle === 'sleeping').length === count);
+    return { sessions, stop, archive, base, workId, a, b, c, parleyLetters, sleeping };
+  }
+
+  it('stopSessions: каждая живая сессия комнаты получает остановку (SIGHUP) и засыпает; сессия вне комнаты и письма — нет', async () => {
+    const { sessions, stop, archive, base, workId, a, b, c, parleyLetters, sleeping } = await rig();
+    expect([a, b, c].map((ref) => sessions.live(ref))).toEqual([true, true, true]);
+
+    await expect(archive({ ...base, stopSessions: true }, request)).resolves.toEqual({ ok: true });
+
+    expect(stop.mock.calls.map(([ref]) => ref.sessionId)).toEqual([a.sessionId, b.sessionId]);
+    expect([a, b, c].map((ref) => sessions.live(ref))).toEqual([false, false, true]);
+    // SIGHUP — 1: хост гасит процесс той же дорогой, что кнопка Stop и архив работы.
+    const exits = broadcasts
+      .filter((entry) => entry.event === 'pty.exit')
+      .map((entry) => entry.data as { ref: SessionRef; signal: number | null });
+    expect(exits.map((exit) => [exit.ref.sessionId, exit.signal]).sort()).toEqual([
+      [a.sessionId, 1],
+      [b.sessionId, 1],
+    ]);
+    await sleeping(2);
+    const map = await readMap(project, workId);
+    expect(map.sessions.map((session) => session.lifecycle)).toEqual(['sleeping', 'sleeping', 'active']);
+    // Остановленным письмо не пишется: оно подняло бы их обратно будильником.
+    expect(await parleyLetters()).toEqual([]);
+    expect(map.rooms[0]?.archivedAt).toEqual(expect.any(String));
+  });
+
+  it('без stopSessions: процессы живы и не тронуты, каждой живой сессии комнаты — прямое письмо parley; вне комнаты письма нет', async () => {
+    const { sessions, stop, archive, base, workId, a, b, c, parleyLetters } = await rig();
+
+    await archive({ ...base, stopSessions: false }, request);
+
+    expect(stop).not.toHaveBeenCalled();
+    expect([a, b, c].map((ref) => sessions.live(ref))).toEqual([true, true, true]);
+    expect((await parleyLetters()).map((letter) => [letter.to, letter.roomId, letter.text])).toEqual([
+      [[a.sessionId], null, LETTER],
+      [[b.sessionId], null, LETTER],
+    ]);
+    const map = await readMap(project, workId);
+    expect(unreadFor(map, a.sessionId).map((message) => message.text)).toContain(LETTER);
+    expect(unreadFor(map, c.sessionId).filter((message) => message.from === PARLEY)).toEqual([]);
+  });
+
+  it('спящему участнику письма нет, а остановка не зовётся: stopSessions: false — письмо только живому', async () => {
+    const { sessions, archive, base, a, b, parleyLetters, sleeping } = await rig();
+    await sessions.stop(b);
+    await sleeping(1);
+
+    await archive({ ...base, stopSessions: false }, request);
+
+    expect((await parleyLetters()).map((letter) => letter.to)).toEqual([[a.sessionId]]);
+    expect(sessions.live(a)).toBe(true);
+  });
+
+  it('спящему участнику остановка не нужна: stopSessions: true — stop зовётся только для живого, писем нет', async () => {
+    const { sessions, stop, archive, base, a, b, parleyLetters, sleeping } = await rig();
+    await sessions.stop(b);
+    await sleeping(1);
+    stop.mockClear();
+
+    await archive({ ...base, stopSessions: true }, request);
+
+    expect(stop.mock.calls.map(([ref]) => ref.sessionId)).toEqual([a.sessionId]);
+    expect(sessions.live(a)).toBe(false);
+    expect(await parleyLetters()).toEqual([]);
+  });
+
+  it('сбой остановки не откатывает архив: остальные сессии всё равно остановлены, ошибка уходит после всех', async () => {
+    const { sessions, stop, base, workId, a, b } = await rig();
+    stop.mockImplementationOnce(async () => {
+      throw new Error('stop failed');
+    });
+    const archive = createRoomsArchive({ live: (ref) => sessions.live(ref), stop });
+
+    await expect(archive({ ...base, stopSessions: true }, request)).rejects.toThrow('stop failed');
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(sessions.live(a)).toBe(true);
+    expect(sessions.live(b)).toBe(false);
+    expect((await readMap(project, workId)).rooms[0]?.archivedAt).toEqual(expect.any(String));
   });
 });

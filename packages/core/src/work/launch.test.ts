@@ -27,6 +27,7 @@ import {
   UNTITLED_WORK,
 } from './launch.js';
 import { setResult } from './map.js';
+import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
@@ -182,13 +183,28 @@ const sessionEnv = (workDir: string, sessionId: string): Record<string, string> 
 });
 
 describe('метки быстрой сессии и автозаголовок', () => {
-  it('быстрая сессия в проекте без работ: работа и ярлык — английские метки', async () => {
+  it('быстрая сессия в проекте без работ: работа — английская метка, сессия — имя по номеру', async () => {
     const created = await createNewSession(project, null);
     const map = await readMap(project, created.workId);
 
     expect(map.work.title).toBe(UNTITLED_WORK);
-    expect(created.session.label).toBe(NEW_LABEL);
-    expect(`${UNTITLED_WORK} ${NEW_LABEL}`).not.toMatch(/[А-Яа-яЁё]/);
+    expect(created.session.label).toBe(defaultSessionName(created.session.id));
+    expect(map.sessions[0]?.label).toBe('Ralph');
+    expect(`${UNTITLED_WORK} ${NEW_LABEL} ${created.session.label}`).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('дочерняя и быстрая сессия работы получают имена своих номеров, а не метку новой сессии', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const quick = await createNewSession(project, workId);
+    const { session: child } = await createChildSession(project, workId, sessionId);
+
+    expect([quick.session.label, child.label]).toEqual([
+      defaultSessionName(quick.session.id),
+      defaultSessionName(child.id),
+    ]);
+    const map = await readMap(project, workId);
+    expect(map.sessions.map((item) => item.label)).not.toContain(NEW_LABEL);
+    expect(new Set(map.sessions.map((item) => item.label)).size).toBe(map.sessions.length);
   });
 
   it('бриф дочерней сессии не несёт русской метки: агент читает её в «Your session»', async () => {
@@ -199,7 +215,7 @@ describe('метки быстрой сессии и автозаголовок',
       'utf8',
     );
 
-    expect(brief).toContain(`## Your session: ${child.id} — ${NEW_LABEL}`);
+    expect(brief).toContain(`## Your session: ${child.id} — ${defaultSessionName(child.id)}`);
   });
 
   it('метки узнаются и в прежней русской записи: карты старых сборок', () => {
@@ -251,7 +267,7 @@ describe('метки быстрой сессии и автозаголовок',
 
     expect(await readFile(workPaths(project, created.workId).map, 'utf8')).toBe(before);
     const map = await readMap(project, created.workId);
-    expect(map.sessions[0]?.label).toBe(NEW_LABEL);
+    expect(map.sessions[0]?.label).toBe(created.session.label);
     expect(map.work.title).toBe(UNTITLED_WORK);
   });
 
@@ -305,8 +321,12 @@ describe('метки быстрой сессии и автозаголовок',
     expect(map.work.title).toBe('Авторизация');
   });
 
-  it('автозаголовок переименует быструю сессию и безымянную работу один раз', async () => {
+  it('автозаголовок переименует сессию с меткой старой сборки и безымянную работу один раз', async () => {
     const created = await createNewSession(project, null);
+    // Новые сессии имя уже имеют: метка `NEW_LABEL` осталась только в картах старых сборок.
+    await updateMap(project, created.workId, (map) => {
+      map.sessions[0]!.label = NEW_LABEL;
+    });
 
     await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
     const map = await readMap(project, created.workId);
@@ -334,9 +354,12 @@ describe('метки быстрой сессии и автозаголовок',
     expect(map.work.title).toBe('Починить сборку');
   });
 
-  it('названную человеком работу автозаголовок не трогает, а ярлык быстрой сессии меняет', async () => {
+  it('названную человеком работу автозаголовок не трогает, а метку старой сборки у сессии меняет', async () => {
     const { workId } = await pending('claude');
     const quick = await createNewSession(project, workId);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((item) => item.id === quick.session.id)!.label = NEW_LABEL;
+    });
 
     await applyAutoTitle(project, workId, quick.session.id, 'Починить сборку');
     const map = await readMap(project, workId);
@@ -346,7 +369,7 @@ describe('метки быстрой сессии и автозаголовок',
     );
   });
 
-  it('переименованную руками сессию автозаголовок не трогает', async () => {
+  it('переименованную руками сессию автозаголовок не трогает, а безымянную работу называет', async () => {
     const created = await createNewSession(project, null);
     await updateMap(project, created.workId, (map) => {
       const session = map.sessions[0];
@@ -356,7 +379,34 @@ describe('метки быстрой сессии и автозаголовок',
     await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
     const map = await readMap(project, created.workId);
     expect(map.sessions[0]?.label).toBe('бэкенд');
-    expect(map.work.title).toBe(UNTITLED_WORK);
+    expect(map.work.title).toBe('Починить сборку');
+  });
+
+  it('сессия с именем по умолчанию ярлык не меняет, безымянную работу называет — один раз', async () => {
+    const created = await createNewSession(project, null);
+
+    await applyAutoTitle(project, created.workId, created.session.id, 'Починить сборку');
+    const map = await readMap(project, created.workId);
+    expect(map.sessions[0]?.label).toBe(created.session.label);
+    expect(map.sessions[0]?.label).toBe(defaultSessionName(created.session.id));
+    expect(map.work.title).toBe('Починить сборку');
+
+    // Работа уже названа: второй заголовок не меняет ни ярлык, ни название.
+    await applyAutoTitle(project, created.workId, created.session.id, 'Другой заголовок');
+    const again = await readMap(project, created.workId);
+    expect(again.sessions[0]?.label).toBe(created.session.label);
+    expect(again.work.title).toBe('Починить сборку');
+  });
+
+  it('сессия с именем в названной работе: автозаголовок ничего не меняет', async () => {
+    const { workId } = await pending('claude');
+    const quick = await createNewSession(project, workId);
+
+    await applyAutoTitle(project, workId, quick.session.id, 'Починить сборку');
+
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((item) => item.id === quick.session.id)?.label).toBe(quick.session.label);
+    expect(map.work.title).toBe('Авторизация');
   });
 });
 

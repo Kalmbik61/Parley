@@ -4,6 +4,7 @@ import {
   isMember,
   isRoomClosed,
   liveLead,
+  requireOpenRoom,
   RoomRuleError,
 } from "./rooms.js";
 import { capturePlanSnapshot } from "./plan-snapshots.js";
@@ -197,7 +198,7 @@ export function proposedRoomPlan(
   input: PlanDraft,
   decisionTextLength = 0,
 ): RoomPlan {
-  const room = planRoom(map, roomId);
+  const room = requireOpenRoom(map, roomId);
   requirePlanLead(map, room, from);
   if (room.mode === "free" || (room.mode ?? "free") !== input.mode)
     throw new RoomRuleError("plan must match the room mode");
@@ -412,6 +413,9 @@ function mutablePlan(
   actor: string,
 ): RoomPlan {
   const plan = map.plans?.find((plan) => plan.id === id);
+  // Архивная комната отказывает раньше конфликта ревизии: её план отменён при архивации, и «план изменился»
+  // агенту ничего бы не объяснил.
+  if (plan) requireOpenRoom(map, plan.roomId);
   if (!plan || plan.rev !== rev || !current(plan))
     throw new PlanConflictError();
   const room = planRoom(map, plan.roomId);
@@ -564,11 +568,30 @@ export function cancelRoomPlan(
     const plan = mutablePlan(draft, id, rev, actor);
     if (actor !== HUMAN)
       throw new RoomRuleError("only the human can cancel a plan");
-    plan.status = "cancelled";
-    plan.cancelledAt = at;
-    planRoom(draft, plan.roomId).proposal = null;
-    capturePlanSnapshot(draft, plan, "cancelled");
-    addSystemMessage(draft, plan.roomId, `Plan ${id} cancelled`, at);
+    cancelPlan(draft, plan, at);
+  });
+}
+/** Отмена живого плана: статус, слот решения, снимок и строка ленты — общий шаг `cancelRoomPlan` и архивации комнаты. */
+function cancelPlan(draft: WorkMap, plan: RoomPlan, at: string): void {
+  plan.status = "cancelled";
+  plan.cancelledAt = at;
+  planRoom(draft, plan.roomId).proposal = null;
+  capturePlanSnapshot(draft, plan, "cancelled");
+  addSystemMessage(draft, plan.roomId, `Plan ${plan.id} cancelled`, at);
+}
+/**
+ * Архивация комнаты (`archiveRoom`) отменяет её живой план так же, как человек (`cancelRoomPlan`), но без ревизии и
+ * без проверок участника и «комната жива»: комнату архивирует человек целиком, а у закрытой комнаты живых участников
+ * нет вовсе. Плана нет — карта не трогается (`edit` подменил бы `map.rooms` копией).
+ */
+export function cancelActiveRoomPlan(
+  map: WorkMap,
+  roomId: string,
+  at: string,
+): void {
+  if (activeRoomPlan(map, roomId) === undefined) return;
+  edit(map, (draft) => {
+    cancelPlan(draft, activeRoomPlan(draft, roomId)!, at);
   });
 }
 export function setRoomMode(
@@ -581,7 +604,7 @@ export function setRoomMode(
   at = new Date().toISOString(),
 ): void {
   edit(map, (draft) => {
-    const room = planRoom(draft, roomId);
+    const room = requireOpenRoom(draft, roomId);
     const previous = room.mode ?? "free";
     const order = ["free", "checklist", "verified"];
     if (!order.includes(mode) || !text(reason) || /[\r\n]/.test(reason))

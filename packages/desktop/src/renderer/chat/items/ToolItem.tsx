@@ -5,6 +5,9 @@
  * в подсказке и в раскрытых аргументах. Усечение результата (64 КБ хоста), входа и диффа — явной
  * пометкой «откройте терминал».
  *
+ * Картинки результата (`response.images`, скриншот MCP браузера) — ряд миниатюр под строкой вызова: он виден
+ * и у свёрнутого вызова, а в раскрытом блоке Result не повторяется (там текст с пометками `[image png, 120 KB]`).
+ *
  * Сжатый вид (`compact`) — вложенный вызов в карточке субагента: строка мельче, хунков у него нет.
  * Раскрытие управляется снаружи (лента помнит его по `id`: виртуальный список размонтирует строки вне
  * экрана) или, без `expanded`, самим элементом.
@@ -17,6 +20,7 @@ import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { toolHeadline } from '../feed-model.js';
 import { DiffHunks } from './DiffHunks.js';
+import { ToolImages } from './ToolImages.js';
 
 export interface ToolItemProps {
   item: FeedTool;
@@ -54,6 +58,7 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
   // Вход `Write` бывает в сотни КБ: JSON строится, только пока вызов раскрыт, и лишь при новом входе.
   const args = useMemo(() => (open ? JSON.stringify(item.input, null, 2) : ''), [open, item.input]);
   const failedWord = item.status === 'failed' || item.status === 'rejected' ? S.chat.toolStatus[item.status] : null;
+  const images = item.response?.images ?? [];
 
   return (
     <div data-testid="chat-tool" data-tool-status={item.status} className="flex min-w-0 flex-col gap-1.5">
@@ -79,6 +84,11 @@ export function ToolItem({ item, compact = false, expanded, onToggle }: ToolItem
         )}
         {failedWord === null ? null : <span className="ml-auto shrink-0 text-xs text-muted-foreground">{failedWord}</span>}
       </button>
+      {images.length === 0 ? null : (
+        <div className="pl-6">
+          <ToolImages images={images} />
+        </div>
+      )}
       {open ? (
         <div data-testid="chat-tool-details" className="flex min-w-0 flex-col gap-1.5 pl-6">
           <span className="text-xs text-muted-foreground">{S.chat.arguments}</span>

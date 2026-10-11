@@ -69,13 +69,13 @@ describe('tabMeta — тест 6', () => {
     expect(meta.favicon).toBeNull();
   });
 
-  // Раунд исправлений 1 куска 3.3: метка-страж core `NEW_LABEL` окно показывает как «New session»;
+  // Метка-страж core `NEW_LABEL` окно показывает именем по номеру сессии (спека архива комнат, часть 2, 13);
   // прежняя русская запись из карты старой сборки — так же.
-  it('terminal: метка новой сессии из core — «New session»', () => {
+  it('terminal: метка новой сессии из core — имя по номеру сессии', () => {
     const meta = tabMeta({ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, entry([session('s-01', 'new session')]));
-    expect(meta.title).toBe('S01 New session');
+    expect(meta.title).toBe('S01 Ralph');
     const legacy = tabMeta({ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, entry([session('s-01', 'новая сессия')]));
-    expect(legacy.title).toBe('S01 New session');
+    expect(legacy.title).toBe('S01 Ralph');
   });
 
   it('terminal без сессии в карте — тег без ярлыка, session: null', () => {

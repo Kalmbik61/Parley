@@ -6,8 +6,8 @@ import { toast } from 'sonner';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeRoom, makeWork } from '../test-utils/work-fixtures.js';
-import { InlineRename, RoomInlineRename } from './InlineRename.js';
+import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { InlineRename, RoomInlineRename, SessionInlineRename } from './InlineRename.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -143,6 +143,65 @@ describe('RoomInlineRename — то же поле в строке комнаты
     fireEvent.change(input, { target: { value: 'Payments' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't rename room: invalid request."));
+    expect(onDone).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('SessionInlineRename — то же поле в строке сессии', () => {
+  const sessionRenames = (): unknown[] => bridge.calls.filter((call) => call.method === 'sessions.rename').map((call) => call.params);
+
+  beforeEach(() => bridge.setHandler('sessions.rename', () => ({ ok: true as const })));
+
+  function renderSession(id: string, label: string, onDone = vi.fn()): { input: HTMLInputElement; onDone: ReturnType<typeof vi.fn> } {
+    render(<SessionInlineRename projectPath="/tmp/proj" workId="w-01" session={makeSession(id, label)} bridge={bridge} onDone={onDone} />);
+    return { input: screen.getByRole('textbox', { name: 'Session name' }) as HTMLInputElement, onDone };
+  }
+
+  it('открывается на ярлыке сессии, выделено всё; Enter зовёт sessions.rename с адресом сессии', async () => {
+    const { input, onDone } = renderSession('s-02', 'plan');
+    expect(input.value).toBe('plan');
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'plan'.length]);
+    expect(Object.keys(useUiStore.getState().sidebarHolds)).toHaveLength(1);
+    fireEvent.change(input, { target: { value: 'Ralph' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(sessionRenames()).toEqual([{ ref: { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-02' }, label: 'Ralph' }]);
+    expect(renames()).toEqual([]);
+  });
+
+  it('старая метка new session — поле на имени по номеру; без изменений хосту ничего не уходит', () => {
+    const { input, onDone } = renderSession('s-18', 'new session');
+    expect(input.value).toBe('Nina');
+    fireEvent.blur(input);
+    expect(onDone).toHaveBeenCalled();
+    expect(sessionRenames()).toEqual([]);
+  });
+
+  it('Esc и пустое имя хосту не уходят', () => {
+    const first = renderSession('s-01', 'plan');
+    fireEvent.change(first.input, { target: { value: 'Other' } });
+    fireEvent.keyDown(first.input, { key: 'Escape' });
+    expect(first.onDone).toHaveBeenCalled();
+    cleanup();
+
+    const second = renderSession('s-01', 'plan');
+    fireEvent.change(second.input, { target: { value: '  ' } });
+    fireEvent.keyDown(second.input, { key: 'Enter' });
+    expect(second.onDone).toHaveBeenCalled();
+    expect(sessionRenames()).toEqual([]);
+  });
+
+  it('отказ хоста — тост «Couldn\'t rename session: invalid request.», поле закрыто', async () => {
+    bridge.setHandler('sessions.rename', () => {
+      throw encodeIpcError({ code: 'bad_request', message: 'session s-01 is not in the map' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { input, onDone } = renderSession('s-01', 'plan');
+    fireEvent.change(input, { target: { value: 'Ralph' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't rename session: invalid request."));
     expect(onDone).toHaveBeenCalled();
     warn.mockRestore();
   });

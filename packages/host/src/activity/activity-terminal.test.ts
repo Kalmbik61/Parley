@@ -329,46 +329,25 @@ describe('сигналы терминала codex → активность', () 
   it('порог тишины по-прежнему роняет `working` сессии codex, чей процесс не под хостом', async () => {
     // Сессия записана в карте как codex, но запущена не окном (например, CLI): терминала у хоста нет,
     // состояние — по журналу, как у всякой, и порог тишины действует.
-    // Время события — mtime журнала, а `working` держится до mtime + порог по часам сервиса. С настоящими часами
-    // и коротким порогом задержка чтения под нагрузкой могла перекрыть порог, и `working` было уже не застать.
-    // Поэтому порог большой, а часы сервиса идут по-настоящему, но со смещением: сначала застаём `working`,
-    // потом двигаем часы почти к порогу — дальше состояние меняет настоящий таймер тишины сервиса.
     const { workId, ref } = await codexSession({ eventsDir: true });
-    const w = await works();
-    const silenceThresholdMs = 30_000;
-    let offset = 0;
-    const a = activity(w, { silenceThresholdMs, now: () => Date.now() + offset });
-    await a.start();
+    // Строка — до старта: её приносит первое чтение журнала, а не уведомление fs.watch. Старт заводит
+    // наблюдателей (журналы, индекс логов), на macOS каждый новый пересоздаёт общий для процесса поток
+    // FSEvents, и запись в этот миг не доходила ни до одного из них: `working` не наступало вовсе.
     const journal = path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`);
     await appendFile(journal, `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
+    // Часы сервиса стоят на времени строки (событие журнала получает mtime файла): порог не истечёт,
+    // как бы ни запоздало чтение, пока часы не сдвинуты.
+    const at = (await stat(journal)).mtime.getTime();
+    let now = at;
+    const w = await works();
+    const a = activity(w, { silenceThresholdMs: 1500, now: () => now });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
 
-    // Событие дописано один раз: если fs-наблюдатель его потерял (он включается не мгновенно), журнал
-    // перечитывается по записи карты.
-    const until = async (check: () => boolean, redo: () => Promise<void>, everyMs: number): Promise<void> => {
-      const started = Date.now();
-      for (;;) {
-        if (check()) return;
-        if (Date.now() - started > 30_000) throw new Error('не дождались условия');
-        await redo();
-        await settle(everyMs);
-      }
-    };
-    await until(
-      () => a.get(ref)?.activity.activity === 'working',
-      () => updateMap(project, workId, () => undefined),
-      100,
-    );
-
-    // Часы — за 1,5 с до порога. Запись карты пересчитывает сессию и взводит таймер на оставшиеся 1,5 с;
-    // дальше карту не трогаем дольше этого срока, и `unseen` ставит именно таймер тишины.
-    const eventAt = (await stat(journal)).mtimeMs;
-    offset = eventAt + silenceThresholdMs - 1500 - Date.now();
-    await until(
-      () => a.get(ref)?.activity.activity === 'unseen',
-      () => updateMap(project, workId, () => undefined),
-      4000,
-    );
-  }, 90_000);
+    // Порог позади: сессию пересчитывает таймер тишины, и ход окончен.
+    now = at + 1501;
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 6000);
+  }, 20_000);
 
   it('Stop от notify новее сигнала работы завершает ход, но следующий кадр спиннера возвращает `working`', async () => {
     // Журнал даёт событию время файла на момент чтения; `Stop`, который скрипт notify дописал позже

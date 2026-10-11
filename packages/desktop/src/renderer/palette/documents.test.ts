@@ -99,6 +99,20 @@ describe('buildDocuments — подписи строк (Organic, 1.9)', () => {
     expect(subtitleOf(`room:${keyOf(w)}\nr-01`)).toBe('Room · Платежи');
   });
 
+  it('архивная комната документом «Room» не бывает (архив комнат, 5.3); её уже открытая вкладка остаётся вкладкой', () => {
+    const archived = makeWork('w-03', {
+      projectPath: '/tmp/arch',
+      title: 'Архив',
+      sessions: [makeSession('s-01', 'a')],
+      rooms: [makeRoom('r-01', 'Открытая'), { ...makeRoom('r-02', 'Старая'), archivedAt: '2026-10-08T12:00:00.000Z' }],
+    });
+    const tabbed = openTab(layoutWith('s-01'), { kind: 'room', id: 'room:r-02', roomId: 'r-02' });
+    const archivedDocs = build({ works: [archived], layouts: { [keyOf(archived)]: tabbed } });
+    expect(titles(archivedDocs, 'rooms')).toEqual(['Открытая']);
+    expect(archivedDocs.some((doc) => doc.id === `room:${keyOf(archived)}\nr-02`)).toBe(false);
+    expect(archivedDocs.some((doc) => doc.id === `tab:${keyOf(archived)}\nroom:r-02`)).toBe(true);
+  });
+
   it('сессия — «работа · слово состояния · провайдер»; работа — «проект · 2 sessions · ветка» (закрытые не в счёт)', () => {
     expect(subtitleOf(`session:${keyOf(w)}\ns-02`)).toBe('Платежи · idle · Claude Code');
     expect(subtitleOf(`work:${keyOf(w)}`)).toBe('shop · 2 sessions · main');

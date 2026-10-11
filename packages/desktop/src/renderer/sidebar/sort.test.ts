@@ -3,7 +3,7 @@ import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStat
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { buildSections, cardRows, compareWorks, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
+import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
   return {
@@ -36,7 +36,14 @@ const keysOf = (works: WorkEntry[]): string[] => works.map((e) => e.map.work.id)
 function build(
   entries: WorkEntry[],
   levels: Record<string, WorkAttention> = {},
-  opts: { pinned?: string[]; collapsed?: string[]; showDone?: boolean; showArchived?: boolean } = {},
+  opts: {
+    pinned?: string[];
+    collapsed?: string[];
+    showDone?: boolean;
+    showArchived?: boolean;
+    hidden?: string[];
+    archivedShown?: string[];
+  } = {},
 ) {
   const attention: Record<string, WorkAttention> = {};
   for (const e of entries) attention[key(e)] = levels[e.map.work.id] ?? att('idle');
@@ -47,6 +54,8 @@ function build(
     collapsed: opts.collapsed ?? [],
     showDone: opts.showDone ?? true,
     showArchived: opts.showArchived ?? false,
+    hidden: opts.hidden ?? [],
+    archivedShown: opts.archivedShown ?? [],
   });
 }
 
@@ -125,12 +134,12 @@ describe('buildSections (6)', () => {
     expect(build(list, levels).map((s) => s.title)).toEqual(['zeta', 'alpha', 'beta']);
   });
 
-  it('группы без показанных работ нет', () => {
+  it('группы без показанных работ нет — кроме группы из одних архивных (спека архива, 6.1)', () => {
     const pinnedOnly = work('/p/one', 'w1');
     const archivedOnly = work('/p/two', 'w2', 'archived');
     const doneOnly = work('/p/three', 'w3', 'done');
     const sections = build([pinnedOnly, archivedOnly, doneOnly], {}, { pinned: [key(pinnedOnly)], showDone: false });
-    expect(sections.map((s) => s.key)).toEqual(['pinned']);
+    expect(sections.map((s) => s.key)).toEqual(['pinned', '/p/two']);
   });
 
   it('закреплённая done при showDone: false пропадает и из Pinned', () => {
@@ -210,6 +219,101 @@ describe('buildSections — showArchived (тест 6 куска 6.3)', () => {
   });
 });
 
+// Спека архива комнат и проектов, 6.1 и 6.3: группа проекта живёт, пока в нём есть работа любого статуса; архивные
+// спрятаны под ссылкой «N archived»; убранный проект («Remove from list…») пропущен.
+describe('buildSections — архивные работы под ссылкой и убранные проекты (спека архива, 6.1, 6.3)', () => {
+  it('группа из одних архивных остаётся: шапка, пустой список, ссылка с числом', () => {
+    const sections = build([work('/p/a', 'w1', 'archived'), work('/p/a', 'w2', 'archived')]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toMatchObject({ kind: 'project', key: '/p/a', title: 'a', projectPath: '/p/a', collapsed: false });
+    expect(sections[0]!.works).toEqual([]);
+    expect(sections[0]!.archived).toEqual({ count: 2, shown: false });
+  });
+
+  it('у проекта без архивных работ ссылки нет', () => {
+    expect(build([work('/p/a', 'w1'), work('/p/a', 'w2', 'done')])[0]!.archived).toBeUndefined();
+  });
+
+  it('группа из одних архивных — ниже всех групп с работами', () => {
+    const sections = build([work('/p/a', 'x', 'archived'), work('/p/z', 'y')]);
+    expect(sections.map((section) => section.title)).toEqual(['z', 'a']);
+  });
+
+  it('ссылка считает архивные работы проекта, закреплённые тоже; закреплённая архивная из Pinned уходит', () => {
+    const arch = work('/p/a', 'arch', 'archived');
+    const archPinned = work('/p/a', 'archPin', 'archived');
+    const live = work('/p/a', 'live');
+    const sections = build([arch, archPinned, live], {}, { pinned: [key(archPinned)] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    // Число в шапке — по показанным, число в ссылке — по всем архивным.
+    expect(keysOf(sections[0]!.works)).toEqual(['live']);
+    expect(sections[0]!.archived).toEqual({ count: 2, shown: false });
+  });
+
+  it('проект, чья единственная неархивная работа закреплена, остаётся группой ради ссылки', () => {
+    const pin = work('/p/a', 'pin');
+    const sections = build([pin, work('/p/a', 'arch', 'archived')], {}, { pinned: [key(pin)] });
+    expect(sections.map((section) => section.key)).toEqual(['pinned', '/p/a']);
+    expect(sections[1]!.works).toEqual([]);
+    expect(sections[1]!.archived).toEqual({ count: 1, shown: false });
+  });
+
+  it('раскрытая ссылка: архивные проекта в конце группы, после done; другие проекты не затронуты', () => {
+    const list = [
+      work('/p/a', 'arch', 'archived'),
+      work('/p/a', 'done1', 'done'),
+      work('/p/a', 'act'),
+      work('/p/b', 'archB', 'archived'),
+      work('/p/b', 'actB'),
+    ];
+    const levels = { arch: att('needs-you', '2026-09-27T12:00:00.000Z') };
+    const sections = build(list, levels, { archivedShown: ['/p/a'] });
+    const a = sections.find((section) => section.key === '/p/a')!;
+    const b = sections.find((section) => section.key === '/p/b')!;
+    expect(keysOf(a.works)).toEqual(['act', 'done1', 'arch']);
+    expect(a.archived).toEqual({ count: 1, shown: true });
+    expect(keysOf(b.works)).toEqual(['actB']);
+    expect(b.archived).toEqual({ count: 1, shown: false });
+  });
+
+  it('закреплённая архивная при раскрытой ссылке проекта стоит в его группе, а не в Pinned', () => {
+    const archPinned = work('/p/a', 'archPin', 'archived');
+    const sections = build([archPinned, work('/p/a', 'live')], {}, { pinned: [key(archPinned)], archivedShown: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    expect(keysOf(sections[0]!.works)).toEqual(['live', 'archPin']);
+  });
+
+  it('общий showArchived раскрывает всё, и ссылки у групп нет', () => {
+    const sections = build([work('/p/a', 'arch', 'archived'), work('/p/a', 'act')], {}, { showArchived: true });
+    expect(keysOf(sections[0]!.works)).toEqual(['act', 'arch']);
+    expect(sections[0]!.archived).toBeUndefined();
+  });
+
+  it('hidden прячет проект из одних архивных; при showArchived он на месте', () => {
+    const list = [work('/p/a', 'w1', 'archived'), work('/p/b', 'w2')];
+    expect(build(list, {}, { hidden: ['/p/a'] }).map((section) => section.key)).toEqual(['/p/b']);
+    const all = build(list, {}, { hidden: ['/p/a'], showArchived: true });
+    expect(all.map((section) => section.key)).toEqual(['/p/b', '/p/a']);
+    expect(keysOf(all[1]!.works)).toEqual(['w1']);
+  });
+
+  it('hidden прячет и его закреплённые архивные, и раскрытую ссылку', () => {
+    const arch = work('/p/a', 'arch', 'archived');
+    expect(build([arch], {}, { hidden: ['/p/a'], pinned: [key(arch)], archivedShown: ['/p/a'] })).toEqual([]);
+  });
+
+  it('hidden не прячет проект с неархивной работой, пока окно не снимет путь из hiddenProjects', () => {
+    const sections = build([work('/p/a', 'arch', 'archived'), work('/p/a', 'act')], {}, { hidden: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+    expect(keysOf(sections[0]!.works)).toEqual(['act']);
+  });
+
+  it('hidden с done-работой: done — неархивная, проект не прячется', () => {
+    const sections = build([work('/p/a', 'd', 'done')], {}, { hidden: ['/p/a'] });
+    expect(sections.map((section) => section.key)).toEqual(['/p/a']);
+  });
+});
+
 describe('visibleWorkOrder (8)', () => {
   it('Pinned первыми; свёрнутых и скрытых done нет', () => {
     const p = work('/p/b', 'pin');
@@ -267,7 +371,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
 
   it('в группе: решение (ранг 4) выше письма человеку (3), выше работающей (2), выше простаивающей (1); done — внизу даже с решением', () => {
     const { entries, attention } = fixtures();
-    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false, hidden: [], archivedShown: [] });
     expect(keysOf(sections[0]!.works)).toEqual(['w-decision', 'w-mail', 'w-busy', 'w-calm', 'w-done']);
   });
 
@@ -278,7 +382,7 @@ describe('порядок сайдбара по рангам 2.7 (расчёт �
     const entries = [move(calm!, '/p/a-calm'), move(busy!, '/p/b-busy'), move(letter!, '/p/c-mail'), move(decision!, '/p/d-decision')];
     const activity = activityMap([makeActivity({ projectPath: '/p/b-busy', workId: 'w-busy', sessionId: 's-01' }, 'working')]);
     const attention = Object.fromEntries(entries.map((entry) => [key(entry), workAttention(entry, activity)]));
-    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false });
+    const sections = buildSections({ entries, attention, pinned: [], collapsed: [], showDone: true, showArchived: false, hidden: [], archivedShown: [] });
     // По имени папки было бы a, b, c, d — порядок задают только ранги.
     expect(sections.map((section) => section.title)).toEqual(['d-decision', 'c-mail', 'b-busy', 'a-calm']);
   });
@@ -425,5 +529,78 @@ describe('cardRows — состав строк карточки (1.2)', () => {
     const [row] = cardRows(map(sessions('s-01'), [old], [message]), false);
     expect(row).toMatchObject({ kind: 'room', lastAt: NOW });
     expect(row?.kind === 'room' ? row.lead : 'нет строки комнаты').toBe('s-01');
+  });
+});
+
+// Архив комнат (спека 2026-10-08, 5.1): архивная комната уходит из основных строк под ссылку карточки.
+describe('cardRows и archivedRows — архивные комнаты (5.1)', () => {
+  const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
+  const sessions3 = (): WorkSession[] => ['s-01', 's-02', 's-03'].map((id) => makeSession(id, id));
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, ...patch });
+  const archivedRoom = (id: string, members: string[], patch: Partial<Room> = {}): Room => room(id, members, { archivedAt: ARCHIVED_AT, ...patch });
+  const map = (list: WorkSession[], rooms: Room[]): WorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const shape = (rows: CardRow[]): string[] =>
+    rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
+
+  it('архивная комната в основных строках не выводится, а её спящие и закрытые участники уходят вместе с ней', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
+    const state = map(list, [archivedRoom('r-01', ['s-02', 's-03'])]);
+    // Закрытая сессия не появляется строкой и при showClosed: её домашняя комната в архиве.
+    expect(shape(cardRows(state, false))).toEqual(['s-01']);
+    expect(shape(cardRows(state, true))).toEqual(['s-01']);
+  });
+
+  it('участник архивной комнаты с процессом (active, pending) остаётся обычной строкой сессии на своём месте', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c', { lifecycle: 'pending' }), makeSession('s-04', 'd', { lifecycle: 'sleeping' })];
+    const rows = cardRows(map(list, [archivedRoom('r-01', ['s-02', 's-03', 's-04'])]), false);
+    expect(shape(rows)).toEqual(['s-01', 's-02', 's-03']);
+    expect(rows.every((row) => row.kind === 'session')).toBe(true);
+  });
+
+  it('домашняя комната сессии: открытая раньше архивной, даже если архивная старше; без открытой — архивная', () => {
+    const list = sessions3();
+    const oldArchive = archivedRoom('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+    const newOpen = room('r-02', ['s-01'], { createdAt: '2026-09-29T09:00:00.000Z' });
+    const state = map(list, [oldArchive, newOpen]);
+    expect(homeRoomOf(state, 's-01')?.id).toBe('r-02');
+    expect(homeRoomOf(state, 's-02')?.id).toBe('r-01');
+    expect(homeRoomOf(state, 's-03')).toBeNull();
+    // s-01 стоит в открытой комнате строкой комнаты; s-02 (active) — обычной строкой; в архивной остаётся пусто.
+    expect(shape(cardRows(state, false))).toEqual(['r-02[s-01]', 's-02', 's-03']);
+  });
+
+  it('archivedRows: строки архивных комнат в порядке карты, у каждой archived и без archiveStops; открытые не входят', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c')];
+    const state = map(list, [archivedRoom('r-01', ['s-02']), room('r-02', ['s-03']), archivedRoom('r-03', [])]);
+    const rows = archivedRows(state, false);
+    expect(rows.map((row) => row.room.id)).toEqual(['r-01', 'r-03']);
+    expect(rows.every((row) => row.archived && row.archiveStops.length === 0)).toBe(true);
+    expect(rows[0]?.members.map((member) => member.id)).toEqual(['s-02']);
+    expect(cardRows(state, false).every((row) => row.kind === 'session' || !row.archived)).toBe(true);
+  });
+
+  it('в строке архивной комнаты нет работающих участников (они уже строки карточки); закрытые — только при showClosed', () => {
+    const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
+    const state = map(list, [archivedRoom('r-01', ['s-01', 's-02', 's-03'])]);
+    const [hidden] = archivedRows(state, false);
+    expect(hidden?.sessions.map((member) => member.id)).toEqual(['s-02', 's-03']);
+    expect(hidden?.members.map((member) => member.id)).toEqual(['s-02']);
+    const [shown] = archivedRows(state, true);
+    expect(shown?.members.map((member) => member.id)).toEqual(['s-02', 's-03']);
+  });
+
+  it('archiveStops открытой комнаты — участники без другой открытой комнаты; архивная соседка в счёт не идёт', () => {
+    const list = sessions3();
+    const target = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
+    const other = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
+    const byId = (rooms: Room[]) => {
+      const rows = cardRows(map(list, rooms), false);
+      return rows.find((row): row is Extract<CardRow, { kind: 'room' }> => row.kind === 'room' && row.room.id === 'r-01');
+    };
+    // s-02 числится и в открытой r-02: остановка её не коснётся, так что при архивации r-01 остаётся только s-01.
+    expect(byId([target, other])?.archived).toBe(false);
+    expect(byId([target, other])?.archiveStops.map((member) => member.id)).toEqual(['s-01']);
+    // Соседка в архиве — она комнатой не считается: оба участника остаются без открытой комнаты.
+    expect(byId([target, { ...other, archivedAt: ARCHIVED_AT }])?.archiveStops.map((member) => member.id)).toEqual(['s-01', 's-02']);
   });
 });

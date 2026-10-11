@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
+import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
@@ -2362,5 +2363,110 @@ describe('RoomPanel — файлы, брошенные на вкладку', () 
     expect(screen.getAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'))).toEqual(['/fake/mock.png', '/fake/spec.md']);
     fireEvent.drop(panel, { dataTransfer: { types: ['text/plain'], files: [] } });
     expect(screen.getAllByTestId('chat-attachment')).toHaveLength(2);
+  });
+});
+
+// Архив комнат (спека 2026-10-08, 5.2): вкладка архивной комнаты читается, но не пишется.
+describe('RoomPanel — архивная комната (5.2)', () => {
+  const archived = (patch: Partial<Room> = {}): WorkEntry => entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z', ...patch }) });
+  const withReopen = (): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.reopen'] } });
+  };
+
+  it('в шапке рядом с названием метка «Archived»; у открытой комнаты метки нет', () => {
+    renderPanel(archived());
+    const label = document.querySelector('[data-room-header] [data-room-archived]') as HTMLElement;
+    expect(label.textContent).toBe('Archived');
+    expect(screen.getByRole('heading', { name: 'Возвраты' })).toBeTruthy();
+    cleanup();
+    renderPanel(entryOf());
+    expect(document.querySelector('[data-room-archived]')).toBeNull();
+  });
+
+  it('длинное название по-прежнему обрезается, а метка не сжимается и остаётся на месте', () => {
+    const long = 'В'.repeat(120);
+    renderPanel(archived({ title: long }));
+    const heading = screen.getByRole('heading');
+    expect(heading.className).toContain('truncate');
+    expect(heading.className).toContain('min-w-0');
+    expect(heading.getAttribute('title')).toBe(long);
+    expect((document.querySelector('[data-room-archived]') as HTMLElement).className).toContain('shrink-0');
+  });
+
+  it('вместо поля ввода — строка «This room is archived.» и кнопка «Reopen»', () => {
+    withReopen();
+    renderPanel(archived());
+    expect(document.querySelector('[data-room-editor]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+    const note = document.querySelector('[data-room-archived-note]') as HTMLElement;
+    expect(within(note).getByText('This room is archived.')).toBeTruthy();
+    expect(within(note).getByRole('button', { name: 'Reopen' })).toBeTruthy();
+  });
+
+  it('у открытой комнаты поле ввода на месте, строки об архиве нет', () => {
+    renderPanel(entryOf());
+    expect(document.querySelector('[data-room-editor]')).not.toBeNull();
+    expect(document.querySelector('[data-room-archived-note]')).toBeNull();
+  });
+
+  it('Reopen — rooms.reopen этой комнаты', async () => {
+    withReopen();
+    bridge.setHandler('rooms.reopen', () => ({ ok: true as const }));
+    renderPanel(archived());
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    await waitFor(() => expect(bridge.calls.map((call) => call.method)).toEqual(['rooms.reopen']));
+    expect(bridge.calls[0]?.params).toEqual({ projectPath: PROJECT, workId: WORK_ID, roomId: 'r-01' });
+  });
+
+  it('отказ хоста — тост «Couldn\'t reopen room», текст хоста только в консоль', async () => {
+    withReopen();
+    bridge.setHandler('rooms.reopen', () => {
+      throw encodeIpcError({ code: 'conflict', message: 'host detail' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderPanel(archived());
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't reopen room: conflicting state."));
+    warn.mockRestore();
+  });
+
+  it('хост без rooms.reopen — строка есть, кнопки нет', () => {
+    renderPanel(archived());
+    expect(screen.getByText('This room is archived.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+  });
+
+  it('лента читается и Share истории работает: сообщения на месте, меню History в шапке', () => {
+    renderPanel(
+      entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z' }), messages: [message('m-1', { from: 's-01', text: 'Hello from the feed' })] }),
+    );
+    expect(screen.getByText('Hello from the feed')).toBeTruthy();
+    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
+  });
+
+  it('файлы на вкладку не принимаются: ни подсветки, ни вложений', () => {
+    renderPanel(archived());
+    const panel = document.querySelector<HTMLElement>('[data-room-panel]') as HTMLElement;
+    fireEvent.dragOver(panel, { dataTransfer: { types: ['Files'], dropEffect: 'none' } });
+    expect(panel.hasAttribute('data-dropping')).toBe(false);
+    fireEvent.drop(panel, { dataTransfer: { types: ['Files'], files: [new File(['x'], 'mock.png')] } });
+    expect(useUiStore.getState().composerAttachments).toEqual({});
+  });
+
+  it('панель плана только читается: кнопки действий выключены, вместо подсказки про работу — «Reopen this room…»', () => {
+    const entry = archived();
+    const plan: import('@parley/core').RoomPlan = {
+      id: 'pl-01', roomId: 'r-01', rev: 3, mode: 'checklist', status: 'active', goal: 'Accepted goal', backlog: [],
+      items: [{ id: 1, title: 'Recovery', owner: 's-01', scope: 'plain', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] }],
+      acceptedAt: 'x', completedAt: null, cancelledAt: null, completionSummary: null,
+    };
+    entry.map.plans = [plan];
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'plans.submit', 'plans.verify', 'plans.cancel', 'rooms.setMode'] } });
+    renderPanel(entry);
+    expect(screen.getByText('Mark done')).toHaveProperty('disabled', true);
+    expect(screen.getByText('Cancel plan…')).toHaveProperty('disabled', true);
+    expect(screen.getByRole('combobox', { name: 'Room mode' })).toHaveProperty('disabled', true);
+    expect(screen.getAllByText('Reopen this room to change the plan.').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Reopen this workspace to change the plan.')).toBeNull();
   });
 });

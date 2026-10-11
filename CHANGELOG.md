@@ -6,6 +6,60 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+## 0.11.0
+
+Screenshots an agent takes — with Chrome DevTools MCP, Claude in Chrome or Playwright, or an image it reads — now show in Chat as thumbnails under the call, and a click opens them larger. A live agent that has reported "done" no longer looks finished.
+
+### Added
+
+- **Screenshots in Chat.** When an agent's tool returns an image — a browser screenshot from Chrome DevTools MCP,
+  Claude in Chrome or Playwright, an image it read — Chat shows it as a thumbnail under the call; click to view it
+  larger. Parley keeps these images in `~/.parley/feed-images` for 7 days, 1 GiB at most (the oldest go first).
+
+### Fixed
+
+- **A live agent that reported "done" shows as working.** Agents report done at the end of every turn and stay
+  alive; the sidebar, the room and the workspace card showed such a session as done, and its row menu offered
+  Resume instead of Stop. A live session now shows its activity; the reported result shows for a sleeping or
+  closed session and in the row's tooltip.
+- **Thumbnails keep their proportions on macOS.** Image thumbnails of attachments were stretched into a square;
+  they now keep the picture's aspect ratio.
+
+## 0.10.1
+
+A screenshot pasted into a room's message field now becomes an attachment, and a long message no longer hides where you type: the message field of a room and of the Chat view follows the caret when typed or pasted text grows past its height.
+
+### Fixed
+
+- **Screenshots paste into a room.** ⌘V or Edit → Paste with an image (and no text) on the clipboard adds it as an attachment, like the paperclip. Before, the room's field took only plain text and the paste did nothing.
+- **A clipboard image that can't be read says so.** When the window sees an image on the clipboard but can't save it, the Chat view and the room show "Couldn't read the image from the clipboard" instead of doing nothing.
+- **The message field keeps the caret in view.** In a room, after pasting a long text, Shift+Enter, dropping text or picking an @-mention, the field scrolls to where you type, bottom padding included; before, a pasted text left the caret far below the visible part. In the Chat view the last line no longer sits flush against the field's border. Editing in the middle of a scrolled-up field doesn't make it jump.
+
+## 0.10.0
+
+A room whose work is done can be archived: its feed stays readable, nobody writes to it until you reopen it. A project no longer disappears from the sidebar when all its workspaces are archived — they sit under "N archived" at the bottom of its group, and "Remove from list…" hides the project. Sessions created without a name get a real one — S01 Ralph, S02 Anatoly, S03 Ruslan… — and any session can be renamed.
+
+### Added
+
+- **Archived rooms.** "Archive…" in a room row's menu: the feed stays readable, nobody can write to the room
+  until "Reopen", a waiting decision is dismissed and a live plan cancelled. "Also stop its N agents that are in
+  no other room" is on by default; agents left running get a letter. Archived rooms sit under "N archived rooms"
+  at the bottom of the card.
+- **Archived workspaces under a link.** A project whose workspaces are all archived stays in the sidebar with "+"
+  and "N archived" at the bottom of its group; "Remove from list…" hides it until a workspace is created there.
+- **Session names and Rename.** A session created without a name gets one by its number — S01 Ralph, S02
+  Anatoly, S03 Ruslan… — and keeps it; Claude Code's title no longer replaces it (an untitled workspace still
+  gets its title). "Rename" in a session row's menu.
+
+### Changed
+
+- Sessions that already carry "New session" in older workspaces show the name by their number in the window;
+  Claude Code's title still renames them once, as before.
+
+## 0.9.0
+
+The browser tab gets a console and network panel and viewport sizes: the page's messages, exceptions and requests with their bodies are visible right in the tab, errors and failed requests are counted on the button, and the page can be emulated at phone, tablet and laptop sizes. On macOS the first hook of a new session is no longer lost.
+
 ### Added
 
 - **Console and network in the browser tab.** The console button in the tab's bar (⌘⌥I; ⌘⌥J opens it on
@@ -24,6 +78,13 @@ All notable changes to Parley are documented in this file.
 
 - The "DevTools" button of a browser tab moved to "⋯" → "Open full DevTools"; the same menu has "Clear console
   and network".
+
+### Fixed
+
+- **The first hook of a new session is no longer lost on macOS.** A hook written at the moment the host set up
+  a new file watcher could be missed, so the session's state lagged behind and sending text or changing effort
+  answered "blocked" until the agent wrote its next hook. The host now reads the session logs once more a second
+  after it sets up new watchers.
 
 ## 0.8.1
 

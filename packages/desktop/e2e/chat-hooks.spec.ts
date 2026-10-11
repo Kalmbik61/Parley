@@ -599,6 +599,14 @@ test.describe('вид Chat на HTTP-хуках стаба (план 2026-10-01,
     await shot(window, 'attachments-800x500-dark');
     await pickTheme(window, 'Theme: light');
 
+    // p) Длинный текст в поле (вставка текстом идёт родным путём textarea): поле прокручено до дна вместе с нижним отступом.
+    await field.click();
+    await window.keyboard.insertText(Array.from({ length: 30 }, (_, index) => `line ${index + 1} of pasted text`).join('\n'));
+    const scroll = await field.evaluate((textarea) => ({ top: textarea.scrollTop, height: textarea.clientHeight, full: textarea.scrollHeight }));
+    expect(scroll.full).toBeGreaterThan(scroll.height);
+    expect(scroll.top + scroll.height).toBeGreaterThanOrEqual(scroll.full - 2);
+    await field.fill('');
+
     // Крестик чипа убирает вложение; поле остаётся в фокусе.
     await composerChips.nth(1).getByRole('button', { name: `Remove ${longName}` }).click();
     await expect(composerChips).toHaveCount(1);

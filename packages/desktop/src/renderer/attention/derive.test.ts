@@ -572,3 +572,77 @@ describe('forYouTarget (Parley 0.3.0)', () => {
     expect(forYouTarget(mapOf([mention('m1', 'r-01', { text: 'just a status' })]))).toBeNull();
   });
 });
+
+// Архив комнат (спека 2026-10-08, 5.3): архивная комната не источник внимания.
+describe('архивная комната не учитывается во внимании (5.3)', () => {
+  const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
+  const proposal: Proposal = { id: 'p-01', from: 's-01', text: 'Решение', rev: 0, at: '2026-10-08T10:00:00.000Z' };
+  const room = (id: string, patch: Partial<Room> = {}): Room => ({
+    id,
+    title: id,
+    creator: 'human',
+    members: ['s-01', 's-02'],
+    createdAt: '2026-10-08T09:00:00.000Z',
+    lead: null,
+    proposal: null,
+    ...patch,
+  });
+  const mention = (id: string, roomId: string, patch: Partial<Message> = {}): Message =>
+    letter({ id, from: 's-02', to: [], roomId, text: '@human, please decide', ...patch });
+  const withRooms = (rooms: Room[], messages: Message[] = []): WorkEntry => {
+    const base = entry([session('s-01')], messages);
+    return { ...base, map: { ...base.map, rooms } };
+  };
+
+  it('roomAwaitsDecision: архивная комната решения не ждёт, даже если слот остался', () => {
+    expect(roomAwaitsDecision(room('r-01', { proposal }))).toBe(true);
+    expect(roomAwaitsDecision(room('r-01', { proposal, archivedAt: ARCHIVED_AT }))).toBe(false);
+  });
+
+  it('решение в архивной комнате не делает работу needs-you и в needsYou не входит', () => {
+    const attention = workAttention(withRooms([room('r-01', { proposal, archivedAt: ARCHIVED_AT })]), {});
+    expect(attention.level).not.toBe('needs-you');
+    expect(attention.needsYou).toBe(0);
+  });
+
+  it('непрочитанное и упоминание в архивной комнате: ни roomsUnread, ни roomMentions, ни humanUnread, ни уровня unseen', () => {
+    const e = withRooms([room('r-01', { archivedAt: ARCHIVED_AT })], [mention('m1', 'r-01')]);
+    const attention = workAttention(e, {});
+    expect(attention.roomsUnread).toEqual({});
+    expect(attention.roomMentions).toEqual({});
+    expect(attention.humanUnread).toBe(0);
+    expect(attention.level).not.toBe('unseen');
+    expect(humanUnreadMentions(e.map)).toEqual([]);
+    expect(forYouTarget(e.map)).toBeNull();
+  });
+
+  it('открытая соседка считается как раньше: упоминание в ней остаётся, в архивной — нет', () => {
+    const e = withRooms(
+      [room('r-01', { archivedAt: ARCHIVED_AT }), room('r-02')],
+      [mention('m1', 'r-01'), mention('m2', 'r-02')],
+    );
+    const attention = workAttention(e, {});
+    expect(attention.roomMentions).toEqual({ 'r-02': 1 });
+    expect(attention.roomsUnread).toEqual({ 'r-02': 1 });
+    expect(attention.humanUnread).toBe(1);
+    expect(humanUnreadMentions(e.map).map((message) => message.id)).toEqual(['m2']);
+  });
+
+  it('лента архивной комнаты не двигает lastEventAt: строка «Room archived by the human.» карточку не поднимает', () => {
+    const archiveLine = letter({
+      id: 'm9',
+      from: 'system',
+      to: ['human'],
+      roomId: 'r-01',
+      at: '2026-10-08T13:00:00.000Z',
+      text: 'Room archived by the human.',
+      readBy: { human: '2026-10-08T13:00:00.000Z' },
+    });
+    const archived = workAttention(withRooms([room('r-01', { archivedAt: ARCHIVED_AT })], [archiveLine]), {});
+    // Остаётся время карты работы (`entry`: updatedAt 2026-09-27), а не время строки об архивации.
+    expect(archived.lastEventAt).toBe('2026-09-27T09:00:00.000Z');
+    // Та же строка в открытой комнате — обычное событие работы.
+    const open = workAttention(withRooms([room('r-01')], [archiveLine]), {});
+    expect(open.lastEventAt).toBe('2026-10-08T13:00:00.000Z');
+  });
+});

@@ -101,6 +101,16 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledWith({ id: 'base', receivedBytes: 1, totalBytes: 2 });
   });
 
+  it('app.imageThumbnail: путь и необязательная сторона миниатюры уходят в канал app:image-thumbnail, ответ main возвращается как есть', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    vi.mocked(ipcRenderer.invoke).mockResolvedValue('data:image/png;base64,AAAA');
+    expect(await bridge.app.imageThumbnail('/h/shot.png', 1600)).toBe('data:image/png;base64,AAAA');
+    expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('app:image-thumbnail', '/h/shot.png', 1600);
+    await bridge.app.imageThumbnail('/h/shot.png');
+    expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('app:image-thumbnail', '/h/shot.png', undefined);
+  });
+
   it('browser.onDevtools: пачка приходит подписчику, отписка снимает его (спека 2026-10-07, 3.5)', async () => {
     const bridge = await loadPreload();
     const listener = vi.fn();

@@ -319,8 +319,15 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   const loading = useWorksStore((state) => state.loading);
   const worksLoaded = !loading;
   // «Работ нет» — это ответ хоста, а не просто пустой начальный снимок:
-  // до первого `works.list` показывать `Landing` рано (спека 5.10, «после загрузки»).
-  const showLanding = worksLoaded && entries.length === 0;
+  // до первого `works.list` показывать `Landing` рано (спека 5.10, «после загрузки»). Работы только архивные в проектах,
+  // убранных из списка («Remove from list…», спека архива, 6.3), — то же «пусто»: сайдбар их не показывает.
+  const hiddenProjects = useUiStore((state) => state.ui.hiddenProjects);
+  const showArchived = useUiStore((state) => state.showArchived);
+  const showLanding =
+    worksLoaded &&
+    (entries.length === 0 ||
+      (!showArchived &&
+        entries.every((entry) => entry.map.work.status === 'archived' && hiddenProjects.includes(entry.projectPath))));
 
 
   const ui = useUiStore((state) => state.ui);

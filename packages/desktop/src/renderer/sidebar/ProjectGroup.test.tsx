@@ -4,12 +4,13 @@
  * Клик по заголовку сворачивает группу, «+» её не сворачивает.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { S } from '../../shared/strings.js';
 import { projectColor } from '../lib/project-color.js';
+import { useUiStore } from '../store/ui.js';
 import { makeWork } from '../test-utils/work-fixtures.js';
-import { ProjectGroup } from './ProjectGroup.js';
+import { ProjectArchivedLink, ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
 
 afterEach(cleanup);
@@ -113,5 +114,87 @@ describe('ProjectGroup', () => {
     expect(header().querySelector('[data-project-chip]')).toBeNull();
     // С куска 3.4 у каждого заголовка секции — только меню «⋯» (спека 6.1).
     expect(screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([S.sidebar.sectionMenu]);
+  });
+});
+
+// Спека архива комнат и проектов, 6.1: ссылка «N archived» внизу группы — архивные работы проекта спрятаны под ней.
+describe('ProjectGroup — ссылка «N archived» (спека архива, 6.1)', () => {
+  beforeEach(() => useUiStore.setState({ archivedShownProjects: [] }));
+
+  const withArchived = (count: number, shown = false): SidebarSection => ({ ...project, archived: { count, shown } });
+  const link = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-archived-works]');
+
+  it('ссылка стоит под карточками, считает архивные работы и не берёт число из шапки', () => {
+    render(
+      <ProjectGroup section={withArchived(5)} onToggleCollapsed={() => {}} onNewWork={() => {}}>
+        <div data-card />
+      </ProjectGroup>,
+    );
+    const group = document.querySelector<HTMLElement>('[data-section]') as HTMLElement;
+    expect(link()?.textContent).toBe('5 archived');
+    expect(group.lastElementChild).toBe(link());
+    // Число в шапке — по показанным работам секции.
+    expect(header().textContent).toContain('3');
+    expect(header().textContent).not.toContain('5');
+  });
+
+  it('клик раскрывает архивные этого проекта в памяти окна; повторный — «Hide archived» прячет', () => {
+    const { rerender } = render(<ProjectGroup section={withArchived(2)} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '2 archived' }));
+    expect(useUiStore.getState().archivedShownProjects).toEqual(['/Users/me/VoiceStudio']);
+
+    rerender(<ProjectGroup section={withArchived(2, true)} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    expect(link()?.textContent).toBe(S.sidebar.hideArchivedWorks);
+    expect(link()?.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide archived' }));
+    expect(useUiStore.getState().archivedShownProjects).toEqual([]);
+  });
+
+  it('раскрытие одного проекта не трогает другие', () => {
+    useUiStore.setState({ archivedShownProjects: ['/p/other'] });
+    render(<ProjectGroup section={withArchived(1)} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '1 archived' }));
+    expect(useUiStore.getState().archivedShownProjects).toEqual(['/p/other', '/Users/me/VoiceStudio']);
+  });
+
+  it('ссылка достижима с клавиатуры, как «N more closed»: нативная кнопка вне roving tabindex, клик группу не сворачивает', () => {
+    const onToggleCollapsed = vi.fn();
+    render(<ProjectGroup section={withArchived(1)} onToggleCollapsed={onToggleCollapsed} onNewWork={() => {}} />);
+    const button = screen.getByRole('button', { name: '1 archived' });
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.tabIndex).toBe(0);
+    fireEvent.click(button);
+    expect(onToggleCollapsed).not.toHaveBeenCalled();
+  });
+
+  it('без архивных работ, у свёрнутой группы, у Pinned и у заголовка виртуального списка ссылки нет', () => {
+    const { rerender } = render(<ProjectGroup section={project} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    expect(link()).toBeNull();
+    rerender(<ProjectGroup section={{ ...withArchived(2), collapsed: true }} onToggleCollapsed={() => {}} onNewWork={() => {}} />);
+    expect(link()).toBeNull();
+    rerender(
+      <ProjectGroup
+        section={{ ...withArchived(2), kind: 'pinned', key: 'pinned', title: S.sidebar.pinned, projectPath: null }}
+        onToggleCollapsed={() => {}}
+        onNewWork={() => {}}
+      />,
+    );
+    expect(link()).toBeNull();
+    rerender(<ProjectGroup section={withArchived(2)} onToggleCollapsed={() => {}} onNewWork={() => {}} headerOnly />);
+    expect(link()).toBeNull();
+  });
+
+  it('отдельная строка виртуального списка рисует ту же ссылку', () => {
+    render(<ProjectArchivedLink section={withArchived(4)} />);
+    expect(screen.getByRole('button', { name: '4 archived' })).toBeTruthy();
+  });
+
+  it('ссылка занимает ширину строки и обрезает текст, а не выталкивает соседей', () => {
+    render(<ProjectArchivedLink section={withArchived(1234567)} />);
+    const button = link() as HTMLElement;
+    expect(button.className).toContain('w-full');
+    expect(button.className).toContain('min-w-0');
+    expect(button.firstElementChild?.className).toContain('truncate');
   });
 });

@@ -241,6 +241,33 @@ describe('NewWorkComposer — вид (1.7)', () => {
     expect(callsOf('works.create')[0]).toMatchObject({ projectPath: '/tmp/two' });
   });
 
+  // Спека архива комнат и проектов, 6.3: проект, убранный из списка («Remove from list…»), в выборе не показывается.
+  it('убранный из списка проект в сегменте не показывается', async () => {
+    useWorksStore.setState({
+      entries: [makeWork('w-old', { projectPath: PROJECT }), makeWork('w-gone', { projectPath: '/tmp/gone', status: 'archived' })],
+    });
+    useUiStore.setState({ ui: { ...DEFAULT_UI, hiddenProjects: ['/tmp/gone'] } });
+    await renderComposer();
+    const items = within(screen.getByRole('radiogroup', { name: 'Project' })).getAllByRole('radio');
+    expect(items.map((item) => item.textContent)).toEqual(['p']);
+  });
+
+  it('убранный проект виден, когда он выбран: «+» его заголовка в режиме показа архивных и «Choose a folder…»', async () => {
+    useWorksStore.setState({
+      entries: [makeWork('w-old', { projectPath: PROJECT }), makeWork('w-gone', { projectPath: '/tmp/gone', status: 'archived' })],
+    });
+    useUiStore.setState({ ui: { ...DEFAULT_UI, hiddenProjects: ['/tmp/gone', '/tmp/fresh'] } });
+    render(<NewWorkComposer open bridge={bridge} projectPath="/tmp/gone" title="" onOpenChange={() => {}} />);
+    await act(async () => {});
+    const group = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Project' });
+    expect(within(group()).getAllByRole('radio').map((item) => item.textContent)).toEqual(['gone', 'p']);
+    expect(within(group()).getByRole('radio', { name: 'gone' }).getAttribute('aria-checked')).toBe('true');
+
+    vi.spyOn(bridge.app, 'chooseFolder').mockResolvedValueOnce('/tmp/fresh');
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a folder…' }));
+    await waitFor(() => expect(within(group()).getByRole('radio', { name: 'fresh' }).getAttribute('aria-checked')).toBe('true'));
+  });
+
   it('«Choose a folder…» добавляет папку в сегмент и выбирает её', async () => {
     vi.spyOn(bridge.app, 'chooseFolder').mockResolvedValueOnce('/tmp/fresh');
     await renderComposer();

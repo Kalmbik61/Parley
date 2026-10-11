@@ -260,6 +260,29 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.delete'>>().toEqualTypeOf<{ ok: true }>();
   });
 
+  it('rooms.archive: комната и флажок stopSessions обязательны; ответ — ok', () => {
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: true }).success).toBe(true);
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: false }).success).toBe(true);
+    // Умолчание флажка — дело окна: без него хост не знает, останавливать ли агентов.
+    expect(METHODS['rooms.archive'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.archive'].safeParse({ ...room, stopSessions: 'yes' }).success).toBe(false);
+    expect(METHODS['rooms.archive'].safeParse({ projectPath: '/p', workId: 'w-0001', stopSessions: true }).success).toBe(false);
+    expectTypeOf<Params<'rooms.archive'>>().toEqualTypeOf<{
+      projectPath: string;
+      workId: string;
+      roomId: string;
+      stopSessions: boolean;
+    }>();
+    expectTypeOf<Result<'rooms.archive'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
+  it('rooms.reopen: только комната; ответ — ok', () => {
+    expect(METHODS['rooms.reopen'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.reopen'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+    expectTypeOf<Params<'rooms.reopen'>>().toEqualTypeOf<{ projectPath: string; workId: string; roomId: string }>();
+    expectTypeOf<Result<'rooms.reopen'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
     const accept = { ...room, proposalId: 'p-01', action: 'accept' };
     expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);
@@ -637,5 +660,27 @@ describe('sessions.setModel (нормалайзер модели и effort, 5.8)
       effort: string | null;
       restarted: boolean;
     }>();
+  });
+});
+
+describe('sessions.rename (часть 2 спеки архива комнат, 15)', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+  const parse = (label: unknown) => METHODS['sessions.rename'].safeParse({ ref, label });
+
+  it('ярлык по правилу works.rename: края обрезаются, пустое и длиннее 120 кодовых точек не проходят', () => {
+    expect(parse('  Ruslan​ ').data?.label).toBe('Ruslan');
+    for (const label of ['', '   ', '​⁠', '😀'.repeat(121), 5, undefined, null]) {
+      expect(parse(label).success, JSON.stringify(label)).toBe(false);
+    }
+    expect(parse('😀'.repeat(120)).success).toBe(true);
+    expect(METHODS['sessions.rename'].safeParse({ label: 'x' }).success).toBe(false);
+  });
+
+  it('параметры и результат: сессия и новый ярлык; ответ — ok', () => {
+    expectTypeOf<Params<'sessions.rename'>>().toEqualTypeOf<{
+      ref: { projectPath: string; workId: string; sessionId: string };
+      label: string;
+    }>();
+    expectTypeOf<Result<'sessions.rename'>>().toEqualTypeOf<{ ok: true }>();
   });
 });

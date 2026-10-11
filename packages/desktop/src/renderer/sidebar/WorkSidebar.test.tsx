@@ -511,6 +511,25 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
     expect(screen.getByRole('menu')).toBeTruthy();
     expect(screen.getByText('Pin')).toBeTruthy();
   });
+
+  it('→ и ← на карточке раскрывают и сворачивают ещё и архивные комнаты (архив комнат, 5.1)', () => {
+    const entry = makeWork('w-ka', {
+      sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'asleep', { lifecycle: 'sleeping' })],
+      rooms: [{ ...makeRoom('r-01', 'Old room'), members: ['s-02'], lead: 's-02', archivedAt: '2026-10-08T12:00:00.000Z' }],
+    });
+    setWorks([entry]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(entry) });
+    render(<Harness />);
+    const card = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
+    act(() => card.focus());
+    expect(card.querySelector('[data-archived-rooms]')?.textContent).toBe('1 archived room');
+    expect(card.querySelector('[data-room-row]')).toBeNull();
+
+    fireEvent.keyDown(card, { key: 'ArrowRight' });
+    expect(card.querySelector('[data-room-row="r-01"]')).not.toBeNull();
+    fireEvent.keyDown(card, { key: 'ArrowLeft' });
+    expect(card.querySelector('[data-room-row]')).toBeNull();
+  });
 });
 
 /** Следующий по порядку Tab элемент документа после `from` (tabIndex ≥ 0, как считает браузер). */
@@ -837,5 +856,100 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     expect(cardOf(second).contains(rows[0] as HTMLElement)).toBe(true);
     fireEvent.click(rows[0] as HTMLElement);
     expect(useUiStore.getState().dialogs.newSession).toMatchObject({ open: true, work: { projectPath: second.projectPath, workId: 'w-2' } });
+  });
+});
+
+// Спека архива комнат и проектов, 6.1: архивные работы проекта спрятаны под ссылкой «N archived» внизу его группы.
+describe('WorkSidebar — архивные работы под ссылкой проекта (спека архива, 6.1)', () => {
+  const live = makeWork('w-live', { projectPath: '/p/beta', title: 'Live' });
+  const arch = makeWork('w-arch', { projectPath: '/p/alpha', title: 'Old job', status: 'archived' });
+  const archBeta = makeWork('w-arch-beta', { projectPath: '/p/beta', title: 'Old beta', status: 'archived' });
+  const cardOf = (entry: WorkEntry): HTMLElement | null => document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`);
+  const link = (projectPath: string): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`[data-section="${projectPath}"] [data-archived-works]`);
+
+  beforeEach(() => useUiStore.setState({ archivedShownProjects: [], showArchived: false }));
+
+  it('проект из одних архивных остаётся: шапка, «+» и ссылка; клик раскрывает приглушённую работу, «Hide archived» прячет', () => {
+    setWorks([arch, live]);
+    render(<Harness />);
+    expect(document.querySelector('[data-section-key="/p/alpha"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: S.sidebar.newWorkspaceInProject('alpha') })).toBeTruthy();
+    expect(cardKeys()).toEqual([keyOf(live)]);
+    expect(link('/p/alpha')?.textContent).toBe('1 archived');
+
+    fireEvent.click(screen.getByRole('button', { name: '1 archived' }));
+    expect(cardKeys()).toEqual([keyOf(live), keyOf(arch)]);
+    expect(cardOf(arch)?.hasAttribute('data-dimmed')).toBe(true);
+    expect(link('/p/alpha')?.textContent).toBe('Hide archived');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide archived' }));
+    expect(cardKeys()).toEqual([keyOf(live)]);
+    expect(link('/p/alpha')?.textContent).toBe('1 archived');
+  });
+
+  it('раскрытие одного проекта не раскрывает архивные другого; ссылка стоит после карточек своей группы', () => {
+    setWorks([arch, live, archBeta]);
+    render(<Harness />);
+    fireEvent.click(link('/p/beta') as HTMLElement);
+    expect(cardKeys()).toEqual([keyOf(live), keyOf(archBeta)]);
+    expect(link('/p/alpha')?.textContent).toBe('1 archived');
+    const group = document.querySelector<HTMLElement>('[data-section="/p/beta"]') as HTMLElement;
+    expect(group.lastElementChild).toBe(link('/p/beta'));
+  });
+
+  it('общий показ архивных раскрывает всё, и ссылок в группах нет', () => {
+    setWorks([arch, live]);
+    render(<Harness />);
+    act(() => useUiStore.getState().toggleShowArchived());
+    expect(cardKeys()).toEqual([keyOf(live), keyOf(arch)]);
+    expect(document.querySelector('[data-archived-works]')).toBeNull();
+  });
+
+  it('свёрнутый проект ссылку не показывает', () => {
+    setWorks([arch, live]);
+    useUiStore.setState({ ui: { ...DEFAULT_UI, collapsedProjects: ['/p/alpha'] } });
+    render(<Harness />);
+    expect(link('/p/alpha')).toBeNull();
+  });
+
+  it('ссылка — кнопка в порядке Tab, курсор стрелок на неё не встаёт: фокус остаётся на ней', () => {
+    setWorks([arch, live]);
+    useLayoutStore.setState({ activeWorkKey: keyOf(live) });
+    render(<Harness />);
+    const button = link('/p/alpha') as HTMLElement;
+    expect(button.tabIndex).toBe(0);
+    act(() => button.focus());
+    fireEvent.keyDown(button, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('при виртуализации ссылка — отдельная строка списка под карточками своей группы', () => {
+    const many = Array.from({ length: 60 }, (_, index) => makeWork(`w-${String(index).padStart(2, '0')}`, { projectPath: '/p/many' }));
+    setWorks([makeWork('w-first', { projectPath: '/p/a-first' }), makeWork('w-old', { projectPath: '/p/a-first', status: 'archived' }), ...many]);
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    // Строкам виртуального списка — ненулевая высота: иначе замер схлопывает их в ноль и окно видимых строк уезжает в конец списка.
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.hasAttribute('data-sidebar-list')) return 800;
+        return this.hasAttribute('data-index') ? 60 : 0;
+      },
+    });
+    try {
+      render(<Harness />);
+      const button = document.querySelector<HTMLElement>('[data-archived-works]') as HTMLElement;
+      expect(button.textContent).toBe('1 archived');
+      // Заголовок рисуется без ссылки, а ссылка — в своей строке виртуального списка.
+      expect(button.closest('[data-section]')).toBeNull();
+      expect(button.closest('[data-index]')).not.toBeNull();
+      expect(document.querySelectorAll('[data-archived-works]')).toHaveLength(1);
+
+      fireEvent.click(button);
+      expect(cardKeys()).toContain(workKey('/p/a-first', 'w-old'));
+      expect(document.querySelector('[data-archived-works]')?.textContent).toBe('Hide archived');
+    } finally {
+      if (original !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', original);
+    }
   });
 });

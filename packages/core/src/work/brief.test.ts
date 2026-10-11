@@ -274,6 +274,15 @@ describe('бриф: роль в комнате', () => {
     expect(brief).not.toContain('you are the lead');
   });
 
+  it('архивная комната в бриф не попадает: ни составом, ни ролью ведущего', () => {
+    const map = mapWithRoom();
+    map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
+    const brief = buildBrief(map, 's-02');
+
+    expect(brief).not.toContain('## Role in the room');
+    expect(brief).not.toContain('r-01');
+  });
+
   it('экспортированные тексты ролей — ровно то, что печатает бриф (их же несёт roomTask в check_inbox)', () => {
     expect(buildBrief(mapWithRoom(), 's-02')).toContain(LEAD_ROLE);
     expect(buildBrief(mapWithRoom(), 's-03')).toContain(memberRole('@s03'));

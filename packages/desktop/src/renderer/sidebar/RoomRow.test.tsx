@@ -20,7 +20,7 @@ import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { RoomRow, type RoomRowProps } from './RoomRow.js';
-import { cardRows, type CardRoomRow } from './sort.js';
+import { archivedRows, cardRows, type CardRoomRow } from './sort.js';
 
 const PROJECT = '/tmp/proj';
 const WORK = 'w-01';
@@ -43,9 +43,12 @@ const message = (id: string, at: string, patch: Partial<Message> = {}): Message 
   ...patch,
 });
 
-/** Строка комнаты из настоящего `cardRows`: тесты берут ту же форму данных, что даёт карточка. Без `roomId` — первая. */
+/**
+ * Строка комнаты из настоящих `cardRows` и `archivedRows`: тесты берут ту же форму данных, что даёт карточка. Без
+ * `roomId` — первая из основных строк (архивные идут после них).
+ */
 function roomRowOf(entry: WorkEntry, showClosed = false, roomId?: string): CardRoomRow {
-  const found = cardRows(entry.map, showClosed).find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
+  const found = [...cardRows(entry.map, showClosed), ...archivedRows(entry.map, showClosed)].find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
   if (found === undefined) throw new Error('строки комнаты нет');
   return found;
 }
@@ -724,5 +727,58 @@ describe('RoomRow — меню строки: Rename и Make lead участни�
     fireEvent.contextMenu(lead);
     expect(screen.getByText('Open')).toBeTruthy();
     expect(screen.queryByText('Make lead')).toBeNull();
+  });
+});
+
+// Архив комнат (спека 2026-10-08, 5.1): строка архивной комнаты под ссылкой карточки — приглушённая, с меню Reopen.
+describe('RoomRow — архивная комната (5.1)', () => {
+  const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
+  const sleeping = (...ids: string[]): WorkSession[] => ids.map((id) => makeSession(id, `${id} label`, { lifecycle: 'sleeping' }));
+  const archivedEntry = (): WorkEntry => fourAgents({ archivedAt: ARCHIVED_AT }, { sessions: sleeping('s-01', 's-02', 's-03', 's-04') });
+
+  beforeEach(() => {
+    useHostStore.setState({
+      status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['rooms.rename', 'rooms.delete', 'rooms.archive', 'rooms.reopen', 'rooms.setLead'] },
+    });
+    useUiStore.setState({ sidebarHolds: {} });
+  });
+  afterEach(() => useHostStore.setState({ status: { state: 'connecting' } }));
+
+  it('строка приглушена (data-dimmed), у открытой комнаты этого атрибута нет', () => {
+    renderRow(archivedEntry());
+    expect(rowEl().hasAttribute('data-dimmed')).toBe(true);
+    cleanup();
+    renderRow(fourAgents());
+    expect(rowEl().hasAttribute('data-dimmed')).toBe(false);
+  });
+
+  it('свёрнутая показывает значки всех её агентов, как открытая; название на месте', () => {
+    renderRow(archivedEntry());
+    expect(header().textContent).toContain('Возвраты');
+    expect(badges().map((badge) => badge.getAttribute('data-provider-badge'))).toEqual(['claude']);
+    expect(badges()[0]?.querySelector('[data-provider-count]')?.textContent).toBe('4');
+  });
+
+  it('правая кнопка — меню архивной комнаты: Reopen, Rename, Delete…; Archive… нет', () => {
+    renderRow(archivedEntry());
+    fireEvent.contextMenu(header());
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Reopen', 'Rename', 'Delete…']);
+  });
+
+  it('участник развёрнутой архивной комнаты: в его меню нет «Make lead» (хост ведущего в архиве не меняет)', () => {
+    act(() => useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true));
+    renderRow(archivedEntry());
+    const member = memberRows().find((element) => element.dataset['sessionId'] === 's-02') as HTMLElement;
+    fireEvent.contextMenu(member);
+    expect(screen.getByText('Open')).toBeTruthy();
+    expect(screen.queryByText('Make lead')).toBeNull();
+  });
+
+  it('длинное название не выталкивает шеврон и время: название обрезается, полный текст в DOM', () => {
+    const long = 'Ж'.repeat(200);
+    renderRow(fourAgents({ archivedAt: ARCHIVED_AT, title: long }, { sessions: sleeping('s-01', 's-02', 's-03', 's-04') }));
+    const title = header().querySelector('span.truncate') as HTMLElement;
+    expect(title.textContent).toBe(long);
+    expect(title.className).toContain('min-w-0');
   });
 });

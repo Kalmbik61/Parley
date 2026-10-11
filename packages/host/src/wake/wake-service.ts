@@ -119,6 +119,11 @@ interface AttemptState {
   /** Письма, которыми подняли: их отправителям уходит письмо о сбое. */
   resumeLetters: string[];
   /**
+   * Процесс вышел, пока `launch` подъёма ещё не вернулся: проверка раннего выхода ждёт его исхода. Запуск
+   * мог сам остановить процесс, чей старт не записался в карту, — тогда о сбое скажет его ошибка, своей причиной.
+   */
+  earlyExit: (() => Promise<void>) | undefined;
+  /**
    * Подняли без промпта (в `resumeArgs` нет `{prompt}`): указатель печатается
    * обычным путём, но только после конца хода нового процесса — до первого хука
    * старый журнал выдал бы простой ещё не запущенного агента (спека 7.3).
@@ -206,6 +211,7 @@ export function createWakeService(
         resumedAt: null,
         journalBase: 0,
         resumeLetters: [],
+        earlyExit: undefined,
         pointerAfter: null,
         resumeUnavailable: false,
         budgetDeniedAt: null,
@@ -375,7 +381,11 @@ export function createWakeService(
       else state.pointerAfter = state.resumedAt;
 
       await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
+      const earlyExit = state.earlyExit;
+      state.earlyExit = undefined;
+      if (earlyExit !== undefined) void earlyExit();
     } catch (error) {
+      state.earlyExit = undefined;
       state.resumedAt = null;
       state.pointerAfter = null;
       if (isResourceDenial(error)) {
@@ -725,7 +735,10 @@ export function createWakeService(
         const resumedAt = state.resumedAt;
         state.resumedAt = null;
         if (resumedAt !== null && Date.now() - resumedAt <= resumeFailWindowMs) {
-          void checkEarlyExit(ref, state, exit.exitCode, state.journalBase, state.resumeLetters);
+          const check = (): Promise<void> =>
+            checkEarlyExit(ref, state, exit.exitCode, state.journalBase, state.resumeLetters);
+          if (state.resuming) state.earlyExit = check;
+          else void check();
         }
       });
 

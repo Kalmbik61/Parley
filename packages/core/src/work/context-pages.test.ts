@@ -425,6 +425,19 @@ describe('топология для агента', () => {
     expect(mapTopology(map, null).messages.unreadForYou).toEqual({ total: 0, rooms: {}, direct: 0 });
   });
 
+  it('архивная комната помечена archived: true, а у открытой поля нет; письма архивной непрочитанными не числятся', () => {
+    const map = baseMap();
+    addRoom(map, { title: 'Вторая', creator: HUMAN, members: ['s-02'] });
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'в комнату' });
+    map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
+
+    const topology = mapTopology(map, 's-01');
+
+    expect(topology.rooms[0]?.archived).toBe(true);
+    expect(topology.rooms[1]).not.toHaveProperty('archived');
+    expect(topology.messages.unreadForYou).toEqual({ total: 0, rooms: {}, direct: 0 });
+  });
+
   it('длинные задача, резюме и цель сокращены, полный размер назван в cut; статус и последнее событие на месте', () => {
     const map = baseMap();
     map.work.goal = 'ц'.repeat(5000);

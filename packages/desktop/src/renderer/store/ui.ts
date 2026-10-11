@@ -131,6 +131,12 @@ export interface UiState {
    */
   showArchived: boolean;
   /**
+   * Проекты с раскрытой ссылкой «N archived» (спека архива комнат и проектов, 6.1): путь проекта; их архивные работы стоят
+   * в конце группы. В памяти окна до перезапуска, не в `ui.json`; общий `showArchived` раскрывает всё разом и этот список
+   * не меняет.
+   */
+  archivedShownProjects: string[];
+  /**
    * Развёрнутость строк комнат в карточках сайдбара (кусок 5 плана «Organic», спека окна 2026-09-29, 2.6 и 3.4):
    * ручной шеврон и клик по строке комнаты перекрывают правило «развёрнута, пока открыта вкладка комнаты или её
    * участника» до перезапуска окна. Ключ — `lib/room-view.ts#roomKey`; нет ключа — решает правило. Только в
@@ -159,6 +165,8 @@ export interface UiState {
   confirmRestartHost: () => void;
   closeRestartHostDialog: () => void;
   toggleShowArchived: () => void;
+  /** «N archived» и «Hide archived» группы проекта: архивные работы этого проекта показать или спрятать. */
+  setProjectArchivedShown: (projectPath: string, shown: boolean) => void;
   setRoomExpanded: (key: string, expanded: boolean) => void;
   toggleWake: (bridge: ParleyBridge) => Promise<void>;
 
@@ -224,6 +232,7 @@ export const useUiStore = create<UiState>((set, get) => {
     sidebarHovering: false,
     sidebarHolds: {},
     showArchived: false,
+    archivedShownProjects: [],
     roomExpanded: {},
 
     setDark: (dark) => {
@@ -287,6 +296,15 @@ export const useUiStore = create<UiState>((set, get) => {
     confirmRestartHost: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: true } })),
     closeRestartHostDialog: () => set((state) => ({ dialogs: { ...state.dialogs, restartHost: false } })),
     toggleShowArchived: () => set((state) => ({ showArchived: !state.showArchived })),
+    setProjectArchivedShown: (projectPath, shown) =>
+      set((state) => {
+        if (state.archivedShownProjects.includes(projectPath) === shown) return state;
+        return {
+          archivedShownProjects: shown
+            ? [...state.archivedShownProjects, projectPath]
+            : state.archivedShownProjects.filter((path) => path !== projectPath),
+        };
+      }),
     setRoomExpanded: (key, expanded) =>
       set((state) => (state.roomExpanded[key] === expanded ? state : { roomExpanded: { ...state.roomExpanded, [key]: expanded } })),
 

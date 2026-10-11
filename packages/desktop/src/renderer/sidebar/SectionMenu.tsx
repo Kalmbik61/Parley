@@ -3,6 +3,11 @@
  * `ui.json.showDoneWorks`. Открытое меню держит порядок сайдбара. В handoff (Organic) у заголовка проекта
  * его нет, поэтому кнопка не занимает место на виду: она проявляется под курсором на заголовке (`group`
  * заголовка), на фокусе с клавиатуры и пока меню открыто.
+ *
+ * «Remove from list…» (спека архива комнат и проектов, 6.3) у проекта убирает его из сайдбара и ничего не удаляет:
+ * путь ложится в `ui.json.hiddenProjects`, а вернётся проект сам, когда в нём появится неархивная работа
+ * (`use-sidebar-sections.ts`). Пункт доступен, только когда у проекта нет неархивных работ: скрыть проект с
+ * работающими агентами значит потерять их внимание. Иначе он выключен с подсказкой «Archive its workspaces first».
  */
 
 import { useEffect, useState } from 'react';
@@ -17,7 +22,16 @@ import { MoreHorizontal } from 'lucide-react';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useUiStore } from '../store/ui.js';
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
+import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu.js';
+import { folderName } from './sort.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
 
 export interface SectionMenuProps {
@@ -39,7 +53,8 @@ export function openParleyEditor(projectPath: string, workId?: string): void {
 
 export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
   const [open, setOpen] = useState(false);
-  useSidebarHold(`section-menu ${sectionKey}`, open);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  useSidebarHold(`section-menu ${sectionKey}`, open || confirmRemove);
   const [exists, setExists] = useState<boolean | null>(null);
   useEffect(() => {
     if (!open || sectionKey === 'pinned') return;
@@ -65,6 +80,14 @@ export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
     }
   };
   const showDone = useUiStore((state) => state.ui.showDoneWorks);
+  // Неархивная работа проекта (done тоже): пока она есть, проект из списка не убрать.
+  const hasLiveWork = useWorksStore((state) =>
+    state.entries.some((entry) => entry.projectPath === sectionKey && entry.map.work.status !== 'archived'),
+  );
+  const removeProject = (): void => {
+    const { ui, patchUi } = useUiStore.getState();
+    patchUi({ hiddenProjects: [...ui.hiddenProjects.filter((path) => path !== sectionKey), sectionKey] });
+  };
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
@@ -97,7 +120,34 @@ export function SectionMenu({ sectionKey }: SectionMenuProps): JSX.Element {
         >
           {S.sidebar.showDone}
         </DropdownMenuCheckboxItem>
+        {sectionKey !== 'pinned' && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={hasLiveWork}
+              data-section-action="remove-from-list"
+              // Выключенный пункт гасит указатель, а тултипу он нужен: подсказка видна и на выключенном.
+              className="data-[disabled]:pointer-events-auto"
+              {...(hasLiveWork ? { title: S.sidebar.removeFromListBlocked } : null)}
+              onSelect={() => setConfirmRemove(true)}
+            >
+              {S.sidebar.removeFromList}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
+      {sectionKey !== 'pinned' && (
+        <ConfirmDialog
+          open={confirmRemove}
+          title={S.sidebar.removeProjectTitle(folderName(sectionKey))}
+          description={S.sidebar.removeProjectDescription}
+          // Ничего не удаляется и возврат сам, поэтому кнопка обычная, а не красная.
+          confirmVariant="default"
+          confirmLabel={S.sidebar.removeProjectConfirm}
+          onConfirm={removeProject}
+          onOpenChange={setConfirmRemove}
+        />
+      )}
     </DropdownMenu>
   );
 }

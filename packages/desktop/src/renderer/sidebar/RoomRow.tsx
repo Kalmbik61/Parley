@@ -36,6 +36,11 @@
  * сливается с узлом строки, как у `SessionRowMenu`: ссылка цели броска и обработчики строки остаются, тултип шапки —
  * атрибут `title`. Строки участников — со своим меню («Make lead» у не ведущего): правая кнопка на участнике открывает
  * его меню, а не меню комнаты.
+ *
+ * Архивная комната (спека архива комнат, 5.1; `CardRoomRow.archived`) стоит под ссылкой внизу карточки и приглушена,
+ * как `done`-карточка: `data-dimmed` на строке (правило `dimmed.css`). Остальное то же: она открывается, разворачивается
+ * и берёт курсор клавиатуры; внимания (`decision`, `N new`) у неё нет — его не считает `attention/derive.ts`, а меню другое
+ * («Reopen», «Rename», «Delete…»). Целью броска сессии она не бывает (`layout/dnd-sidebar.ts`).
  */
 
 import { useState } from 'react';
@@ -167,7 +172,15 @@ export function RoomRow({
   };
 
   return (
-    <RoomRowMenu workKey={workKey} projectPath={projectPath} workId={workId} row={row} bridge={bridge} onRename={() => setRenaming(true)}>
+    <RoomRowMenu
+      workKey={workKey}
+      projectPath={projectPath}
+      workId={workId}
+      row={row}
+      bridge={bridge}
+      onRename={() => setRenaming(true)}
+      livePlan={Boolean(plan)}
+    >
     <div
       ref={setDropRef}
       role="treeitem"
@@ -176,6 +189,7 @@ export function RoomRow({
       tabIndex={stop ? 0 : -1}
       data-room-row={room.id}
       data-selected={selected}
+      {...(row.archived ? { 'data-dimmed': '' } : {})}
       {...(over ? { 'data-drop-over': '' } : {})}
       onClick={(event) => {
         // Клик по строке — не клик по карточке: карточка сделала бы только работу активной. Клики из порталов меню
@@ -278,7 +292,8 @@ export function RoomRow({
               selected={session.id === selectedSessionId}
               onOpen={openerFor(session.id)}
               inRoom
-              roomId={room.id}
+              // `roomId` нужен только для «Make lead»; в архивную комнату хост ведущего не пускает (`requireOpenRoom`).
+              {...(row.archived ? {} : { roomId: room.id })}
               lead={session.id === row.lead}
             />
           ))}

@@ -33,11 +33,11 @@ import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { usePaletteStore } from '../palette/store.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
-import { ProjectGroup } from './ProjectGroup.js';
+import { ProjectArchivedLink, ProjectGroup } from './ProjectGroup.js';
 import type { SidebarSection } from './sort.js';
 import { useSidebarKeys } from './use-sidebar-keys.js';
 import { useSidebarAttention, useSidebarSections } from './use-sidebar-sections.js';
-import { showClosedSessions, WorkCard } from './WorkCard.js';
+import { showArchivedRooms, showClosedSessions, WorkCard } from './WorkCard.js';
 
 export interface WorkSidebarProps {
   /** Мост для меню карточек и строк (кусок 3.4). */
@@ -62,6 +62,8 @@ const VIRTUALIZE_ABOVE = 50;
 const HEADER_HEIGHT = 46;
 const CARD_HEIGHT = 60;
 const SESSION_ROW_HEIGHT = 27;
+/** Ссылка «N archived» под карточками группы: 24px и зазор 6 сверху. */
+const ARCHIVED_LINK_HEIGHT = 30;
 /** Раз в сколько обновляется относительное время (план 3.3). */
 const NOW_PERIOD_MS = 30_000;
 /**
@@ -70,7 +72,10 @@ const NOW_PERIOD_MS = 30_000;
  */
 const INITIAL_LIST_RECT = { width: 288, height: 800 };
 
-type Row = { kind: 'header'; section: SidebarSection } | { kind: 'card'; section: SidebarSection; entry: WorkEntry };
+type Row =
+  | { kind: 'header'; section: SidebarSection }
+  | { kind: 'card'; section: SidebarSection; entry: WorkEntry }
+  | { kind: 'archived'; section: SidebarSection };
 
 /** Строка навигации (1.2): пилюля 32px, значок 14, сочетание справа; hover — `text 7%`. */
 const NAV_ROW =
@@ -82,6 +87,8 @@ function rowsOf(sections: SidebarSection[]): Row[] {
   return sections.flatMap((section) => [
     { kind: 'header' as const, section },
     ...(section.collapsed ? [] : section.works.map((entry) => ({ kind: 'card' as const, section, entry }))),
+    // Ссылка «N archived» — своя строка под карточками группы (ProjectGroup.tsx).
+    ...(section.collapsed || section.archived === undefined ? [] : [{ kind: 'archived' as const, section }]),
   ]);
 }
 
@@ -181,7 +188,11 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
     listRef,
     activeWorkKey,
     onActivateWork: (key) => props.current.onActivateWork(key),
-    onShowClosed: showClosedSessions,
+    // → и ← на карточке раскрывают и сворачивают закрытые сессии и архивные комнаты разом.
+    onShowClosed: (key, shown) => {
+      showClosedSessions(key, shown);
+      showArchivedRooms(key, shown);
+    },
     // → и ← на строке комнаты — тот же ручной шеврон, что и клик по нему (правило 2.6 уступает).
     onExpandRoom: (key, roomId, expanded) => useUiStore.getState().setRoomExpanded(roomKey(key, roomId), expanded),
   });
@@ -303,12 +314,15 @@ function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       const row = rows[index];
-      return row === undefined || row.kind === 'header' ? HEADER_HEIGHT : estimateCard(row.entry);
+      if (row === undefined || row.kind === 'header') return HEADER_HEIGHT;
+      return row.kind === 'archived' ? ARCHIVED_LINK_HEIGHT : estimateCard(row.entry);
     },
     getItemKey: (index) => {
       const row = rows[index];
       if (row === undefined) return index;
-      return row.kind === 'header' ? `h ${row.section.key}` : `c ${row.section.key} ${workKey(row.entry.projectPath, row.entry.map.work.id)}`;
+      if (row.kind === 'header') return `h ${row.section.key}`;
+      if (row.kind === 'archived') return `a ${row.section.key}`;
+      return `c ${row.section.key} ${workKey(row.entry.projectPath, row.entry.map.work.id)}`;
     },
     initialRect: INITIAL_LIST_RECT,
     overscan: 4,
@@ -333,7 +347,10 @@ function VirtualList({ scrollRef, rows, renderCard, onToggleCollapsed, onNewWork
                 section={row.section}
                 onToggleCollapsed={() => onToggleCollapsed(row.section.key)}
                 onNewWork={onNewWork}
+                headerOnly
               />
+            ) : row.kind === 'archived' ? (
+              <ProjectArchivedLink section={row.section} />
             ) : (
               renderCard(row.entry)
             )}

@@ -23,6 +23,7 @@
 import type { Message, MessageKind, Room, WorkEntry, WorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { participantTag } from './participant-tag.js';
+import { isRoomArchived } from './room-archive.js';
 import { treeOrder } from './tree-order.js';
 
 // Тот же литерал, что и `HUMAN` в `core/work/types.ts` (см. комментарий выше
@@ -35,11 +36,14 @@ export const DECISIONS_SHOWN = 5;
 
 /**
  * Адресаты письма: `to`, а у рассылки комнаты (пустой `to`) — все участники,
- * кроме отправителя (спецификация 6.1, перенос из `core/work/letters.ts`).
+ * кроме отправителя (спецификация 6.1, перенос из `core/work/letters.ts`). Письма архивной комнаты адресатов не имеют,
+ * и с явным `to` тоже: старая лента непрочитанной не считается (архив комнат, 3.4).
  */
 export function recipientsOf(message: Message, map: WorkMap): string[] {
-  if (message.roomId === null || message.to.length > 0) return message.to;
+  if (message.roomId === null) return message.to;
   const room = map.rooms.find((candidate: Room) => candidate.id === message.roomId);
+  if (room !== undefined && isRoomArchived(room)) return [];
+  if (message.to.length > 0) return message.to;
   if (room === undefined) return [];
   const members = new Set([room.creator, ...room.members]);
   members.delete(HUMAN);

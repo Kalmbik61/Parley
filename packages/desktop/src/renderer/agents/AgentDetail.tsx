@@ -8,10 +8,11 @@
 import { useState } from 'react';
 import { ArrowLeft, CheckCircle2, Circle, LoaderCircle } from 'lucide-react';
 import type { FeedItem } from '@parley/core';
-import type { SessionRef } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { ChatEnvContext } from '../chat/chat-env.js';
+import { ImagePreviewHost } from '../chat/ImagePreview.js';
 import { ToolItem } from '../chat/items/ToolItem.js';
 import { openAgentCard } from '../chat/open-agent.js';
 import { requestTranscript, TRANSCRIPT_TAIL, useLiveTranscript, type Transcript } from '../chat/transcript.js';
@@ -65,81 +66,85 @@ export function AgentDetail({ bridge, sessionRef, items, pick, onBack }: AgentDe
 
   return (
     <ChatEnvContext.Provider value={{ bridge, sessionRef }}>
-      <div data-testid="agent-detail" className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto px-1 pb-2">
-        {back}
-        <header className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
-            {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" /> : null}
-            <span className="min-w-0 truncate">{agent.description ?? agent.agentType ?? S.chat.agent.fallbackTitle}</span>
-          </span>
-          <span className="min-w-0 truncate text-xs text-muted-foreground">
-            {[agent.agentType, agent.model, S.chat.agent.status[agent.status], formatDuration(elapsed)].filter(Boolean).join(' · ')}
-          </span>
-        </header>
+      {/* Миниатюры картинок в транскрипте агента открывают просмотр, как в ленте: панель держит свой диалог (панель видна,
+          пока смонтирована; сменили сессию — `key` у `AgentsPanelView` убирает её вместе с диалогом). */}
+      <ImagePreviewHost bridge={bridge} sessionKey={refKey(sessionRef)} visible>
+        <div data-testid="agent-detail" className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto px-1 pb-2">
+          {back}
+          <header className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+              {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" /> : null}
+              <span className="min-w-0 truncate">{agent.description ?? agent.agentType ?? S.chat.agent.fallbackTitle}</span>
+            </span>
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {[agent.agentType, agent.model, S.chat.agent.status[agent.status], formatDuration(elapsed)].filter(Boolean).join(' · ')}
+            </span>
+          </header>
 
-        {agent.prompt !== null ? (
+          {agent.prompt !== null ? (
+            <section className="flex min-w-0 flex-col gap-1">
+              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.task}</h3>
+              <div className="min-w-0 break-words text-sm">
+                <RoomMarkdown text={prompt} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
+              </div>
+              {promptLines.length > PROMPT_LINES ? (
+                <button type="button" className="self-start text-xs text-muted-foreground hover:text-foreground" onClick={() => setPromptOpen(!promptOpen)}>
+                  {promptOpen ? S.agentsPanel.showLess : S.agentsPanel.showAll}
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {steps !== null ? (
+            <section className="flex min-w-0 flex-col gap-1">
+              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.steps}</h3>
+              <ul className="flex flex-col gap-0.5 text-sm">
+                {steps.map((step, index) => (
+                  <li key={index} className="flex min-w-0 items-start gap-1.5">
+                    {step.status === 'completed' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : step.status === 'in_progress' ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : <Circle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />}
+                    <span className="min-w-0 break-words">{step.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           <section className="flex min-w-0 flex-col gap-1">
-            <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.task}</h3>
-            <div className="min-w-0 break-words text-sm">
-              <RoomMarkdown text={prompt} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
-            </div>
-            {promptLines.length > PROMPT_LINES ? (
-              <button type="button" className="self-start text-xs text-muted-foreground hover:text-foreground" onClick={() => setPromptOpen(!promptOpen)}>
-                {promptOpen ? S.agentsPanel.showLess : S.agentsPanel.showAll}
+            <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.activity}</h3>
+            {agent.children.length === 0 ? <p className="text-xs text-muted-foreground">{S.agentsPanel.noActivity}</p> : null}
+            {agent.children.map((child) => (
+              <ToolItem key={child.id} item={child} compact />
+            ))}
+          </section>
+
+          {agent.result !== undefined ? (
+            <section className="flex min-w-0 flex-col gap-1">
+              <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.result}</h3>
+              <div className="min-w-0 break-words text-sm">
+                <RoomMarkdown text={agent.result} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
+              </div>
+            </section>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2">
+            {agent.agentId !== null ? (
+              <button type="button" className="text-xs underline-offset-2 hover:underline" onClick={() => (transcript === null ? reload() : setTranscript(null))}>
+                {transcript === null ? S.agentsPanel.fullTranscript : S.agentsPanel.hideTranscript}
               </button>
             ) : null}
-          </section>
-        ) : null}
-
-        {steps !== null ? (
-          <section className="flex min-w-0 flex-col gap-1">
-            <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.steps}</h3>
-            <ul className="flex flex-col gap-0.5 text-sm">
-              {steps.map((step, index) => (
-                <li key={index} className="flex min-w-0 items-start gap-1.5">
-                  {step.status === 'completed' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : step.status === 'in_progress' ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : <Circle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />}
-                  <span className="min-w-0 break-words">{step.text}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        <section className="flex min-w-0 flex-col gap-1">
-          <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.activity}</h3>
-          {agent.children.length === 0 ? <p className="text-xs text-muted-foreground">{S.agentsPanel.noActivity}</p> : null}
-          {agent.children.map((child) => (
-            <ToolItem key={child.id} item={child} compact />
-          ))}
-        </section>
-
-        {agent.result !== undefined ? (
-          <section className="flex min-w-0 flex-col gap-1">
-            <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.result}</h3>
-            <div className="min-w-0 break-words text-sm">
-              <RoomMarkdown text={agent.result} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
-            </div>
-          </section>
-        ) : null}
-
-        <div className="flex flex-wrap gap-2">
-          {agent.agentId !== null ? (
-            <button type="button" className="text-xs underline-offset-2 hover:underline" onClick={() => (transcript === null ? reload() : setTranscript(null))}>
-              {transcript === null ? S.agentsPanel.fullTranscript : S.agentsPanel.hideTranscript}
-            </button>
-          ) : null}
-          {agent.agentId !== null ? (
-            <button type="button" className="text-xs underline-offset-2 hover:underline" onClick={() => openAgentCard(sessionRef, agent.agentId as string)}>
-              {S.agentsPanel.showInChat}
-            </button>
-          ) : null}
+            {agent.agentId !== null ? (
+              <button type="button" className="text-xs underline-offset-2 hover:underline" onClick={() => openAgentCard(sessionRef, agent.agentId as string)}>
+                {S.agentsPanel.showInChat}
+              </button>
+            ) : null}
+          </div>
+          {transcript?.state === 'loading' ? <p className="text-xs text-muted-foreground">{S.chat.agent.transcriptLoading}</p> : null}
+          {transcript?.state === 'error' ? <p className="text-xs text-muted-foreground">{S.chat.agent.transcriptFailed}</p> : null}
+          {tail.map((item) => (item.kind === 'tool' ? <ToolItem key={item.id} item={item} compact /> : item.kind === 'text' || item.kind === 'prompt' ? (
+            <div key={item.id} className="min-w-0 break-words text-sm"><RoomMarkdown text={item.text} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} /></div>
+          ) : null))}
         </div>
-        {transcript?.state === 'loading' ? <p className="text-xs text-muted-foreground">{S.chat.agent.transcriptLoading}</p> : null}
-        {transcript?.state === 'error' ? <p className="text-xs text-muted-foreground">{S.chat.agent.transcriptFailed}</p> : null}
-        {tail.map((item) => (item.kind === 'tool' ? <ToolItem key={item.id} item={item} compact /> : item.kind === 'text' || item.kind === 'prompt' ? (
-          <div key={item.id} className="min-w-0 break-words text-sm"><RoomMarkdown text={item.text} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} /></div>
-        ) : null))}
-      </div>
+      </ImagePreviewHost>
     </ChatEnvContext.Provider>
   );
 }

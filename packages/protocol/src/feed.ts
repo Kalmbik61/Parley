@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
 
 /** Версия схемы ленты: растёт с каждым добавленным полем элемента или решения. */
-export const FEED_SCHEMA_VERSION = 2;
+export const FEED_SCHEMA_VERSION = 3;
 
 /** = `FEED_RESULT_LIMIT` core: символов сводки результата инструмента. */
 export const FEED_RESULT_LIMIT = 64 * 1024;
@@ -28,6 +28,12 @@ export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 export const FEED_TEXT_LIMIT = 256 * 1024;
 /** = `FEED_AGENT_CHILDREN` core: вложенных вызовов у карточки субагента. */
 export const FEED_AGENT_CHILDREN = 100;
+/** = `FEED_IMAGES_PER_CALL` core: ссылок на картинки в сводке результата одного вызова. */
+export const FEED_IMAGES_PER_CALL = 6;
+/** = `FEED_IMAGE_PATH_LIMIT` core: символов в пути к файлу картинки (`FeedImageRef.path`). */
+export const FEED_IMAGE_PATH_LIMIT = 4096;
+/** = `FEED_IMAGE_MIME_LIMIT` core: символов в типе картинки (`FeedImageRef.mime`). */
+export const FEED_IMAGE_MIME_LIMIT = 100;
 /**
  * = `FEED_MIN_VERSION` core: наименьшая версия `claude`, которой хост пишет HTTP-хуки ленты. Окно по
  * ней решает, доступен ли сессии вид «Chat» (решение 6), — core в рендерер не импортируется.
@@ -90,10 +96,18 @@ const text = z.strictObject({
   truncated: z.boolean().exactOptional(),
 });
 
+/** Ссылка на файл картинки результата (`FeedImageRef` core): байтов лента не несёт. */
+const imageRef = z.strictObject({
+  path: z.string().max(FEED_IMAGE_PATH_LIMIT),
+  mime: z.string().max(FEED_IMAGE_MIME_LIMIT),
+  bytes: z.number().int().min(0).exactOptional(),
+});
+
 const toolResponse = z.strictObject({
   text: z.string().max(FEED_RESULT_LIMIT),
   size: z.number().int().min(0),
   truncated: z.boolean(),
+  images: z.array(imageRef).max(FEED_IMAGES_PER_CALL).exactOptional(),
 });
 
 const patchHunk = z.strictObject({

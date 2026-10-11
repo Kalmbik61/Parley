@@ -8,7 +8,7 @@
  * - на другую сессию — диалог «New room» из двух сессий (1.6): `merge`;
  * - на строку комнаты, где сессии нет, — `rooms.addMember`: `join`.
  * Нельзя: на себя, в свою комнату (и на участника своей комнаты), закрытую сессию и на закрытую (хост закрытых в
- * комнату не берёт), на сессию или комнату, которых в карте уже нет. Цель, на которую бросить нельзя, не подсвечивается.
+ * комнату не берёт), на сессию или комнату, которых в карте уже нет, и на архивную комнату (писать в неё нельзя). Цель, на которую бросить нельзя, не подсвечивается.
  *
  * «Своя комната» — та, в которой сайдбар ставит сессию (`sidebar/sort.ts#homeRoomOf`): сессия старой карты в
  * нескольких комнатах стоит в самой ранней (решение 4), поэтому бросок её в другую из них разрешён, а правило одной
@@ -16,6 +16,7 @@
  */
 
 import type { WorkMap } from '@parley/core';
+import { isRoomArchived } from '../lib/room-archive.js';
 import { homeRoomOf } from '../sidebar/sort.js';
 import type { SidebarTarget } from './dnd.js';
 
@@ -40,6 +41,6 @@ export function resolveSidebarDrop(map: WorkMap, sessionId: string, target: Side
   }
 
   const room = map.rooms.find((candidate) => candidate.id === target.roomId);
-  if (room === undefined || homeRoomOf(map, dragged.id)?.id === room.id) return null;
+  if (room === undefined || isRoomArchived(room) || homeRoomOf(map, dragged.id)?.id === room.id) return null;
   return { kind: 'join', sessionId: dragged.id, roomId: room.id };
 }

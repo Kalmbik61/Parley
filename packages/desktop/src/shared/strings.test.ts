@@ -87,6 +87,22 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
     expect(S.sidebar.hideClosed).toBe('Hide closed');
   });
 
+  // Спека архива комнат и проектов, 6, 6.2 и 6.3: ссылка группы проекта, текст архивации работы, «Remove from list…».
+  it('ссылка группы проекта, подтверждение архивации работы и «Remove from list…» — тексты спеки', () => {
+    expect(S.sidebar.archivedWorks(3)).toBe('3 archived');
+    expect(S.sidebar.hideArchivedWorks).toBe('Hide archived');
+    expect(S.cardMenu.archiveConfirmDescription).toBe(
+      'Running agents will be stopped. Find it under "archived" at the bottom of its project, then "Reopen" it to resume them.',
+    );
+    expect(S.sidebar.removeFromList).toBe('Remove from list…');
+    expect(S.sidebar.removeFromListBlocked).toBe('Archive its workspaces first');
+    expect(S.sidebar.removeProjectTitle('shop')).toBe('Remove "shop" from the list?');
+    expect(S.sidebar.removeProjectDescription).toBe(
+      'Its workspaces stay on disk. The project comes back when a workspace is created in it.',
+    );
+    expect(S.sidebar.removeProjectConfirm).toBe('Remove');
+  });
+
   // Кусок 5 плана «Organic»: строка комнаты (1.2) и строка «New session or room» под строками карточки.
   it('строка комнаты: шеврон, слова состояния, `★` ведущего', () => {
     expect(S.sidebar.showAgents).toBe('Show agents');

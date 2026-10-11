@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedAgent, FeedItem, FeedTool } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
@@ -59,6 +59,39 @@ describe('AgentDetail', () => {
     expect(openAgentCard).toHaveBeenCalledWith(REF, 'a1');
     fireEvent.click(screen.getByRole('button', { name: S.agentsPanel.back }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  it('миниатюра картинки в транскрипте агента открывает просмотр (в панели свой диалог просмотра)', async () => {
+    const SHOT = '/h/feed-images/shot.png';
+    const SMALL = 'data:image/png;base64,SMALL';
+    const BIG = 'data:image/png;base64,BIG';
+    const bridge = createFakeBridge();
+    bridge.setThumbnail(SHOT, SMALL);
+    bridge.setThumbnail(SHOT, BIG, 1600);
+    // Вызовы агента в карточке картинок не несут (редьюсер их там срезает); они есть в транскрипте агента — его «Full transcript».
+    const screenshot: FeedTool = {
+      ...call,
+      id: 'tool:shot',
+      toolUseId: 'shot',
+      name: 'mcp__chrome-devtools__take_screenshot',
+      input: {},
+      response: { text: '[image png, 1 KB]', size: 18, truncated: false, images: [{ path: SHOT, mime: 'image/png' }] },
+    };
+    bridge.setHandler('feed.snapshot', () => ({ items: [screenshot] as FeedItem[], revision: 0, schemaVersion: 2, mode: null }));
+    render(<AgentDetail bridge={bridge} sessionRef={REF} items={[agent()]} pick={{ by: 'item', id: 'agent:t1' }} onBack={() => undefined} />);
+
+    fireEvent.click(screen.getByRole('button', { name: S.agentsPanel.fullTranscript }));
+    const thumbnail = await screen.findByRole('button', { name: 'Image 1 of 1' });
+    expect(thumbnail.querySelector('img')?.getAttribute('src')).toBe(SMALL);
+
+    fireEvent.click(thumbnail);
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 of 1' });
+    await waitFor(() => expect(within(dialog).getByTestId('chat-tool-image-view').getAttribute('src')).toBe(BIG));
+    expect(bridge.thumbnailRequests).toContainEqual({ path: SHOT, maxPx: 1600 });
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(thumbnail);
   });
 
   it('агента больше нет в ленте — строка gone и кнопка назад', () => {

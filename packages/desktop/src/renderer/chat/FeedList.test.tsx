@@ -94,6 +94,18 @@ afterEach(() => {
   if (originalOffsetHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
 });
 
+describe('FeedList — прокрутчик как место возврата фокуса', () => {
+  it('прокрутчик получает фокус программно (tabindex -1) и помечен: просмотр картинки вернёт фокус сюда, если строки с миниатюрой уже нет', () => {
+    render(feed([text('a', 'one')]));
+    const scroller = screen.getByTestId('chat-feed');
+
+    expect(scroller.getAttribute('tabindex')).toBe('-1');
+    expect(scroller.hasAttribute('data-preview-return')).toBe(true);
+    scroller.focus();
+    expect(document.activeElement).toBe(scroller);
+  });
+});
+
 describe('FeedList — перерисовка по дельте', () => {
   it('дельта меняет один текст — перерисована одна строка, остальные нет', () => {
     const first = [text('a', 'one'), text('b', 'two'), text('c', 'three')];

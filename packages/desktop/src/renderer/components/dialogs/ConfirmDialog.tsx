@@ -23,9 +23,14 @@ export interface ConfirmDialogProps {
   confirmVariant?: 'destructive' | 'default';
   /**
    * Флажок под описанием (удаление комнаты: «Also delete its N sessions»). Снят при каждом открытии — согласие на
-   * большее разрушение даётся явно; его значение приходит в `onConfirm`.
+   * большее разрушение даётся явно; его значение приходит в `onConfirm`. Включённым его открывает `checkboxChecked`.
    */
   checkbox?: string;
+  /**
+   * Флажок включён при каждом открытии (архив комнаты: «Also stop its N agents…» — остановка обратима, и по умолчанию
+   * её хотят). Без `checkbox` ничего не значит.
+   */
+  checkboxChecked?: boolean;
   onConfirm: (checked: boolean) => void;
   /**
    * Второе действие между «Отменой» и подтверждением (раунд fix-final-c, п. 4: «Commit anyway»
@@ -44,6 +49,7 @@ export function ConfirmDialog({
   confirmLabel,
   confirmVariant = 'destructive',
   checkbox,
+  checkboxChecked = false,
   onConfirm,
   secondary,
   onOpenChange,
@@ -53,12 +59,12 @@ export function ConfirmDialog({
   // остаётся в DOM на время анимации закрытия, и двойной клик слал второй вызов — у
   // удаления он получал `not_found` и показывал ложный тост после успешного удаления.
   const confirmed = useRef(false);
-  const [checked, setChecked] = useState(false);
+  const [checked, setChecked] = useState(checkboxChecked);
   useEffect(() => {
     if (!open) return;
     confirmed.current = false;
-    setChecked(false);
-  }, [open]);
+    setChecked(checkboxChecked);
+  }, [open, checkboxChecked]);
 
   // `aria-describedby={undefined}` без описания — приём из `ui/ui.test.tsx`,
   // чтобы Radix не предупреждал в консоли про отсутствующее описание. С

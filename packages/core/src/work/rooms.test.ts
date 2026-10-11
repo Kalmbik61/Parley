@@ -2,21 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { unreadFor } from './letters.js';
 import { addMessage, addSession, parseMap, removeSession, setResult, transitionSession } from './map.js';
 import { reservePlanEffects } from './plan-effects.js';
-import { resolveProposal, setProposal } from './proposals.js';
+import { activeRoomPlan, cancelRoomPlan, setRoomMode, updatePlanItem } from './plans.js';
+import { proposeCompletion, resolveProposal, setProposal } from './proposals.js';
 import {
   addMember,
   addMemberByLead,
   addRoom,
+  addRoomArchivedLetters,
   addRoomOriginMessage,
+  addSystemMessage,
+  archiveRoom,
   deleteRoom,
   isDescendant,
   isMember,
+  isRoomArchived,
   isRoomClosed,
   joinNotice,
   leaveOtherRooms,
   liveLead,
   nextRoomId,
   renameRoom,
+  renameSession,
+  reopenRoom,
+  requireOpenRoom,
   roomLead,
   RoomRuleError,
   setRoomLead,
@@ -42,7 +50,7 @@ describe('nextRoomId', () => {
   it('первая комната — r-01, дальше по порядку', () => {
     const map = emptyMap();
     expect(nextRoomId(map)).toBe('r-01');
-    map.rooms.push({ id: 'r-01', title: 'x', creator: 's-01', members: [], createdAt: '', lead: null, proposal: null });
+    map.rooms.push({ id: 'r-01', title: 'x', creator: 's-01', members: [], createdAt: '', lead: null, proposal: null, archivedAt: null });
     expect(nextRoomId(map)).toBe('r-02');
   });
 
@@ -73,6 +81,7 @@ describe('addRoom', () => {
       mode: 'free',
       proposal: null,
       recipe: null,
+      archivedAt: null,
     });
     expect(map.rooms).toEqual([room]);
   });
@@ -87,6 +96,7 @@ describe('isMember', () => {
     createdAt: '',
     lead: null,
     proposal: null,
+    archivedAt: null,
   };
 
   it('создатель, участник и человек — участники; посторонний — нет', () => {
@@ -195,6 +205,7 @@ describe('roomLead', () => {
     createdAt: '',
     lead: null,
     proposal: null,
+    archivedAt: null,
     ...patch,
   });
 
@@ -615,6 +626,44 @@ describe('renameRoom', () => {
   });
 });
 
+describe('renameSession', () => {
+  it('края обрезаются, как у комнаты: пробелы и невидимые символы формата; системной строки нет', () => {
+    const map = twoRooms();
+    renameSession(map, 's-02', '  \u200BRuslan Backend\u2060 ');
+    expect(map.sessions[1]?.label).toBe('Ruslan Backend');
+    // Остальные сессии и комнаты не тронуты, в ленте ничего не появилось.
+    expect(map.sessions.map((session) => session.label)).toEqual(['архитектор', 'Ruslan Backend', 'ревью', 'тесты']);
+    expect(map.rooms.map((room) => room.title)).toEqual(['Возвраты', 'Ревью']);
+    expect(map.messages).toEqual([]);
+  });
+
+  it('пустое, из пробелов или из одних ZWSP — отказ, прежнее имя остаётся; нет сессии — отказ', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+    for (const label of ['', '   ', '\u200B\u200B']) {
+      expect(() => renameSession(map, 's-02', label)).toThrow(RoomRuleError);
+    }
+    expect(() => renameSession(map, 's-09', 'x')).toThrow(/is not in the map/);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('закрытую сессию тоже можно переименовать: строка в сайдбаре остаётся', () => {
+    const map = twoRooms();
+    transitionSession(map, 's-03', 'closed');
+
+    renameSession(map, 's-03', 'Reviewer');
+
+    expect(map.sessions[2]).toMatchObject({ label: 'Reviewer', lifecycle: 'closed' });
+  });
+
+  it('сессия-участник комнаты остаётся участником: меняется только ярлык', () => {
+    const map = twoRooms();
+    renameSession(map, 's-01', 'Lead');
+    expect(map.rooms[0]?.members).toEqual(['s-01', 's-02']);
+    expect(map.rooms[0]?.lead).toBe('s-01');
+  });
+});
+
 describe('setRoomLead', () => {
   const NOW = '2026-10-07T12:00:00.000Z';
 
@@ -728,6 +777,15 @@ describe('deleteRoom', () => {
     expect(() => parseMap(JSON.stringify(map), 'map.json')).not.toThrow();
   });
 
+  it('архивная комната: прощальное письмо только работающему — спящего, усыплённого архивацией, оно не будит', () => {
+    const map = roomsWithFeed();
+    archiveRoom(map, 'r-01', NOW);
+    const letters = deleteRoom(map, 'r-01', NOW);
+
+    expect(letters.map((letter) => letter.to)).toEqual([['s-01']]);
+    expect(unreadFor(map, 's-02')).toEqual([]);
+  });
+
   it('не запущенный, закрытый и состоящий в другой комнате (старая карта) участник письма не получает', () => {
     const map = roomsWithFeed();
     addMember(map, 'r-01', 's-04', NOW);
@@ -792,5 +850,345 @@ describe('deleteRoom', () => {
     const before = JSON.stringify(map);
     expect(() => deleteRoom(map, 'r-09', NOW)).toThrow(RoomRuleError);
     expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe('requireOpenRoom и isRoomArchived', () => {
+  const NOW = '2026-10-08T12:00:00.000Z';
+  const REFUSAL = 'room r-01 is archived: only the human can reopen it';
+
+  it('открытая комната возвращается; архивная — RoomRuleError с текстом из спеки; нет комнаты — отказ, как у соседей', () => {
+    const map = twoRooms();
+    expect(requireOpenRoom(map, 'r-01')).toBe(map.rooms[0]);
+
+    archiveRoom(map, 'r-01', NOW);
+    expect(() => requireOpenRoom(map, 'r-01')).toThrow(RoomRuleError);
+    expect(() => requireOpenRoom(map, 'r-01')).toThrow(REFUSAL);
+    expect(requireOpenRoom(map, 'r-02')).toBe(map.rooms[1]);
+    expect(() => requireOpenRoom(map, 'r-09')).toThrow(/room r-09 is not in the map/);
+  });
+
+  it('комната из литерала без archivedAt (карта не через parseMap) открытая, а не архивная', () => {
+    const legacy = { id: 'r-01', title: 'x', creator: HUMAN, members: [], createdAt: '', lead: null, proposal: null } as unknown as Room;
+    expect(isRoomArchived(legacy)).toBe(false);
+    expect(isRoomArchived({ ...legacy, archivedAt: null })).toBe(false);
+    expect(isRoomArchived({ ...legacy, archivedAt: NOW })).toBe(true);
+  });
+});
+
+/** Три сессии и комната r-01 «План» (checklist) человека: ведущий s-01, пункты у s-02 и s-03. Решение принято. */
+function planRoomMap(): WorkMap {
+  const map = emptyMap();
+  for (const label of ['ведущий', 'первый', 'второй']) {
+    addSession(map, { provider: 'claude', label, task: 'x' });
+  }
+  addRoom(map, { title: 'План', creator: HUMAN, members: ['s-01', 's-02', 's-03'], lead: 's-01', mode: 'checklist' });
+  const plan = {
+    mode: 'checklist' as const,
+    goal: 'Готово',
+    items: [
+      { id: 1, title: 'Первый', owner: 's-02', scope: 'src/a.ts' },
+      { id: 2, title: 'Второй', owner: 's-03', scope: 'src/b.ts' },
+    ],
+  };
+  const proposal = setProposal(map, 'r-01', 's-01', 'Решение', '2026-10-08T12:00:00.000Z', { plan });
+  resolveProposal(map, 'r-01', proposal.proposalId, 'accept', { rev: 0, planId: map.rooms[0]!.proposal!.plan!.id, planRev: 0 }, '2026-10-08T12:00:00.000Z');
+  return map;
+}
+
+describe('archiveRoom', () => {
+  const NOW = '2026-10-08T12:00:00.000Z';
+  const LATER = '2026-10-08T13:00:00.000Z';
+
+  it('ставит archivedAt, пишет одну системную строку человеку и оставляет ленту нетронутой', () => {
+    const map = twoRooms();
+    addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', text: 'задача' });
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'позиция' });
+    const before = map.messages.map((message) => ({ ...message }));
+
+    archiveRoom(map, 'r-01', NOW);
+
+    expect(map.rooms[0]).toMatchObject({ id: 'r-01', archivedAt: NOW });
+    expect(map.rooms[1]?.archivedAt).toBeNull();
+    expect(map.messages.slice(0, 2)).toEqual(before);
+    expect(map.messages).toHaveLength(3);
+    expect(map.messages[2]).toMatchObject({
+      roomId: 'r-01',
+      from: SYSTEM,
+      to: [HUMAN],
+      kind: 'note',
+      text: 'Room archived by the human.',
+      at: NOW,
+    });
+    expect(map.messages[2]?.readBy[HUMAN]).toBe(NOW);
+  });
+
+  it('очищает слот решения без ответа и письма ведущему не пишет', () => {
+    const map = twoRooms();
+    setProposal(map, 'r-01', 's-01', 'План', NOW);
+
+    archiveRoom(map, 'r-01', LATER);
+
+    expect(map.rooms[0]?.proposal).toBeNull();
+    expect(map.messages.map((message) => message.text)).toEqual(['Room archived by the human.']);
+  });
+
+  it('отменяет живой план, снимает доставки в очереди и ждущую правку; новых писем доставка не шлёт', () => {
+    const map = planRoomMap();
+    // Лимит один: доставка первого пункта ушла письмом, второго осталась в очереди.
+    reservePlanEffects(map, 1, NOW);
+    expect(map.planEffects?.map((effect) => effect.status)).toEqual(['sent', 'queued']);
+    const plan = map.plans![0]!;
+    setProposal(map, 'r-01', 's-01', 'Правка плана', NOW, {
+      plan: { mode: 'checklist', goal: 'Другая цель', items: plan.items.map(({ id, title, owner, scope }) => ({ id, title, owner, scope })), id: plan.id, rev: plan.rev },
+    });
+    expect(map.rooms[0]?.proposal).not.toBeNull();
+
+    archiveRoom(map, 'r-01', LATER);
+
+    expect(map.plans![0]).toMatchObject({ status: 'cancelled', cancelledAt: LATER });
+    expect(activeRoomPlan(map, 'r-01')).toBeUndefined();
+    expect(map.planEffects?.map((effect) => effect.status)).toEqual(['sent', 'cancelled']);
+    expect(map.rooms[0]).toMatchObject({ proposal: null, archivedAt: LATER });
+    // Порядок: сначала отмена плана, потом строка об архивации, и только потом ставится archivedAt.
+    expect(map.messages.slice(-2).map((message) => message.text)).toEqual([`Plan ${plan.id} cancelled`, 'Room archived by the human.']);
+
+    const count = map.messages.length;
+    reservePlanEffects(map, 20, LATER);
+    expect(map.messages).toHaveLength(count);
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).not.toThrow();
+  });
+
+  it('возвращает сессии, которых архивация оставила без открытой комнаты; человек и неизвестные id не входят', () => {
+    const map = twoRooms();
+    expect(archiveRoom(map, 'r-01', NOW)).toEqual(['s-01', 's-02']);
+
+    // Создатель-сессия тоже участник; удалённая из карты сессия не входит.
+    const agents = emptyMap();
+    for (const label of ['создатель', 'участник', 'удалённый']) {
+      addSession(agents, { provider: 'claude', label, task: 'x' });
+    }
+    addRoom(agents, { title: 'агентская', creator: 's-01', members: ['s-02', 's-03'], lead: 's-01' });
+    removeSession(agents, 's-03');
+    expect(archiveRoom(agents, 'r-01', NOW)).toEqual(['s-01', 's-02']);
+  });
+
+  it('сессия другой открытой комнаты (старая карта) остаётся; другая архивная комната её не держит', () => {
+    const map = twoRooms();
+    // Старая карта: s-02 числится и в r-02.
+    (map.rooms[1] as Room).members.push('s-02');
+
+    expect(archiveRoom(map, 'r-02', NOW)).toEqual(['s-03']);
+    // r-02 теперь в архиве, и s-02 осталась без открытой комнаты, когда уходит и r-01.
+    expect(archiveRoom(map, 'r-01', NOW)).toEqual(['s-01', 's-02']);
+  });
+
+  it('повторный вызов ничего не меняет, не пишет вторую строку и отдаёт пустой список', () => {
+    const map = twoRooms();
+    expect(archiveRoom(map, 'r-01', NOW)).toEqual(['s-01', 's-02']);
+    const after = JSON.stringify(map);
+
+    expect(archiveRoom(map, 'r-01', LATER)).toEqual([]);
+    expect(JSON.stringify(map)).toBe(after);
+    expect(map.messages.filter((message) => message.text === 'Room archived by the human.')).toHaveLength(1);
+  });
+
+  it('нет комнаты — RoomRuleError, карта не тронута', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+    expect(() => archiveRoom(map, 'r-09', NOW)).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('карта с архивной комнатой читается, а archivedAt переживает круг запись → чтение', () => {
+    const map = planRoomMap();
+    archiveRoom(map, 'r-01', NOW);
+    expect(parseMap(JSON.stringify(map), 'map.json').rooms[0]?.archivedAt).toBe(NOW);
+  });
+
+  describe('писать в архивную комнату нельзя, читать и убирать можно', () => {
+    const REFUSAL = /room r-01 is archived: only the human can reopen it/;
+
+    function archived(): WorkMap {
+      const map = twoRooms();
+      addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'позиция' });
+      archiveRoom(map, 'r-01', NOW);
+      return map;
+    }
+
+    it('входы в комнату, ведущий, решение, режим и завершение плана отказывают RoomRuleError', () => {
+      const map = archived();
+      const writes: [string, () => unknown][] = [
+        ['addMember', () => addMember(map, 'r-01', 's-04')],
+        ['addMemberByLead', () => addMemberByLead(map, 'r-01', 's-01', 's-04')],
+        ['setRoomLead', () => setRoomLead(map, 'r-01', 's-02')],
+        ['setProposal', () => setProposal(map, 'r-01', 's-01', 'решение')],
+        ['resolveProposal', () => resolveProposal(map, 'r-01', 'p-01', 'accept')],
+        ['setRoomMode', () => setRoomMode(map, 'r-01', HUMAN, 'checklist', 'причина')],
+        ['proposeCompletion', () => proposeCompletion(map, 'r-01', 's-01', 'pl-01', 0, 'итог')],
+      ];
+      const before = JSON.stringify(map);
+      for (const [name, write] of writes) {
+        expect(write, name).toThrow(RoomRuleError);
+        expect(write, name).toThrow(REFUSAL);
+      }
+      expect(JSON.stringify(map)).toBe(before);
+    });
+
+    it('шаги плана архивной комнаты отказывают причиной архива, а не «план изменился»', () => {
+      const map = planRoomMap();
+      archiveRoom(map, 'r-01', NOW);
+      const plan = map.plans![0]!;
+      expect(() => updatePlanItem(map, plan.id, plan.rev, 1, 's-02', 'in_progress')).toThrow(REFUSAL);
+      expect(() => cancelRoomPlan(map, plan.id, plan.rev, HUMAN)).toThrow(REFUSAL);
+    });
+
+    it('переименование, удаление и служебные строки проходят', () => {
+      const map = archived();
+      renameRoom(map, 'r-01', 'Новое имя');
+      expect(map.rooms[0]?.title).toBe('Новое имя');
+
+      const line = addSystemMessage(map, 'r-01', 'служебная строка', LATER);
+      expect(line).toMatchObject({ roomId: 'r-01', text: 'служебная строка' });
+      const letter = addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', text: 'от человека' });
+      expect(letter.roomId).toBe('r-01');
+
+      deleteRoom(map, 'r-01', LATER);
+      expect(map.rooms.map((room) => room.id)).toEqual(['r-02']);
+    });
+
+    it('правило одной комнаты не меняется: вошедшая в новую комнату сессия молча уходит из архивной', () => {
+      const map = archived();
+      const feed = map.messages.filter((message) => message.roomId === 'r-01').map((message) => message.id);
+
+      addMember(map, 'r-02', 's-01', LATER);
+
+      expect(map.rooms[0]?.members).toEqual(['s-02']);
+      expect(map.rooms[0]?.archivedAt).toBe(NOW);
+      expect(map.messages.filter((message) => message.roomId === 'r-01').map((message) => message.id)).toEqual(feed);
+    });
+  });
+});
+
+describe('reopenRoom', () => {
+  const NOW = '2026-10-08T12:00:00.000Z';
+  const LATER = '2026-10-08T13:00:00.000Z';
+
+  it('снимает архив, пишет строку человеку; сессии не поднимаются, участники остаются; писать снова можно', () => {
+    const map = twoRooms();
+    archiveRoom(map, 'r-01', NOW);
+    const lifecycles = map.sessions.map((session) => session.lifecycle);
+
+    reopenRoom(map, 'r-01', LATER);
+
+    expect(map.rooms[0]).toMatchObject({ archivedAt: null, members: ['s-01', 's-02'] });
+    expect(map.messages.at(-1)).toMatchObject({
+      roomId: 'r-01',
+      from: SYSTEM,
+      to: [HUMAN],
+      text: 'Room reopened by the human.',
+      at: LATER,
+    });
+    expect(map.messages.at(-1)?.readBy[HUMAN]).toBe(LATER);
+    expect(map.sessions.map((session) => session.lifecycle)).toEqual(lifecycles);
+    expect(requireOpenRoom(map, 'r-01')).toBe(map.rooms[0]);
+    expect(addMember(map, 'r-01', 's-04', LATER).roomId).toBe('r-01');
+  });
+
+  it('письма, не прочитанные до архивации, после возврата непрочитанными не становятся — спящих не будят', () => {
+    const map = twoRooms();
+    addMessage(map, { from: 's-01', to: [], roomId: 'r-01', text: 'рассылка' }, NOW);
+    expect(unreadFor(map, 's-02')).toHaveLength(1);
+    archiveRoom(map, 'r-01', NOW);
+    reopenRoom(map, 'r-01', LATER);
+    expect(unreadFor(map, 's-02')).toEqual([]);
+    expect(unreadFor(map, 's-01')).toEqual([]);
+    // Новое письмо после возврата — снова обычное непрочитанное.
+    addMessage(map, { from: 's-01', to: [], roomId: 'r-01', text: 'после возврата' }, LATER);
+    expect(unreadFor(map, 's-02').map((message) => message.text)).toEqual(['после возврата']);
+  });
+
+  it('открытая комната — ничего не меняет и строки не пишет', () => {
+    const map = twoRooms();
+    const before = JSON.stringify(map);
+    reopenRoom(map, 'r-01', LATER);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+
+  it('нет комнаты — RoomRuleError', () => {
+    expect(() => reopenRoom(twoRooms(), 'r-09', LATER)).toThrow(RoomRuleError);
+  });
+
+  it('план, отменённый архивацией, не воскресает', () => {
+    const map = planRoomMap();
+    archiveRoom(map, 'r-01', NOW);
+    reopenRoom(map, 'r-01', LATER);
+
+    expect(activeRoomPlan(map, 'r-01')).toBeUndefined();
+    expect(map.plans![0]?.status).toBe('cancelled');
+  });
+
+  it('после возврата комнату можно архивировать снова: вторая строка в ленте', () => {
+    const map = twoRooms();
+    archiveRoom(map, 'r-01', NOW);
+    reopenRoom(map, 'r-01', LATER);
+
+    expect(archiveRoom(map, 'r-01', LATER)).toEqual(['s-01', 's-02']);
+    expect(map.messages.filter((message) => message.text === 'Room archived by the human.')).toHaveLength(2);
+  });
+});
+
+describe('addRoomArchivedLetters', () => {
+  const NOW = '2026-10-08T12:00:00.000Z';
+  const LATER = '2026-10-08T13:00:00.000Z';
+  const TEXT = 'Room "Возвраты" was archived by the human. You are no longer in an open room.';
+
+  /** Комната «Возвраты» {s-01, s-02} в архиве: s-01 работает, s-02 спит. */
+  function archived(): { map: WorkMap; orphans: string[] } {
+    const map = twoRooms();
+    transitionSession(map, 's-01', 'active');
+    transitionSession(map, 's-02', 'active');
+    transitionSession(map, 's-02', 'sleeping');
+    return { map, orphans: archiveRoom(map, 'r-01', NOW) };
+  }
+
+  it('живой сессии — прямое письмо parley без комнаты; спящей письма нет', () => {
+    const { map, orphans } = archived();
+    const before = map.messages.length;
+
+    const letters = addRoomArchivedLetters(map, 'r-01', orphans, LATER);
+
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({ from: PARLEY, to: ['s-01'], roomId: null, kind: 'note', text: TEXT, at: LATER });
+    expect(map.messages).toHaveLength(before + 1);
+    // Письмо вне комнаты: будильник поднимет бы спящего, так что спящему его и не пишем.
+    expect(unreadFor(map, 's-01')).toHaveLength(1);
+    expect(unreadFor(map, 's-02')).toEqual([]);
+  });
+
+  it('закрытой и ещё не запущенной сессии письма нет; повтор id не удваивает письмо', () => {
+    const { map } = archived();
+    transitionSession(map, 's-03', 'closed');
+
+    // s-04 не запущена (pending), s-03 закрыта.
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-03', 's-04'], LATER)).toEqual([]);
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-01', 's-01'], LATER)).toHaveLength(1);
+  });
+
+  it('сессия, которая успела войти в другую открытую комнату, письма не получает', () => {
+    const { map, orphans } = archived();
+    addMember(map, 'r-02', 's-01', NOW);
+
+    expect(addRoomArchivedLetters(map, 'r-01', orphans, LATER)).toEqual([]);
+  });
+
+  it('пустой список и неизвестные id ничего не пишут; нет комнаты — RoomRuleError', () => {
+    const { map } = archived();
+    const before = JSON.stringify(map);
+
+    expect(addRoomArchivedLetters(map, 'r-01', [], LATER)).toEqual([]);
+    expect(addRoomArchivedLetters(map, 'r-01', ['s-99', HUMAN], LATER)).toEqual([]);
+    expect(JSON.stringify(map)).toBe(before);
+    expect(() => addRoomArchivedLetters(map, 'r-09', ['s-01'], LATER)).toThrow(RoomRuleError);
   });
 });

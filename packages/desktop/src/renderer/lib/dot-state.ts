@@ -11,16 +11,18 @@ import type { Activity, SessionLifecycle, SessionStatus, WorkSession } from '@pa
 import { S } from '../../shared/strings.js';
 
 /**
- * Прежний единый статус из двух осей карты v2 — копия `displayStatus` из
- * `core/work/status-view.ts`. Рендерер берёт из core только типы: рантайм core
- * тянет Node и в песочницу окна не собирается. Правка одной требует правки другой.
+ * Единый статус из двух осей карты v2. Не копия `displayStatus` из
+ * `core/work/status-view.ts` (рантайм core тянет Node и в песочницу окна не
+ * собирается): у живой сессии итог `report` не показываем — агент сдаёт его в
+ * конце каждого хода и остаётся жить, так что состояние ведёт activity. Итог
+ * видят спящая/закрытая сессия и тултип строки; core-версия (бриф, MCP) другая намеренно.
  */
 export function displayStatus(session: Pick<WorkSession, 'lifecycle' | 'result'>): SessionStatus {
   switch (session.lifecycle) {
     case 'pending':
       return 'pending';
     case 'active':
-      return session.result ?? 'active';
+      return 'active';
     case 'sleeping':
     case 'closed':
       return session.result ?? 'exited';

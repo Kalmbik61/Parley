@@ -5,19 +5,39 @@ import type { SessionRef } from '@parley/protocol';
 // копия выражений в окне должна узнавать ровно то, что core набирает в терминал.
 import { oneLine } from '../../../../core/src/counters.js';
 import { isPointerText, pointerText } from '../../../../core/src/work/delivery.js';
+import { defaultSessionName, NAMES } from '../../../../core/src/work/names.js';
 import type { Message, Room } from '../../../../core/src/work/types.js';
 import { sessionLabelFor, sessionLabelText, sessionRowLabel, workTitleText } from './participant.js';
 
 describe('sessionRowLabel', () => {
-  // Раунд исправлений 1 куска 3.3: `NEW_LABEL` core ('new session') окно показывает как «New session».
-  it('метка новой сессии из core — «New session», обычная — как есть', () => {
-    expect(sessionRowLabel('s-01', 'new session')).toBe('S01 New session');
+  // Спека архива комнат, часть 2, 13: `NEW_LABEL` core ('new session') на диске старой карты окно показывает именем
+  // по номеру сессии, а не «New session».
+  it('метка новой сессии из core — имя по номеру сессии, обычная — как есть', () => {
+    expect(sessionRowLabel('s-01', 'new session')).toBe(`S01 ${NAMES[0]}`);
+    expect(sessionRowLabel('s-18', 'new session')).toBe('S18 Nina');
     expect(sessionRowLabel('s-02', 'new')).toBe('S02 new');
   });
 
-  it('прежняя русская запись метки (карта старой сборки) — тоже «New session»', () => {
-    expect(sessionRowLabel('s-01', 'новая сессия')).toBe('S01 New session');
+  it('прежняя русская запись метки (карта старой сборки) — тоже имя по номеру', () => {
+    expect(sessionRowLabel('s-01', 'новая сессия')).toBe(`S01 ${NAMES[0]}`);
     expect(sessionRowLabel('s-02', 'новая')).toBe('S02 новая');
+  });
+
+  it('имя по номеру то же, что даёт core, и после полного круга с номером круга', () => {
+    for (const number of [1, 2, 17, 18, 60, 61, 120, 121]) {
+      const id = `s-${String(number).padStart(2, '0')}`;
+      expect(sessionRowLabel(id, 'new session'), id).toBe(`${id.replace('s-', 'S')} ${defaultSessionName(id)}`);
+    }
+    expect(sessionRowLabel('s-61', 'new session')).toBe(`S61 ${NAMES[0]} 2`);
+  });
+
+  it('свой ярлык, даже совпавший с чужим именем из списка, не трогается', () => {
+    expect(sessionRowLabel('s-01', 'Ralph')).toBe('S01 Ralph');
+  });
+
+  it('id не вида s-NN имени не получает — прежнее «New session»', () => {
+    expect(sessionRowLabel('manual-123', 'new session')).toBe('manual-123 New session');
+    expect(sessionLabelText('new session', 'manual-123')).toBe('New session');
   });
 
   it('s-03 → S03, склеивается с ярлыком', () => {
@@ -54,11 +74,11 @@ describe('указатель на письма вместо ярлыка (авт
     proposal: null,
   });
 
-  it('ярлык из карты пользователя — «New session», имя сессии на месте указателя не показывается', () => {
-    expect(sessionRowLabel('s-01', 'New messages (1) in r-01 "Second". Call check_inbox.')).toBe('S01 New session');
+  it('ярлык из карты пользователя — имя по номеру, текст указателя на месте имени не показывается', () => {
+    expect(sessionRowLabel('s-01', 'New messages (1) in r-01 "Second". Call check_inbox.')).toBe(`S01 ${NAMES[0]}`);
   });
 
-  it('каждый указатель core — и как есть, и после oneLine с обрезкой длинного названия комнаты — «New session»', () => {
+  it('каждый указатель core — и как есть, и после oneLine с обрезкой длинного названия комнаты — имя по номеру', () => {
     const texts = [
       pointerText([letter(null)], []),
       pointerText([letter('r-01')], [room('Second')]),
@@ -68,7 +88,7 @@ describe('указатель на письма вместо ярлыка (авт
     for (const text of texts) {
       for (const label of [text, oneLine(text)]) {
         expect(isPointerText(label), label).toBe(true);
-        expect(sessionLabelText(label), label).toBe('New session');
+        expect(sessionLabelText(label, 's-18'), label).toBe('Nina');
       }
     }
     expect(workTitleText(texts[1]!)).toBe('Untitled workspace');
@@ -76,7 +96,7 @@ describe('указатель на письма вместо ярлыка (авт
 
   it('похожее, но своё имя — как есть', () => {
     expect(sessionRowLabel('s-01', 'New messages handling')).toBe('S01 New messages handling');
-    expect(sessionLabelText('New messages (1). Call check_inbox. And fix the parser')).toBe(
+    expect(sessionLabelText('New messages (1). Call check_inbox. And fix the parser', 's-01')).toBe(
       'New messages (1). Call check_inbox. And fix the parser',
     );
   });

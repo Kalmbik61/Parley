@@ -67,6 +67,7 @@ const roomOf = (id: string, title: string): Room => ({
   createdAt: new Date().toISOString(),
   lead: null,
   proposal: null,
+  archivedAt: null,
 });
 
 describe('pointerText', () => {

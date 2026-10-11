@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPendingSession, createWork } from '@parley/core';
+import { createPendingSession, createWork, readMap, transitionSession, updateMap } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { fakeEffortScreen } from '../../test/fake-effort-screen.js';
 import type { FakeEffortScreen } from '../../test/fake-effort-screen.js';
@@ -398,5 +398,91 @@ describe('sessions.setModel (спека нормалайзера, 5.8)', () => {
       restarted: true,
     });
     expect(setModel).toHaveBeenCalledWith(ref, 'sonnet');
+  });
+});
+
+describe('sessions.rename (часть 2 спеки архива комнат, 15)', () => {
+  let project = '';
+
+  beforeEach(async () => {
+    project = await mkdtemp(path.join(tmpdir(), 'parley-rename-session-'));
+  });
+
+  afterEach(async () => {
+    await rm(project, { recursive: true, force: true });
+  });
+
+  const { sessionsRename } = createSessionHandlers({
+    sessions: {} as unknown as SessionsService,
+    pty: {} as unknown as SessionMethodDeps['pty'],
+    activity: {} as unknown as SessionMethodDeps['activity'],
+    wake: {} as unknown as SessionMethodDeps['wake'],
+  });
+
+  /** Работа с двумя сессиями: первая без ярлыка (имя по умолчанию), вторая названа. */
+  async function workWithSessions(): Promise<{ workId: string; refs: [SessionRef, SessionRef] }> {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const workId = work.work.id;
+    const first = await createPendingSession(project, workId, { provider: 'claude', label: '', task: 'сделай штуку' });
+    const second = await createPendingSession(project, workId, { provider: 'codex', label: 'бэкенд', task: 'и ещё' });
+    return {
+      workId,
+      refs: [
+        { projectPath: project, workId, sessionId: first },
+        { projectPath: project, workId, sessionId: second },
+      ],
+    };
+  }
+
+  const labelsOf = async (workId: string): Promise<string[]> =>
+    (await readMap(project, workId)).sessions.map((session) => session.label);
+
+  it('ярлык записан в карту с обрезанными краями; updatedAt работы и остальные записи стоят на месте', async () => {
+    const { workId, refs } = await workWithSessions();
+    const before = await readMap(project, workId);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await expect(sessionsRename({ ref: refs[0], label: '  \u200BRuslan Backend\u2060 ' }, request)).resolves.toEqual({
+      ok: true,
+    });
+
+    const map = await readMap(project, workId);
+    expect(map.sessions.map((session) => session.label)).toEqual(['Ruslan Backend', 'бэкенд']);
+    expect(map.work.updatedAt).toBe(before.work.updatedAt);
+    expect(map.messages).toEqual(before.messages);
+    expect(map.sessions[0]).toMatchObject({ lifecycle: 'pending', task: 'сделай штуку', provider: 'claude' });
+  });
+
+  it('пустой ярлык, чужая сессия, чужая работа и чужой проект — bad_request, карта не тронута', async () => {
+    const { workId, refs } = await workWithSessions();
+    const before = await labelsOf(workId);
+    const [first] = refs;
+
+    const attempts: Array<[SessionRef, string]> = [
+      [first, '   '],
+      [first, '\u200B\u200B'],
+      [{ ...first, sessionId: 's-09' }, 'x'],
+      [{ ...first, workId: 'w-9999' }, 'x'],
+      [{ ...first, projectPath: path.join(project, 'нет-такого') }, 'x'],
+    ];
+    for (const [ref, label] of attempts) {
+      await expect(sessionsRename({ ref, label }, request), JSON.stringify([ref.sessionId, ref.workId, label])).rejects.toMatchObject({
+        name: 'HostError',
+        code: 'bad_request',
+      });
+    }
+    expect(await labelsOf(workId)).toEqual(before);
+  });
+
+  it('закрытую сессию тоже можно переименовать', async () => {
+    const { workId, refs } = await workWithSessions();
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, refs[1].sessionId, 'closed');
+    });
+
+    await sessionsRename({ ref: refs[1], label: 'Archived backend' }, request);
+
+    const closed = (await readMap(project, workId)).sessions[1];
+    expect(closed).toMatchObject({ label: 'Archived backend', lifecycle: 'closed' });
   });
 });
