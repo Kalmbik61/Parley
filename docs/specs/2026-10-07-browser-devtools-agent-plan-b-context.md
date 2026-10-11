@@ -21,12 +21,12 @@
 - код Orca — `stablyai/orca`, коммит `b1cd858` (MIT, Copyright (c) 2026 Lovecast Inc.); что взято, что нет и почему — `docs/research/2026-10-08-orca-plan-b-delta.md`. Адаптированный код уже записан в задачах 2, 15, 16, 19 и 22: исполнитель переносит его из плана, а не заново из Orca.
 
 **Где работать:**
-- ветка `feat/browser-context`, worktree `.claude/worktrees/browser-context`, от свежего `origin/master` с влитым этапом A:
+- ветка `feat/browser-context`, worktree `.claude/worktrees/browser-context`, от ветки `docs/browser-plan-b-orca`, а не от `origin/master`. В ней уже влит `origin/master` 4833c74 с этапом A (merge 0f06d6b), а переписанный план B, правки спеки и индекса и карта Orca (`docs/research/2026-10-08-orca-plan-b-delta.md`) лежат только в ней: пока PR этапа B не влит, в `origin/master` их нет (там прежний план в 8520 строк), и исполнитель из ветки от `origin/master` читал бы его, а карты Orca не нашёл бы:
 
 ```bash
 cd /Users/kalmbik61/Desktop/MY/my_harnas
 git fetch origin
-git worktree add -b feat/browser-context .claude/worktrees/browser-context origin/master
+git worktree add -b feat/browser-context .claude/worktrees/browser-context docs/browser-plan-b-orca
 cd .claude/worktrees/browser-context
 pnpm install
 pnpm build            # без сборки @parley/core тесты protocol и окна не находят пакет
@@ -35,6 +35,7 @@ pnpm typecheck && pnpm lint
 pnpm --filter @parley/desktop e2e   # после pnpm build; исходные красные — в отчёт
 ```
 
+- если `origin/master` ушёл дальше 4833c74, влить его в новую ветку (`git merge origin/master`) до `pnpm install`;
 - все команды ниже — из корня этого worktree;
 - одиночный тест окна: `pnpm --filter @parley/desktop exec vitest run <путь от packages/desktop>`;
 - E2E: `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test <файл>`;
@@ -2605,9 +2606,10 @@ git commit -m "feat(desktop): цель «To» вкладки браузера в
 - Тест: `packages/desktop/src/renderer/browser/context/targets.test.ts`
 
 **Интерфейсы:**
-- Берёт: `BrowserTarget` (задача 9), `sessionTag`, `sessionRowLabel` (`renderer/lib/participant.ts`), `WorkEntry` (`@parley/core`, только тип).
+- Берёт: `BrowserTarget` (задача 9), `sessionTag`, `sessionRowLabel` (`renderer/lib/participant.ts`), `isRoomArchived` (`renderer/lib/room-archive.ts`), `WorkEntry` и `Room` (`@parley/core`, только типы).
 - Отдаёт: `TargetOption { target; key; name; title; provider; mode }`, `targetKey(target)`, `targetOptions(entry, chatAvailable)`, `isTargetAlive(entry, target)`, `defaultTarget(entry, focusedSessionId)`, `resolveTarget(entry, stored, focusedSessionId)` → `{ target; fellBack }`, `targetName(entry, target)`.
-- Правила (спека 4.5): в меню — сессии работы, кроме закрытых (`lifecycle !== 'closed'`), и все комнаты. Умолчание — сессия в фокусе работы (`focusedSessionOf`), если она в списке, иначе первая живая (`lifecycle === 'active'`), иначе первая комната, иначе `null`. Сохранённая цель пропала — умолчание и `fellBack: true`.
+- Правила (спека 4.5): в меню — сессии работы, кроме закрытых (`lifecycle !== 'closed'`), и все **открытые** комнаты. Архивная комната (PR #40, `Room.archivedAt`) не цель: в ней нет поля ввода (`RoomPanel.tsx`, вместо него «This room is archived.»), и путь, положенный в `composerAttachments`, осел бы в черновике, которого никто не видит, а тост соврал бы «added». Умолчание — сессия в фокусе работы (`focusedSessionOf`), если она в списке, иначе первая живая (`lifecycle === 'active'`), иначе первая открытая комната, иначе `null`. Сохранённая цель пропала — сессию закрыли или удалили, комнату удалили или архивировали — умолчание и `fellBack: true`.
+- Имена сессий (PR #40): строка меню берёт ярлык через `sessionRowLabel`, поэтому сессия без имени (`new session` в карте) показана именем по номеру — `S05 Roman`; кнопка «To» и тост остаются на `S05` (`sessionTag`).
 
 - [ ] **Шаг 1. Написать падающий тест.**
 
@@ -2617,6 +2619,9 @@ import { describe, expect, it } from 'vitest';
 import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { defaultTarget, isTargetAlive, resolveTarget, targetKey, targetName, targetOptions } from './targets.js';
 
+// Архивная комната (PR #40): лента читается, поля ввода нет. `makeRoom` поля `archivedAt` не знает — комната из него открыта.
+const ARCHIVED = { ...makeRoom('r-09', 'old design'), archivedAt: '2026-10-09T10:00:00.000Z' };
+
 const WORK = makeWork('w-01', {
   sessions: [
     makeSession('s-01', 'planner', { lifecycle: 'closed' }),
@@ -2624,14 +2629,14 @@ const WORK = makeWork('w-01', {
     makeSession('s-03', 'codex helper', { provider: 'codex' }),
     makeSession('s-04', 'sleeper', { lifecycle: 'sleeping' }),
   ],
-  rooms: [makeRoom('r-01', 'review room'), makeRoom('r-02', 'design')],
+  rooms: [makeRoom('r-01', 'review room'), ARCHIVED, makeRoom('r-02', 'design')],
 });
 
 // Сессия Codex здесь — без Chat (Codex ниже 0.160.0 или хост без `feed-codex`, PR #36): решает `feedAvailableNow`, не имя провайдера.
 const chat = (provider: string): boolean | null => (provider === 'claude' ? true : provider === 'codex' ? false : null);
 
 describe('targetOptions (спека браузера 4.5)', () => {
-  it('сессии без закрытых: ярлык, провайдер, вид chat | terminal; комнаты — все, без провайдера', () => {
+  it('сессии без закрытых: ярлык, провайдер, вид chat | terminal; комнаты — открытые, без провайдера (архивной r-09 в меню нет)', () => {
     const { sessions, rooms } = targetOptions(WORK, chat);
     expect(sessions.map((option) => [option.key, option.name, option.title, option.provider, option.mode])).toEqual([
       ['session:s-02', 'S02', 'S02 backend', 'claude', 'chat'],
@@ -2646,6 +2651,11 @@ describe('targetOptions (спека браузера 4.5)', () => {
 
   it('доступность Chat неизвестна — вид не помечен', () => {
     expect(targetOptions(WORK, () => null).sessions.map((option) => option.mode)).toEqual([null, null, null]);
+  });
+
+  it('имена по умолчанию (PR #40): сессия с меткой «new session» — в меню `S05 Roman`, в кнопке и тосте `S05`', () => {
+    const work = makeWork('w-06', { sessions: [makeSession('s-05', 'new session')] });
+    expect(targetOptions(work, chat).sessions.map((option) => [option.name, option.title])).toEqual([['S05', 'S05 Roman']]);
   });
 });
 
@@ -2676,6 +2686,21 @@ describe('defaultTarget и resolveTarget', () => {
     expect(isTargetAlive(WORK, { kind: 'room', roomId: 'r-99' })).toBe(false);
   });
 });
+
+describe('архивные комнаты (PR #40): в них нет поля ввода, вложению там некуда лечь', () => {
+  it('архивная — не живая цель; сохранённая в ней цель откатывается, как пропавшая', () => {
+    expect(isTargetAlive(WORK, { kind: 'room', roomId: 'r-09' })).toBe(false);
+    expect(resolveTarget(WORK, { kind: 'room', roomId: 'r-09' }, null)).toEqual({ target: { kind: 'session', sessionId: 's-02' }, fellBack: true });
+    expect(resolveTarget(WORK, { kind: 'room', roomId: 'r-09' }, 's-03')).toEqual({ target: { kind: 'session', sessionId: 's-03' }, fellBack: true });
+  });
+
+  it('умолчанием не бывает: первая комната — открытая, а единственная архивная — это «целиться некуда»', () => {
+    const archivedFirst = makeWork('w-04', { rooms: [ARCHIVED, makeRoom('r-03', 'open')] });
+    expect(defaultTarget(archivedFirst, null)).toEqual({ kind: 'room', roomId: 'r-03' });
+    expect(defaultTarget(makeWork('w-05', { rooms: [ARCHIVED] }), null)).toBeNull();
+    expect(resolveTarget(makeWork('w-05', { rooms: [ARCHIVED] }), { kind: 'room', roomId: 'r-09' }, null)).toEqual({ target: null, fellBack: true });
+  });
+});
 ```
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/context/targets.test.ts` → FAIL: нет `./targets.js`.
@@ -2687,13 +2712,15 @@ describe('defaultTarget и resolveTarget', () => {
 /**
  * Цели «To» вкладки браузера (спека браузера 4.5): сессии и комнаты работы, умолчание и откат. Цель хранится в
  * раскладке (`TabSpec.target`); нет поля — умолчание: сессия в фокусе работы, иначе первая живая сессия, иначе первая
- * комната. Сохранённая цель пропала (сессию закрыли или удалили, комнату удалили) — снова умолчание, и вкладка
- * сообщает об этом тостом (`use-page-context.ts`).
+ * открытая комната. Архивная комната (PR #40) не цель: в ней нет поля ввода (`RoomPanel`), вложение осело бы в
+ * черновике, которого никто не видит. Сохранённая цель пропала (сессию закрыли или удалили, комнату удалили или
+ * архивировали) — снова умолчание, и вкладка сообщает об этом тостом (`use-page-context.ts`).
  */
 
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WorkEntry, WorkSession } from '@parley/core';
 import type { BrowserTarget } from '../../../shared/layout-types.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
+import { isRoomArchived } from '../../lib/room-archive.js';
 
 export interface TargetOption {
   target: BrowserTarget;
@@ -2717,6 +2744,11 @@ function listedSessions(entry: WorkEntry): WorkSession[] {
   return entry.map.sessions.filter((session) => session.lifecycle !== 'closed');
 }
 
+/** Комнаты меню: архивная читается, но писать в неё нельзя — поля ввода нет. */
+function listedRooms(entry: WorkEntry): Room[] {
+  return entry.map.rooms.filter((room) => !isRoomArchived(room));
+}
+
 export function targetOptions(
   entry: WorkEntry,
   chatAvailable: (provider: string) => boolean | null,
@@ -2732,7 +2764,7 @@ export function targetOptions(
       mode: available === null ? null : available ? 'chat' : 'terminal',
     };
   });
-  const rooms = entry.map.rooms.map(
+  const rooms = listedRooms(entry).map(
     (room): TargetOption => ({ target: { kind: 'room', roomId: room.id }, key: `room:${room.id}`, name: room.title, title: room.title, provider: null, mode: null }),
   );
   return { sessions, rooms };
@@ -2741,7 +2773,7 @@ export function targetOptions(
 export function isTargetAlive(entry: WorkEntry, target: BrowserTarget): boolean {
   return target.kind === 'session'
     ? listedSessions(entry).some((session) => session.id === target.sessionId)
-    : entry.map.rooms.some((room) => room.id === target.roomId);
+    : listedRooms(entry).some((room) => room.id === target.roomId);
 }
 
 export function defaultTarget(entry: WorkEntry, focusedSessionId: string | null): BrowserTarget | null {
@@ -2751,7 +2783,7 @@ export function defaultTarget(entry: WorkEntry, focusedSessionId: string | null)
   }
   const live = sessions.find((session) => session.lifecycle === 'active');
   if (live !== undefined) return { kind: 'session', sessionId: live.id };
-  const room = entry.map.rooms[0];
+  const room = listedRooms(entry)[0];
   return room === undefined ? null : { kind: 'room', roomId: room.id };
 }
 
@@ -2770,7 +2802,7 @@ export function targetName(entry: WorkEntry, target: BrowserTarget): string {
 }
 ```
 
-- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (5 тестов). `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (8 тестов). `pnpm --filter @parley/desktop typecheck` → без ошибок.
 
 - [ ] **Шаг 5. Закоммитить.**
 
@@ -3991,7 +4023,7 @@ export function usePageContext(input: PageContextInput): PageContext {
   const latest = useRef({ input, target: resolved.target });
   latest.current = { input, target: resolved.target };
 
-  // Цель пропала (сессию закрыли или удалили, комнату удалили): поле снимается, тост — один раз.
+  // Цель пропала (сессию закрыли или удалили, комнату удалили или архивировали): поле снимается, тост — один раз.
   const fallback = resolved.target === null ? null : targetName(entry, resolved.target);
   useEffect(() => {
     if (!resolved.fellBack) return;
@@ -4081,6 +4113,8 @@ git commit -m "feat(desktop): меню «To» в строке вкладки б�
   - упавшие запросы (`isFailed`).
 
   Фильтры уровня и текста здесь не действуют. Кнопка A видна, пока счётчик больше нуля; без «Preserve log» файл несёт ровно то, что он насчитал.
+- Предел журнала: окно держит не больше `DEVTOOLS_LIMITS.consoleEntries` (1000) записей консоли и `networkEntries` (500) запросов, старые вытесняются (`devtools/store.ts#upsert`). «Все видимые ошибки» — те, что журнал ещё держит: при потоке сообщений ошибка может уйти из журнала раньше клика (пункт итогового ревью A «приоритет ошибок при потоке» — вне этапа B).
+- Клавиатурный путь к кнопкам строки Console («Copy», «Add to chat») — вне этапа B: «Расхождения», п. 22.
 - Тело ответа читается в момент клика.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -4982,7 +5016,7 @@ export async function elementInfo(inspector: CdpSender, id: number, point: { x: 
 
 - [ ] **Шаг 5. Закрытый список.** В `inspector.ts` (A):
   - импорт `import { REACT_INFO_FN } from './react-info.js';`;
-  - в набор `CDP_ALLOWED` добавить те из методов, которых в нём ещё нет, с комментарием «Этап B: выбор элемента (спека 3.8) и снимки элемента и аннотаций (4.6, 4.7)»: `'DOM.enable'`, `'DOM.disable'`, `'DOM.getNodeForLocation'`, `'DOM.describeNode'`, `'DOM.resolveNode'`, `'Accessibility.enable'`, `'Accessibility.disable'`, `'Accessibility.getPartialAXTree'`, `'Runtime.callFunctionOn'`, `'Runtime.releaseObject'`, `'Page.captureScreenshot'`. `Page.getLayoutMetrics` этапу B больше не нужен (снимок аннотаций — видимая часть): его добавит этап C, если B не добавил (план C, задача 12);
+  - в набор `CDP_ALLOWED` добавить те из методов, которых в нём ещё нет, с комментарием «Этап B: выбор элемента (спека 3.8) и снимки элемента и аннотаций (4.6, 4.7)»: `'DOM.enable'`, `'DOM.disable'`, `'DOM.getNodeForLocation'`, `'DOM.describeNode'`, `'DOM.resolveNode'`, `'Accessibility.enable'`, `'Accessibility.disable'`, `'Accessibility.getPartialAXTree'`, `'Runtime.callFunctionOn'`, `'Runtime.releaseObject'`, `'Page.captureScreenshot'`. `Page.getLayoutMetrics` этапу B больше не нужен (снимок аннотаций — видимая часть): его добавит этап C, если B не добавил (план C, задача 12). `DOM.disable` в список входит, но B его не зовёт: `elementInfo` включает домен DOM и оставляет его включённым (`Accessibility` выключает в `finally` функция `accessibility`). Два вызова `elementInfo` одного гостя могут перекрыться — выбор сразу после выбора, пока первый ждёт страницу до `PICK_LIMITS.infoMs`, — и `DOM.disable` первого выключил бы домен под вторым; отключать домен, если это понадобится, будут этапы C и D со своим порядком вызовов;
   - после `CDP_ALLOWED`:
 
 ```ts
@@ -5585,9 +5619,9 @@ git commit -m "feat(desktop): Select в main — точка и ⇧ клика, �
 ## Задача 17. Select в окне вместо карточки Design Mode, клавиша ⌘⇧C
 
 **Файлы:**
-- Изменить: `packages/desktop/src/renderer/browser/store.ts`, `packages/desktop/src/renderer/browser/BrowserChrome.tsx`, `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/main/browser/design-mode.ts`, `packages/desktop/src/shared/keybindings.ts`, `packages/desktop/src/renderer/keys/handler.ts`, `packages/desktop/src/renderer/palette/actions.ts`, `packages/desktop/src/shared/strings.ts`, `packages/desktop/src/renderer/review/notes/SendMenu.tsx` (шапка), `packages/desktop/src/renderer/layout/SurfaceLayer.tsx` (комментарий `sendDeps`), `packages/desktop/e2e/browser.spec.ts`
+- Изменить: `packages/desktop/src/renderer/browser/store.ts`, `packages/desktop/src/renderer/browser/BrowserChrome.tsx`, `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/main/browser/design-mode.ts`, `packages/desktop/src/shared/keybindings.ts`, `packages/desktop/src/renderer/keys/handler.ts`, `packages/desktop/src/renderer/palette/actions.ts`, `packages/desktop/src/shared/strings.ts`, `packages/desktop/src/renderer/review/notes/SendMenu.tsx` (шапка), `packages/desktop/src/renderer/layout/SurfaceLayer.tsx` (комментарий `sendDeps`), `packages/desktop/src/renderer/shell/AppShell.tsx` (комментарий `sendDeps`), `packages/desktop/e2e/browser.spec.ts`
 - Удалить: `packages/desktop/src/renderer/browser/DesignModeCard.tsx`, `DesignModeCard.test.tsx`, `design-block.ts`, `design-block.test.ts`
-- Тесты: `packages/desktop/src/renderer/browser/store.test.ts`, `packages/desktop/src/renderer/browser/BrowserSurface.test.tsx`, `packages/desktop/src/renderer/browser/BrowserChrome.test.tsx` (A), `packages/desktop/src/shared/keybindings.test.ts`, `packages/desktop/src/renderer/palette/actions.test.ts`, `packages/desktop/src/main/ipc.test.ts` (форма `picked`)
+- Тесты: `packages/desktop/src/renderer/browser/store.test.ts`, `packages/desktop/src/renderer/browser/BrowserSurface.test.tsx`, `packages/desktop/src/renderer/browser/BrowserChrome.test.tsx` (A), `packages/desktop/src/shared/keybindings.test.ts`, `packages/desktop/src/renderer/palette/actions.test.ts`, `packages/desktop/src/main/ipc.test.ts` (форма `picked`), `packages/desktop/src/main/browser/design-mode.test.ts` (убрать проверки `thumbnail`, шаг 6)
 
 **Интерфейсы:**
 - Берёт: `elementDraft` (задача 14), `usePageContext` (задача 13), `viewportNote` (задача 4), `PickResult` (задача 16).
@@ -5985,9 +6019,10 @@ git rm packages/desktop/src/renderer/browser/DesignModeCard.tsx packages/desktop
     },
 ```
 
-    в `S.actions` после `actualSize` — `selectElement: 'Select element',`. `S.designBlock` остаётся до задачи 18: его ещё цитирует гид агента;
+    в `S.actions` после `actualSize: 'Actual size',` — `selectElement: 'Select element',`. Ключ `actualSize` в `strings.ts` дважды: `actualSize: 'Actual size'` в `S.actions` (на master 4833c74 — строка 1553) и `actualSize: '100%'` в другом разделе (строка 1752) — второй не трогать. `S.designBlock` остаётся до задачи 18: его ещё цитирует гид агента;
   - `review/notes/SendMenu.tsx`: в шапке убрать «его же берёт Design Mode — 9.3b, спека 12.3»;
-  - `layout/SurfaceLayer.tsx`: комментарий `sendDeps` — «Отправка агенту окна (7.2) — строке «To» вкладки браузера (этап B)».
+  - `layout/SurfaceLayer.tsx`: комментарий `sendDeps` — «Отправка агенту окна (7.2) — строке «To» вкладки браузера (этап B)»;
+  - `shell/AppShell.tsx` (на master 4833c74 — строка 216): комментарий поля `sendDeps: SendWithToastDeps; // карточке Design Mode через слой поверхностей (9.3b)` → `// строке «To» вкладки браузера через слой поверхностей (этап B)`.
 
 - [ ] **Шаг 7. Клавиша и палитра.**
   - `shared/keybindings.ts`: в `ActionId` к браузерным добавить `| 'browser.select'`; в `ACTIONS` после `browser.zoomReset`:
@@ -6023,7 +6058,7 @@ git rm packages/desktop/src/renderer/browser/DesignModeCard.tsx packages/desktop
 - [ ] **Шаг 10. Закоммитить.**
 
 ```bash
-git add -A packages/desktop/src/renderer/browser packages/desktop/src/shared packages/desktop/src/main/browser/design-mode.ts packages/desktop/src/main/browser/design-mode.test.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/renderer/keys/handler.ts packages/desktop/src/renderer/palette packages/desktop/src/renderer/review/notes/SendMenu.tsx packages/desktop/src/renderer/layout/SurfaceLayer.tsx packages/desktop/e2e/browser.spec.ts
+git add -A packages/desktop/src/renderer/browser packages/desktop/src/shared packages/desktop/src/main/browser/design-mode.ts packages/desktop/src/main/browser/design-mode.test.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/renderer/keys/handler.ts packages/desktop/src/renderer/palette packages/desktop/src/renderer/review/notes/SendMenu.tsx packages/desktop/src/renderer/layout/SurfaceLayer.tsx packages/desktop/src/renderer/shell/AppShell.tsx packages/desktop/e2e/browser.spec.ts
 git commit -m "feat(desktop): Select вместо карточки Design Mode — элемент в цель «To», ⇧-клик, ⌘⇧C" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -8849,8 +8884,9 @@ async function dragInGuest(app: ElectronApplication, url: string, selector: stri
       )) as { x: number; y: number };
       guest.sendInputEvent({ type: 'mouseMove', x: start.x, y: start.y });
       guest.sendInputEvent({ type: 'mouseDown', x: start.x, y: start.y, button: 'left', clickCount: 1 });
-      guest.sendInputEvent({ type: 'mouseMove', x: start.x + Math.round(wx / 2), y: start.y + Math.round(wy / 2), button: 'left', modifiers: ['leftButtonDown'] });
-      guest.sendInputEvent({ type: 'mouseMove', x: start.x + wx, y: start.y + wy, button: 'left', modifiers: ['leftButtonDown'] });
+      // Модификаторы в electron.d.ts — в нижнем регистре: 'leftbuttondown' (с 'leftButtonDown' tsc отказывает, TS2820).
+      guest.sendInputEvent({ type: 'mouseMove', x: start.x + Math.round(wx / 2), y: start.y + Math.round(wy / 2), button: 'left', modifiers: ['leftbuttondown'] });
+      guest.sendInputEvent({ type: 'mouseMove', x: start.x + wx, y: start.y + wy, button: 'left', modifiers: ['leftbuttondown'] });
       guest.sendInputEvent({ type: 'mouseUp', x: start.x + wx, y: start.y + wy, button: 'left', clickCount: 1 });
     },
     [url, selector, dx, dy] as const,
@@ -9177,8 +9213,8 @@ git commit -m "test(desktop): E2E контекста из браузера — �
 - Изменить: `CHANGELOG.md`, `README.md`, `docs/specs/2026-09-26-desktop-orca-ui-design.md`
 - Тест: `packages/desktop/src/release-docs.test.ts` (без правок).
 
-- [ ] **Шаг 1. CHANGELOG.** В `## Unreleased`:
-  - первым пунктом `### Added`:
+- [ ] **Шаг 1. CHANGELOG.** `## Unreleased` в `CHANGELOG.md` сейчас пуст: за заголовком идёт пустая строка и сразу `## 0.11.0`, заголовков `### Added` и `### Changed` под ним нет. Сначала создать их под `## Unreleased` — `### Added`, затем `### Changed`, между ними и перед `## 0.11.0` по пустой строке, — потом положить пункты. Если к моменту задачи в master под `## Unreleased` уже что-то появилось, пункты B идут первыми в своих разделах:
+  - в `### Added`:
 
 ```markdown
 - **Page context in chat.** The bar above a browser page has "To: S02 ▾" — the session or room
@@ -9192,7 +9228,7 @@ git commit -m "test(desktop): E2E контекста из браузера — �
   without Enter. A toast offers "Open" and "Undo". Nothing is sent by itself.
 ```
 
-  - первым пунктом `### Changed`:
+  - в `### Changed`:
 
 ```markdown
 - **Design Mode is now Select.** The result card and "Send to agent ▾" are gone: the element
@@ -9220,8 +9256,28 @@ git commit -m "test(desktop): E2E контекста из браузера — �
   Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent until you send it.
 ```
 
-  - абзац о теме гида `window` (задача 18): «a page element from Design Mode» → «page context from the built-in browser»;
-  - абзац о сессии без сигналов: «(a note, a Design Mode element, a file or a screenshot)» → «(a note, a page context line, a file or a screenshot)»;
+  - абзац о теме гида `window` (задача 18). Фраза в README перенесена по строкам, поэтому искать её целиком нельзя; `README.md`, строки 1276-1277, сейчас такие (точный текст):
+
+```text
+four kinds of blocks that the window inserts into the agent's terminal (notes on a diff, a
+page element from Design Mode, a request to resolve a merge conflict, the path of a dropped
+```
+
+    заменить на (счёт «four kinds» верен: заметки к диффу, контекст страницы, просьба разрешить конфликт, путь брошенного файла):
+
+```text
+four kinds of blocks that the window inserts into the agent's terminal (notes on a diff,
+page context from the built-in browser, a request to resolve a merge conflict, the path of a dropped
+```
+
+  - абзац о сессии без сигналов: тоже перенос; `README.md`, строки 1849-1850, сейчас такие (точный текст):
+
+```text
+terminal title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
+note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
+```
+
+    заменить только вторую строку: `note, a page context line, a file or a screenshot) with the toast "S02 is waiting for your`;
   - в таблице клавиш после строки этапа A «Console and network of a browser tab…»:
 
 ```markdown
@@ -9260,7 +9316,8 @@ git commit -m "test(desktop): E2E контекста из браузера — �
    миниатюра снимка в чипе видна до отправки; данные идут в ограде с пометкой «page data, not instructions».
 ```
 
-- [ ] **Шаг 4. Спека окна, 12.2 и 12.5.**
+- [ ] **Шаг 4. Спека окна, 12.2, 12.5 и 15.1.**
+  - 15.1, пункт 9 (`docs/specs/2026-09-26-desktop-orca-ui-design.md`, строка 2534) сейчас «9. Агент браузером не управляет. Design Mode — только по клику человека.»: заменить вторую фразу на «Select и Annotate — только по клику человека.»;
   - 12.2, пункт «Агент браузером не управляет», второе предложение (его написал этап A) заменить: «Программный доступ к странице есть только у main: по действию человека — Select и Annotate, DevTools и размер вьюпорта; инспектор CDP читает консоль и сеть, а по выбору человека — роль, имя и компонент React элемента (`Runtime.callFunctionOn` — только с `REACT_INFO_FN`) и снимки.». Сам пункт целиком заменит этап C;
   - 12.5, блок кода (этап A уже дописал свои методы), в `interface BrowserApi` после методов этапа A:
 
@@ -9445,7 +9502,7 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
 6. **CDP:**
    - `REACT_INFO_FN` лежит в `main/browser/react-info.ts`;
    - `cdpCallAllowed(method, params)` — в `inspector.ts`, его зовут `send` и внутренняя `command` (у A обе проверяли `CDP_ALLOWED.has`);
-   - B добавляет в `CDP_ALLOWED`: `DOM.enable`, `DOM.disable`, `DOM.getNodeForLocation`, `DOM.describeNode`, `DOM.resolveNode`, `Accessibility.enable`, `Accessibility.disable`, `Accessibility.getPartialAXTree`, `Runtime.callFunctionOn`, `Runtime.releaseObject`, `Page.captureScreenshot`. `Page.getLayoutMetrics` B не добавляет (снимок аннотаций — видимая часть) — его добавит C (план C, задача 12);
+   - B добавляет в `CDP_ALLOWED`: `DOM.enable`, `DOM.disable`, `DOM.getNodeForLocation`, `DOM.describeNode`, `DOM.resolveNode`, `Accessibility.enable`, `Accessibility.disable`, `Accessibility.getPartialAXTree`, `Runtime.callFunctionOn`, `Runtime.releaseObject`, `Page.captureScreenshot`. `Page.getLayoutMetrics` B не добавляет (снимок аннотаций — видимая часть) — его добавит C (план C, задача 12). `DOM.disable` в списке, но B его не зовёт: после `elementInfo` домен DOM остаётся включённым (задача 15, шаг 5);
    - тест A «закрытый список этапа A» сверял список целиком и ждал, что `Runtime.callFunctionOn` в нём нет. B дописывает в него свои методы и снимает эту проверку; вызов ограничивает `cdpCallAllowed`;
    - рамочный тест «callFunctionOn только с `REACT_INFO_FN`» — в `inspector.test.ts`. Этап C, добавляя свои методы, тоже правит список в этом тесте.
 7. **Новые модули B, которыми может пользоваться D:**
@@ -9500,3 +9557,5 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
     - `NOTICE` называет каждый такой файл, страж — `notice.test.ts#orcaFiles`. Этапы C и D, беря код Orca, добавляют в шапку ту же пометку и строку в `NOTICE`.
 19. **Вид Chat у Codex** (PR #36, Codex 0.160.0 и новее) отправляет вложения через `composeRoomMessage` — списком «Attachments:». Спека 1.2 и 4.5 поправлены: сессия Codex с Chat — первая строка таблицы доставки; `.png` к ней даёт задача 11.
 20. **Клавиши Select и Annotate с фокусом в окне.** Как обещает индекс: ⌘⇧C и ⌘⌥A с фокусом в строке или панели вкладки ловит `BrowserSurface` тем же `panelKey`, что ⌘⌥I и ⌘⌥J этапа A (задача 23, шаг 6); из страницы их пересылает main. Решение 2026-10-08: без этого клавиша в адресной строке молча ничего не делала бы.
+21. **Архивные комнаты не цель «To»** (PR #40 влит в master после написания плана; задача 10). `targets.ts` не предлагает архивную комнату (`isRoomArchived`, `renderer/lib/room-archive.ts`), не берёт её умолчанием, а сохранённую в ней цель считает пропавшей: откат на умолчание и тост, как у удалённой. В архивной комнате нет поля ввода (`RoomPanel.tsx`), и путь в `composerAttachments` осел бы в черновике, которого никто не видит. Спека 4.5 («Rooms» — комнаты работы, умолчание — «первая комната») читается как «открытые»; её текст не правился. Архивные **работы** в меню не попадают и так: меню берёт сессии и комнаты своей работы (`entry`), не других.
+22. **Клавиатурный путь к «Copy» и «Add to chat» строки Console — не в этапе B** (отложено; пункт «решить в B» из итогового ревью этапа A). Кнопки строки остаются по наведению (`hidden … group-hover:flex group-focus-within:flex` в `ConsoleView.tsx`): у строки без раскрытия нечего фокусировать, а файлы панели B не меняет. Список строк с блуждающим фокусом (roving focus, стрелки) — отдельная задача позже. Клавиатурой в чат остаются доступны «Add errors to chat» в шапке панели и «Add to chat» в деталях запроса Network (строка сети — `<button>`, Enter открывает детали). Строку Console с клавиатуры в чат пока не добавить.
