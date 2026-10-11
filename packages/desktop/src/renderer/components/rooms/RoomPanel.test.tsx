@@ -701,6 +701,24 @@ describe('RoomPanel — сообщения (1.3)', () => {
     expect(within(row).queryByRole('img', { name: 'New' })).toBeNull();
   });
 
+  it('сообщение человека справа, агента и системы — слева', () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { from: 'human' }),
+          message('m-2', { from: 's-02', readBy: {} }),
+          message('m-3', { from: 'system', to: ['human'], readBy: {} }),
+        ],
+      }),
+    );
+    expect(messageRow('m-1').className).toContain('self-end');
+    expect(messageRow('m-1').className).toContain('flex-row-reverse');
+    for (const id of ['m-2', 'm-3']) {
+      expect(messageRow(id).className).not.toContain('self-end');
+      expect(messageRow(id).className).not.toContain('flex-row-reverse');
+    }
+  });
+
   it('сообщение в 2000 знаков и слово без пробелов переносятся внутри колонки', () => {
     const word = 'Ы'.repeat(2000);
     renderPanel(entryOf({ messages: [message('m-1', { text: word })] }));

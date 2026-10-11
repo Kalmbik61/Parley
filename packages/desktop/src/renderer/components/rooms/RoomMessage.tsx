@@ -26,6 +26,9 @@
  *
  * Свой `@human` человека (Parley 0.3.0) — текст, а не чип «@you»: себя человек не упоминает (`humanChips`); у сообщений
  * агентов чип остаётся — по нему агент зовёт человека.
+ *
+ * Сообщение человека стоит справа и текстом лежит на пузыре `bg-secondary`, как промпт в Chat
+ * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря.
  */
 
 import { S } from '../../../shared/strings.js';
@@ -71,12 +74,15 @@ const REPLY_QUOTE_CLASS =
 interface ReplyQuoteProps {
   reply: ReplyModel;
   onJumpTo: (messageId: string) => void;
+  /** Сообщение человека стоит справа — цитата прижата к правому краю. */
+  right: boolean;
 }
 
-function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
+function ReplyQuote({ reply, onJumpTo, right }: ReplyQuoteProps): JSX.Element {
+  const quoteClass = cn(REPLY_QUOTE_CLASS, right && 'self-end');
   if (!reply.found) {
     return (
-      <div data-message-reply-missing="" className={REPLY_QUOTE_CLASS}>
+      <div data-message-reply-missing="" className={quoteClass}>
         <span aria-hidden="true">↩</span> {S.rooms.replyMissing}
       </div>
     );
@@ -88,7 +94,7 @@ function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
       // Строка обрезается по ширине колонки — выдержка целиком видна подсказкой.
       title={reply.excerpt}
       onClick={() => onJumpTo(reply.id)}
-      className={cn(REPLY_QUOTE_CLASS, 'cursor-pointer hover:text-foreground')}
+      className={cn(quoteClass, 'cursor-pointer hover:text-foreground')}
     >
       <span aria-hidden="true">↩ </span>
       <span className="font-semibold">{reply.from}</span>
@@ -108,12 +114,14 @@ export function RoomMessage({
   const { picked, waiting } = message.delivery;
   /** Письмо `parley` или системная строка. */
   const system = message.sender.kind === 'system';
+  /** Сообщение человека — справа, на пузыре. */
+  const human = message.sender.kind === 'human';
   return (
     <div
       data-message-id={message.id}
       data-sender={message.sender.kind}
       tabIndex={-1}
-      className="flex max-w-[680px] gap-2.5"
+      className={cn('flex max-w-[680px] gap-2.5', human && 'flex-row-reverse self-end')}
     >
       <div className="flex w-5 shrink-0 justify-center pt-px">
         <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} />
@@ -122,7 +130,10 @@ export function RoomMessage({
         <div
           ref={observeRef}
           data-message-meta={message.id}
-          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+          className={cn(
+            'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground',
+            human && 'justify-end',
+          )}
         >
           <span className="min-w-0 break-words font-semibold text-foreground">{message.from}</span>
           {message.lead ? (
@@ -142,17 +153,27 @@ export function RoomMessage({
             />
           ) : null}
         </div>
-        {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} />}
-        <RoomMarkdown
-          // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
-          text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
-          labelOf={labelOf}
-          onOpenExternal={onOpenExternal}
-          humanChips={message.sender.kind !== 'human'}
-          codePaths={system}
-        />
+        {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} right={human} />}
+        <div
+          className={cn(
+            'min-w-0',
+            human && 'max-w-full self-end rounded-md bg-secondary px-3 py-2 text-secondary-foreground',
+          )}
+        >
+          <RoomMarkdown
+            // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
+            text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
+            labelOf={labelOf}
+            onOpenExternal={onOpenExternal}
+            humanChips={!human}
+            codePaths={system}
+          />
+        </div>
         {picked.length === 0 && waiting.length === 0 ? null : (
-          <div data-message-delivery="" className="break-words text-xs text-muted-foreground">
+          <div
+            data-message-delivery=""
+            className={cn('break-words text-xs text-muted-foreground', human && 'text-right')}
+          >
             {picked.length === 0 ? null : (
               <span
                 data-message-picked=""
