@@ -93,7 +93,18 @@ export interface PickResult {
   html: string;
   styles: Record<string, string>;
   imagePath: string | null;
-  thumbnail: string | null; // 9.3a: уменьшенный data:image/png для карточки
+  thumbnail: string | null; // 9.3a, карточка Design Mode: main отдаёт null, поле уходит с карточкой (задача 17 этапа B)
+  /** Точка, по которой main нашёл узел через CDP (CSS-пиксели вьюпорта; main прибавляет прокрутку); `null` — под точкой не выбранный элемент. */
+  point: { x: number; y: number } | null;
+  /** Клик с ⇧: Select остаётся включённым (спека браузера 4.6). */
+  shift: boolean;
+  /** Вьюпорт страницы в момент выбора: строка Viewport файла `element`. */
+  viewport: PickViewport;
+  /** Роль и доступное имя из дерева доступности (спека 3.8). */
+  role?: string;
+  name?: string;
+  /** До трёх компонентов React снизу вверх. */
+  react?: ReactComponentInfo[];
 }
 
 /** Favicon гостя (событие browser:favicon, 9.2a): main скачал значок и отдаёт его окну как data:. */

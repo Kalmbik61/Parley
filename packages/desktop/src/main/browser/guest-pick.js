@@ -1,5 +1,5 @@
-// Скрипт выбора элемента Design Mode (кусок 9.3a, спека 12.3). Main исполняет его в госте через
-// executeJavaScriptInIsolatedWorld(PICK_WORLD_ID): изолированный мир не видит скриптов страницы, а
+// Скрипт выбора элемента Select (прежде Design Mode; кусок 9.3a, спека 12.3, спека браузера 4.6). Main исполняет его
+// в госте через executeJavaScriptInIsolatedWorld(PICK_WORLD_ID): изолированный мир не видит скриптов страницы, а
 // страница — его переменных, так что подделать выбор или позвать отмену она не может. DOM общий:
 // всё, что скрипт отсюда отдаёт, — данные страницы, и main их заново проверяет (validatePick).
 //
@@ -66,7 +66,18 @@
     label.textContent = `${shortName(el)} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
   }
 
-  function dataOf(el) {
+  // Точка, по которой main найдёт узел через CDP (DOM.getNodeForLocation, спека браузера 3.8): сам клик, а если элемент
+  // прокручивался в видимую часть — центр его видимой части. Под этой точкой должен быть сам элемент, иначе точки нет:
+  // main не станет гадать.
+  function pointFor(el, x, y, scrolled) {
+    if (!scrolled && document.elementFromPoint(x, y) === el) return { x, y };
+    const rect = el.getBoundingClientRect();
+    const cx = Math.round(Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1));
+    const cy = Math.round(Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1));
+    return document.elementFromPoint(cx, cy) === el ? { x: cx, y: cy } : null;
+  }
+
+  function dataOf(el, event, scrolled) {
     const rect = el.getBoundingClientRect();
     return {
       selector: dom.selectorOf(el),
@@ -77,6 +88,11 @@
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       viewport: { width: window.innerWidth, height: window.innerHeight },
       devicePixelRatio: window.devicePixelRatio,
+      point: pointFor(el, event.clientX, event.clientY, scrolled),
+      // ⇧-клик: Select остаётся включённым (спека браузера 4.6).
+      shift: event.shiftKey === true,
+      // Прокрутка документа: точка документа для CDP и обрезка снимка — вьюпорт плюс прокрутка (спайк 0.4, 0.7).
+      scroll: { x: window.scrollX, y: window.scrollY },
     };
   }
 
@@ -121,8 +137,9 @@
       if (event.type !== 'click') return;
       const el = document.elementFromPoint(event.clientX, event.clientY);
       if (!el || el === overlay || overlay.contains(el)) return;
-      if (!fullyVisible(el)) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-      finish(dataOf(el));
+      const scrolled = !fullyVisible(el);
+      if (scrolled) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      finish(dataOf(el, event, scrolled));
     }
 
     function onKey(event) {

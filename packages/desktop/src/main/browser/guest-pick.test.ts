@@ -113,6 +113,10 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     expect(result.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight });
     expect(result.styles).toMatchObject({ display: 'block' });
     expect(result).toHaveProperty('devicePixelRatio');
+    // Этап B: точка для CDP — сам клик (под ним выбранный элемент), без ⇧, прокрутка документа.
+    expect(result.point).toEqual({ x: 30, y: 30 });
+    expect(result.shift).toBe(false);
+    expect(result.scroll).toEqual({ x: 0, y: 0 });
 
     // Оверлей и перехватчики сняты: клик снова доходит до страницы.
     expect(document.documentElement.textContent).not.toContain('form.login ·');
@@ -151,9 +155,51 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     });
     const picking = runScript();
     dispatchTrusted(button, mouse('click'));
-    const result = (await picking) as { rect: { y: number } };
+    const result = (await picking) as { rect: { y: number }; point: unknown };
     expect(form.scrollIntoView).toHaveBeenCalledWith({ block: 'center', inline: 'center', behavior: 'instant' });
     expect(result.rect.y).toBe(100);
+    expect(result.point).toEqual({ x: 160, y: 160 });
+  });
+
+  it('⇧-клик — shift: true (Select держит режим, спека браузера 4.6)', async () => {
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click', { shiftKey: true }));
+    expect(((await picking) as { shift: boolean }).shift).toBe(true);
+  });
+
+  it('после прокрутки под центром другой узел — точки нет', async () => {
+    let top = 5000;
+    form.getBoundingClientRect = () => ({ x: 10, y: top, width: 300, height: 120, top, left: 10, right: 310, bottom: top + 120, toJSON: () => ({}) });
+    form.scrollIntoView = vi.fn(() => {
+      top = 100;
+    });
+    document.elementFromPoint = vi.fn((x: number) => (x === 30 ? form : button));
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click'));
+    expect(((await picking) as { point: unknown }).point).toBeNull();
+  });
+
+  it('центр элемента за краем окна (он шире и выше окна) — точка прижата к видимой части', async () => {
+    form.getBoundingClientRect = () => ({ x: 10, y: 100, width: 3000, height: 4000, top: 100, left: 10, right: 3010, bottom: 4100, toJSON: () => ({}) });
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click'));
+    // Окно jsdom 1024×768: центр элемента (1510; 2100) прижимается к последнему столбцу и последней строке окна.
+    expect(((await picking) as { point: unknown }).point).toEqual({ x: window.innerWidth - 1, y: window.innerHeight - 1 });
+  });
+
+  it('прокрутка документа — в результате: точка документа для CDP = точка вьюпорта + прокрутка', async () => {
+    const scrollX = Object.getOwnPropertyDescriptor(window, 'scrollX');
+    const scrollY = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 5 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 250 });
+    try {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('click'));
+      expect(((await picking) as { scroll: unknown }).scroll).toEqual({ x: 5, y: 250 });
+    } finally {
+      if (scrollX !== undefined) Object.defineProperty(window, 'scrollX', scrollX);
+      if (scrollY !== undefined) Object.defineProperty(window, 'scrollY', scrollY);
+    }
   });
 
   it('новый запуск снимает прежний выбор (null), отмена мира — тоже', async () => {

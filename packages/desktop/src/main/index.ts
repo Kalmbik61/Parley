@@ -306,6 +306,12 @@ if (!gotLock) {
     const downloadLog: Array<{ filename: string; url: string }> = [];
     const testGlobals = globalThis as { __parleyDownloads?: typeof downloadLog; __parleySaveAnswer?: string | null };
     if (logDownloads) testGlobals.__parleyDownloads = downloadLog;
+    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
+    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя. Создаётся
+    // до выбора элемента: Select берёт у него снимок, роль и React (спека 3.8).
+    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
+    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
+    const emulation = createEmulation({ inspector });
     // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
     // стража: загрузка из гостя снимает его выбор (fix-9b).
     const designMode = createDesignMode({
@@ -313,12 +319,8 @@ if (!gotLock) {
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
       // Помощники DOM (guest-dom.js, по Orca) — в той же строке перед скриптом выбора: значение строки — промис выбора.
       guestScript: `${guestDomScript}\n${guestPickScript}`,
+      inspector,
     });
-    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
-    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя.
-    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
-    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
-    const emulation = createEmulation({ inspector });
     // Журнал снят вместе с гостем — размер его вкладки тоже.
     inspector.onDestroyed((id) => emulation.forget(id));
     installBrowserGuard({
