@@ -33,6 +33,12 @@ function react19(stack: string[]): object {
   return { type: 'button', return: { type: SaveButton, return: null }, _debugStack: { stack: stack.join('\n') } };
 }
 
+/** Два верхних кадра стека React 19 в Vite: маркер и рантайм JSX (его кадр пропущен по имени функции). */
+const JSX_TOP = [
+  'Error: react-stack-top-frame',
+  '    at exports.jsxDEV (http://localhost:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=1:250:30)',
+];
+
 describe('REACT_INFO_FN (спека браузера 3.8; поиск компонента — по Orca)', () => {
   it('React 18: до трёх компонентов вверх по return; источник — место в файле компонента, где он нарисовал узел ниже', () => {
     const chain = [
@@ -87,6 +93,45 @@ describe('REACT_INFO_FN (спека браузера 3.8; поиск компо�
         ]),
       }),
     ).toEqual([{ name: 'SaveButton', source: 'src/components/SaveButton.tsx:12', approx: true }]);
+  });
+
+  it('React 19: свой кадр приложения не принимается за рантайм React — папка react* и scheduler в пути или хост react-app.test вне node_modules', () => {
+    // Путь пакетов React узнаётся только под node_modules. Любой сегмент адреса, названный react* или scheduler, не
+    // рантайм: иначе у компонента из src/features/scheduler/ или с хоста react-app.test пропадал бы источник
+    // (имя оставалось, source: null).
+    const app: [url: string, source: string][] = [
+      ['http://localhost:5173/src/features/scheduler/Calendar.tsx?t=17', 'src/features/scheduler/Calendar.tsx'],
+      ['http://localhost:5173/packages/react/src/Button.tsx', 'packages/react/src/Button.tsx'],
+      ['http://localhost:5173/src/react-table/Table.tsx', 'src/react-table/Table.tsx'],
+      ['http://react-app.test/src/App.tsx', 'src/App.tsx'],
+      ['http://react-app.localhost:5173/src/App.tsx', 'src/App.tsx'],
+      ['webpack-internal:///(app-pages-browser)/./app/scheduler/page.tsx', 'app/scheduler/page.tsx'],
+    ];
+    for (const [url, source] of app) {
+      expect(run({ __reactFiber$x: react19([...JSX_TOP, `    at SaveButton (${url}:12:10)`]) }), url).toEqual([
+        { name: 'SaveButton', source: `${source}:12`, approx: true },
+      ]);
+    }
+  });
+
+  it('React 19: кадры самого React пропущены по пути под node_modules, даже если имя функции не из списка (Vite deps, compiled react у Next, pnpm, scheduler)', () => {
+    const runtime: [fn: string, url: string][] = [
+      ['renderWithHooks', 'http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=1'],
+      ['workLoop', 'http://localhost:5173/node_modules/.vite/deps/scheduler.js?v=1'],
+      ['Object.jsxDEV', 'webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react/cjs/react-jsx-dev-runtime.development.js'],
+      ['renderWithHooks', 'webpack-internal:///(app-pages-browser)/./node_modules/next/dist/compiled/react-dom/cjs/react-dom-client.development.js'],
+      ['renderWithHooks', 'http://localhost:3000/node_modules/.pnpm/react-dom@19.0.0_react@19.0.0/node_modules/react-dom/cjs/react-dom-client.development.js'],
+      ['workLoop', 'http://localhost:3000/node_modules/.pnpm/scheduler@0.25.0/node_modules/scheduler/cjs/scheduler.development.js'],
+      ['renderWithHooks', 'file:///C:/work/app/node_modules/react-dom/cjs/react-dom-client.development.js'],
+    ];
+    for (const [fn, url] of runtime) {
+      expect(
+        run({
+          __reactFiber$x: react19([...JSX_TOP, `    at ${fn} (${url}:1000:10)`, '    at SaveButton (http://localhost:5173/src/components/SaveButton.tsx:12:10)']),
+        }),
+        url,
+      ).toEqual([{ name: 'SaveButton', source: 'src/components/SaveButton.tsx:12', approx: true }]);
+    }
   });
 
   it('нет React — null; ловушка страницы в свойстве — null, без исключения', () => {

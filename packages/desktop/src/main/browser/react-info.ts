@@ -18,7 +18,9 @@
  *   источник — место в его файле, где он нарисовал узел ниже по цепочке (`_debugSource`), а не одно поле на элемент;
  * - React 19 (`_debugStack`, у Orca его нет) — правило `parseDebugStack` этапа 0 (отчёт, 0.6): первые 6 строк стека,
  *   кадры рантайма JSX и пакетов React пропущены, первый оставшийся — место создания; пометка approx.: без source maps
- *   это позиция в собранном файле.
+ *   это позиция в собранном файле. Пакеты `react`, `react-dom` и `scheduler` узнаются по пути только под `node_modules`:
+ *   папка `src/features/scheduler/`, `packages/react/` или хост `react-app.test` самого приложения — не рантайм, иначе
+ *   у компонента пропал бы источник.
  * Из глобалов страницы функция берёт только встроенные, ошибки ловит. Всё, что она вернула, — данные страницы: форму и
  * длины проверяет `parseReactInfo`.
  */
@@ -39,7 +41,7 @@ export const REACT_INFO_FN = `function () {
     var FRAMEWORK = /^(?:Fragment|StrictMode|Suspense|Profiler)$|\\.(?:Provider|Consumer)$/;
     var FRAME = /^\\s*at (?:(.*?) \\()?(.*?):(\\d+):(\\d+)\\)?\\s*$/;
     var SKIP_FN = /^(?:exports\\.)?(?:jsxDEV|jsxs?|createElement)$|react_stack_bottom_frame|react-stack-top-frame/;
-    var SKIP_URL = /(?:^|[\\/\\\\])(?:react|react-dom|scheduler)(?:[\\/\\\\@.\\-_]|$)|react[-_]jsx[-_]?dev[-_]?runtime|jsx-dev-runtime|\\/node_modules\\/(?:\\.vite\\/deps\\/)?react/;
+    var SKIP_URL = /node_modules[\\/\\\\](?:.*[\\/\\\\])?(?:react|react-dom|scheduler)(?:[\\/\\\\@.\\-_]|$)|react[-_]jsx[-_]?dev[-_]?runtime|jsx-dev-runtime|\\/node_modules\\/(?:\\.vite\\/deps\\/)?react/;
     var nameOf = function (type) {
       if (typeof type === 'function') return type.displayName || type.name || '';
       if (!type || typeof type !== 'object') return '';
