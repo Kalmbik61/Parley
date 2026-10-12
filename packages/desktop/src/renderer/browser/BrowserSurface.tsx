@@ -22,6 +22,10 @@
  *   (`ui.json`); ⌘⌥I и ⌘⌥J с фокусом в строке или панели ловит этот компонент;
  * - размер — из раскладки (`TabSpec.viewport`): эмуляцию ставит main (`use-viewport.ts`), а окно ставит тот же узел
  *   `<webview>` размером ширина×scale на высота×scale по центру нейтрального поля с подписью.
+ *
+ * Цель «To» (этап B, спека браузера 4.5): сессия или комната, куда лягут «Add to chat», Select и аннотации. Хранится в
+ * раскладке (`TabSpec.target`, нет поля — умолчание); `usePageContext` разрешает её, откатывает пропавшую с тостом и
+ * ведёт очередь добавлений, меню `TargetMenu` стоит в строке вкладки.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -32,6 +36,7 @@ import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.j
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../shared/keybindings.js';
+import type { BrowserTarget } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -40,6 +45,8 @@ import { useUiStore } from '../store/ui.js';
 import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserChrome } from './BrowserChrome.js';
+import { TargetMenu } from './context/TargetMenu.js';
+import { usePageContext } from './context/use-page-context.js';
 import { DesignModeCard } from './DesignModeCard.js';
 import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
@@ -108,6 +115,8 @@ export interface BrowserSurfaceProps {
   url: string;
   /** Размер вьюпорта вкладки (`TabSpec.viewport`, спека 2026-10-07, 4.2); null — Fit. */
   viewport: ViewportSpec | null;
+  /** Цель «To» из раскладки (этап B): нет — умолчание. */
+  target?: BrowserTarget | undefined;
   groupId: string;
   visible: boolean;
   bridge: ParleyBridge;
@@ -129,7 +138,7 @@ const IDLE: BrowserTabState = {
   pick: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fieldRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
@@ -139,6 +148,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
   // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
   const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
+  const pageContext = usePageContext({ bridge, workKey, tabId, entry, stored: target, sendDeps });
   const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
   const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
@@ -478,6 +488,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
         counters={counters}
         onToggleDevtools={() => useDevtoolsStore.getState().toggle(tabId)}
         onClearDevtools={clearDevtools}
+        targetMenu={<TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />}
       />
       <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (

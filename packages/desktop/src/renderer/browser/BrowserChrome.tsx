@@ -6,9 +6,10 @@
  * - адрес;
  * - размер вьюпорта (`ViewportMenu`);
  * - ⌖ Design Mode — подсвечен, пока идёт выбор элемента;
+ * - меню цели «To» (`targetMenu`, этап B, спека браузера 4.1) — после ⌖, перед консолью;
  * - консоль: значок со счётчиками ошибок (красный) и предупреждений (жёлтый); нули не показываются;
  * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network».
- * Под строкой — полоса загрузки 2px. ⌖ Select, ✎ Annotate и «To» займут место ⌖ на этапе B.
+ * Под строкой — полоса загрузки 2px. ⌖ Select и ✎ Annotate займут место ⌖ на этапе B.
  *
  * Узкая строка (окно 800×500): подписи прячет контейнерный запрос самой строки (`@container`), остаются значки;
  * сжимается первым адрес — у остальных `shrink-0`.
@@ -54,6 +55,8 @@ export interface BrowserChromeProps {
   onToggleDevtools(): void;
   /** «⋯ → Clear console and network». */
   onClearDevtools(): void;
+  /** Меню цели «To» (этап B, спека браузера 4.1): после ⌖ и ✎, перед консолью. */
+  targetMenu?: ReactNode;
 }
 
 /** Выше этого значка счётчика пишут «999+»: число в журнале не ограничено, а строка 36px и так узка. */
@@ -110,6 +113,7 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
       >
         <Crosshair className="size-3.5" aria-hidden="true" />
       </button>
+      {props.targetMenu}
       <button
         type="button"
         aria-label={S.browser.devtools.toggle}

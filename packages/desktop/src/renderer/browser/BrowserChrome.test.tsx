@@ -51,6 +51,14 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     expect(screen.queryByRole('button', { name: 'DevTools' })).toBeNull();
   });
 
+  it('«To» (этап B, спека 4.1): меню цели — после ⌖ и до кнопки консоли', () => {
+    renderChrome({ targetMenu: <button type="button">To: S01</button> });
+    const names = within(screen.getByTestId('browser-chrome'))
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label') ?? button.textContent);
+    expect(names.slice(names.indexOf('Design Mode'), names.indexOf('Console and network') + 1)).toEqual(['Design Mode', 'To: S01', 'Console and network']);
+  });
+
   it('счётчики: нули не показываются; ошибки и предупреждения — числа с подсказкой; кнопка показывает и прячет панель', () => {
     const props = renderChrome({ counters: { errors: 3, warnings: 1 }, devtoolsOpen: true });
     expect(screen.getByTestId('devtools-errors').textContent).toBe('3');

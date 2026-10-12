@@ -9,10 +9,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
-import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
+import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { BrowserTarget, GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { makeRoom, makeSession } from '../test-utils/work-fixtures.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { LayoutView } from '../layout/LayoutView.js';
@@ -53,8 +54,8 @@ function entry(): WorkEntry {
   };
 }
 
-function setBrowserTab(url: string): void {
-  const tab: TabSpec = { kind: 'browser', id: TAB, url };
+function setBrowserTab(url: string, target?: BrowserTarget): void {
+  const tab: TabSpec = target === undefined ? { kind: 'browser', id: TAB, url } : { kind: 'browser', id: TAB, url, target };
   const root: GroupNode = { type: 'group', id: 'g1', tabs: [tab], activeTabId: TAB };
   useLayoutStore.setState({
     activeWorkKey: WORK_KEY,
@@ -964,5 +965,43 @@ describe('BrowserSurface — первая загрузка после захва
     expect(warn).toHaveBeenCalledWith('[parley] viewport is not set before the first page', { code: 'failed', message: 'boom' });
     error.mockRestore();
     warn.mockRestore();
+  });
+});
+
+function entryWith(sessions: WorkSession[], rooms: Room[]): WorkEntry {
+  const base = entry();
+  return { ...base, map: { ...base.map, sessions, rooms } };
+}
+
+function browserTabSpec(): Extract<TabSpec, { kind: 'browser' }> | undefined {
+  const layout = useLayoutStore.getState().layouts[WORK_KEY];
+  const found = layout === undefined ? null : findTab(layout, TAB);
+  const tab = found?.group.tabs[found.index];
+  return tab?.kind === 'browser' ? tab : undefined;
+}
+
+describe('BrowserSurface — цель «To» (этап B, спека браузера 4.5)', () => {
+  it('без поля target — умолчание: первая живая сессия; выбор комнаты пишет target в раскладку', () => {
+    useWorksStore.setState({ entries: [entryWith([makeSession('s-01', 'lead')], [makeRoom('r-01', 'review')])] });
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const button = screen.getByRole('button', { name: /^To:/ });
+    expect(button.textContent).toBe('To: S01');
+    fireEvent.keyDown(button, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /review/ }));
+    expect(browserTabSpec()?.target).toEqual({ kind: 'room', roomId: 'r-01' });
+    expect(screen.getByRole('button', { name: /^To:/ }).textContent).toBe('To: review');
+  });
+
+  it('цель пропала (сессию удалили) — поле снято, тост об откате один раз', () => {
+    vi.mocked(toast).mockClear();
+    useWorksStore.setState({ entries: [entryWith([makeSession('s-01', 'lead')], [])] });
+    setBrowserTab('http://localhost:5173/', { kind: 'session', sessionId: 's-09' });
+    renderWork();
+    expect(browserTabSpec()).toBeDefined();
+    expect(browserTabSpec()?.target).toBeUndefined();
+    expect(vi.mocked(toast).mock.calls.filter(([text]) => String(text).startsWith('The chosen'))).toEqual([
+      ['The chosen session or room is gone — page context now goes to S01'],
+    ]);
   });
 });
