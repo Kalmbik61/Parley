@@ -2103,6 +2103,15 @@ const REPLACING_CASES: NeedCase[] = [
 /** Через 40 с после записи лога на секунде 6 — дольше порога тишины (30 с). */
 const SILENT = Date.parse(sec(6)) + 40_000;
 
+/** Пассивные события журнала на секунде 9, позже записи лога на секунде 6: они ход не начинают. */
+const PASSIVE_AT_9: Next[] = [
+  ['idle_prompt', notice(9, 'idle_prompt')],
+  ['Stop', event('Stop', null, sec(9))],
+  ['SubagentStop', hook('SubagentStop', { agentId: 'a' }, sec(9))],
+  ['ParleyWaitEnd', hook('ParleyWaitEnd', { waitId: 'w1' }, sec(9))],
+  ['SessionEnd', event('SessionEnd', null, sec(9))],
+];
+
 /** Снятое не возвращается: ни новым концом хода, ни тишиной, когда ход продолжил лог (3.3). */
 const RESURFACING_CASES: NeedCase[] = [
   ...BASES.flatMap((base): NeedCase[] => [
@@ -2141,6 +2150,24 @@ const RESURFACING_CASES: NeedCase[] = [
     activity: 'unseen',
     need: null,
   },
+  // Запись лога новее начала эпизода снимает лимит и вход насовсем: пассивное событие журнала, дописанное после неё,
+  // их не возвращает — снятие считается от начала эпизода, а не от последнего события любого вида.
+  ...ENDED_BASES.flatMap((base) =>
+    (
+      [
+        ['запись человека', { lastRecordAt: sec(6), lastUserRecordAt: sec(6) }],
+        ['запись ассистента', { lastRecordAt: sec(6), lastUserRecordAt: sec(1) }],
+      ] as Array<[string, ActivityLog]>
+    ).flatMap(([who, log]) =>
+      PASSIVE_AT_9.map(([name, next]): NeedCase => ({
+        name: `${base.label}, ${who} в логе на секунде 6, затем ${name} на секунде 9 → need не возвращается`,
+        events: [...base.events, next],
+        log,
+        activity: 'unseen',
+        need: null,
+      })),
+    ),
+  ),
 ];
 
 /** «Конкретнее — сильнее» и границы эпизода (3.2, 3.5). */
@@ -2378,6 +2405,28 @@ describe('activityOf: need — запасной путь по ошибке API �
     expect(result.need?.since).toBe(at);
     expect(result.need?.resetsAt).toBe('2026-09-05T22:00:00.000Z');
   });
+
+  it('первое чтение журнала даёт всем строкам одно время (mtime файла): ошибку лога запасной путь не восстановит', () => {
+    // Ограничение принято (решение контролёра). При первом чтении журнала — а это случается после перезапуска хоста —
+    // у всех строк одно `at`, mtime файла, и строка о начале хода выглядит новее ошибки в логе, поэтому свёртка не
+    // отличает ход, закончившийся ошибкой, от обычного. Процессы агентов перезапуск хоста не переживают: сессии
+    // становятся спящими, `need` у спящей `null` и так (3.1), а `stuck` в карте служба «застрял» снимает молча (6.3).
+    const same = sec(9);
+    const idle = hook('Notification', { notificationType: 'idle_prompt' }, same);
+    const log = apiErrorLog(3, 'rate_limit', SESSION_LIMIT);
+
+    const firstRead = activityOf({
+      events: [event('UserPromptSubmit', null, same), idle],
+      log,
+      now: NOW,
+    });
+    expect(firstRead.activity).toBe('unseen');
+    expect(firstRead.need).toBeNull();
+
+    // Те же строки с настоящим временем (ход начался до ошибки): лимит выведен. Теряется он только от общего времени.
+    const liveRead = activityOf({ events: [submit(1), idle], log, now: NOW });
+    expect(liveRead.need).toEqual(LIMIT_AT_3);
+  });
 });
 
 describe('activityOf: need — снятие (3.3)', () => {
@@ -2386,6 +2435,18 @@ describe('activityOf: need — снятие (3.3)', () => {
   it.each(LOG_CASES)('$name', expectCase);
   it.each(REPLACING_CASES)('$name', expectCase);
   it.each(RESURFACING_CASES)('$name', expectCase);
+
+  it('порядок строк — порядок файла: запись лога новее последней строки, но старше начала эпизода, лимит всё равно снимает', () => {
+    // Строки идут не по времени: `Stop` на секунде 2 дописан после `StopFailure` на секунде 5. Запись лога на секунде 3
+    // новее последней строки журнала — сессия работает, — и по тишине ход кончается без возвращённого лимита.
+    const result = activityOf({
+      events: [submit(1), failure(5, 'rate_limit', SESSION_LIMIT), event('Stop', null, sec(2))],
+      log: { lastRecordAt: sec(3), lastUserRecordAt: sec(3) },
+      now: Date.parse(sec(3)) + 40_000,
+    });
+    expect(result.activity).toBe('unseen');
+    expect(result.need).toBeNull();
+  });
 });
 
 describe('activityOf: need — конкретнее сильнее, эпизод (3.2, 3.5)', () => {
@@ -2493,6 +2554,47 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
       }
     }
     expect(count).toBeGreaterThan(10_000);
+    expect(bad).toEqual([]);
+  });
+
+  it('пассивное событие журнала не возвращает снятые лимит и вход: для всех последовательностей до двух событий', () => {
+    // Снятое состояние не должно зависеть от того, что журнал дописали после записи лога: `Stop`, простой, остановка
+    // субагента, конец ожидания, выход. (Одобрение и вопрос сюда не входят: у них прежнее правило «запись человека
+    // новее последнего события», и оно сравнивается с последним событием любого вида.)
+    const passive: Array<[string, EventRecord]> = [
+      ['Stop', event('Stop', null, sec(9))],
+      ['idle_prompt', notice(9, 'idle_prompt')],
+      ['SubagentStop', hook('SubagentStop', { agentId: 'a' }, sec(9))],
+      ['ParleyWaitStart', hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }, sec(9))],
+      ['ParleyWaitEnd', hook('ParleyWaitEnd', { waitId: 'w1' }, sec(9))],
+      ['SessionEnd', event('SessionEnd', null, sec(9))],
+    ];
+    const logs: Array<[string, ActivityLog | null]> = [
+      ['без лога', null],
+      ['запись человека на секунде 6', { lastRecordAt: sec(6), lastUserRecordAt: sec(6) }],
+      ['запись ассистента на секунде 6', { lastRecordAt: sec(6), lastUserRecordAt: sec(1) }],
+      ['ошибка API на секунде 5', apiErrorLog(5, 'rate_limit', SESSION_LIMIT)],
+      ['ошибка API на секунде 2', apiErrorLog(2, 'rate_limit', SESSION_LIMIT)],
+    ];
+    const bad: string[] = [];
+    let count = 0;
+    for (const indexes of sequences(2)) {
+      const names = indexes.map((index) => ALPHABET[index]?.[0] ?? '?').join(' → ');
+      const events = indexes.map(
+        (index, position) => ALPHABET[index]?.[1](position + 1) ?? submit(1),
+      );
+      for (const [logName, log] of logs) {
+        if (activityOf({ events, log, now: NOW }).need !== null) continue;
+        for (const [name, next] of passive) {
+          count += 1;
+          const kind = activityOf({ events: [...events, next], log, now: NOW }).need?.kind;
+          if (kind === 'limit' || kind === 'sign-in') {
+            bad.push(`${names} (${logName}) + ${name}: появился ${kind}`);
+          }
+        }
+      }
+    }
+    expect(count).toBeGreaterThan(3_000);
     expect(bad).toEqual([]);
   });
 });

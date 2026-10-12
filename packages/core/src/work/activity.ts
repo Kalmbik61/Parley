@@ -508,6 +508,17 @@ export function activityOf({
     failed(apiError.at, apiError.error, apiError.text);
     source = 'log';
   }
+  // Лимит и вход снимает и запись работы в логе новее начала эпизода — считая от него, а не от последнего события
+  // журнала: иначе `Stop`, простой или остановка субагента, дописанные после такой записи, вернули бы снятое. Сама
+  // запись ошибки (`errorEndsTurn`) — конец хода, а не его продолжение.
+  if (
+    need !== null &&
+    rankOf(need.kind) < 0 &&
+    !errorEndsTurn &&
+    isNewer(recordAt, msOf(need.since))
+  ) {
+    need = null;
+  }
 
   if (phase !== 'blocked') {
     const recordIsNewer = isNewer(recordAt, eventAt);
