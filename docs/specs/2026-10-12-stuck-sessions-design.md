@@ -131,9 +131,10 @@ Codex:
 
 **Конкретнее — сильнее.** Внутри эпизода более точный вид не заменяется менее точным: у Codex OSC 9
 об одобрении и заголовок `Action Required` приходят вместе, и `approval` не превращается в `question`.
-Заголовок без OSC 9 становится `question` не сразу, а если за 1 с OSC 9 об одобрении так и не пришёл
-(`blocked` при этом выставляется сразу, как сейчас): иначе человек получил бы «Asked you a question»
-на обычное одобрение.
+Заголовок без OSC 9 сразу даёт `question`, а OSC 9 об одобрении, пришедшее следом, повышает вид до
+`approval` (`since` прежний). Чтобы человек не получил «Asked you a question» на обычное одобрение,
+окно шлёт уведомление «нужно действие» через 1 с после входа сессии в `needs-you` (`NEED_SETTLE_MS`) — с
+последним `need`; ушла из `needs-you` за эту секунду — уведомления нет (7.1).
 
 ### 3.3 Когда снимается
 
@@ -151,13 +152,12 @@ Codex:
 ### 3.4 Время сброса
 
 Порядок:
-1. **Данные провайдера**, если время в будущем:
-   - Claude — файл строки статуса сессии `limits/<сессия>.json` (`five_hour`, `seven_day`,
-     `resets_at`). Окно выбирается по тексту: «session limit» → `five_hour`, «weekly limit» →
-     `seven_day`; без слова — окно с `used_percentage` ≥ 100;
-   - Codex — последний `token_count` с `rate_limits` в том же rollout: окно с `used_percent` ≥ 100,
-     `resets_at` в секундах Unix;
-   - GLM — квота Z.ai (`host/limits/zai-quota.ts`), запрос в момент удара: окно на 100 %.
+1. **Данные провайдера** — из службы лимитов хоста (`LimitsService.get(провайдер)`, `host/limits/`):
+   у Claude это строки статуса сессий, у Codex — `token_count` свежих rollout, у GLM — квота Z.ai.
+   Берётся окно, названное текстом («session limit» → `fiveHour`, «weekly limit» → `week`), а без
+   слова — окно с `usedPercent` ≥ 100 (оба — более позднее), если его сброс в будущем. У GLM при
+   ударе без такого окна служба лимитов один раз за эпизод перечитывает квоту (`refresh(true)`).
+   Данные провайдера новее удара, и все окна ниже 100 % — лимит уже сброшен: `resetsAt` — сейчас.
 2. **Текст ошибки:**
    - Claude: «resets 2:50pm (Europe/Moscow)», «resets 7pm (Europe/Moscow)», «resets Sep 22 at 4pm
      (Europe/Moscow)». Пояс — из скобок; время без даты — ближайшее после записи;
@@ -195,8 +195,7 @@ Codex:
 
 - `core/session-index.ts` (Claude): `lastApiError: { at, error, status, text } | null` — самая
   свежая запись ассистента с `isApiErrorMessage: true`, если она новее последней записи человека.
-- `core/codex/index-session.ts`: у `task_complete` — `error: { info, message } | null`; у сессии —
-  последние `rate_limits` из `token_count`.
+- `core/codex/index-session.ts`: у `task_complete` — `error: { info, message } | null`.
 
 ### 4.3 `activity-service`
 
@@ -229,9 +228,9 @@ Codex:
 
 ### 5.1 Поле карты
 
-`WorkSession.stuck: { kind, since, detail, resetsAt, window, account } | null` — та же форма, что
-`SessionNeed`. Пишет только хост и только при пороге (3.5). В старых картах поля нет:
-`migrateSession` (`core/work/map.ts`) подставляет `null`.
+`WorkSession.stuck?: { kind, since, detail, resetsAt, window, account } | null` — та же форма, что
+`SessionNeed`. Пишет только хост и только при пороге (3.5). Поле необязательное, как `model` и
+`effort`: нет поля — то же, что `null`, миграции карты не нужно.
 
 ### 5.2 Строка в комнате и письма Parley
 
@@ -378,6 +377,8 @@ Claude Code «Wait here, then continue automatically» (в 2.1.296 — с хво
 - Заголовок прежний — `S.notifications.sessionTitle(работа, сессия, 'needs you')`. Текст — причина
   (7.4), а не задача сессии. Сессия в комнате — в конце `· room <имя>`.
 - Уровень внимания `needs-you` даёт и `need`, а не только `blocked` (`attention/derive.ts`).
+- Уведомление «нужно действие» уходит через `NEED_SETTLE_MS` = 1 с после входа в `needs-you`, с
+  последним `need`; вышла из `needs-you` раньше — уведомления нет (3.2).
 - Клик: `limit` → комната сессии (решение принимается там), без комнаты — терминал; остальные виды →
   терминал сессии (действовать там).
 - Лимит у нескольких сессий одного провайдера — одно уведомление на провайдера (тег
@@ -463,7 +464,7 @@ Settings → Notifications (`components/settings/SettingsDialog.tsx`): преж�
 
 - **core**: разбор ошибок Claude и Codex → вид и `detail`; время сброса по тексту с поясом —
   инвариантами по диапазону (полночь, переход на летнее время, смена года); `activityOf` с `need` для
-  каждого вида, снятие, «конкретнее — сильнее»; `deliveryAction` → `stuck`; `migrateSession`;
+  каждого вида, снятие, «конкретнее — сильнее»; `deliveryAction` → `stuck`; карта без поля `stuck`;
   `get_map`, `wait_for`, `send_message` с застрявшим; тексты строк и писем; тема `stuck`.
 - **host**: `activity-service` — `StopFailure`, запасной путь через журнал, сигналы Codex с причиной,
   `startup` у Claude; `stuck-service` — пороги, карта, строки и письма, «back», сверка после
