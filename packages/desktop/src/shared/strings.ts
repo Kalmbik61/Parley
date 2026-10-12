@@ -1511,6 +1511,8 @@ export const S = {
     rect: (x: number, y: number, width: number, height: number): string => `Rect: ${width} × ${height} at ${x}, ${y} (page coordinates)`,
     elementsUnder: 'Elements under it:',
     underItem: (selector: string, text: string): string => (text === '' ? `- ${selector}` : `- ${selector} — "${text}"`),
+    /** Метка поставлена на другой странице, чем в шапке (лоток переживает смену документа): адрес — первой строкой её ограды. */
+    markedOn: (url: string): string => `Marked on: ${url}`,
   },
 
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */

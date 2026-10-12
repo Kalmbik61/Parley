@@ -1740,7 +1740,7 @@ git commit -m "feat(desktop): файлы-контексты элемента, к
 
 **Интерфейсы:**
 - Отдаёт (`shared/browser-types.ts`, спека 3.5): `PickViewport`, `ViewportFraction`, `Rect`, `AnnotationElementTarget`, `AnnotationRegionTarget`, `AnnotationTarget`, `AnnotationPick`, `AnnotationPin`, `AnnotationPosition`. Индекс называет `AnnotationPick`, `AnnotationPin` и `Rect`, но не задаёт их форму — она здесь. `AnnotationPosition.rect` — в долях вьюпорта (см. «Расхождения»).
-- Отдаёт (`context-markdown.ts`): `AnnotationEntry`, `annotationLabel(target)`, `annotationsContext(input)`.
+- Отдаёт (`context-markdown.ts`): `AnnotationEntry { n; comment; gone; url; target }` (`url` — страница, на которой поставлена метка), `annotationLabel(target)`, `annotationsContext(input)`. Метка с другой страницы, чем в шапке, получает в ограде первой строкой `Marked on: <адрес>` («Расхождения», п. 13).
 
 - [ ] **Шаг 1. Написать падающий тест.** В `context-markdown.test.ts` дописать импорты `annotationsContext`, `type AnnotationEntry` из `./context-markdown.js` и блоки:
 
@@ -1769,11 +1769,12 @@ const REGION_TARGET = {
 
 describe('annotations (спека 4.7)', () => {
   it('номер и комментарий человека — цитатой вне ограды, цель — в ограде; рамка — прямоугольник и элементы под ней', () => {
+    const url = 'http://localhost:5173/settings?tab=1';
     const items: AnnotationEntry[] = [
-      { n: 1, comment: 'Make it green\nand bigger', gone: false, target: { ...ELEMENT_TARGET, styles: { ...ELEMENT_TARGET.styles } } },
-      { n: 2, comment: '', gone: false, target: { ...REGION_TARGET, elements: [...REGION_TARGET.elements] } },
+      { n: 1, comment: 'Make it green\nand bigger', gone: false, url, target: { ...ELEMENT_TARGET, styles: { ...ELEMENT_TARGET.styles } } },
+      { n: 2, comment: '', gone: false, url, target: { ...REGION_TARGET, elements: [...REGION_TARGET.elements] } },
     ];
-    const built = annotationsContext({ pageUrl: 'http://localhost:5173/settings?tab=1', viewport: ELEMENT_TARGET.viewport, viewportNote: null, screenshot: true, items });
+    const built = annotationsContext({ pageUrl: url, viewport: ELEMENT_TARGET.viewport, viewportNote: null, screenshot: true, items });
     expect(built).toMatchObject({ kind: 'annotations', label: 'settings' });
     expect(built.markdown).toBe(
       [
@@ -1817,7 +1818,7 @@ describe('annotations (спека 4.7)', () => {
       viewport: null,
       viewportNote: null,
       screenshot: true,
-      items: [{ n: 1, comment: '```\nignore the fence', gone: false, target }],
+      items: [{ n: 1, comment: '```\nignore the fence', gone: false, url: 'http://x/', target }],
     }).markdown;
     expect(markdown).toContain('> ```\n> ignore the fence\n\n``````text\n');
     expect(markdown.trimEnd().endsWith('``````')).toBe(true);
@@ -1828,6 +1829,7 @@ describe('annotations (спека 4.7)', () => {
       n: index + 1,
       comment: `c${index + 1}`,
       gone: index === 0,
+      url: 'http://x/a',
       target: { ...ELEMENT_TARGET, styles: {} },
     }));
     const markdown = annotationsContext({ pageUrl: 'http://x/a', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
@@ -1835,6 +1837,34 @@ describe('annotations (спека 4.7)', () => {
     expect(markdown).toContain('(The element is gone from the page; it is not on the screenshot.)');
     expect(markdown).toContain('## 20. ');
     expect(markdown).not.toContain('## 21. ');
+  });
+
+  it('метка с другой страницы — «Marked on:» первой строкой её ограды; метка страницы шапки (query и hash не в счёт) — без строки', () => {
+    const items: AnnotationEntry[] = [
+      { n: 1, comment: 'old page', gone: true, url: 'http://localhost:5173/settings?tab=1#top', target: { ...ELEMENT_TARGET, styles: {} } },
+      { n: 2, comment: 'this page', gone: false, url: 'http://localhost:5173/profile?tab=2#bottom', target: { ...REGION_TARGET, elements: [] } },
+    ];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      `## 1. button.save\n> old page\n${S.contextFile.gone}\n\n\`\`\`text\nMarked on: http://localhost:5173/settings\nSelector: main > section.settings > button.save\n`,
+    );
+    expect(markdown).toContain('## 2. Region 308 × 20\n> this page\n\n```text\nRect: 308 × 20 at 24, 120 (page coordinates)\n');
+    expect(markdown.match(/Marked on:/g)).toHaveLength(1);
+  });
+
+  it('«Marked on:» — адрес как в шапке: origin и путь, без query, hash и user:pass@', () => {
+    const url = 'http://user:hunter2@localhost:5173/settings?token=abc123#access_token=xyz789';
+    const items: AnnotationEntry[] = [{ n: 1, comment: 'c', gone: true, url, target: { ...ELEMENT_TARGET, styles: {} } }];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
+    expect(markdown).toContain('\nMarked on: http://localhost:5173/settings\n');
+    for (const secret of ['hunter2', 'abc123', 'xyz789']) expect(markdown).not.toContain(secret);
+  });
+
+  it('адрес метки не разобрался — строки «Marked on:» нет, а не пустая', () => {
+    const items: AnnotationEntry[] = [{ n: 1, comment: 'c', gone: false, url: '', target: { ...ELEMENT_TARGET, styles: {} } }];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: true, items }).markdown;
+    expect(markdown).not.toContain('Marked on');
   });
 });
 ```
@@ -1870,7 +1900,11 @@ export interface Rect {
 /** Метка на элементе (спека 4.7): данные на момент метки; роль, имя и React дочитывает main. */
 export interface AnnotationElementTarget {
   kind: 'element';
-  /** Id цели в мире скрипта меток (`a1`, `a2`…): по нему скрипт рисует номер и идёт за элементом. */
+  /**
+   * Id цели в мире скрипта меток (`a1`, `a2`…): по нему скрипт рисует номер и идёт за элементом. Уникален только в
+   * пределах одного документа: в новом документе скрипт нумерует с `a1` заново, поэтому лоток в `annotateSync` шлёт
+   * метки одного, текущего документа — ключ прежнего документа в новом мире назвал бы чужую цель.
+   */
   key: string;
   selector: string;
   text: string;
@@ -1886,6 +1920,7 @@ export interface AnnotationElementTarget {
 /** Рамка области (спека 4.7): прямоугольник в CSS-пикселях документа и до трёх элементов под ней. */
 export interface AnnotationRegionTarget {
   kind: 'region';
+  /** Как у метки на элементе: уникален только в пределах одного документа. */
   key: string;
   rect: Rect;
   elements: Array<{ selector: string; text: string }>;
@@ -1924,16 +1959,22 @@ export interface AnnotationPosition {
     rect: (x: number, y: number, width: number, height: number): string => `Rect: ${width} × ${height} at ${x}, ${y} (page coordinates)`,
     elementsUnder: 'Elements under it:',
     underItem: (selector: string, text: string): string => (text === '' ? `- ${selector}` : `- ${selector} — "${text}"`),
+    /** Метка поставлена на другой странице, чем в шапке (лоток переживает смену документа): адрес — первой строкой её ограды. */
+    markedOn: (url: string): string => `Marked on: ${url}`,
 ```
 
 - [ ] **Шаг 5. Реализовать.** В `context-markdown.ts` дописать импорт `import type { AnnotationTarget, ReactComponentInfo } from './browser-types.js';` (вместо прежнего импорта `ReactComponentInfo`) и в конец файла:
 
 ```ts
-/** Пункт аннотаций: номер, комментарий человека, пропал ли элемент и цель на момент метки. */
+/**
+ * Пункт аннотаций: номер, комментарий человека, пропал ли элемент, цель на момент метки и адрес страницы, на которой
+ * метка поставлена: лоток переживает смену документа, и в одной пачке бывают метки с разных страниц.
+ */
 export interface AnnotationEntry {
   n: number;
   comment: string;
   gone: boolean;
+  url: string;
   target: AnnotationTarget;
 }
 
@@ -1962,7 +2003,11 @@ function targetLines(target: AnnotationTarget): string {
   return lines.join('\n');
 }
 
-/** Пачка аннотаций (спека 4.7): номер и комментарий — вне ограды, цель — в ограде; не больше `CONTEXT_LIMITS.annotations`. */
+/**
+ * Пачка аннотаций (спека 4.7): номер и комментарий — вне ограды, цель — в ограде; не больше `CONTEXT_LIMITS.annotations`.
+ * `pageUrl` — страница сейчас (шапка и метка имени файла); метка с другой страницы получает в ограде первой строкой
+ * `Marked on: <адрес>` — адрес из `item.url`, в виде шапки (origin и путь).
+ */
 export function annotationsContext(input: {
   pageUrl: string;
   viewport: PageMeta['viewport'];
@@ -1981,11 +2026,16 @@ export function annotationsContext(input: {
     },
     { text: S.contextFile.annotationsNote },
   ];
+  const current = headerUrl(input.pageUrl);
   for (const item of input.items.slice(0, CONTEXT_LIMITS.annotations)) {
     const comment = item.comment.trim() === '' ? S.contextFile.noComment : cutText(item.comment, CONTEXT_LIMITS.comment);
     const lines = [S.contextFile.annotationHeading(item.n, annotationLabel(item.target)), quote(comment)];
     if (item.gone) lines.push(S.contextFile.gone);
-    parts.push({ text: lines.join('\n') }, { data: targetLines(item.target) });
+    // Путь в адресе задаёт страница, поэтому адрес стоит в ограде, а не в тексте окна. Не разобрался (`''`) — строки нет.
+    const markedOn = headerUrl(item.url);
+    const target = targetLines(item.target);
+    const data = markedOn === '' || markedOn === current ? target : `${S.contextFile.markedOn(markedOn)}\n${target}`;
+    parts.push({ text: lines.join('\n') }, { data });
   }
   return { kind: 'annotations', label, markdown: assemble(parts) };
 }
@@ -6808,6 +6858,7 @@ git commit -m "feat(desktop): скрипт меток аннотаций в из
   - `FakeBridge.setAnnotatePicks(picks)`, `setAnnotatePositions(positions | null)`, `setAnnotateCapture(path)`; вызовы — в `browserCalls`.
 - Снимок (этап 0, 0.7): меток на странице нет (новый документ) — `{ path: null }`. Иначе — `Page.captureScreenshot({ format: 'png' })` видимой части: снимок всей страницы через `captureBeyondViewport` двоит фиксированный заголовок и теряет метки ниже первой поверхности вида. CDP не вышел — `capturePage()` видимой части.
 - Метка на элементе: роль, имя и React — по точке документа `documentPoint(point, scroll)` (этап 0, 0.4); `point` и `scroll` в окно не уходят.
+- Метки `annotateSync` — пункты одного, текущего документа (задача 21, `pinsOf`): их номера могут идти не подряд, а ключи не повторяются. Ключ (`a1`…) скрипт нумерует заново в каждом документе: повтор в списке — это метки двух документов, и скрипт нарисовал бы обе на одной цели. `parseAnnotationPins` отвечает на повтор `null`, канал — `bad_request`.
 - Скрипт меток main ставит после помощников DOM одной строкой: `guestScript` — это `guest-dom.js` + `guest-annotate.js` (шаг 3, `main/index.ts`).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -6908,6 +6959,11 @@ describe('parseAnnotationPins', () => {
     expect(parseAnnotationPins(Array.from({ length: 21 }, (_, index) => ({ n: (index % 20) + 1, key: `a${index}` })))).toBeNull();
     expect(parseAnnotationPins([{ n: 1, key: 'x"); alert(1); ("' }])).toBeNull();
     expect(parseAnnotationPins('x')).toBeNull();
+  });
+
+  it('ключ не повторяется: повтор — метки двух документов в одном списке; номера не обязаны идти подряд', () => {
+    expect(parseAnnotationPins([{ n: 1, key: 'a1' }, { n: 2, key: 'a1' }])).toBeNull();
+    expect(parseAnnotationPins([{ n: 2, key: 'a1' }, { n: 3, key: 'a2' }])).toEqual([{ n: 2, key: 'a1' }, { n: 3, key: 'a2' }]);
   });
 });
 
@@ -7224,12 +7280,17 @@ export function validateAnnotationPick(raw: unknown): ValidAnnotationPick | null
   };
 }
 
-/** Метки окна для `sync`: до 20, номер 1…20, ключ `a<число>`; иначе null — канал ответит `bad_request`. */
+/**
+ * Метки окна для `sync`: до 20, номер 1…20, ключ `a<число>` без повторов; иначе null — канал ответит `bad_request`.
+ * Ключ уникален лишь в пределах документа: повтор значит, что в список попали метки двух документов.
+ */
 export function parseAnnotationPins(value: unknown): AnnotationPin[] | null {
   if (!Array.isArray(value) || value.length > CONTEXT_LIMITS.annotations) return null;
   const pins: AnnotationPin[] = [];
+  const keys = new Set<string>();
   for (const item of value) {
-    if (!isRecord(item) || !isPinNumber(item.n) || typeof item.key !== 'string' || !PIN_KEY.test(item.key)) return null;
+    if (!isRecord(item) || !isPinNumber(item.n) || typeof item.key !== 'string' || !PIN_KEY.test(item.key) || keys.has(item.key)) return null;
+    keys.add(item.key);
     pins.push({ n: item.n, key: item.key });
   }
   return pins;
@@ -7417,7 +7478,7 @@ export function createAnnotate(deps: {
   /** Одна метка аннотаций (спека браузера 4.7); окно зовёт снова, пока режим включён. null — Esc, навигация, отмена. */
   annotateStart(webContentsId: number): Promise<AnnotationPick | null>;
   annotateCancel(webContentsId: number): Promise<void>;
-  /** Перерисовать метки страницы по лотку и узнать, где они (доли вьюпорта) и какие элементы пропали. */
+  /** Перерисовать метки страницы по лотку (пункты её документа) и узнать, где они (доли вьюпорта) и какие элементы пропали. */
   annotateSync(webContentsId: number, pins: AnnotationPin[]): Promise<AnnotationPosition[]>;
   /** Снимок страницы с номерами меток в `drops/`; меток на странице нет — `null`. */
   annotateCapture(webContentsId: number): Promise<{ path: string | null }>;
@@ -7504,8 +7565,10 @@ git commit -m "feat(desktop): аннотации в main — метки, пер�
 
 **Интерфейсы:**
 - Берёт: типы меток (задача 6), `CONTEXT_LIMITS` (задача 4).
-- Отдаёт: `AnnotationItem { n; key; target; comment; gone; rect }`, `AnnotationEditing { n; isNew; anchor; draft }`, `AnnotateTabState { items; editing; collapsed }`, `EMPTY_ANNOTATE`, `pinsOf(items)`, `useAnnotateStore` с действиями `receive`, `setDraft`, `save`, `cancelEdit`, `startEdit`, `remove`, `clear`, `restore`, `markPositions`, `markAllGone`, `setCollapsed`, `drop`.
+- Отдаёт: `AnnotationItem { n; key; generation; url; target; comment; gone; rect }`, `AnnotationEditing { n; isNew; anchor; draft }`, `AnnotateTabState { items; editing; collapsed; generation }`, `EMPTY_ANNOTATE`, `pinsOf(tab)`, `useAnnotateStore` с действиями `receive(tabId, pick, url)`, `setDraft`, `save`, `cancelEdit`, `startEdit`, `remove`, `clear`, `restore`, `markPositions`, `markAllGone`, `setCollapsed`, `drop`.
 - Правила: номера — 1…N без дыр (удаление перенумеровывает), не больше 20 пунктов. Новая метка сразу открывает редактор. Esc у новой метки её отменяет. Комментарий обрезается по краям и до 2000 кодовых точек. «Undo» возвращает убранную пачку перед текущими пунктами.
+- **Адрес.** Пункт помнит адрес страницы, на которой поставлен: `receive(tabId, pick, url)` получает живой адрес вкладки в момент ответа скрипта. Лоток переживает смену документа, и в файле у метки с другой страницы, чем в шапке, первая строка ограды — `Marked on: <адрес>` (задача 6).
+- **Поколение документа.** Ключ метки (`a1`, `a2`…) скрипт нумерует заново в каждом документе, а лоток хранит и пункты прошлых: без различия «a1» нового документа совпал бы с «a1» прошлого, страница нарисовала бы обе метки на одной цели, а старый пункт ожил бы. Вкладка держит `generation`, `markAllGone` (новый документ) увеличивает его — всегда, и при пустом лотке: иначе «Undo» вернул бы пункты прошлой страницы как живые. Пункт несёт поколение документа, где поставлен. В страницу (`pinsOf`) уходят только пункты текущего поколения; пункты прошлых в её мире не существуют и всегда `gone`, `restore` метит так же вернувшиеся пункты прошлого поколения. Ключ должен быть уникален лишь в пределах документа: это даёт `seq` скрипта меток, а повтор в списке `parseAnnotationPins` (задача 20) отклоняет. Нумерацию скрипта нельзя «продолжать» числом окна, например `Date.now()`: ключ `a<число>` не длиннее шести цифр (`PIN_KEY`).
 
 - [ ] **Шаг 1. Написать падающий тест.**
 
@@ -7513,9 +7576,11 @@ git commit -m "feat(desktop): аннотации в main — метки, пер�
 // packages/desktop/src/renderer/browser/annotate/store.test.ts
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AnnotationElementTarget, AnnotationRegionTarget } from '../../../shared/browser-types.js';
-import { pinsOf, useAnnotateStore } from './store.js';
+import { EMPTY_ANNOTATE, pinsOf, useAnnotateStore } from './store.js';
 
 const TAB = 'browser:a1';
+const PAGE = 'http://localhost:5173/settings';
+const OTHER_PAGE = 'http://localhost:5173/profile';
 const VIEWPORT = { width: 1280, height: 800, dpr: 2 };
 
 function element(key: string): AnnotationElementTarget {
@@ -7533,26 +7598,26 @@ afterEach(() => useAnnotateStore.setState({ tabs: {} }));
 
 describe('useAnnotateStore (спека браузера 4.7)', () => {
   it('новая метка — пункт с номером по порядку и открытый редактор у метки', () => {
-    store().receive(TAB, element('a1'));
+    store().receive(TAB, element('a1'), PAGE);
     expect(tab()?.items.map((item) => [item.n, item.key, item.comment])).toEqual([[1, 'a1', '']]);
     expect(tab()?.editing).toEqual({ n: 1, isNew: true, anchor: { fx: 0.1, fy: 0.2 }, draft: '' });
   });
 
   it('Save: черновик обрезан по краям и до 2000; редактор закрыт; правка готовой — с её комментарием и местом из последней перерисовки', () => {
-    store().receive(TAB, element('a1'));
+    store().receive(TAB, element('a1'), PAGE);
     store().setDraft(TAB, `  ${'x'.repeat(2500)}  `);
     store().save(TAB);
     expect(tab()?.items[0]?.comment).toBe('x'.repeat(2000));
     expect(tab()?.editing).toBeNull();
     store().markPositions(TAB, [{ n: 1, rect: { x: 0.5, y: 0.6, width: 0.1, height: 0.1 } }]);
-    store().receive(TAB, { kind: 'edit', n: 1 });
+    store().receive(TAB, { kind: 'edit', n: 1 }, PAGE);
     expect(tab()?.editing).toEqual({ n: 1, isNew: false, anchor: { fx: 0.5, fy: 0.6 }, draft: 'x'.repeat(2000) });
   });
 
   it('Esc у новой метки — пункта нет; у готовой — только редактор закрыт', () => {
-    store().receive(TAB, element('a1'));
+    store().receive(TAB, element('a1'), PAGE);
     store().save(TAB);
-    store().receive(TAB, region('a2'));
+    store().receive(TAB, region('a2'), PAGE);
     store().cancelEdit(TAB);
     expect(tab()?.items.map((item) => item.key)).toEqual(['a1']);
     store().startEdit(TAB, 1);
@@ -7563,39 +7628,39 @@ describe('useAnnotateStore (спека браузера 4.7)', () => {
 
   it('удаление перенумеровывает; больше 20 — новая метка не ставится', () => {
     for (let index = 1; index <= 3; index += 1) {
-      store().receive(TAB, element(`a${index}`));
+      store().receive(TAB, element(`a${index}`), PAGE);
       store().save(TAB);
     }
     store().remove(TAB, 2);
-    expect(pinsOf(tab()?.items ?? [])).toEqual([
+    expect(pinsOf(tab() ?? EMPTY_ANNOTATE)).toEqual([
       { n: 1, key: 'a1' },
       { n: 2, key: 'a3' },
     ]);
     for (let index = 4; index <= 25; index += 1) {
-      store().receive(TAB, element(`a${index}`));
+      store().receive(TAB, element(`a${index}`), PAGE);
       store().save(TAB);
     }
     expect(tab()?.items).toHaveLength(20);
   });
 
   it('clear отдаёт пачку для Undo, restore возвращает её перед новыми пунктами', () => {
-    store().receive(TAB, element('a1'));
+    store().receive(TAB, element('a1'), PAGE);
     store().save(TAB);
     const removed = store().clear(TAB);
     expect(tab()?.items).toEqual([]);
-    store().receive(TAB, region('a2'));
+    store().receive(TAB, region('a2'), PAGE);
     store().save(TAB);
     store().restore(TAB, removed);
-    expect(pinsOf(tab()?.items ?? [])).toEqual([
+    expect(pinsOf(tab() ?? EMPTY_ANNOTATE)).toEqual([
       { n: 1, key: 'a1' },
       { n: 2, key: 'a2' },
     ]);
   });
 
   it('положения: null — «element gone»; новый документ — все пропали; drop убирает вкладку', () => {
-    store().receive(TAB, element('a1'));
+    store().receive(TAB, element('a1'), PAGE);
     store().save(TAB);
-    store().receive(TAB, region('a2'));
+    store().receive(TAB, region('a2'), PAGE);
     store().save(TAB);
     store().markPositions(TAB, [
       { n: 1, rect: null },
@@ -7609,6 +7674,42 @@ describe('useAnnotateStore (спека браузера 4.7)', () => {
     ]);
     store().drop(TAB);
     expect(tab()).toBeUndefined();
+  });
+
+  it('пункт помнит адрес страницы, на которой поставлен, и поколение документа', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    expect(tab()?.items.map((item) => [item.url, item.generation])).toEqual([[PAGE, 0]]);
+  });
+
+  it('новый документ: метки прошлого в страницу не уходят, пункт остаётся «gone»; тот же ключ в новом документе — другая метка', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    store().markAllGone(TAB);
+    // Скрипт нового документа нумерует с a1 заново.
+    store().receive(TAB, region('a1'), OTHER_PAGE);
+    store().save(TAB);
+    expect(pinsOf(tab() ?? EMPTY_ANNOTATE)).toEqual([{ n: 2, key: 'a1' }]);
+    store().markPositions(TAB, [{ n: 2, rect: { x: 0, y: 0, width: 0.1, height: 0.1 } }]);
+    expect(tab()?.items.map((item) => [item.url, item.gone])).toEqual([
+      [PAGE, true],
+      [OTHER_PAGE, false],
+    ]);
+  });
+
+  it('«Undo» после нового документа: вернувшиеся пункты прошлого — «gone» и в метки не уходят, даже если лоток был пуст', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    const removed = store().clear(TAB);
+    // Тост «Undo» ещё на экране, а страница сменилась: лоток пуст, но поколение растёт всё равно.
+    store().markAllGone(TAB);
+    store().receive(TAB, region('a1'), OTHER_PAGE);
+    store().save(TAB);
+    store().restore(TAB, removed);
+    expect(tab()?.items.map((item) => [item.n, item.url, item.gone])).toEqual([
+      [1, PAGE, true],
+      [2, OTHER_PAGE, false],
+    ]);
+    expect(pinsOf(tab() ?? EMPTY_ANNOTATE)).toEqual([{ n: 2, key: 'a1' }]);
   });
 });
 ```
@@ -7624,6 +7725,11 @@ describe('useAnnotateStore (спека браузера 4.7)', () => {
  * памяти окна. Данные каждой метки снимаются в момент её создания: новый документ стирает метки со страницы, а лоток с
  * данными остаётся (пункты помечаются «element gone»). Номера — 1…N без дыр: удаление перенумеровывает, и номера лотка,
  * файла и меток на снимке совпадают.
+ *
+ * Поколение документа. Ключ метки (`a1`, `a2`…) скрипт страницы нумерует заново в каждом документе, а лоток хранит и
+ * пункты прошлых: без различия «a1» нового документа совпал бы с «a1» прошлого, и страница нарисовала бы обе метки на
+ * одной цели. Поэтому у вкладки есть `generation` (растёт на каждом новом документе), а у пункта — поколение документа,
+ * где он поставлен. В страницу уходят только пункты текущего поколения; пункты прошлых в её мире не существуют.
  */
 
 import { create } from 'zustand';
@@ -7633,7 +7739,12 @@ import { CONTEXT_LIMITS } from '../../../shared/context-markdown.js';
 
 export interface AnnotationItem {
   n: number;
+  /** Ключ цели в мире скрипта меток: уникален только в пределах поколения `generation`. */
   key: string;
+  /** Поколение документа вкладки, в котором поставлена метка (`AnnotateTabState.generation` в тот момент). */
+  generation: number;
+  /** Адрес страницы в момент метки: в файле он называет страницу метки, если она не та, что в шапке. */
+  url: string;
   target: AnnotationTarget;
   comment: string;
   /** Элемента больше нет на странице (или страница сменилась). */
@@ -7654,12 +7765,15 @@ export interface AnnotateTabState {
   items: AnnotationItem[];
   editing: AnnotationEditing | null;
   collapsed: boolean;
+  /** Поколение текущего документа: `markAllGone` (новый документ) увеличивает его, даже когда лоток пуст. */
+  generation: number;
 }
 
-export const EMPTY_ANNOTATE: AnnotateTabState = { items: [], editing: null, collapsed: false };
+export const EMPTY_ANNOTATE: AnnotateTabState = { items: [], editing: null, collapsed: false, generation: 0 };
 
-export function pinsOf(items: readonly AnnotationItem[]): AnnotationPin[] {
-  return items.map(({ n, key }) => ({ n, key }));
+/** Метки для страницы: только пункты её документа — ключ прошлого документа в её мире ничего не называет или называет чужое. */
+export function pinsOf(tab: Pick<AnnotateTabState, 'items' | 'generation'>): AnnotationPin[] {
+  return tab.items.filter((item) => item.generation === tab.generation).map(({ n, key }) => ({ n, key }));
 }
 
 function renumber(items: readonly AnnotationItem[]): AnnotationItem[] {
@@ -7680,8 +7794,8 @@ function editOf(tab: AnnotateTabState, n: number): AnnotationEditing | null {
 
 export interface AnnotateState {
   tabs: Record<string, AnnotateTabState>;
-  /** Ответ скрипта: новая метка — пункт и редактор; правка — редактор этого пункта. */
-  receive(tabId: string, pick: AnnotationPick): void;
+  /** Ответ скрипта: новая метка — пункт и редактор; правка — редактор этого пункта. `url` — адрес страницы сейчас. */
+  receive(tabId: string, pick: AnnotationPick, url: string): void;
   setDraft(tabId: string, draft: string): void;
   save(tabId: string): void;
   cancelEdit(tabId: string): void;
@@ -7702,7 +7816,7 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
 
   return {
     tabs: {},
-    receive: (tabId, pick) =>
+    receive: (tabId, pick, url) =>
       patch(tabId, (tab) => {
         if (pick.kind === 'edit') return { ...tab, editing: editOf(tab, pick.n) };
         if (tab.items.length >= CONTEXT_LIMITS.annotations) return tab;
@@ -7710,7 +7824,7 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
         return {
           ...tab,
           collapsed: false,
-          items: [...tab.items, { n, key: pick.key, target: pick, comment: '', gone: false, rect: null }],
+          items: [...tab.items, { n, key: pick.key, generation: tab.generation, url, target: pick, comment: '', gone: false, rect: null }],
           editing: { n, isNew: true, anchor: pick.anchor, draft: '' },
         };
       }),
@@ -7736,7 +7850,11 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
       return removed;
     },
     restore: (tabId, items) =>
-      patch(tabId, (tab) => ({ ...tab, editing: null, items: renumber([...items, ...tab.items].slice(0, CONTEXT_LIMITS.annotations)) })),
+      patch(tabId, (tab) => {
+        // Пока тост «Undo» висел, страница могла смениться: пункты прошлого документа возвращаются, но «gone».
+        const back = items.map((item) => (item.generation === tab.generation ? item : { ...item, gone: true, rect: null }));
+        return { ...tab, editing: null, items: renumber([...back, ...tab.items].slice(0, CONTEXT_LIMITS.annotations)) };
+      }),
     markPositions: (tabId, positions) =>
       patch(tabId, (tab) => ({
         ...tab,
@@ -7745,8 +7863,9 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
           return position === undefined ? item : { ...item, rect: position.rect, gone: position.rect === null };
         }),
       })),
+    // Новый документ: поколение растёт всегда, и при пустом лотке — иначе «Undo» вернёт пункты прошлой страницы как живые.
     markAllGone: (tabId) =>
-      patch(tabId, (tab) => (tab.items.length === 0 ? tab : { ...tab, items: tab.items.map((item) => ({ ...item, gone: true, rect: null })) })),
+      patch(tabId, (tab) => ({ ...tab, generation: tab.generation + 1, items: tab.items.map((item) => ({ ...item, gone: true, rect: null })) })),
     setCollapsed: (tabId, collapsed) => patch(tabId, (tab) => ({ ...tab, collapsed })),
     drop: (tabId) =>
       set((state) => {
@@ -7759,7 +7878,7 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
 });
 ```
 
-- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (6 тестов). `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 4. Запустить — проходит.** Команда шага 2 → PASS (9 тестов). `pnpm --filter @parley/desktop typecheck` → без ошибок.
 
 - [ ] **Шаг 5. Закоммитить.**
 
@@ -7863,6 +7982,7 @@ import { AnnotationTray } from './AnnotationTray.js';
 afterEach(() => cleanup());
 
 const VIEWPORT = { width: 1280, height: 800, dpr: 2 };
+const PAGE = 'http://localhost:5173/';
 // Без пробела в конце: getByTitle сравнивает подпись после обрезки пробелов.
 const LONG = 'very long comment '.repeat(20).trim();
 
@@ -7870,6 +7990,8 @@ const ITEMS: AnnotationItem[] = [
   {
     n: 1,
     key: 'a1',
+    generation: 0,
+    url: PAGE,
     comment: LONG,
     gone: false,
     rect: null,
@@ -7878,6 +8000,8 @@ const ITEMS: AnnotationItem[] = [
   {
     n: 2,
     key: 'a2',
+    generation: 0,
+    url: PAGE,
     comment: '',
     gone: true,
     rect: null,
@@ -7930,6 +8054,17 @@ describe('AnnotationTray (спека браузера 4.7; каркас — по
     view.rerender(<AnnotationTray items={ITEMS} collapsed={false} busy {...h} />);
     expect((screen.getByRole('button', { name: 'Add to chat' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Clear' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('пункты разных документов с одним ключом — две строки без предупреждения React о повторе ключа', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const [first] = ITEMS as [AnnotationItem, AnnotationItem];
+    // Скрипт нового документа нумерует с a1 заново: ключ тот же, поколение другое.
+    const again: AnnotationItem = { ...first, n: 2, generation: 1 };
+    render(<AnnotationTray items={[first, again]} collapsed={false} busy={false} {...handlers()} />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 });
 ```
@@ -8174,7 +8309,8 @@ export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDel
               const target = annotationTargetText(item.target);
               return (
                 <li
-                  key={item.key}
+                  // Ключ метки уникален лишь в пределах документа, а в лотке есть пункты нескольких: строка — по поколению и ключу.
+                  key={`${item.generation}:${item.key}`}
                   data-annotation={item.n}
                   className="group flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent focus-within:bg-accent"
                 >
@@ -8238,10 +8374,10 @@ git commit -m "feat(desktop): редактор комментария метки
 **Интерфейсы:**
 - Берёт: мост `annotate*` (задача 20), `useAnnotateStore`, `pinsOf`, `EMPTY_ANNOTATE` (задача 21), `AnnotationEditor`, `AnnotationTray` (задача 22), `annotationsContext` (задача 6), `usePageContext().add` (задача 13), `toggleBrowserMode` (задача 17).
 - Отдаёт:
-  - `syncPins(bridge, tabId, webContentsId)`, `useAnnotateMode({ bridge, tabId, webContentsId, active })`, `addAnnotationsToChat({ bridge, tabId, webContentsId, pageUrl, viewportNote, add })`;
+  - `syncPins(bridge, tabId, webContentsId)`, `useAnnotateMode({ bridge, tabId, webContentsId, active, urlRef })`, `addAnnotationsToChat({ bridge, tabId, webContentsId, pageUrl, viewportNote, add })`; `urlRef` — живой адрес вкладки (`urlRef` поверхности, задача 14): метка помнит адрес на момент ответа скрипта;
   - `BrowserChromeProps.onAnnotate(): void`, кнопка ✎ Annotate;
   - клавиша `browser.annotate` — `CmdOrCtrl+Alt+A` (⌘⌥A, рядом с ⌘⌥I и ⌘⌥J панели), `when: 'browser'`, в палитре (`S.actions.annotatePage`); `S.errors.actions.annotate`. ⌘⇧A занят действием `sidebar.agents` (PR #34) и остаётся ему.
-- Цикл: пока режим `annotate`, окно зовёт `annotateStart`. Метка открывает редактор, следующая — только после Save, Delete или Esc. Метки страницы перерисовываются (`annotateSync`) при каждом изменении состава лотка. Новый документ помечает пункты «element gone». После «Add to chat» лоток пуст, «Undo» в тосте возвращает пачку.
+- Цикл: пока режим `annotate`, окно зовёт `annotateStart`. Метка открывает редактор, следующая — только после Save, Delete или Esc. Метки страницы перерисовываются (`annotateSync`) при каждом изменении состава лотка. Новый документ помечает пункты «element gone» и начинает новое поколение лотка (задача 21): в страницу уходят только метки её документа, а в файле у метки с другой страницы, чем в шапке, строка `Marked on:` (задача 6). После «Add to chat» лоток пуст, «Undo» в тосте возвращает пачку.
 
 - [ ] **Шаг 1. Написать падающие тесты.**
 
@@ -8255,6 +8391,7 @@ import { useAnnotateStore } from './store.js';
 import { addAnnotationsToChat, syncPins } from './use-annotate-mode.js';
 
 const TAB = 'browser:a1';
+const PAGE = 'http://localhost:5173/settings';
 const VIEWPORT = { width: 1280, height: 800, dpr: 2 };
 const ELEMENT: AnnotationElementTarget = {
   kind: 'element',
@@ -8270,10 +8407,10 @@ const REGION: AnnotationRegionTarget = { kind: 'region', key: 'a2', rect: { x: 1
 
 function twoPins(): void {
   const store = useAnnotateStore.getState();
-  store.receive(TAB, ELEMENT);
+  store.receive(TAB, ELEMENT, PAGE);
   store.setDraft(TAB, 'make it green');
   store.save(TAB);
-  store.receive(TAB, REGION);
+  store.receive(TAB, REGION, PAGE);
   store.save(TAB);
 }
 
@@ -8339,6 +8476,29 @@ describe('addAnnotationsToChat (спека браузера 4.7)', () => {
     await addAnnotationsToChat({ bridge, tabId: TAB, webContentsId: 7, pageUrl: 'http://x/', viewportNote: null, add });
     expect(drafts).toEqual([]);
     expect(bridge.browserCalls).toEqual([]);
+  });
+
+  it('метка, новый документ, ещё метка: прежний пункт «gone» и назван в файле по своей странице, на страницу уходит одна новая метка', async () => {
+    const bridge = createFakeBridge();
+    const store = useAnnotateStore.getState();
+    store.receive(TAB, ELEMENT, PAGE);
+    store.setDraft(TAB, 'make it green');
+    store.save(TAB);
+    store.markAllGone(TAB);
+    // Скрипт меток нового документа нумерует с a1 заново — ключ тот же, что у первой метки.
+    store.receive(TAB, { ...REGION, key: 'a1' }, 'http://localhost:5173/profile');
+    store.save(TAB);
+    bridge.setAnnotateCapture('/h/drops/page.png');
+    const { drafts, add } = collector('room');
+    await addAnnotationsToChat({ bridge, tabId: TAB, webContentsId: 7, pageUrl: 'http://localhost:5173/profile', viewportNote: null, add });
+    expect(bridge.browserCalls[0]).toEqual({ method: 'annotateSync', args: [7, [{ n: 2, key: 'a1' }]] });
+    const markdown = drafts[0]?.markdown ?? '';
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      '## 1. button.save\n> make it green\n(The element is gone from the page; it is not on the screenshot.)\n\n```text\nMarked on: http://localhost:5173/settings\nSelector: main > button.save\n',
+    );
+    expect(markdown).toContain('## 2. Region 308 × 20\n> (no comment)\n\n```text\nRect: 308 × 20 at 1, 2 (page coordinates)\n');
+    expect(markdown.match(/Marked on:/g)).toHaveLength(1);
   });
 });
 ```
@@ -8452,6 +8612,41 @@ describe('BrowserSurface — Annotate (этап B, спека браузера 4
     expect(modeOf()).toBe('off');
     expect(screen.getByTestId('annotation-tray').textContent).toContain('element gone');
   });
+
+  it('метка, новый документ, ещё метка, «Add to chat»: файл называет страницу первой метки, её пункт не оживает, на страницу уходит только новая метка', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/settings');
+    renderWork();
+    const first = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(first, { key: 'Enter' });
+    });
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/profile' });
+    expect(modeOf()).toBe('off');
+    // Скрипт меток нового документа нумерует с a1 заново — ключ тот же, что у первой метки.
+    bridge.setAnnotatePicks([{ ...ELEMENT_PICK, selector: 'body > a.next' }]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const second = await screen.findByRole('textbox', { name: 'Comment for annotation 2' });
+    fireEvent.change(second, { target: { value: 'and this link' } });
+    await act(async () => {
+      fireEvent.keyDown(second, { key: 'Enter' });
+    });
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateSync').at(-1)?.args).toEqual([12, [{ n: 2, key: 'a1' }]]);
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const { markdown } = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string };
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      '## 1. button.save\n> make it green\n(The element is gone from the page; it is not on the screenshot.)\n\n```text\nMarked on: http://localhost:5173/settings\nSelector: body > button.save\n',
+    );
+    expect(markdown).toContain('## 2. a.next\n> and this link\n\n```text\nSelector: body > a.next\n');
+  });
 });
 ```
 
@@ -8505,13 +8700,13 @@ import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import type { ContextDraft, Delivered } from '../context/deliver.js';
 import { useBrowserStore } from '../store.js';
-import { pinsOf, useAnnotateStore } from './store.js';
+import { EMPTY_ANNOTATE, pinsOf, useAnnotateStore } from './store.js';
 
-/** Перерисовать метки страницы по лотку и пометить пропавшие элементы. */
+/** Перерисовать метки страницы по лотку (только пункты её документа) и пометить пропавшие элементы. */
 export async function syncPins(bridge: ParleyBridge, tabId: string, webContentsId: number): Promise<void> {
-  const items = useAnnotateStore.getState().tabs[tabId]?.items ?? [];
+  const tab = useAnnotateStore.getState().tabs[tabId] ?? EMPTY_ANNOTATE;
   try {
-    const positions = await bridge.browser.annotateSync(webContentsId, pinsOf(items));
+    const positions = await bridge.browser.annotateSync(webContentsId, pinsOf(tab));
     useAnnotateStore.getState().markPositions(tabId, positions);
   } catch (error) {
     console.warn('[parley] annotateSync failed', error);
@@ -8534,7 +8729,20 @@ function editorClosed(tabId: string): Promise<void> {
   });
 }
 
-export function useAnnotateMode({ bridge, tabId, webContentsId, active }: { bridge: ParleyBridge; tabId: string; webContentsId: number | null; active: boolean }): void {
+export function useAnnotateMode({
+  bridge,
+  tabId,
+  webContentsId,
+  active,
+  urlRef,
+}: {
+  bridge: ParleyBridge;
+  tabId: string;
+  webContentsId: number | null;
+  active: boolean;
+  /** Живой адрес страницы вкладки (его ведёт поверхность): метка запоминает его на момент ответа скрипта. */
+  urlRef: { readonly current: string };
+}): void {
   useEffect(() => {
     if (!active || webContentsId === null) return undefined;
     let alive = true;
@@ -8562,7 +8770,7 @@ export function useAnnotateMode({ bridge, tabId, webContentsId, active }: { brid
           off();
           return;
         }
-        useAnnotateStore.getState().receive(tabId, pick);
+        useAnnotateStore.getState().receive(tabId, pick, urlRef.current);
         await editorClosed(tabId);
       }
     })();
@@ -8570,10 +8778,10 @@ export function useAnnotateMode({ bridge, tabId, webContentsId, active }: { brid
       alive = false;
       bridge.browser.annotateCancel(webContentsId).catch((error: unknown) => console.warn('[parley] annotateCancel failed', error));
     };
-  }, [active, bridge, tabId, webContentsId]);
+  }, [active, bridge, tabId, webContentsId, urlRef]);
 
-  // Метки страницы — по лотку: новая, отменённая, удалённая, очищенная, возвращённая по Undo.
-  const pins = useAnnotateStore((state) => (state.tabs[tabId]?.items ?? []).map((item) => `${item.n}:${item.key}`).join(','));
+  // Метки страницы — по лотку: новая, отменённая, удалённая, очищенная, возвращённая по Undo; пункты прошлых документов в страницу не уходят.
+  const pins = useAnnotateStore((state) => pinsOf(state.tabs[tabId] ?? EMPTY_ANNOTATE).map(({ n, key }) => `${n}:${key}`).join(','));
   const hadPins = useRef(false);
   useEffect(() => {
     if (webContentsId === null || (pins === '' && !hadPins.current)) return;
@@ -8613,7 +8821,7 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
     viewport: items[0]?.target.viewport ?? null,
     viewportNote: deps.viewportNote,
     screenshot: path !== null,
-    items: items.map(({ n, comment, gone, target }) => ({ n, comment, gone, target })),
+    items: items.map(({ n, comment, gone, url, target }) => ({ n, comment, gone, url, target })),
   });
   const removed = useAnnotateStore.getState().clear(deps.tabId);
   const restore = (): void => useAnnotateStore.getState().restore(deps.tabId, removed);
@@ -8657,7 +8865,7 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
 ```tsx
   // Annotate (спека браузера 4.7): цикл меток и метки страницы — по лотку; лоток вкладки живёт, пока жива вкладка.
   const annotate = useAnnotateStore((store) => store.tabs[tabId]) ?? EMPTY_ANNOTATE;
-  useAnnotateMode({ bridge, tabId, webContentsId: state.webContentsId, active: state.mode === 'annotate' });
+  useAnnotateMode({ bridge, tabId, webContentsId: state.webContentsId, active: state.mode === 'annotate', urlRef });
   useEffect(() => () => useAnnotateStore.getState().drop(tabId), [tabId]);
   const [annotateBusy, setAnnotateBusy] = useState(false);
 
@@ -9536,6 +9744,8 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
 12. **Гид агента (core).** B меняет тему `window` в `core/work/guide.ts`: вместо блока Design Mode — раздел «Page context from the browser»; правит `guidance.test.ts` и `agent-guide-sync.test.ts`. Строки-указатели на скилл `parley-browser` остаются этапу D.
 13. **Толкование спеки 4.7** («данные и снимок каждой метки снимаются в момент её создания»):
     - данные цели снимаются при создании метки и переживают смену документа;
+    - вместе с данными снимается адрес страницы метки (`AnnotationItem.url`): метка, поставленная не на странице шапки (после нового документа или смены маршрута SPA), получает в ограде первой строкой `Marked on: <адрес>` — origin и путь, как в шапке;
+    - ключ метки (`a1`…) скрипт нумерует заново в каждом документе, поэтому лоток держит поколение документа (`AnnotateTabState.generation`): в страницу уходят только метки её документа, пункты прошлых — `gone` по определению, а `parseAnnotationPins` отклоняет повтор ключа;
     - один `.png` видимой части снимается при «Add to chat», пока метки стоят на странице;
     - после нового документа файл уходит без снимка со строкой «Screenshot: none — the page changed after annotating»;
     - отдельный снимок каждой метки при создании не делается: в файл уходит один `.png`.

@@ -40,7 +40,11 @@ export interface Rect {
 /** Метка на элементе (спека 4.7): данные на момент метки; роль, имя и React дочитывает main. */
 export interface AnnotationElementTarget {
   kind: 'element';
-  /** Id цели в мире скрипта меток (`a1`, `a2`…): по нему скрипт рисует номер и идёт за элементом. */
+  /**
+   * Id цели в мире скрипта меток (`a1`, `a2`…): по нему скрипт рисует номер и идёт за элементом. Уникален только в
+   * пределах одного документа: в новом документе скрипт нумерует с `a1` заново, поэтому лоток в `annotateSync` шлёт
+   * метки одного, текущего документа — ключ прежнего документа в новом мире назвал бы чужую цель.
+   */
   key: string;
   selector: string;
   text: string;
@@ -56,6 +60,7 @@ export interface AnnotationElementTarget {
 /** Рамка области (спека 4.7): прямоугольник в CSS-пикселях документа и до трёх элементов под ней. */
 export interface AnnotationRegionTarget {
   kind: 'region';
+  /** Как у метки на элементе: уникален только в пределах одного документа. */
   key: string;
   rect: Rect;
   elements: Array<{ selector: string; text: string }>;

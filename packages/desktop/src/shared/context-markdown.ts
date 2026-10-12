@@ -349,11 +349,15 @@ export function errorsContext(input: { pageUrl: string; console: readonly Consol
   return { kind: 'errors', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: lines.join('\n') }]) };
 }
 
-/** Пункт аннотаций: номер, комментарий человека, пропал ли элемент и цель на момент метки. */
+/**
+ * Пункт аннотаций: номер, комментарий человека, пропал ли элемент, цель на момент метки и адрес страницы, на которой
+ * метка поставлена: лоток переживает смену документа, и в одной пачке бывают метки с разных страниц.
+ */
 export interface AnnotationEntry {
   n: number;
   comment: string;
   gone: boolean;
+  url: string;
   target: AnnotationTarget;
 }
 
@@ -382,7 +386,11 @@ function targetLines(target: AnnotationTarget): string {
   return lines.join('\n');
 }
 
-/** Пачка аннотаций (спека 4.7): номер и комментарий — вне ограды, цель — в ограде; не больше `CONTEXT_LIMITS.annotations`. */
+/**
+ * Пачка аннотаций (спека 4.7): номер и комментарий — вне ограды, цель — в ограде; не больше `CONTEXT_LIMITS.annotations`.
+ * `pageUrl` — страница сейчас (шапка и метка имени файла); метка с другой страницы получает в ограде первой строкой
+ * `Marked on: <адрес>` — адрес из `item.url`, в виде шапки (origin и путь).
+ */
 export function annotationsContext(input: {
   pageUrl: string;
   viewport: PageMeta['viewport'];
@@ -401,11 +409,16 @@ export function annotationsContext(input: {
     },
     { text: S.contextFile.annotationsNote },
   ];
+  const current = headerUrl(input.pageUrl);
   for (const item of input.items.slice(0, CONTEXT_LIMITS.annotations)) {
     const comment = item.comment.trim() === '' ? S.contextFile.noComment : cutText(item.comment, CONTEXT_LIMITS.comment);
     const lines = [S.contextFile.annotationHeading(item.n, annotationLabel(item.target)), quote(comment)];
     if (item.gone) lines.push(S.contextFile.gone);
-    parts.push({ text: lines.join('\n') }, { data: targetLines(item.target) });
+    // Путь в адресе задаёт страница, поэтому адрес стоит в ограде, а не в тексте окна. Не разобрался (`''`) — строки нет.
+    const markedOn = headerUrl(item.url);
+    const target = targetLines(item.target);
+    const data = markedOn === '' || markedOn === current ? target : `${S.contextFile.markedOn(markedOn)}\n${target}`;
+    parts.push({ text: lines.join('\n') }, { data });
   }
   return { kind: 'annotations', label, markdown: assemble(parts) };
 }

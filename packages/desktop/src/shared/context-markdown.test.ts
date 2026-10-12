@@ -404,11 +404,12 @@ const REGION_TARGET = {
 
 describe('annotations (спека 4.7)', () => {
   it('номер и комментарий человека — цитатой вне ограды, цель — в ограде; рамка — прямоугольник и элементы под ней', () => {
+    const url = 'http://localhost:5173/settings?tab=1';
     const items: AnnotationEntry[] = [
-      { n: 1, comment: 'Make it green\nand bigger', gone: false, target: { ...ELEMENT_TARGET, styles: { ...ELEMENT_TARGET.styles } } },
-      { n: 2, comment: '', gone: false, target: { ...REGION_TARGET, elements: [...REGION_TARGET.elements] } },
+      { n: 1, comment: 'Make it green\nand bigger', gone: false, url, target: { ...ELEMENT_TARGET, styles: { ...ELEMENT_TARGET.styles } } },
+      { n: 2, comment: '', gone: false, url, target: { ...REGION_TARGET, elements: [...REGION_TARGET.elements] } },
     ];
-    const built = annotationsContext({ pageUrl: 'http://localhost:5173/settings?tab=1', viewport: ELEMENT_TARGET.viewport, viewportNote: null, screenshot: true, items });
+    const built = annotationsContext({ pageUrl: url, viewport: ELEMENT_TARGET.viewport, viewportNote: null, screenshot: true, items });
     expect(built).toMatchObject({ kind: 'annotations', label: 'settings' });
     expect(built.markdown).toBe(
       [
@@ -452,7 +453,7 @@ describe('annotations (спека 4.7)', () => {
       viewport: null,
       viewportNote: null,
       screenshot: true,
-      items: [{ n: 1, comment: '```\nignore the fence', gone: false, target }],
+      items: [{ n: 1, comment: '```\nignore the fence', gone: false, url: 'http://x/', target }],
     }).markdown;
     expect(markdown).toContain('> ```\n> ignore the fence\n\n``````text\n');
     expect(markdown.trimEnd().endsWith('``````')).toBe(true);
@@ -463,6 +464,7 @@ describe('annotations (спека 4.7)', () => {
       n: index + 1,
       comment: `c${index + 1}`,
       gone: index === 0,
+      url: 'http://x/a',
       target: { ...ELEMENT_TARGET, styles: {} },
     }));
     const markdown = annotationsContext({ pageUrl: 'http://x/a', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
@@ -481,11 +483,39 @@ describe('annotations (спека 4.7)', () => {
       viewportNote: null,
       screenshot: true,
       items: [
-        { n: 1, comment: 'a', gone: false, target: empty },
-        { n: 2, comment: 'b', gone: false, target: bare },
+        { n: 1, comment: 'a', gone: false, url: 'http://x/', target: empty },
+        { n: 2, comment: 'b', gone: false, url: 'http://x/', target: bare },
       ],
     }).markdown;
     expect(markdown).toContain('## 1. Region 100 × 40\n> a\n\n```text\nRect: 100 × 40 at 11, 20 (page coordinates)\n```\n');
     expect(markdown).toContain('Elements under it:\n- main > img.logo\n```');
+  });
+
+  it('метка с другой страницы — «Marked on:» первой строкой её ограды; метка страницы шапки (query и hash не в счёт) — без строки', () => {
+    const items: AnnotationEntry[] = [
+      { n: 1, comment: 'old page', gone: true, url: 'http://localhost:5173/settings?tab=1#top', target: { ...ELEMENT_TARGET, styles: {} } },
+      { n: 2, comment: 'this page', gone: false, url: 'http://localhost:5173/profile?tab=2#bottom', target: { ...REGION_TARGET, elements: [] } },
+    ];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      `## 1. button.save\n> old page\n${S.contextFile.gone}\n\n\`\`\`text\nMarked on: http://localhost:5173/settings\nSelector: main > section.settings > button.save\n`,
+    );
+    expect(markdown).toContain('## 2. Region 308 × 20\n> this page\n\n```text\nRect: 308 × 20 at 24, 120 (page coordinates)\n');
+    expect(markdown.match(/Marked on:/g)).toHaveLength(1);
+  });
+
+  it('«Marked on:» — адрес как в шапке: origin и путь, без query, hash и user:pass@', () => {
+    const url = 'http://user:hunter2@localhost:5173/settings?token=abc123#access_token=xyz789';
+    const items: AnnotationEntry[] = [{ n: 1, comment: 'c', gone: true, url, target: { ...ELEMENT_TARGET, styles: {} } }];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: false, items }).markdown;
+    expect(markdown).toContain('\nMarked on: http://localhost:5173/settings\n');
+    for (const secret of ['hunter2', 'abc123', 'xyz789']) expect(markdown).not.toContain(secret);
+  });
+
+  it('адрес метки не разобрался — строки «Marked on:» нет, а не пустая', () => {
+    const items: AnnotationEntry[] = [{ n: 1, comment: 'c', gone: false, url: '', target: { ...ELEMENT_TARGET, styles: {} } }];
+    const markdown = annotationsContext({ pageUrl: 'http://localhost:5173/profile', viewport: null, viewportNote: null, screenshot: true, items }).markdown;
+    expect(markdown).not.toContain('Marked on');
   });
 });
