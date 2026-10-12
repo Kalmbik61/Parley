@@ -25,6 +25,10 @@ const MOSCOW = 'Europe/Moscow'; // UTC+3 круглый год
 const NEW_YORK = 'America/New_York'; // EST −5, EDT −4: в 2026-м часы переводят 8 марта и 1 ноября
 const KOLKATA = 'Asia/Kolkata'; // UTC+5:30 круглый год
 const BERLIN = 'Europe/Berlin'; // CET +1, CEST +2: часы переводят 29 марта и 25 октября
+// Пропуск часа вплотную к полуночи: в 2026-м Нуук переводит часы в 23:00 28 марта (сразу 00:00 29-го),
+// Гавана — в 00:00 8 марта (сразу 01:00).
+const GODTHAB = 'America/Godthab';
+const HAVANA = 'America/Havana';
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -361,6 +365,52 @@ describe('parseResetText: Codex', () => {
   });
 });
 
+describe('parseResetText: GLM (Z.ai)', () => {
+  // Живая запись из журнала автора (2026-10-08T06:51:54Z, `isApiErrorMessage: true`, `error: "rate_limit"`).
+  // Номер запроса в хвосте начинается с 14:51:53 при записи в 06:51:54Z: Z.ai печатает пекинское время (UTC+8).
+  const RECORD =
+    'API Error: Request rejected (429) · [1308][Usage limit reached for 5 hour. Your limit will reset at 2026-10-08 19:03:01][20261008145153…]';
+  const AT = new Date('2026-10-08T06:51:54.000Z');
+  const RESET = '2026-10-08T11:03:01.000Z'; // 19:03:01 по Пекину
+
+  it('живая запись → 19:03:01 по Пекину, окно session', () => {
+    expect(parseResetText(RECORD, AT, MOSCOW)).toEqual({ resetsAt: RESET, window: 'session' });
+  });
+
+  it('пояс машины не влияет: тот же момент при localZone Нью-Йорк и Калькутта и без localZone', () => {
+    expect(parseResetText(RECORD, AT, NEW_YORK)).toEqual({ resetsAt: RESET, window: 'session' });
+    expect(parseResetText(RECORD, AT, KOLKATA).resetsAt).toBe(RESET);
+    expect(parseResetText(RECORD, AT).resetsAt).toBe(RESET);
+  });
+
+  it('секунды сохраняются', () => {
+    const text = RECORD.replace('19:03:01', '19:03:59');
+    expect(parseResetText(text, AT, MOSCOW).resetsAt).toBe('2026-10-08T11:03:59.000Z');
+  });
+
+  it('время не позже записи возвращается как разобрано: это абсолютная дата', () => {
+    const later = new Date('2026-10-09T00:00:00.000Z');
+    expect(parseResetText(RECORD, later, MOSCOW).resetsAt).toBe(RESET);
+  });
+
+  it('окно называет только «Usage limit reached for 5 hour»: у прочих текстов окно null', () => {
+    // Текст кода 1310 не подтверждён: проверяем лишь, что окно не выдумывается.
+    const other =
+      'API Error: Request rejected (429) · [1310][Limit exhausted. Your limit will reset at 2026-10-12 00:00:00]';
+    expect(parseResetText(other, AT, MOSCOW)).toEqual({
+      resetsAt: '2026-10-11T16:00:00.000Z',
+      window: null,
+    });
+  });
+
+  it('невозможная дата или время (2026-13-40 25:00:00, секунда 60, 30 февраля) → resetsAt null', () => {
+    for (const bad of ['2026-13-40 25:00:00', '2026-10-08 19:03:60', '2026-02-30 10:00:00']) {
+      const text = RECORD.replace('2026-10-08 19:03:01', bad);
+      expect(parseResetText(text, AT, MOSCOW), bad).toEqual({ resetsAt: null, window: 'session' });
+    }
+  });
+});
+
 describe('parseResetText: непонятное даёт null, а не ошибку', () => {
   const AT = new Date('2026-09-20T08:00:00.000Z');
 
@@ -468,6 +518,13 @@ describe('parseResetText: инварианты времени без даты', 
     expect(guess.resetsAt).toBe('2026-03-08T07:30:00.000Z');
     expect(wall(Date.parse(guess.resetsAt ?? ''), NEW_YORK)).toBe('2026-03-08 03:30');
   });
+
+  it('пропуск часа вплотную к полуночи (12:30am в Гаване 8 марта) сдвигается на час, как и в zonedInstant', () => {
+    const at = new Date('2026-03-08T03:00:00.000Z'); // 22:00 по Гаване 7 марта
+    const guess = parseResetText('resets 12:30am (America/Havana)', at);
+    expect(guess.resetsAt).toBe('2026-03-08T05:30:00.000Z');
+    expect(wall(Date.parse(guess.resetsAt ?? ''), HAVANA)).toBe('2026-03-08 01:30');
+  });
 });
 
 describe('zonedInstant', () => {
@@ -496,6 +553,15 @@ describe('zonedInstant', () => {
     const moment = zonedInstant({ year: 2026, month: 3, day: 29, hour: 2, minute: 30 }, BERLIN);
     expect(moment?.toISOString()).toBe('2026-03-29T01:30:00.000Z');
     expect(wall(moment ?? 0, BERLIN)).toBe('2026-03-29 03:30');
+  });
+
+  it('пропуск часа вплотную к полуночи: 23:30 в Нууке 28 марта и 00:30 в Гаване 8 марта сдвигаются на час', () => {
+    const nuuk = zonedInstant({ year: 2026, month: 3, day: 28, hour: 23, minute: 30 }, GODTHAB);
+    expect(nuuk?.toISOString()).toBe('2026-03-29T01:30:00.000Z');
+    expect(wall(nuuk ?? 0, GODTHAB)).toBe('2026-03-29 00:30'); // сдвиг перешёл через полночь
+    const havana = zonedInstant({ year: 2026, month: 3, day: 8, hour: 0, minute: 30 }, HAVANA);
+    expect(havana?.toISOString()).toBe('2026-03-08T05:30:00.000Z');
+    expect(wall(havana ?? 0, HAVANA)).toBe('2026-03-08 01:30');
   });
 
   it('повтор часа при переводе назад — первое вхождение, и к западу, и к востоку от Гринвича', () => {

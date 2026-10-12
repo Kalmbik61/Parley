@@ -147,15 +147,19 @@ function wallClock(clock: Intl.DateTimeFormat, ms: number): number {
 const offsetAt = (clock: Intl.DateTimeFormat, ms: number): number =>
   wallClock(clock, ms) - Math.floor(ms / 1000) * 1000;
 
-/** Метка стенных часов из частей; `null` — такой даты или времени не бывает (30 февраля, 25 часов). */
+/**
+ * Метка стенных часов из частей; `null` — такой даты или времени не бывает (30 февраля, 25 часов). Секунды
+ * нужны одному формату — GLM, остальным хватает минут; 60 секунд перекатываются в минуту и не проходят сверку.
+ */
 function wallOfParts(
   year: number,
   month: number,
   day: number,
   hour: number,
   minute: number,
+  second = 0,
 ): number | null {
-  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second);
   const back = new Date(wall);
   const same =
     back.getUTCFullYear() === year &&
@@ -222,10 +226,34 @@ const CLAUDE_RESET = new RegExp(String.raw`\bresets\s+${WHEN}(?:\s*\(([^)]+)\))?
 /** Codex: «try again at 7:27 PM». Текст до `try again` не разбирается, поэтому апостроф в «You’ve» (’ или ') не мешает. */
 const CODEX_RESET = new RegExp(String.raw`\btry again at\s+${WHEN}`, 'i');
 
+/**
+ * GLM (Z.ai): «Your limit will reset at 2026-10-08 19:03:01» — абсолютное время по Пекину (UTC+8): Z.ai
+ * печатает пекинское время, пояс машины и скобки тут ни при чём. Группы: год, месяц, день, час, минуты, секунды.
+ */
+const GLM_RESET = /\bYour limit will reset at\s+(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/i;
+const GLM_ZONE = 'Asia/Shanghai';
+
+/** Окно по тексту. Слова окна GLM известны одни: «Usage limit reached for 5 hour» — пятичасовой лимит. */
 function windowOf(text: string): ResetGuess['window'] {
-  if (/session limit/i.test(text)) return 'session';
+  if (/session limit|usage limit reached for 5 hour/i.test(text)) return 'session';
   if (/weekly limit/i.test(text)) return 'week';
   return null;
+}
+
+/** Момент из «2026-10-08 19:03:01» по Пекину, секунды сохраняются; `null` — такой даты или времени не бывает. */
+function glmResetAt(match: RegExpExecArray): string | null {
+  const [, year, month, day, hour, minute, second] = match;
+  const clock = zoneClock(GLM_ZONE);
+  const wall = wallOfParts(
+    Number(year),
+    Number(month),
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+  if (clock === null || wall === null) return null;
+  return new Date(instantsOfWall(clock, wall)[0]).toISOString();
 }
 
 /** Дата из текста; `year: null` — года в тексте нет. */
@@ -271,11 +299,13 @@ function resetInstant(
  * Время сброса и окно из текста ошибки. Форматы:
  * - Claude: «resets 2:50pm (Europe/Moscow)», «resets 7pm (Europe/Moscow)», «resets Sep 22 at 4pm
  *   (Europe/Moscow)»; пояс — из скобок, без скобок — `localZone`;
- * - Codex: «try again at 7:27 PM», «try again at Oct 14th, 2026 7:27 PM» — `localZone`.
+ * - Codex: «try again at 7:27 PM», «try again at Oct 14th, 2026 7:27 PM» — `localZone`;
+ * - GLM (Z.ai): «Your limit will reset at 2026-10-08 19:03:01» — абсолютное время по Пекину (`Asia/Shanghai`),
+ *   секунды сохраняются, `localZone` не нужен; время не позже `at` возвращается как разобрано.
  * Время без даты — ближайшее строго после `at`; дата без года — в году `at` (по часам пояса), а если она уже
- * прошла — в следующем. Окно: «session limit» → `session`, «weekly limit» → `week`, иначе `null`; оно
- * берётся из текста, даже когда время не разобрать. Непонятный текст, несуществующий пояс или дата —
- * `resetsAt: null`, а не ошибка.
+ * прошла — в следующем. Окно: «session limit» и «Usage limit reached for 5 hour» (GLM) → `session`,
+ * «weekly limit» → `week`, иначе `null`; оно берётся из текста, даже когда время не разобрать. Непонятный
+ * текст, несуществующий пояс или дата — `resetsAt: null`, а не ошибка.
  */
 export function parseResetText(
   text: string,
@@ -284,6 +314,8 @@ export function parseResetText(
 ): ResetGuess {
   const window = windowOf(text);
   const unknown: ResetGuess = { resetsAt: null, window };
+  const glm = GLM_RESET.exec(text);
+  if (glm !== null) return { resetsAt: glmResetAt(glm), window };
   const match = CLAUDE_RESET.exec(text) ?? CODEX_RESET.exec(text);
   const atMs = at.getTime();
   if (match === null || Number.isNaN(atMs)) return unknown;
@@ -327,8 +359,8 @@ export function pickResetsAt(
 ): ResetGuess {
   if (limits === null) return guess;
   const known = [
-    ...(limits.fiveHour === null ? [] : [{ window: 'session' as const, ...limits.fiveHour }]),
-    ...(limits.week === null ? [] : [{ window: 'week' as const, ...limits.week }]),
+    ...(limits.fiveHour === null ? [] : [{ ...limits.fiveHour, window: 'session' as const }]),
+    ...(limits.week === null ? [] : [{ ...limits.week, window: 'week' as const }]),
   ];
   const [picked] = known
     .filter((candidate) => guess.window === null || candidate.window === guess.window)
