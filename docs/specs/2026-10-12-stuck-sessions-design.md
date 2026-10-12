@@ -498,12 +498,15 @@ Settings → Notifications (`components/settings/SettingsDialog.tsx`): преж�
    (`group.com.apple.usernoted/db2`) без Full Disk Access не читается. Проба в dev-окне с заглушкой
    Codex и `PARLEY_NOTIFICATIONS=log` — первая задача плана: зависимости в worktree ставятся только
    после одобрения плана. Настройки у автора: `notifications` в `ui.json` — все `true`, звук
-   включён. Проба 2026-10-12 (задача 0): E2E `packages/desktop/e2e/stuck-notify.spec.ts` (Codex в
-   комнате, `STUB_APPROVAL`, на виду вкладка комнаты, окно в фокусе) находит в журнале уведомлений
-   ровно одну запись `… · S02 codex — needs you` с `silent: false` — окно уведомление шлёт, и
-   `isTargetVisible` его не съедает; причина тишины в macOS, её закрывает свой звук (задача 7).
-   Заглушка Codex повторяет заголовки и OSC 9 по исследованию, а не живой Codex 0.162 — эту часть
-   проверит живая приёмка.
+   включён. Проба 2026-10-12 (задача 0): E2E `packages/desktop/e2e/stuck-notify.spec.ts` (заглушка
+   Codex в комнате, `STUB_APPROVAL`, вкладка терминала Codex не открыта; `focus` в тесте — событие
+   DOM, не фокус ОС) находит в журнале ровно одну запись `… · S02 codex — needs you` с
+   `silent: false`: окно уведомление шлёт, `isTargetVisible` его не съедает. Что сигнал доходит до
+   окна и на живом Codex, видно по метке «нужен ты» (автор 2026-10-11: «метка есть, звука нет»).
+   В режиме `PARLEY_NOTIFICATIONS=log` настоящего уведомления macOS нет (`main/index.ts` пишет
+   запись журнала вместо `Notification`), поэтому показ и звук баннера проба не проверяла: тишина —
+   в этом последнем звене (настройки уведомлений macOS, Focus, показ уведомлений Electron). Его
+   закрывает свой сигнал, который играет окно (задача 7); живая приёмка проверит это заново.
 2. **Codex** (бинарь 0.162 и `codex-rs/protocol/src/protocol.rs`):
    - `task_complete` несёт `error: { message, codex_error_info }` (`ErrorEvent`); в rollout
      `codex_error_info` — строка snake_case, например `"usage_limit_exceeded"`;
@@ -517,12 +520,12 @@ Settings → Notifications (`components/settings/SettingsDialog.tsx`): преж�
      и вариант текста «You've hit your usage limit for …».
 3. **Свой звук:** Electron 44.4.5, окно Parley `autoplayPolicy` не задаёт — по документации Electron
    умолчание `no-user-gesture-required`, WebAudio играет без жеста пользователя. Проверка в окне без
-   фокуса и в свёрнутом — в той же первой задаче плана. Проба 2026-10-12 (задача 0): в E2E после
-   `BrowserWindow.hide()` `new AudioContext().state` — `running` (после `resume()` тоже);
-   одноразовый запуск Electron 44.4.5 вне Playwright дал `running` и в показанном окне без фокуса,
-   и в скрытом, и в свёрнутом (у свёрнутого `visibilityState` — `hidden`, после `hide()` остаётся
-   `visible`), поэтому аудио без окна Chromium не усыпляет, а `context.resume()` перед звуком
-   (задача 7) остаётся страховкой.
+   фокуса и в свёрнутом — в той же первой задаче плана. Проба 2026-10-12 (задача 0): `AudioContext`
+   оставался `running` (и после `resume()`) в трёх проверенных состояниях — окно показано без
+   фокуса, после `BrowserWindow.hide()`, окно свёрнуто. `hide()` проверен в E2E и одноразовым
+   запуском Electron 44.4.5 вне Playwright, остальные два состояния — только им; скрипт в
+   репозитории не хранится. У свёрнутого окна `visibilityState` — `hidden`, после `hide()` остаётся
+   `visible`. `context.resume()` перед звуком (задача 7) остаётся страховкой.
 4. **GLM:** по сторонним разборам код Z.ai 1308 — лимит пяти часов, 1310 — недели или месяца; точный
    текст и поле времени сброса не подтверждены. Время сброса — из квоты Z.ai (3.4, п. 1), разбор
    текста — только если формат подтвердится на живом ответе.
