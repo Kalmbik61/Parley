@@ -13,6 +13,26 @@
  * областям окна; параметризованные тексты — функции.
  */
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import type { ContextKind } from './context-markdown.js';
+
+/** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
+const CONTEXT_NAMES: Record<ContextKind, string> = {
+  element: 'Page element',
+  console: 'Console message',
+  request: 'Network request',
+  errors: 'Page errors',
+  annotations: 'Page annotations',
+};
+
+/** Сколько и чего добавлено — для тоста «2 elements added to S02» (`S.browser.target.added`). */
+const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = {
+  element: ['element', 'elements'],
+  console: ['console message', 'console messages'],
+  request: ['request', 'requests'],
+  errors: ['error list', 'error lists'],
+  annotations: ['annotation', 'annotations'],
+  mixed: ['item', 'items'],
+};
 
 export const S = {
   plans: {
@@ -1339,6 +1359,27 @@ export const S = {
     designMode: 'Design Mode',
     sendToAgent: 'Send to agent',
     pickAgain: 'Pick again',
+    /** Цель «To» (спека браузера 4.1, 4.5): кнопка строки вкладки, меню и тост добавления. */
+    target: {
+      button: (name: string): string => `To: ${name}`,
+      noTarget: 'To: —',
+      /** Подсказка кнопки «To». */
+      choose: 'Where page context goes',
+      sessions: 'Sessions',
+      rooms: 'Rooms',
+      /** Как ляжет вложение у сессии: чипом в Chat или строкой в ввод CLI. */
+      chat: 'chat',
+      terminal: 'terminal',
+      added: (count: number, kind: ContextKind | 'mixed', target: string): string => {
+        const [one, many] = CONTEXT_NOUNS[kind];
+        return `${count} ${count === 1 ? one : many} added to ${target}`;
+      },
+      open: 'Open',
+      undo: 'Undo',
+      nowhere: 'No session or room to add page context to',
+      fellBack: (name: string): string => `The chosen session or room is gone — page context now goes to ${name}`,
+      fellBackNowhere: 'The chosen session or room is gone, and there is no other one',
+    },
     /**
      * Панель Console | Network и кнопка строки (спека 2026-10-07-browser-devtools-agent-design.md, 4.1, 4.3, 4.4).
      * Сообщения, адреса, заголовки и тела страницы — данные, идут как есть.
@@ -1513,6 +1554,9 @@ export const S = {
     underItem: (selector: string, text: string): string => (text === '' ? `- ${selector}` : `- ${selector} — "${text}"`),
     /** Метка поставлена на другой странице, чем в шапке (лоток переживает смену документа): адрес — первой строкой её ограды. */
     markedOn: (url: string): string => `Marked on: ${url}`,
+    /** Строка в ввод CLI сессии без Chat (спека 4.5): что и где лежит; Enter нажимает человек. */
+    terminalLine: (kind: ContextKind, label: string, mdPath: string, pngPath: string | null): string =>
+      `${CONTEXT_NAMES[kind]} ${label}: ${mdPath}${pngPath === null ? '' : ` (screenshot: ${pngPath})`}`,
   },
 
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
@@ -1720,6 +1764,7 @@ export const S = {
       discardWorktree: 'discard worktree',
       openDevTools: 'open DevTools',
       pickElement: 'pick element',
+      addToChat: 'add to chat',
       setViewport: 'set the viewport size',
       clearDevtools: 'clear console and network',
       loadResponse: 'load the response',
