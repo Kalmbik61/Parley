@@ -1415,6 +1415,13 @@ const apiErrorLog = (
   ...patch,
 });
 
+/** Лог с ошибкой API в произвольный момент `at`: тоже последняя запись работы, человек писал на секунде 1. */
+const apiErrorLogAt = (at: string, error: string | null, text: string): ActivityLog => ({
+  lastRecordAt: at,
+  lastUserRecordAt: sec(1),
+  lastApiError: { at, error, text },
+});
+
 /** Одна строка таблицы: что подали свёртке и что она должна сказать про активность и `need`. */
 interface NeedCase {
   name: string;
@@ -1775,7 +1782,6 @@ const LIMIT_AT_3 = wanted('limit', 3, {
 /** События журнала после записи ошибки, которые работу заново не начинают: запасной путь действует (3.2). */
 const PASSIVE_AFTER: Array<[name: string, event: EventRecord]> = [
   ['Stop', event('Stop', null, sec(6))],
-  ['StopFailure того же лимита', failure(6, 'rate_limit', SESSION_LIMIT)],
   ['SessionEnd', event('SessionEnd', null, sec(6))],
   ['SubagentStop', hook('SubagentStop', { agentId: 'a' }, sec(6))],
   ['ParleyWaitStart', hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }, sec(6))],
@@ -1846,6 +1852,59 @@ const RESTARTING_AFTER_CASES: NeedCase[] = (
   activity,
   need,
 }));
+
+/** Журнал: ход и его `StopFailure` лимита на секунде 3 (`LIMIT_AT_3`). */
+const JOURNAL_LIMIT = [submit(1), failure(3, 'rate_limit', SESSION_LIMIT)];
+
+const BEFORE_FAILURE = '2026-09-05T10:00:02.600Z'; // запись лога на 0,4 с раньше события журнала
+const AFTER_FAILURE = '2026-09-05T10:00:03.400Z'; // на 0,4 с позже
+const LATER_FAILURE = '2026-09-05T10:00:07.000Z'; // на 4 с позже: журнал о втором ударе не знает
+
+/** `StopFailure` в журнале главнее ошибки в логе: эпизод и конец хода — по событию журнала (3.2). */
+const JOURNAL_FAILURE_CASES: NeedCase[] = [
+  ...(
+    [
+      ['на 0,4 с раньше события', BEFORE_FAILURE],
+      ['в тот же момент', sec(3)],
+      ['на 0,4 с позже события', AFTER_FAILURE],
+      ['на 4 с позже события', LATER_FAILURE],
+    ] as Array<[string, string]>
+  ).map(([when, at]): NeedCase => ({
+    name: `StopFailure в журнале, запись ошибки в логе ${when} → эпизод по событию журнала`,
+    events: JOURNAL_LIMIT,
+    log: apiErrorLogAt(at, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: LIMIT_AT_3,
+  })),
+  {
+    name: 'журнал: server_error, лог: rate_limit позже → решает журнал, need нет',
+    events: [submit(1), failure(3, 'server_error', 'API Error: 500')],
+    log: apiErrorLogAt(AFTER_FAILURE, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'журнал: rate_limit, лог: authentication_failed позже → решает журнал',
+    events: JOURNAL_LIMIT,
+    log: apiErrorLogAt(AFTER_FAILURE, 'authentication_failed', SIGNED_OUT),
+    activity: 'unseen',
+    need: LIMIT_AT_3,
+  },
+  {
+    name: 'журнал: StopFailure, а в логе после ошибки писал ассистент → ход идёт, need снят',
+    events: JOURNAL_LIMIT,
+    log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT, { lastRecordAt: sec(6) }),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'StopFailure прошлого хода, а в новом ходу ошибка только в логе → запасной путь',
+    events: [submit(1), failure(2, 'server_error', 'API Error: 500'), submit(4)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: wanted('limit', 5, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+];
 
 /** Заготовки для снятия: у каждой вида `need` своё начало на секунде 3. */
 interface Base {
@@ -2235,6 +2294,7 @@ describe('activityOf: need — запасной путь по ошибке API �
   it.each(FALLBACK_CASES)('$name', expectCase);
   it.each(PASSIVE_AFTER_CASES)('$name', expectCase);
   it.each(RESTARTING_AFTER_CASES)('$name', expectCase);
+  it.each(JOURNAL_FAILURE_CASES)('$name', expectCase);
 
   it('после Stop и idle_prompt ход всё равно окончен на самой записи ошибки, а не на простое', () => {
     const result = fold(STOP_THEN_IDLE);
@@ -2243,12 +2303,38 @@ describe('activityOf: need — запасной путь по ошибке API �
     expect(result.lastEventAt).toBe('2026-09-05T10:01:05.000Z');
   });
 
-  it('StopFailure в журнале и та же ошибка в логе: эпизод считается по записи лога, а не по времени чтения журнала', () => {
-    const events = [submit(1), failure(6, 'rate_limit', SESSION_LIMIT)];
-    expect(activity(events).need?.since).toBe(sec(6));
-    const both = activityOf({ events, log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT), now: NOW });
-    expect(both.need).toEqual(LIMIT_AT_3);
-    expect(both.turnEndedAt).toBe(sec(3));
+  it('старый CLI: в журнале нет StopFailure — эпизод и конец хода по записи лога, ход окончен на ней', () => {
+    const result = activityOf({
+      events: [submit(1), event('Stop', null, sec(4))],
+      log: apiErrorLogAt(AFTER_FAILURE, 'rate_limit', SESSION_LIMIT),
+      now: NOW,
+    });
+    expect(result.need?.since).toBe(AFTER_FAILURE);
+    expect(result.turnEndedAt).toBe(AFTER_FAILURE);
+    expect(result.source).toBe('log');
+  });
+
+  it('StopFailure в журнале: запись ошибки в логе ничего не меняет — ни раньше события, ни позже, ни вовсе', () => {
+    const journalOnly = activityOf({ events: JOURNAL_LIMIT, now: NOW });
+    expect(journalOnly.need).toEqual(LIMIT_AT_3);
+    expect(journalOnly.turnEndedAt).toBe(sec(3));
+    expect(journalOnly.source).toBe('hooks');
+    for (const at of [BEFORE_FAILURE, sec(3), AFTER_FAILURE, LATER_FAILURE]) {
+      const log = apiErrorLogAt(at, 'rate_limit', SESSION_LIMIT);
+      expect(activityOf({ events: JOURNAL_LIMIT, log, now: NOW })).toEqual(journalOnly);
+    }
+  });
+
+  it('журнал и лог доходят в любом порядке: как только StopFailure в журнале, время эпизода — его', () => {
+    for (const at of [BEFORE_FAILURE, AFTER_FAILURE]) {
+      const log = apiErrorLogAt(at, 'rate_limit', SESSION_LIMIT);
+      // Лог раньше журнала: события о конце хода ещё нет, и эпизод открывает запись ошибки.
+      expect(activityOf({ events: [submit(1)], log, now: NOW }).need?.since).toBe(at);
+      // Журнал дописан — эпизод по его событию, а результат тот же, что у журнала без лога.
+      const both = activityOf({ events: JOURNAL_LIMIT, log, now: NOW });
+      expect(both.need).toEqual(LIMIT_AT_3);
+      expect(both).toEqual(activityOf({ events: JOURNAL_LIMIT, now: NOW }));
+    }
   });
 
   it('ход окончен на самой записи, а не по тишине; источник — лог', () => {
@@ -2332,6 +2418,7 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     ...FALLBACK_CASES,
     ...PASSIVE_AFTER_CASES,
     ...RESTARTING_AFTER_CASES,
+    ...JOURNAL_FAILURE_CASES,
     ...CLEARING_CASES,
     ...KEEPING_CASES,
     ...LOG_CASES,

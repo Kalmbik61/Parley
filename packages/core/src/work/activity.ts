@@ -271,6 +271,8 @@ export function activityOf({
   let lastEventAt: string | null = null;
   // Время последнего события, которое начало или продолжило работу (`restartsWork`).
   let lastRestartAt: string | null = null;
+  // После последнего такого события в журнале есть `StopFailure`: о конце хода сказал сам Claude Code.
+  let failedInJournal = false;
   let exited = false;
   const started = new Map<string, StartedAgent>();
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
@@ -341,7 +343,12 @@ export function activityOf({
 
   for (const event of events ?? []) {
     lastEventAt = event.at;
-    if (restartsWork(event)) lastRestartAt = event.at;
+    if (restartsWork(event)) {
+      lastRestartAt = event.at;
+      failedInJournal = false;
+    } else if (event.name === 'StopFailure') {
+      failedInJournal = true;
+    }
     const heldBefore = background.length > 0;
     // Сессия началась заново (запуск, `--resume`, `/clear`, сжатие): прежнее забыто,
     // но снимок самого события уже про новое состояние и остаётся.
@@ -480,30 +487,31 @@ export function activityOf({
     source = 'log';
   }
 
-  // Запасной путь для ошибки API (3.2): у сессии, чей `StopFailure` не доходит до журнала, о ней знает один лог.
-  // Запись ошибки — последняя запись работы, новее человека и последнего события журнала, начавшего работу
-  // (`Stop` и `idle_prompt` после неё её не отменяют), а ход не стоит на вопросе: тогда это то же, что `StopFailure`
-  // в момент записи. Ход кончился на ней, а не через порог тишины: сама запись — «ответ ассистента новее событий»,
-  // который иначе вернул бы сессию в `working`. Был ответ после неё (Claude продолжил сам) или сообщение человека —
-  // ошибка позади. Если `StopFailure` дошёл и до журнала, берётся запись лога: её время не зависит от чтения журнала.
+  // Ошибка API в логе (3.2). Запись ошибки — последняя запись работы, новее человека и последнего события журнала,
+  // начавшего работу (`Stop` и `idle_prompt` после неё её не отменяют), а ход не стоит на вопросе: ход кончился на ней.
+  // Сама запись — «ответ ассистента новее событий», который иначе вернул бы сессию в `working`, поэтому здесь она
+  // возобновлением работы не считается. Был ответ после неё (Claude продолжил сам) или сообщение человека — ошибка
+  // позади.
   const apiError = log?.lastApiError ?? null;
   const apiErrorAt = msOf(apiError?.at ?? null);
-  let endedByLogError = false;
-  if (
+  const errorEndsTurn =
     apiError !== null &&
     phase !== 'blocked' &&
     isNewer(apiErrorAt, restartAt) &&
     isNewer(apiErrorAt, userAt) &&
-    !(recordAt > apiErrorAt)
-  ) {
+    !(recordAt > apiErrorAt);
+  // Запасной путь: у сессии, чей `StopFailure` не доходит до журнала (старый Claude Code, хуки ленты выключены), о
+  // конце хода знает один лог — это то же, что `StopFailure` в момент записи. Если же в журнале после начала хода
+  // есть свой `StopFailure`, журнал главнее: `need`, `since` и конец хода остаются по его событию, что бы ни
+  // показывал лог и когда бы индекс лога его ни дочитал, — иначе время эпизода менялось бы от порядка прихода.
+  if (errorEndsTurn && !failedInJournal) {
     failed(apiError.at, apiError.error, apiError.text);
     source = 'log';
-    endedByLogError = true;
   }
 
   if (phase !== 'blocked') {
     const recordIsNewer = isNewer(recordAt, eventAt);
-    if (recordIsNewer && !endedByLogError) {
+    if (recordIsNewer && !errorEndsTurn) {
       phase = 'working';
       turnEndedAt = null;
       source = 'log';
