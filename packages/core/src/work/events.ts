@@ -66,15 +66,16 @@ export interface EventRecord {
    */
   source: string | null;
   /**
-   * `error` у `StopFailure`: что оборвало ход (`rate_limit`, `authentication_failed`, `billing_error`…). У
-   * остальных событий и у строк без поля — `null`.
+   * `error` у `StopFailure`: что оборвало ход (`rate_limit`, `authentication_failed`, `billing_error`…); читается
+   * у любого события с таким полем. Нет поля — `null`.
    */
   error: string | null;
-  /** `error_details` у `StopFailure`: подробности ошибки («429 Too Many Requests»); нет поля — `null`. */
+  /** `error_details` — только у `StopFailure`: подробности ошибки («429 Too Many Requests»). Иначе — `null`. */
   errorDetails: string | null;
   /**
-   * `last_assistant_message`: у `StopFailure` — текст ошибки, каким его видит человек (в нём бывает время сброса
-   * лимита: «resets 2:50pm (Europe/Moscow)»); у `Stop` и `SubagentStop` — последний ответ. Нет поля — `null`.
+   * `last_assistant_message` — только у `StopFailure`: текст ошибки, каким его видит человек (в нём бывает время
+   * сброса лимита: «resets 2:50pm (Europe/Moscow)»). У остальных событий — `null`, даже если поле в stdin есть: у
+   * `Stop` и `SubagentStop` там весь последний ответ, а журнал держит события в памяти всю сессию.
    */
   lastAssistantMessage: string | null;
   /** `message` у `Notification`: текст запроса («Claude needs your permission to use Bash»); нет поля — `null`. */
@@ -212,6 +213,8 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
   const name = data.hook_event_name;
   if (typeof name !== 'string' || name === '') return null;
   const toolName = textOf(data.tool_name);
+  // Ответ и подробности ошибки нужны только `StopFailure`: у `Stop` и `SubagentStop` в том же поле весь ответ.
+  const stopFailure = name === 'StopFailure';
   return {
     ...bareEvent(at, name),
     notificationType: typeof data.notification_type === 'string' ? data.notification_type : null,
@@ -223,8 +226,8 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
     waitId: textOf(data.parley_wait_id),
     source: textOf(data.source),
     error: textOf(data.error),
-    errorDetails: textOf(data.error_details),
-    lastAssistantMessage: textOf(data.last_assistant_message),
+    errorDetails: stopFailure ? textOf(data.error_details) : null,
+    lastAssistantMessage: stopFailure ? textOf(data.last_assistant_message) : null,
     message: textOf(data.message),
     toolName,
     toolDetail: toolDetailOf(toolName, data.tool_input),

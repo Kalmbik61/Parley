@@ -44,8 +44,9 @@ export interface ActivityLog {
   lastUserRecordAt: string | null;
   /**
    * Самая поздняя запись ассистента с ошибкой API (`SessionIndex.lastApiError`, только лог Claude Code):
-   * запасной путь для сессий, запущенных до хука `StopFailure`. Это сырьё, а не вывод: новее ли она остальных
-   * осей, решает свёртка. Нет поля и `null` — такой записи нет.
+   * запасной путь для сессий, у которых `StopFailure` не доходит до журнала, — запущенных до этого хука и на
+   * `claude` ниже порога ленты. Это сырьё, а не вывод: новее ли она остальных осей, решает свёртка. Нет поля и
+   * `null` — такой записи нет.
    */
   lastApiError?: { at: string; error: string | null; text: string } | null;
 }

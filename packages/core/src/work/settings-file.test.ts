@@ -28,23 +28,12 @@ describe('workSettings', () => {
       'Notification',
       'PermissionRequest',
       'Stop',
-      'StopFailure',
       'SubagentStart',
       'SubagentStop',
       'SessionStart',
       'SessionEnd',
     ]);
-    expect(HOOK_EVENTS).toHaveLength(9);
-  });
-
-  it('StopFailure идёт сразу после Stop и несёт ту же команду cat >>', () => {
-    const index = HOOK_EVENTS.indexOf('StopFailure');
-
-    expect(index).toBeGreaterThan(0);
-    expect(HOOK_EVENTS[index - 1]).toBe('Stop');
-    expect(workSettings().hooks['StopFailure']).toEqual([
-      { hooks: [{ type: 'command', command: HOOK_COMMAND }] },
-    ]);
+    expect(HOOK_EVENTS).toHaveLength(8);
   });
 
   it('команда у всех хуков одна: дописать stdin в журнал сессии', () => {
@@ -92,7 +81,7 @@ describe('выключение плагинов в сессии (сокраще�
 describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, решение 1)', () => {
   const URL = 'http://127.0.0.1:53123/hooks';
 
-  /** Файл до ленты, собранный руками: девять хуков `cat >>`, предел у `SessionEnd`, строка статуса. */
+  /** Файл до ленты, собранный руками: восемь хуков `cat >>`, предел у `SessionEnd`, строка статуса. */
   const legacyJson = (): string => {
     const hooks: Record<string, unknown> = {};
     for (const event of HOOK_EVENTS) {
@@ -202,6 +191,33 @@ describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, ре�
     expect(Object.keys(hooks)).toEqual([...HOOK_EVENTS, 'MessageDisplay']);
     expect(hooks['Stop']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command', 'http']);
     expect(hooks['UserPromptSubmit']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command']);
+  });
+
+  // `StopFailure` — событие, которого нет в старом Claude Code и которое он мог бы отвергнуть в `--settings`.
+  // Журнальный `cat >>` ему ставится только там, где хост уже решил, что `claude` новый (`hookUrl`), — как и
+  // HTTP-хук ленты. Ниже порога ленты ошибку лимита находит запасной путь по журналу сессии.
+  it('StopFailure с hookUrl: в группе cat >> в журнал первым, HTTP-хук ленты вторым', () => {
+    const byDefault = workSettings({ hookUrl: URL }).hooks;
+    const alone = workSettings({ hookUrl: URL, hookEvents: ['StopFailure'] }).hooks;
+
+    for (const hooks of [byDefault, alone]) {
+      const group = hooks['StopFailure'];
+      expect(group).toHaveLength(1);
+      expect(group?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command', 'http']);
+      expect(group?.[0]?.hooks[0]).toEqual({ type: 'command', command: HOOK_COMMAND });
+    }
+    // Место ключа среди событий ленты прежнее: меняется только содержимое его группы.
+    expect(Object.keys(alone)).toEqual([...HOOK_EVENTS, 'StopFailure']);
+  });
+
+  it('StopFailure без hookUrl или вне hookEvents: ключа в файле нет вовсе', () => {
+    expect(workSettings().hooks).not.toHaveProperty('StopFailure');
+    expect(workSettings({ hookEvents: ['StopFailure'] }).hooks).not.toHaveProperty('StopFailure');
+    expect(
+      workSettings({ hookUrl: URL, hookEvents: ['Stop', 'MessageDisplay'] }).hooks,
+    ).not.toHaveProperty('StopFailure');
+    expect(workSettingsJson()).not.toContain('StopFailure');
+    expect(workSettingsJson({ hookEvents: ['StopFailure'] })).toBe(legacyJson());
   });
 
   it('в файле только хуки и строка статуса — рамка (Review Focus 5)', () => {
@@ -348,11 +364,6 @@ describe('writeWorkSettings', () => {
     };
     expect(Object.keys(parsed.hooks)).toEqual([...HOOK_EVENTS]);
     expect(parsed.hooks['Stop']?.[0]?.hooks[0]).toEqual({
-      type: 'command',
-      command: HOOK_COMMAND,
-    });
-    // Ошибка API (лимит, вход) приходит `StopFailure`, а не `Stop`: журнал получает и её.
-    expect(parsed.hooks['StopFailure']?.[0]?.hooks[0]).toEqual({
       type: 'command',
       command: HOOK_COMMAND,
     });

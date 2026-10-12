@@ -33,16 +33,12 @@ const fromShellEnv = (key: string): string =>
  */
 export const HOOK_COMMAND = `cat >> "${fromShellEnv('WORK_DIR')}/events/${fromShellEnv('SESSION_ID')}.jsonl" || true`;
 
-/**
- * Хуки таблицы 4.2: промпты, разрешения, вопросы агента, Stop, субагенты, сессия. `StopFailure` — ход,
- * оборванный ошибкой API (лимит подписки, вход): Claude Code шлёт его вместо `Stop`.
- */
+/** Хуки таблицы 4.2: промпты, разрешения, вопросы агента, Stop, субагенты, сессия. */
 export const HOOK_EVENTS = [
   'UserPromptSubmit',
   'Notification',
   'PermissionRequest',
   'Stop',
-  'StopFailure',
   'SubagentStart',
   'SubagentStop',
   'SessionStart',
@@ -50,6 +46,15 @@ export const HOOK_EVENTS = [
 ] as const;
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];
+
+/**
+ * События, которым `cat >>` в журнал ставится только вместе с HTTP-хуком ленты: при `hookUrl` и если событие есть
+ * в `hookEvents`. `StopFailure` — ход, оборванный ошибкой API (лимит подписки, вход): Claude Code шлёт его вместо
+ * `Stop`. Старый Claude Code может отвергнуть незнакомое событие в `--settings`, а `hookUrl` хост даёт только
+ * `claude` не ниже `FEED_MIN_VERSION`, где событие заведомо есть. Ниже этой версии файл остаётся прежним, а лимит
+ * находит запасной путь по журналу сессии (`SessionIndex.lastApiError`).
+ */
+const GATED_JOURNAL_EVENTS: readonly string[] = ['StopFailure'];
 
 /**
  * `SessionEnd` придерживает выход процесса, поэтому у него есть предел; у
@@ -170,7 +175,8 @@ function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
  *
  * С `hookUrl` к прежним хукам добавляются HTTP-обработчики ленты: у событий из обоих списков —
  * в той же группе после `cat >>`, у новых — своей группой. Журнал `events/` остаётся как был: по
- * нему считается активность.
+ * нему считается активность. Исключение — `GATED_JOURNAL_EVENTS`: такому событию вместе с HTTP-хуком
+ * ставится и `cat >>`, первым в группе; без `hookUrl` его в файле нет.
  */
 export function workSettings({
   provider,
@@ -190,6 +196,9 @@ export function workSettings({
   if (hookUrl !== undefined) {
     for (const event of hookEvents) {
       const http = feedHook(hookUrl, event, hookTokenEnv);
+      if (hooks[event] === undefined && GATED_JOURNAL_EVENTS.includes(event)) {
+        hooks[event] = [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }];
+      }
       const group = hooks[event]?.[0];
       if (group !== undefined) {
         group.hooks.push(http);

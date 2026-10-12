@@ -450,6 +450,37 @@ describe('eventRecordOf: поля ошибки и инструмента', () =>
     expect(bareEvent(AT, 'Stop')).toMatchObject(NO_EXTRA);
   });
 
+  // У настоящих `Stop` и `SubagentStop` в last_assistant_message лежит весь последний ответ, а события живут
+  // в памяти хоста всю сессию: поле нужно только `StopFailure` (там текст ошибки со временем сброса).
+  it.each(['Stop', 'SubagentStop'])(
+    '%s: длинный last_assistant_message и error_details не читаются — null',
+    (name) => {
+      const big = 'x'.repeat(50_000);
+      const event = eventRecordOf(
+        { hook_event_name: name, last_assistant_message: big, error_details: big },
+        AT,
+      );
+
+      expect(event).toMatchObject({ name, lastAssistantMessage: null, errorDetails: null });
+    },
+  );
+
+  it('StopFailure: last_assistant_message и error_details читаются', () => {
+    const event = eventRecordOf(
+      {
+        hook_event_name: 'StopFailure',
+        last_assistant_message: 'API Error: Rate limit reached',
+        error_details: '429 Too Many Requests',
+      },
+      AT,
+    );
+
+    expect(event).toMatchObject({
+      lastAssistantMessage: 'API Error: Rate limit reached',
+      errorDetails: '429 Too Many Requests',
+    });
+  });
+
   it('пустые строки и значения не строк — null, событие не теряется', () => {
     const event = eventRecordOf(
       {
@@ -488,6 +519,26 @@ describe('eventRecordOf: поля ошибки и инструмента', () =>
       errorDetails: '429 Too Many Requests',
       lastAssistantMessage: "You've hit your session limit · resets 2:50pm (Europe/Moscow)",
     });
+  });
+
+  it('в журнале events/ ответ держит только StopFailure: у Stop с длинным ответом поле — null', async () => {
+    await writeFile(
+      journal(),
+      raw({ hook_event_name: 'Stop', last_assistant_message: 'x'.repeat(50_000) }) +
+        raw({
+          hook_event_name: 'StopFailure',
+          error: 'rate_limit',
+          last_assistant_message: 'API Error: Rate limit reached',
+        }),
+      'utf8',
+    );
+
+    const events = (await openEvents(dir).read(SESSION)) ?? [];
+
+    expect(events.map((event) => event.lastAssistantMessage)).toEqual([
+      null,
+      'API Error: Rate limit reached',
+    ]);
   });
 });
 
