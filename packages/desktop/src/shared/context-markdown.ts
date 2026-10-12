@@ -9,7 +9,10 @@
  * длиннее `CONTEXT_LIMITS.markdown`: лишнее режется в данных, а не в тексте человека.
  */
 
-import type { ViewportSpec } from './browser-devtools.js';
+import { DEVTOOLS_LIMITS, type ConsoleEntry, type NetworkEntry, type ResponseBody, type ViewportSpec } from './browser-devtools.js';
+import type { ReactComponentInfo } from './browser-types.js';
+import { selectorTail } from './css-selector.js';
+import { redactBody, redactHeaders, redactUrl, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
 
 export type ContextKind = 'element' | 'console' | 'request' | 'errors' | 'annotations';
@@ -162,4 +165,182 @@ export function header(title: string, page: PageMeta, screenshot: 'slot' | 'none
   if (screenshot === 'slot') lines.push(S.contextFile.screenshot(SCREENSHOT_SLOT));
   if (screenshot === 'none') lines.push(S.contextFile.noScreenshot);
   return lines.join('\n');
+}
+
+/** Готовый файл-контекст: вид, метка имени файла (`<вид>-<метка>-<4 hex>.md`) и текст. */
+export interface BuiltContext {
+  kind: ContextKind;
+  label: string;
+  markdown: string;
+}
+
+/** Данные элемента в ограде: Select и метки аннотаций на элементах. */
+export interface ElementData {
+  selector: string;
+  text: string;
+  html: string;
+  styles: Readonly<Record<string, string>>;
+  role?: string;
+  name?: string;
+  react?: readonly ReactComponentInfo[];
+}
+
+/** Элемент Select: данные, адрес страницы, путь снимка в `drops/` и размер вьюпорта (`PickResult` подходит как есть). */
+export interface ElementContextInput extends ElementData {
+  url: string;
+  imagePath: string | null;
+  viewport: PageMeta['viewport'];
+}
+
+/** Метка элемента по последнему звену селектора: `button.save`, `button-save` (по id), `body`. */
+export function elementLabel(selector: string): string {
+  const tail = selectorTail(selector);
+  const tag = tail.tag === '' ? 'element' : tail.tag;
+  if (tail.id !== null) return contextLabel(`${tag}-${tail.id}`);
+  const first = tail.classes[0];
+  return contextLabel(first === undefined ? tag : `${tag}.${first}`);
+}
+
+export function consoleLabel(entry: Pick<ConsoleEntry, 'level' | 'text'>): string {
+  return contextLabel(`${entry.level}-${entry.text.slice(0, 80)}`);
+}
+
+export function requestLabel(entry: Pick<NetworkEntry, 'method' | 'url' | 'status' | 'failure'>): string {
+  let path = '';
+  try {
+    path = new URL(entry.url).pathname;
+  } catch {
+    path = '';
+  }
+  const outcome = entry.status !== null ? String(entry.status) : entry.failure !== null ? entry.failure.reason : 'pending';
+  return contextLabel(`${entry.method}-${path}-${outcome}`);
+}
+
+/** Метка файлов страницы (`errors`, `annotations`): путь страницы, корень — `page`. */
+export function pageLabel(url: string): string {
+  let path = '';
+  try {
+    // Хвост срезается от начала серии (`(?<!\/)`), а не с каждой её точки — как в `contextLabel`: путь задаёт сама страница.
+    path = new URL(url).pathname.replace(/^\/+|(?<!\/)\/+$/g, '');
+  } catch {
+    path = '';
+  }
+  return contextLabel(path === '' ? 'page' : path);
+}
+
+function page(url: string): PageMeta {
+  return { url, viewport: null, viewportNote: null };
+}
+
+function stylesText(styles: Readonly<Record<string, string>>): string {
+  return Object.entries(styles)
+    .map(([name, value]) => `${name}:${value}`)
+    .join('; ');
+}
+
+function elementLines(data: ElementData): string {
+  const lines = [S.contextFile.selector(data.selector)];
+  if (data.role !== undefined) lines.push(S.contextFile.role(data.role, data.name ?? ''));
+  if (data.react !== undefined && data.react.length > 0) {
+    lines.push(S.contextFile.react(data.react.map((item) => S.contextFile.component(item.name, item.source, item.approx)).join(' < ')));
+  }
+  lines.push(S.contextFile.text(data.text), S.contextFile.styles(stylesText(data.styles)), S.contextFile.html, data.html);
+  return lines.join('\n');
+}
+
+export function elementContext(input: { pick: ElementContextInput; viewportNote: string | null }): BuiltContext {
+  const { pick } = input;
+  const label = elementLabel(pick.selector);
+  const head = header(
+    S.contextFile.elementTitle(label),
+    { url: pick.url, viewport: pick.viewport, viewportNote: input.viewportNote },
+    pick.imagePath === null ? 'absent' : 'slot',
+  );
+  return { kind: 'element', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: elementLines(pick) }]) };
+}
+
+/** Место в коде страницы: URL с маской, строка и столбец. */
+function located(location: { url: string; line: number; column: number }): string {
+  return `${redactUrl(location.url)}:${location.line}:${location.column}`;
+}
+
+export function consoleContext(input: { pageUrl: string; entry: ConsoleEntry }): BuiltContext {
+  const { entry } = input;
+  const label = consoleLabel(entry);
+  const lines = [S.contextFile.level(entry.level, entry.origin)];
+  if (entry.location !== null) lines.push(S.contextFile.source(located(entry.location)));
+  if (entry.count > 1) lines.push(S.contextFile.repeated(entry.count));
+  lines.push(S.contextFile.message, entry.text);
+  if (entry.stack.length > 0) {
+    lines.push(S.contextFile.stack, ...entry.stack.slice(0, DEVTOOLS_LIMITS.stackFrames).map((frame) => S.contextFile.frame(frame.fn, located(frame))));
+  }
+  const head = header(S.contextFile.consoleTitle(label), page(input.pageUrl), 'absent');
+  return { kind: 'console', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: lines.join('\n') }]) };
+}
+
+function headersBlock(title: string, headers: ReadonlyArray<[string, string]>): string[] {
+  return headers.length === 0 ? [] : [title, ...redactHeaders(headers).map(([name, value]) => S.contextFile.header(name, value))];
+}
+
+function headerValue(headers: ReadonlyArray<[string, string]>, name: string): string | null {
+  return headers.find(([key]) => key.toLowerCase() === name)?.[1] ?? null;
+}
+
+/** Тело с маской и пределом; JSON, который не разобрался, не идёт вовсе — его маской не закрыть (спека 6). */
+function bodyText(text: string, mimeType: string | null): string {
+  return unmaskableJson(text, mimeType) ? S.contextFile.bodyNotMaskable : redactBody(text, mimeType, CONTEXT_LIMITS.body);
+}
+
+function responseText(body: ResponseBody | null, mimeType: string | null): string {
+  if (body === null) return S.contextFile.bodyGone;
+  if (body.base64) return S.contextFile.binaryBody;
+  if (body.text === '') return S.contextFile.noBody;
+  return bodyText(body.text, mimeType);
+}
+
+export function requestContext(input: { pageUrl: string; entry: NetworkEntry; responseBody: ResponseBody | null }): BuiltContext {
+  const { entry } = input;
+  const label = requestLabel(entry);
+  const lines = [S.contextFile.request(entry.method, redactUrl(entry.url))];
+  if (entry.status !== null) lines.push(S.contextFile.status(entry.status, entry.statusText));
+  if (entry.failure !== null) lines.push(S.contextFile.failure(entry.failure.reason, entry.failure.text));
+  if (entry.status === null && entry.failure === null) lines.push(S.contextFile.pending);
+  lines.push(S.contextFile.type(entry.kind, entry.mimeType));
+  if (entry.remoteAddress !== null) lines.push(S.contextFile.remote(entry.remoteAddress));
+  lines.push(...headersBlock(S.contextFile.requestHeaders, entry.requestHeaders), ...headersBlock(S.contextFile.responseHeaders, entry.responseHeaders));
+  if (entry.hasPostData) {
+    const body = entry.postData === null ? S.contextFile.bodyNotCaptured : bodyText(entry.postData, headerValue(entry.requestHeaders, 'content-type'));
+    lines.push(S.contextFile.requestBody, body);
+  }
+  // Ответа нет (CORS, сеть, отмена) — и тела ответа нет.
+  if (entry.status !== null) lines.push(S.contextFile.responseBody, responseText(input.responseBody, entry.mimeType));
+  const head = header(S.contextFile.requestTitle(label), page(input.pageUrl), 'absent');
+  return { kind: 'request', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: lines.join('\n') }]) };
+}
+
+function outcomeText(entry: NetworkEntry): string {
+  if (entry.status !== null) return entry.statusText === '' ? String(entry.status) : `${entry.status} ${entry.statusText}`;
+  if (entry.failure !== null) return entry.failure.text === '' ? entry.failure.reason : `${entry.failure.reason}: ${entry.failure.text}`;
+  return S.contextFile.noResponse;
+}
+
+/** Все видимые ошибки (спека 4.3): ошибки консоли и упавшие запросы по времени, не больше `CONTEXT_LIMITS.errors`. */
+export function errorsContext(input: { pageUrl: string; console: readonly ConsoleEntry[]; requests: readonly NetworkEntry[] }): BuiltContext {
+  const items = [
+    ...input.console.map((entry) => ({
+      ts: entry.ts,
+      line: (n: number): string =>
+        entry.location === null ? S.contextFile.errorItem(n, entry.text) : `${S.contextFile.errorItem(n, entry.text)}\n   ${S.contextFile.at(located(entry.location))}`,
+    })),
+    ...input.requests.map((entry) => ({
+      ts: entry.ts,
+      line: (n: number): string => S.contextFile.failedItem(n, entry.method, redactUrl(entry.url), outcomeText(entry)),
+    })),
+  ].sort((a, b) => a.ts - b.ts);
+  const shown = items.slice(0, CONTEXT_LIMITS.errors);
+  const lines = shown.map((item, index) => item.line(index + 1));
+  if (items.length > shown.length) lines.push(S.contextFile.more(items.length - shown.length));
+  const label = pageLabel(input.pageUrl);
+  const head = header(S.contextFile.errorsTitle(label), page(input.pageUrl), 'absent');
+  return { kind: 'errors', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: lines.join('\n') }]) };
 }

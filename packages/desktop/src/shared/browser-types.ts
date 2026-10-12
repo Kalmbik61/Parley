@@ -7,6 +7,13 @@ import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
 export const BROWSER_PARTITION = 'persist:harnas-browser';
 
+/** Компонент React выбранного элемента (спека браузера 3.8): имя до 100 знаков, источник до 300, `approx` — у React 19. */
+export interface ReactComponentInfo {
+  name: string;
+  source: string | null;
+  approx: boolean;
+}
+
 export interface PickResult {
   url: string;
   selector: string;
