@@ -35,7 +35,7 @@ reset» (`code.claude.com/docs/en/hooks`, `…/interactive-mode`), сверен�
 | Что | Claude Code и GLM | Codex |
 |---|---|---|
 | Лимит | запись ассистента `isApiErrorMessage: true`, `error: "rate_limit"`, `apiErrorStatus: 429`, текст «You've hit your session limit · resets 2:50pm (Europe/Moscow)», «You've hit your weekly limit · resets Sep 22 at 4pm (Europe/Moscow)»; хук `StopFailure` с `error: "rate_limit"` | `event_msg` `task_complete` с `error: { codex_error_info: "usage_limit_exceeded", message: "You've hit your usage limit. … try again at 7:27 PM." }` |
-| Вход и аккаунт | `error`: `authentication_failed` («Not logged in · Please run /login», «token expired»), `account_on_hold`, `billing_error`, `oauth_org_not_allowed` | в бинаре 0.162 есть `unauthorized`, `usage_not_included`, `quota_exceeded` и текст «Your access token could not be refreshed…»; точную запись — на этапе 0 |
+| Вход и аккаунт | `error`: `authentication_failed` («Not logged in · Please run /login», «token expired»), `account_on_hold`, `billing_error`, `oauth_org_not_allowed` | `task_complete` с `error.codex_error_info: "unauthorized"` и текстом вроде «Your access token could not be refreshed… Please log out and sign in again.» (10.1) |
 | Одобрение | хук `PermissionRequest`; `Notification` `permission_prompt` | OSC 9 «Approval requested: …», «Codex wants to edit …»; заголовок `[ ! ] Action Required` (`host/pty/codex-terminal.ts`) |
 
 ## 2. Решения
@@ -124,7 +124,7 @@ Codex:
 | `approval` | OSC 9 «Approval requested: <команда>», «Codex wants to edit <файл>» | хвост строки |
 | `question` | заголовок `Action Required` без OSC 9 об одобрении в этом эпизоде | — |
 | `limit` | rollout `task_complete` с `error.codex_error_info: "usage_limit_exceeded"` | `error.message` |
-| `sign-in` | rollout `task_complete` с кодом входа или аккаунта; список кодов — этап 0 (кандидаты `unauthorized` → `auth`, `usage_not_included` → `account`) | `error.message` |
+| `sign-in` | rollout `task_complete` с `error.codex_error_info: "unauthorized"` → `auth` (своего кода «аккаунт» у Codex нет, 10.1) | `error.message` |
 | `startup` | существующий срок `startup-wait`: 20 с без `Ready` и `Working` (`startupExpired`) | — |
 
 `rate_limit_exceeded` у Codex (короткий 429 с повтором) `need` не даёт: Codex повторяет сам.
@@ -161,8 +161,11 @@ Codex:
 2. **Текст ошибки:**
    - Claude: «resets 2:50pm (Europe/Moscow)», «resets 7pm (Europe/Moscow)», «resets Sep 22 at 4pm
      (Europe/Moscow)». Пояс — из скобок; время без даты — ближайшее после записи;
-   - Codex: «try again at 7:27 PM» — пояс машины хоста, ближайшее после записи. Формат с датой —
-     этап 0.
+   - Codex: «try again at 7:27 PM» (тот же день) или «try again at Oct 14th, 2026 7:27 PM» (другой
+     день, суффикс `st`/`nd`/`rd`/`th`) — пояс машины хоста; время без даты — ближайшее после записи
+     (10.1);
+   - GLM: если в тексте ответа Z.ai есть время сброса — оно; формат не подтверждён, опора — квота
+     (п. 1).
 3. Иначе `null`.
 
 Разбор — чистые функции в core с тестами-инвариантами по диапазону (полночь, переход на летнее
@@ -357,10 +360,11 @@ reason: 'stuck' }` раньше проверки занятости. Новое 
 
 ### 6.4 Меню на экране
 
-Перед печатью возврата хост смотрит экран сессии (`host/pty/screen.ts`). Строки меню лимита Claude
-Code («Wait here, then continue automatically», «Don't continue automatically») и иной открытый
-выбор — не печатать, а слать человеку `limit-return-blocked` с причиной «a menu is open in its
-terminal». Точные строки — этап 0.
+Перед печатью возврата хост смотрит экран сессии (`host/pty/screen.ts`). Видна строка меню лимита
+Claude Code «Wait here, then continue automatically» (в 2.1.296 — с хвостами « at …», « shortly»,
+« when the limit resets», 10.1) — не печатать, а слать человеку `limit-return-blocked` с причиной
+«a menu is open in its terminal». Строку «Don't continue automatically» как признак не берём: в
+бинаре 2.1.296 её нет простым текстом.
 
 ### 6.5 Вход
 
@@ -486,6 +490,35 @@ Settings → Notifications (`components/settings/SettingsDialog.tsx`): преж�
 5. **Claude Code:** точные строки меню лимита (`/rate-limit-options`) и строк ожидания — для 6.4.
 
 Итоги этапа 0 правят эту спеку до плана.
+
+### 10.1 Итоги этапа 0 (2026-10-12, без установки зависимостей)
+
+1. **Пропавший звук у Codex — не закрыт.** Журнал доставленных уведомлений macOS
+   (`group.com.apple.usernoted/db2`) без Full Disk Access не читается. Проба в dev-окне с заглушкой
+   Codex и `PARLEY_NOTIFICATIONS=log` — первая задача плана: зависимости в worktree ставятся только
+   после одобрения плана. Настройки у автора: `notifications` в `ui.json` — все `true`, звук
+   включён.
+2. **Codex** (бинарь 0.162 и `codex-rs/protocol/src/protocol.rs`):
+   - `task_complete` несёт `error: { message, codex_error_info }` (`ErrorEvent`); в rollout
+     `codex_error_info` — строка snake_case, например `"usage_limit_exceeded"`;
+   - значения `CodexErrorInfo`: `context_window_exceeded`, `session_budget_exceeded`,
+     `usage_limit_exceeded`, `rate_limit_exceeded`, `flex_unavailable`, `server_overloaded`,
+     `cyber_policy`, `bio_policy`, `misalignment_policy_violation`, `too_many_denials`,
+     `internal_server_error`, `unauthorized`, `bad_request`, `invalid_prompt`, `sandbox_error`,
+     `other` и варианты с полями (`http_connection_failed` и др.). `need` дают только
+     `usage_limit_exceeded` (`limit`) и `unauthorized` (`sign-in`, `auth`);
+   - формат времени: `%-I:%M %p` в тот же день, `%b %-d<st|nd|rd|th>, %Y %-I:%M %p` в другой; есть
+     и вариант текста «You've hit your usage limit for …».
+3. **Свой звук:** Electron 44.4.5, окно Parley `autoplayPolicy` не задаёт — по документации Electron
+   умолчание `no-user-gesture-required`, WebAudio играет без жеста пользователя. Проверка в окне без
+   фокуса и в свёрнутом — в той же первой задаче плана.
+4. **GLM:** по сторонним разборам код Z.ai 1308 — лимит пяти часов, 1310 — недели или месяца; точный
+   текст и поле времени сброса не подтверждены. Время сброса — из квоты Z.ai (3.4, п. 1), разбор
+   текста — только если формат подтвердится на живом ответе.
+5. **Claude Code 2.1.296** (строки бинаря): «Usage limit reached», «Usage limit reached again»,
+   «Usage limit has reset», «Wait here, then continue automatically» (с хвостами « at », « shortly»,
+   « when the limit resets»), «Automatic continue stopped after repeated usage-limit hits»,
+   «Automatic continue cancelled». Признак меню для 6.4 — «Wait here, then continue automatically».
 
 ## 11. Порядок
 
