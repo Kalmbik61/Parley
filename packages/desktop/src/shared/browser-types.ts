@@ -14,6 +14,72 @@ export interface ReactComponentInfo {
   approx: boolean;
 }
 
+/** Вьюпорт страницы в момент выбора или метки: CSS-пиксели и devicePixelRatio (спека 3.6, строка Viewport). */
+export interface PickViewport {
+  width: number;
+  height: number;
+  dpr: number;
+}
+
+/**
+ * Точка как доля вьюпорта страницы (0…1). Окно переводит её в свои пиксели по прямоугольнику `<webview>`: масштаб
+ * страницы и эмуляция размера в доле не участвуют.
+ */
+export interface ViewportFraction {
+  fx: number;
+  fy: number;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Метка на элементе (спека 4.7): данные на момент метки; роль, имя и React дочитывает main. */
+export interface AnnotationElementTarget {
+  kind: 'element';
+  /** Id цели в мире скрипта меток (`a1`, `a2`…): по нему скрипт рисует номер и идёт за элементом. */
+  key: string;
+  selector: string;
+  text: string;
+  html: string;
+  styles: Record<string, string>;
+  role?: string;
+  name?: string;
+  react?: ReactComponentInfo[];
+  anchor: ViewportFraction;
+  viewport: PickViewport;
+}
+
+/** Рамка области (спека 4.7): прямоугольник в CSS-пикселях документа и до трёх элементов под ней. */
+export interface AnnotationRegionTarget {
+  kind: 'region';
+  key: string;
+  rect: Rect;
+  elements: Array<{ selector: string; text: string }>;
+  anchor: ViewportFraction;
+  viewport: PickViewport;
+}
+
+export type AnnotationTarget = AnnotationElementTarget | AnnotationRegionTarget;
+
+/** Ответ `annotateStart`: новая метка или клик по номеру готовой — её правка. */
+export type AnnotationPick = AnnotationTarget | { kind: 'edit'; n: number };
+
+/** Метка лотка для перерисовки в странице. */
+export interface AnnotationPin {
+  n: number;
+  key: string;
+}
+
+/** Положение метки после перерисовки: прямоугольник цели в долях вьюпорта (`Rect` из долей); `null` — элемента нет. */
+export interface AnnotationPosition {
+  n: number;
+  rect: Rect | null;
+}
+
 export interface PickResult {
   url: string;
   selector: string;

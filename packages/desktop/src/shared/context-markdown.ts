@@ -10,7 +10,7 @@
  */
 
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type NetworkEntry, type ResponseBody, type ViewportSpec } from './browser-devtools.js';
-import type { ReactComponentInfo } from './browser-types.js';
+import type { AnnotationTarget, ReactComponentInfo } from './browser-types.js';
 import { selectorTail } from './css-selector.js';
 import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
@@ -347,4 +347,65 @@ export function errorsContext(input: { pageUrl: string; console: readonly Consol
   const label = pageLabel(input.pageUrl);
   const head = header(S.contextFile.errorsTitle(label), page(input.pageUrl), 'absent');
   return { kind: 'errors', label, markdown: assemble([{ text: head }, { text: S.contextFile.pageDataNote }, { data: lines.join('\n') }]) };
+}
+
+/** Пункт аннотаций: номер, комментарий человека, пропал ли элемент и цель на момент метки. */
+export interface AnnotationEntry {
+  n: number;
+  comment: string;
+  gone: boolean;
+  target: AnnotationTarget;
+}
+
+/** Подпись цели: `button.save` у метки на элементе, `Region 308 × 20` у рамки. */
+export function annotationLabel(target: AnnotationTarget): string {
+  return target.kind === 'element'
+    ? elementLabel(target.selector)
+    : S.contextFile.region(Math.round(target.rect.width), Math.round(target.rect.height));
+}
+
+/** Комментарий человека — цитатой: «```» в нём не откроет ограду данных ниже. */
+function quote(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line === '' ? '>' : `> ${line}`))
+    .join('\n');
+}
+
+function targetLines(target: AnnotationTarget): string {
+  if (target.kind === 'element') return elementLines(target);
+  const { x, y, width, height } = target.rect;
+  const lines = [S.contextFile.rect(Math.round(x), Math.round(y), Math.round(width), Math.round(height))];
+  if (target.elements.length > 0) {
+    lines.push(S.contextFile.elementsUnder, ...target.elements.map((item) => S.contextFile.underItem(item.selector, item.text)));
+  }
+  return lines.join('\n');
+}
+
+/** Пачка аннотаций (спека 4.7): номер и комментарий — вне ограды, цель — в ограде; не больше `CONTEXT_LIMITS.annotations`. */
+export function annotationsContext(input: {
+  pageUrl: string;
+  viewport: PageMeta['viewport'];
+  viewportNote: string | null;
+  screenshot: boolean;
+  items: readonly AnnotationEntry[];
+}): BuiltContext {
+  const label = pageLabel(input.pageUrl);
+  const parts: ContextPart[] = [
+    {
+      text: header(
+        S.contextFile.annotationsTitle(label),
+        { url: input.pageUrl, viewport: input.viewport, viewportNote: input.viewportNote },
+        input.screenshot ? 'slot' : 'none',
+      ),
+    },
+    { text: S.contextFile.annotationsNote },
+  ];
+  for (const item of input.items.slice(0, CONTEXT_LIMITS.annotations)) {
+    const comment = item.comment.trim() === '' ? S.contextFile.noComment : cutText(item.comment, CONTEXT_LIMITS.comment);
+    const lines = [S.contextFile.annotationHeading(item.n, annotationLabel(item.target)), quote(comment)];
+    if (item.gone) lines.push(S.contextFile.gone);
+    parts.push({ text: lines.join('\n') }, { data: targetLines(item.target) });
+  }
+  return { kind: 'annotations', label, markdown: assemble(parts) };
 }
