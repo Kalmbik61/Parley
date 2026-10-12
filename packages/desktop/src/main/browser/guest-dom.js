@@ -42,9 +42,12 @@
     return /^[A-Za-z0-9_-]{12,}$/.test(name) && /\d/.test(name) && /[A-Z]/.test(name);
   }
 
+  // `id` и `class` читаются атрибутами, а не свойствами `el.id`, `el.classList`, `el.className`: у `<form>` именованные
+  // поля перекрывают встроенные свойства (DOM clobbering), `<input name="id">` делал бы `form.id` этим полем, и звено
+  // выходило бы `form#[object HTMLInputElement]` — оно ничего не находит. Атрибут от имён полей не зависит.
   function stableClasses(el) {
     const out = [];
-    for (const name of Array.from(el.classList || [])) {
+    for (const name of new Set((el.getAttribute('class') || '').split(/[ \t\n\f\r]+/).filter(Boolean))) {
       if (out.length >= CLASSES_PER_LINK) break;
       if (name.length > CLASS_LENGTH || /^css-[a-z0-9]+$/i.test(name) || looksHashy(name)) continue;
       out.push(name);
@@ -54,7 +57,8 @@
 
   function linkOf(el) {
     const tag = el.tagName.toLowerCase();
-    if (el.id) return `${tag}#${CSS.escape(el.id)}`;
+    const id = el.getAttribute('id');
+    if (id) return `${tag}#${CSS.escape(id)}`;
     return tag + stableClasses(el).map((name) => `.${CSS.escape(name)}`).join('');
   }
 

@@ -70,6 +70,29 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
     expect(dom().selectorOf(document.querySelectorAll('a')[1] as Element)).toBe('ul.y > li > a');
   });
 
+  it('селектор берёт id атрибутом: поле name="id" в форме (DOM clobbering) не превращает звено в form#[object HTMLInputElement]', () => {
+    // В браузере именованные поля формы перекрывают её встроенные свойства: <input name="id"> делает form.id этим полем.
+    // jsdom так не делает, поэтому подмена выставлена вручную; настоящий id лежит в атрибуте, его getAttribute и читает.
+    document.body.innerHTML = '<form id="f"><input name="id" type="text"><button type="button">Go</button></form>';
+    const form = $('form');
+    Object.defineProperty(form, 'id', { value: $('input') });
+    expect(dom().selectorOf(form)).toBe('form#f');
+  });
+
+  it('форма без id с полем name="id" (вход, поиск) идёт по классам из атрибута, а не по подменённым id и className', () => {
+    // id в атрибуте нет — звено строится по классам. Подмена свойства id не должна давать звено form#[object …], а подмена
+    // className — отнимать классы. classList здесь не подменяется: селекторный движок jsdom сам читает его у элемента
+    // и падает; в браузере движок родной и свойства-обёртки не читает.
+    document.body.innerHTML = `
+      <form class="plain"><input name="q" type="text"></form>
+      <form class="login primary"><input name="id" type="text"><input name="className" type="text"></form>`;
+    const form = $('form.login');
+    const [id, className] = Array.from(form.querySelectorAll('input'));
+    Object.defineProperty(form, 'id', { value: id });
+    Object.defineProperty(form, 'className', { value: className });
+    expect(dom().selectorOf(form)).toBe('form.login.primary');
+  });
+
   it('хэши CSS-modules и css-xxxx в селектор не идут; Tailwind-классы экранированы', () => {
     document.body.innerHTML = '<div class="css-1q2w3e Button_root__a1B2c3 md:flex py-1.5"><span>x</span></div><div><span>y</span></div>';
     expect(dom().selectorOf($('div'))).toBe('div.md\\:flex.py-1\\.5');
