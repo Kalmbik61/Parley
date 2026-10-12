@@ -15,4 +15,12 @@ describe('selectorTail', () => {
     // Селектор guest-dom.js (задача 2, по Orca) с Tailwind-классами: `\.` и `\:` внутри имени.
     expect(selectorTail('div.md\\:flex.py-1\\.5')).toEqual({ tag: 'div', id: null, classes: ['md:flex', 'py-1.5'] });
   });
+
+  it('id тоже: `:r0:` (useId) и id с первой цифрой — как их пишет guest-dom через CSS.escape', () => {
+    expect(selectorTail('main > input#\\:r0\\:')).toEqual({ tag: 'input', id: ':r0:', classes: [] });
+    expect(selectorTail('div#\\31 23')).toEqual({ tag: 'div', id: '123', classes: [] });
+    // Пробел после кода — часть экранирования: `1` → `\31 `, и буква за ним (`1a` → `\31 a`) в код не входит.
+    expect(selectorTail('div#\\31 a')).toEqual({ tag: 'div', id: '1a', classes: [] });
+    expect(selectorTail('form > div#\\31 ')).toEqual({ tag: 'div', id: '1', classes: [] });
+  });
 });

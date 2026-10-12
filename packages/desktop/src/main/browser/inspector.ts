@@ -45,13 +45,14 @@ import {
   type ExceptionParams,
   type LogParams,
 } from './cdp-entries.js';
+import { REACT_INFO_FN } from './react-info.js';
 
 export type CdpMethod = string;
 
 /**
- * Закрытый список команд CDP (спека 3.3). Этап A — включение доменов, тело ответа и эмуляция размера. Этап B добавит
- * DOM, Accessibility, снимки и `Runtime.callFunctionOn` с `REACT_INFO_FN`, этап C — тело запроса. `Runtime.evaluate`
- * здесь не бывает никогда.
+ * Закрытый список команд CDP (спека 3.3). Этап A — включение доменов, тело ответа и эмуляция размера. Этап B добавил
+ * DOM, Accessibility, снимки и `Runtime.callFunctionOn` с `REACT_INFO_FN` (вызов этого метода ограничивает
+ * `cdpCallAllowed`), этап C — тело запроса. `Runtime.evaluate` здесь не бывает никогда.
  */
 export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Runtime.enable',
@@ -67,7 +68,29 @@ export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Emulation.clearDeviceMetricsOverride',
   'Emulation.setTouchEmulationEnabled',
   'Emulation.setUserAgentOverride',
+  // Этап B: выбор элемента (спека 3.8) и снимки элемента и аннотаций (4.6, 4.7).
+  'DOM.enable',
+  'DOM.disable',
+  'DOM.getNodeForLocation',
+  'DOM.describeNode',
+  'DOM.resolveNode',
+  'Accessibility.enable',
+  'Accessibility.disable',
+  'Accessibility.getPartialAXTree',
+  'Runtime.callFunctionOn',
+  'Runtime.releaseObject',
+  'Page.captureScreenshot',
 ]);
+
+/**
+ * Можно ли так позвать CDP (спека браузера 3.3): метод — из закрытого списка, а `Runtime.callFunctionOn` — только с
+ * `REACT_INFO_FN` (3.8). Это единственное исполнение кода в мире страницы; JS агента сюда не попадает никогда.
+ */
+export function cdpCallAllowed(method: string, params?: Record<string, unknown>): boolean {
+  if (!CDP_ALLOWED.has(method)) return false;
+  if (method === 'Runtime.callFunctionOn') return params?.functionDeclaration === REACT_INFO_FN;
+  return true;
+}
 
 /** Тайм-аут команды CDP (спайк 0.1): без страницы `enable` висит; дольше него `ready` страницу вкладки не держит. */
 export const CDP_COMMAND_MS = 10_000;
@@ -198,7 +221,7 @@ export function createInspector(deps: {
   const eventListeners = new Map<number, Map<string, Set<(params: unknown) => void>>>();
 
   function command<T>(contents: WebContents, method: CdpMethod, params?: Record<string, unknown>): Promise<T> {
-    if (!CDP_ALLOWED.has(method)) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
+    if (!cdpCallAllowed(method, params)) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
     return new Promise<T>((resolve, reject) => {
       const cancel = setTimer(() => reject(new Error(`CDP command timed out: ${method}`)), CDP_COMMAND_MS);
       contents.debugger.sendCommand(method, params).then(
@@ -547,7 +570,7 @@ export function createInspector(deps: {
       }
     },
     send<T>(id: number, method: CdpMethod, params?: Record<string, unknown>): Promise<T> {
-      if (!CDP_ALLOWED.has(method)) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
+      if (!cdpCallAllowed(method, params)) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
       const contents = live(id);
       if (contents === null) return Promise.reject(new Error(`no browser guest: ${id}`));
       if (journals.get(id)?.attached !== true) return Promise.reject(new Error(`capture unavailable: ${id}`));

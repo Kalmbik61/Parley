@@ -6,8 +6,9 @@
  * берёт у `getURL()`, а снимок делает сам — `capturePage` по проверенному прямоугольнику.
  */
 import type { NativeImage, WebContents } from 'electron';
-import type { PickResult } from '../../shared/browser-types.js';
+import type { PickResult, Rect } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
+import { cutCodePoints, finite, isRecord, readRect } from './guest-data.js';
 
 /** Мир скрипта выбора: не 0 (мир страницы) и не занятые Electron. */
 export const PICK_WORLD_ID = 1001;
@@ -49,34 +50,10 @@ const STYLE_KEYS = new Set([
 /** Отмена выбора в том же изолированном мире: страница эту функцию не видит. */
 const CANCEL_SCRIPT = 'globalThis.__parleyPickCancel?.()';
 
-type Rect = { x: number; y: number; width: number; height: number };
 type ValidPick = Omit<PickResult, 'url' | 'imagePath' | 'thumbnail'> & {
   rect: Rect;
   viewport: { width: number; height: number };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Первые `limit` кодовых точек: суррогатная пара эмодзи не рвётся. */
-function cutCodePoints(text: string, limit: number): { text: string; cut: boolean } {
-  if (text.length <= limit) return { text, cut: false };
-  const points = Array.from(text);
-  if (points.length <= limit) return { text, cut: false };
-  return { text: points.slice(0, limit).join(''), cut: true };
-}
-
-function finite(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function readRect(value: unknown): Rect | null {
-  if (!isRecord(value)) return null;
-  const { x, y, width, height } = value;
-  if (!finite(x) || !finite(y) || !finite(width) || !finite(height) || width < 0 || height < 0) return null;
-  return { x, y, width, height };
-}
 
 /**
  * Проверка формы данных из гостя: лишние поля выкинуты, строки обрезаны (html — с

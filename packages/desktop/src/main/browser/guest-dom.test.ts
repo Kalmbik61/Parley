@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { selectorTail } from '../../shared/css-selector.js';
 import { PICK_LIMITS } from './design-mode.js';
+import { nodeMatches } from './element-info.js';
 
 // Путь, а не URL: в jsdom глобальный URL — его, и readFileSync такой не примет.
 const domScript = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'guest-dom.js'), 'utf8');
@@ -96,6 +98,21 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
   it('хэши CSS-modules и css-xxxx в селектор не идут; Tailwind-классы экранированы', () => {
     document.body.innerHTML = '<div class="css-1q2w3e Button_root__a1B2c3 md:flex py-1.5"><span>x</span></div><div><span>y</span></div>';
     expect(dom().selectorOf($('div'))).toBe('div.md\\:flex.py-1\\.5');
+  });
+
+  it('звено селектора доходит до сверки узла CDP: id из useId (`:r0:`), id с первой цифрой и классы Tailwind', () => {
+    // main находит узел по точке клика и сверяет его с последним звеном этого селектора (`element-info.ts#nodeMatches`):
+    // экранирование CSS.escape должно сниматься обратно в то, что лежит в атрибутах узла.
+    document.body.innerHTML =
+      '<form><input id=":r0:" type="text"><div id="123"></div><button class="md:flex py-1.5 plain" type="button">Go</button></form>';
+    const { selectorOf } = dom();
+    const elements = Array.from(document.querySelectorAll('input, div, button'));
+    expect(elements.map((el) => selectorOf(el))).toEqual(['input#\\:r0\\:', 'div#\\31 23', 'button.md\\:flex.py-1\\.5']);
+    for (const el of elements) {
+      // DOM.describeNode отдаёт атрибуты плоским списком «имя, значение».
+      const node = { localName: el.localName, attributes: Array.from(el.attributes).flatMap((attr) => [attr.name, attr.value]) };
+      expect(nodeMatches(node, selectorTail(selectorOf(el))), selectorOf(el)).toBe(true);
+    }
   });
 
   it('текст: узлы через пробел, пробелы схлопнуты, script и style не читаются; не больше 80 узлов и LIMITS.text', () => {
