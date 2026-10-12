@@ -53,6 +53,13 @@ describe('redactUrl', () => {
     expect(redactUrl('http://localhost:5173/')).toBe('http://localhost:5173/');
     expect(redactUrl('not a url?password=1')).toBe(`not a url?password=${REDACTED}`);
   });
+
+  it('пароль с «@» в адресе: убрано всё до последней «@» входа, хвост пароля не остаётся; «@» после пути не трогается', () => {
+    // Браузер делит адрес входа по последней «@», поэтому в `user:p@ss@host` пароль — `p@ss`.
+    expect(redactUrl('https://user:p@ss@host.example/path?x=1')).toBe('https://host.example/path?x=1');
+    expect(redactUrl('https://user:pa%40ss@host.example/path')).toBe('https://host.example/path');
+    expect(redactUrl('https://host.example/mail/a@b.c')).toBe('https://host.example/mail/a@b.c');
+  });
 });
 
 describe('redactBody', () => {
@@ -79,6 +86,15 @@ describe('redactBody', () => {
     expect(unmaskableJson('{"a":1}', 'application/json')).toBe(false);
     expect(unmaskableJson('plain text', 'text/plain')).toBe(false);
     expect(unmaskableJson('', 'application/json')).toBe(false);
+  });
+
+  it('разобранный JSON, на который маска не легла (вложенность глубже стека), не отдаётся как есть — тело целиком <redacted>', () => {
+    // JSON.parse такую глубину разбирает, а обход маски и JSON.stringify падают с RangeError. Молча вернуть тело значило бы
+    // отдать секрет, а unmaskableJson его не отсеет — тело разбирается.
+    const depth = 20000;
+    const body = `${'['.repeat(depth)}{"password":"hunter2"}${']'.repeat(depth)}`;
+    // Булево сравнение: при провале vitest не печатает в сообщение тело на 40 КБ.
+    expect(redactBody(body, 'application/json') === REDACTED).toBe(true);
   });
 
   it('форма: секретные параметры — <redacted>', () => {

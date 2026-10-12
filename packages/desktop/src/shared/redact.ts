@@ -54,14 +54,15 @@ function redactParams(params: string): string {
 /**
  * URL с маской: `user:pass@` убран, значения секретных параметров query и фрагмента (`#access_token=…` неявного
  * OAuth) — `<redacted>`. Адрес разбирается как текст, а не `new URL`: остальные символы не перекодируются, а битый
- * адрес тоже маскируется.
+ * адрес тоже маскируется. Вход убирается по последнюю `@` до пути — так делит адрес браузер, и пароль с `@`
+ * (`user:p@ss@host`) не оставляет хвоста.
  */
 export function redactUrl(url: string): string {
   const hashAt = url.indexOf('#');
   const beforeHash = hashAt === -1 ? url : url.slice(0, hashAt);
   const hash = hashAt === -1 ? null : url.slice(hashAt + 1);
   const queryAt = beforeHash.indexOf('?');
-  const base = (queryAt === -1 ? beforeHash : beforeHash.slice(0, queryAt)).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#@]*@/i, '$1');
+  const base = (queryAt === -1 ? beforeHash : beforeHash.slice(0, queryAt)).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#]*@/i, '$1');
   const query = queryAt === -1 ? null : beforeHash.slice(queryAt + 1);
   const maskedHash = hash === null ? '' : `#${hash.includes('=') ? redactParams(hash) : hash}`;
   return `${base}${query === null ? '' : `?${redactParams(query)}`}${maskedHash}`;
@@ -106,18 +107,27 @@ function cut(text: string, limit: number): string {
 
 /**
  * Тело запроса или ответа с маской: JSON — ключи на любой глубине, форма — параметры, прочее — как есть. Битый JSON
- * возвращается без изменений — его отсеивает вызывающий (`unmaskableJson`). `limit` — в кодовых точках, с пометкой
- * обрезки; режется уже замаскированное.
+ * возвращается без изменений — его отсеивает вызывающий (`unmaskableJson`). Разобранный JSON, на который маска не
+ * легла, — `<redacted>` целиком. `limit` — в кодовых точках, с пометкой обрезки; режется уже замаскированное.
  */
 export function redactBody(text: string, mimeType: string | null, limit: number = Number.POSITIVE_INFINITY): string {
   let masked = text;
   if (mimeType !== null && /^application\/x-www-form-urlencoded/i.test(mimeType)) {
     masked = redactParams(text);
   } else if (isJson(text, mimeType)) {
+    let parsed: unknown;
     try {
-      masked = JSON.stringify(maskJson(JSON.parse(text)), null, 2);
+      parsed = JSON.parse(text);
     } catch {
       // Битый или обрезанный JSON маской не закрыть: он остаётся как есть, его отсеивает вызывающий (`unmaskableJson`).
+      return cut(text, limit);
+    }
+    try {
+      masked = JSON.stringify(maskJson(parsed), null, 2);
+    } catch {
+      // Разобрался, но маска не легла (вложенность глубже стека, RangeError): unmaskableJson такое тело не отсеет, поэтому
+      // как есть его не отдаём — целиком <redacted>.
+      masked = REDACTED;
     }
   }
   return cut(masked, limit);
