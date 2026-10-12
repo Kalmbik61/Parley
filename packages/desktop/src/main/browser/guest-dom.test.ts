@@ -93,6 +93,25 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
     expect(textOf(long)).toBe('y'.repeat(LIMITS.text));
   });
 
+  it('текст: тело textarea не читается — значение секретного поля, которое htmlOf прячет, не уходит через text', () => {
+    // Серверная разметка кладёт значение поля в текст узла textarea, а не в атрибут: htmlOf у секретных полей (как в
+    // тесте HTML ниже) его очищает, и textOf не вправе его отдать. Прежний text шёл через innerText, а у него тела
+    // textarea нет; тело обычного textarea остаётся в HTML.
+    document.body.innerHTML = `
+      <form id="f">
+        <label>Code</label>
+        <textarea autocomplete="one-time-code">123456</textarea>
+        <textarea autocomplete="cc-number">4111</textarea>
+        <textarea autocomplete="section-a new-password">pw2</textarea>
+        <textarea name="note">draft</textarea>
+        <span>after</span>
+      </form>`;
+    const { textOf } = dom();
+    expect(textOf($('#f'))).toBe('Code after');
+    // Выбран сам textarea: его тело тоже не читается.
+    expect(textOf($('textarea'))).toBe('');
+  });
+
   it('HTML: без script, style, on* и srcdoc; секретные поля пусты; у href, src и action нет query и hash, чужая схема — пусто', () => {
     document.body.innerHTML = `
       <form id="f" action="/login?next=/admin#x" onsubmit="steal()">

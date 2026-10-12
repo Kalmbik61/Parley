@@ -14,7 +14,8 @@
 //   звеньев в проверке уникальности исправлен (у Orca с третьего звена проверялась строка в другом порядке). Проверки
 //   `containsSecret` нет: маска у Parley одна — `shared/redact.ts`. Пределы — `PICK_LIMITS`, а не `GRAB_BUDGET`;
 // - textOf — `getBoundedText`: обход не больше 80 текстовых узлов без регулярок по всему тексту; текст `script`,
-//   `style`, `noscript` и `template` не читается. Пометки « (truncated)» нет: её ставит main;
+//   `style`, `noscript`, `template` и `textarea` не читается (тело секретного textarea htmlOf очищает, и через text оно
+//   не уйдёт; прежний text шёл через innerText без тела textarea). Пометки « (truncated)» нет: её ставит main;
 // - htmlOf — прежняя `cleanHtml` Parley (без `script`, `style`, `on*`, `srcdoc` и значений секретных полей) плюс мысль
 //   `getSafeAttributes` и `sanitizeUrl` Orca: у `href`, `src` и `action` снимаются query и hash, чужая схема
 //   (`javascript:`, `data:`) — пустая строка;
@@ -29,7 +30,8 @@
   const TEXT_NODES = 80;
   const CLASSES_PER_LINK = 2;
   const CLASS_LENGTH = 60;
-  const SKIP_TEXT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  // Текст этих элементов textOf не читает; в textarea это значение поля (у секретных htmlOf его очищает).
+  const SKIP_TEXT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA']);
   const URL_ATTRIBUTES = new Set(['href', 'src', 'action']);
   const SAFE_SCHEMES = new Set(['http', 'https', 'file']);
   // Поля, чьё value уходить агенту не должно: пароли, CSRF-токены, карты, одноразовые коды.
