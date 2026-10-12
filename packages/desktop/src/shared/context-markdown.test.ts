@@ -40,6 +40,16 @@ describe('contextLabel', () => {
     expect(contextLabel('x'.repeat(100))).toHaveLength(CONTEXT_LIMITS.label);
     expect(contextLabel('')).toBe('page');
   });
+
+  it('длинная серия «.» или «.-» внутри строки (путь страницы задаёт сама страница) не вешает окно: перебор не квадратичный', () => {
+    // Порог по времени, а не таймаут теста: цикл синхронный, и таймер vitest не обязан сработать раньше его конца.
+    // Квадратичная версия (`[-.]+$` без lookbehind) на 200 000 знаков — десятки секунд, линейная — около миллисекунды.
+    for (const unit of ['.', '.-']) {
+      const started = performance.now();
+      expect(contextLabel(`s/${unit.repeat(200_000 / unit.length)}/x`), unit).toBe('s');
+      expect(performance.now() - started, unit).toBeLessThan(500);
+    }
+  });
 });
 
 describe('headerUrl', () => {

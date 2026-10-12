@@ -40,11 +40,13 @@ export function fence(text: string, info = 'text'): string {
 
 /** Метка имени файла: `[a-z0-9._-]`, прочее — дефисом, не длиннее 40; пусто — `page`. */
 export function contextLabel(raw: string): string {
+  // Хвост срезается от начала серии (`(?<![-.])`), а не с каждой её точки: иначе длинная серия «.» или «.-» внутри
+  // строки даёт квадратичный перебор, а путь страницы, из которого строят метку, задаёт сама страница.
   const slug = raw
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/-{2,}/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '');
+    .replace(/^[-.]+|(?<![-.])[-.]+$/g, '');
   const cut = slug.slice(0, CONTEXT_LIMITS.label).replace(/[-.]+$/, '');
   return cut === '' ? 'page' : cut;
 }
