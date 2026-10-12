@@ -112,10 +112,11 @@ Claude Code и GLM (GLM — тот же `claude` с базой Z.ai):
 | `sign-in` | то же с `error` `authentication_failed`, `oauth_org_not_allowed` (`auth`); `account_on_hold`, `billing_error` (`account`) | текст ошибки |
 | `startup` | процесс запущен хостом, а за 20 с не пришло ни одного хука (сейчас так ловится только `trust-wait` у сессий в worktree, `host/activity/activity-service.ts#maybeTrustWait`) | — |
 
-Запасной путь через журнал нужен сессиям, запущенным до этой версии: их `--settings` ещё без
-`StopFailure`. Финальная ошибка API заканчивает ход: свёртка (`activityOf`) считает ход оконченным
-на такой записи, а не через 30 с тишины. Ретраи (`system/api_error` с `retryInMs`) ход не кончают и
-`need` не дают.
+Запасной путь через журнал нужен сессиям, у которых `StopFailure` не доходит до журнала событий:
+запущенным до этой версии (их `--settings` ещё без хука) и тем, чей `claude` работает без хуков ленты —
+ниже `FEED_MIN_VERSION` или у хоста без приёмника хуков (4.1). Финальная ошибка API заканчивает ход:
+свёртка (`activityOf`) считает ход оконченным на такой записи, а не через 30 с тишины. Ретраи
+(`system/api_error` с `retryInMs`) ход не кончают и `need` не дают.
 
 Codex:
 
@@ -188,16 +189,22 @@ Codex:
 
 ### 4.1 Журнал событий
 
-- `HOOK_EVENTS` (`core/work/settings-file.ts`) получает `StopFailure`. Действует для новых запусков
-  и подъёмов: `--settings` собирается при каждом запуске.
-- `EventRecord` (`core/work/events.ts`) берёт из stdin хука `error`, `error_details`,
-  `last_assistant_message`, `message`, `tool_name` и короткую выжимку `tool_input` (команда или путь
-  файла, до 200 знаков).
+- `StopFailure` пишется в журнал событий (`cat >>`, `core/work/settings-file.ts`) только вместе с HTTP-хуками
+  ленты: когда задан `hookUrl` и `StopFailure` есть в `hookEvents` — тем же признаком хост уже счёл `claude`
+  достаточно новым (`FEED_MIN_VERSION`). В `HOOK_EVENTS` его нет (отдельный список `GATED_JOURNAL_EVENTS`):
+  без `hookUrl` файл настроек побайтно прежний, и старый Claude Code не получает незнакомого события, которое
+  мог бы отвергнуть. Таким CLI и сессиям, запущенным до этой версии, ошибку находит запасной путь по журналу
+  сессии (3.2, 4.2). Действует для новых запусков и подъёмов: `--settings` собирается при каждом запуске.
+- `EventRecord` (`core/work/events.ts`) берёт из stdin хука `error`, `message`, `tool_name` и короткую
+  выжимку `tool_input` (команда `Bash` или путь файла правки, до 200 знаков). `error_details` и
+  `last_assistant_message` читаются только у `StopFailure`: у `Stop` и `SubagentStop` во втором лежит весь
+  последний ответ, а события хранятся в памяти хоста всю сессию.
 
 ### 4.2 Индексы журналов
 
-- `core/session-index.ts` (Claude): `lastApiError: { at, error, status, text } | null` — самая
-  свежая запись ассистента с `isApiErrorMessage: true`, если она новее последней записи человека.
+- `core/session-index.ts` (Claude): `lastApiError: { at, error, text } | null` — самая поздняя запись
+  ассистента с `isApiErrorMessage: true`: `error` — поле записи, `text` — текст её блоков. Новее ли она
+  последней записи человека и событий журнала, индекс не решает — времена сравнивает свёртка.
 - `core/codex/index-session.ts`: у `task_complete` — `error: { info, message } | null`.
 
 ### 4.3 `activity-service`

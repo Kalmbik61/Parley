@@ -3,6 +3,7 @@ import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
+import { blocksText } from './feed/reduce.js';
 import { isPointerText } from './work/delivery.js';
 import { isRecord, textOf } from './work/events.js';
 import { createUsageLedger, type UsageCounters, type UsageSummary } from './work/usage-ledger.js';
@@ -163,20 +164,6 @@ function claudeCounters({ input, output, cacheRead, cacheWrite }: NonNullable<Se
   };
 }
 
-/** Текст ответа: `content` строкой или блоки `text` через перевод строки; текста нет — `''`. */
-function contentText(message: unknown): string {
-  const content = isRecord(message) ? message['content'] : undefined;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  const texts: string[] = [];
-  for (const block of content) {
-    if (isRecord(block) && block['type'] === 'text' && typeof block['text'] === 'string') {
-      texts.push(block['text']);
-    }
-  }
-  return texts.join('\n');
-}
-
 /**
  * Индексирует ОДИН файл сессии: мета, заголовок, длительность, счётчики моделей,
  * инструментов, ролей и типов записей. Подсессии добавляются отдельно — они лежат
@@ -293,7 +280,13 @@ export async function indexSessionFile(
         raw['isApiErrorMessage'] === true &&
         (lastApiError === undefined || at >= lastApiError.at)
       ) {
-        lastApiError = { at, error: textOf(raw['error']), text: contentText(raw['message']) };
+        const message = raw['message'];
+        lastApiError = {
+          at,
+          error: textOf(raw['error']),
+          // Текст блоков ответа, как у карточки ошибки ленты (`feedFromTranscript`); текста нет — `''`.
+          text: blocksText(isRecord(message) ? message['content'] : null) ?? '',
+        };
       }
     }
   };

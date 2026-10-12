@@ -148,7 +148,10 @@ export interface WorkSettingsOptions {
    * хуки и строка статуса, побайтно как до ленты.
    */
   hookUrl?: string;
-  /** Какие события слать HTTP; по умолчанию — `FEED_HOOK_EVENTS`. */
+  /**
+   * Какие события слать HTTP; по умолчанию — `FEED_HOOK_EVENTS`. От списка зависит и журнальный `cat >>` для
+   * `StopFailure` (`GATED_JOURNAL_EVENTS`): он ставится, только если событие есть здесь и задан `hookUrl`.
+   */
   hookEvents?: readonly string[];
   /** Точные id плагинов, которые выключаются только в этой сессии; пусто или нет — поля в файле нет. */
   disablePlugins?: readonly string[];
