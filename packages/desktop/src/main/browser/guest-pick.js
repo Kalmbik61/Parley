@@ -3,17 +3,15 @@
 // страница — его переменных, так что подделать выбор или позвать отмену она не может. DOM общий:
 // всё, что скрипт отсюда отдаёт, — данные страницы, и main их заново проверяет (validatePick).
 //
-// Файл — одно выражение: его значение — промис, который Electron дождётся и отдаст main. По клику
+// Main ставит перед ним `guest-dom.js` в ту же строку (помощники DOM `globalThis.__parleyDom`, этап B браузера):
+// значение строки — значение этого файла, промис, который Electron дождётся и отдаст main. По клику
 // человека — данные элемента, по Esc или отмене — null.
 (() => {
   // Новый выбор того же гостя снимает прежний: два оверлея и два набора перехватчиков не нужны.
   if (typeof globalThis.__parleyPickCancel === 'function') globalThis.__parleyPickCancel();
 
-  // Пределы — те же, что проверяет main (PICK_LIMITS); лишнее отсюда просто не везём. html — на символ
-  // больше: так main видит, что обрезано, и ставит свою пометку.
-  const MAX_LINKS = 12;
-  const MAX_TEXT = 500;
-  const MAX_HTML = 4096;
+  // Помощники DOM — guest-dom.js в той же строке перед этим файлом (этап B браузера, задача 2).
+  const dom = globalThis.__parleyDom;
   const STYLE_KEYS = [
     'display',
     'position',
@@ -41,8 +39,6 @@
   ];
   // Клик не должен сработать на странице: usePress React Aria и похожие ловят pointerup и mouseup.
   const BLOCKED = ['click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'auxclick', 'contextmenu'];
-  // Поля, чьё value уходить агенту не должно: пароли, CSRF-токены, карты, одноразовые коды.
-  const SECRET_AUTOCOMPLETE = /^(cc-.*|one-time-code|.*-password)$/i;
 
   const overlay = document.createElement('div');
   overlay.style.cssText =
@@ -70,67 +66,14 @@
     label.textContent = `${shortName(el)} · ${Math.round(rect.width)}×${Math.round(rect.height)}`;
   }
 
-  function selectorOf(el) {
-    const links = [];
-    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-      const tag = node.tagName.toLowerCase();
-      if (tag === 'body' || tag === 'html') {
-        links.unshift('body');
-        break;
-      }
-      let link = tag;
-      if (node.id) {
-        link += `#${CSS.escape(node.id)}`;
-      } else {
-        const classes = typeof node.className === 'string' ? node.className.trim().split(/\s+/).filter(Boolean) : [];
-        link += classes.map((name) => `.${CSS.escape(name)}`).join('');
-        const parent = node.parentElement;
-        if (parent) {
-          const same = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
-          if (same.length > 1) link += `:nth-of-type(${same.indexOf(node) + 1})`;
-        }
-      }
-      links.unshift(link);
-    }
-    return links.slice(-MAX_LINKS).join(' > ');
-  }
-
-  function isSecretField(el) {
-    const tag = el.tagName.toLowerCase();
-    if (tag !== 'input' && tag !== 'textarea') return false;
-    const type = (el.getAttribute('type') || '').toLowerCase();
-    if (tag === 'input' && (type === 'password' || type === 'hidden')) return true;
-    const tokens = (el.getAttribute('autocomplete') || '').split(/\s+/);
-    return tokens.some((token) => SECRET_AUTOCOMPLETE.test(token));
-  }
-
-  function cleanHtml(el) {
-    const clone = el.cloneNode(true);
-    for (const node of clone.querySelectorAll('script, style')) node.remove();
-    for (const node of [clone, ...clone.querySelectorAll('*')]) {
-      for (const attr of Array.from(node.attributes)) {
-        const name = attr.name.toLowerCase();
-        if (name.startsWith('on') || name === 'srcdoc') node.removeAttribute(attr.name);
-      }
-      if (isSecretField(node)) {
-        node.removeAttribute('value');
-        if (node.tagName.toLowerCase() === 'textarea') node.textContent = '';
-      }
-    }
-    return clone.outerHTML.slice(0, MAX_HTML + 1);
-  }
-
   function dataOf(el) {
-    const computed = getComputedStyle(el);
-    const styles = {};
-    for (const key of STYLE_KEYS) styles[key] = computed.getPropertyValue(key);
     const rect = el.getBoundingClientRect();
-    const text = typeof el.innerText === 'string' ? el.innerText : el.textContent || '';
     return {
-      selector: selectorOf(el),
-      text: text.replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT),
-      html: cleanHtml(el),
-      styles,
+      selector: dom.selectorOf(el),
+      text: dom.textOf(el),
+      // html — на символ больше предела: так main видит, что обрезано, и ставит свою пометку.
+      html: dom.htmlOf(el, dom.LIMITS.html),
+      styles: dom.stylesOf(el, STYLE_KEYS),
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       viewport: { width: window.innerWidth, height: window.innerHeight },
       devicePixelRatio: window.devicePixelRatio,

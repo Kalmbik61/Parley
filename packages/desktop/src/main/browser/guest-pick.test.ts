@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Путь, а не URL: в jsdom глобальный URL — его, и readFileSync такой не примет.
-const guestScript = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'guest-pick.js'), 'utf8');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const guestScript = readFileSync(path.join(here, 'guest-pick.js'), 'utf8');
+const domScript = readFileSync(path.join(here, 'guest-dom.js'), 'utf8');
 
 /**
  * isTrusted у jsdom — неподделываемое свойство (как в браузере), а dispatchEvent сбрасывает его в
@@ -29,9 +31,9 @@ function mouse(type: string, init: MouseEventInit = {}): MouseEvent {
   return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 30, clientY: 30, ...init });
 }
 
-/** Скрипт как в госте: выражение, значение которого — промис выбора. */
+/** Скрипт как в госте: помощники DOM и скрипт выбора одной строкой, её значение — промис выбора. */
 function runScript(): Promise<unknown> {
-  return (0, eval)(guestScript) as Promise<unknown>;
+  return (0, eval)(`${domScript}\n${guestScript}`) as Promise<unknown>;
 }
 
 describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
@@ -104,7 +106,8 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     for (const secret of ['secret', 'tok', '4111', 'pw2']) expect(html).not.toContain(secret);
     expect(html).not.toMatch(/onclick|onmouseover|srcdoc|<script|<style/i);
 
-    expect(result.selector).toBe('body > main.page > form#f');
+    // Кратчайший уникальный селектор (guest-dom.js, по Orca): у формы есть id.
+    expect(result.selector).toBe('form#f');
     expect(result.text).toMatch(/frame Save$/);
     expect(result.rect).toEqual({ x: 10, y: 20, width: 300, height: 120 });
     expect(result.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight });

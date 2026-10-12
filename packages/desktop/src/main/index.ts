@@ -24,6 +24,7 @@ import { S } from '../shared/strings.js';
 import { createDesignMode } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
+import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
@@ -309,7 +310,8 @@ if (!gotLock) {
     const designMode = createDesignMode({
       fromId: (id) => webContents.fromId(id) ?? null,
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
-      guestScript: guestPickScript,
+      // Помощники DOM (guest-dom.js, по Orca) — в той же строке перед скриптом выбора: значение строки — промис выбора.
+      guestScript: `${guestDomScript}\n${guestPickScript}`,
     });
     // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
     // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя.

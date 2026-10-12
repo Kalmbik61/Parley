@@ -41,11 +41,11 @@ export default tseslint.config(
     files: ['packages/desktop/src/renderer/**', 'packages/desktop/src/preload/**'],
     languageOptions: { globals: browserGlobals },
   },
-  // Скрипт выбора Design Mode (кусок 9.3a) лежит в src/main, но исполняется в странице гостя.
+  // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
-    files: ['packages/desktop/src/main/browser/guest-pick.js'],
+    files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js'],
     languageOptions: {
-      globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly' },
+      globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly', NodeFilter: 'readonly' },
     },
   },
 );
