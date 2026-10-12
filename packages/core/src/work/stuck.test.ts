@@ -550,6 +550,8 @@ describe('pickResetsAt', () => {
   const STALE = '2026-09-20T09:59:00.000Z'; // старше SINCE
 
   const TEXT: ResetGuess = { resetsAt: '2026-09-20T11:50:00.000Z', window: null };
+  /** В тексте ошибки времени сброса не было. */
+  const NO_TEXT: ResetGuess = { resetsAt: null, window: null };
   const used = (usedPercent: number, resetsAt: string | null): LimitWindow => ({
     usedPercent,
     resetsAt,
@@ -560,103 +562,146 @@ describe('pickResetsAt', () => {
     at = FRESH,
   ): ProviderLimits => ({ fiveHour, week, at });
 
-  it('окно провайдера в будущем бьёт текст', () => {
-    expect(pickResetsAt(TEXT, limits(used(100, SOON), null), SINCE, NOW)).toEqual({
-      resetsAt: SOON,
-      window: 'session',
+  describe('исчерпанное окно (100 %) со сбросом в будущем', () => {
+    it('бьёт время из текста', () => {
+      expect(pickResetsAt(TEXT, limits(used(100, SOON), null), SINCE, NOW)).toEqual({
+        resetsAt: SOON,
+        window: 'session',
+      });
+      expect(pickResetsAt(TEXT, limits(null, used(100, LATER)), SINCE, NOW)).toEqual({
+        resetsAt: LATER,
+        window: 'week',
+      });
     });
-    expect(pickResetsAt(TEXT, limits(null, used(100, LATER)), SINCE, NOW)).toEqual({
-      resetsAt: LATER,
-      window: 'week',
+
+    it('названное окно — тоже, даже когда время в тексте есть', () => {
+      expect(
+        pickResetsAt({ ...TEXT, window: 'session' }, limits(used(100, SOON), null), SINCE, NOW),
+      ).toEqual({ resetsAt: SOON, window: 'session' });
+      expect(
+        pickResetsAt({ ...TEXT, window: 'week' }, limits(null, used(100, LATER)), SINCE, NOW),
+      ).toEqual({ resetsAt: LATER, window: 'week' });
     });
-  });
 
-  it('окно в прошлом — текст', () => {
-    expect(pickResetsAt(TEXT, limits(used(100, PAST), null), SINCE, NOW)).toEqual(TEXT);
-  });
-
-  it('window «week» берёт week, «session» — fiveHour', () => {
-    const both = limits(used(100, SOON), used(40, LATER));
-    expect(pickResetsAt({ ...TEXT, window: 'week' }, both, SINCE, NOW)).toEqual({
-      resetsAt: LATER,
-      window: 'week',
+    it('названное окно берётся именно оно, даже если у другого сброс позже', () => {
+      expect(
+        pickResetsAt(
+          { ...TEXT, window: 'week' },
+          limits(used(100, LATER), used(100, SOON)),
+          SINCE,
+          NOW,
+        ),
+      ).toEqual({ resetsAt: SOON, window: 'week' });
+      expect(
+        pickResetsAt(
+          { ...TEXT, window: 'session' },
+          limits(used(100, SOON), used(100, LATER)),
+          SINCE,
+          NOW,
+        ),
+      ).toEqual({ resetsAt: SOON, window: 'session' });
     });
-    expect(
-      pickResetsAt(
-        { ...TEXT, window: 'session' },
-        limits(used(60, SOON), used(100, LATER)),
-        SINCE,
-        NOW,
-      ),
-    ).toEqual({ resetsAt: SOON, window: 'session' });
-  });
 
-  it('названное окно берётся и ниже 100 %: сброс окна от расхода не зависит', () => {
-    expect(
-      pickResetsAt({ ...TEXT, window: 'session' }, limits(used(40, SOON), null, STALE), SINCE, NOW),
-    ).toEqual({ resetsAt: SOON, window: 'session' });
-  });
-
-  it('без названия оба окна по 100 % — берётся позднее', () => {
-    expect(pickResetsAt(TEXT, limits(used(100, SOON), used(100, LATER)), SINCE, NOW)).toEqual({
-      resetsAt: LATER,
-      window: 'week',
+    it('без названия оба окна по 100 % — берётся позднее', () => {
+      expect(pickResetsAt(TEXT, limits(used(100, SOON), used(100, LATER)), SINCE, NOW)).toEqual({
+        resetsAt: LATER,
+        window: 'week',
+      });
+      expect(pickResetsAt(TEXT, limits(used(100, LATER), used(100, SOON)), SINCE, NOW)).toEqual({
+        resetsAt: LATER,
+        window: 'session',
+      });
     });
-    expect(pickResetsAt(TEXT, limits(used(100, LATER), used(100, SOON)), SINCE, NOW)).toEqual({
-      resetsAt: LATER,
-      window: 'session',
+
+    it('без названия берётся только исчерпанное окно, даже если у другого сброс позже', () => {
+      expect(pickResetsAt(TEXT, limits(used(100, SOON), used(60, LATER)), SINCE, NOW)).toEqual({
+        resetsAt: SOON,
+        window: 'session',
+      });
     });
-  });
 
-  it('без названия берётся только исчерпанное окно, даже если у другого сброс позже', () => {
-    expect(pickResetsAt(TEXT, limits(used(100, SOON), used(60, LATER)), SINCE, NOW)).toEqual({
-      resetsAt: SOON,
-      window: 'session',
+    it('сброс в прошлом или ровно сейчас — не берётся: остаётся время из текста', () => {
+      expect(pickResetsAt(TEXT, limits(used(100, PAST), null), SINCE, NOW)).toEqual(TEXT);
+      expect(pickResetsAt(TEXT, limits(used(100, iso(NOW)), null), SINCE, NOW)).toEqual(TEXT);
     });
-  });
 
-  it('данные новее since и все окна ниже 100 % → лимит уже сброшен: resetsAt = now', () => {
-    expect(pickResetsAt(TEXT, limits(used(30, SOON), used(10, LATER)), SINCE, NOW)).toEqual({
-      resetsAt: iso(NOW),
-      window: null,
-    });
-  });
-
-  it('«уже сброшен» сохраняет окно из текста', () => {
-    expect(
-      pickResetsAt(
-        { ...TEXT, window: 'session' },
-        limits(used(30, PAST), used(10, LATER)),
-        SINCE,
-        NOW,
-      ),
-    ).toEqual({ resetsAt: iso(NOW), window: 'session' });
-  });
-
-  it('данные старше since и все окна ниже 100 % ничего не доказывают → текст', () => {
-    expect(pickResetsAt(TEXT, limits(used(30, SOON), used(10, LATER), STALE), SINCE, NOW)).toEqual(
-      TEXT,
-    );
-  });
-
-  it('limits null → текст', () => {
-    expect(pickResetsAt(TEXT, null, SINCE, NOW)).toEqual(TEXT);
-    expect(pickResetsAt({ resetsAt: null, window: 'week' }, null, SINCE, NOW)).toEqual({
-      resetsAt: null,
-      window: 'week',
+    it('без времени сброса взять нечем: остаётся время из текста, а без него — null', () => {
+      expect(pickResetsAt(TEXT, limits(used(100, null), null), SINCE, NOW)).toEqual(TEXT);
+      expect(pickResetsAt(NO_TEXT, limits(used(100, null), null), SINCE, NOW)).toEqual(NO_TEXT);
     });
   });
 
-  it('данные без единого окна не значат «сброшен» → текст', () => {
-    expect(pickResetsAt(TEXT, limits(null, null), SINCE, NOW)).toEqual(TEXT);
+  describe('окно ниже 100 %: при свежих данных это уже новое окно после сброса', () => {
+    it('названное окно со сбросом в будущем не берётся — время из текста, не окна и не now', () => {
+      const guess: ResetGuess = { ...TEXT, window: 'session' };
+      expect(pickResetsAt(guess, limits(used(5, SOON), null), SINCE, NOW)).toEqual(guess);
+    });
+
+    it('исчерпанное, но не названное окно тоже не берётся', () => {
+      const guess: ResetGuess = { ...TEXT, window: 'week' };
+      expect(pickResetsAt(guess, limits(used(100, SOON), used(40, LATER)), SINCE, NOW)).toEqual(
+        guess,
+      );
+    });
+
+    it('все окна ниже 100 % и свежие данные, но в тексте время есть → время из текста, не now', () => {
+      expect(pickResetsAt(TEXT, limits(used(30, SOON), used(10, LATER)), SINCE, NOW)).toEqual(TEXT);
+    });
   });
 
-  it('названного окна в данных нет → текст, названное окно сохраняется', () => {
-    const guess: ResetGuess = { ...TEXT, window: 'session' };
-    expect(pickResetsAt(guess, limits(null, used(100, LATER)), SINCE, NOW)).toEqual(guess);
+  describe('«уже сброшен»: только когда в тексте времени нет', () => {
+    it('данные новее since и все окна ниже 100 % → resetsAt = now', () => {
+      expect(pickResetsAt(NO_TEXT, limits(used(30, SOON), used(10, LATER)), SINCE, NOW)).toEqual({
+        resetsAt: iso(NOW),
+        window: null,
+      });
+    });
+
+    it('окно из текста сохраняется, и у названного окна сброс может быть как в будущем, так и в прошлом', () => {
+      const guess: ResetGuess = { resetsAt: null, window: 'session' };
+      expect(pickResetsAt(guess, limits(used(5, SOON), null), SINCE, NOW)).toEqual({
+        resetsAt: iso(NOW),
+        window: 'session',
+      });
+      expect(pickResetsAt(guess, limits(used(30, PAST), used(10, LATER)), SINCE, NOW)).toEqual({
+        resetsAt: iso(NOW),
+        window: 'session',
+      });
+    });
   });
 
-  it('окно на 100 % без времени сброса взять нечем → текст', () => {
-    expect(pickResetsAt(TEXT, limits(used(100, null), null), SINCE, NOW)).toEqual(TEXT);
+  describe('нечем ответить → resetsAt остаётся null', () => {
+    it('данные старше since или ровно since и все окна ниже 100 % ничего не доказывают', () => {
+      expect(
+        pickResetsAt(NO_TEXT, limits(used(30, SOON), used(10, LATER), STALE), SINCE, NOW),
+      ).toEqual(NO_TEXT);
+      expect(
+        pickResetsAt(NO_TEXT, limits(used(30, SOON), used(10, LATER), SINCE), SINCE, NOW),
+      ).toEqual(NO_TEXT);
+      // со временем в тексте оно и остаётся
+      expect(
+        pickResetsAt(TEXT, limits(used(30, SOON), used(10, LATER), STALE), SINCE, NOW),
+      ).toEqual(TEXT);
+    });
+
+    it('данные без единого окна не значат «сброшен»', () => {
+      expect(pickResetsAt(NO_TEXT, limits(null, null), SINCE, NOW)).toEqual(NO_TEXT);
+      expect(pickResetsAt(TEXT, limits(null, null), SINCE, NOW)).toEqual(TEXT);
+    });
+
+    it('названного окна в данных нет → как есть, название сохраняется', () => {
+      const guess: ResetGuess = { ...TEXT, window: 'session' };
+      expect(pickResetsAt(guess, limits(null, used(100, LATER)), SINCE, NOW)).toEqual(guess);
+      const bare: ResetGuess = { resetsAt: null, window: 'session' };
+      expect(pickResetsAt(bare, limits(null, used(100, LATER)), SINCE, NOW)).toEqual(bare);
+    });
+
+    it('limits null → как есть', () => {
+      expect(pickResetsAt(TEXT, null, SINCE, NOW)).toEqual(TEXT);
+      expect(pickResetsAt({ resetsAt: null, window: 'week' }, null, SINCE, NOW)).toEqual({
+        resetsAt: null,
+        window: 'week',
+      });
+    });
   });
 });

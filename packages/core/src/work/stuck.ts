@@ -309,11 +309,15 @@ export function parseResetText(
 }
 
 /**
- * Окончательное время сброса (спека 3.4). Берётся окно провайдера, названное `guess.window`
- * («session» — `fiveHour`, «week» — `week`), а без названия — окно с `usedPercent` ≥ 100 (если таких два —
- * более позднее), но только если его сброс позже `now`; иначе остаётся `guess`. Названное окно берётся и ниже
- * 100 %: сброс окна от расхода не зависит. Если не из чего выбрать, а данные провайдера новее `since` и все
- * окна ниже 100 %, лимит уже сброшен: `resetsAt` — `now`.
+ * Окончательное время сброса (спека 3.4), по порядку:
+ * 1. Исчерпанное окно провайдера (`usedPercent` ≥ 100) со сбросом строго позже `now`: названное
+ *    `guess.window` («session» — `fiveHour`, «week» — `week`), а без названия — любое из двух, из них более
+ *    позднее. Окно ниже 100 % не берётся, даже названное: при свежих данных это уже новое окно после сброса,
+ *    его `resetsAt` — конец нового окна, а не этого лимита, и сессию по нему припарковали бы зря.
+ * 2. Иначе время из текста ошибки: `guess.resetsAt`, если оно есть, — `guess` как есть.
+ * 3. Иначе (в тексте времени нет): данные провайдера новее `since` и все их окна ниже 100 % — лимит уже
+ *    сброшен, `resetsAt` — `now`, окно из `guess`.
+ * 4. Иначе `resetsAt` остаётся `null`.
  */
 export function pickResetsAt(
   guess: ResetGuess,
@@ -326,21 +330,20 @@ export function pickResetsAt(
     ...(limits.fiveHour === null ? [] : [{ window: 'session' as const, ...limits.fiveHour }]),
     ...(limits.week === null ? [] : [{ window: 'week' as const, ...limits.week }]),
   ];
-  const candidates = known.filter((candidate) =>
-    guess.window === null ? candidate.usedPercent >= 100 : candidate.window === guess.window,
-  );
-  const [picked] = candidates
-    .flatMap(({ window, resetsAt }) =>
-      resetsAt !== null && Date.parse(resetsAt) > now
+  const [picked] = known
+    .filter((candidate) => guess.window === null || candidate.window === guess.window)
+    .flatMap(({ window, usedPercent, resetsAt }) =>
+      usedPercent >= 100 && resetsAt !== null && Date.parse(resetsAt) > now
         ? [{ window, resetsAt, ms: Date.parse(resetsAt) }]
         : [],
     )
     .sort((a, b) => b.ms - a.ms);
   if (picked !== undefined) return { resetsAt: picked.resetsAt, window: picked.window };
+  if (guess.resetsAt !== null) return guess;
 
   const fresh = Date.parse(limits.at) > Date.parse(since);
   if (fresh && known.length > 0 && known.every((candidate) => candidate.usedPercent < 100)) {
     return { resetsAt: new Date(now).toISOString(), window: guess.window };
   }
-  return guess;
+  return guess; // времени в тексте нет, и сказать его нечем: resetsAt остаётся null
 }
