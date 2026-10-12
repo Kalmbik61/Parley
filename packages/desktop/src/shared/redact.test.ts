@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSecretName, REDACTED, redactBody, redactHeaders, redactUrl, unmaskableJson } from './redact.js';
+import { isSecretName, REDACTED, redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
 
 describe('isSecretName (спека браузера, раздел 6)', () => {
@@ -81,6 +81,49 @@ describe('redactUrl', () => {
   });
 });
 
+// Точный текст Log.entryAdded из Electron 44.4.5: fetch на другой origin без заголовков CORS. Chromium цитирует адрес запроса целиком.
+const CORS_MESSAGE =
+  "Access to fetch at 'http://127.0.0.1:62482/api/x?token=SECRET-QUERY-123&tab=1' from origin 'http://127.0.0.1:62483' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.";
+
+describe('redactUrlsInText', () => {
+  it('сообщение CORS цитирует адрес запроса с ?token= — адрес идёт через redactUrl, остальной текст цел', () => {
+    expect(redactUrlsInText(CORS_MESSAGE)).toBe(CORS_MESSAGE.replace('SECRET-QUERY-123', REDACTED));
+  });
+
+  it('текст без адресов и адрес без секретов не меняются', () => {
+    for (const text of ['', 'TypeError: x is undefined', 'see http://localhost:5173/settings?tab=1#top for details']) expect(redactUrlsInText(text), text).toBe(text);
+  });
+
+  it('несколько адресов подряд: wss и регистр схемы, user:pass@, фрагмент OAuth; адрес кончается на пробеле, кавычке, обратной кавычке и <>', () => {
+    const text = [
+      'GET HTTPS://u:p@x.y/a?api_key=k1 -> wss://x.y/ws?access_token=t1&id=2',
+      '"http://x.y/cb#access_token=t2&state=s"',
+      '`http://x.y/?password=p3`',
+      '<http://x.y/?session=s4>',
+      'ok',
+    ].join(' ');
+    expect(redactUrlsInText(text)).toBe(
+      [
+        `GET HTTPS://x.y/a?api_key=${REDACTED} -> wss://x.y/ws?access_token=${REDACTED}&id=2`,
+        `"http://x.y/cb#access_token=${REDACTED}&state=s"`,
+        `\`http://x.y/?password=${REDACTED}\``,
+        `<http://x.y/?session=${REDACTED}>`,
+        'ok',
+      ].join(' '),
+    );
+  });
+
+  it('текст задаёт страница: на сериях «h», «a.», «http» и на тысячах параметров перебор линейный, окно не виснет', () => {
+    // Порог по времени, а не таймаут теста: цикл синхронный. Образец любой схемы `[a-z][a-z0-9+.-]*://` на 50 000 знаков «h» (без `\b`)
+    // или «a.» (и с `\b`) занимает секунды и растёт квадратично; якорь `\b(?:https?|wss?)` — доли миллисекунды.
+    for (const text of ['h'.repeat(50_000), 'a.'.repeat(50_000), 'http'.repeat(50_000), 'http:/'.repeat(50_000), `http://x/?${'a=b&'.repeat(50_000)}`]) {
+      const started = performance.now();
+      redactUrlsInText(text);
+      expect(performance.now() - started, text.slice(0, 12)).toBeLessThan(500);
+    }
+  });
+});
+
 describe('redactBody', () => {
   it('вложенный JSON: секретные ключи на любой глубине и в массивах — <redacted>', () => {
     const body = JSON.stringify({ user: { name: 'demo', credentials: { password: 'p1' } }, items: [{ apiKey: 'k1' }, { id: 1 }], session_id: 's1' });
@@ -141,5 +184,132 @@ describe('redactBody', () => {
     expect(redactBody(text, 'text/plain')).toBe(text);
     expect(redactBody('x'.repeat(5000), 'text/plain', 4096)).toBe(`${'x'.repeat(4096)}${S.contextFile.truncated}`);
     expect(redactBody('x'.repeat(4096), 'text/plain', 4096)).toBe('x'.repeat(4096));
+  });
+});
+
+// Тело и Content-Type запроса — как их кладёт Chromium в Electron 44.4.5 (fetch(url, { body: formData }) и form.submit() с enctype
+// multipart/form-data): граница `----WebKitFormBoundary…`, перевод строки CRLF, закрывающий разделитель с «--».
+const BOUNDARY = '----WebKitFormBoundaryHFk0FB154gnvJpA4';
+const MULTIPART = `multipart/form-data; boundary=${BOUNDARY}`;
+const LOGIN_BODY = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="username"\r\n\r\ndemo\r\n--${BOUNDARY}\r\nContent-Disposition: form-data; name="password"\r\n\r\nMULTIPART-SECRET\r\n--${BOUNDARY}--\r\n`;
+
+describe('redactBody: multipart/form-data (FormData, форма с файлом)', () => {
+  it('значение части с секретным именем — <redacted>, прочие части, заголовки и разделители — как были; предел режет уже замаскированное', () => {
+    const masked = LOGIN_BODY.replace('MULTIPART-SECRET', REDACTED);
+    expect(redactBody(LOGIN_BODY, MULTIPART)).toBe(masked);
+    expect(redactBody(LOGIN_BODY, MULTIPART, 150)).toBe(`${masked.slice(0, 150)}${S.contextFile.truncated}`);
+  });
+
+  it('имя без кавычек и с индексами, регистр заголовка и параметра, «name=» и «;» в имени файла, значение в несколько строк; преамбула и эпилог целы', () => {
+    const body = [
+      'This is a preamble that clients ignore.',
+      `--${BOUNDARY}`,
+      'content-disposition: form-data; NAME=user[Password]',
+      '',
+      'p1',
+      `--${BOUNDARY}`,
+      'Content-Disposition: form-data; name="avatar"; filename="my name=token.png"',
+      'Content-Type: image/png',
+      '',
+      'PNG-BYTES',
+      `--${BOUNDARY}`,
+      'Content-Disposition: form-data; filename="my; name=up.bin"; name="api_key"',
+      'Content-Type: application/octet-stream',
+      '',
+      'KEY-BYTES',
+      `--${BOUNDARY}`,
+      'Content-Disposition: form-data; name="client_secret"; filename="s.txt"',
+      'Content-Type: text/plain',
+      '',
+      'secret line one',
+      'secret line two',
+      `--${BOUNDARY}--`,
+      'This is an epilogue that clients ignore.',
+      '',
+    ].join('\r\n');
+    expect(redactBody(body, MULTIPART)).toBe(
+      [
+        'This is a preamble that clients ignore.',
+        `--${BOUNDARY}`,
+        'content-disposition: form-data; NAME=user[Password]',
+        '',
+        REDACTED,
+        `--${BOUNDARY}`,
+        'Content-Disposition: form-data; name="avatar"; filename="my name=token.png"',
+        'Content-Type: image/png',
+        '',
+        'PNG-BYTES',
+        `--${BOUNDARY}`,
+        'Content-Disposition: form-data; filename="my; name=up.bin"; name="api_key"',
+        'Content-Type: application/octet-stream',
+        '',
+        REDACTED,
+        `--${BOUNDARY}`,
+        'Content-Disposition: form-data; name="client_secret"; filename="s.txt"',
+        'Content-Type: text/plain',
+        '',
+        REDACTED,
+        `--${BOUNDARY}--`,
+        'This is an epilogue that clients ignore.',
+        '',
+      ].join('\r\n'),
+    );
+  });
+
+  it('перевод строки только LF — те же части; boundary в кавычках, со знаками, особыми для регулярных выражений, и с параметрами после него', () => {
+    const lf = [`--${BOUNDARY}`, 'Content-Disposition: form-data; name="password"', '', 'LF-SECRET', `--${BOUNDARY}--`, ''].join('\n');
+    expect(redactBody(lf, MULTIPART)).toBe(lf.replace('LF-SECRET', REDACTED));
+    // Знаки из bchars RFC 2046: апостроф, скобки, плюс, запятая, точка, двоеточие, равно, вопрос и пробел внутри.
+    const odd = "a'b(c)+_,-./:=?d e";
+    const body = `--${odd}\r\nContent-Disposition: form-data; name="auth"\r\n\r\nODD-SECRET\r\n--${odd}--\r\n`;
+    expect(redactBody(body, `multipart/form-data; boundary="${odd}"; charset=utf-8`)).toBe(body.replace('ODD-SECRET', REDACTED));
+  });
+
+  it('тело оборвано на пределе postData (64 КБ): значение секретной части без закрывающего разделителя — <redacted>, обрыв в заголовке ничего не открывает', () => {
+    const head = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="password"\r\n\r\n`;
+    expect(redactBody(`${head}CUT-SECR`, MULTIPART)).toBe(`${head}${REDACTED}`);
+    // Обрыв посреди заголовка следующей части: значения в ней ещё нет, строка заголовка остаётся как была.
+    const cutInHeader = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="user"\r\n\r\ndemo\r\n--${BOUNDARY}\r\nContent-Disposition: form-data; name="passw`;
+    expect(redactBody(cutInHeader, MULTIPART)).toBe(cutInHeader);
+  });
+
+  it('нет boundary в типе или его разделителя нет в теле — разобрать тело нечем, оно целиком <redacted>', () => {
+    expect(redactBody(LOGIN_BODY, 'multipart/form-data')).toBe(REDACTED);
+    expect(redactBody(LOGIN_BODY, 'multipart/form-data; boundary=')).toBe(REDACTED);
+    expect(redactBody(LOGIN_BODY, 'multipart/form-data; boundary=OTHER')).toBe(REDACTED);
+    // Тип врёт, тело — JSON: части не найти, и по JSON-ветке оно тоже не пойдёт.
+    expect(redactBody('{"password":"x"}', MULTIPART)).toBe(REDACTED);
+  });
+
+  it('части без имён (multipart/mixed, related) остаются как были: решает имя, как у ключей JSON', () => {
+    const body = `--${BOUNDARY}\r\nContent-Type: text/plain\r\n\r\nplain part\r\n--${BOUNDARY}--\r\n`;
+    expect(redactBody(body, `multipart/mixed; boundary=${BOUNDARY}`)).toBe(body);
+  });
+
+  it('boundary со словом «json» не делает multipart «JSON, который не разбирается»: тело маскируется по частям', () => {
+    // Случайная граница WebKit (16 знаков) содержит «json» примерно раз на семьдесят тысяч запросов.
+    const boundary = '----WebKitFormBoundaryjsonX1y2Z3a4';
+    const body = `--${boundary}\r\nContent-Disposition: form-data; name="token"\r\n\r\nJSON-BOUNDARY-SECRET\r\n--${boundary}--\r\n`;
+    const type = `multipart/form-data; boundary=${boundary}`;
+    expect(unmaskableJson(body, type)).toBe(false);
+    expect(redactBody(body, type)).toBe(body.replace('JSON-BOUNDARY-SECRET', REDACTED));
+  });
+
+  it('тысячи частей, значение в сотни тысяч строк и очень длинная строка заголовка: перебор линейный, стек не переполняется', () => {
+    // Порог по времени, а не таймаут теста: цикл синхронный. `push(...строки)` на сотнях тысяч элементов роняет стек — поэтому цикл.
+    const part = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="f"\r\n\r\nv\r\n`;
+    const manyLines = 'x\r\n'.repeat(300_000);
+    const bodies = [
+      `${part.repeat(20_000)}--${BOUNDARY}--\r\n`,
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="password"\r\n\r\n${manyLines}--${BOUNDARY}--\r\n`,
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="note"\r\n\r\n${manyLines}--${BOUNDARY}--\r\n`,
+      `--${BOUNDARY}\r\nContent-Disposition: form-data${'; name '.repeat(30_000)}\r\n\r\nv\r\n--${BOUNDARY}--\r\n`,
+      `--${BOUNDARY}\r\nContent-Disposition: form-data;${' '.repeat(50_000)}x\r\n\r\nv\r\n--${BOUNDARY}--\r\n`,
+    ];
+    for (const [index, body] of bodies.entries()) {
+      const started = performance.now();
+      redactBody(body, MULTIPART);
+      expect(performance.now() - started, `тело ${index}`).toBeLessThan(500);
+    }
   });
 });

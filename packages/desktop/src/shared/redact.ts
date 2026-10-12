@@ -8,7 +8,11 @@
  * `privateKey`, но не `keyboard`). Значение такого имени заменяется на `<redacted>`.
  *
  * Заголовки-адреса (`Referer`, `Location`, `Content-Location`) идут через `redactUrl`: страница `/reset?token=…` кладёт
- * свой адрес в `Referer` каждого запроса, редирект OAuth — токен в `Location`.
+ * свой адрес в `Referer` каждого запроса, редирект OAuth — токен в `Location`. Текст сообщения консоли, цитирующий адрес
+ * (CORS называет адрес запроса целиком), — через `redactUrlsInText`.
+ *
+ * Тело `multipart/form-data` (`FormData`, форма с файлом) маскируется по частям: значение части, чьё имя секретное, —
+ * `<redacted>` (`redactBody`).
  */
 
 import { S } from './strings.js';
@@ -77,6 +81,16 @@ export function redactUrl(url: string): string {
   return `${base}${query === null ? '' : `?${redactParams(query)}`}${maskedHash}`;
 }
 
+/**
+ * Текст, цитирующий адреса (сообщение консоли): каждый адрес `http(s)://` и `ws(s)://` идёт через `redactUrl`, остальной
+ * текст не меняется — масок по виду значения нет (спека 6). Сообщение CORS называет адрес запроса целиком, с `?token=…`.
+ * Адрес кончается на пробеле, кавычке, обратной кавычке или `<>`. Схема — только эти четыре, от границы слова: образец
+ * любой схемы (`[a-z][a-z0-9+.-]*://`) на длинной серии вроде «a.a.a.» перебирает квадратично, а текст задаёт страница.
+ */
+export function redactUrlsInText(text: string): string {
+  return text.replace(/\b(?:https?|wss?):\/\/[^\s'"`<>]+/gi, (url) => redactUrl(url));
+}
+
 function maskJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(maskJson);
   if (value !== null && typeof value === 'object') {
@@ -104,11 +118,16 @@ function parses(text: string): boolean {
   }
 }
 
+/** Тип `multipart/*`: границы частей лежат в его параметре `boundary`. */
+const MULTIPART_TYPE = /^\s*multipart\//i;
+
 /**
  * JSON, который не разбирается (обрезан источником или битый): маска его не видит — значение у края могло быть
  * отрезано посередине. Такое тело не кладут ни в файл-контекст, ни в ответ агенту.
  */
 export function unmaskableJson(text: string, mimeType: string | null): boolean {
+  // multipart разбирается по частям (`redactBody`): слово «json» в его границе, а она случайная, JSON его не делает.
+  if (mimeType !== null && MULTIPART_TYPE.test(mimeType)) return false;
   return text.trim() !== '' && isJson(text, mimeType) && !parses(text);
 }
 
@@ -119,8 +138,71 @@ function cut(text: string, limit: number): string {
   return points.length <= limit ? text : `${points.slice(0, limit).join('')}${S.contextFile.truncated}`;
 }
 
+/** Граница из полного значения Content-Type: `boundary=x` или `boundary="x y"`; нет или пусто — `null`. */
+function multipartBoundary(contentType: string): string | null {
+  const match = /;\s*boundary\s*=\s*(?:"([^"]*)"|([^\s;]+))/i.exec(contentType);
+  const boundary = match?.[1] ?? match?.[2] ?? '';
+  return boundary === '' ? null : boundary;
+}
+
+/** Имя поля из заголовка Content-Disposition части (`name="password"`, `name=password`); заголовка или имени нет — `null`. */
+function partName(headerLines: readonly string[]): string | null {
+  const disposition = headerLines.find((line) => /^\s*content-disposition\s*:/i.test(line));
+  if (disposition === undefined) return null;
+  // Параметры разбираются подряд, значение в кавычках съедается целиком: `name=` внутри `filename="a name=b"` — не имя поля.
+  // Начало параметра — только `;` или `:`: пробел в стартовом классе даёт квадратичный перебор на длинной серии пробелов.
+  for (const [, key, quoted, bare] of disposition.matchAll(/[;:]\s*([^\s;:=]+)\s*=\s*(?:"([^"]*)"|([^\s;]*))/g)) {
+    if (key?.toLowerCase() === 'name') return quoted ?? bare ?? '';
+  }
+  return null;
+}
+
+/** Часть multipart после строки её разделителя: заголовки, пустая строка, значение. Значение секретного поля — `<redacted>`. */
+function maskPart(lines: readonly string[]): readonly string[] {
+  const blank = lines.findIndex((line) => line === '' || line === '\r');
+  if (blank === -1) return lines;
+  const name = partName(lines.slice(0, blank));
+  if (name === null || !isSecretName(name)) return lines;
+  // Перевод строки перед следующим разделителем принадлежит разделителю: «\r» на конце последней строки значения остаётся.
+  return [...lines.slice(0, blank + 1), lines[lines.length - 1]?.endsWith('\r') === true ? `${REDACTED}\r` : REDACTED];
+}
+
 /**
- * Тело запроса или ответа с маской: JSON — ключи на любой глубине, форма — параметры, прочее — как есть. Битый JSON
+ * Тело `multipart/*`: границу берёт заголовок типа, разделитель — строка, что начинается с `--граница` (RFC 2046, 5.1.1).
+ * Строки между разделителями — части, значение части с секретным `name` — `<redacted>`. Преамбулу до первого разделителя и
+ * эпилог за закрывающим `--граница--` разбирает тот же `maskPart`: у обычного тела в них нет заголовка части, и они остаются
+ * как были. Нет границы в типе или разделителя в теле — тело разобрать нечем, оно целиком `<redacted>`. Тело оборвано на
+ * пределе — последняя часть всё равно разбирается.
+ */
+function redactMultipart(text: string, contentType: string): string {
+  const boundary = multipartBoundary(contentType);
+  if (boundary === null) return REDACTED;
+  const delimiter = `--${boundary}`;
+  const out: string[] = [];
+  let part: string[] = [];
+  let seen = false;
+  const flush = (): void => {
+    // Цикл, а не `push(...строки)`: на сотнях тысяч строк значения спред роняет стек.
+    for (const line of maskPart(part)) out.push(line);
+    part = [];
+  };
+  for (const line of text.split('\n')) {
+    if (line.startsWith(delimiter)) {
+      flush();
+      out.push(line);
+      seen = true;
+    } else {
+      part.push(line);
+    }
+  }
+  flush();
+  return seen ? out.join('\n') : REDACTED;
+}
+
+/**
+ * Тело запроса или ответа с маской: JSON — ключи на любой глубине, форма — параметры, multipart — части с секретным
+ * именем, прочее — как есть. Для multipart `mimeType` — значение заголовка Content-Type целиком, с `boundary=`: у запроса
+ * оно в его заголовках, а `mimeType` ответа у Chromium без параметров, и такое тело — целиком `<redacted>`. Битый JSON
  * возвращается без изменений — его отсеивает вызывающий (`unmaskableJson`). Разобранный JSON, на который маска не
  * легла, — `<redacted>` целиком. `limit` — в кодовых точках, с пометкой обрезки; режется уже замаскированное.
  * Тело в скобках под типом формы — JSON с неверным заголовком (jQuery со строкой в `data`, старый axios): он идёт
@@ -128,7 +210,9 @@ function cut(text: string, limit: number): string {
  */
 export function redactBody(text: string, mimeType: string | null, limit: number = Number.POSITIVE_INFINITY): string {
   let masked = text;
-  if (mimeType !== null && /^application\/x-www-form-urlencoded/i.test(mimeType) && !startsWithBracket(text)) {
+  if (mimeType !== null && MULTIPART_TYPE.test(mimeType)) {
+    masked = redactMultipart(text, mimeType);
+  } else if (mimeType !== null && /^application\/x-www-form-urlencoded/i.test(mimeType) && !startsWithBracket(text)) {
     masked = redactParams(text);
   } else if (isJson(text, mimeType)) {
     let parsed: unknown;

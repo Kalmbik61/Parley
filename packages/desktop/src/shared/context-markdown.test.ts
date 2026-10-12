@@ -148,6 +148,12 @@ describe('метки файлов', () => {
     expect(pageLabel('http://localhost:5173/')).toBe('page');
   });
 
+  it('консоль: адрес с секретом в начале сообщения не попадает в метку — а с ней в заголовок и имя файла', () => {
+    const label = consoleLabel({ level: 'error', text: 'GET http://x/a?token=hunter2 failed' });
+    expect(label).not.toContain('hunter2');
+    expect(label).toBe('error-get-http-x-a-token-redacted-failed');
+  });
+
   it('путь страницы: слэши по краям не мешают, серия «/» внутри не вешает окно (путь задаёт сама страница): перебор не квадратичный', () => {
     expect(pageLabel('http://x//a//')).toBe('a');
     expect(pageLabel('http://x/a//b')).toBe('a-b');
@@ -208,7 +214,19 @@ const ENTRY: ConsoleEntry = {
   count: 2,
 };
 
+// Точный текст Log.entryAdded из Electron 44.4.5: fetch на другой origin без заголовков CORS. Этап A кладёт его в журнал как origin 'network'.
+const CORS_MESSAGE =
+  "Access to fetch at 'http://127.0.0.1:62482/api/x?token=SECRET-QUERY-123&tab=1' from origin 'http://127.0.0.1:62483' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.";
+const CORS_ENTRY: ConsoleEntry = { ...ENTRY, origin: 'network', text: CORS_MESSAGE, location: null, stack: [], count: 1 };
+const CORS_MASKED = CORS_MESSAGE.replace('SECRET-QUERY-123', REDACTED);
+
 describe('console', () => {
+  it('Фокус ревью 1: сообщение CORS цитирует адрес запроса с ?token= — в Message он <redacted>, остальной текст цел', () => {
+    const { markdown } = consoleContext({ pageUrl: 'http://127.0.0.1:62483/page?x=1', entry: CORS_ENTRY });
+    expect(markdown).not.toContain('SECRET-QUERY-123');
+    expect(markdown).toContain(`Level: error (network)\nMessage:\n${CORS_MASKED}\n\`\`\`\n`);
+  });
+
   it('уровень и источник, повторы, сообщение и стек; секрет в адресе источника — <redacted>', () => {
     expect(consoleContext({ pageUrl: 'http://localhost:5173/settings?tab=1', entry: ENTRY }).markdown).toBe(
       [
@@ -285,6 +303,26 @@ describe('request', () => {
     expect(built.markdown).toContain('  Content-Type: application/json');
   });
 
+  it('Фокус ревью 1: неудачный вход через FormData — multipart-тело в файле без пароля, остальные поля целы', () => {
+    // Тело и Content-Type — как их кладёт Chromium в Electron 44.4.5 (fetch(url, { body: formData })): значение в теле идёт открытым текстом.
+    const boundary = '----WebKitFormBoundaryHFk0FB154gnvJpA4';
+    const built = requestContext({
+      pageUrl: 'http://localhost:5173/login',
+      entry: {
+        ...REQUEST,
+        url: 'http://localhost:5173/api/login',
+        status: 401,
+        statusText: 'Unauthorized',
+        requestHeaders: [['Content-Type', `multipart/form-data; boundary=${boundary}`]],
+        postData: `--${boundary}\r\nContent-Disposition: form-data; name="username"\r\n\r\ndemo\r\n--${boundary}\r\nContent-Disposition: form-data; name="password"\r\n\r\nMULTIPART-SECRET\r\n--${boundary}--\r\n`,
+      },
+      responseBody: null,
+    });
+    expect(built.markdown).not.toContain('MULTIPART-SECRET');
+    expect(built.markdown).toContain('name="username"\r\n\r\ndemo\r\n');
+    expect(built.markdown).toContain(`name="password"\r\n\r\n${REDACTED}\r\n`);
+  });
+
   it('тела — до 4 КБ; бинарное и вытесненное — пометкой; отказ без ответа — причина, тела ответа нет', () => {
     const long = requestContext({
       pageUrl: 'http://x/',
@@ -325,6 +363,12 @@ describe('errors', () => {
     expect(built.markdown).toContain('\n50. ');
     expect(built.markdown).not.toContain('\n51. ');
     expect(built.markdown).toContain('…and 10 more');
+  });
+
+  it('Фокус ревью 1: ошибка консоли с сообщением CORS — адрес запроса с ?token= в пункте списка <redacted>', () => {
+    const { markdown } = errorsContext({ pageUrl: 'http://127.0.0.1:62483/page?x=1', console: [CORS_ENTRY], requests: [] });
+    expect(markdown).not.toContain('SECRET-QUERY-123');
+    expect(markdown).toContain(`1. Console error: ${CORS_MASKED}\n`);
   });
 
   it('источник ошибки — строкой «at …» под ней', () => {

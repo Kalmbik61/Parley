@@ -12,7 +12,7 @@
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type NetworkEntry, type ResponseBody, type ViewportSpec } from './browser-devtools.js';
 import type { ReactComponentInfo } from './browser-types.js';
 import { selectorTail } from './css-selector.js';
-import { redactBody, redactHeaders, redactUrl, unmaskableJson } from './redact.js';
+import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
 
 export type ContextKind = 'element' | 'console' | 'request' | 'errors' | 'annotations';
@@ -202,7 +202,8 @@ export function elementLabel(selector: string): string {
 }
 
 export function consoleLabel(entry: Pick<ConsoleEntry, 'level' | 'text'>): string {
-  return contextLabel(`${entry.level}-${entry.text.slice(0, 80)}`);
+  // Адрес в начале сообщения с маской: метка — это и заголовок файла, и его имя.
+  return contextLabel(`${entry.level}-${redactUrlsInText(entry.text.slice(0, 80))}`);
 }
 
 export function requestLabel(entry: Pick<NetworkEntry, 'method' | 'url' | 'status' | 'failure'>): string {
@@ -270,7 +271,8 @@ export function consoleContext(input: { pageUrl: string; entry: ConsoleEntry }):
   const lines = [S.contextFile.level(entry.level, entry.origin)];
   if (entry.location !== null) lines.push(S.contextFile.source(located(entry.location)));
   if (entry.count > 1) lines.push(S.contextFile.repeated(entry.count));
-  lines.push(S.contextFile.message, entry.text);
+  // Сообщение может цитировать адрес запроса (CORS называет его целиком, с `?token=…`): адреса в тексте идут через маску.
+  lines.push(S.contextFile.message, redactUrlsInText(entry.text));
   if (entry.stack.length > 0) {
     lines.push(S.contextFile.stack, ...entry.stack.slice(0, DEVTOOLS_LIMITS.stackFrames).map((frame) => S.contextFile.frame(frame.fn, located(frame))));
   }
@@ -329,8 +331,10 @@ export function errorsContext(input: { pageUrl: string; console: readonly Consol
   const items = [
     ...input.console.map((entry) => ({
       ts: entry.ts,
-      line: (n: number): string =>
-        entry.location === null ? S.contextFile.errorItem(n, entry.text) : `${S.contextFile.errorItem(n, entry.text)}\n   ${S.contextFile.at(located(entry.location))}`,
+      line: (n: number): string => {
+        const item = S.contextFile.errorItem(n, redactUrlsInText(entry.text));
+        return entry.location === null ? item : `${item}\n   ${S.contextFile.at(located(entry.location))}`;
+      },
     })),
     ...input.requests.map((entry) => ({
       ts: entry.ts,
