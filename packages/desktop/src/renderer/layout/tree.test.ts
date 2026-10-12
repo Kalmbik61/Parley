@@ -1150,3 +1150,40 @@ describe('размер вкладки браузера (спека 2026-10-07, 4
     }
   });
 });
+
+describe('цель «To» вкладки браузера (этап B, спека браузера 4.5)', () => {
+  function tabOf(layout: WorkLayout, id: string): TabSpec | undefined {
+    const found = findTab(layout, id);
+    return found?.group.tabs[found.index];
+  }
+
+  it('updateTab ставит и снимает target, размер и адрес не трогает; target у терминала — та же ссылка', () => {
+    const page = browserTab('http://localhost:5173/');
+    const term = freshTab();
+    let layout = openTab(emptyLayout(), page, 'active');
+    layout = openTab(layout, term, 'active');
+    const sized = updateTab(layout, page.id, { viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } });
+    const set = updateTab(sized, page.id, { target: { kind: 'room', roomId: 'r-01' } });
+    expect(tabOf(set, page.id)).toEqual({ ...page, viewport: { preset: 'mobile-m', rotated: false, dpr: 2 }, target: { kind: 'room', roomId: 'r-01' } });
+    expect(tabOf(updateTab(set, page.id, { url: 'http://localhost:5173/a' }), page.id)).toMatchObject({ target: { kind: 'room', roomId: 'r-01' } });
+    expect(tabOf(updateTab(set, page.id, { target: null }), page.id)).toEqual(tabOf(sized, page.id));
+    expect(updateTab(layout, term.id, { target: { kind: 'room', roomId: 'r-01' } })).toBe(layout);
+  });
+
+  it('parseWorkLayout: target сессии и комнаты читается без лишних полей; без поля — норма; мусор — вкладка без цели', () => {
+    const page = browserTab('http://localhost:5173/');
+    const layout = openTab(emptyLayout(), page, 'active');
+    const withTarget = (target: unknown): unknown => {
+      const raw = JSON.parse(JSON.stringify(layout)) as { root: { tabs: Array<Record<string, unknown>> } };
+      raw.root.tabs[0] = { ...raw.root.tabs[0], target };
+      return raw;
+    };
+    const parsed = (raw: unknown): TabSpec | undefined => tabOf(parseWorkLayout(raw) as WorkLayout, page.id);
+    expect(parsed(withTarget({ kind: 'session', sessionId: 's-02', extra: 1 }))).toEqual({ ...page, target: { kind: 'session', sessionId: 's-02' } });
+    expect(parsed(withTarget({ kind: 'room', roomId: 'r-01' }))).toEqual({ ...page, target: { kind: 'room', roomId: 'r-01' } });
+    expect(parsed(JSON.parse(JSON.stringify(layout)))).toEqual(page);
+    for (const bad of [{ kind: 'session' }, { kind: 'room', roomId: 5 }, 'x', null]) {
+      expect(parsed(withTarget(bad)), JSON.stringify(bad)).toEqual(page);
+    }
+  });
+});
