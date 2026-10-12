@@ -55,6 +55,8 @@ const designMode = {
   start: vi.fn().mockResolvedValue(null),
   cancel: vi.fn().mockResolvedValue(undefined),
 };
+/** Запись файла-контекста (этап B браузера): main/browser/context-files.ts подменён — мост только проверяет форму. */
+const saveContext = vi.fn().mockResolvedValue({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
 /** Журнал и эмуляция моста (спека 2026-10-07, 3.5): подменены — мост проверяет гостя и аргументы. */
 const inspector = {
   snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
@@ -219,6 +221,7 @@ function setup(
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
       designMode,
+      saveContext,
       inspector,
       emulation,
     },
@@ -1212,6 +1215,17 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(emulation.set).toHaveBeenLastCalledWith(7, mobile, area);
     await ipcMain.invoke('browser:set-viewport', 7, null, area);
     expect(emulation.set).toHaveBeenLastCalledWith(7, null, area);
+  });
+
+  it('save-context (этап B): неверная форма — bad_request без записи; верная — browser.saveContext', async () => {
+    saveContext.mockClear();
+    const { ipcMain } = browserSetup();
+    const good = { kind: 'console', label: 'error-boom', markdown: '# x\n', imagePath: null };
+    expect(await codeOf(ipcMain.invoke('browser:save-context', { ...good, kind: 'cookie' }))).toBe('bad_request');
+    expect(await codeOf(ipcMain.invoke('browser:save-context', { ...good, imagePath: 'relative.png' }))).toBe('bad_request');
+    expect(saveContext).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('browser:save-context', good)).toEqual({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
+    expect(saveContext).toHaveBeenCalledWith(good);
   });
 });
 

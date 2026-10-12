@@ -3,6 +3,7 @@
  * раздел, форма данных и мост `browser.*`.
  */
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from './browser-devtools.js';
+import type { ContextKind } from './context-markdown.js';
 
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
 export const BROWSER_PARTITION = 'persist:harnas-browser';
@@ -107,6 +108,20 @@ export interface BrowserOpenTab {
   openerWebContentsId: number;
 }
 
+/** Файл-контекст для `saveContext` (спека браузера 3.6): готовый Markdown и снимок в `drops/` (или нет). */
+export interface ContextInput {
+  kind: ContextKind;
+  label: string;
+  markdown: string;
+  imagePath: string | null;
+}
+
+/** Где лёг файл-контекст: `.md` и, если был снимок, `.png` рядом. */
+export interface SavedContext {
+  mdPath: string;
+  pngPath: string | null;
+}
+
 // Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
 export interface BrowserApi {
   /** null — выбор отменён: Esc, pickCancel, навигация главного фрейма, падение или закрытие страницы. */
@@ -122,6 +137,8 @@ export interface BrowserApi {
   onFavicon(listener: (e: BrowserFavicon) => void): () => void; // спека 12.1
   /** Гость получил фокус (focus его WebContents): окно делает его вкладку активной — клик в страницу DOM окна не видит. */
   onFocus(listener: (e: { webContentsId: number }) => void): () => void;
+  /** Файл-контекст в `drops/context/` (спека браузера 3.6): main проверяет форму и снимок, сам выбирает имя. */
+  saveContext(input: ContextInput): Promise<SavedContext>;
   /**
    * Журнал консоли и сети гостя (спека 2026-10-07-browser-devtools-agent-design.md, 3.5). Журнала нет (захват не
    * подключался) — пустой с `capture: 'unavailable'`.

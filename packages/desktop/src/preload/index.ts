@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
-import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../shared/browser-types.js';
+import type { BrowserFavicon, BrowserOpenTab, ContextInput, PickResult, SavedContext } from '../shared/browser-types.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -321,6 +321,7 @@ const bridge = {
       browserFocusListeners.add(listener);
       return () => browserFocusListeners.delete(listener);
     },
+    saveContext: (input: ContextInput) => ipcRenderer.invoke('browser:save-context', input) as Promise<SavedContext>,
     devtoolsSnapshot: (webContentsId: number) =>
       ipcRenderer.invoke('browser:devtools-snapshot', webContentsId) as Promise<DevtoolsSnapshot>,
     devtoolsClear: (webContentsId: number) => ipcRenderer.invoke('browser:devtools-clear', webContentsId) as Promise<void>,

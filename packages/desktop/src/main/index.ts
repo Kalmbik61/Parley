@@ -21,6 +21,7 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parl
 import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
@@ -466,6 +467,7 @@ if (!gotLock) {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
         designMode,
+        saveContext: (input) => saveContextFile({ ...input, dir: contextDir(), dropsDir: dropsDir() }),
         inspector,
         emulation,
       },

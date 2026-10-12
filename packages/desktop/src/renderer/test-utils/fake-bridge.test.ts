@@ -191,3 +191,20 @@ describe('fake-bridge: app.imageThumbnail (миниатюры вложений �
     expect(bridge.thumbnailCalls).toEqual(['/a.png', '/a.png', '/a.png', '/b.png', '/c.png']);
   });
 });
+
+describe('fake-bridge: browser.saveContext (этап B браузера)', () => {
+  it('по умолчанию — пути /fake/drops/context по виду и метке, png — только со снимком; журнал browserCalls; ответ и отказ по сеттеру', async () => {
+    const bridge = createFakeBridge();
+    await expect(bridge.browser.saveContext({ kind: 'console', label: 'Error Boom', markdown: '# x', imagePath: null })).resolves.toEqual({
+      mdPath: '/fake/drops/context/console-error-boom-0001.md',
+      pngPath: null,
+    });
+    await expect(bridge.browser.saveContext({ kind: 'element', label: 'button.save', markdown: '# x', imagePath: '/h/drops/a.png' })).resolves.toEqual({
+      mdPath: '/fake/drops/context/element-button.save-0002.md',
+      pngPath: '/fake/drops/context/element-button.save-0002.png',
+    });
+    expect(bridge.browserCalls.map((call) => call.method)).toEqual(['saveContext', 'saveContext']);
+    bridge.setSaveContextResult({ code: 'failed', message: 'disk' });
+    await expect(bridge.browser.saveContext({ kind: 'errors', label: 'x', markdown: '#', imagePath: null })).rejects.toMatchObject({ code: 'failed' });
+  });
+});
