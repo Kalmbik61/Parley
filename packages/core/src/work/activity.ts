@@ -141,6 +141,30 @@ const RESUMING = new Set([
   'quota_auto_resume_fired',
 ]);
 
+/**
+ * События журнала, после которых работа заново не началась: конец хода, выход, остановка субагента и строки
+ * `wait_for`, которые дописывает MCP-сервер, а не Claude Code. Запись об ошибке API в логе сравнивается с последним
+ * событием, которое работу начинало (`restartsWork`): ошибка остаётся последним словом сессии, даже если после неё
+ * Claude Code дописал `Stop` или `idle_prompt`, — иначе у сессий без `StopFailure` лимит пропадал бы через минуту простоя.
+ */
+const PASSIVE_EVENTS = new Set([
+  'Stop',
+  'StopFailure',
+  'SessionEnd',
+  'SubagentStop',
+  'ParleyWaitStart',
+  'ParleyWaitEnd',
+]);
+
+/** `Notification`, после которых работа заново не началась: простой у приглашения и выполненный вход. */
+const PASSIVE_NOTIFICATIONS = new Set(['idle_prompt', 'auth_success']);
+
+/** Событие начало или продолжило работу: всё, что не названо в `PASSIVE_EVENTS` и `PASSIVE_NOTIFICATIONS`. */
+const restartsWork = (event: EventRecord): boolean =>
+  event.name === 'Notification'
+    ? !PASSIVE_NOTIFICATIONS.has(event.notificationType ?? '')
+    : !PASSIVE_EVENTS.has(event.name);
+
 /** `SessionStart.source`, с которых сессия начинается заново; пусто — прежняя версия без поля. */
 const LAUNCH_SOURCES = new Set(['startup', 'resume', 'clear']);
 
@@ -245,6 +269,8 @@ export function activityOf({
   let source: ActivitySource = 'none';
   let turnEndedAt: string | null = null;
   let lastEventAt: string | null = null;
+  // Время последнего события, которое начало или продолжило работу (`restartsWork`).
+  let lastRestartAt: string | null = null;
   let exited = false;
   const started = new Map<string, StartedAgent>();
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
@@ -315,6 +341,7 @@ export function activityOf({
 
   for (const event of events ?? []) {
     lastEventAt = event.at;
+    if (restartsWork(event)) lastRestartAt = event.at;
     const heldBefore = background.length > 0;
     // Сессия началась заново (запуск, `--resume`, `/clear`, сжатие): прежнее забыто,
     // но снимок самого события уже про новое состояние и остаётся.
@@ -444,6 +471,7 @@ export function activityOf({
   const lastRecordAt = log?.lastRecordAt ?? null;
   const recordAt = msOf(lastRecordAt);
   const eventAt = msOf(lastEventAt);
+  const restartAt = msOf(lastRestartAt);
   const userAt = msOf(log?.lastUserRecordAt ?? null);
 
   if (phase === 'blocked' && isNewer(userAt, eventAt)) {
@@ -453,17 +481,18 @@ export function activityOf({
   }
 
   // Запасной путь для ошибки API (3.2): у сессии, чей `StopFailure` не доходит до журнала, о ней знает один лог.
-  // Запись ошибки — последняя запись работы, новее журнала и человека, а ход не стоит на вопросе: тогда это то же,
-  // что `StopFailure` в момент записи. Ход кончился на ней, а не через порог тишины: сама запись — «ответ ассистента
-  // новее событий», который иначе вернул бы сессию в `working`. Был ответ после неё (Claude продолжил сам) или
-  // сообщение человека — ошибка позади.
+  // Запись ошибки — последняя запись работы, новее человека и последнего события журнала, начавшего работу
+  // (`Stop` и `idle_prompt` после неё её не отменяют), а ход не стоит на вопросе: тогда это то же, что `StopFailure`
+  // в момент записи. Ход кончился на ней, а не через порог тишины: сама запись — «ответ ассистента новее событий»,
+  // который иначе вернул бы сессию в `working`. Был ответ после неё (Claude продолжил сам) или сообщение человека —
+  // ошибка позади. Если `StopFailure` дошёл и до журнала, берётся запись лога: её время не зависит от чтения журнала.
   const apiError = log?.lastApiError ?? null;
   const apiErrorAt = msOf(apiError?.at ?? null);
   let endedByLogError = false;
   if (
     apiError !== null &&
     phase !== 'blocked' &&
-    isNewer(apiErrorAt, eventAt) &&
+    isNewer(apiErrorAt, restartAt) &&
     isNewer(apiErrorAt, userAt) &&
     !(recordAt > apiErrorAt)
   ) {

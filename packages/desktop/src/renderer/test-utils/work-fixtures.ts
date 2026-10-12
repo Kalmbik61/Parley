@@ -102,6 +102,7 @@ export function makeActivity(
       source: 'hooks',
       exited: false,
       hooksMissing: false,
+      need: null,
     },
     metrics: patch.metrics ?? null,
   };

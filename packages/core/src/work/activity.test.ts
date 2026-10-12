@@ -1765,6 +1765,88 @@ const FALLBACK_CASES: NeedCase[] = [
   },
 ];
 
+/** Лимит в логе на секунде 3: ожидаемое состояние, пока после записи не началась новая работа. */
+const LIMIT_AT_3 = wanted('limit', 3, {
+  detail: SESSION_LIMIT,
+  resetsAt: SESSION_RESET,
+  window: 'session',
+});
+
+/** События журнала после записи ошибки, которые работу заново не начинают: запасной путь действует (3.2). */
+const PASSIVE_AFTER: Array<[name: string, event: EventRecord]> = [
+  ['Stop', event('Stop', null, sec(6))],
+  ['StopFailure того же лимита', failure(6, 'rate_limit', SESSION_LIMIT)],
+  ['SessionEnd', event('SessionEnd', null, sec(6))],
+  ['SubagentStop', hook('SubagentStop', { agentId: 'a' }, sec(6))],
+  ['ParleyWaitStart', hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }, sec(6))],
+  ['ParleyWaitEnd', hook('ParleyWaitEnd', { waitId: 'w1' }, sec(6))],
+  ['idle_prompt', notice(6, 'idle_prompt')],
+  ['auth_success', notice(6, 'auth_success')],
+];
+
+/** Ошибка на секунде 3, `Stop` сразу за ней, а через минуту — `idle_prompt` старого Claude Code без `StopFailure`. */
+const STOP_THEN_IDLE: NeedCase = {
+  name: 'ошибка в логе, затем Stop и через минуту idle_prompt → limit остаётся',
+  events: [
+    submit(1),
+    event('Stop', null, sec(4)),
+    hook('Notification', { notificationType: 'idle_prompt' }, '2026-09-05T10:01:05.000Z'),
+  ],
+  log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT),
+  now: Date.parse('2026-09-05T10:01:10.000Z'),
+  activity: 'unseen',
+  need: LIMIT_AT_3,
+};
+
+const PASSIVE_AFTER_CASES: NeedCase[] = [
+  ...PASSIVE_AFTER.map(([name, next]): NeedCase => ({
+    name: `ошибка в логе, затем ${name} → limit остаётся, ход окончен на записи ошибки`,
+    events: [submit(1), next],
+    log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: LIMIT_AT_3,
+  })),
+  STOP_THEN_IDLE,
+  {
+    ...STOP_THEN_IDLE,
+    name: 'то же у просмотренной сессии → idle, limit остаётся',
+    seen: true,
+    activity: 'idle',
+  },
+];
+
+/** События журнала после записи ошибки, которые работу начинают заново: запасной путь молчит (3.2). */
+const RESTARTING_AFTER_CASES: NeedCase[] = (
+  [
+    ['UserPromptSubmit', submit(6), 'working', null],
+    ['SessionStart(resume)', hook('SessionStart', { source: 'resume' }, sec(6)), 'unseen', null],
+    ['SessionStart(compact)', hook('SessionStart', { source: 'compact' }, sec(6)), 'working', null],
+    ['SubagentStart', hook('SubagentStart', { agentId: 'a' }, sec(6)), 'working', null],
+    ['кадр спиннера Codex', event(TERMINAL_WORKING_EVENT, null, sec(6)), 'working', null],
+    ['quota_auto_resume_fired', notice(6, 'quota_auto_resume_fired'), 'working', null],
+    ['elicitation_complete', notice(6, 'elicitation_complete'), 'working', null],
+    [
+      'PermissionRequest',
+      permission(6, 'Bash', 'ls'),
+      'blocked',
+      wanted('approval', 6, { detail: 'ls' }),
+    ],
+    [
+      'agent_needs_input',
+      notice(6, 'agent_needs_input', 'Which?'),
+      'blocked',
+      wanted('question', 6, { detail: 'Which?' }),
+    ],
+    ['parley_startup', notice(6, PARLEY_STARTUP_NOTIFICATION), 'blocked', wanted('startup', 6)],
+  ] as Array<[string, EventRecord, Activity, SessionNeed | null]>
+).map(([name, next, activity, need]): NeedCase => ({
+  name: `ошибка в логе, затем ${name} → запасного пути нет`,
+  events: [submit(1), next],
+  log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT),
+  activity,
+  need,
+}));
+
 /** Заготовки для снятия: у каждой вида `need` своё начало на секунде 3. */
 interface Base {
   label: string;
@@ -2151,6 +2233,23 @@ describe('activityOf: need — ошибка API оборвала ход (3.2)', 
 
 describe('activityOf: need — запасной путь по ошибке API в логе (3.2)', () => {
   it.each(FALLBACK_CASES)('$name', expectCase);
+  it.each(PASSIVE_AFTER_CASES)('$name', expectCase);
+  it.each(RESTARTING_AFTER_CASES)('$name', expectCase);
+
+  it('после Stop и idle_prompt ход всё равно окончен на самой записи ошибки, а не на простое', () => {
+    const result = fold(STOP_THEN_IDLE);
+    expect(result.turnEndedAt).toBe(sec(3));
+    expect(result.source).toBe('log');
+    expect(result.lastEventAt).toBe('2026-09-05T10:01:05.000Z');
+  });
+
+  it('StopFailure в журнале и та же ошибка в логе: эпизод считается по записи лога, а не по времени чтения журнала', () => {
+    const events = [submit(1), failure(6, 'rate_limit', SESSION_LIMIT)];
+    expect(activity(events).need?.since).toBe(sec(6));
+    const both = activityOf({ events, log: apiErrorLog(3, 'rate_limit', SESSION_LIMIT), now: NOW });
+    expect(both.need).toEqual(LIMIT_AT_3);
+    expect(both.turnEndedAt).toBe(sec(3));
+  });
 
   it('ход окончен на самой записи, а не по тишине; источник — лог', () => {
     const result = fold(LIMIT_IN_LOG);
@@ -2231,6 +2330,8 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     ...SOURCE_CASES,
     ...LIMIT_CASES,
     ...FALLBACK_CASES,
+    ...PASSIVE_AFTER_CASES,
+    ...RESTARTING_AFTER_CASES,
     ...CLEARING_CASES,
     ...KEEPING_CASES,
     ...LOG_CASES,
@@ -2260,6 +2361,8 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     ['auth_success', (n) => notice(n, 'auth_success')],
     ['idle_prompt', (n) => notice(n, 'idle_prompt')],
     ['Stop', (n) => event('Stop', null, sec(n))],
+    ['SessionEnd', (n) => event('SessionEnd', null, sec(n))],
+    ['SubagentStop', (n) => hook('SubagentStop', { agentId: 'a' }, sec(n))],
     ['StopFailure(rate_limit)', (n) => failure(n, 'rate_limit', SESSION_LIMIT)],
     ['StopFailure(authentication_failed)', (n) => failure(n, 'authentication_failed', SIGNED_OUT)],
     ['StopFailure(server_error)', (n) => failure(n, 'server_error', 'API Error: 500')],
@@ -2277,7 +2380,12 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
   }
 
   it('для всех последовательностей до трёх событий — с ошибкой API в логе и без, просмотренных и нет', () => {
-    const logs: Array<ActivityLog | null> = [null, apiErrorLog(5, 'rate_limit', SESSION_LIMIT)];
+    // Ошибка в логе новее всех событий (секунда 5) и посередине последовательности (секунда 2).
+    const logs: Array<ActivityLog | null> = [
+      null,
+      apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+      apiErrorLog(2, 'rate_limit', SESSION_LIMIT),
+    ];
     const bad: string[] = [];
     let count = 0;
     for (const indexes of sequences(3)) {
