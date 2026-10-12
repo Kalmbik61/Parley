@@ -1446,6 +1446,15 @@ export const S = {
     screenshot: (path: string): string => `Screenshot: ${path}`,
   },
 
+  /**
+   * Файлы-контексты браузера (спека браузера 3.6, `shared/context-markdown.ts`): текст для агента, поэтому
+   * английский. Данные страницы идут в ограде как есть; заголовки, пути и числа — свои.
+   */
+  contextFile: {
+    /** Пометка обрезки длинного значения: HTML, тела, данные в ограде. */
+    truncated: '…(truncated)',
+  },
+
   /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
   banners: {
     interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,
