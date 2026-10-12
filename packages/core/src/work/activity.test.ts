@@ -5,13 +5,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { activityOf, hookedSince, type ActivityLog } from './activity.js';
+import { activityOf, hookedSince, type Activity, type ActivityLog } from './activity.js';
 import {
+  PARLEY_STARTUP_NOTIFICATION,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   type BackgroundTask,
   type EventRecord,
 } from './events.js';
+import { NEED_DETAIL_MAX, type NeedKind, type SessionNeed } from './stuck.js';
 
 const AT = '2026-09-05T10:00:00.000Z';
 const NOW = Date.parse('2026-09-05T10:00:10.000Z');
@@ -226,6 +228,7 @@ describe('activityOf: таблица переходов 4.2', () => {
       source: 'none',
       exited: false,
       hooksMissing: false,
+      need: null,
     });
   });
 });
@@ -1356,5 +1359,945 @@ describe('activityOf: TerminalWorking — кадр спиннера термин
 
     expect(result.activity).toBe('working');
     expect(result.waitingFor).toBe('inbox');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// need: чего сессия ждёт от человека (Застрявшие сессии, 3.1–3.3, 3.5)
+// ---------------------------------------------------------------------------------------------
+
+/** Секунда `n` (1–9) той же минуты, что `AT` и `NOW`: события растут по времени, до `NOW` — не больше девяти секунд. */
+const sec = (n: number): string => `2026-09-05T10:00:0${n}.000Z`;
+
+const SESSION_LIMIT = "You've hit your session limit · resets 2:50pm (Europe/Moscow)";
+/** 14:50 по Москве (UTC+3 круглый год) в день записи — 11:50 UTC. */
+const SESSION_RESET = '2026-09-05T11:50:00.000Z';
+const SIGNED_OUT = 'Not logged in · Please run /login';
+
+const submit = (n: number): EventRecord => event('UserPromptSubmit', null, sec(n));
+const permission = (
+  n: number,
+  toolName: string | null,
+  toolDetail: string | null = null,
+): EventRecord => hook('PermissionRequest', { toolName, toolDetail }, sec(n));
+const notice = (n: number, type: string, message: string | null = null): EventRecord =>
+  hook('Notification', { notificationType: type, message }, sec(n));
+/** `StopFailure`: текст ошибки — `last_assistant_message`, подробности — `error_details`. */
+const failure = (
+  n: number,
+  error: string | null,
+  text: string | null,
+  details: string | null = null,
+): EventRecord =>
+  hook('StopFailure', { error, lastAssistantMessage: text, errorDetails: details }, sec(n));
+
+/** Ожидаемая потребность: поля, которых тест не называет, пусты. */
+const wanted = (kind: NeedKind, n: number, patch: Partial<SessionNeed> = {}): SessionNeed => ({
+  kind,
+  since: sec(n),
+  detail: null,
+  resetsAt: null,
+  window: null,
+  account: null,
+  ...patch,
+});
+
+/** Лог с ошибкой API на секунде `n`: она — последняя запись работы, человек писал раньше. */
+const apiErrorLog = (
+  n: number,
+  error: string | null,
+  text: string,
+  patch: Partial<ActivityLog> = {},
+): ActivityLog => ({
+  lastRecordAt: sec(n),
+  lastUserRecordAt: sec(1),
+  lastApiError: { at: sec(n), error, text },
+  ...patch,
+});
+
+/** Одна строка таблицы: что подали свёртке и что она должна сказать про активность и `need`. */
+interface NeedCase {
+  name: string;
+  events: EventRecord[] | null;
+  log?: ActivityLog;
+  seen?: boolean;
+  /** «Сейчас» в мс; по умолчанию — `NOW`. */
+  now?: number;
+  activity: Activity;
+  need: SessionNeed | null;
+}
+
+const fold = (row: NeedCase, seen = row.seen ?? false): ReturnType<typeof activityOf> =>
+  activityOf({ events: row.events, log: row.log ?? null, seen, now: row.now ?? NOW });
+
+const expectCase = (row: NeedCase): void => {
+  const result = fold(row);
+  expect(result.activity).toBe(row.activity);
+  expect(result.need).toEqual(row.need);
+};
+
+/** Источники ожидания человека: одобрение, вопрос, старт (3.2). */
+const SOURCE_CASES: NeedCase[] = [
+  {
+    name: 'PermissionRequest Bash → approval, detail — команда',
+    events: [submit(1), permission(2, 'Bash', 'npm install')],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'npm install' }),
+  },
+  {
+    name: 'PermissionRequest без выжимки tool_input → approval, detail — имя инструмента',
+    events: [submit(1), permission(2, 'WebFetch')],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'WebFetch' }),
+  },
+  {
+    name: 'PermissionRequest без tool_name → approval без detail',
+    events: [submit(1), permission(2, null)],
+    activity: 'blocked',
+    need: wanted('approval', 2),
+  },
+  {
+    name: 'permission_prompt → approval, detail — message',
+    events: [submit(1), notice(2, 'permission_prompt', 'Claude needs your permission to use Bash')],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'Claude needs your permission to use Bash' }),
+  },
+  {
+    name: 'agent_needs_input → question, detail — message',
+    events: [submit(1), notice(2, 'agent_needs_input', 'Which database?')],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Which database?' }),
+  },
+  {
+    name: 'elicitation_dialog → question, detail — message',
+    events: [submit(1), notice(2, 'elicitation_dialog', 'Pick a region')],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Pick a region' }),
+  },
+  {
+    name: 'elicitation_url_dialog → question, detail — message',
+    events: [submit(1), notice(2, 'elicitation_url_dialog', 'Open the link to sign in')],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Open the link to sign in' }),
+  },
+  {
+    name: 'Notification без message → question без detail',
+    events: [submit(1), notice(2, 'agent_needs_input')],
+    activity: 'blocked',
+    need: wanted('question', 2),
+  },
+  {
+    name: 'parley_startup → startup без detail, сессия blocked, хода не было',
+    events: [notice(2, PARLEY_STARTUP_NOTIFICATION)],
+    activity: 'blocked',
+    need: wanted('startup', 2),
+  },
+  {
+    name: 'parley_startup после закончившего ход → blocked, startup',
+    events: [submit(1), event('Stop', null, sec(2)), notice(3, PARLEY_STARTUP_NOTIFICATION)],
+    activity: 'blocked',
+    need: wanted('startup', 3),
+  },
+  {
+    name: 'длинный message обрезается до NEED_DETAIL_MAX знаков',
+    events: [submit(1), notice(2, 'agent_needs_input', 'q'.repeat(300))],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: `${'q'.repeat(NEED_DETAIL_MAX - 1)}…` }),
+  },
+  {
+    name: 'переводы строк в message сводятся к пробелам',
+    events: [submit(1), notice(2, 'agent_needs_input', 'Which\ndatabase?')],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Which database?' }),
+  },
+];
+
+/** Ошибка API оборвала ход: лимит и слетевший вход (3.2). */
+const LIMIT_CASES: NeedCase[] = [
+  {
+    name: 'StopFailure rate_limit с «resets» в тексте → limit, resetsAt и window из текста, ход окончен',
+    events: [submit(1), failure(3, 'rate_limit', SESSION_LIMIT)],
+    activity: 'unseen',
+    need: wanted('limit', 3, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+  {
+    name: 'тот же лимит у просмотренной сессии → idle, need тот же',
+    events: [submit(1), failure(3, 'rate_limit', SESSION_LIMIT)],
+    seen: true,
+    activity: 'idle',
+    need: wanted('limit', 3, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+  {
+    name: 'недельный лимит с датой → resetsAt в этот день, window week',
+    events: [
+      submit(1),
+      failure(
+        3,
+        'rate_limit',
+        "You've hit your weekly limit · resets Sep 22 at 4pm (Europe/Moscow)",
+      ),
+    ],
+    activity: 'unseen',
+    need: wanted('limit', 3, {
+      detail: "You've hit your weekly limit · resets Sep 22 at 4pm (Europe/Moscow)",
+      resetsAt: '2026-09-22T13:00:00.000Z',
+      window: 'week',
+    }),
+  },
+  {
+    name: 'лимит без времени в тексте → resetsAt и window null',
+    events: [submit(1), failure(3, 'rate_limit', 'API Error: Rate limit reached')],
+    activity: 'unseen',
+    need: wanted('limit', 3, { detail: 'API Error: Rate limit reached' }),
+  },
+  {
+    name: 'лимит GLM: время по Пекину, окно пять часов',
+    events: [
+      submit(1),
+      failure(
+        3,
+        'rate_limit',
+        '[1308][Usage limit reached for 5 hour. Your limit will reset at 2026-10-08 19:03:01]',
+      ),
+    ],
+    activity: 'unseen',
+    need: wanted('limit', 3, {
+      detail:
+        '[1308][Usage limit reached for 5 hour. Your limit will reset at 2026-10-08 19:03:01]',
+      resetsAt: '2026-10-08T11:03:01.000Z',
+      window: 'session',
+    }),
+  },
+  {
+    name: 'нет last_assistant_message → текст берётся из error_details',
+    events: [
+      submit(1),
+      failure(3, 'rate_limit', null, '429 Too Many Requests · resets 7pm (Europe/Moscow)'),
+    ],
+    activity: 'unseen',
+    need: wanted('limit', 3, {
+      detail: '429 Too Many Requests · resets 7pm (Europe/Moscow)',
+      resetsAt: '2026-09-05T16:00:00.000Z',
+    }),
+  },
+  {
+    name: 'last_assistant_message важнее error_details',
+    events: [submit(1), failure(3, 'rate_limit', SESSION_LIMIT, '429 Too Many Requests')],
+    activity: 'unseen',
+    need: wanted('limit', 3, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+  {
+    name: 'лимит без текста → limit без detail и resetsAt',
+    events: [submit(1), failure(3, 'rate_limit', null)],
+    activity: 'unseen',
+    need: wanted('limit', 3),
+  },
+  {
+    name: 'длинный текст: detail обрезан, а время сброса берётся из полного текста',
+    events: [
+      submit(1),
+      failure(3, 'rate_limit', `${'x'.repeat(300)} · resets 2:50pm (Europe/Moscow)`),
+    ],
+    activity: 'unseen',
+    need: wanted('limit', 3, {
+      detail: `${'x'.repeat(NEED_DETAIL_MAX - 1)}…`,
+      resetsAt: SESSION_RESET,
+    }),
+  },
+  {
+    name: 'authentication_failed → sign-in, account auth',
+    events: [submit(1), failure(3, 'authentication_failed', SIGNED_OUT)],
+    activity: 'unseen',
+    need: wanted('sign-in', 3, { detail: SIGNED_OUT, account: 'auth' }),
+  },
+  {
+    name: 'oauth_org_not_allowed → sign-in, account auth',
+    events: [submit(1), failure(3, 'oauth_org_not_allowed', 'This organization is not allowed')],
+    activity: 'unseen',
+    need: wanted('sign-in', 3, { detail: 'This organization is not allowed', account: 'auth' }),
+  },
+  {
+    name: 'billing_error → sign-in, account account',
+    events: [submit(1), failure(3, 'billing_error', 'Your credit balance is too low')],
+    activity: 'unseen',
+    need: wanted('sign-in', 3, { detail: 'Your credit balance is too low', account: 'account' }),
+  },
+  {
+    name: 'account_on_hold → sign-in, account account; время сброса у sign-in не берётся',
+    events: [
+      submit(1),
+      failure(3, 'account_on_hold', 'Account on hold · resets 2:50pm (Europe/Moscow)'),
+    ],
+    activity: 'unseen',
+    need: wanted('sign-in', 3, {
+      detail: 'Account on hold · resets 2:50pm (Europe/Moscow)',
+      account: 'account',
+    }),
+  },
+  {
+    name: 'server_error → ход окончен, need нет',
+    events: [submit(1), failure(3, 'server_error', 'API Error: 500')],
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'StopFailure без поля error → ход окончен, need нет',
+    events: [submit(1), failure(3, null, 'API Error')],
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'лимит, а сессию держит живой фоновый субагент → working, need нет',
+    events: [
+      submit(1),
+      startOf('a', {}, sec(2)),
+      hook(
+        'StopFailure',
+        { error: 'rate_limit', lastAssistantMessage: SESSION_LIMIT, backgroundTasks: [task('a')] },
+        sec(3),
+      ),
+    ],
+    activity: 'working',
+    need: null,
+  },
+];
+
+/** Запасной путь: ошибка API только в логе сессии (3.2). */
+const LIMIT_IN_LOG: NeedCase = {
+  name: 'лимит в логе, журнал пуст → limit, ход окончен на записи ошибки',
+  events: [],
+  log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+  activity: 'unseen',
+  need: wanted('limit', 5, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+};
+
+const FALLBACK_CASES: NeedCase[] = [
+  LIMIT_IN_LOG,
+  {
+    name: 'лимит в логе, журнала событий нет вовсе → то же',
+    events: null,
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: wanted('limit', 5, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+  {
+    name: 'лимит в логе, журнал старше ошибки → limit',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'unseen',
+    need: wanted('limit', 5, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+  {
+    name: 'вход в логе: authentication_failed → sign-in, account auth',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'authentication_failed', SIGNED_OUT),
+    activity: 'unseen',
+    need: wanted('sign-in', 5, { detail: SIGNED_OUT, account: 'auth' }),
+  },
+  {
+    name: 'оплата в логе: billing_error → sign-in, account account',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'billing_error', 'Your credit balance is too low'),
+    activity: 'unseen',
+    need: wanted('sign-in', 5, { detail: 'Your credit balance is too low', account: 'account' }),
+  },
+  {
+    name: 'ошибка без лимита и входа (server_error) в логе → ход окончен, need нет',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'server_error', 'API Error: 500'),
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'ошибка в логе без поля error → ход окончен, need нет',
+    events: [submit(1)],
+    log: apiErrorLog(5, null, 'API Error'),
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'в журнале событие новее ошибки → запасного пути нет, ход идёт',
+    events: [submit(6)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'событие журнала в тот же момент, что и ошибка → запасного пути нет',
+    events: [submit(5)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'ассистент писал после ошибки (продолжил сам) → запасного пути нет',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT, { lastRecordAt: sec(7) }),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'человек написал после ошибки → запасного пути нет',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT, {
+      lastRecordAt: sec(6),
+      lastUserRecordAt: sec(6),
+    }),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'запись человека новее ошибки решает сама, даже когда lastRecordAt её не видит',
+    events: [submit(1)],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT, {
+      lastRecordAt: null,
+      lastUserRecordAt: sec(6),
+    }),
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: 'ход blocked по журналу → запасной путь молчит, остаётся approval',
+    events: [submit(1), permission(2, 'Bash', 'ls')],
+    log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'ls' }),
+  },
+];
+
+/** Заготовки для снятия: у каждой вида `need` своё начало на секунде 3. */
+interface Base {
+  label: string;
+  events: EventRecord[];
+  need: SessionNeed;
+  /** Активность при этом `need`: стоящий ход — `blocked`, окончивший — `unseen`. */
+  activity: Activity;
+}
+
+const LIMIT: Base = {
+  label: 'limit',
+  events: [submit(1), failure(3, 'rate_limit', SESSION_LIMIT)],
+  need: wanted('limit', 3, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  activity: 'unseen',
+};
+const SIGN_IN: Base = {
+  label: 'sign-in',
+  events: [submit(1), failure(3, 'authentication_failed', SIGNED_OUT)],
+  need: wanted('sign-in', 3, { detail: SIGNED_OUT, account: 'auth' }),
+  activity: 'unseen',
+};
+const APPROVAL: Base = {
+  label: 'approval',
+  events: [submit(1), permission(3, 'Bash', 'npm install')],
+  need: wanted('approval', 3, { detail: 'npm install' }),
+  activity: 'blocked',
+};
+const QUESTION: Base = {
+  label: 'question',
+  events: [submit(1), notice(3, 'agent_needs_input', 'Which database?')],
+  need: wanted('question', 3, { detail: 'Which database?' }),
+  activity: 'blocked',
+};
+const ENDED_BASES = [LIMIT, SIGN_IN];
+const BLOCKED_BASES = [APPROVAL, QUESTION];
+const BASES = [...ENDED_BASES, ...BLOCKED_BASES];
+
+type Next = [name: string, event: EventRecord];
+
+/** Начало хода и ответ на форму снимают любой вид (3.3). */
+const STARTS: Next[] = [
+  ['UserPromptSubmit', submit(4)],
+  ['кадр спиннера Codex', event(TERMINAL_WORKING_EVENT, null, sec(4))],
+  ['quota_auto_resume_fired', notice(4, 'quota_auto_resume_fired')],
+  ['elicitation_complete', notice(4, 'elicitation_complete')],
+  ['elicitation_response', notice(4, 'elicitation_response')],
+];
+
+/** Запуск процесса: `startup`, `resume`, `clear` и SessionStart без поля. */
+const LAUNCHES: Next[] = [
+  ['SessionStart(startup)', hook('SessionStart', { source: 'startup' }, sec(4))],
+  ['SessionStart(resume)', hook('SessionStart', { source: 'resume' }, sec(4))],
+  ['SessionStart(clear)', hook('SessionStart', { source: 'clear' }, sec(4))],
+  ['SessionStart без source', event('SessionStart', null, sec(4))],
+];
+
+/** `idle_prompt` и сжатие контекста: ни лимит, ни вход, ни вопрос человеку они не снимают. */
+const QUIET: Next[] = [
+  ['idle_prompt', notice(4, 'idle_prompt')],
+  ['SessionStart(compact)', hook('SessionStart', { source: 'compact' }, sec(4))],
+];
+
+const STOP: Next = ['Stop', event('Stop', null, sec(4))];
+
+const CLEARING_CASES: NeedCase[] = BASES.flatMap((base) => [
+  ...STARTS.map(([name, next]): NeedCase => ({
+    name: `${base.label}, затем ${name} → working, need снят`,
+    events: [...base.events, next],
+    activity: 'working',
+    need: null,
+  })),
+  ...LAUNCHES.map(([name, next]): NeedCase => ({
+    name: `${base.label}, затем ${name} → ход окончен, need снят`,
+    events: [...base.events, next],
+    activity: 'unseen',
+    need: null,
+  })),
+]);
+
+const KEEPING_CASES: NeedCase[] = [
+  // Лимит и вход переживают то, чем ход и так кончился: Stop, idle_prompt и Ready Codex (он приходит как Stop).
+  ...ENDED_BASES.flatMap((base) =>
+    [STOP, ...QUIET].flatMap(([name, next]): NeedCase[] => [
+      {
+        name: `${base.label}, затем ${name} → need остаётся`,
+        events: [...base.events, next],
+        activity: 'unseen',
+        need: base.need,
+      },
+      {
+        name: `${base.label}, затем ${name}, сессия просмотрена → idle, need остаётся`,
+        events: [...base.events, next],
+        seen: true,
+        activity: 'idle',
+        need: base.need,
+      },
+    ]),
+  ),
+  // Вопрос человеку простой и сжатие не отменяют; `auth_success` — не про него.
+  ...BLOCKED_BASES.flatMap((base) =>
+    [...QUIET, ['auth_success', notice(4, 'auth_success')] as Next].map(
+      ([name, next]): NeedCase => ({
+        name: `${base.label}, затем ${name} → blocked, need остаётся`,
+        events: [...base.events, next],
+        activity: 'blocked',
+        need: base.need,
+      }),
+    ),
+  ),
+  // Stop заканчивает ход, и ждать человека больше нечего.
+  ...BLOCKED_BASES.map((base): NeedCase => ({
+    name: `${base.label}, затем Stop → ход окончен, need снят`,
+    events: [...base.events, STOP[1]],
+    activity: 'unseen',
+    need: null,
+  })),
+  // `auth_success` снимает только вход.
+  {
+    name: 'sign-in, затем auth_success → вход выполнен, need снят, ход по-прежнему окончен',
+    events: [...SIGN_IN.events, notice(4, 'auth_success')],
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'limit, затем auth_success → limit остаётся',
+    events: [...LIMIT.events, notice(4, 'auth_success')],
+    activity: 'unseen',
+    need: LIMIT.need,
+  },
+];
+
+/** Запись человека в логе новее событий снимает любой вид, старая — нет (3.3). */
+const LOG_CASES: NeedCase[] = BASES.flatMap((base): NeedCase[] => [
+  {
+    name: `${base.label}, затем запись человека в логе новее событий → working, need снят`,
+    events: base.events,
+    log: { lastRecordAt: sec(6), lastUserRecordAt: sec(6) },
+    activity: 'working',
+    need: null,
+  },
+  {
+    name: `${base.label}, запись человека в логе старше событий → need остаётся`,
+    events: base.events,
+    log: { lastRecordAt: sec(2), lastUserRecordAt: sec(2) },
+    activity: base.activity,
+    need: base.need,
+  },
+]);
+
+/** Новая ошибка или новый вопрос заменяет прежнее, если между ними ничего не сняло. */
+const REPLACING_CASES: NeedCase[] = [
+  {
+    name: 'лимит, затем StopFailure входа → sign-in со своим since',
+    events: [...LIMIT.events, failure(5, 'authentication_failed', SIGNED_OUT)],
+    activity: 'unseen',
+    need: wanted('sign-in', 5, { detail: SIGNED_OUT, account: 'auth' }),
+  },
+  {
+    name: 'лимит, затем повторный StopFailure лимита → since и время сброса по последнему',
+    events: [
+      ...LIMIT.events,
+      failure(
+        5,
+        'rate_limit',
+        "You've hit your weekly limit · resets Sep 22 at 4pm (Europe/Moscow)",
+      ),
+    ],
+    activity: 'unseen',
+    need: wanted('limit', 5, {
+      detail: "You've hit your weekly limit · resets Sep 22 at 4pm (Europe/Moscow)",
+      resetsAt: '2026-09-22T13:00:00.000Z',
+      window: 'week',
+    }),
+  },
+  {
+    name: 'лимит, затем StopFailure без need (server_error) → лимит снят: ход кончился другой ошибкой',
+    events: [...LIMIT.events, failure(5, 'server_error', 'API Error: 500')],
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'лимит, затем Claude продолжил сам и просит одобрение → approval со своим since',
+    events: [...LIMIT.events, permission(5, 'Bash', 'ls')],
+    activity: 'blocked',
+    need: wanted('approval', 5, { detail: 'ls' }),
+  },
+  {
+    name: 'одобрение, затем StopFailure лимита → одобрение снято, limit',
+    events: [...APPROVAL.events, failure(4, 'rate_limit', SESSION_LIMIT)],
+    activity: 'unseen',
+    need: wanted('limit', 4, { detail: SESSION_LIMIT, resetsAt: SESSION_RESET, window: 'session' }),
+  },
+];
+
+/** Через 40 с после записи лога на секунде 6 — дольше порога тишины (30 с). */
+const SILENT = Date.parse(sec(6)) + 40_000;
+
+/** Снятое не возвращается: ни новым концом хода, ни тишиной, когда ход продолжил лог (3.3). */
+const RESURFACING_CASES: NeedCase[] = [
+  ...BASES.flatMap((base): NeedCase[] => [
+    {
+      name: `${base.label}, затем новый ход и его Stop → need не возвращается`,
+      events: [...base.events, submit(4), event('Stop', null, sec(5))],
+      activity: 'unseen',
+      need: null,
+    },
+    {
+      name: `${base.label}, затем запись человека в логе и тишина → ход окончен по тишине, need не возвращается`,
+      events: base.events,
+      log: { lastRecordAt: sec(6), lastUserRecordAt: sec(6) },
+      now: SILENT,
+      activity: 'unseen',
+      need: null,
+    },
+  ]),
+  ...ENDED_BASES.map((base): NeedCase => ({
+    name: `${base.label}, затем запись ассистента новее событий (продолжил сам) и тишина → need не возвращается`,
+    events: base.events,
+    log: { lastRecordAt: sec(6), lastUserRecordAt: sec(1) },
+    now: SILENT,
+    activity: 'unseen',
+    need: null,
+  })),
+  {
+    name: 'limit, затем Claude продолжил сам (quota_auto_resume_fired) и закончил ход → need не возвращается',
+    events: [...LIMIT.events, notice(4, 'quota_auto_resume_fired'), event('Stop', null, sec(5))],
+    activity: 'unseen',
+    need: null,
+  },
+  {
+    name: 'sign-in, затем auth_success и Stop → need не возвращается',
+    events: [...SIGN_IN.events, notice(4, 'auth_success'), event('Stop', null, sec(5))],
+    activity: 'unseen',
+    need: null,
+  },
+];
+
+/** «Конкретнее — сильнее» и границы эпизода (3.2, 3.5). */
+const STRENGTH_CASES: NeedCase[] = [
+  {
+    name: 'approval, затем question → approval, since и detail первого',
+    events: [
+      submit(1),
+      permission(2, 'Bash', 'npm install'),
+      notice(3, 'agent_needs_input', 'Which database?'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'npm install' }),
+  },
+  {
+    name: 'question, затем approval (permission_prompt) → approval, since первого, detail нового',
+    events: [
+      submit(1),
+      notice(2, 'agent_needs_input', 'Which database?'),
+      notice(3, 'permission_prompt', 'Claude needs your permission'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'Claude needs your permission' }),
+  },
+  {
+    name: 'question, затем PermissionRequest → approval, since первого',
+    events: [
+      submit(1),
+      notice(2, 'elicitation_dialog', 'Which database?'),
+      permission(3, 'Bash', 'npm install'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'npm install' }),
+  },
+  {
+    name: 'question, затем approval без detail → approval без detail, а не текст вопроса',
+    events: [
+      submit(1),
+      notice(2, 'agent_needs_input', 'Which database?'),
+      notice(3, 'permission_prompt'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2),
+  },
+  {
+    name: 'PermissionRequest и через 6 с его permission_prompt → один эпизод, detail из PermissionRequest',
+    events: [
+      submit(1),
+      permission(2, 'Bash', 'npm install'),
+      notice(8, 'permission_prompt', 'Claude needs your permission'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'npm install' }),
+  },
+  {
+    name: 'повторный permission_prompt → тот же эпизод',
+    events: [
+      submit(1),
+      notice(2, 'permission_prompt', 'first'),
+      notice(3, 'permission_prompt', 'second'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 2, { detail: 'first' }),
+  },
+  {
+    name: 'второй PermissionRequest за идущим одобрением — новое окно разрешения: since и detail новые',
+    events: [submit(1), permission(2, 'Bash', 'npm install'), permission(5, 'Bash', 'npm test')],
+    activity: 'blocked',
+    need: wanted('approval', 5, { detail: 'npm test' }),
+  },
+  {
+    name: 'startup, затем question → question, since первого',
+    events: [
+      notice(2, PARLEY_STARTUP_NOTIFICATION),
+      notice(3, 'agent_needs_input', 'Which database?'),
+    ],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Which database?' }),
+  },
+  {
+    name: 'question, затем startup → question остаётся',
+    events: [
+      notice(2, 'agent_needs_input', 'Which database?'),
+      notice(3, PARLEY_STARTUP_NOTIFICATION),
+    ],
+    activity: 'blocked',
+    need: wanted('question', 2, { detail: 'Which database?' }),
+  },
+  {
+    name: 'ответ и новое одобрение → новый эпизод со своим since',
+    events: [submit(1), permission(2, 'Bash', 'ls'), submit(3), permission(4, 'Bash', 'pwd')],
+    activity: 'blocked',
+    need: wanted('approval', 4, { detail: 'pwd' }),
+  },
+  {
+    name: 'Stop и новое одобрение → новый эпизод со своим since',
+    events: [
+      submit(1),
+      permission(2, 'Bash', 'ls'),
+      event('Stop', null, sec(3)),
+      permission(4, 'Bash', 'pwd'),
+    ],
+    activity: 'blocked',
+    need: wanted('approval', 4, { detail: 'pwd' }),
+  },
+];
+
+describe('activityOf: need — одобрение, вопрос, старт (3.2)', () => {
+  it.each(SOURCE_CASES)('$name', expectCase);
+
+  it('имя внутреннего уведомления хоста о старте — parley_startup', () => {
+    expect(PARLEY_STARTUP_NOTIFICATION).toBe('parley_startup');
+  });
+
+  it('Notification с именем из прототипа объекта (constructor, toString) — неизвестное событие, а не вопрос', () => {
+    for (const type of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const result = activity([submit(1), notice(2, type, 'text')]);
+      expect(result.activity).toBe('working');
+      expect(result.need).toBeNull();
+    }
+  });
+});
+
+describe('activityOf: need — ошибка API оборвала ход (3.2)', () => {
+  it.each(LIMIT_CASES)('$name', expectCase);
+
+  it('StopFailure заканчивает ход в момент события: turnEndedAt — его время, источник — журнал', () => {
+    const result = activity([submit(1), failure(3, 'rate_limit', SESSION_LIMIT)]);
+    expect(result.turnEndedAt).toBe(sec(3));
+    expect(result.source).toBe('hooks');
+    expect(result.lastEventAt).toBe(sec(3));
+  });
+
+  it('StopFailure без need тоже заканчивает ход', () => {
+    const result = activity([submit(1), failure(3, 'server_error', 'API Error: 500')]);
+    expect(result.activity).toBe('unseen');
+    expect(result.turnEndedAt).toBe(sec(3));
+  });
+
+  it('текст Codex без пояса читается по часам машины: пояс свёртка не подставляет', () => {
+    const text =
+      "You've hit your usage limit. Visit settings to purchase more credits or try again at Oct 14th, 2026 7:27 PM.";
+    const result = activity([submit(1), failure(3, 'rate_limit', text)]);
+    // Ожидание строится конструктором `Date` по местным часам — тот же пояс, что у `Intl` по умолчанию.
+    expect(result.need?.resetsAt).toBe(new Date(2026, 9, 14, 19, 27).toISOString());
+    expect(result.need?.window).toBeNull();
+  });
+});
+
+describe('activityOf: need — запасной путь по ошибке API в логе (3.2)', () => {
+  it.each(FALLBACK_CASES)('$name', expectCase);
+
+  it('ход окончен на самой записи, а не по тишине; источник — лог', () => {
+    const result = fold(LIMIT_IN_LOG);
+    expect(result.turnEndedAt).toBe(sec(5));
+    expect(result.source).toBe('log');
+    expect(result.lastEventAt).toBeNull();
+    // Та же запись без отметки об ошибке API — обычный ответ ассистента: сессия работает до порога тишины.
+    const plain = activityOf({
+      events: [],
+      log: { lastRecordAt: sec(5), lastUserRecordAt: sec(1) },
+      now: NOW,
+    });
+    expect(plain.activity).toBe('working');
+    expect(plain.need).toBeNull();
+  });
+
+  it('без журнала событий поднят флаг hooksMissing, а need выведен', () => {
+    const result = activityOf({
+      events: null,
+      log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+      now: NOW,
+    });
+    expect(result.hooksMissing).toBe(true);
+    expect(result.need?.kind).toBe('limit');
+  });
+
+  it('время сброса считается от времени записи ошибки, а не от «сейчас»', () => {
+    // Запись в 23:50 по Москве, «resets 1am (Europe/Moscow)» — ближайший час ночи по Москве, а не сегодняшний.
+    const text = "You've hit your session limit · resets 1am (Europe/Moscow)";
+    const at = '2026-09-05T20:50:00.000Z';
+    const result = activityOf({
+      events: [],
+      log: {
+        lastRecordAt: at,
+        lastUserRecordAt: null,
+        lastApiError: { at, error: 'rate_limit', text },
+      },
+      now: Date.parse(at) + 5_000,
+    });
+    expect(result.need?.since).toBe(at);
+    expect(result.need?.resetsAt).toBe('2026-09-05T22:00:00.000Z');
+  });
+});
+
+describe('activityOf: need — снятие (3.3)', () => {
+  it.each(CLEARING_CASES)('$name', expectCase);
+  it.each(KEEPING_CASES)('$name', expectCase);
+  it.each(LOG_CASES)('$name', expectCase);
+  it.each(REPLACING_CASES)('$name', expectCase);
+  it.each(RESURFACING_CASES)('$name', expectCase);
+});
+
+describe('activityOf: need — конкретнее сильнее, эпизод (3.2, 3.5)', () => {
+  it.each(STRENGTH_CASES)('$name', expectCase);
+});
+
+describe('activityOf: need — инвариант вида и хода (3.1)', () => {
+  const BLOCKING_KINDS: NeedKind[] = ['approval', 'question', 'startup'];
+  const ENDED_KINDS: NeedKind[] = ['limit', 'sign-in'];
+
+  /**
+   * Нарушение инварианта в состоянии: `blocked` всегда с видом из тройки, а `need` у остальных — только вида из
+   * пары при оконченном ходе (`unseen`, `idle`). `null` — всё в порядке.
+   */
+  const violation = (result: ReturnType<typeof activityOf>): string | null => {
+    const kind = result.need?.kind;
+    if (result.activity === 'blocked') {
+      return kind !== undefined && BLOCKING_KINDS.includes(kind)
+        ? null
+        : `blocked с need ${String(kind)}`;
+    }
+    if (kind === undefined) return null;
+    const ended = result.activity === 'unseen' || result.activity === 'idle';
+    return ended && ENDED_KINDS.includes(kind) ? null : `${result.activity} с need ${kind}`;
+  };
+
+  const TABLE = [
+    ...SOURCE_CASES,
+    ...LIMIT_CASES,
+    ...FALLBACK_CASES,
+    ...CLEARING_CASES,
+    ...KEEPING_CASES,
+    ...LOG_CASES,
+    ...REPLACING_CASES,
+    ...RESURFACING_CASES,
+    ...STRENGTH_CASES,
+  ];
+
+  it('для всех случаев таблиц: need !== null ⇒ (blocked и вид из тройки) или (unseen/idle и вид из пары)', () => {
+    const bad = TABLE.flatMap((row) =>
+      [false, true].map((seen) => ({ row, seen, why: violation(fold(row, seen)) })),
+    )
+      .filter(({ why }) => why !== null)
+      .map(({ row, seen, why }) => `${row.name} (seen=${String(seen)}): ${String(why)}`);
+    expect(TABLE.length).toBeGreaterThan(100);
+    expect(bad).toEqual([]);
+  });
+
+  const ALPHABET: Array<[name: string, make: (n: number) => EventRecord]> = [
+    ['UserPromptSubmit', submit],
+    ['PermissionRequest', (n) => permission(n, 'Bash', 'ls')],
+    ['permission_prompt', (n) => notice(n, 'permission_prompt', 'Allow?')],
+    ['agent_needs_input', (n) => notice(n, 'agent_needs_input', 'Which?')],
+    ['parley_startup', (n) => notice(n, PARLEY_STARTUP_NOTIFICATION)],
+    ['elicitation_complete', (n) => notice(n, 'elicitation_complete')],
+    ['quota_auto_resume_fired', (n) => notice(n, 'quota_auto_resume_fired')],
+    ['auth_success', (n) => notice(n, 'auth_success')],
+    ['idle_prompt', (n) => notice(n, 'idle_prompt')],
+    ['Stop', (n) => event('Stop', null, sec(n))],
+    ['StopFailure(rate_limit)', (n) => failure(n, 'rate_limit', SESSION_LIMIT)],
+    ['StopFailure(authentication_failed)', (n) => failure(n, 'authentication_failed', SIGNED_OUT)],
+    ['StopFailure(server_error)', (n) => failure(n, 'server_error', 'API Error: 500')],
+    ['SessionStart(resume)', (n) => hook('SessionStart', { source: 'resume' }, sec(n))],
+    ['SessionStart(compact)', (n) => hook('SessionStart', { source: 'compact' }, sec(n))],
+    ['TerminalWorking', (n) => event(TERMINAL_WORKING_EVENT, null, sec(n))],
+  ];
+
+  /** Все последовательности из 1–`depth` событий алфавита, номера по алфавиту. */
+  function* sequences(depth: number, prefix: number[] = []): Generator<number[]> {
+    if (prefix.length > 0) yield prefix;
+    if (prefix.length === depth) return;
+    for (let index = 0; index < ALPHABET.length; index += 1)
+      yield* sequences(depth, [...prefix, index]);
+  }
+
+  it('для всех последовательностей до трёх событий — с ошибкой API в логе и без, просмотренных и нет', () => {
+    const logs: Array<ActivityLog | null> = [null, apiErrorLog(5, 'rate_limit', SESSION_LIMIT)];
+    const bad: string[] = [];
+    let count = 0;
+    for (const indexes of sequences(3)) {
+      const names = indexes.map((index) => ALPHABET[index]?.[0] ?? '?').join(' → ');
+      const events = indexes.map(
+        (index, position) => ALPHABET[index]?.[1](position + 1) ?? submit(1),
+      );
+      for (const log of logs) {
+        for (const seen of [false, true]) {
+          count += 1;
+          const why = violation(activityOf({ events, log, seen, now: NOW }));
+          if (why !== null) {
+            bad.push(
+              `${names}${log === null ? '' : ' + ошибка в логе'}, seen=${String(seen)}: ${why}`,
+            );
+          }
+        }
+      }
+    }
+    expect(count).toBeGreaterThan(10_000);
+    expect(bad).toEqual([]);
   });
 });

@@ -370,6 +370,7 @@ export {
 } from './work/stuck.js';
 export type { ApiFailure, NeedKind, ResetGuess, SessionNeed } from './work/stuck.js';
 export {
+  PARLEY_STARTUP_NOTIFICATION,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,

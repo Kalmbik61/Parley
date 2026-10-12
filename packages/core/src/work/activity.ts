@@ -14,6 +14,12 @@
  * их дописывает MCP-сервер сессии): пока оно идёт, сессия занята — агент внутри вызова
  * инструмента, — а тишина её тоже не понижает.
  *
+ * Чего сессия ждёт от человека — `need` (спека «Застрявшие сессии», 3.1–3.3, 3.5). Одобрение, вопрос и экран
+ * старта останавливают ход: `blocked`. Лимит подписки и слетевший вход, наоборот, ход оканчивают: `StopFailure`
+ * (а у сессий без этого хука — финальная ошибка API в логе провайдера) — конец хода, и `need` сидит поверх
+ * `unseen`/`idle`, переживая `Stop`, `idle_prompt` и `Ready` Codex. Внутри эпизода более конкретный вид не
+ * заменяется менее конкретным. Опубликованное `need` всегда согласовано с `activity` (`reportedNeed`).
+ *
  * Удержание не вечно: если ни событий хуков, ни записей лога родителя нет дольше
  * `backgroundHoldMs` (час), фоновый субагент и ожидание считаются зомби — удержание снято, ход
  * окончен.
@@ -22,7 +28,19 @@
  */
 
 import { DEFAULT_CONFIG } from '../config.js';
-import { TERMINAL_WORKING_EVENT, type BackgroundTask, type EventRecord } from './events.js';
+import {
+  PARLEY_STARTUP_NOTIFICATION,
+  TERMINAL_WORKING_EVENT,
+  type BackgroundTask,
+  type EventRecord,
+} from './events.js';
+import {
+  classifyClaudeFailure,
+  clampDetail,
+  parseResetText,
+  type NeedKind,
+  type SessionNeed,
+} from './stuck.js';
 
 export type Activity = 'working' | 'blocked' | 'unseen' | 'idle';
 
@@ -90,18 +108,38 @@ export interface SessionActivity {
   exited: boolean;
   /** Каталога `events/` нет — работает одна страховка, нужно предупреждение. */
   hooksMissing: boolean;
+  /**
+   * Чего сессия ждёт от человека; `null` — ничего (спека «Застрявшие сессии», 3.1). Не `null` только у `blocked`
+   * (одобрение, вопрос, экран старта) и у сессии с оконченным ходом, `unseen` или `idle` (лимит, вход): значения
+   * `activity` от этого не меняются. Lifecycle свёртка не видит — `null` у спящей и закрытой ставит хост.
+   */
+  need: SessionNeed | null;
 }
 
-/** `Notification`, после которых агент ждёт человека. */
-const BLOCKING = new Set([
-  'permission_prompt',
-  'agent_needs_input',
-  'elicitation_dialog',
-  'elicitation_url_dialog',
+/** Виды `need`, при которых ход стоит (`blocked`), по возрастанию конкретности: «конкретнее — сильнее» (3.2). */
+const BLOCKING_KINDS: readonly NeedKind[] = ['startup', 'question', 'approval'];
+
+/** Конкретность вида в эпизоде ожидания; −1 у видов, при которых ход не стоит (лимит, вход). */
+const rankOf = (kind: NeedKind): number => BLOCKING_KINDS.indexOf(kind);
+
+/** `Notification`, после которых агент ждёт человека, и какой вид `need` они дают. */
+const BLOCKING = new Map<string, NeedKind>([
+  ['permission_prompt', 'approval'],
+  ['agent_needs_input', 'question'],
+  ['elicitation_dialog', 'question'],
+  ['elicitation_url_dialog', 'question'],
+  [PARLEY_STARTUP_NOTIFICATION, 'startup'],
 ]);
 
-/** `Notification`, которыми ожидание закончилось и агент снова работает. */
-const RESUMING = new Set(['elicitation_complete', 'elicitation_response']);
+/**
+ * `Notification`, которыми ожидание закончилось и агент снова работает: ответ на форму, а также продолжение,
+ * которое Claude Code начал сам после сброса лимита (`quota_auto_resume_fired`).
+ */
+const RESUMING = new Set([
+  'elicitation_complete',
+  'elicitation_response',
+  'quota_auto_resume_fired',
+]);
 
 /** `SessionStart.source`, с которых сессия начинается заново; пусто — прежняя версия без поля. */
 const LAUNCH_SOURCES = new Set(['startup', 'resume', 'clear']);
@@ -218,11 +256,15 @@ export function activityOf({
   // Идущие вызовы `wait_for` в порядке начала: параллельных бывает несколько, и конец снимает своё.
   let waits: ActiveWait[] = [];
   let heldByBackground = false;
+  // Чего ждёт сессия: эпизод от появления потребности до её снятия. Как и `phase`, меняется замыканиями.
+  let need = null as SessionNeed | null;
 
   const start = (): void => {
     phase = 'working';
     turnEndedAt = null;
     source = 'hooks';
+    // Ход начался (промпт, кадр спиннера, ответ на форму, продолжение после лимита): ждать человека больше нечего.
+    need = null;
   };
   const end = (at: string): void => {
     phase = 'ended';
@@ -234,6 +276,41 @@ export function activityOf({
     for (const id of started.keys()) {
       if (!background.some((task) => task.id === id)) started.delete(id);
     }
+    // `need` конец хода не трогает: лимит и вход на нём как раз и ждут, а вопрос человеку после него не виден —
+    // `reportedNeed` показывает такие виды только у стоящего хода.
+  };
+  // Ход встал: агент ждёт человека. Внутри идущего эпизода более конкретный вид не заменяется менее конкретным,
+  // а менее конкретный повышается до более конкретного — с прежним `since`. `newDialog` — окно разрешения
+  // (`PermissionRequest`): оно у каждого одобрения своё, и второе за идущим — уже другое, с новым `since`.
+  const block = (kind: NeedKind, at: string, detail: string | null, newDialog = false): void => {
+    const open = phase === 'blocked' ? need : null;
+    phase = 'blocked';
+    source = 'hooks';
+    if (open === null || (newDialog && open.kind === 'approval')) {
+      need = { kind, since: at, detail, resetsAt: null, window: null, account: null };
+    } else if (rankOf(kind) > rankOf(open.kind)) {
+      need = { ...open, kind, detail };
+    }
+  };
+  // Ход оборван ошибкой API (`StopFailure`, а при запасном пути — запись лога): ход окончен, а лимит и слетевший
+  // вход ждут человека. Время сброса берётся из полного текста: строка `detail` обрезана до `NEED_DETAIL_MAX` знаков
+  // и могла потерять хвост с ним. Ошибка не из этих двух (`server_error`…) `need` не даёт и снимает прежний.
+  const failed = (at: string, error: string | null, text: string | null): void => {
+    end(at);
+    const failure = classifyClaudeFailure(error);
+    if (failure === null) {
+      need = null;
+      return;
+    }
+    const reset = failure.kind === 'limit' ? parseResetText(text ?? '', new Date(at)) : null;
+    need = {
+      kind: failure.kind,
+      since: at,
+      detail: clampDetail(text),
+      resetsAt: reset?.resetsAt ?? null,
+      window: reset?.window ?? null,
+      account: failure.account,
+    };
   };
 
   for (const event of events ?? []) {
@@ -267,8 +344,10 @@ export function activityOf({
         // Проба живого Claude Code 2.1.289 (2026-10-06): первый хук — признак готовности поля ввода,
         // SessionStart срабатывает через ~0,2-0,35 с после запуска и набранный в этот миг текст не теряется;
         // удерживать `working` до `idle_prompt` ради готовности ввода не нужно.
-        if (isLaunchSource(event.source) && (phase === 'working' || phase === 'blocked')) {
-          end(event.at);
+        if (isLaunchSource(event.source)) {
+          // Запущен новый процесс: то, чего ждал прежний (вопрос, лимит, вход), позади.
+          need = null;
+          if (phase === 'working' || phase === 'blocked') end(event.at);
         }
         break;
       case TERMINAL_WORKING_EVENT:
@@ -276,16 +355,18 @@ export function activityOf({
         start();
         break;
       case 'PermissionRequest':
-        phase = 'blocked';
-        source = 'hooks';
+        block('approval', event.at, clampDetail(event.toolDetail ?? event.toolName), true);
         break;
       case 'Notification': {
         const type = event.notificationType ?? '';
-        if (BLOCKING.has(type)) {
-          phase = 'blocked';
-          source = 'hooks';
+        const kind = BLOCKING.get(type);
+        if (kind !== undefined) {
+          block(kind, event.at, clampDetail(event.message));
         } else if (RESUMING.has(type)) {
           start();
+        } else if (type === 'auth_success') {
+          // Вход выполнен: слетевший вход снят, лимит от входа не проходит. Ход при этом не начинается.
+          if (need?.kind === 'sign-in') need = null;
         } else if (type === 'idle_prompt' && phase !== 'blocked') {
           // Простой не отменяет вопроса пользователю: blocked снимает только
           // ответ на него или новый промпт.
@@ -295,6 +376,11 @@ export function activityOf({
       }
       case 'Stop':
         end(event.at);
+        break;
+      case 'StopFailure':
+        // Claude Code шлёт его вместо `Stop`, когда ход оборвала ошибка API; у Codex такое событие хост выводит
+        // из `task_complete` с ошибкой. Текст ошибки — то, что видит человек; без него — подробности.
+        failed(event.at, event.error, event.lastAssistantMessage ?? event.errorDetails);
         break;
       case 'SubagentStart':
         // Без id старт не сопоставить с остановкой — события пропускаются.
@@ -366,12 +452,35 @@ export function activityOf({
     source = 'log';
   }
 
+  // Запасной путь для ошибки API (3.2): у сессии, чей `StopFailure` не доходит до журнала, о ней знает один лог.
+  // Запись ошибки — последняя запись работы, новее журнала и человека, а ход не стоит на вопросе: тогда это то же,
+  // что `StopFailure` в момент записи. Ход кончился на ней, а не через порог тишины: сама запись — «ответ ассистента
+  // новее событий», который иначе вернул бы сессию в `working`. Был ответ после неё (Claude продолжил сам) или
+  // сообщение человека — ошибка позади.
+  const apiError = log?.lastApiError ?? null;
+  const apiErrorAt = msOf(apiError?.at ?? null);
+  let endedByLogError = false;
+  if (
+    apiError !== null &&
+    phase !== 'blocked' &&
+    isNewer(apiErrorAt, eventAt) &&
+    isNewer(apiErrorAt, userAt) &&
+    !(recordAt > apiErrorAt)
+  ) {
+    failed(apiError.at, apiError.error, apiError.text);
+    source = 'log';
+    endedByLogError = true;
+  }
+
   if (phase !== 'blocked') {
     const recordIsNewer = isNewer(recordAt, eventAt);
-    if (recordIsNewer) {
+    if (recordIsNewer && !endedByLogError) {
       phase = 'working';
       turnEndedAt = null;
       source = 'log';
+      // Запись новее событий — сессия снова работает, и то, чего она ждала, позади (запись человека — прямо
+      // названное снятие, 3.3); иначе по тишине ход окончился бы с прежним лимитом.
+      need = null;
     }
     // Тишину считаем от последнего события любой оси, а не только лога: свежий
     // хук значит, что агент жив, пока длинный инструмент или субагент ничего не
@@ -417,10 +526,11 @@ export function activityOf({
   const tasks = phase === 'ended' ? [] : tasksOf(started, background);
 
   const ended: Activity = seen ? 'idle' : 'unseen';
+  // Ничего не известно — состояние тусклое: после перезапуска харнесса все
+  // закончившие ход сессии считаются просмотренными (раздел 4.1).
+  const reported: Activity = phase === null ? 'idle' : phase === 'ended' ? ended : phase;
   return {
-    // Ничего не известно — состояние тусклое: после перезапуска харнесса все
-    // закончившие ход сессии считаются просмотренными (раздел 4.1).
-    activity: phase === null ? 'idle' : phase === 'ended' ? ended : phase,
+    activity: reported,
     subagents: tasks.length,
     tasks,
     // Последнее из идущих ожиданий.
@@ -431,7 +541,20 @@ export function activityOf({
     source,
     exited,
     hooksMissing: events === null,
+    need: reportedNeed(need, reported),
   };
+}
+
+/**
+ * `need` в паре с опубликованной активностью (3.1): `blocked` — только вид, при котором ход стоит (одобрение,
+ * вопрос, старт); ход окончен (`unseen`, `idle`) — только вид, на котором он оборвался (лимит, вход). Всё прочее —
+ * `null`: работающая сессия ничего не ждёт, а несогласованный вид — остаток эпизода, который снял лог, тишина или
+ * фоновые субагенты, поднявшие сессию в `working`.
+ */
+function reportedNeed(need: SessionNeed | null, activity: Activity): SessionNeed | null {
+  if (need === null || activity === 'working') return null;
+  const stopsTurn = rankOf(need.kind) >= 0;
+  return stopsTurn === (activity === 'blocked') ? need : null;
 }
 
 /**
