@@ -146,6 +146,21 @@ describe('deliverContext (спека браузера 4.5)', () => {
     expect(lastToast().text).toBe('1 element added to review room');
   });
 
+  it('Фокус ревью 5: пока пачка одной цели жива, доставка в другую цель — новый тост; Undo первого трогает только его цель', async () => {
+    // Без Undo и без паузы: в тесте выше Undo сам сбрасывает пачку, и там другая цель получает новый тост и без сверки ключа.
+    await deliverContext(ITEM, deps({ kind: 'session', sessionId: 's-02' }));
+    const first = lastToast();
+    await deliverContext(SECOND, deps({ kind: 'room', roomId: 'r-01' }));
+    const second = lastToast();
+    expect(second.options.id).not.toBe(first.options.id);
+    expect(second.text).toBe('1 element added to review room');
+    expect(chatPaths()).toEqual([ITEM.mdPath]);
+    expect(roomPaths()).toEqual([SECOND.mdPath]);
+    first.options.cancel?.onClick();
+    expect(chatPaths()).toEqual([]);
+    expect(roomPaths()).toEqual([SECOND.mdPath]);
+  });
+
   it('разные виды в одной пачке — «items»; onUndo пункта зовётся по Undo', async () => {
     const onUndo = vi.fn();
     await deliverContext({ ...ITEM, kind: 'console', label: 'error-boom', pngPath: null, onUndo }, deps({ kind: 'room', roomId: 'r-01' }));
