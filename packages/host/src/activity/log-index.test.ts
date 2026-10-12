@@ -117,6 +117,48 @@ describe('createLogIndex', () => {
     });
   });
 
+  it('log отдаёт lastApiError из индекса; у сессии без ошибки API поля нет', async () => {
+    const text = "You've hit your session limit · resets 2:50pm (Europe/Moscow)";
+    const record = (value: Record<string, unknown>): string => `${JSON.stringify(value)}\n`;
+    await writeClaudeSession(
+      'limited',
+      record({
+        type: 'user',
+        sessionId: 'limited',
+        timestamp: '2026-10-12T10:00:00.000Z',
+        message: { role: 'user', content: 'продолжай' },
+      }) +
+        record({
+          type: 'assistant',
+          sessionId: 'limited',
+          timestamp: '2026-10-12T10:01:00.000Z',
+          isApiErrorMessage: true,
+          error: 'rate_limit',
+          apiErrorStatus: 429,
+          message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+        }),
+    );
+    await writeClaudeSession(
+      'plain',
+      record({
+        type: 'user',
+        sessionId: 'plain',
+        timestamp: '2026-10-12T10:00:00.000Z',
+        message: { role: 'user', content: 'привет' },
+      }),
+    );
+
+    const idx = index();
+    await idx.start();
+
+    expect(idx.log(session({ providerSessionId: 'limited' }))).toEqual({
+      lastRecordAt: '2026-10-12T10:01:00.000Z',
+      lastUserRecordAt: '2026-10-12T10:00:00.000Z',
+      lastApiError: { at: '2026-10-12T10:01:00.000Z', error: 'rate_limit', text },
+    });
+    expect(idx.log(session({ providerSessionId: 'plain' }))).not.toHaveProperty('lastApiError');
+  });
+
   it('один и тот же нативный id у Claude и Codex друг друга не вытесняет: лог выбирает провайдер сессии', async () => {
     const id = '11111111-1111-1111-1111-111111111111';
     await writeClaudeSession(

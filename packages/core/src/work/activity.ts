@@ -42,6 +42,12 @@ export interface ActivityLog {
    * Только она снимает `blocked` со стороны страховки (раздел 4.3).
    */
   lastUserRecordAt: string | null;
+  /**
+   * Самая поздняя запись ассистента с ошибкой API (`SessionIndex.lastApiError`, только лог Claude Code):
+   * запасной путь для сессий, запущенных до хука `StopFailure`. Это сырьё, а не вывод: новее ли она остальных
+   * осей, решает свёртка. Нет поля и `null` — такой записи нет.
+   */
+  lastApiError?: { at: string; error: string | null; text: string } | null;
 }
 
 /** Живой субагент сессии: что о нём известно журналу. */

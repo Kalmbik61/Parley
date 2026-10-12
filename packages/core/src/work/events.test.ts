@@ -8,7 +8,8 @@ import { appendFile, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openEvents, watchEvents } from './events.js';
+import { bareEvent, eventRecordOf, openEvents, watchEvents } from './events.js';
+import { NEED_DETAIL_MAX } from './stuck.js';
 
 const SESSION = 's-01';
 
@@ -307,6 +308,186 @@ describe('openEvents: поля агента и фоновых задач', () =>
     expect(empty?.source).toBeNull();
     expect(none?.source).toBeNull();
     expect(bad?.source).toBeNull();
+  });
+});
+
+describe('eventRecordOf: поля ошибки и инструмента', () => {
+  const AT = '2026-10-12T10:00:00.000Z';
+  /** Шесть полей этой задачи, когда в stdin хука их нет. */
+  const NO_EXTRA = {
+    error: null,
+    errorDetails: null,
+    lastAssistantMessage: null,
+    message: null,
+    toolName: null,
+    toolDetail: null,
+  };
+
+  it('StopFailure из документации: error, error_details и last_assistant_message', () => {
+    const event = eventRecordOf(
+      {
+        hook_event_name: 'StopFailure',
+        session_id: 'abc123',
+        transcript_path: '/home/u/.claude/projects/p/abc123.jsonl',
+        cwd: '/home/u/p',
+        error: 'rate_limit',
+        error_details: '429 Too Many Requests',
+        last_assistant_message: 'API Error: Rate limit reached',
+      },
+      AT,
+    );
+
+    expect(event).toMatchObject({
+      at: AT,
+      name: 'StopFailure',
+      error: 'rate_limit',
+      errorDetails: '429 Too Many Requests',
+      lastAssistantMessage: 'API Error: Rate limit reached',
+      message: null,
+      toolName: null,
+      toolDetail: null,
+    });
+  });
+
+  it('Notification: message доходит до события вместе с notification_type', () => {
+    const event = eventRecordOf(
+      {
+        hook_event_name: 'Notification',
+        notification_type: 'permission_prompt',
+        message: 'Claude needs your permission to use Bash',
+      },
+      AT,
+    );
+
+    expect(event).toMatchObject({
+      notificationType: 'permission_prompt',
+      message: 'Claude needs your permission to use Bash',
+      error: null,
+      toolName: null,
+    });
+  });
+
+  it('PermissionRequest Bash: tool_name и команда из tool_input', () => {
+    const event = eventRecordOf(
+      {
+        hook_event_name: 'PermissionRequest',
+        tool_name: 'Bash',
+        tool_input: { command: 'rm -rf node_modules', description: 'Remove dependencies' },
+        permission_suggestions: [],
+      },
+      AT,
+    );
+
+    expect(event).toMatchObject({
+      name: 'PermissionRequest',
+      toolName: 'Bash',
+      toolDetail: 'rm -rf node_modules',
+      error: null,
+      errorDetails: null,
+      lastAssistantMessage: null,
+      message: null,
+    });
+  });
+
+  it.each([
+    ['Bash', { command: 'git status' }, 'git status'],
+    ['Edit', { file_path: '/p/src/a.ts', old_string: 'a', new_string: 'b' }, '/p/src/a.ts'],
+    ['Write', { file_path: '/p/src/b.ts', content: 'x' }, '/p/src/b.ts'],
+    ['MultiEdit', { file_path: '/p/src/c.ts', edits: [] }, '/p/src/c.ts'],
+    ['NotebookEdit', { notebook_path: '/p/n.ipynb', new_source: 'x' }, '/p/n.ipynb'],
+  ])('toolDetail у %s — команда или путь файла', (toolName, toolInput, expected) => {
+    const event = eventRecordOf(
+      { hook_event_name: 'PermissionRequest', tool_name: toolName, tool_input: toolInput },
+      AT,
+    );
+
+    expect(event).toMatchObject({ toolName, toolDetail: expected });
+  });
+
+  it.each([
+    ['Read', { file_path: '/p/src/a.ts' }],
+    ['Grep', { pattern: 'x', path: '/p' }],
+    ['mcp__parley__wait_for', { target: 's-02' }],
+    // Чужое поле своего инструмента: путь у Bash и команда у Edit детали не дают.
+    ['Bash', { file_path: '/p/a.ts' }],
+    ['Edit', { command: 'ls' }],
+    ['NotebookEdit', { file_path: '/p/a.ts' }],
+    ['Bash', { command: '' }],
+    ['Bash', { command: 42 }],
+    ['Bash', 'ls'],
+    ['Bash', ['ls']],
+    ['Bash', null],
+  ])('toolDetail у %s при tool_input %j — null', (toolName, toolInput) => {
+    const event = eventRecordOf(
+      { hook_event_name: 'PermissionRequest', tool_name: toolName, tool_input: toolInput },
+      AT,
+    );
+
+    expect(event?.toolName).toBe(toolName);
+    expect(event?.toolDetail).toBeNull();
+  });
+
+  it('toolDetail: длинная многострочная команда — одна строка не длиннее NEED_DETAIL_MAX, оборванная на …', () => {
+    const command = `echo start\n${'x'.repeat(500)}\necho end`;
+    const event = eventRecordOf(
+      { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command } },
+      AT,
+    );
+
+    expect(event?.toolDetail).not.toContain('\n');
+    expect(event?.toolDetail).toHaveLength(NEED_DETAIL_MAX);
+    expect(event?.toolDetail?.startsWith('echo start xxx')).toBe(true);
+    expect(event?.toolDetail?.endsWith('…')).toBe(true);
+  });
+
+  it('Stop без этих полей и bareEvent: все шесть полей — null', () => {
+    const stop = eventRecordOf(
+      { hook_event_name: 'Stop', stop_hook_active: false, background_tasks: [] },
+      AT,
+    );
+
+    expect(stop).toMatchObject(NO_EXTRA);
+    expect(bareEvent(AT, 'Stop')).toMatchObject(NO_EXTRA);
+  });
+
+  it('пустые строки и значения не строк — null, событие не теряется', () => {
+    const event = eventRecordOf(
+      {
+        hook_event_name: 'StopFailure',
+        error: 7,
+        error_details: { code: 429 },
+        last_assistant_message: '',
+        message: ['x'],
+        tool_name: false,
+        // Без имени инструмента команда деталью не становится.
+        tool_input: { command: 'ls' },
+      },
+      AT,
+    );
+
+    expect(event).toMatchObject({ name: 'StopFailure', ...NO_EXTRA });
+  });
+
+  it('строка StopFailure из журнала events/ несёт те же поля', async () => {
+    await writeFile(
+      journal(),
+      raw({
+        hook_event_name: 'StopFailure',
+        error: 'rate_limit',
+        error_details: '429 Too Many Requests',
+        last_assistant_message: "You've hit your session limit · resets 2:50pm (Europe/Moscow)",
+      }),
+      'utf8',
+    );
+
+    const [event] = (await openEvents(dir).read(SESSION)) ?? [];
+
+    expect(event).toMatchObject({
+      name: 'StopFailure',
+      error: 'rate_limit',
+      errorDetails: '429 Too Many Requests',
+      lastAssistantMessage: "You've hit your session limit · resets 2:50pm (Europe/Moscow)",
+    });
   });
 });
 

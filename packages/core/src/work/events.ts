@@ -12,6 +12,7 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { clampDetail } from './stuck.js';
 
 /**
  * Фоновая задача из `background_tasks` хука — снимок на момент события. Claude Code
@@ -64,6 +65,28 @@ export interface EventRecord {
    * событий и у строк без поля — `null`.
    */
   source: string | null;
+  /**
+   * `error` у `StopFailure`: что оборвало ход (`rate_limit`, `authentication_failed`, `billing_error`…). У
+   * остальных событий и у строк без поля — `null`.
+   */
+  error: string | null;
+  /** `error_details` у `StopFailure`: подробности ошибки («429 Too Many Requests»); нет поля — `null`. */
+  errorDetails: string | null;
+  /**
+   * `last_assistant_message`: у `StopFailure` — текст ошибки, каким его видит человек (в нём бывает время сброса
+   * лимита: «resets 2:50pm (Europe/Moscow)»); у `Stop` и `SubagentStop` — последний ответ. Нет поля — `null`.
+   */
+  lastAssistantMessage: string | null;
+  /** `message` у `Notification`: текст запроса («Claude needs your permission to use Bash»); нет поля — `null`. */
+  message: string | null;
+  /** `tool_name` событий инструментов (`PermissionRequest`…); нет поля — `null`. */
+  toolName: string | null;
+  /**
+   * Что делает инструмент, для показа человеку: команда `Bash` или путь файла, который правят (`Edit`, `Write`,
+   * `MultiEdit`, `NotebookEdit`) — одна строка не длиннее `NEED_DETAIL_MAX` знаков. `tool_input` целиком журнал не
+   * держит: события лежат в памяти всю сессию. У других инструментов и без `tool_input` — `null`.
+   */
+  toolDetail: string | null;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -109,6 +132,12 @@ export const bareEvent = (at: string, name: string): EventRecord => ({
   waitTarget: null,
   waitId: null,
   source: null,
+  error: null,
+  errorDetails: null,
+  lastAssistantMessage: null,
+  message: null,
+  toolName: null,
+  toolDetail: null,
 });
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -117,6 +146,26 @@ export const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** Непустая строка или `null`: Claude Code шлёт пустую строку вместо отсутствующего значения. */
 export const textOf = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null;
+
+/**
+ * Выжимка `tool_input` (`EventRecord.toolDetail`): команда `Bash`, путь файла у `Edit`, `Write`, `MultiEdit` и
+ * `NotebookEdit`. Поле берётся по инструменту — чужое поле (путь у `Bash`) деталью не становится.
+ */
+function toolDetailOf(toolName: string | null, input: unknown): string | null {
+  if (!isRecord(input)) return null;
+  switch (toolName) {
+    case 'Bash':
+      return clampDetail(textOf(input.command));
+    case 'Edit':
+    case 'Write':
+    case 'MultiEdit':
+      return clampDetail(textOf(input.file_path));
+    case 'NotebookEdit':
+      return clampDetail(textOf(input.notebook_path));
+    default:
+      return null;
+  }
+}
 
 /**
  * Разбирает `background_tasks`. Кривой элемент (не объект, нет `id`, `type` или `status`)
@@ -162,6 +211,7 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
 
   const name = data.hook_event_name;
   if (typeof name !== 'string' || name === '') return null;
+  const toolName = textOf(data.tool_name);
   return {
     ...bareEvent(at, name),
     notificationType: typeof data.notification_type === 'string' ? data.notification_type : null,
@@ -172,6 +222,12 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
     waitTarget: textOf(data.parley_wait_target),
     waitId: textOf(data.parley_wait_id),
     source: textOf(data.source),
+    error: textOf(data.error),
+    errorDetails: textOf(data.error_details),
+    lastAssistantMessage: textOf(data.last_assistant_message),
+    message: textOf(data.message),
+    toolName,
+    toolDetail: toolDetailOf(toolName, data.tool_input),
   };
 }
 

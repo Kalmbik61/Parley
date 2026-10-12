@@ -42,6 +42,16 @@ function codexCounters(payload: RawRecord) {
   };
 }
 
+/**
+ * `error` события `task_complete` — `{ message, codex_error_info }`: ход кончился ошибкой (лимит, вход…).
+ * Не объект — ошибки нет. Нет `message` — текст пустой: вид ошибки (`codex_error_info`) решает и без него.
+ */
+function turnError(payload: RawRecord): { info: unknown; message: string } | null {
+  const error = asRecord(payload['error']);
+  if (error === null) return null;
+  return { info: error['codex_error_info'], message: str(error, 'message') ?? '' };
+}
+
 /** Первый текстовый блок content[] — там `{type: 'input_text', text}`. */
 function firstContentText(payload: RawRecord): string | null {
   const content = payload['content'];
@@ -158,7 +168,9 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
           at !== null &&
           (kind === 'task_started' || kind === 'task_complete' || kind === 'turn_aborted')
         ) {
-          lastTurnEvent = { type: kind, at };
+          // Ошибка описывает только это событие: следующее строится заново и старую не наследует.
+          const error = kind === 'task_complete' ? turnError(payload) : null;
+          lastTurnEvent = error === null ? { type: kind, at } : { type: kind, at, error };
         }
         // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
         // для этого не годятся: там же едут системные инструкции и AGENTS.md.

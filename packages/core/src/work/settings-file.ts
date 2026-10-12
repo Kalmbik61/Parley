@@ -33,12 +33,16 @@ const fromShellEnv = (key: string): string =>
  */
 export const HOOK_COMMAND = `cat >> "${fromShellEnv('WORK_DIR')}/events/${fromShellEnv('SESSION_ID')}.jsonl" || true`;
 
-/** Хуки таблицы 4.2: промпты, разрешения, вопросы агента, Stop, субагенты, сессия. */
+/**
+ * Хуки таблицы 4.2: промпты, разрешения, вопросы агента, Stop, субагенты, сессия. `StopFailure` — ход,
+ * оборванный ошибкой API (лимит подписки, вход): Claude Code шлёт его вместо `Stop`.
+ */
 export const HOOK_EVENTS = [
   'UserPromptSubmit',
   'Notification',
   'PermissionRequest',
   'Stop',
+  'StopFailure',
   'SubagentStart',
   'SubagentStop',
   'SessionStart',

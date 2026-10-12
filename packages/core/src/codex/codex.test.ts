@@ -105,6 +105,120 @@ describe('indexCodexSession', () => {
     },
   );
 
+  describe('ошибка, которой кончился ход (task_complete.error)', () => {
+    const AT = '2026-03-12T10:00:30.000Z';
+    const LATER = '2026-03-12T10:01:00.000Z';
+    // Настоящая запись: `error` лежит в самом `task_complete` рядом с `last_agent_message`.
+    const LIMIT = {
+      message:
+        "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at 7:27 PM.",
+      codex_error_info: 'usage_limit_exceeded',
+    };
+    const turnEvent = (type: string, at: string, extra: Record<string, unknown> = {}): string =>
+      line({ timestamp: at, type: 'event_msg', payload: { type, turn_id: 'turn-1', ...extra } });
+
+    it('task_complete с error: lastTurnEvent несёт info (codex_error_info) и message', async () => {
+      const file = await writeRollout(
+        '2026-03-12',
+        'turn-error',
+        meta() +
+          turnEvent('task_started', '2026-03-12T10:00:10.000Z') +
+          turnEvent('task_complete', AT, { last_agent_message: null, error: LIMIT }) +
+          // Служебный хвост после ответа событие хода не меняет.
+          line({ timestamp: LATER, type: 'event_msg', payload: { type: 'token_count' } }),
+      );
+
+      expect((await indexCodexSession(file)).lastTurnEvent).toEqual({
+        type: 'task_complete',
+        at: AT,
+        error: { info: 'usage_limit_exceeded', message: LIMIT.message },
+      });
+    });
+
+    it.each([
+      ['task_started', {}],
+      ['turn_aborted', { reason: 'interrupted' }],
+      ['task_complete', { last_agent_message: 'готово' }],
+    ])(
+      'следующий %s заменяет событие, и ошибка старого не переходит к новому',
+      async (type, extra) => {
+        const file = await writeRollout(
+          '2026-03-12',
+          `turn-after-${type}`,
+          meta() + turnEvent('task_complete', AT, { error: LIMIT }) + turnEvent(type, LATER, extra),
+        );
+
+        const index = await indexCodexSession(file);
+
+        expect(index.lastTurnEvent).toEqual({ type, at: LATER });
+        expect(index.lastTurnEvent).not.toHaveProperty('error');
+      },
+    );
+
+    it('codex_error_info вариантом с полями приходит как есть', async () => {
+      const info = { http_connection_failed: { http_status_code: 502 } };
+      const file = await writeRollout(
+        '2026-03-12',
+        'turn-error-object',
+        meta() +
+          turnEvent('task_complete', AT, {
+            error: { message: 'Connection failed', codex_error_info: info },
+          }),
+      );
+
+      expect((await indexCodexSession(file)).lastTurnEvent?.error).toEqual({
+        info,
+        message: 'Connection failed',
+      });
+    });
+
+    it('error без message остаётся ошибкой с пустым текстом: вид (info) не теряется', async () => {
+      const file = await writeRollout(
+        '2026-03-12',
+        'turn-error-no-text',
+        meta() + turnEvent('task_complete', AT, { error: { codex_error_info: 'unauthorized' } }),
+      );
+
+      expect((await indexCodexSession(file)).lastTurnEvent?.error).toEqual({
+        info: 'unauthorized',
+        message: '',
+      });
+    });
+
+    it.each([
+      ['нет error', 'no-error-a', {}],
+      ['error: null', 'no-error-b', { error: null }],
+      ['error строкой', 'no-error-c', { error: 'boom' }],
+      ['error списком', 'no-error-d', { error: [LIMIT] }],
+    ])('task_complete, %s — ошибки в lastTurnEvent нет', async (_name, id, extra) => {
+      const file = await writeRollout(
+        '2026-03-12',
+        id,
+        meta() + turnEvent('task_complete', AT, extra),
+      );
+
+      const index = await indexCodexSession(file);
+
+      expect(index.lastTurnEvent).toEqual({ type: 'task_complete', at: AT });
+      expect(index.lastTurnEvent).not.toHaveProperty('error');
+    });
+
+    it('error у task_started и turn_aborted не читается: ошибкой кончается только task_complete', async () => {
+      const file = await writeRollout(
+        '2026-03-12',
+        'turn-error-wrong-event',
+        meta() +
+          turnEvent('task_started', AT, { error: LIMIT }) +
+          turnEvent('turn_aborted', LATER, { error: LIMIT }),
+      );
+
+      expect((await indexCodexSession(file)).lastTurnEvent).toEqual({
+        type: 'turn_aborted',
+        at: LATER,
+      });
+    });
+  });
+
   it('раскладывает мету, модель, инструменты и заголовок', async () => {
     const file = await writeRollout(
       '2026-03-12',
