@@ -25,7 +25,8 @@
  *
  * Цель «To» (этап B, спека браузера 4.5): сессия или комната, куда лягут «Add to chat», Select и аннотации. Хранится в
  * раскладке (`TabSpec.target`, нет поля — умолчание); `usePageContext` разрешает её, откатывает пропавшую с тостом и
- * ведёт очередь добавлений, меню `TargetMenu` стоит в строке вкладки.
+ * ведёт очередь добавлений, меню `TargetMenu` стоит в строке вкладки. «Add to chat» панели Console | Network (запись
+ * консоли, запрос, все ошибки) — `context/actions.ts`: слоты `DevtoolsPanel` ведут их в `usePageContext().add`.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -45,6 +46,7 @@ import { useUiStore } from '../store/ui.js';
 import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { BrowserChrome } from './BrowserChrome.js';
+import { createPageContextActions } from './context/actions.js';
 import { TargetMenu } from './context/TargetMenu.js';
 import { usePageContext } from './context/use-page-context.js';
 import { DesignModeCard } from './DesignModeCard.js';
@@ -149,6 +151,20 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
   const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
   const pageContext = usePageContext({ bridge, workKey, tabId, entry, stored: target, sendDeps });
+  // Адрес страницы на момент клика «Add to chat»: TabSpec.url, его ведёт сама поверхность.
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const contextActions = useMemo(
+    () =>
+      createPageContextActions({
+        bridge,
+        webContentsId: () => useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null,
+        pageUrl: () => urlRef.current,
+        devtools: () => useDevtoolsStore.getState().tabs[tabId] ?? EMPTY_DEVTOOLS,
+        add: pageContext.add,
+      }),
+    [bridge, tabId, pageContext.add],
+  );
   const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
   const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
@@ -577,6 +593,9 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
           onResize={commitPanelHeight}
           onReload={reload}
           onClear={clearDevtools}
+          onAddConsoleToChat={contextActions.console}
+          onAddRequestToChat={contextActions.request}
+          onAddErrorsToChat={contextActions.errors}
         />
       ) : null}
     </div>

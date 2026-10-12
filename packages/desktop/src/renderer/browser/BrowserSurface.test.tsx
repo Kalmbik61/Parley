@@ -29,6 +29,8 @@ import { useDevtoolsStore } from './devtools/store.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
+import { roomKey } from '../lib/room-view.js';
+import { resetDeliveryForTests } from './context/deliver.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -1003,5 +1005,58 @@ describe('BrowserSurface — цель «To» (этап B, спека брауз�
     expect(vi.mocked(toast).mock.calls.filter(([text]) => String(text).startsWith('The chosen'))).toEqual([
       ['The chosen session or room is gone — page context now goes to S01'],
     ]);
+  });
+});
+
+/** Работа с одной комнатой и без сессий: цель по умолчанию — комната, вложения видны в её поле. */
+function roomWork(): void {
+  useWorksStore.setState({ entries: [entryWith([], [makeRoom('r-01', 'review')])] });
+}
+
+const roomPaths = (): readonly string[] => useUiStore.getState().composerAttachments[roomKey(WORK_KEY, 'r-01')] ?? [];
+
+describe('BrowserSurface — «Add to chat» из панели (этап B, спека браузера 4.3–4.5)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+  });
+
+  it('строка консоли — файл console в цель «To»; «Add errors to chat» — файл errors; агенту ничего', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [consoleEntry(1, { level: 'error', text: 'boom' })], network: [] });
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'console'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/console-error-boom-0001.md']));
+    fireEvent.click(screen.getByRole('button', { name: 'Add errors to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/console-error-boom-0001.md', '/fake/drops/context/errors-page-0002.md']));
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+
+  it('запрос в деталях Network — файл request в цель «To»; тело ответа читается у гостя своей вкладки в момент клика', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/settings');
+    renderWork();
+    bridge.setResponseBody({ text: '{"ok":false}', base64: false, truncated: false });
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [], network: [networkEntry('r1', { status: 500, statusText: 'Internal Server Error' })] });
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => {
+      useDevtoolsStore.getState().show(TAB, 'network');
+      useDevtoolsStore.getState().patch(TAB, { selected: 'r1' });
+    });
+    // Детали открыты, а тело ещё не читалось: оно читается по клику «Add to chat», а не заранее.
+    expect(bridge.browserCalls.filter((call) => call.method === 'responseBody')).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/request-get-api-r1-500-0001.md']));
+    expect(bridge.browserCalls.filter((call) => call.method === 'responseBody')).toEqual([{ method: 'responseBody', args: [7, 'r1'] }]);
+    // В файле — адрес страницы вкладки на момент клика и тело ответа, прочитанное у её гостя.
+    const saved = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string } | undefined;
+    expect(saved?.markdown).toContain('URL: http://localhost:5173/settings');
+    expect(saved?.markdown).toContain('"ok": false');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
   });
 });
