@@ -286,6 +286,14 @@ export function activityOf({
   let heldByBackground = false;
   // Чего ждёт сессия: эпизод от появления потребности до её снятия. Как и `phase`, меняется замыканиями.
   let need = null as SessionNeed | null;
+  // Время последней записи человека в логе: ею закрывается ожидание человека (`answered`).
+  const userAt = msOf(log?.lastUserRecordAt ?? null);
+  // Эпизод ожидания человека закрывает запись человека в логе, появившаяся после его начала: разрешение выдано или
+  // на вопрос ответили (хука «разрешение выдано» в наборе 4.2 нет). Считается от начала эпизода, а не от последнего
+  // события журнала, — иначе остановка субагента или другое пассивное событие, дописанное после записи, снова
+  // поставило бы ход на вопрос. Новое событие ожидания после записи открывает уже следующий эпизод (`block`).
+  const answered = (episode: SessionNeed | null): boolean =>
+    episode !== null && isNewer(userAt, msOf(episode.since));
 
   const start = (): void => {
     phase = 'working';
@@ -309,9 +317,10 @@ export function activityOf({
   };
   // Ход встал: агент ждёт человека. Внутри идущего эпизода более конкретный вид не заменяется менее конкретным,
   // а менее конкретный повышается до более конкретного — с прежним `since`. `newDialog` — окно разрешения
-  // (`PermissionRequest`): оно у каждого одобрения своё, и второе за идущим — уже другое, с новым `since`.
+  // (`PermissionRequest`): оно у каждого одобрения своё, и второе за идущим — уже другое, с новым `since`. Эпизод,
+  // который закрыла запись человека в логе, уже не идёт: событие после неё открывает новый, какого бы вида ни было.
   const block = (kind: NeedKind, at: string, detail: string | null, newDialog = false): void => {
-    const open = phase === 'blocked' ? need : null;
+    const open = phase === 'blocked' && !answered(need) ? need : null;
     phase = 'blocked';
     source = 'hooks';
     if (open === null || (newDialog && open.kind === 'approval')) {
@@ -473,15 +482,14 @@ export function activityOf({
 
   // Страховка по логу (4.3). Из записей лога `blocked` снимает только запись
   // ПОЛЬЗОВАТЕЛЯ: пока агент ждёт ответа, с его стороны в транскрипт не пишется
-  // ничего, а появившаяся запись значит, что разрешение выдано и ход продолжился
+  // ничего, а появившаяся после начала ожидания запись значит, что разрешение выдано и ход продолжился
   // (хука «разрешение выдано» в наборе 4.2 нет).
   const lastRecordAt = log?.lastRecordAt ?? null;
   const recordAt = msOf(lastRecordAt);
   const eventAt = msOf(lastEventAt);
   const restartAt = msOf(lastRestartAt);
-  const userAt = msOf(log?.lastUserRecordAt ?? null);
 
-  if (phase === 'blocked' && isNewer(userAt, eventAt)) {
+  if (phase === 'blocked' && answered(need)) {
     phase = 'working';
     turnEndedAt = null;
     source = 'log';

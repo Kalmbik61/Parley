@@ -1366,8 +1366,8 @@ describe('activityOf: TerminalWorking — кадр спиннера термин
 // need: чего сессия ждёт от человека (Застрявшие сессии, 3.1–3.3, 3.5)
 // ---------------------------------------------------------------------------------------------
 
-/** Секунда `n` (1–9) той же минуты, что `AT` и `NOW`: события растут по времени, до `NOW` — не больше девяти секунд. */
-const sec = (n: number): string => `2026-09-05T10:00:0${n}.000Z`;
+/** Секунда `n` (0–59) той же минуты, что `AT` и `NOW` (секунда 10): события растут по времени. */
+const sec = (n: number): string => `2026-09-05T10:00:${String(n).padStart(2, '0')}.000Z`;
 
 const SESSION_LIMIT = "You've hit your session limit · resets 2:50pm (Europe/Moscow)";
 /** 14:50 по Москве (UTC+3 круглый год) в день записи — 11:50 UTC. */
@@ -1939,8 +1939,14 @@ const QUESTION: Base = {
   need: wanted('question', 3, { detail: 'Which database?' }),
   activity: 'blocked',
 };
+const STARTUP: Base = {
+  label: 'startup',
+  events: [notice(3, PARLEY_STARTUP_NOTIFICATION)],
+  need: wanted('startup', 3),
+  activity: 'blocked',
+};
 const ENDED_BASES = [LIMIT, SIGN_IN];
-const BLOCKED_BASES = [APPROVAL, QUESTION];
+const BLOCKED_BASES = [APPROVAL, QUESTION, STARTUP];
 const BASES = [...ENDED_BASES, ...BLOCKED_BASES];
 
 type Next = [name: string, event: EventRecord];
@@ -2108,6 +2114,7 @@ const PASSIVE_AT_9: Next[] = [
   ['idle_prompt', notice(9, 'idle_prompt')],
   ['Stop', event('Stop', null, sec(9))],
   ['SubagentStop', hook('SubagentStop', { agentId: 'a' }, sec(9))],
+  ['ParleyWaitStart', hook('ParleyWaitStart', { waitTarget: 's-02', waitId: 'w1' }, sec(9))],
   ['ParleyWaitEnd', hook('ParleyWaitEnd', { waitId: 'w1' }, sec(9))],
   ['SessionEnd', event('SessionEnd', null, sec(9))],
 ];
@@ -2169,6 +2176,60 @@ const RESURFACING_CASES: NeedCase[] = [
     ),
   ),
 ];
+
+/** Запись человека в логе на секунде 6: разрешение выдано или на вопрос ответили. */
+const HUMAN_AT_6: ActivityLog = { lastRecordAt: sec(6), lastUserRecordAt: sec(6) };
+
+/**
+ * Ожидание человека закрыто записью лога, начатое раньше (секунда 3): пассивное событие журнала, дописанное после
+ * неё, ход на вопрос не возвращает — запись сравнивается с началом эпизода, а не с последним событием любого вида.
+ * `Stop` кончает ход (`unseen`), остальные оставляют `working`.
+ */
+const ANSWERED_CASES: NeedCase[] = BLOCKED_BASES.flatMap((base) =>
+  PASSIVE_AT_9.map(([name, next]): NeedCase => ({
+    name: `${base.label}, запись человека в логе на секунде 6, затем ${name} на секунде 9 → ожидание снято`,
+    events: [...base.events, next],
+    log: HUMAN_AT_6,
+    activity: name === 'Stop' ? 'unseen' : 'working',
+    need: null,
+  })),
+);
+
+/** Новое событие ожидания после записи человека — новый эпизод со своим `since`, каким бы ни был закрытый. */
+const NEW_BLOCKS: Array<[name: string, event: EventRecord, need: SessionNeed]> = [
+  ['PermissionRequest', permission(10, 'Bash', 'pwd'), wanted('approval', 10, { detail: 'pwd' })],
+  [
+    'permission_prompt',
+    notice(10, 'permission_prompt', 'Allow?'),
+    wanted('approval', 10, { detail: 'Allow?' }),
+  ],
+  [
+    'agent_needs_input',
+    notice(10, 'agent_needs_input', 'Which?'),
+    wanted('question', 10, { detail: 'Which?' }),
+  ],
+  [
+    'elicitation_dialog',
+    notice(10, 'elicitation_dialog', 'Pick one'),
+    wanted('question', 10, { detail: 'Pick one' }),
+  ],
+  [
+    'elicitation_url_dialog',
+    notice(10, 'elicitation_url_dialog', 'Open the link'),
+    wanted('question', 10, { detail: 'Open the link' }),
+  ],
+  ['parley_startup', notice(10, PARLEY_STARTUP_NOTIFICATION), wanted('startup', 10)],
+];
+
+const REBLOCK_CASES: NeedCase[] = BLOCKED_BASES.flatMap((base) =>
+  NEW_BLOCKS.map(([name, next, need]): NeedCase => ({
+    name: `${base.label}, запись человека в логе на секунде 6, затем ${name} на секунде 10 → blocked, новый эпизод`,
+    events: [...base.events, next],
+    log: HUMAN_AT_6,
+    activity: 'blocked',
+    need,
+  })),
+);
 
 /** «Конкретнее — сильнее» и границы эпизода (3.2, 3.5). */
 const STRENGTH_CASES: NeedCase[] = [
@@ -2435,6 +2496,45 @@ describe('activityOf: need — снятие (3.3)', () => {
   it.each(LOG_CASES)('$name', expectCase);
   it.each(REPLACING_CASES)('$name', expectCase);
   it.each(RESURFACING_CASES)('$name', expectCase);
+  it.each(ANSWERED_CASES)('$name', expectCase);
+  it.each(REBLOCK_CASES)('$name', expectCase);
+
+  it('ожидание закрыто записью человека: остановка субагента после неё не ставит ход на вопрос, новый запрос — ставит', () => {
+    const events = [submit(1), permission(2, 'Bash', 'ls')];
+    const quiet = activityOf({
+      events: [...events, hook('SubagentStop', { agentId: 'a' }, sec(9))],
+      log: HUMAN_AT_6,
+      now: NOW,
+    });
+    expect(quiet.activity).toBe('working');
+    expect(quiet.need).toBeNull();
+    expect(quiet.source).toBe('log');
+
+    const again = activityOf({
+      events: [...events, permission(10, 'Bash', 'pwd')],
+      log: HUMAN_AT_6,
+      now: NOW,
+    });
+    expect(again.activity).toBe('blocked');
+    expect(again.need).toEqual(wanted('approval', 10, { detail: 'pwd' }));
+  });
+
+  it('возвращение из blocked по записи человека сбрасывает конец прошлого хода, и пассивное событие после неё его не возвращает', () => {
+    // Ход уже заканчивался до вопроса (`Stop` на секунде 2): прежний `turnEndedAt` не должен пережить `working`.
+    const result = activityOf({
+      events: [
+        submit(1),
+        event('Stop', null, sec(2)),
+        permission(3, 'Bash', 'ls'),
+        hook('SubagentStop', { agentId: 'a' }, sec(9)),
+      ],
+      log: HUMAN_AT_6,
+      now: NOW,
+    });
+    expect(result.activity).toBe('working');
+    expect(result.turnEndedAt).toBeNull();
+    expect(result.need).toBeNull();
+  });
 
   it('порядок строк — порядок файла: запись лога новее последней строки, но старше начала эпизода, лимит всё равно снимает', () => {
     // Строки идут не по времени: `Stop` на секунде 2 дописан после `StopFailure` на секунде 5. Запись лога на секунде 3
@@ -2459,9 +2559,13 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
 
   /**
    * Нарушение инварианта в состоянии: `blocked` всегда с видом из тройки, а `need` у остальных — только вида из
-   * пары при оконченном ходе (`unseen`, `idle`). `null` — всё в порядке.
+   * пары при оконченном ходе (`unseen`, `idle`); работающая сессия без конца хода. `null` — всё в порядке.
    */
   const violation = (result: ReturnType<typeof activityOf>): string | null => {
+    // Работающая сессия хода не заканчивала: `turnEndedAt` — `null` (подъём из `blocked` по записи лога тоже).
+    if (result.activity === 'working' && result.turnEndedAt !== null) {
+      return `working с turnEndedAt ${result.turnEndedAt}`;
+    }
     const kind = result.need?.kind;
     if (result.activity === 'blocked') {
       return kind !== undefined && BLOCKING_KINDS.includes(kind)
@@ -2485,6 +2589,8 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     ...LOG_CASES,
     ...REPLACING_CASES,
     ...RESURFACING_CASES,
+    ...ANSWERED_CASES,
+    ...REBLOCK_CASES,
     ...STRENGTH_CASES,
   ];
 
@@ -2528,11 +2634,13 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
   }
 
   it('для всех последовательностей до трёх событий — с ошибкой API в логе и без, просмотренных и нет', () => {
-    // Ошибка в логе новее всех событий (секунда 5) и посередине последовательности (секунда 2).
+    // Ошибка в логе новее всех событий (секунда 5) и посередине последовательности (секунда 2); запись человека
+    // новее всех событий (секунда 6): она закрывает ожидание человека.
     const logs: Array<ActivityLog | null> = [
       null,
       apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
       apiErrorLog(2, 'rate_limit', SESSION_LIMIT),
+      HUMAN_AT_6,
     ];
     const bad: string[] = [];
     let count = 0;
@@ -2557,10 +2665,11 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     expect(bad).toEqual([]);
   });
 
-  it('пассивное событие журнала не возвращает снятые лимит и вход: для всех последовательностей до двух событий', () => {
+  it('пассивное событие журнала не возвращает снятое ожидание: для всех последовательностей до двух событий', () => {
     // Снятое состояние не должно зависеть от того, что журнал дописали после записи лога: `Stop`, простой, остановка
-    // субагента, конец ожидания, выход. (Одобрение и вопрос сюда не входят: у них прежнее правило «запись человека
-    // новее последнего события», и оно сравнивается с последним событием любого вида.)
+    // субагента, начало и конец ожидания, выход. Если без такого события `need` был `null` (а значит, и не `blocked`),
+    // после него он не появляется — ни лимит и вход, ни одобрение, вопрос и старт. Общий инвариант вида и хода
+    // держится и после события.
     const passive: Array<[string, EventRecord]> = [
       ['Stop', event('Stop', null, sec(9))],
       ['idle_prompt', notice(9, 'idle_prompt')],
@@ -2584,13 +2693,16 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
         (index, position) => ALPHABET[index]?.[1](position + 1) ?? submit(1),
       );
       for (const [logName, log] of logs) {
-        if (activityOf({ events, log, now: NOW }).need !== null) continue;
+        const unblocked = activityOf({ events, log, now: NOW }).need === null;
         for (const [name, next] of passive) {
           count += 1;
-          const kind = activityOf({ events: [...events, next], log, now: NOW }).need?.kind;
-          if (kind === 'limit' || kind === 'sign-in') {
-            bad.push(`${names} (${logName}) + ${name}: появился ${kind}`);
+          const after = activityOf({ events: [...events, next], log, now: NOW });
+          if (unblocked && after.need !== null) {
+            bad.push(`${names} (${logName}) + ${name}: появился ${after.need.kind}`);
           }
+          // Общий инвариант вида и хода держится и после пассивного события.
+          const why = violation(after);
+          if (why !== null) bad.push(`${names} (${logName}) + ${name}: ${why}`);
         }
       }
     }
