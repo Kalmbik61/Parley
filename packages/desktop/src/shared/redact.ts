@@ -6,6 +6,9 @@
  * `Proxy-Authorization`, `Cookie`, `Set-Cookie`; имя, где есть `token`, `secret`, `password`, `passwd`,
  * `api-key` (`apikey`, `api_key`), `session`, `csrf` или `auth`; имя со словом `key` (`private_key`,
  * `privateKey`, но не `keyboard`). Значение такого имени заменяется на `<redacted>`.
+ *
+ * Заголовки-адреса (`Referer`, `Location`, `Content-Location`) идут через `redactUrl`: страница `/reset?token=…` кладёт
+ * свой адрес в `Referer` каждого запроса, редирект OAuth — токен в `Location`.
  */
 
 import { S } from './strings.js';
@@ -28,8 +31,14 @@ export function isSecretName(name: string): boolean {
     .includes('key');
 }
 
+/** Заголовки, чьё значение — адрес: query и фрагмент в нём несут те же секреты, что и в самом адресе. */
+const URL_HEADERS: ReadonlySet<string> = new Set(['referer', 'location', 'content-location']);
+
 export function redactHeaders(headers: ReadonlyArray<[string, string]>): Array<[string, string]> {
-  return headers.map(([name, value]) => [name, isSecretName(name) ? REDACTED : value]);
+  return headers.map(([name, value]) => {
+    if (isSecretName(name)) return [name, REDACTED];
+    return [name, URL_HEADERS.has(name.toLowerCase()) ? redactUrl(value) : value];
+  });
 }
 
 /** `a=1&token=x` → `a=1&token=<redacted>`: остальные пары остаются как были, без перекодирования. */
@@ -76,9 +85,14 @@ function maskJson(value: unknown): unknown {
   return value;
 }
 
+/** Тело начинается со скобки — по виду это JSON, какой бы тип ни стоял в заголовке. */
+function startsWithBracket(text: string): boolean {
+  return /^\s*[[{]/.test(text);
+}
+
 /** JSON по типу или по виду: тело с типом text/plain, но в фигурных скобках, тоже маскируется (как в плане C). */
 function isJson(text: string, mimeType: string | null): boolean {
-  return (mimeType !== null && /json/i.test(mimeType)) || /^\s*[[{]/.test(text);
+  return (mimeType !== null && /json/i.test(mimeType)) || startsWithBracket(text);
 }
 
 function parses(text: string): boolean {
@@ -109,10 +123,12 @@ function cut(text: string, limit: number): string {
  * Тело запроса или ответа с маской: JSON — ключи на любой глубине, форма — параметры, прочее — как есть. Битый JSON
  * возвращается без изменений — его отсеивает вызывающий (`unmaskableJson`). Разобранный JSON, на который маска не
  * легла, — `<redacted>` целиком. `limit` — в кодовых точках, с пометкой обрезки; режется уже замаскированное.
+ * Тело в скобках под типом формы — JSON с неверным заголовком (jQuery со строкой в `data`, старый axios): он идёт
+ * как JSON. Как форма он вернулся бы с паролем на месте, а `unmaskableJson` его не отсеял бы — тело разбирается.
  */
 export function redactBody(text: string, mimeType: string | null, limit: number = Number.POSITIVE_INFINITY): string {
   let masked = text;
-  if (mimeType !== null && /^application\/x-www-form-urlencoded/i.test(mimeType)) {
+  if (mimeType !== null && /^application\/x-www-form-urlencoded/i.test(mimeType) && !startsWithBracket(text)) {
     masked = redactParams(text);
   } else if (isJson(text, mimeType)) {
     let parsed: unknown;

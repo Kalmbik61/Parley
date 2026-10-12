@@ -35,6 +35,25 @@ describe('redactHeaders', () => {
       ['X-Request-Id', '42'],
     ]);
   });
+
+  it('Referer, Location и Content-Location — адреса: секреты query и фрагмента — <redacted>, регистр имени не важен, Origin и прочие — как есть', () => {
+    // Страница /reset?token=… кладёт свой адрес в Referer каждого запроса, редирект OAuth — токен во фрагмент Location.
+    expect(
+      redactHeaders([
+        ['Referer', 'http://localhost:5173/reset?token=abc&tab=x'],
+        ['location', 'https://x.y/cb#access_token=t1&state=s'],
+        ['Content-Location', '/v2/doc?api_key=k&lang=en'],
+        ['Origin', 'http://localhost:5173'],
+        ['Host', 'localhost:5173'],
+      ]),
+    ).toEqual([
+      ['Referer', `http://localhost:5173/reset?token=${REDACTED}&tab=x`],
+      ['location', `https://x.y/cb#access_token=${REDACTED}&state=s`],
+      ['Content-Location', `/v2/doc?api_key=${REDACTED}&lang=en`],
+      ['Origin', 'http://localhost:5173'],
+      ['Host', 'localhost:5173'],
+    ]);
+  });
 });
 
 describe('redactUrl', () => {
@@ -99,6 +118,22 @@ describe('redactBody', () => {
 
   it('форма: секретные параметры — <redacted>', () => {
     expect(redactBody('user=demo&password=p1', 'application/x-www-form-urlencoded')).toBe(`user=demo&password=${REDACTED}`);
+  });
+
+  it('JSON под типом формы (jQuery со строкой в data, старый axios, неверный заголовок) маскируется как JSON, а не проходит как форма с паролем на месте', () => {
+    // Тип в заголовке врёт, но вид тела — скобка: тот же закон, что у text/plain, — JSON узнаётся по типу или по первой скобке.
+    const body = '{"user":"demo","password":"hunter2"}';
+    const form = 'application/x-www-form-urlencoded; charset=UTF-8';
+    expect(JSON.parse(redactBody(body, form))).toEqual({ user: 'demo', password: REDACTED });
+    expect(JSON.parse(redactBody(`  [${body}]`, form))).toEqual([{ user: 'demo', password: REDACTED }]);
+    expect(unmaskableJson(body, form)).toBe(false);
+  });
+
+  it('обрезанный JSON под типом формы остаётся как есть и узнаётся unmaskableJson — форма не режет его по первому «=»', () => {
+    // «=» внутри значения: ветка формы разрезала бы тело по нему и вернула бы мусор вместо исходного текста.
+    const cut = '{"password": "p1", "next": "https://x.y/cb?a=b", "note": "tr';
+    expect(redactBody(cut, 'application/x-www-form-urlencoded')).toBe(cut);
+    expect(unmaskableJson(cut, 'application/x-www-form-urlencoded')).toBe(true);
   });
 
   it('не-JSON тело не меняется, только режется по пределу с пометкой', () => {
