@@ -1582,6 +1582,15 @@ export const S = {
     decisionNew: (room: string, lead: string): string => `${room} · ${lead} collected positions`,
     /** Ведущий заменил текст, пока человек не ответил (`rev` вырос), или принёс исправленное после `Return for rework`. */
     decisionRevised: (room: string, lead: string): string => `${room} · ${lead} revised the decision`,
+    /** Строка «что спрашивают» в теле уведомления «нужен ты»: команда, правка, вопрос, план — `renderer/attention/ask-summary.ts`. */
+    askRun: (command: string): string => `Run: ${command}`,
+    /** «Edit: src/app.ts» — имя инструмента и путь (относительный, если файл внутри проекта). */
+    askTool: (tool: string, path: string): string => `${tool}: ${path}`,
+    askFetch: (url: string): string => `Fetch: ${url}`,
+    askQuestion: (question: string): string => `Question: ${question}`,
+    askPlan: 'Plan ready for review',
+    /** Вторая строка тела: проект и сколько ещё сессий ждут человека. */
+    waitingLine: (project: string, more: number): string => (more > 0 ? `${project} · ${more} more waiting` : project),
     /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
     open: 'Open',
     later: 'Later',

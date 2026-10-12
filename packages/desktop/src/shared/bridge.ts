@@ -41,10 +41,11 @@ export type HostStatus =
 /**
  * Куда ведёт клик по уведомлению (спека 3.3, 7.4): вкладка сессии, почты или комнаты.
  * Main шлёт её окну событием `app:focus-target`; окну, которое ещё грузится, — через
- * отложенную (`app:take-focus-target`).
+ * отложенную (`app:take-focus-target`). У цели-сессии с `cardId` клик открывает сессию в виде «Chat»,
+ * прокрученном к этой ждущей карточке (`cardId` — `id` элемента ленты).
  */
 export type FocusTarget =
-  | { kind: 'session'; ref: SessionRef }
+  | { kind: 'session'; ref: SessionRef; cardId?: string }
   | { kind: 'mail'; projectPath: string; workId: string }
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 

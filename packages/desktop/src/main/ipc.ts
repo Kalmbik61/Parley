@@ -123,7 +123,8 @@ function isFocusTarget(value: unknown): value is FocusTarget {
         isRecord(ref) &&
         typeof ref.projectPath === 'string' &&
         typeof ref.workId === 'string' &&
-        typeof ref.sessionId === 'string'
+        typeof ref.sessionId === 'string' &&
+        (value.cardId === undefined || isValidPathArg(value.cardId))
       );
     }
     case 'mail':

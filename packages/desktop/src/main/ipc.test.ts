@@ -682,6 +682,17 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     expect(showNotification).toHaveBeenCalledTimes(2);
   });
 
+  it('цель-сессия с cardId-строкой — верная форма; cardId не строка или с NUL — отказ', () => {
+    const { ipcMain, showNotification } = setup();
+    const withCard = { ...note, target: { ...target, cardId: 'perm:1' } };
+    ipcMain.invoke('app:notify', withCard);
+    expect(showNotification).toHaveBeenCalledWith(withCard);
+    showNotification.mockClear();
+    ipcMain.invoke('app:notify', { ...note, target: { ...target, cardId: 7 } });
+    ipcMain.invoke('app:notify', { ...note, target: { ...target, cardId: 'a\0b' } });
+    expect(showNotification).not.toHaveBeenCalled();
+  });
+
   it('title из 201 эмодзи — показано ровно 200 кодовых точек, последняя «…», суррогаты целы', () => {
     const { ipcMain, showNotification } = setup();
     ipcMain.invoke('app:notify', { ...note, title: '😀'.repeat(201), body: '😀'.repeat(201) });

@@ -25,3 +25,15 @@ export function openAgentCard(ref: SessionRef, agentId: string): void {
   useLayoutStore.getState().apply(workKey(ref.projectPath, ref.workId), (layout) => updateTab(layout, tabId.terminal(ref.sessionId), { view: 'chat' }));
   useChatUiStore.getState().requestReveal(refKey(ref), agentId);
 }
+
+/**
+ * Клик по уведомлению про ждущую карточку (разрешение, вопрос, план): та же вкладка сессии в виде «Chat», лента
+ * прокручивается к карточке с этим `cardId` (`id` элемента ленты). Цели нет (сессию или работу убрали) — `false`
+ * без тоста и без просьбы: тост показывает вызывающий, как у остальных целей уведомлений.
+ */
+export function openSessionCard(ref: SessionRef, cardId: string): boolean {
+  if (!applyFocusTarget({ kind: 'session', ref }, buildFocusTargetDeps())) return false;
+  useLayoutStore.getState().apply(workKey(ref.projectPath, ref.workId), (layout) => updateTab(layout, tabId.terminal(ref.sessionId), { view: 'chat' }));
+  useChatUiStore.getState().requestRevealItem(refKey(ref), cardId);
+  return true;
+}

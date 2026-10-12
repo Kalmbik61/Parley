@@ -13,7 +13,7 @@
  * поэтому ближайший `scroll` после неё не учитывается.
  *
  * Просьба показать карточку агента (`reveal`: бейдж агентов в сайдбаре и комнате, «N agents running» в тулбаре) —
- * прокрутка к карточке с этим `agentId` и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
+ * прокрутка к карточке с этим `agentId` (или к элементу с `itemId`) и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
  *
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
@@ -70,7 +70,7 @@ export interface FeedListProps {
    * Просьба показать карточку агента (`ui-store.ts`, кусок 4b): лента прокручивает к ней и зовёт `onRevealed` с её
    * `nonce`. Карточки ещё нет — просьба ждёт, пока она появится в ленте (снимок только что открытой вкладки).
    */
-  reveal?: { agentId: string; nonce: number };
+  reveal?: ({ agentId: string } | { itemId: string }) & { nonce: number };
   onRevealed?: (nonce: number) => void;
 }
 
@@ -210,12 +210,16 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
     if (atBottomRef.current) pinToBottom();
   }, [pinToBottom, total, rows.length, last, working !== undefined]);
 
-  // Просьба показать карточку агента. Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
+  // Просьба показать карточку агента (`agentId`) или любой элемент по `id` (`itemId`, например ждущая карточка
+  // разрешения из уведомления). Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
   // и просьба, последним остаётся переход к карточке. Прилипание снимается — иначе следующий элемент увёл бы
   // ленту обратно к низу; доехала лента до дна сама — `scroll` вернёт его. Просьба гаснет, когда карточка найдена.
   useLayoutEffect(() => {
     if (reveal === undefined) return;
-    const at = rows.findIndex((row) => 'item' in row && row.item.kind === 'agent' && row.item.agentId === reveal.agentId);
+    const at = rows.findIndex((row) => {
+      if (!('item' in row)) return false;
+      return 'agentId' in reveal ? row.item.kind === 'agent' && row.item.agentId === reveal.agentId : row.item.id === reveal.itemId;
+    });
     if (at === -1) return;
     atBottomRef.current = false;
     setAtBottom(false);
