@@ -28,7 +28,7 @@ import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
-import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
@@ -377,9 +377,10 @@ if (!gotLock) {
     // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
     // снимок работ новому клиенту хост не шлёт, а первый `connect()` выше мог упасть.
     // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
-    // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
+    // Старые скриншоты `drops/` (кусок 5.4) и файлы-контексты браузера в `drops/context/` (спека браузера 3.6):
+    // только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
-    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
+    void cleanupDropsTree(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
