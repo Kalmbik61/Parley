@@ -110,6 +110,8 @@ function setup(
     webContents?: Map<number, unknown>;
     onUiSaved?: () => void;
     appVersion?: string | null;
+    isIslandSender?: (sender: unknown) => boolean;
+    islandActive?: () => boolean;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -207,6 +209,8 @@ function setup(
     getUpdate,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
+    ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
+    ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -725,6 +729,37 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+describe('host:call от острова', () => {
+  const island = { id: 99 };
+  const options = { isIslandSender: (sender: unknown) => sender === island };
+  const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+
+  it('остров зовёт методы белого списка', async () => {
+    const { ipcMain, connection } = setup(options);
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF });
+  });
+
+  it('прочие методы острову отказаны, хост их не видит', async () => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'host.shutdown', {})).rejects.toBeTruthy();
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it('главное окно зовёт что угодно, как раньше', async () => {
+    const { ipcMain, connection } = setup(options);
+    await ipcMain.invokeWithEvent('host:call', { sender: { id: 1 } }, 'host.shutdown', {});
+    expect(connection.call).toHaveBeenCalledWith('host.shutdown', {});
+  });
+
+  it('app:island-active отвечает синхронно тем, что знает main', () => {
+    const event: { returnValue?: unknown } = {};
+    const { ipcMain } = setup({ islandActive: () => true });
+    ipcMain.invokeWithEvent('app:island-active', event);
+    expect(event.returnValue).toBe(true);
   });
 });
 

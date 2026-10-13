@@ -16,6 +16,7 @@ import { LayoutTooLargeError } from './layout-store.js';
 import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
+import { ISLAND_METHODS } from '../shared/island.js';
 import { isNotesFile } from '../shared/notes-types.js';
 import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
@@ -114,7 +115,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isFocusTarget(value: unknown): value is FocusTarget {
+export function isFocusTarget(value: unknown): value is FocusTarget {
   if (!isRecord(value)) return false;
   switch (value.kind) {
     case 'session': {
@@ -182,6 +183,10 @@ export interface RegisterIpcOptions {
   setAppearance: (mode: Appearance) => void;
   /** `nativeTheme.shouldUseDarkColors` — источник истины темы окна (`app:is-dark`, раунд main-r2, п. 1). */
   isDark: () => boolean;
+  /** Окно острова (спека 2026-10-12): от него `host:call` пропускает только `ISLAND_METHODS`. */
+  isIslandSender?: (sender: unknown) => boolean;
+  /** Есть ли живое окно острова — для `notify.ts` главного окна (`app:island-active`). */
+  islandActive?: () => boolean;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -304,6 +309,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
     notesStore,
     setAppearance,
     isDark,
+    isIslandSender,
+    islandActive,
     titlebarDoubleClick,
     showItemInFolder,
     roots,
@@ -317,9 +324,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle(
     'host:call',
-    withIpcError(async (_event, method: unknown, params: unknown) => {
+    withIpcError(async (event, method: unknown, params: unknown) => {
       if (typeof method !== 'string' || !isMethodName(method)) {
         throw new Error(`unknown method: ${String(method)}`);
+      }
+      // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
+      if (isIslandSender?.((event as { sender?: unknown }).sender) === true && !ISLAND_METHODS.has(method)) {
+        throw new Error(`method not allowed for the island: ${method}`);
       }
       return connection.call(method, params);
     }),
@@ -329,6 +340,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     'host:activity-snapshot',
     withIpcError(async () => connection.activitySnapshot()),
   );
+
+  // Есть ли окно острова: `sendSync` прелоада главного окна, чтобы `notify.ts` знал, слать ли системное уведомление.
+  ipcMain.on('app:island-active', (event) => {
+    (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
+  });
 
   ipcMain.on('host:notify', (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
