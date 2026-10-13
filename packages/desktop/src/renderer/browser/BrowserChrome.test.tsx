@@ -20,6 +20,7 @@ function renderChrome(extra: Partial<BrowserChromeProps> = {}): BrowserChromePro
     onDevTools: vi.fn(),
     mode: 'off',
     onSelect: vi.fn(),
+    onAnnotate: vi.fn(),
     viewport: null,
     onViewport: vi.fn(),
     devtoolsOpen: false,
@@ -33,7 +34,7 @@ function renderChrome(extra: Partial<BrowserChromeProps> = {}): BrowserChromePro
 }
 
 describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
-  it('порядок: назад, вперёд, обновить, адрес, размер, ⌖ Select, консоль, ⋯; кнопки «DevTools» больше нет', () => {
+  it('порядок: назад, вперёд, обновить, адрес, размер, ⌖ Select, ✎ Annotate, консоль, ⋯; кнопки «DevTools» больше нет', () => {
     renderChrome();
     const chrome = screen.getByTestId('browser-chrome');
     expect(within(chrome).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
@@ -42,6 +43,7 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
       'Reload',
       'Viewport size',
       'Select',
+      'Annotate',
       'Console and network',
       'More browser actions',
     ]);
@@ -51,12 +53,12 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     expect(screen.queryByRole('button', { name: 'DevTools' })).toBeNull();
   });
 
-  it('«To» (этап B, спека 4.1): меню цели — после ⌖ Select и до кнопки консоли', () => {
+  it('«To» (этап B, спека 4.1): меню цели — после ⌖ Select и ✎ Annotate и до кнопки консоли', () => {
     renderChrome({ targetMenu: <button type="button">To: S01</button> });
     const names = within(screen.getByTestId('browser-chrome'))
       .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label') ?? button.textContent);
-    expect(names.slice(names.indexOf('Select'), names.indexOf('Console and network') + 1)).toEqual(['Select', 'To: S01', 'Console and network']);
+    expect(names.slice(names.indexOf('Select'), names.indexOf('Console and network') + 1)).toEqual(['Select', 'Annotate', 'To: S01', 'Console and network']);
   });
 
   it('⌖ Select (этап B, спека 4.6): подсвечена только в режиме select; клик — onSelect', () => {
@@ -68,6 +70,15 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     cleanup();
     renderChrome({ mode: 'annotate' });
     expect(screen.getByRole('button', { name: 'Select' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('✎ Annotate (этап B, спека 4.7): подсвечена только в режиме annotate; клик — onAnnotate', () => {
+    const props = renderChrome({ mode: 'annotate' });
+    const annotate = screen.getByRole('button', { name: 'Annotate' });
+    expect(annotate.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Select' }).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(annotate);
+    expect(props.onAnnotate).toHaveBeenCalledTimes(1);
   });
 
   it('счётчики: нули не показываются; ошибки и предупреждения — числа с подсказкой; кнопка показывает и прячет панель', () => {

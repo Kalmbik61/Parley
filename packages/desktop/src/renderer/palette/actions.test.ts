@@ -179,6 +179,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
     // Этап B: Select — режим активной вкладки браузера (toggleBrowserMode).
     'browser.select': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('select'),
+    'browser.annotate': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate'),
     // Спека 2026-10-07, 4.3: панель вкладки браузера активной группы.
     'browser.devtools': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(true),
     'browser.console': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' }),
@@ -599,6 +600,24 @@ describe('Select (этап B, спека браузера 4.6)', () => {
     expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('off');
     useBrowserStore.setState({ tabs: {} });
     runAction('browser.select', makeContext({ browser: false }).ctx);
+    expect(useBrowserStore.getState().tabs).toEqual({});
+  });
+});
+
+describe('Annotate (этап B, спека браузера 4.7)', () => {
+  beforeEach(() => useBrowserStore.setState({ tabs: {} }));
+
+  it('browser.annotate дважды — режим снят; после select — заменяет его; без страницы — ничего', () => {
+    const spies = makeContext();
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate');
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('off');
+    runAction('browser.select', spies.ctx);
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate');
+    useBrowserStore.setState({ tabs: {} });
+    runAction('browser.annotate', makeContext({ browser: false }).ctx);
     expect(useBrowserStore.getState().tabs).toEqual({});
   });
 });

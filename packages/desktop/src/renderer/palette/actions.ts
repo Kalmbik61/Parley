@@ -186,10 +186,10 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     if (key !== undefined) ctx.layout.setActiveWork(key);
     return;
   }
-  // Select (этап B браузера): режим активной вкладки браузера; вкладки нет — ничего.
-  if (id === 'browser.select') {
+  // Select и Annotate (этап B браузера): режим активной вкладки браузера; вкладки нет — ничего.
+  if (id === 'browser.select' || id === 'browser.annotate') {
     const page = ctx.browser.active();
-    if (page !== null) toggleBrowserMode(page.tabId, 'select');
+    if (page !== null) toggleBrowserMode(page.tabId, id === 'browser.select' ? 'select' : 'annotate');
     return;
   }
   // ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b): вкладку делает активной browser:focus. Отказ — в консоль, без

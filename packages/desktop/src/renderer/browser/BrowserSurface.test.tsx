@@ -22,10 +22,11 @@ import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { findTab, updateTab } from '../layout/tree.js';
 import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
 import { toast } from 'sonner';
-import type { PickResult } from '../../shared/browser-types.js';
+import type { AnnotationPick, AnnotationPosition, PickResult } from '../../shared/browser-types.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { consoleEntry, devtoolsBatch, networkEntry } from '../test-utils/devtools-fixtures.js';
 import { useDevtoolsStore } from './devtools/store.js';
+import { useAnnotateStore } from './annotate/store.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
@@ -151,6 +152,7 @@ afterEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useBrowserStore.setState({ tabs: {}, limitToasted: {} });
   useDevtoolsStore.setState({ tabs: {} });
+  useAnnotateStore.setState({ tabs: {} });
   useUiStore.setState({ ui: DEFAULT_UI });
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -769,6 +771,18 @@ describe('BrowserSurface — журнал (спека 2026-10-07, 3.5; Фоку�
     expect(useDevtoolsStore.getState().tabs[TAB]).toBeUndefined();
   });
 
+  it('⌘⇧C и ⌘⌥A с фокусом в адресной строке — Select и Annotate, как ⌘⌥I у панели (спека 4.9)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+  });
+
   it('⌘⌥I и ⌘⌥J с фокусом внутри панели вкладки — тоже ловит поверхность (ревью задачи 10)', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
@@ -1180,5 +1194,422 @@ describe('BrowserSurface — «Add to chat» из панели (этап B, сп
     expect(saved?.markdown).toContain('URL: http://localhost:5173/settings');
     expect(saved?.markdown).toContain('"ok": false');
     expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+});
+
+const ELEMENT_PICK: AnnotationPick = {
+  kind: 'element',
+  key: 'a1',
+  selector: 'body > button.save',
+  text: 'Save',
+  html: '<button class="save">Save</button>',
+  styles: {},
+  anchor: { fx: 0.1, fy: 0.2 },
+  viewport: { width: 800, height: 600, dpr: 2 },
+};
+
+describe('BrowserSurface — Annotate (этап B, спека браузера 4.7)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** ✎, первая метка и комментарий в редакторе окна. */
+  async function firstPin(comment: string): Promise<HTMLElement> {
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks([ELEMENT_PICK]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: comment } });
+    return field;
+  }
+
+  it('✎ — метка: редактор в окне, Save — пункт в лотке, метки страницы перерисованы; режим держится', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    const tray = screen.getByTestId('annotation-tray');
+    expect(tray.textContent).toContain('1 annotation');
+    expect(tray.textContent).toContain('make it green');
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateSync').at(-1)?.args).toEqual([12, [{ n: 1, key: 'a1' }]]);
+    expect(modeOf()).toBe('annotate');
+    await vi.waitFor(() => expect(bridge.browserCalls.filter((call) => call.method === 'annotateStart')).toHaveLength(2));
+  });
+
+  it('Esc в редакторе новой метки — метки и лотка нет, режим держится', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(modeOf()).toBe('annotate');
+  });
+
+  it('Select и Annotate взаимоисключающие: ⌖ во время ✎ — annotateCancel и pickStart', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    expect(modeOf()).toBe('annotate');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    expect(modeOf()).toBe('select');
+    expect(bridge.browserCalls.some((call) => call.method === 'annotateCancel')).toBe(true);
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
+  it('«Add to chat» в лотке — файл annotations со снимком в цель «To»; лоток пуст', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/annotations-page-0001.md']));
+    expect(bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0]).toMatchObject({ kind: 'annotations', imagePath: '/fake/drops/annotate.png' });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+  });
+
+  it('новый документ — пункты лотка «element gone», данные на месте', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(modeOf()).toBe('off');
+    expect(screen.getByTestId('annotation-tray').textContent).toContain('element gone');
+  });
+
+  it('метка, новый документ, ещё метка, «Add to chat»: файл называет страницу первой метки, её пункт не оживает, на страницу уходит только новая метка', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/settings');
+    renderWork();
+    const first = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(first, { key: 'Enter' });
+    });
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/profile' });
+    expect(modeOf()).toBe('off');
+    // Скрипт меток нового документа нумерует с a1 заново — ключ тот же, что у первой метки.
+    bridge.setAnnotatePicks([{ ...ELEMENT_PICK, selector: 'body > a.next' }]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const second = await screen.findByRole('textbox', { name: 'Comment for annotation 2' });
+    fireEvent.change(second, { target: { value: 'and this link' } });
+    await act(async () => {
+      fireEvent.keyDown(second, { key: 'Enter' });
+    });
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateSync').at(-1)?.args).toEqual([12, [{ n: 2, key: 'a1' }]]);
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const { markdown } = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string };
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      '## 1. button.save\n> make it green\n(The element is gone from the page; it is not on the screenshot.)\n\n```text\nMarked on: http://localhost:5173/settings\nSelector: body > button.save\n',
+    );
+    expect(markdown).toContain('## 2. a.next\n> and this link\n\n```text\nSelector: body > a.next\n');
+  });
+});
+
+describe('BrowserSurface — Annotate: заметки отчётов задач 20-22 (этап B, задача 23)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** ✎ и первая метка: редактор открыт, в поле набрано `comment` (Enter не нажат). */
+  async function markWith(comment: string, picks: AnnotationPick[] = [ELEMENT_PICK]): Promise<HTMLElement> {
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks(picks);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: comment } });
+    return field;
+  }
+
+  const cancels = (): number => bridge.browserCalls.filter((call) => call.method === 'annotateCancel').length;
+
+  it('редактор и лоток — внутри поля страницы (browser-field): редактор рисуется в его слое, а не в body', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('x');
+    const fieldBox = screen.getByTestId('browser-field');
+    expect(fieldBox.contains(screen.getByTestId('annotation-editor'))).toBe(true);
+    expect(fieldBox.contains(screen.getByTestId('annotation-tray'))).toBe(true);
+    expect(fieldBox.contains(screen.getByTestId('annotation-anchor'))).toBe(true);
+  });
+
+  it('Esc вне открытого редактора (на заголовке лотка) ничего не отменяет: редактор владеет Esc, режим держится; Esc в самом поле — отмена новой метки', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('typed');
+    const header = within(screen.getByTestId('annotation-tray')).getAllByRole('button')[0] as HTMLElement;
+    await act(async () => {
+      fireEvent.keyDown(header, { key: 'Escape' });
+    });
+    expect(screen.getByTestId('annotation-editor')).toBeTruthy();
+    expect(modeOf()).toBe('annotate');
+    expect(cancels()).toBe(0);
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(modeOf()).toBe('annotate');
+  });
+
+  it('редактор закрыт (Save): фокус упавшего поля возвращается странице — ⌘⌥A и Esc продолжают приходить', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    const field = await markWith('x');
+    expect(document.activeElement).toBe(field);
+    expect(focus).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(document.activeElement).toBe(document.body);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('лоток исчез вместе с кнопкой, державшей фокус («Add to chat»): фокус падает на body — страница получает его назад', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    focus.mockClear();
+    const add = within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' });
+    act(() => add.focus());
+    expect(document.activeElement).toBe(add);
+    await act(async () => {
+      fireEvent.click(add);
+    });
+    await vi.waitFor(() => expect(screen.queryByTestId('annotation-tray')).toBeNull());
+    expect(document.activeElement).toBe(document.body);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('редактор закрыт, а фокус уже у адресной строки — страница фокус не забирает', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    await markWith('x');
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    act(() => address.focus());
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-editor')).getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(document.activeElement).toBe(address);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('✎ в лотке: положение метки обновляется до редактора — он открывается у свежего места (N1 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('first');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items[0]?.rect).toMatchObject({ x: 0.1, y: 0.1 });
+    // Страницу прокрутили, пока человек читал лоток: метка теперь в другом месте.
+    bridge.setAnnotatePositions([{ n: 1, rect: { x: 0.5, y: 0.6, width: 0.2, height: 0.05 } }]);
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    await screen.findByTestId('annotation-editor');
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing?.anchor).toEqual({ fx: 0.5, fy: 0.6 });
+  });
+
+  it('набранное в редакторе не теряется, что бы человек ни нажал в лотке: ✎ и корзина другого пункта сохраняют его (N3 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    // Обе метки в очереди сразу: цикл просит вторую, как только закрыт редактор первой.
+    const first = await markWith('one', [ELEMENT_PICK, { ...ELEMENT_PICK, key: 'a2', selector: 'body > a.next' }]);
+    await act(async () => {
+      fireEvent.keyDown(first, { key: 'Enter' });
+    });
+    const second = await screen.findByRole('textbox', { name: 'Comment for annotation 2' });
+    fireEvent.change(second, { target: { value: 'two, typed' } });
+    const tray = screen.getByTestId('annotation-tray');
+    await act(async () => {
+      fireEvent.click(within(tray).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['one', 'two, typed']);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment for annotation 1' }), { target: { value: 'one, retyped' } });
+    await act(async () => {
+      fireEvent.click(within(tray).getByRole('button', { name: 'Delete annotation 2' }));
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['one, retyped']);
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+  });
+
+  it('«Add to chat» с набранным, но не сохранённым комментарием: он в файле, «(no comment)» нет (N3 задачи 21)', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('typed, not saved');
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const { markdown } = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string };
+    expect(markdown).toContain('> typed, not saved');
+    expect(markdown).not.toContain('(no comment)');
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+  });
+
+  it('did-navigate во время Annotate: режим снят и странице уходит annotateCancel (заметка задачи 20)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 12);
+    fire(view, 'dom-ready');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    expect(modeOf()).toBe('annotate');
+    expect(cancels()).toBe(0);
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(modeOf()).toBe('off');
+    expect(cancels()).toBe(1);
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateCancel').at(-1)?.args).toEqual([12]);
+  });
+
+  it('страница ответила null (Esc в странице, начатый переход): режим снят и annotateCancel уходит — страница не остаётся взведённой (заметка задачи 20)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks([null]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(cancels()).toBe(1);
+  });
+
+  it('фокус страницы не трогается, пока редактора не было: монтирование, dom-ready, метка в лотке', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const field = await markWith('x');
+      const onPage = (): boolean => focus.mock.contexts.some((element) => (element as HTMLElement).tagName === 'WEBVIEW');
+      expect(onPage()).toBe(false);
+      await act(async () => {
+        fireEvent.keyDown(field, { key: 'Enter' });
+      });
+      // Редактор закрыт — вот теперь страница получает фокус назад.
+      expect(onPage()).toBe(true);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  /** Перерисовки меток страницы с отметкой «редактор ещё на экране»: так видно, кто их попросил — обработчик или эффект после рендера. */
+  function watchSyncs(): Array<{ pins: unknown[]; editorMounted: boolean }> {
+    const seen: Array<{ pins: unknown[]; editorMounted: boolean }> = [];
+    const original = bridge.browser.annotateSync;
+    bridge.browser.annotateSync = async (webContentsId, pins) => {
+      seen.push({ pins, editorMounted: document.querySelector('[data-testid="annotation-editor"]') !== null });
+      return original(webContentsId, pins);
+    };
+    return seen;
+  }
+
+  it('Esc новой метки: страницу просят перерисоваться сразу, из обработчика, а не только после рендера (замечание 1 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('');
+    const seen = watchSyncs();
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(seen.some((call) => call.pins.length === 0 && call.editorMounted)).toBe(true);
+    expect(seen.at(-1)?.pins).toEqual([]);
+  });
+
+  it('Delete в редакторе новой метки — та же отмена: перерисовка из обработчика', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('typed');
+    const seen = watchSyncs();
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-editor')).getByRole('button', { name: 'Delete' }));
+    });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(seen.some((call) => call.pins.length === 0 && call.editorMounted)).toBe(true);
+  });
+
+  it('✎ в лотке, а вкладку закрыли, пока шла перерисовка: редактор не открывается и записи лотка не появляется', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    let answer: (positions: AnnotationPosition[]) => void = () => {};
+    bridge.browser.annotateSync = () => new Promise<AnnotationPosition[]>((resolve) => (answer = resolve));
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    cleanup();
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+    await act(async () => answer([{ n: 1, rect: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } }]));
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('закрытие вкладки — лоток убран', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeDefined();
+    cleanup();
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
   });
 });

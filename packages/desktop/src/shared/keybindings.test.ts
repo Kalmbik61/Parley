@@ -69,7 +69,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'browser.newTab': true,
   'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,
   'browser.devtools': true, 'browser.console': true,
-  'browser.select': true,
+  'browser.select': true, 'browser.annotate': true,
 };
 
 describe('ACTIONS (тест 1)', () => {
@@ -128,7 +128,7 @@ describe('ACTIONS (тест 1)', () => {
   });
 
   it('действия браузера — when browser, без меню; палитровые без сочетания — без меню', () => {
-    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset', 'browser.devtools', 'browser.console', 'browser.select'] as const) {
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset', 'browser.devtools', 'browser.console', 'browser.select', 'browser.annotate'] as const) {
       const action = ACTIONS.find((candidate) => candidate.id === id);
       expect(action?.when).toBe('browser');
       expect(action?.menu).toBeNull();
@@ -192,5 +192,13 @@ describe('панель браузера (спека 2026-10-07, 4.9)', () => {
 describe('browser.select (спека браузера 4.9)', () => {
   it('⌘⇧C, область browser, без меню, в палитре', () => {
     expect(ACTIONS.find((action) => action.id === 'browser.select')).toMatchObject({ keys: 'CmdOrCtrl+Shift+C', menu: null, when: 'browser', inPalette: true });
+  });
+});
+
+describe('browser.annotate (спека браузера 4.9)', () => {
+  it('⌘⌥A, область browser, без меню, в палитре; ⌘⇧A остаётся у sidebar.agents', () => {
+    expect(ACTIONS.find((action) => action.id === 'browser.annotate')).toMatchObject({ keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true });
+    expect(ACTIONS.filter((action) => action.keys === 'CmdOrCtrl+Alt+A')).toHaveLength(1);
+    expect(ACTIONS.filter((action) => action.keys === 'CmdOrCtrl+Shift+A').map((action) => action.id)).toEqual(['sidebar.agents']);
   });
 });

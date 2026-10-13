@@ -5,8 +5,8 @@
  * - «назад», «вперёд», «перезагрузить» или «остановить»;
  * - адрес;
  * - размер вьюпорта (`ViewportMenu`);
- * - ⌖ Select (этап B) — после меню размеров, перед «To»; подсвечен, пока режим включён (✎ Annotate встанет рядом);
- * - меню цели «To» (`targetMenu`, этап B, спека браузера 4.1) — после ⌖, перед консолью;
+ * - ⌖ Select и ✎ Annotate (этап B) — после меню размеров, перед «To»; подсвечена кнопка включённого режима;
+ * - меню цели «To» (`targetMenu`, этап B, спека браузера 4.1) — после ⌖ и ✎, перед консолью;
  * - консоль: значок со счётчиками ошибок (красный) и предупреждений (жёлтый); нули не показываются;
  * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network».
  * Под строкой — полоса загрузки 2px.
@@ -17,7 +17,7 @@
  * Страницей строка не управляет сама: всё — колбэками `BrowserSurface`, у которого `<webview>`.
  */
 
-import { ArrowLeft, ArrowRight, Crosshair, MoreHorizontal, RotateCw, SquareTerminal, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Crosshair, MoreHorizontal, PencilLine, RotateCw, SquareTerminal, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { S } from '../../shared/strings.js';
@@ -46,6 +46,7 @@ export interface BrowserChromeProps {
   /** Режим вкладки: подсвечены ⌖ или ✎ (этап B, спека браузера 4.6, 4.7). */
   mode: BrowserMode;
   onSelect(): void;
+  onAnnotate(): void;
   /** Размер вьюпорта вкладки (`TabSpec.viewport`); null — Fit. */
   viewport: ViewportSpec | null;
   onViewport(spec: ViewportSpec | null): void;
@@ -117,6 +118,9 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
       <ViewportMenu viewport={props.viewport} disabled={!live} onChange={props.onViewport} />
       <ModeButton label={S.browser.select.button} title={S.browser.select.title} pressed={props.mode === 'select'} disabled={!live} onClick={props.onSelect}>
         <Crosshair className="size-3.5" aria-hidden="true" />
+      </ModeButton>
+      <ModeButton label={S.browser.annotate.button} title={S.browser.annotate.title} pressed={props.mode === 'annotate'} disabled={!live} onClick={props.onAnnotate}>
+        <PencilLine className="size-3.5" aria-hidden="true" />
       </ModeButton>
       {props.targetMenu}
       <button

@@ -315,6 +315,13 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(resolveAction(cmd('C', 'KeyC', { shiftKey: true }), 'other', false)).toBeNull();
   });
 
+  it('Annotate (этап B, спека браузера 4.9): реализован, без методов хоста; ⌘⌥A рендерер окна не ловит — клавиша у гостя, ⌘⇧A остаётся у sidebar.agents', () => {
+    expect(IMPLEMENTED_ACTIONS.has('browser.annotate')).toBe(true);
+    expect(isActionAvailable('browser.annotate', new Set())).toBe(true);
+    expect(resolveAction(cmd('å', 'KeyA', { altKey: true }), 'other', false)).toBeNull();
+    expect(resolveAction(cmd('A', 'KeyA', { shiftKey: true }), 'other', false)).toBe('sidebar.agents');
+  });
+
   it('browser.newTab реализован (9.2a) и доступен без методов хоста', () => {
     expect(IMPLEMENTED_ACTIONS.has('browser.newTab')).toBe(true);
     expect(isActionAvailable('browser.newTab', new Set())).toBe(true);

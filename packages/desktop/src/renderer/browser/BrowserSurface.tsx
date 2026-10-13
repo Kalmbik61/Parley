@@ -34,7 +34,7 @@ import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
-import { BROWSER_PARTITION, type PickResult } from '../../shared/browser-types.js';
+import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../../shared/browser-types.js';
 import { viewportNote } from '../../shared/context-markdown.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../shared/keybindings.js';
@@ -46,6 +46,10 @@ import { focusTab, updateTab } from '../layout/tree.js';
 import { useUiStore } from '../store/ui.js';
 import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { AnnotationEditor } from './annotate/AnnotationEditor.js';
+import { AnnotationTray } from './annotate/AnnotationTray.js';
+import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';
+import { addAnnotationsToChat, cancelMark, saveDraft, syncPins, useAnnotateMode } from './annotate/use-annotate-mode.js';
 import { BrowserChrome } from './BrowserChrome.js';
 import { createPageContextActions, elementDraft } from './context/actions.js';
 import { TargetMenu } from './context/TargetMenu.js';
@@ -92,10 +96,12 @@ const WEBVIEW_ATTRIBUTES = {
 } as Record<string, string>;
 
 /**
- * Клавиши панели (спека 2026-10-07, 4.9) — из реестра. В странице их пересылает main; с фокусом в строке или панели
- * вкладки — этот обработчик: рендерер окна действия `browser` не ловит (`keys/handler.ts#whenAllows`).
+ * Клавиши панели, Select и Annotate (спека 2026-10-07, 4.9) — из реестра. В странице их пересылает main; с фокусом в
+ * строке или панели вкладки — этот обработчик: рендерер окна действия `browser` не ловит (`keys/handler.ts#whenAllows`).
  */
-const PANEL_KEYS = ACTIONS.filter((action) => action.id === 'browser.devtools' || action.id === 'browser.console');
+const PANEL_KEYS = ACTIONS.filter(
+  (action) => action.id === 'browser.devtools' || action.id === 'browser.console' || action.id === 'browser.select' || action.id === 'browser.annotate',
+);
 
 function panelKey(event: KeyLike): ActionId | null {
   return PANEL_KEYS.find((action) => action.keys !== null && matchesAccelerator(action.keys, event))?.id ?? null;
@@ -207,6 +213,64 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
       bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[parley] pickCancel failed', error));
     };
   }, [selecting, bridge, tabId]);
+
+  // Annotate (спека браузера 4.7): цикл меток и метки страницы — по лотку; лоток вкладки живёт, пока жива вкладка.
+  const annotate = useAnnotateStore((store) => store.tabs[tabId]) ?? EMPTY_ANNOTATE;
+  useAnnotateMode({ bridge, tabId, webContentsId: state.webContentsId, active: state.mode === 'annotate', urlRef });
+  useEffect(() => () => useAnnotateStore.getState().drop(tabId), [tabId]);
+  const [annotateBusy, setAnnotateBusy] = useState(false);
+  const pageId = (): number | null => useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+
+  // Редактор закрыт (Save, Delete, Esc) или лоток исчез («Add to chat», Clear): снятое поле или кнопка держали фокус, он падает
+  // на body, и клавиши корня (Esc, ⌘⌥A) перестают приходить. Возвращаем его странице — следующая метка и так там. Чужой фокус
+  // (адресная строка, поле чата) не трогаем.
+  const editorOpen = annotate.editing !== null;
+  const trayShown = annotate.items.length > 0;
+  const overlays = useRef({ editorOpen: false, trayShown: false });
+  useEffect(() => {
+    const was = overlays.current;
+    overlays.current = { editorOpen, trayShown };
+    if (!(was.editorOpen && !editorOpen) && !(was.trayShown && !trayShown)) return;
+    const holder = document.activeElement;
+    if (holder === null || holder === document.body) viewRef.current?.focus();
+  }, [editorOpen, trayShown]);
+
+  /**
+   * Метка → точка в поле страницы (`fieldRef` A): доля вьюпорта по прямоугольнику `<webview>` — при эмуляции он стоит по
+   * центру поля и уменьшен — плюс его сдвиг в поле, как `getBrowserOverlayAnchor` у Orca. Край поля и переворот
+   * редактора вверх держит Radix (`AnnotationEditor`, `collisionBoundary`).
+   */
+  const anchorAt = (anchor: ViewportFraction): { left: number; top: number } => {
+    const page = fieldRef.current?.getBoundingClientRect();
+    const view = viewRef.current?.getBoundingClientRect();
+    if (page === undefined || view === undefined) return { left: 0, top: 0 };
+    return { left: view.left - page.left + anchor.fx * view.width, top: view.top - page.top + anchor.fy * view.height };
+  };
+
+  // ✎ в строке лотка: положение метки — с прошлой перерисовки, а страницу могли прокрутить; редактор открывается после свежей.
+  const editAnnotation = (n: number): void => {
+    const open = (): void => {
+      // Вкладку могли закрыть, пока шла перерисовка.
+      if (useAnnotateStore.getState().tabs[tabId] === undefined) return;
+      saveDraft(tabId);
+      useAnnotateStore.getState().startEdit(tabId, n);
+    };
+    const id = pageId();
+    if (id === null) open();
+    else void syncPins(bridge, tabId, id).then(open);
+  };
+
+  const addAnnotations = (): void => {
+    setAnnotateBusy(true);
+    void addAnnotationsToChat({
+      bridge,
+      tabId,
+      webContentsId: pageId(),
+      pageUrl: urlRef.current,
+      viewportNote: noteRef.current,
+      add: pageContext.add,
+    }).finally(() => setAnnotateBusy(false));
+  };
 
   // Скрытую вкладку человек не видит: Select и Annotate в ней снимаются, а не едят клики страницы до возврата.
   useEffect(() => {
@@ -358,6 +422,8 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
         saveUrl(event.url);
         if (event.url !== BLANK_SRC) setDocMobile(appliedMobileRef.current);
         update({ title: null, favicon: null, mode: 'off' });
+        // Новый документ: меток на странице больше нет, данные в лотке остаются.
+        useAnnotateStore.getState().markAllGone(tabId);
         history();
       },
       'did-navigate-in-page': (event) => {
@@ -481,7 +547,9 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
       onKeyDown={(event) => {
         // Esc при фокусе в окне (после клика по ⌖ или ✎ он на кнопке): в странице Esc ловит сам скрипт. Esc, который уже
         // закрыл меню Radix (его события идут по дереву React сквозь портал, в том числе из меню «To») или полосу поиска,
-        // помечен preventDefault — режим он не выключает.
+        // помечен preventDefault — режим он не выключает. Так же с открытым редактором метки: слой Radix гасит каждый Esc
+        // окна для себя, и вне редактора (заголовок лотка, адресная строка) он ни отменяет метку, ни выключает режим — редактор
+        // владеет Esc, набранное не пропадает; отменяет Esc в самом поле (`AnnotationEditor`, не доходит сюда).
         if (event.key === 'Escape' && !event.defaultPrevented && state.mode !== 'off') {
           event.preventDefault();
           useBrowserStore.getState().update(tabId, { mode: 'off' });
@@ -491,6 +559,10 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
         const action = live ? panelKey(event.nativeEvent) : null;
         if (action === null) return;
         event.preventDefault();
+        if (action === 'browser.select' || action === 'browser.annotate') {
+          toggleBrowserMode(tabId, action === 'browser.select' ? 'select' : 'annotate');
+          return;
+        }
         if (action === 'browser.console') useDevtoolsStore.getState().show(tabId, 'console');
         else useDevtoolsStore.getState().toggle(tabId);
       }}
@@ -510,6 +582,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
         onDevTools={openDevTools}
         mode={state.mode}
         onSelect={() => toggleBrowserMode(tabId, 'select')}
+        onAnnotate={() => toggleBrowserMode(tabId, 'annotate')}
         viewport={viewport}
         onViewport={setViewport}
         devtoolsOpen={devtools.open}
@@ -559,6 +632,43 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
             }}
           />
         ) : null}
+        {annotate.editing === null ? null : (
+          <AnnotationEditor
+            key={`${annotate.editing.n}:${annotate.editing.isNew ? 'new' : 'edit'}`}
+            n={annotate.editing.n}
+            draft={annotate.editing.draft}
+            anchor={anchorAt(annotate.editing.anchor)}
+            container={fieldRef.current}
+            onDraft={(text) => useAnnotateStore.getState().setDraft(tabId, text)}
+            onSave={() => useAnnotateStore.getState().save(tabId)}
+            onDelete={() => {
+              const editing = useAnnotateStore.getState().tabs[tabId]?.editing ?? null;
+              if (editing === null) return;
+              // Delete новой метки — та же отмена, что Esc; готовой — удаление пункта.
+              if (editing.isNew) void cancelMark(bridge, tabId, pageId());
+              else useAnnotateStore.getState().remove(tabId, editing.n);
+            }}
+            onCancel={() => void cancelMark(bridge, tabId, pageId())}
+          />
+        )}
+        {annotate.items.length === 0 ? null : (
+          <AnnotationTray
+            items={annotate.items}
+            collapsed={annotate.collapsed}
+            busy={annotateBusy}
+            onToggle={() => useAnnotateStore.getState().setCollapsed(tabId, !annotate.collapsed)}
+            onEdit={editAnnotation}
+            onDelete={(n) => {
+              saveDraft(tabId);
+              useAnnotateStore.getState().remove(tabId, n);
+            }}
+            onClear={() => {
+              saveDraft(tabId);
+              useAnnotateStore.getState().clear(tabId);
+            }}
+            onAddToChat={addAnnotations}
+          />
+        )}
         {state.loadFailed && !state.crashed ? (
           <div
             data-testid="browser-load-failed"

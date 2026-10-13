@@ -73,6 +73,15 @@ describe('forwardGuestShortcuts (тест 7)', () => {
     expect(send.mock.calls.map(([id]) => id)).toEqual(['browser.select']);
   });
 
+  it('⌘⌥A из страницы (этап B, спека браузера 4.9) — гасится в госте и уходит окну как Annotate; обычный ⌘A остаётся странице', () => {
+    const guest = fakeGuest();
+    const send = vi.fn<(id: ActionId) => void>();
+    forwardGuestShortcuts(guest.contents, send);
+    expect(guest.input({ key: 'å', code: 'KeyA', meta: true, alt: true })).toBe(true);
+    expect(guest.input({ key: 'a', code: 'KeyA', meta: true })).toBe(false);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['browser.annotate']);
+  });
+
   it('keyUp и isComposing — не трогаются', () => {
     const guest = fakeGuest();
     const send = vi.fn<(id: ActionId) => void>();
