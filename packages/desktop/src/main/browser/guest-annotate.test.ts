@@ -155,6 +155,48 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     expect(pins()).toBe(0);
   });
 
+  it('слой без <style>: страница с CSP без unsafe-inline в style-src режет <style> и setAttribute("style") — номера остались бы без стиля, а нарушение легло бы в Console человека; стили лежат на узлах через style.cssText (CSSOM CSP не режет)', async () => {
+    const setAttribute = vi.spyOn(Element.prototype, 'setAttribute');
+    const first = runScript();
+    click(button);
+    await first;
+    // Окно перерисовывает метки по лотку после каждой: без этого временный номер первой метки ушёл бы со второй.
+    controller().sync([{ n: 1, key: 'a1' }]);
+    const second = runScript();
+    dispatchTrusted(button, mouse('mousedown', { clientX: 200, clientY: 200 }));
+    dispatchTrusted(button, mouse('mousemove', { clientX: 260, clientY: 240 }));
+    dispatchTrusted(button, mouse('mouseup', { clientX: 260, clientY: 240 }));
+    await second;
+    controller().sync([
+      { n: 1, key: 'a1' },
+      { n: 2, key: 'a2' },
+    ]);
+    expect(layer?.querySelector('style')).toBeNull();
+    expect(setAttribute.mock.calls.filter(([name]) => name === 'style')).toEqual([]);
+    const read = (el: HTMLElement | null | undefined, names: string[]): Record<string, string | undefined> =>
+      Object.fromEntries(names.map((name) => [name, el?.style.getPropertyValue(name)]));
+    const badges = Array.from(layer?.querySelectorAll<HTMLElement>('.badge') ?? []);
+    expect(badges).toHaveLength(2);
+    for (const badge of badges) {
+      expect(read(badge, ['position', 'width', 'height', 'display', 'border-radius', 'user-select'])).toEqual({
+        position: 'absolute',
+        width: '24px',
+        height: '24px',
+        display: 'flex',
+        'border-radius': '9999px',
+        'user-select': 'none',
+      });
+      expect(badge.style.getPropertyValue('background-color')).toMatch(/^(rgb\(245, 158, 11\)|#f59e0b)$/i);
+      expect(badge.style.getPropertyValue('color')).toMatch(/^(rgb\(255, 255, 255\)|#fff(fff)?|white)$/i);
+    }
+    // Рамка элемента — сплошная, рамка области — пунктир; классы остались именами узлов.
+    const outlines = Array.from(layer?.querySelectorAll<HTMLElement>('.outline') ?? []);
+    expect(outlines.map((outline) => [outline.classList.contains('region'), read(outline, ['position', 'border-style', 'border-width'])])).toEqual([
+      [false, { position: 'absolute', 'border-style': 'solid', 'border-width': '2px' }],
+      [true, { position: 'absolute', 'border-style': 'dashed', 'border-width': '2px' }],
+    ]);
+  });
+
   it('протяжка больше 4 px — рамка: прямоугольник в координатах документа и до трёх элементов под центром', async () => {
     const picking = runScript();
     dispatchTrusted(button, mouse('mousedown', { clientX: 30, clientY: 30 }));

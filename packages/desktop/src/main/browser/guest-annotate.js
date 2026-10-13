@@ -18,6 +18,8 @@
 //   документа, снятому при создании: так она идёт и за элементом во вложенном прокручиваемом контейнере; рамка
 //   области — в координатах документа (спека 4.7);
 // - мир 1001, без токена и без console.debug: инспектор пишет все console.* страницы в журнал Console человека;
+// - стили узлов — style.cssText на каждом узле, а не <style> в shadow-корне: страница с CSP без 'unsafe-inline' в style-src
+//   режет <style>, но не CSSOM (номера остались бы без стиля, а нарушение легло бы в Console человека);
 // - на beforeunload слой не снимается: мир умирает вместе с документом, а скачивание и отменённый переход документ не
 //   меняют — метки должны остаться;
 // - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок с центром в её левом верхнем углу, прижатый
@@ -39,13 +41,17 @@
     // Эти два страница не получает, но отменять их нельзя: pointerdown с preventDefault отменяет и последующие mousedown,
     // mousemove и mouseup (совместимые события мыши, Pointer Events), а жест ведут именно они — метка не ставилась бы.
     const HIDDEN_ONLY = ['pointerdown', 'pointerup'];
-    const LAYER_CSS =
-      `.outline{position:absolute;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;will-change:transform;}` +
-      '.outline.region{border-style:dashed;}' +
-      `.badge{position:absolute;left:0;top:0;box-sizing:border-box;width:${BADGE_PX}px;height:${BADGE_PX}px;display:flex;` +
+    // Стили узлов слоя кладутся на каждый узел через style.cssText (CSSOM), а не <style> в shadow-корне: страница с CSP, где
+    // в style-src нет 'unsafe-inline', режет <style> и setAttribute('style'), но не CSSOM. Иначе номера остались бы без
+    // стиля, а нарушение CSP легло бы в Console человека (инспектор пишет туда все console.* и нарушения страницы).
+    const OUTLINE_CSS = `position:absolute;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;will-change:transform;`;
+    // Рамка области — пунктиром; идёт после OUTLINE_CSS: border-style после border, иначе сокращённая запись его перекрыла бы.
+    const REGION_CSS = 'border-style:dashed;';
+    const BADGE_CSS =
+      `position:absolute;left:0;top:0;box-sizing:border-box;width:${BADGE_PX}px;height:${BADGE_PX}px;display:flex;` +
       `align-items:center;justify-content:center;border-radius:9999px;border:1px solid rgba(255,255,255,0.95);background:${COLOR};` +
       'color:#fff;font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 10px 24px rgba(0,0,0,.18);' +
-      'will-change:transform;user-select:none;}';
+      'will-change:transform;user-select:none;';
 
     // Рамка протяжки — пока человек тянет; вне слоя, чтобы рисоваться без кадра.
     const box = document.createElement('div');
@@ -70,9 +76,6 @@
         host = document.createElement('div');
         host.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;contain:layout style paint;overflow:hidden;';
         root = host.attachShadow({ mode: 'closed' });
-        const style = document.createElement('style');
-        style.textContent = LAYER_CSS;
-        root.appendChild(style);
       }
       // Страница могла вынуть хост из DOM (перерисовала body) — вернуть.
       const parent = document.body || document.documentElement;
@@ -152,10 +155,14 @@
         live.add(pin.key);
         let node = nodes.get(pin.key);
         if (node === undefined) {
+          // Классы — имена узлов (тесты, отладка), стилей за ними нет: весь вид лежит на самом узле.
+          const region = targets.get(pin.key).rect !== undefined;
           const outline = document.createElement('div');
-          outline.className = targets.get(pin.key).rect === undefined ? 'outline' : 'outline region';
+          outline.className = region ? 'outline region' : 'outline';
+          outline.style.cssText = region ? OUTLINE_CSS + REGION_CSS : OUTLINE_CSS;
           const badge = document.createElement('span');
           badge.className = 'badge';
+          badge.style.cssText = BADGE_CSS;
           root.append(outline, badge);
           node = { outline, badge };
           nodes.set(pin.key, node);
