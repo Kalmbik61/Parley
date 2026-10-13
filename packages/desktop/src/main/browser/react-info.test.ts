@@ -147,6 +147,61 @@ describe('REACT_INFO_FN (спека браузера 3.8; поиск компо�
   });
 });
 
+/** Функция-компонент с заданным именем: displayName у React важнее name. */
+function named(name: string): () => null {
+  return Object.assign((): null => null, { displayName: name });
+}
+
+describe('REACT_INFO_FN: строки страницы не уходят длиннее предела (итоговое ревью, I-1)', () => {
+  it('имя компонента длиннее REACT_LIMITS.name пропущено, остальные в цепочке остаются; ровно предел — остаётся', () => {
+    const outer = { type: named('Outer'), return: null };
+    const long = { type: named('L'.repeat(REACT_LIMITS.name + 1)), return: outer };
+    const exact = { type: named('E'.repeat(REACT_LIMITS.name)), return: long };
+    expect(run({ __reactFiber$k: { type: 'button', return: exact } })).toEqual([
+      { name: 'E'.repeat(REACT_LIMITS.name), source: null, approx: false },
+      { name: 'Outer', source: null, approx: false },
+    ]);
+  });
+
+  it('источник длиннее REACT_LIMITS.source — null (имя остаётся, approx снят); ровно предел — остаётся', () => {
+    const tail = ':1';
+    const exact = 's'.repeat(REACT_LIMITS.source - tail.length);
+    const over = 's'.repeat(REACT_LIMITS.source - tail.length + 1);
+    const chain = (fileName: string): object => ({ type: 'button', return: { type: named('Save'), return: null }, _debugSource: { fileName, lineNumber: 1 } });
+    expect(run({ __reactFiber$k: chain(exact) })).toEqual([{ name: 'Save', source: `${exact}${tail}`, approx: false }]);
+    expect(run({ __reactFiber$k: chain(over) })).toEqual([{ name: 'Save', source: null, approx: false }]);
+    // React 19: путь из _debugStack ведёт себя так же.
+    const stack = (url: string): object => ({ type: 'button', return: { type: named('Save'), return: null }, _debugStack: { stack: `Error: react-stack-top-frame\n    at Save (${url}:12:10)` } });
+    expect(run({ __reactFiber$k: stack(`http://h/${'p'.repeat(REACT_LIMITS.source)}`) })).toEqual([{ name: 'Save', source: null, approx: false }]);
+  });
+
+  it('имя и источник в 50 млн знаков не возвращаются: ответ по CDP мал (предела на размер ответа у CDP нет)', () => {
+    const huge = 'n'.repeat(50_000_000);
+    const outer = { type: named('Outer'), return: null };
+    const hostile = { type: named(huge), return: outer };
+    const fiber = { type: 'button', return: { type: named('Save'), return: hostile }, _debugSource: { fileName: huge, lineNumber: 1 } };
+    const result = run({ __reactFiber$k: fiber }) as Array<{ name: string; source: string | null }>;
+    // Сравнение булевым значением и длиной: упавший toEqual пытался бы показать строку в 50 млн знаков.
+    expect(result.map((item) => item.name)).toEqual(['Save', 'Outer']);
+    expect(result.every((item) => item.name.length <= REACT_LIMITS.name && (item.source === null || item.source.length <= REACT_LIMITS.source))).toBe(true);
+    expect(JSON.stringify(result).length).toBeLessThan(500);
+  });
+
+  it('результат собирается присваиванием, а не Array.prototype.push: в мире страницы push может быть чужим', () => {
+    const push = Array.prototype.push;
+    Array.prototype.push = function pagePatchedPush(): number {
+      throw new Error('push подменён страницей');
+    };
+    let result: unknown;
+    try {
+      result = run({ __reactFiber$k: { type: 'button', return: { type: named('Save'), return: null } } });
+    } finally {
+      Array.prototype.push = push;
+    }
+    expect(result).toEqual([{ name: 'Save', source: null, approx: false }]);
+  });
+});
+
 describe('parseReactInfo', () => {
   it('форма проверена: не больше трёх, имя до 100, источник до 300, approx — только true', () => {
     const value = [

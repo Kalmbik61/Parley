@@ -23,6 +23,14 @@
  *   у компонента пропал бы источник.
  * Из глобалов страницы функция берёт только встроенные, ошибки ловит. Всё, что она вернула, — данные страницы: форму и
  * длины проверяет `parseReactInfo`.
+ *
+ * Размер ответа. Функция идёт в главном мире страницы, а у CDP предела на размер ответа нет: `returnByValue` целиком
+ * разбирается в процессе браузера ещё до `parseReactInfo`, и имя компонента или путь в сотни мегабайт одним
+ * присваиванием положили бы main. Поэтому имя длиннее `REACT_LIMITS.name` (в юнитах UTF-16) пропускает компонент, а
+ * источник длиннее `REACT_LIMITS.source` становится `null`. Длина проверяется по `.length` (у примитива её не подменить,
+ * в отличие от `slice`) и раньше регулярки по имени; результат пополняется присваиванием `out[out.length]`, а не `push`,
+ * который в мире страницы может быть чужим. Это сужает атаку, а не делает функцию доверенной: страница, что ставит
+ * сеттеры на `Array.prototype`, всё равно перекроит массив, и форму с длинами после неё держит только `parseReactInfo`.
  */
 
 import type { ReactComponentInfo } from '../../shared/browser-types.js';
@@ -30,7 +38,8 @@ import { cutCodePoints, isRecord } from './guest-data.js';
 
 /**
  * Пределы React (спека браузера 8): до трёх компонентов, имя до 100, источник до 300. `depth` — подъём по `return` не
- * дальше 35 звеньев (как у Orca), `stackLines` — первые 6 строк `_debugStack` (правило этапа 0).
+ * дальше 35 звеньев (как у Orca), `stackLines` — первые 6 строк `_debugStack` (правило этапа 0). Те же `name` и `source`
+ * стоят в самой функции страницы: длиннее — не уходит в ответ вовсе (см. «Размер ответа» выше).
  */
 export const REACT_LIMITS = { components: 3, name: 100, source: 300, depth: 35, stackLines: 6 } as const;
 
@@ -38,6 +47,8 @@ export const REACT_INFO_FN = `function () {
   try {
     var LIMIT = ${REACT_LIMITS.components};
     var DEPTH = ${REACT_LIMITS.depth};
+    var NAME = ${REACT_LIMITS.name};
+    var SOURCE = ${REACT_LIMITS.source};
     var FRAMEWORK = /^(?:Fragment|StrictMode|Suspense|Profiler)$|\\.(?:Provider|Consumer)$/;
     var FRAME = /^\\s*at (?:(.*?) \\()?(.*?):(\\d+):(\\d+)\\)?\\s*$/;
     var SKIP_FN = /^(?:exports\\.)?(?:jsxDEV|jsxs?|createElement)$|react_stack_bottom_frame|react-stack-top-frame/;
@@ -90,9 +101,10 @@ export const REACT_INFO_FN = `function () {
     var fiber = below.return;
     for (var depth = 0; fiber && out.length < LIMIT && depth < DEPTH; depth += 1) {
       var name = nameOf(fiber.type);
-      if (typeof name === 'string' && name !== '' && !FRAMEWORK.test(name)) {
+      if (typeof name === 'string' && name !== '' && name.length <= NAME && !FRAMEWORK.test(name)) {
         var found = sourceOf(below);
-        out.push({ name: name, source: found ? found.source : null, approx: found ? found.approx : false });
+        var source = found && typeof found.source === 'string' && found.source.length <= SOURCE ? found.source : null;
+        out[out.length] = { name: name, source: source, approx: source !== null && found.approx === true };
       }
       below = fiber;
       fiber = fiber.return;
