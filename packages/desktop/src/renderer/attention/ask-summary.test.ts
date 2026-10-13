@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { FeedCard, FeedItem, FeedPermissionCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
-import { askSummary, pendingAskOf } from './ask-summary.js';
+import { askSummary, pendingAskOf, pendingCards } from './ask-summary.js';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
@@ -100,5 +100,16 @@ describe('pendingAskOf', () => {
     expect(pendingAskOf({ items, decisions: 'window' }, PROJECT)?.inWindow).toBe(true);
     expect(pendingAskOf({ items, decisions: null }, PROJECT)?.inWindow).toBe(true);
     expect(pendingAskOf({ items }, PROJECT)?.inWindow).toBe(true);
+  });
+});
+
+describe('pendingCards', () => {
+  it('все ждущие карточки по порядку ленты, ответившие не в счёт', () => {
+    const items: FeedItem[] = [
+      permission('c-1', 'Bash', { command: 'ls' }),
+      permission('c-2', 'Bash', { command: 'rm x' }, 'allowed'),
+      question('c-3', 'Which?'),
+    ];
+    expect(pendingCards(items).map((card) => card.cardId)).toEqual(['c-1', 'c-3']);
   });
 });

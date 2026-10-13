@@ -51,12 +51,17 @@ export function askSummary(card: FeedCard, projectPath: string): string {
   return card.toolName;
 }
 
+/** Все карточки, ждущие ответа, по порядку ленты. */
+export function pendingCards(items: readonly FeedItem[]): FeedCard[] {
+  return items.filter((item): item is FeedCard => isCard(item) && item.state === 'pending');
+}
+
 /** Самая поздняя карточка, ждущая ответа; нет такой — `null`. */
 export function pendingAskOf(
   snapshot: { items: readonly FeedItem[]; decisions?: FeedDecisions | null },
   projectPath: string,
 ): PendingAsk | null {
-  const card = snapshot.items.findLast((item): item is FeedCard => isCard(item) && item.state === 'pending');
+  const card = pendingCards(snapshot.items).at(-1);
   if (card === undefined) return null;
   return { cardId: card.id, summary: askSummary(card, projectPath), inWindow: snapshot.decisions !== 'terminal' };
 }
