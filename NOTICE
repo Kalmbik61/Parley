@@ -4,7 +4,8 @@
 Orca
 ------------------------------------------------------------------------------
 
-Источник: https://github.com/Kalmbik61/orca-harnas, коммит acf8e679.
+Источник: https://github.com/Kalmbik61/orca-harnas, коммит acf8e679 (форк); файлы
+этапа B браузера — из https://github.com/stablyai/orca, коммит b1cd858 (ниже).
 
 MIT License
 
@@ -65,6 +66,32 @@ Inc., лицензия MIT; её полный текст — выше, в это
 Файл .github/workflows/release.yml написан заново; порядок «черновик → сборка →
 проверка файлов → публикация» и мысль о гейтах взяты из release-cut.yml и
 release-mac-build.yml того же проекта.
+
+Адаптированные файлы (этап B браузера — Select и Annotate; источник —
+https://github.com/stablyai/orca, коммит b1cd858; правообладатель и лицензия те
+же — MIT, Copyright (c) 2026 Lovecast Inc., полный текст выше, в этом разделе):
+- packages/desktop/src/main/browser/guest-dom.js — адаптация
+  src/main/browser/grab-guest-foundation-script.ts,
+  src/main/browser/grab-guest-content-script.ts и
+  src/main/browser/grab-guest-element-context-script.ts: кратчайший уникальный
+  селектор, ограниченный обход текста, очистка URL. Работает в изолированном
+  мире страницы, а не в главном, как у Orca.
+- packages/desktop/src/main/browser/react-info.ts — адаптация
+  src/main/browser/grab-guest-react-script.ts: поиск компонента React и пути
+  исходника; правило React 19 — своё.
+- packages/desktop/src/main/browser/design-mode.ts — основной снимок элемента
+  Select по src/main/browser/browser-grab-screenshot.ts: вырезка из
+  capturePage() видимой части, множитель «ширина картинки / ширина вьюпорта»
+  измеряется по картинке. Обрезка CDP — только для элемента больше вьюпорта,
+  своя, не из Orca.
+- packages/desktop/src/main/browser/guest-annotate.js — слой номерных меток по
+  src/shared/browser-annotation-viewport-bridge.ts.
+- packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx — по
+  src/renderer/src/components/browser-pane/annotate/pending-browser-annotation-card.tsx.
+- packages/desktop/src/renderer/browser/annotate/AnnotationTray.tsx — по
+  src/renderer/src/components/browser-pane/annotate/browser-page-annotation-tray.tsx.
+В шапке каждого из этих файлов — путь исходника в Orca и пометка
+«(stablyai/orca b1cd858, MIT)».
 
 ------------------------------------------------------------------------------
 shadcn/ui

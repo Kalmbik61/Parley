@@ -32,6 +32,27 @@ function shadcnFiles(): string[] {
   return out.sort();
 }
 
+/**
+ * Файлы окна с пометкой `stablyai/orca` в тексте — адаптации кода Orca (этап B браузера и дальше): main, рендерер и
+ * shared, без тестов. Забытый в NOTICE файл ловит этот страж, а не ревью.
+ */
+function orcaFiles(): string[] {
+  const out: string[] = [];
+  const stack = ['main', 'renderer', 'shared'].map((dir) => path.join(desktopRoot, 'src', dir));
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === undefined) continue;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (/\.(ts|tsx|js)$/.test(entry.name) && !entry.name.includes('.test.') && readFileSync(full, 'utf8').includes('stablyai/orca')) {
+        out.push(path.relative(repoRoot, full));
+      }
+    }
+  }
+  return out.sort();
+}
+
 const fontsDir = path.join(desktopRoot, 'src', 'renderer', 'assets', 'fonts');
 const firstLine = (file: string): string => readFileSync(path.join(fontsDir, file), 'utf8').split('\n')[0] ?? '';
 
@@ -130,6 +151,16 @@ describe('NOTICE и лицензии в сборке (ревью M7)', () => {
     expect(notice).toContain('Copyright (c) 2023-2026 The ggml authors');
     expect(notice).toContain('Silero VAD');
     expect(notice).toContain('Copyright (c) 2020-present Silero Team');
+  });
+
+  it('NOTICE называет каждый файл окна, адаптированный из stablyai/orca, и коммит источника; в шапке файла — та же пометка', () => {
+    expect(notice).toContain('https://github.com/stablyai/orca, коммит b1cd858');
+    const files = orcaFiles();
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      expect(notice, file).toContain(file);
+      expect(readFileSync(path.join(repoRoot, file), 'utf8'), file).toContain('(stablyai/orca b1cd858, MIT)');
+    }
   });
 
   it('NOTICE называет таблицу палитр терминала из Orca', () => {
