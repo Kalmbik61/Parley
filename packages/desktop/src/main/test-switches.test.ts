@@ -8,6 +8,7 @@ const ALL_ON = {
   PARLEY_DROPS: 'fake',
   PARLEY_SHELL: 'log',
   PARLEY_LOGIN_SHELL: 'skip',
+  PARLEY_ISLAND: 'off',
 };
 
 describe('testSwitches', () => {
@@ -20,6 +21,7 @@ describe('testSwitches', () => {
       shell: true,
       loginShell: true,
       voice: false,
+      islandOff: true,
     });
   });
 
@@ -32,6 +34,7 @@ describe('testSwitches', () => {
       shell: false,
       loginShell: false,
       voice: false,
+      islandOff: false,
     });
   });
 
@@ -44,7 +47,15 @@ describe('testSwitches', () => {
       shell: true,
       loginShell: true,
       voice: false,
+      islandOff: true,
     });
+  });
+
+  it('PARLEY_ISLAND=off выключает остров в неупакованном окне, в сборке без PARLEY_E2E — нет', () => {
+    expect(testSwitches({ PARLEY_ISLAND: 'off' }, false).islandOff).toBe(true);
+    expect(testSwitches({ PARLEY_ISLAND: 'on' }, false).islandOff).toBe(false);
+    expect(testSwitches({ PARLEY_ISLAND: 'off' }, true).islandOff).toBe(false);
+    expect(testSwitches({ PARLEY_ISLAND: 'off', PARLEY_E2E: '1' }, true).islandOff).toBe(true);
   });
 
   it('voice: fake — только в неупакованном окне или с PARLEY_E2E=1', () => {
@@ -66,8 +77,18 @@ describe('testSwitches', () => {
       HARNAS_DROPS: 'fake',
       HARNAS_SHELL: 'log',
       HARNAS_LOGIN_SHELL: 'skip',
+      HARNAS_ISLAND: 'off',
     };
-    const all = { downloads: true, dialogs: true, notifications: true, drops: true, shell: true, loginShell: true, voice: false };
+    const all = {
+      downloads: true,
+      dialogs: true,
+      notifications: true,
+      drops: true,
+      shell: true,
+      loginShell: true,
+      voice: false,
+      islandOff: true,
+    };
     expect(testSwitches(legacy, false)).toEqual(all);
     // В собранном приложении — только с явным HARNAS_E2E=1, как и с PARLEY_E2E=1.
     expect(testSwitches(legacy, true).notifications).toBe(false);
@@ -96,6 +117,7 @@ describe('testSwitches', () => {
       shell: false,
       loginShell: false,
       voice: false,
+      islandOff: false,
     });
     expect(testSwitches({ PARLEY_DROPS: 'log', PARLEY_SHELL: '1', PARLEY_LOGIN_SHELL: '1' }, false)).toMatchObject({
       drops: false,

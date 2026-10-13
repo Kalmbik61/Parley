@@ -11,6 +11,7 @@ import {
   nativeTheme,
   net,
   Notification,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -19,8 +20,11 @@ import {
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
+import type { FocusTarget } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
+import type { IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
+import type { UiFile } from '../shared/ui-types.js';
 import { createDesignMode } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
@@ -37,6 +41,9 @@ import { imageThumbnail } from './image-thumbnail.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
+import { registerIslandIpc } from './island/ipc.js';
+import type { IslandPlacement } from './island/placement.js';
+import { createIslandController, islandWindowOptions } from './island/window.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { createNotesStore } from './notes-store.js';
@@ -59,7 +66,7 @@ import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
 import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
 import { killRunningEngines, removeStaleRecordings } from './voice/transcribe.js';
-import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
+import { createMainWindow, guardNavigation, guardWindowClose, titlebarDoubleClickAction } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,6 +230,8 @@ if (!gotLock) {
 
     const preloadPath = path.join(dirname, '../preload/index.js');
     const indexHtmlPath = path.join(dirname, '../renderer/index.html');
+    const islandPreloadPath = path.join(dirname, '../preload/island.js');
+    const islandHtmlPath = path.join(dirname, '../renderer/island.html');
 
     // Флаги окна из `search` (`location.search` рендерера читает их сама, `main/window.ts`
     // просто грузит файл с готовой строкой запроса): `renderer=dom` — E2E читают текст
@@ -357,18 +366,86 @@ if (!gotLock) {
     if (logNotifications) {
       (globalThis as { __parleyNotifications?: LoggedNotification[] }).__parleyNotifications = notificationLog;
     }
+    /** Цель клика (уведомление, остров): окну, если оно загружено, иначе — в отложенные. */
+    const sendFocusTarget = (target: FocusTarget): void => {
+      const window = mainWindow;
+      if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
+        window.webContents.send('app:focus-target', target);
+      } else {
+        // Окно ещё грузится — в том числе созданное `activate` за миг до клика.
+        pendingFocusTarget.put(target);
+      }
+    };
     const notifier = createNotifier({
       create: (options): NotificationLike =>
         logNotifications ? createLoggedNotification(notificationLog, options) : new Notification(options),
       focusWindow: focusMainWindow,
-      sendFocusTarget: (target) => {
-        const window = mainWindow;
-        if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
-          window.webContents.send('app:focus-target', target);
-        } else {
-          // Окно ещё грузится — в том числе созданное `activate` за миг до клика.
-          pendingFocusTarget.put(target);
-        }
+      sendFocusTarget,
+    });
+
+    // Остров одобрений (спека 2026-10-12): окно по настройке «Island»; место — кеш из ui.json, запись асинхронная.
+    let islandPlacement: IslandPlacement = { displayId: ui.island.displayId, anchor: ui.island.anchor };
+    const island = createIslandController<BrowserWindow>({
+      createWindow: () => {
+        const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
+        guardNavigation(window.webContents, `file://${islandHtmlPath}`);
+        void window.loadFile(islandHtmlPath);
+        return window;
+      },
+      displays: () => screen.getAllDisplays(),
+      primaryDisplayId: () => screen.getPrimaryDisplay().id,
+      placement: () => islandPlacement,
+      savePlacement: (placement) => {
+        islandPlacement = placement;
+        void uiStore.save({ island: { ...placement } } as Partial<Omit<UiFile, 'version'>>).catch(() => undefined);
+      },
+      onCreated: (window) => {
+        forwardHostToPages(connection, window);
+        window.webContents.on('did-finish-load', () => pushIslandConfig());
+      },
+      log: (message) => console.warn('[parley]', message),
+    });
+    const islandConfig = async (): Promise<IslandConfig> => {
+      const current = await uiStore.load();
+      return { sound: current.notifications.sound, hintShown: current.island.hintShown, topInset: island.topInset() };
+    };
+    const pushIslandConfig = (): void => {
+      void islandConfig().then((config) => {
+        const window = island.current();
+        if (window !== null) window.webContents.send('island:config', config);
+      });
+    };
+    /** Настройка решает, есть ли окно; `PARLEY_ISLAND=off` (E2E) — острова нет в любом случае. */
+    const syncIsland = (current: UiFile): void => {
+      islandPlacement = { displayId: current.island.displayId, anchor: current.island.anchor };
+      if (current.island.enabled && !switches.islandOff) island.open();
+      else island.close();
+      pushIslandConfig();
+    };
+    syncIsland(ui);
+    // Мониторы подключили, отключили, сменили разрешение — место заново из сохранённой точки, отступ под чёлку заново.
+    const relayoutIsland = (): void => {
+      island.relayout();
+      pushIslandConfig();
+    };
+    screen.on('display-added', relayoutIsland);
+    screen.on('display-removed', relayoutIsland);
+    screen.on('display-metrics-changed', relayoutIsland);
+    registerIslandIpc({
+      ipcMain,
+      controller: island,
+      config: islandConfig,
+      pushConfig: pushIslandConfig,
+      openTarget: (target) => {
+        focusMainWindow();
+        sendFocusTarget(target);
+      },
+      beep: () => shell.beep(),
+      markHintShown: () => {
+        void uiStore
+          .save({ island: { hintShown: true } } as Partial<Omit<UiFile, 'version'>>)
+          .then(() => pushIslandConfig())
+          .catch(() => undefined);
       },
     });
 
@@ -439,7 +516,13 @@ if (!gotLock) {
       connection,
       layoutStore: createLayoutStore(desktopLayoutsPath()),
       uiStore,
-      onUiSaved: () => void updates.settingsChanged(),
+      onUiSaved: () => {
+        void updates.settingsChanged();
+        // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
+        void uiStore.load().then(syncIsland);
+      },
+      isIslandSender: (sender) => island.isIsland(sender),
+      islandActive: () => island.current() !== null,
       notesStore: createNotesStore(),
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;
@@ -556,7 +639,8 @@ if (!gotLock) {
     // Клик по уведомлению без окон: macOS может прислать `activate` раньше клика. Окно
     // тогда создаёт этот обработчик, а цель клика ждёт его загрузки в отложенных.
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      // Остров — тоже окно: «окон нет совсем» больше не значит «главного окна нет».
+      if (mainWindow === null || mainWindow.isDestroyed()) {
         focusMainWindow();
       }
     });
