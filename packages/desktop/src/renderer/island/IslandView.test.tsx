@@ -283,6 +283,37 @@ describe('пауза кнопок решения после показа зап�
   });
 });
 
+describe('цвета острова', () => {
+  /** Рампа `neutral-*` переворачивается в тёмной теме (100 — самый тёмный): на чёрном острове такой текст невидим. */
+  const NEUTRAL = /\b(text|bg|border)-neutral-\d/;
+  /** Классы всех элементов вида; точка состояния — общий компонент сайдбара со своими проверенными токенами. */
+  const classesOf = (): string[] =>
+    Array.from(document.body.querySelectorAll('*')).filter((node) => node.closest('[data-testid="agent-state-dot"]') === null).map((node) => node.getAttribute('class') ?? '');
+
+  const states: Array<[string, Partial<IslandViewProps>]> = [
+    ['пилюля с подсказкой', { config: { sound: true, hintShown: false, topInset: 0 } }],
+    ['список', { listOpen: true }],
+    ['карточка с очередью и пометками', { items: [permissionItem({ note: 'elsewhere' }), permissionItem({ key: 'k\u0000c-2', note: 'failed' })] }],
+    ['карточка вопроса', { items: [questionItem(['Postgres', 'SQLite'])] }],
+    ['карточка с одной кнопкой Open in Parley', { items: [permissionItem({ inWindow: false })] }],
+  ];
+
+  it('ни в одном состоянии нет классов text-/bg-/border-neutral-N — только токены темы', () => {
+    for (const [name, patch] of states) {
+      view(patch);
+      expect(classesOf().filter((classes) => NEUTRAL.test(classes)), name).toEqual([]);
+      cleanup();
+    }
+  });
+
+  it('текст острова — text-foreground, второстепенный — text-muted-foreground', () => {
+    view({ items: [permissionItem()] });
+    expect(screen.getByTestId('island').className).toContain('text-foreground');
+    expect(screen.getByRole('button', { name: 'Hide until the next request' }).className).toContain('text-muted-foreground');
+    expect(screen.getByTestId('island-drag').className).toContain('text-muted-foreground');
+  });
+});
+
 describe('ручка перетаскивания', () => {
   /** Событие указателя с точкой на экране: `MouseEvent` нужного типа — не зависит от того, знает ли jsdom `PointerEvent`. */
   const pointer = (type: string, screenX: number, screenY: number): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY });

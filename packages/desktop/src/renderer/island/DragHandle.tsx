@@ -17,7 +17,7 @@ export function DragHandle({ api }: { api: Pick<IslandApi, 'dragStart' | 'dragMo
       title={S.island.drag}
       aria-label={S.island.drag}
       role="separator"
-      className="cursor-grab select-none px-1 text-neutral-400 active:cursor-grabbing"
+      className="cursor-grab select-none px-1 text-muted-foreground active:cursor-grabbing"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture?.(event.pointerId);
         api.dragStart({ screenX: event.screenX, screenY: event.screenY });

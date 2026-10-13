@@ -1,6 +1,8 @@
 /**
  * Вид острова (спека 2026-10-12, раздел 4): пилюля, список «в работе» или карточка запроса. Чистый вид: всё
- * приходит пропсами, решения и переходы — колбэками. Остров всегда тёмный (чёрный, как чёлка).
+ * приходит пропсами, решения и переходы — колбэками. Остров всегда тёмный (чёрный, как чёлка). Цвет текста — только
+ * семантические токены темы (`text-foreground`, `text-muted-foreground`): рампа `neutral-*` в тёмной теме перевёрнута
+ * (100 — самый тёмный), и `text-neutral-100` на чёрном фоне невидим.
  */
 
 import { useEffect, useState } from 'react';
@@ -53,7 +55,7 @@ function rowTarget(row: IslandRow): FocusTarget {
 
 function HideButton({ onHide }: { onHide(): void }): JSX.Element {
   return (
-    <button type="button" aria-label={S.island.hide} title={S.island.hide} onClick={onHide} className="px-1 text-neutral-400 hover:text-neutral-100">
+    <button type="button" aria-label={S.island.hide} title={S.island.hide} onClick={onHide} className="px-1 text-muted-foreground hover:text-foreground">
       ×
     </button>
   );
@@ -84,16 +86,16 @@ function List({ model, api }: IslandViewProps): JSX.Element {
     <div data-testid="island-list" className="flex max-h-80 w-[360px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-xs">
       {model.groups.map((group) => (
         <div key={group.key} className="flex flex-col gap-1">
-          <div className="text-neutral-400">
-            {group.title} <span className="text-neutral-500">· {group.project}</span>
+          <div className="text-muted-foreground">
+            {group.title} <span className="text-muted-foreground">· {group.project}</span>
           </div>
           {group.rows.map((row) => (
             <button key={row.key} type="button" className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
               {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе, комната) — «working». */}
               <AgentStateDot state={row.kind === 'session' && row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
               <span className="min-w-0 flex-1 truncate">{row.kind === 'session' ? row.label : row.title}</span>
-              {row.kind === 'session' && row.inTerminal ? <span className="text-neutral-400">{S.island.waitingInTerminal}</span> : null}
-              {row.kind === 'room' ? <span className="text-neutral-400">{S.island.roomBusy(row.busy)}</span> : null}
+              {row.kind === 'session' && row.inTerminal ? <span className="text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+              {row.kind === 'room' ? <span className="text-muted-foreground">{S.island.roomBusy(row.busy)}</span> : null}
             </button>
           ))}
         </div>
@@ -171,10 +173,10 @@ function Card(props: IslandViewProps): JSX.Element | null {
         <DragHandle api={api} />
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
-          {label === undefined ? null : <span className="text-neutral-500"> · {label.project}</span>}
+          {label === undefined ? null : <span className="text-muted-foreground"> · {label.project}</span>}
         </span>
         {items.length > 1 ? (
-          <span className="flex items-center gap-1 text-neutral-400">
+          <span className="flex items-center gap-1 text-muted-foreground">
             <button type="button" aria-label={S.island.previous} onClick={() => onSelect(index - 1)} disabled={index === 0}>
               ‹
             </button>
@@ -189,7 +191,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
       <div title={item.summary} className="truncate font-mono text-[12px]">
         {item.summary}
       </div>
-      {item.note === 'elsewhere' ? <div className="text-neutral-400">{S.island.answeredElsewhere}</div> : null}
+      {item.note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.answeredElsewhere}</div> : null}
       {item.note === 'failed' ? <div className="text-[var(--status-warning-text)]">{S.island.failed}</div> : null}
       <div className="flex flex-wrap gap-2">
         <Actions item={item} armed={armed} api={api} onDecide={onDecide} />
@@ -201,9 +203,9 @@ function Card(props: IslandViewProps): JSX.Element | null {
 export function IslandView(props: IslandViewProps): JSX.Element {
   const { items, listOpen, config, onHintDone } = props;
   return (
-    <div data-testid="island" className="rounded-b-[18px] bg-black text-neutral-100 shadow-lg" style={{ paddingTop: config.topInset }}>
+    <div data-testid="island" className="rounded-b-[18px] bg-black text-foreground shadow-lg" style={{ paddingTop: config.topInset }}>
       {!config.hintShown ? (
-        <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-[11px] text-neutral-300">
+        <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-[11px] text-muted-foreground">
           <span>{S.island.hint}</span>
           <button type="button" className="underline" onClick={onHintDone}>
             {S.island.gotIt}
