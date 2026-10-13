@@ -71,23 +71,50 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pr
   });
 }
 
-async function accessibility(inspector: CdpSender, id: number, backendNodeId: number): Promise<Pick<ElementInfo, 'role' | 'name'>> {
-  await inspector.send(id, 'Accessibility.enable');
-  try {
-    const tree = await inspector.send<{ nodes?: unknown }>(id, 'Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false });
-    const nodes: AxNode[] = Array.isArray(tree.nodes) ? tree.nodes : [];
-    const node = nodes.find((candidate) => candidate.backendDOMNodeId === backendNodeId) ?? nodes[0];
-    const out: Pick<ElementInfo, 'role' | 'name'> = {};
-    if (node === undefined || node.ignored === true) return out;
-    const role = node.role?.value;
-    const name = node.name?.value;
-    if (typeof role === 'string' && role !== '') out.role = cutCodePoints(role, ELEMENT_INFO_LIMITS.role).text;
-    if (typeof name === 'string' && name !== '') out.name = cutCodePoints(name, ELEMENT_INFO_LIMITS.name).text;
-    return out;
-  } finally {
-    // Дерево доступности страница ведёт, пока домен включён: держать его включённым незачем.
-    await inspector.send(id, 'Accessibility.disable').catch(() => undefined);
-  }
+/** Хвост очереди Accessibility каждого гостя (см. `exclusive`); запись живёт, пока в очереди есть вызовы. */
+const accessibilityQueues = new Map<number, Promise<void>>();
+
+/**
+ * Задачи одного гостя — по очереди. Домен Accessibility включает и выключает каждый вызов `elementInfo`, и второй выбор,
+ * пока первый ещё читает дерево (⇧-клики подряд; вызов, которого вызывающий уже не ждёт по `withTimeout`, всё равно
+ * доходит до конца), выключил бы домен под первым: у того пропали бы роль и имя. Больше общего состояния у вызовов нет
+ * (`DOM` остаётся включённым, объекты страницы у каждого свои), поэтому по очереди идёт только эта часть, а не весь вызов:
+ * застрявший раньше (на `DOM.enable`) очереди не касается, а застрявший в самом дереве держит её не дольше команды
+ * инспектора (`CDP_COMMAND_MS`). Очередь у каждого гостя своя.
+ */
+function exclusive<T>(id: number, task: () => Promise<T>): Promise<T> {
+  const run = (accessibilityQueues.get(id) ?? Promise.resolve()).then(task);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  accessibilityQueues.set(id, tail);
+  void tail.then(() => {
+    // За нами никто не встал — записи не нужно, иначе карта росла бы на каждого гостя.
+    if (accessibilityQueues.get(id) === tail) accessibilityQueues.delete(id);
+  });
+  return run;
+}
+
+function accessibility(inspector: CdpSender, id: number, backendNodeId: number): Promise<Pick<ElementInfo, 'role' | 'name'>> {
+  return exclusive(id, async () => {
+    await inspector.send(id, 'Accessibility.enable');
+    try {
+      const tree = await inspector.send<{ nodes?: unknown }>(id, 'Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false });
+      const nodes: AxNode[] = Array.isArray(tree.nodes) ? tree.nodes : [];
+      const node = nodes.find((candidate) => candidate.backendDOMNodeId === backendNodeId) ?? nodes[0];
+      const out: Pick<ElementInfo, 'role' | 'name'> = {};
+      if (node === undefined || node.ignored === true) return out;
+      const role = node.role?.value;
+      const name = node.name?.value;
+      if (typeof role === 'string' && role !== '') out.role = cutCodePoints(role, ELEMENT_INFO_LIMITS.role).text;
+      if (typeof name === 'string' && name !== '') out.name = cutCodePoints(name, ELEMENT_INFO_LIMITS.name).text;
+      return out;
+    } finally {
+      // Дерево доступности страница ведёт, пока домен включён: держать его включённым незачем.
+      await inspector.send(id, 'Accessibility.disable').catch(() => undefined);
+    }
+  });
 }
 
 async function reactInfo(inspector: CdpSender, id: number, backendNodeId: number): Promise<ReactComponentInfo[] | undefined> {

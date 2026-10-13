@@ -90,6 +90,85 @@ describe('elementInfo (спека браузера 3.8)', () => {
   });
 });
 
+describe('elementInfo: Accessibility у выборов одного гостя идёт по очереди (disable первого не гасит дерево второго)', () => {
+  /** Инспектор с журналом вызовов `id:метод`; getPartialAXTree первого вызова гостя `holdId` ждёт, пока не откроют ворота. */
+  function gated(holdId: number) {
+    const calls: string[] = [];
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    const send = vi.fn(async (id: number, method: string) => {
+      calls.push(`${id}:${method}`);
+      if (id === holdId && method === 'Accessibility.getPartialAXTree' && !held) {
+        held = true;
+        await gate;
+      }
+      return (ANSWERS as Record<string, unknown>)[method] ?? {};
+    });
+    return { inspector: { send } as unknown as CdpSender, calls, release: () => release() };
+  }
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  const count = (calls: string[], call: string): number => calls.filter((item) => item === call).length;
+
+  it('второй выбор того же гостя не включает Accessibility, пока первый не выключил его; disable первого раньше enable второго, оба с ролью и именем', async () => {
+    const { inspector, calls, release } = gated(7);
+    const first = elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save');
+    await settle();
+    const second = elementInfo(inspector, 7, { x: 2, y: 2 }, 'main > button#save');
+    await settle();
+    // Первый держит дерево доступности. Без очереди второй за это время включил бы домен ещё раз и после своего чтения выключил
+    // бы его под первым — у того пропали бы роль и имя.
+    expect(count(calls, '7:Accessibility.enable')).toBe(1);
+    expect(count(calls, '7:Accessibility.disable')).toBe(0);
+    release();
+    const [infoFirst, infoSecond] = await Promise.all([first, second]);
+    expect(infoFirst).toMatchObject({ role: 'button', name: 'Save' });
+    expect(infoSecond).toMatchObject({ role: 'button', name: 'Save' });
+    expect(calls.indexOf('7:Accessibility.disable')).toBeLessThan(calls.lastIndexOf('7:Accessibility.enable'));
+  });
+
+  it('другой гость не ждёт: очередь у каждого своя', async () => {
+    const { inspector, release } = gated(7);
+    const held = elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save');
+    await settle();
+    await expect(elementInfo(inspector, 8, { x: 1, y: 1 }, 'main > button#save')).resolves.toMatchObject({ role: 'button', name: 'Save' });
+    release();
+    await held;
+  });
+
+  it('вызов, застрявший до дерева (DOM.enable без ответа), следующий выбор того же гостя не держит: по очереди идёт только Accessibility', async () => {
+    let first = true;
+    const send = vi.fn(async (_id: number, method: string): Promise<unknown> => {
+      if (method === 'DOM.enable' && first) {
+        first = false;
+        return new Promise(() => undefined);
+      }
+      return (ANSWERS as Record<string, unknown>)[method] ?? {};
+    });
+    const inspector = { send } as unknown as CdpSender;
+    void elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save');
+    await expect(elementInfo(inspector, 7, { x: 2, y: 2 }, 'main > button#save')).resolves.toMatchObject({ role: 'button', name: 'Save' });
+  });
+
+  it('отказ дерева у первого очередь не заклинивает: второй выполняется как обычно, React у первого цел', async () => {
+    let failOnce = true;
+    const send = vi.fn(async (_id: number, method: string) => {
+      if (method === 'Accessibility.getPartialAXTree' && failOnce) {
+        failOnce = false;
+        throw new Error('page busy');
+      }
+      return (ANSWERS as Record<string, unknown>)[method] ?? {};
+    });
+    const inspector = { send } as unknown as CdpSender;
+    const [first, second] = await Promise.all([elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save'), elementInfo(inspector, 7, { x: 2, y: 2 }, 'main > button#save')]);
+    expect(first).toEqual({ react: [{ name: 'SaveButton', source: 'src/SaveButton.tsx:12', approx: false }] });
+    expect(second).toMatchObject({ role: 'button', name: 'Save' });
+    expect(methods(send).filter((method) => method === 'Accessibility.disable')).toHaveLength(2);
+  });
+});
+
 describe('withTimeout', () => {
   it('не уложился — запасное значение; отказ — тоже; успел — ответ', async () => {
     vi.useFakeTimers();
