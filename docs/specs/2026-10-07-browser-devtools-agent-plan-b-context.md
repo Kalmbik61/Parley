@@ -9,7 +9,7 @@
 - main пишет файл в `~/.parley/desktop/drops/context/` (`main/browser/context-files.ts`): права 0600, имя `<вид>-<метка>-<4 hex>.md`, снимок `.png` переезжает рядом из `drops/`;
 - путь уходит в цель «To» вкладки (`TabSpec.target`): сессия с Chat — чип над полем (`useChatUiStore.attachments`), сессия без Chat — строка в ввод CLI без Enter (`sendWithToast(…, submit: false)`), комната — чип над полем комнаты (`composerAttachments`);
 - скрипты страницы стоят на общем DOM-экстракторе `guest-dom.js` (по Orca: кратчайший уникальный селектор, ограниченный обход текста, очистка URL) и исполняются только в изолированном мире 1001;
-- Select (замена Design Mode, ⌘⇧C): скрипт выбора отдаёт точку клика, ⇧ и прокрутку; main по точке документа дочитывает через CDP роль, имя и компонент React (`REACT_INFO_FN`, поиск компонента — по Orca, React 19 — правило этапа 0) и снимает элемент обрезкой `Page.captureScreenshot` (запасной путь — `capturePage` по Orca);
+- Select (замена Design Mode, ⌘⇧C): скрипт выбора отдаёт точку клика, ⇧ и прокрутку; main по точке документа дочитывает через CDP роль, имя и компонент React (`REACT_INFO_FN`, поиск компонента — по Orca, React 19 — правило этапа 0) и снимает элемент вырезкой из `capturePage()` видимой части (по Orca: множитель «ширина картинки / ширина вьюпорта» измеряется по картинке); обрезка CDP `Page.captureScreenshot` с `captureBeyondViewport` — только для элемента больше вьюпорта (допуск 1 CSS-пиксель): в настоящем `<webview>` она порой отдаёт не тот участок;
 - Annotate (⌘⌥A): скрипт меток `guest-annotate.js` со слоем номеров по Orca (закрытый shadow-корень, пересчёт раз в кадр), редактор комментария — Radix-поповер у метки и лоток — в окне (каркасы — по Orca), «Add to chat» — один `.md` и один `.png` видимой части с номерами меток.
 
 **Стек:** Electron 44.4.5 (CDP 1.3 через `webContents.debugger`, инспектор этапа A), React 18, zustand 5, Radix (`ui/dropdown-menu.tsx`, `ui/popover.tsx`), `lucide-react` 1.48, `sonner` 2; vitest + Testing Library + jsdom; Playwright `_electron`.
@@ -85,7 +85,7 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
   | React 18 — `_debugSource` (0.6) | задача 15, `REACT_INFO_FN`, тест «React 18» |
   | React 19 — правило `parseDebugStack` по первым 6 строкам `_debugStack`, пометка approx. (0.6) | задача 15, `REACT_INFO_FN`, тест «React 19» со стеком из отчёта |
   | `DOM.getNodeForLocation` вернул сам элемент (0.6), но в координатах документа — точка + `scrollX/Y`, без `scale` эмуляции (0.4) | задача 15 (`documentPoint` в `guest-data.ts`), задачи 16 и 20 (`elementInfo` получает точку документа) |
-  | снимок элемента: основной — CDP `clip` в координатах документа × `getZoomFactor()` с `captureBeyondViewport`, высота клипа не больше поверхности вида; запасной — `capturePage` (0.7, решение 2026-10-08) | задача 16 (`captureClip`, `cropRect`, `snapshot`). Множитель запасного пути измеряется по Orca (ширина картинки / ширина вьюпорта), поэтому `Emulation.scale(id)` этапу B не нужен |
+  | снимок элемента: CDP `clip` в координатах документа × `getZoomFactor()` с `captureBeyondViewport`, высота клипа не больше поверхности вида (0.7, решение 2026-10-08) — при исполнении оставлен только для элемента больше вьюпорта, а основной путь — вырезка из `capturePage()` видимой части | задача 16 (`snapshot`, `exceedsViewport`, `captureClip`, `cropRect`). Множитель вырезки измеряется по Orca (ширина картинки / ширина вьюпорта), поэтому `Emulation.scale(id)` этапу B не нужен |
   | снимок аннотаций — только видимая часть; `CONTEXT_LIMITS.annotationFullPage` и тест «страница длиннее 8000 px» удалены (0.7) | задачи 4 и 20 |
   | вариант D подключения CDP (0.1): `<webview>` стартует с `about:blank` | этап A; B только пользуется |
 
@@ -5094,7 +5094,9 @@ git commit -m "feat(desktop): роль, имя и компонент React вы�
 
 ---
 
-## Задача 16. Select в main: точка, ⇧, снимок CDP с запасным по Orca, роль и React
+## Задача 16. Select в main: точка, ⇧, снимок видимой части (CDP — для элемента больше вьюпорта), роль и React
+
+> **Ход исполнения (решение при исполнении этапа B; коммиты 9b9fa45 и cedd37b).** Задача выполнена как написана ниже, но порядок путей снимка поменялся. Реализатор и ревью на настоящем `<webview>` увидели, что обрезка CDP (`captureClip` с `captureBeyondViewport`) при снимках вразброс порой отдаёт не тот участок (пустой, от начала документа). Выпущено наоборот: основной путь — вырезка из `capturePage()` видимой части (`cropRect`, множитель по картинке); обрезка CDP — только для элемента больше вьюпорта (`exceedsViewport`: шире или выше больше чем на `PICK_LIMITS.viewportSlack`, 1 CSS-пиксель), и если она не вышла — та же вырезка. Помещающемуся элементу CDP не зовётся. Код `snapshot` и тесты снимка ниже — исходные, верен выпущенный код: `design-mode.ts` и `design-mode.test.ts` в ветке. `PICK_LIMITS` получил ещё `viewportSlack: 1` и `scriptMs: 3000` («Расхождения», п. 23).
 
 **Файлы:**
 - Изменить: `packages/desktop/src/main/browser/guest-pick.js`, `packages/desktop/src/main/browser/design-mode.ts`, `packages/desktop/src/shared/browser-types.ts` (`PickResult`), `packages/desktop/src/main/index.ts`
@@ -5104,12 +5106,12 @@ git commit -m "feat(desktop): роль, имя и компонент React вы�
 - Берёт: `elementInfo`, `withTimeout`, `CdpSender`, `ElementInfo` (задача 15); `readPoint`, `documentPoint` (задача 15); `PickViewport`, `ReactComponentInfo`, `Rect` (задачи 5, 6); `S.contextFile.truncated` (задача 3); помощники `__parleyDom` (задача 2).
 - Отдаёт:
   - `PickResult` (спека 3.5): `+ point: { x; y } | null`, `+ shift: boolean`, `+ viewport: PickViewport`, `+ role?`, `+ name?`, `+ react?`. Поле `viewport` — добавление к индексу: из него шапка `element` берёт строку Viewport. `point` — в CSS-пикселях вьюпорта (точку документа строит main). `thumbnail` пока остаётся, main отдаёт в нём `null`; поле уходит в задаче 17 вместе с карточкой;
-  - `createDesignMode(deps)` получает `inspector: CdpSender`; `PICK_LIMITS` — `+ captureSide: 4096`, `+ infoMs: 2000`, `− thumbnailWidth`; `ValidPick`, `CaptureClip`, `captureClip(pick, zoom, surface)`, `cropRect(rect, viewport, bitmap)`; `captureRect` удалён.
+  - `createDesignMode(deps)` получает `inspector: CdpSender`; `PICK_LIMITS` — `+ captureSide: 4096`, `+ infoMs: 2000`, `− thumbnailWidth` (при исполнении ещё `+ viewportSlack: 1` и `+ scriptMs: 3000`); `ValidPick`, `CaptureClip`, `exceedsViewport(rect, viewport)`, `captureClip(pick, zoom, surface)`, `cropRect(rect, viewport, bitmap)`; `captureRect` удалён.
 - `point` — точка, по которой `elementFromPoint` в странице дал выбранный элемент: клик, а если элемент прокручивался в видимую часть — центр его видимой части. Под центром другой узел — `null`: main не гадает. `scroll` — прокрутка документа в момент ответа; main прибавляет её к точке (`documentPoint`): `DOM.getNodeForLocation` ждёт координаты документа (этап 0, 0.4).
-- Снимок (этап 0, 0.7, решение 2026-10-08):
-  - основной — CDP `Page.captureScreenshot({ format: 'png', captureBeyondViewport: true, clip })`, `clip` — прямоугольник вьюпорта плюс прокрутка, умноженный на `getZoomFactor()` (без этого при масштабе 2 обрезка пуста), со `scale: 1`; страница не прокручивается, DPR эмуляции сохраняется;
+- Снимок (этап 0, 0.7, решение 2026-10-08; порядок путей пересмотрен при исполнении — примечание под заголовком):
+  - основной — по Orca `browser-grab-screenshot.ts`: вырезка из `capturePage()` видимой части по множителю «ширина картинки / ширина вьюпорта». Множитель измерен, а не вычислен: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле, поэтому `Emulation.scale(id)` не нужен;
+  - только для элемента больше вьюпорта (`exceedsViewport`) сперва пробуется CDP `Page.captureScreenshot({ format: 'png', captureBeyondViewport: true, clip })`, `clip` — прямоугольник вьюпорта плюс прокрутка, умноженный на `getZoomFactor()` (без этого при масштабе 2 обрезка пуста), со `scale: 1`; страница не прокручивается, DPR эмуляции сохраняется. CDP отказал или ответил пусто — та же вырезка;
   - высота клипа — не больше поверхности вида: выше Chromium повторяет первую поверхность. Поверхность измеряется картинкой `capturePage()` видимой части: её высота в пикселях, делённая на DPR страницы (`pick.viewport.dpr`), — высота поверхности в CSS-пикселях. Без эмуляции это `innerHeight`; у Mobile M 2x, уменьшенной под поле вдвое, на экране DPR 1 — 203 вместо 812;
-  - запасной (CDP отказал или ответил пусто) — по Orca `browser-grab-screenshot.ts`: та же картинка `capturePage()` и вырезка по множителю «ширина картинки / ширина вьюпорта». Множитель измерен, а не вычислен: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле, поэтому `Emulation.scale(id)` не нужен;
   - у Orca не берём: скрытие оверлея скриптом в главном мире (`guest-pick.js` снимает оверлей сам и ждёт два кадра), запрос `window.innerWidth` к странице (ширина — из проверенного `pick.viewport`), data-URL и потолок 2 МиБ (наружу — PNG в `drops/`, предел файла — у `saveImage`).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -5461,12 +5463,14 @@ export interface PickResult {
  *
  * Скрипт выбора (`guest-pick.js` после помощников `guest-dom.js`) исполняется в изолированном мире гостя; всё, что он
  * вернул, — данные недоверенной страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес берёт у
- * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решение 2026-10-08): основной — обрезка CDP
- * `Page.captureScreenshot` в координатах документа × масштаб страницы, высотой не больше поверхности вида (выше
- * Chromium повторяет первую поверхность); запасной — `capturePage()` видимой части и вырезка по множителю «ширина
- * картинки / ширина вьюпорта». По точке документа main дочитывает роль, имя и компонент React (`element-info.ts`).
+ * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решения 2026-10-08): основной — `capturePage()` видимой
+ * части и вырезка по множителю «ширина картинки / ширина вьюпорта»; обрезка CDP `Page.captureScreenshot` в
+ * координатах документа × масштаб страницы, высотой не больше поверхности вида (выше Chromium повторяет первую
+ * поверхность), — только для элемента больше вьюпорта, которого видимая часть не вместит: в `<webview>` она порой
+ * отдаёт не тот участок (пробы настоящего Electron), поэтому помещающемуся элементу её не зовут. По точке документа main
+ * дочитывает роль, имя и компонент React (`element-info.ts`).
  *
- * Запасной снимок (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
+ * Снимок видимой части (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
  * (stablyai/orca b1cd858, MIT): множитель не вычисляется из масштаба и эмуляции, а измеряется по картинке. Изменено:
  * ширина вьюпорта — из проверенного выбора (`pick.viewport.width`), без запроса к странице; оверлей не прячется —
  * `guest-pick.js` снимает его сам и ждёт два кадра; вырезка — пересечением с картинкой; наружу — PNG в `drops/`, а не
@@ -5491,10 +5495,13 @@ import { cutCodePoints, documentPoint, finite, isRecord, readPoint, readRect } f
 /**
  * Пределы данных элемента (спека 12.3, «Числа» плана; спека браузера 8). `selector` спека ограничивает только звеньями,
  * а одно звено (класс или id) пишет страница — длина своя (fix-9). `captureSide` — сторона обрезки снимка в
- * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `infoMs` — сколько ждём
- * роль и React: страница в бесконечном цикле не держит выбор. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
+ * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `viewportSlack` — допуск
+ * «больше вьюпорта» в CSS-пикселях (`exceedsViewport`). `infoMs` — сколько ждём роль и React: страница в бесконечном цикле
+ * не держит выбор. `scriptMs` — сколько ждём ответ страницы на служебный вызов аннотаций (перерисовка, счёт и снятие
+ * меток) и на снимок с метками: упавший или замёрзший гость не отвечает вовсе, скрытый не отдаёт снимок, и без предела окно
+ * ждало бы вечно. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
  */
-export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, infoMs: 2000 } as const;
+export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, viewportSlack: 1, infoMs: 2000, scriptMs: 3000 } as const;
 ```
 
   - `ValidPick` и `validatePick`:
@@ -6211,6 +6218,8 @@ git commit -m "docs(core): гид агента — файлы-контексты
 
 ## Задача 19. Скрипт меток `guest-annotate.js` (слой меток — по Orca)
 
+> **Ход исполнения.** Блок `guest-annotate.js` ниже исправлен по выпущенному коду только в части стилей слоя (коммит c0ae34c): стили узлов лежат на каждом узле через `style.cssText`, а не в `<style>` внутри shadow-корня, который строгая CSP страницы режет. Выпущенный файл отличается от блока ещё по ревью и пробам настоящего Electron (1ea6ef7, 168966d): `pointerdown` и `pointerup` не отменяются (`HIDDEN_ONLY`: отмена `pointerdown` заставляет Chromium бросить последующие `mousedown` и `mouseup`, и метка не ставится), скрытый `display:none` элемент считается пропавшим, номер прижат внутрь вьюпорта (`badgeAt`) и кликается там же, где нарисован. Верен выпущенный `guest-annotate.js`; тесты ниже — исходные, у выпущенных их больше.
+
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/guest-annotate.js`
 - Изменить: `eslint.config.js` (глобалы страницы для нового скрипта)
@@ -6227,7 +6236,7 @@ git commit -m "docs(core): гид агента — файлы-контексты
 - `sync(pins)` рисует номера по ключам и отдаёт `{ n, rect }`: доли вьюпорта или `null`, если элемента нет. `count()` — сколько меток нарисовано сейчас. Ключевые стили — 10 из 23 (спека 4.7), HTML — до 1 КБ (`CONTEXT_LIMITS.annotationHtml`).
 - **Слой меток — адаптация Orca** `src/shared/browser-annotation-viewport-bridge.ts` (функция `buildBrowserAnnotationViewportBridgeScript`, слой 80–263):
   - как у Orca: хост `position: fixed; inset: 0; pointer-events: none; contain: layout style paint` на `document.body` с **закрытым** shadow-корнем (страница меток не видит и стилями их не задевает); узлы меток по ключу создаются и убираются по списку (`updateMarkers`); положение пересчитывается раз в кадр (`requestAnimationFrame`) на прокрутке любого контейнера (`scroll` в фазе захвата) и на ресайзе (`positionMarkers`); метки за краем вьюпорта спрятаны; меток нет — хост вынут из DOM;
-  - изменено: положение метки на элементе — живой `getBoundingClientRect()` её элемента, а не `rectPage`, снятый при создании (у Orca метка не идёт за элементом во вложенном прокручиваемом контейнере); мир 1001 вместо 1207, без токена и **без `console.debug`** (инспектор A пишет все `console.*` страницы в журнал Console человека); слой **не снимается на `beforeunload`** (мир умирает вместе с документом, а скачивание и отменённый переход документ не меняют); у цели есть рамка — сплошная у элемента, пунктир у области; номер — кружок 24 px в левом верхнем углу цели, цвет `#f59e0b`.
+  - изменено: положение метки на элементе — живой `getBoundingClientRect()` её элемента, а не `rectPage`, снятый при создании (у Orca метка не идёт за элементом во вложенном прокручиваемом контейнере); мир 1001 вместо 1207, без токена и **без `console.debug`** (инспектор A пишет все `console.*` страницы в журнал Console человека); слой **не снимается на `beforeunload`** (мир умирает вместе с документом, а скачивание и отменённый переход документ не меняют); у цели есть рамка — сплошная у элемента, пунктир у области; номер — кружок 24 px в левом верхнем углу цели, цвет `#f59e0b`; **стили узлов — `style.cssText` на каждом узле**, а не `<style>` в shadow-корне: страница с CSP без `'unsafe-inline'` в `style-src` режет `<style>` (CSSOM не режет), и с ним номера остались бы без стиля, а нарушение CSP легло бы в Console человека.
 - Прежние копии `selectorOf`, `isSecretField` и `cleanHtml` в этом скрипте не нужны — они в `guest-dom.js`.
 
 - [ ] **Шаг 1. Написать падающий тест.**
@@ -6489,6 +6498,8 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
 //   документа, снятому при создании: так она идёт и за элементом во вложенном прокручиваемом контейнере; рамка
 //   области — в координатах документа (спека 4.7);
 // - мир 1001, без токена и без console.debug: инспектор пишет все console.* страницы в журнал Console человека;
+// - стили узлов — style.cssText на каждом узле, а не <style> в shadow-корне: страница с CSP без 'unsafe-inline' в style-src
+//   режет <style>, но не CSSOM (номера остались бы без стиля, а нарушение легло бы в Console человека);
 // - на beforeunload слой не снимается: мир умирает вместе с документом, а скачивание и отменённый переход документ не
 //   меняют — метки должны остаться;
 // - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок в её левом верхнем углу.
@@ -6506,13 +6517,17 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     const STYLE_KEYS = ['display', 'position', 'width', 'height', 'margin', 'padding', 'color', 'background-color', 'font-size', 'font-weight'];
     // mousedown и mouseup ведут жест сами; остальное гасится, чтобы клик не сработал на странице.
     const BLOCKED = ['click', 'pointerdown', 'pointerup', 'dblclick', 'auxclick', 'contextmenu'];
-    const LAYER_CSS =
-      `.outline{position:absolute;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;will-change:transform;}` +
-      '.outline.region{border-style:dashed;}' +
-      `.badge{position:absolute;left:0;top:0;box-sizing:border-box;width:${BADGE_PX}px;height:${BADGE_PX}px;display:flex;` +
+    // Стили узлов слоя кладутся на каждый узел через style.cssText (CSSOM), а не <style> в shadow-корне: страница с CSP, где
+    // в style-src нет 'unsafe-inline', режет <style> и setAttribute('style'), но не CSSOM. Иначе номера остались бы без
+    // стиля, а нарушение CSP легло бы в Console человека (инспектор пишет туда все console.* и нарушения страницы).
+    const OUTLINE_CSS = `position:absolute;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;will-change:transform;`;
+    // Рамка области — пунктиром; идёт после OUTLINE_CSS: border-style после border, иначе сокращённая запись его перекрыла бы.
+    const REGION_CSS = 'border-style:dashed;';
+    const BADGE_CSS =
+      `position:absolute;left:0;top:0;box-sizing:border-box;width:${BADGE_PX}px;height:${BADGE_PX}px;display:flex;` +
       `align-items:center;justify-content:center;border-radius:9999px;border:1px solid rgba(255,255,255,0.95);background:${COLOR};` +
       'color:#fff;font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 10px 24px rgba(0,0,0,.18);' +
-      'will-change:transform;user-select:none;}';
+      'will-change:transform;user-select:none;';
 
     // Рамка протяжки — пока человек тянет; вне слоя, чтобы рисоваться без кадра.
     const box = document.createElement('div');
@@ -6537,9 +6552,6 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
         host = document.createElement('div');
         host.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none;contain:layout style paint;overflow:hidden;';
         root = host.attachShadow({ mode: 'closed' });
-        const style = document.createElement('style');
-        style.textContent = LAYER_CSS;
-        root.appendChild(style);
       }
       // Страница могла вынуть хост из DOM (перерисовала body) — вернуть.
       const parent = document.body || document.documentElement;
@@ -6599,10 +6611,14 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
         live.add(pin.key);
         let node = nodes.get(pin.key);
         if (node === undefined) {
+          // Классы — имена узлов (тесты, отладка), стилей за ними нет: весь вид лежит на самом узле.
+          const region = targets.get(pin.key).rect !== undefined;
           const outline = document.createElement('div');
-          outline.className = targets.get(pin.key).rect === undefined ? 'outline' : 'outline region';
+          outline.className = region ? 'outline region' : 'outline';
+          outline.style.cssText = region ? OUTLINE_CSS + REGION_CSS : OUTLINE_CSS;
           const badge = document.createElement('span');
           badge.className = 'badge';
+          badge.style.cssText = BADGE_CSS;
           root.append(outline, badge);
           node = { outline, badge };
           nodes.set(pin.key, node);
@@ -6843,6 +6859,8 @@ git commit -m "feat(desktop): скрипт меток аннотаций в из
 ---
 
 ## Задача 20. Аннотации в main и мост `annotate*`
+
+> **Ход исполнения.** Блок `annotate.ts` ниже — исходный. Выпущенный (коммиты cd783c5 и 7e13d10) не ждёт страницу без предела: вызовы скрипта `cancel`, `sync`, счёт меток в `capture` и оба пути снимка (`Page.captureScreenshot`, затем `capturePage()`) идут через `withTimeout(…, PICK_LIMITS.scriptMs, …)` — 3 с, запасное значение «метки пропали» или «снимка нет» («Расхождения», п. 23). Гостя, который уничтожен или упал (`isDestroyed()`, `isCrashed()`), `annotate.ts` не трогает вовсе (`usable`): на упавшем кадре промис скрипта не завершается никогда. Верен выпущенный `annotate.ts`.
 
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/annotate.ts`
@@ -9417,6 +9435,12 @@ git commit -m "test(desktop): E2E контекста из браузера — �
 
 ## Задача 25. Документы: CHANGELOG, README, спека окна 12.2, 12.3 и 12.5
 
+> **Ход исполнения.** Выпущенные тексты отличаются от блоков ниже так:
+> - снимок элемента (12.3, п. 4) — вырезка из `capturePage()` видимой части, обрезка CDP только для элемента больше вьюпорта; текст 12.3 в шаге 3 приведён к выпущенному;
+> - маска (README, спека браузера, раздел 6) шире, чем в плане: значения `Referer`, `Location` и `Content-Location`, адреса в тексте консоли, форма и `multipart/form-data`; JSON, который не разбирается, в файл не идёт;
+> - клавиши Select и Annotate работают с фокусом в странице, строке вкладки и панели, как ⌘⌥I и ⌘⌥J (README: пункт и строка таблицы);
+> - сверх списка шагов поправлены: README (панель — «ничего не уходит агенту, пока не добавлено в чат»), окно 3.4, 12.1, 12.2 (список команд `CDP_ALLOWED`), 12.5 (каналы) и 15.2 (`drops/context/`; раздел 11 спеки браузера требует 12.1 и 15.2), спека браузера 4.6, 4.7, 6, 8 и 12, индекс плана (строка 0.7 и экспорты `redact.ts`).
+
 **Файлы:**
 - Изменить: `CHANGELOG.md`, `README.md`, `docs/specs/2026-09-26-desktop-orca-ui-design.md`
 - Тест: `packages/desktop/src/release-docs.test.ts` (без правок).
@@ -9500,8 +9524,8 @@ note, a Design Mode element, a file or a screenshot) with the toast "S02 is wait
 ### 12.3 Select (прежде Design Mode)
 
 Этап B спеки `2026-10-07-browser-devtools-agent-design.md` (4.6, 3.8) заменил Design Mode выбором с отложенным
-вложением; карточки результата больше нет. Помощники DOM скрипта выбора, поиск компонента React и запасной снимок
-адаптированы из Orca (`stablyai/orca`, коммит b1cd858, MIT) — список файлов в `NOTICE`.
+вложением; карточки результата больше нет. Помощники DOM скрипта выбора, поиск компонента React и снимок видимой
+части адаптированы из Orca (`stablyai/orca`, коммит b1cd858, MIT) — список файлов в `NOTICE`.
 
 1. ⌖ или ⌘⇧C включают режим, кнопка подсвечена. Клик кладёт элемент в цель «To» вкладки и выключает режим, ⇧-клик
    кладёт и режим оставляет, Esc или второй ⌖ — выход. С Annotate режим не совмещается.
@@ -9510,12 +9534,19 @@ note, a Design Mode element, a file or a screenshot) with the toast "S02 is wait
    пропускает события с `isTrusted: false`.
 3. **Данные элемента** — прежние пределы (селектор до 12 звеньев — теперь кратчайший уникальный; текст 500 — не
    больше 80 текстовых узлов; HTML 4096 без секретных полей и без query у ссылок; 23 стиля) и новые поля: точка
-   клика, ⇧, вьюпорт с DPR. По точке документа (точка + прокрутка) main через CDP находит узел (`DOM.getNodeForLocation`),
-   сверяет его с выбранным по тегу и классам и дочитывает роль и имя (`Accessibility.getPartialAXTree`) и до трёх
-   компонентов React с источником (`Runtime.callFunctionOn` — только с `REACT_INFO_FN`).
-4. **Снимок** — обрезка `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в координатах документа ×
-   масштаб страницы, высотой не больше поверхности вида; без CDP — `capturePage()` видимой части и вырезка по
-   измеренному множителю «ширина картинки / ширина вьюпорта». PNG — в `drops/`.
+   клика, ⇧, вьюпорт с DPR. Всё, что вернул скрипт, — данные страницы: main заново проверяет форму и длины
+   (`validatePick`), лишние поля выкидывает, а адрес берёт сам — `origin + pathname` из `getURL()`. По точке документа
+   (точка + прокрутка) main через CDP находит узел (`DOM.getNodeForLocation`), сверяет его с выбранным по тегу и
+   классам и дочитывает роль и имя (`Accessibility.getPartialAXTree`) и до трёх компонентов React с источником
+   (`Runtime.callFunctionOn` — только с `REACT_INFO_FN`).
+4. **Снимок** — вырезка из `capturePage()` видимой части (по Orca): прямоугольник элемента умножается на измеренный
+   множитель «ширина картинки / ширина вьюпорта» — он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле
+   при эмуляции. Не целиком видимый элемент скрипт сперва прокручивает в видимую часть, а свою рамку до снимка снимает.
+   Элемент больше вьюпорта (шире или выше больше чем на 1 CSS-пиксель, `PICK_LIMITS.viewportSlack`) видимая часть не
+   вмещает: для него сперва берётся обрезка `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в
+   координатах документа × масштаб страницы, высотой не больше поверхности вида и стороной не больше
+   `PICK_LIMITS.captureSide`; не вышла — та же вырезка. Остальным CDP не зовётся: в `<webview>` обрезка порой отдаёт не
+   тот участок. PNG — в `drops/`; снимок не вышел — файл-контекст идёт без него.
 5. **Результат** — файл-контекст `drops/context/element-<метка>-<4 hex>.md` и снимок рядом (спека браузера 3.6). Путь
    ложится в цель «To»: чип над полем Chat или комнаты, у сессии без Chat — строка в ввод CLI без Enter. Отправляет
    человек.
@@ -9640,8 +9671,8 @@ https://github.com/stablyai/orca, коммит b1cd858; правообладат
 - packages/desktop/src/main/browser/react-info.ts — адаптация
   src/main/browser/grab-guest-react-script.ts: поиск компонента React и пути
   исходника; правило React 19 — своё.
-- packages/desktop/src/main/browser/design-mode.ts — запасной снимок элемента
-  по src/main/browser/browser-grab-screenshot.ts.
+- packages/desktop/src/main/browser/design-mode.ts — снимок видимой части
+  элемента по src/main/browser/browser-grab-screenshot.ts.
 - packages/desktop/src/main/browser/guest-annotate.js — слой номерных меток по
   src/shared/browser-annotation-viewport-bridge.ts.
 - packages/desktop/src/renderer/browser/annotate/AnnotationEditor.tsx — по
@@ -9695,9 +9726,11 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
 Имена индекса сохранены, имена этапа A сверены с его планом (`…-plan-a-devtools.md`). Ниже — что этап B уточняет или добавляет; этапы C и D берут это как контракт.
 
 1. **Снимок аннотаций — видимая часть** (этап 0, 0.7: снимок всей страницы двоит фиксированный заголовок и теряет метки). `CONTEXT_LIMITS.annotationFullPage`, которое прежняя редакция плана вводила для снимка всей страницы, не вводится; из индекса оно убрано, спека 4.7 поправлена.
-2. **`redactBody(text, mimeType, limit?)`** — необязательный третий параметр: B режет тела файлов до `CONTEXT_LIMITS.body` уже после маски (C режет сам). Ещё — `unmaskableJson(text, mimeType)`. Толкование раздела 6:
+2. **`redactBody(text, mimeType, limit?)`** — необязательный третий параметр: B режет тела файлов до `CONTEXT_LIMITS.body` уже после маски (C режет сам). Ещё — `unmaskableJson(text, mimeType)` и `redactUrlsInText(text)`. Толкование раздела 6 (спека поправлена по исполнению задач 3 и 5):
    - «параметры» — это и параметры формы `application/x-www-form-urlencoded`, и фрагмента URL (`#access_token=…`); `user:pass@` из URL убирается;
-   - JSON узнаётся по типу или по первой скобке;
+   - значения заголовков `Referer`, `Location` и `Content-Location` идут через `redactUrl` (`redactHeaders`): страница `/reset?token=…` кладёт свой адрес в `Referer` каждого запроса, редирект OAuth — токен в `Location`. Адреса `http(s)://` и `ws(s)://` в тексте сообщения консоли идут через `redactUrlsInText` (сообщение CORS называет адрес запроса целиком);
+   - JSON узнаётся по типу или по первой скобке: тело в скобках (кроме `multipart/*`) маскируется как JSON, даже под типом формы;
+   - `multipart/form-data` маскируется по частям: значение части с секретным `name` — `<redacted>`. `mimeType` для него — значение Content-Type целиком, с `boundary=` (у запроса оно в его заголовках; у ответа Chromium отдаёт тип без параметров, и такое тело — целиком `<redacted>`); тело без разделителя тоже целиком `<redacted>`;
    - JSON, который не разбирается (обрезан источником или битый), `redactBody` возвращает без изменений, а в файл-контекст он не идёт вовсе: вместо тела — `S.contextFile.bodyNotMaskable`. Так же поступает агент (`bodyForAgent` плана C), и `redact.ts` этого плана — надмножество запасного файла C.
 3. **`PickResult`**:
    - `+ viewport: PickViewport` — строка Viewport файла `element`;
@@ -9733,7 +9766,7 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
       - в `main/index.ts` строки `inspector`, `forwardBatches` и `emulation` переезжают выше `createDesignMode`: выбору и меткам нужен инспектор;
       - в `BrowserSurface` — только ветку Esc в `onKeyDown` корня, ветка `panelKey` остаётся; ⌖ Design Mode в `BrowserChrome` становится Select, рядом встают ✎ и «To». Тесты A строки (`BrowserChrome.test.tsx`: пропсы `renderChrome`, порядок кнопок) правятся вместе с ней;
       - в `inspector.ts` — список и проверку CDP (п. 6).
-    - `Emulation.scale(id)` B не добавляет: множитель запасного снимка измеряется по картинке `capturePage()` (по Orca), а основной снимок — CDP-клип в координатах документа × `getZoomFactor()`, высотой не больше поверхности вида. Эту же формулу берёт `elementClip` плана D (задача 13).
+    - `Emulation.scale(id)` B не добавляет: множитель снимка элемента измеряется по картинке `capturePage()` (по Orca) и сам учитывает масштаб страницы, DPR экрана и уменьшение под поле. Эта вырезка из видимой части — основной путь. CDP-клип в координатах документа × `getZoomFactor()`, высотой не больше поверхности вида, — только для элемента больше вьюпорта (допуск `PICK_LIMITS.viewportSlack`, 1 CSS-пиксель); не вышел — та же вырезка. Так решено при исполнении: в настоящем `<webview>` клип при снимках вразброс порой отдаёт не тот участок (пустой, от начала документа). Формулу клипа берёт `elementClip` плана D (задача 13); прежде чем опереться на неё, D проверяет её на настоящем `<webview>` сам.
     - `RegisterIpcOptions['browser']` получает `saveContext` и `annotate`.
     - Снимок журнала (`devtoolsSnapshot`) этапу B не нужен: «Add errors to chat» читает журнал окна.
 11. **Строки вне пространств индекса:**
@@ -9762,10 +9795,11 @@ grep -rl "stablyai/orca" packages/desktop/src --include='*.ts' --include='*.tsx'
 18. **Код Orca** (`stablyai/orca`, коммит `b1cd858`, MIT):
     - `guest-dom.js` (задача 2) — общий для скриптов выбора и меток; селектор — кратчайший уникальный суффикс (`form#f`, а не `body > main.page > form#f`): всё, что смотрит последнее звено (`selectorTail`, `elementLabel`, сверка узла), не меняется;
     - `REACT_LIMITS` растёт полями `depth: 35` (подъём по `return`) и `stackLines: 6` (строки `_debugStack`); путь источника без origin и query — `src/App.tsx:12`;
-    - слой меток — закрытый shadow-корень на `document.body`, положение — по живому `getBoundingClientRect()`;
+    - слой меток — закрытый shadow-корень на `document.body`, положение — по живому `getBoundingClientRect()`; стили узлов лежат на каждом узле через `style.cssText`, а не в `<style>` внутри shadow-корня: страница с CSP без `'unsafe-inline'` в `style-src` режет `<style>` (номера остались бы без стиля, а нарушение CSP легло бы в Console человека и в красный счётчик), а CSSOM не режет;
     - `PopoverContent` (`ui/popover.tsx`) получает необязательный `portalContainer`; `ANNOTATION_EDITOR` и `editorAt` прежней редакции не вводятся;
     - `NOTICE` называет каждый такой файл, страж — `notice.test.ts#orcaFiles`. Этапы C и D, беря код Orca, добавляют в шапку ту же пометку и строку в `NOTICE`.
 19. **Вид Chat у Codex** (PR #36, Codex 0.160.0 и новее) отправляет вложения через `composeRoomMessage` — списком «Attachments:». Спека 1.2 и 4.5 поправлены: сессия Codex с Chat — первая строка таблицы доставки; `.png` к ней даёт задача 11.
 20. **Клавиши Select и Annotate с фокусом в окне.** Как обещает индекс: ⌘⇧C и ⌘⌥A с фокусом в строке или панели вкладки ловит `BrowserSurface` тем же `panelKey`, что ⌘⌥I и ⌘⌥J этапа A (задача 23, шаг 6); из страницы их пересылает main. Решение 2026-10-08: без этого клавиша в адресной строке молча ничего не делала бы.
 21. **Архивные комнаты не цель «To»** (PR #40 влит в master после написания плана; задача 10). `targets.ts` не предлагает архивную комнату (`isRoomArchived`, `renderer/lib/room-archive.ts`), не берёт её умолчанием, а сохранённую в ней цель считает пропавшей: откат на умолчание и тост, как у удалённой. В архивной комнате нет поля ввода (`RoomPanel.tsx`), и путь в `composerAttachments` осел бы в черновике, которого никто не видит. Спека 4.5 («Rooms» — комнаты работы, умолчание — «первая комната») читается как «открытые»; её текст не правился. Архивные **работы** в меню не попадают и так: меню берёт сессии и комнаты своей работы (`entry`), не других.
 22. **Клавиатурный путь к «Copy» и «Add to chat» строки Console — не в этапе B** (отложено; пункт «решить в B» из итогового ревью этапа A). Кнопки строки остаются по наведению (`hidden … group-hover:flex group-focus-within:flex` в `ConsoleView.tsx`): у строки без раскрытия нечего фокусировать, а файлы панели B не меняет. Список строк с блуждающим фокусом (roving focus, стрелки) — отдельная задача позже. Клавиатурой в чат остаются доступны «Add errors to chat» в шапке панели и «Add to chat» в деталях запроса Network (строка сети — `<button>`, Enter открывает детали). Строку Console с клавиатуры в чат пока не добавить.
+23. **Пределы Select и Annotate** (`PICK_LIMITS` в `main/browser/design-mode.ts`). К `captureSide` и `infoMs` исполнение добавило `viewportSlack: 1` (допуск «больше вьюпорта», CSS-пиксели) и `scriptMs: 3000` (сколько main ждёт ответ страницы на служебный вызов меток — перерисовку, счёт, снятие — и на каждый путь снимка с номерами: упавший, замёрзший или скрытый гость не отвечает вовсе, и без предела окно ждало бы вечно). Зеркало `guest-dom.js` (`LIMITS`) держит только первые четыре ключа (`html`, `text`, `selectorLinks`, `selector`). Этап D, зовя скрипты мира 1001, учитывает то же: вызов без предела виснет на упавшей или замёрзшей странице.

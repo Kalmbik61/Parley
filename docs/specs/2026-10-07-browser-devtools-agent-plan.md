@@ -155,9 +155,11 @@ browser: {
 // packages/desktop/src/shared/redact.ts (B; пользуются C и D)
 export const REDACTED = '<redacted>';
 export function isSecretName(name: string): boolean;
-export function redactHeaders(headers: ReadonlyArray<[string, string]>): Array<[string, string]>;
+export function redactHeaders(headers: ReadonlyArray<[string, string]>): Array<[string, string]>; // значения Referer, Location, Content-Location — через redactUrl
 export function redactUrl(url: string): string;
-export function redactBody(text: string, mimeType: string | null, limit?: number): string; // обрезанный или битый JSON не маскируется — в файл и агенту не идёт (`unmaskableJson`), как в плане C
+export function redactUrlsInText(text: string): string; // адреса http(s):// и ws(s):// в тексте сообщения консоли — через redactUrl
+export function redactBody(text: string, mimeType: string | null, limit?: number): string; // обрезанный или битый JSON не маскируется — в файл и агенту не идёт (`unmaskableJson`), как в плане C; multipart — по частям, и mimeType для него — Content-Type целиком, с `boundary=`
+export function unmaskableJson(text: string, mimeType: string | null): boolean;
 
 // packages/desktop/src/shared/context-markdown.ts (B; fence пользуются C и D)
 export function fence(text: string, info?: string): string;
@@ -319,7 +321,7 @@ export const AGENT_LIMITS: {
 | 0.4 Ввод CDP | `Input.*` в CSS-пикселях вьюпорта страницы (с эмуляцией — эмулированного) | поправка на `scale` | D: задача действий | иначе: точка ввода × `scale` (у мобильной эмуляции при масштабе страницы × `scale ÷ zoom`); перед клавиатурой гостю нужен фокус ([0.4](../research/2026-10-08-browser-stage0.md#04-ввод-через-cdp)) |
 | 0.5 Картинка MCP | ответ — блок `image` и текст с путём | у Codex — только текст с путём; скилл велит `view_image` | C: задача `browser_screenshot`; D: скилл | умолчание стоит: Claude Code и Codex видят блок `image` (2026-10-08). Codex без `default_tools_approval_mode` у сервера отклоняет вызов в `exec` — решение об одобрении инструментов Parley в живых проверках D ([0.5](../research/2026-10-08-browser-stage0.md#05-картинка-mcp-claude-code-и-codex)) |
 | 0.6 React | `REACT_INFO_FN` по спеке 3.8 | у React 19 — только имена, без источника | B: задача Select | умолчание стоит для React 18; у React 19 — правило разбора `_debugStack` из отчёта; `getNodeForLocation` берёт координаты документа ([0.6](../research/2026-10-08-browser-stage0.md#06-компонент-react-и-источник)) |
-| 0.7 Снимки | элемент и аннотации снимает `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в CSS-пикселях — эмуляцию учитывает сам | `capturePage` с пересчётом на `scale` и `getZoomFactor()`, только видимая часть | B: задачи Select и аннотаций | иначе: элемент B — CDP `clip` в координатах документа × `getZoomFactor()`, высота не больше поверхности вида (решение 2026-10-08), запасной — `capturePage()` видимой части с измеренным множителем (по Orca); аннотации — видимая часть; `fullPage` у C — `unsupported` ([0.7](../research/2026-10-08-browser-stage0.md#07-снимок-всей-страницы-и-обрезка-элемента)) |
+| 0.7 Снимки | элемент и аннотации снимает `Page.captureScreenshot({ clip, captureBeyondViewport: true })` в CSS-пикселях — эмуляцию учитывает сам | `capturePage` с пересчётом на `scale` и `getZoomFactor()`, только видимая часть | B: задачи Select и аннотаций | иначе: элемент B — вырезка из `capturePage()` видимой части с измеренным множителем (по Orca); CDP `clip` в координатах документа × `getZoomFactor()`, высота не больше поверхности вида (решение 2026-10-08), — только для элемента больше вьюпорта (допуск 1 CSS-пиксель). Так решено при исполнении B: в настоящем `<webview>` клип порой отдаёт не тот участок, и C и D перед тем, как опереться на него, проверяют его сами; аннотации — видимая часть (`Page.captureScreenshot` без обрезки, запасной — `capturePage()`); `fullPage` у C — `unsupported` ([0.7](../research/2026-10-08-browser-stage0.md#07-снимок-всей-страницы-и-обрезка-элемента)) |
 
 ### Предварительные факты — проверочный запуск 2026-10-07
 
