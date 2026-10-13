@@ -17,7 +17,7 @@
 - Codex вне острова: провайдер `'codex'` не попадает ни в пилюлю, ни в список, ни в запросы; его уведомления — системные, как сейчас.
 - Остров **включён по умолчанию** (`ui.island.enabled: true`), подсказка при первом показе — «Drag me · × to hide · turn off in Settings».
 - «В работе»: сессия — `sessionAttention` даёт `working` или `needs-you`; комната — хотя бы один её участник в работе; «finished, not seen» не считается.
-- Окно острова: `type: 'panel'`, без рамки, прозрачное, `setAlwaysOnTop(true, 'screen-saver')`, `setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })`, `acceptFirstMouse: true`, `enableLargerThanScreen: true` (без него macOS сдвигает видимое окно под строку меню), показ только `showInactive()`.
+- Окно острова: `type: 'panel'`, без рамки, прозрачное, `setAlwaysOnTop(true, 'screen-saver')` (без `setVisibleOnAllWorkspaces` — поправка ревью группы 1: Electron меняет на нём тип процесса и прячет значок в Dock; `panel` и так на всех рабочих столах), `acceptFirstMouse: true`, `enableLargerThanScreen: true` (без него macOS сдвигает видимое окно под строку меню), показ только `showInactive()`.
 - Чёлка: встроенный дисплей (`internal`) и строка меню (`workArea.y - bounds.y`) ≥ 32 px → отступ содержимого сверху на высоту строки меню.
 - Белый список методов хоста для острова: `works.list`, `feed.snapshot`, `feed.decide` (+ `host:activity-snapshot`).
 - `PARLEY_ISLAND=off` (только неупакованное окно или `PARLEY_E2E=1`) — острова нет; `playwright.config.ts` ставит его по умолчанию.
