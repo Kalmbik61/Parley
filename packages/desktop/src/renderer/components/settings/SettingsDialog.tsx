@@ -403,7 +403,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   onCheckedChange={(checked) => toggleNotification('sound', checked)}
                 />
                 {/*
-                  Патч — только `enabled`, не `{ ...ui.island, enabled }`: `displayId`, `anchor` и `hintShown` main пишет в
+                  Патч — только `enabled`, не `{ ...ui.island, enabled }`: `displayId` и `anchor` main пишет в
                   ui.json сам, мимо рендерера, так что копия `ui.island` здесь устарела, а целый объект перезаписал бы их.
                   Main сливает `island` на один уровень вглубь (`mergeUiPatch`), частичного патча хватает.
                 */}

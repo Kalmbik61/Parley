@@ -1621,8 +1621,6 @@ export const S = {
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
     idle: 'No agents running',
-    hint: 'Drag me · × to hide · turn off in Settings',
-    gotIt: 'Got it',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */

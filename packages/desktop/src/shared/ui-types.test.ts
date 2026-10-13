@@ -175,17 +175,22 @@ describe('раздел browser (спека 2026-10-07, 4.3)', () => {
 });
 
 describe('normalizeUi: остров', () => {
-  it('нет поля — умолчания: включён, по центру, монитор не выбран, подсказка не показана', () => {
-    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center', hintShown: false });
+  it('нет поля — умолчания: включён, по центру, монитор не выбран', () => {
+    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center' });
   });
 
   it('битые значения заменяются умолчаниями по одному, целые остаются', () => {
-    expect(normalizeUi({ island: { enabled: false, displayId: 'x', anchor: 'top', hintShown: true } }).island).toEqual({
+    expect(normalizeUi({ island: { enabled: false, displayId: 'x', anchor: 'top' } }).island).toEqual({
       enabled: false,
       displayId: null,
       anchor: 'center',
-      hintShown: true,
     });
+  });
+
+  it('ключ hintShown из ui.json прежних сборок игнорируется: загрузка не ломается, в результат он не попадает', () => {
+    const island = normalizeUi({ island: { enabled: false, displayId: 3, anchor: 'right', hintShown: true } }).island;
+    expect(island).toEqual({ enabled: false, displayId: 3, anchor: 'right' });
+    expect('hintShown' in island).toBe(false);
   });
 
   it('displayId — только целое число', () => {

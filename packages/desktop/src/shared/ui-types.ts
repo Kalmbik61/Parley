@@ -28,13 +28,12 @@ export type IslandAnchor = 'left' | 'center' | 'right';
 
 /**
  * Остров одобрений (спека 2026-10-12): включён ли (по умолчанию да — у всех, включая обновившихся), где стоит
- * (`displayId` — id монитора Electron, `null` — основной) и показана ли подсказка первого показа.
+ * (`displayId` — id монитора Electron, `null` — основной; `anchor` — точка у его верхнего края).
  */
 export interface IslandUi {
   enabled: boolean;
   displayId: number | null;
   anchor: IslandAnchor;
-  hintShown: boolean;
 }
 
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
@@ -94,7 +93,7 @@ export const DEFAULT_UI: UiFile = {
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null },
-  island: { enabled: true, displayId: null, anchor: 'center', hintShown: false },
+  island: { enabled: true, displayId: null, anchor: 'center' },
 };
 
 /**
@@ -209,7 +208,6 @@ function normalizeIsland(value: unknown): IslandUi {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
     displayId: Number.isInteger(source.displayId) ? (source.displayId as number) : fallback.displayId,
     anchor: ISLAND_ANCHORS.includes(source.anchor as IslandAnchor) ? (source.anchor as IslandAnchor) : fallback.anchor,
-    hintShown: typeof source.hintShown === 'boolean' ? source.hintShown : fallback.hintShown,
   };
 }
 

@@ -1,14 +1,16 @@
 /**
  * Перетаскивание острова за любое место формы (`useShapeDrag`): жест начинается, когда указатель ушёл от точки
  * нажатия дальше порога, а не с самого нажатия; кнопки, ссылки, `[role="button"]` и `data-no-drag` жест не начинают;
- * отпускание, отмена и потеря захвата заканчивают его один раз. Харнесс — форма с вложенными целями, без JSX.
+ * отпускание, отмена и потеря захвата заканчивают его один раз. Смахивание вверх: на первом движении за порог вверх и
+ * по вертикали больше, чем по горизонтали, — не перетаскивание, а один `onSwipeUp` после `SWIPE_UP_PX`. Харнесс — форма
+ * с вложенными целями, без JSX.
  */
 
 import { createElement } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IslandApi } from '../../shared/island.js';
-import { DRAG_THRESHOLD_PX, useShapeDrag } from './drag.js';
+import { DRAG_THRESHOLD_PX, SWIPE_UP_PX, useShapeDrag } from './drag.js';
 
 type DragApi = Pick<IslandApi, 'dragStart' | 'dragMove' | 'dragEnd'>;
 
@@ -16,10 +18,11 @@ interface Rig {
   api: DragApi;
   onDragStart: ReturnType<typeof vi.fn>;
   onDragEnd: ReturnType<typeof vi.fn>;
+  onSwipeUp: ReturnType<typeof vi.fn>;
 }
 
 function Harness({ rig }: { rig: Rig }): JSX.Element {
-  const drag = useShapeDrag(rig.api, { onDragStart: rig.onDragStart, onDragEnd: rig.onDragEnd });
+  const drag = useShapeDrag(rig.api, { onDragStart: rig.onDragStart, onDragEnd: rig.onDragEnd, onSwipeUp: rig.onSwipeUp });
   return createElement(
     'div',
     { 'data-testid': 'shape', 'data-dragging': String(drag.dragging), ...drag.handlers },
@@ -36,6 +39,7 @@ function mount(): Rig {
     api: { dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn() },
     onDragStart: vi.fn(),
     onDragEnd: vi.fn(),
+    onSwipeUp: vi.fn(),
   };
   render(createElement(Harness, { rig }));
   return rig;
@@ -204,7 +208,7 @@ describe('перетаскивание острова за форму', () => {
 
   it('колбэки жеста необязательные', () => {
     const api: DragApi = { dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn() };
-    const rig: Rig = { api, onDragStart: undefined as never, onDragEnd: undefined as never };
+    const rig: Rig = { api, onDragStart: undefined as never, onDragEnd: undefined as never, onSwipeUp: undefined as never };
     render(createElement(Harness, { rig }));
     const target = screen.getByTestId('text');
     fireEvent(target, pointer('pointerdown', 0, 0));
@@ -212,5 +216,158 @@ describe('перетаскивание острова за форму', () => {
     fireEvent(target, pointer('pointerup', 20, 0, { buttons: 0 }));
     expect(api.dragStart).toHaveBeenCalledTimes(1);
     expect(api.dragEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('колбэки жеста необязательные: без onSwipeUp движение вверх — обычное перетаскивание', () => {
+    const api: DragApi = { dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn() };
+    const rig: Rig = { api, onDragStart: undefined as never, onDragEnd: undefined as never, onSwipeUp: undefined as never };
+    render(createElement(Harness, { rig }));
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 30));
+    expect(api.dragStart).toHaveBeenCalledWith({ screenX: 100, screenY: 50 });
+  });
+});
+
+describe('смахивание острова вверх', () => {
+  it('вверх дальше SWIPE_UP_PX при вертикальном преобладании: onSwipeUp ровно раз, перетаскивания нет, указатель захвачен', () => {
+    const rig = mount();
+    const shape = screen.getByTestId('shape');
+    const capture = vi.fn();
+    Object.defineProperty(shape, 'setPointerCapture', { value: capture });
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    // 6 px вверх — уже не клик (порог 4), но до SWIPE_UP_PX не дотянуто: режим смахивания взведён, ничего не позвано.
+    fireEvent(target, pointer('pointermove', 100, 50 - (SWIPE_UP_PX - 2)));
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+    fireEvent(target, pointer('pointermove', 101, 50 - SWIPE_UP_PX));
+    expect(rig.onSwipeUp).toHaveBeenCalledTimes(1);
+    // Жест кончен: дальше движения не делают ничего, пока не нажали заново.
+    fireEvent(target, pointer('pointermove', 101, 10));
+    fireEvent(target, pointer('pointermove', 160, 10));
+    fireEvent(target, pointer('pointerup', 160, 10, { buttons: 0 }));
+    expect(rig.onSwipeUp).toHaveBeenCalledTimes(1);
+    expect(rig.api.dragStart).not.toHaveBeenCalled();
+    expect(rig.api.dragMove).not.toHaveBeenCalled();
+    expect(rig.api.dragEnd).not.toHaveBeenCalled();
+    expect(rig.onDragStart).not.toHaveBeenCalled();
+    expect(rig.onDragEnd).not.toHaveBeenCalled();
+    expect(shape.getAttribute('data-dragging')).toBe('false');
+  });
+
+  it('быстрое движение: первое же событие за порог уже дальше SWIPE_UP_PX — onSwipeUp в нём же', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 30));
+    expect(rig.onSwipeUp).toHaveBeenCalledTimes(1);
+    expect(rig.api.dragStart).not.toHaveBeenCalled();
+  });
+
+  it('вверх меньше порога и отпустили: ничего — ни смахивания, ни перетаскивания; следующее нажатие начинает заново', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 50 - (SWIPE_UP_PX - 1)));
+    fireEvent(target, pointer('pointerup', 100, 50 - (SWIPE_UP_PX - 1), { buttons: 0 }));
+    fireEvent(target, pointer('lostpointercapture', 100, 50 - (SWIPE_UP_PX - 1), { buttons: 0 }));
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+    expect(rig.api.dragStart).not.toHaveBeenCalled();
+    expect(rig.api.dragEnd).not.toHaveBeenCalled();
+    expect(rig.onDragEnd).not.toHaveBeenCalled();
+    // Режим смахивания сброшен концом жеста: новое нажатие и горизонтальный сдвиг — перетаскивание.
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 120, 50));
+    expect(rig.api.dragStart).toHaveBeenCalledTimes(1);
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+  });
+
+  it('новое нажатие после смахивания работает заново', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 30));
+    fireEvent(target, pointer('pointerup', 100, 30, { buttons: 0 }));
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 30));
+    expect(rig.onSwipeUp).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([['pointercancel'], ['lostpointercapture']])('%s посреди смахивания сбрасывает режим, dragEnd не шлётся', (type) => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 50 - (SWIPE_UP_PX - 2)));
+    fireEvent(target, pointer(type, 100, 40, { buttons: 0 }));
+    // Без сброса это движение достроило бы прежнее смахивание.
+    fireEvent(target, pointer('pointermove', 100, 20));
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+    expect(rig.api.dragEnd).not.toHaveBeenCalled();
+    expect(rig.onDragEnd).not.toHaveBeenCalled();
+  });
+
+  it('горизонтальное движение — перетаскивание, как раньше; onSwipeUp нет', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 130, 50));
+    expect(rig.api.dragStart).toHaveBeenCalledWith({ screenX: 100, screenY: 50 });
+    expect(rig.onDragStart).toHaveBeenCalledTimes(1);
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+  });
+
+  it('вверх, но по горизонтали не меньше — перетаскивание: смахивание только при вертикальном преобладании', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    // Ровно по диагонали (|dy| = |dx|) — не «вертикально больше»: тащим.
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 110, 40));
+    expect(rig.api.dragStart).toHaveBeenCalledTimes(1);
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+  });
+
+  it('вниз вертикально — перетаскивание, а не смахивание', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 80));
+    expect(rig.api.dragStart).toHaveBeenCalledTimes(1);
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+  });
+
+  it('движение вверх после начавшегося перетаскивания — не смахивание', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 130, 50));
+    fireEvent(target, pointer('pointermove', 130, 0));
+    fireEvent(target, pointer('pointermove', 130, -40));
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
+    expect(rig.api.dragStart).toHaveBeenCalledTimes(1);
+    expect(rig.api.dragMove).toHaveBeenLastCalledWith({ screenX: 130, screenY: -40 });
+    fireEvent(target, pointer('pointerup', 130, -40, { buttons: 0 }));
+    expect(rig.api.dragEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['button'], ['link'], ['role-button'], ['no-drag'], ['no-drag-child']])(
+    'нажатие на цели %s: ни смахивания, ни перетаскивания, как далеко ни тяни вверх',
+    (id) => {
+      const rig = mount();
+      const target = screen.getByTestId(id);
+      fireEvent(target, pointer('pointerdown', 100, 150));
+      fireEvent(target, pointer('pointermove', 100, 20));
+      fireEvent(target, pointer('pointerup', 100, 20, { buttons: 0 }));
+      expect(rig.onSwipeUp).not.toHaveBeenCalled();
+      expect(rig.api.dragStart).not.toHaveBeenCalled();
+    },
+  );
+
+  it('кнопку отпустили там, где форма события не видела: движение вверх без кнопки смахиванием не становится', () => {
+    const rig = mount();
+    const target = screen.getByTestId('text');
+    fireEvent(target, pointer('pointerdown', 100, 50));
+    fireEvent(target, pointer('pointermove', 100, 20, { buttons: 0 }));
+    expect(rig.onSwipeUp).not.toHaveBeenCalled();
   });
 });

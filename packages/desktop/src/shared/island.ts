@@ -22,10 +22,9 @@ export interface IslandHitRect {
   height: number;
 }
 
-/** Что острову нужно из настроек и места: звук по Sound, показана ли подсказка, отступ под чёлку, точка у края монитора. */
+/** Что острову нужно из настроек и места: звук по Sound, отступ под чёлку, точка у края монитора. */
 export interface IslandConfig {
   sound: boolean;
-  hintShown: boolean;
   topInset: number;
   /** Точка, у которой стоит остров: форма выравнивается внутри фиксированного кадра окна влево, по центру или вправо. */
   anchor: IslandAnchor;
@@ -49,7 +48,6 @@ export interface IslandApi {
   /** Показать главное окно (создать, если закрыто) и открыть в нём цель. */
   open(target: FocusTarget): void;
   beep(): void;
-  hintShown(): void;
   /** Отрисовка острова упала: main снимает признак «страница загружена» (уведомления снова идут) и прячет окно. */
   failed(): void;
 }

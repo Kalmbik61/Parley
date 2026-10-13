@@ -367,9 +367,9 @@ describe('SettingsDialog — переключатель «Island»', () => {
     await waitFor(() => expect(saveUiSpy).toHaveBeenLastCalledWith({ island: { enabled: true } }));
   });
 
-  it('в патче нет displayId, anchor и hintShown: их main пишет сам, а копия рендерера устарела', async () => {
+  it('в патче нет displayId и anchor: их main пишет сам, а копия рендерера устарела', async () => {
     const bridge = createFakeBridge();
-    await bridge.app.saveUi({ island: { enabled: true, displayId: 7, anchor: 'right', hintShown: true } });
+    await bridge.app.saveUi({ island: { enabled: true, displayId: 7, anchor: 'right' } });
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     openSettings(bridge);
 

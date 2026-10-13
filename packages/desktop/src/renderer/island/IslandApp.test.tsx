@@ -1,7 +1,7 @@
 /**
  * Проводка острова на подставном мосту: новый запрос выбирается в карточке (а не остаётся прежний) и выдвигает убранный
- * остров, «×» убирает его (окно при этом остаётся видимым, пока хост подключён), покой в 4 с убирает сам, язычок
- * выдвигает остров кликом или потяжкой вниз, корень заполняет кадр окна и выравнивает форму по точке, наведение приходит
+ * остров, стрелка ⌃ внизу формы (видна только под курсором, `onHover`) и смахивание вверх убирают его (окно при этом
+ * остаётся видимым, пока хост подключён), покой в 4 с убирает сам, язычок выдвигает остров кликом или потяжкой вниз, корень заполняет кадр окна и выравнивает форму по точке, наведение приходит
  * от main (`onHover`) и открывает список, а область под мышь (форма или язычок) уходит main и не повторяется. Где нужна
  * цепочка «событие → снимок ленты → карточка», таймеры настоящие; отсчёт покоя идёт на подставных таймерах и на заранее заполненных сторах (без обмена с хостом).
  * Строки Done: новый конец хода выдвигает остров (без звука), конец хода до подключения — нет, удержание `DONE_HOLD_MS`
@@ -61,9 +61,9 @@ class ResizeObserverStub {
 
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
-    config: vi.fn(async (): Promise<IslandConfig> => ({ sound: false, hintShown: true, topInset: 0, anchor: 'center', ...config })),
+    config: vi.fn(async (): Promise<IslandConfig> => ({ sound: false, topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
-    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
+    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -118,6 +118,11 @@ function seedIdle(): void {
 const pointer = (type: string, screenX = 10, screenY = 20, buttons = 1): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY, buttons });
 
 const isRetracted = (): boolean => screen.getByTestId('island-slide').getAttribute('data-retracted') === 'true';
+/** Убирает остров стрелкой ⌃: она есть только под курсором, поэтому сначала main сообщает «над областью». */
+const tuck = (hover: (over: boolean) => void): void => {
+  hover(true);
+  fireEvent.click(screen.getByTestId('island-tuck'));
+};
 /** Выдвигает убранный остров кликом по язычку. */
 const expand = (): void => {
   fireEvent.click(screen.getByTestId('island-tab'));
@@ -162,15 +167,15 @@ describe('проводка острова', () => {
     expect(screen.queryByTestId('island-tab')).toBeNull();
   });
 
-  it('«×» убирает остров, но окно остаётся видимым; новый запрос выдвигает его снова', async () => {
-    const { island, bridge, blocked } = setup();
+  it('стрелка ⌃ убирает остров, но окно остаётся видимым; новый запрос выдвигает его снова', async () => {
+    const { island, bridge, blocked, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     blocked('s-01');
     await screen.findByTitle('Run: rm -rf build');
     await waitFor(() => expect(isRetracted()).toBe(false));
     await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
     vi.mocked(island.setVisible).mockClear();
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab')).toBeTruthy();
     // Окно не прячется: убирается только то, что нарисовано.
@@ -195,13 +200,13 @@ describe('проводка острова', () => {
     await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
   });
 
-  it('после переподключения всё ещё ждущая карточка — новая: выдвигает убранный «×» остров', async () => {
-    const { island, bridge, blocked, disconnect, reconnect } = setup();
+  it('после переподключения всё ещё ждущая карточка — новая: выдвигает убранный стрелкой остров', async () => {
+    const { island, bridge, blocked, disconnect, reconnect, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     blocked('s-01');
     await screen.findByTitle('Run: rm -rf build');
     await waitFor(() => expect(isRetracted()).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(isRetracted()).toBe(true);
     disconnect();
     await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(false));
@@ -313,12 +318,71 @@ describe('проводка острова', () => {
       expect(island.dragStart).not.toHaveBeenCalled();
     });
 
-    it('нажатие на «×» остров не тащит: только убирает', async () => {
+    it('нажатие на стрелке остров не тащит и не смахивает, куда ни веди указатель', async () => {
       const { island } = await openedList();
-      const tuck = screen.getByRole('button', { name: 'Tuck the island away' });
-      fireEvent(tuck, pointer('pointerdown', 10, 20));
-      fireEvent(tuck, pointer('pointermove', 80, 20));
-      fireEvent(tuck, pointer('pointerup', 80, 20, 0));
+      const arrow = screen.getByTestId('island-tuck');
+      fireEvent(arrow, pointer('pointerdown', 10, 100));
+      fireEvent(arrow, pointer('pointermove', 80, 100));
+      fireEvent(arrow, pointer('pointermove', 80, 20));
+      fireEvent(arrow, pointer('pointerup', 80, 20, 0));
+      expect(island.dragStart).not.toHaveBeenCalled();
+      expect(isRetracted()).toBe(false);
+    });
+  });
+
+  describe('стрелка ⌃ и смахивание вверх', () => {
+    it('стрелка есть только под курсором (по main): ушёл — пропала; убранный остров стрелки не показывает', async () => {
+      const { bridge, working, hover } = setup();
+      render(<IslandApp bridge={bridge} />);
+      working('s-01');
+      await screen.findByText('1 working');
+      expect(screen.queryByTestId('island-tuck')).toBeNull();
+      hover(true);
+      expect(screen.getByTestId('island-tuck')).toBeTruthy();
+      hover(false);
+      expect(screen.queryByTestId('island-tuck')).toBeNull();
+      // Курсор остался над областью (над язычком), а остров убран: стрелки нет.
+      tuck(hover);
+      expect(isRetracted()).toBe(true);
+      expect(screen.queryByTestId('island-tuck')).toBeNull();
+    });
+
+    it('смахивание вверх по острову убирает его в язычок: перетаскивания нет, окно остаётся видимым', async () => {
+      const { island, bridge, working } = setup();
+      render(<IslandApp bridge={bridge} />);
+      working('s-01');
+      await screen.findByText('1 working');
+      await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
+      vi.mocked(island.setVisible).mockClear();
+      const pill = screen.getByTestId('island-pill');
+      fireEvent(pill, pointer('pointerdown', 100, 40));
+      // Вверх меньше порога смахивания: остров на месте.
+      fireEvent(pill, pointer('pointermove', 100, 35));
+      expect(isRetracted()).toBe(false);
+      fireEvent(pill, pointer('pointermove', 100, 30));
+      expect(isRetracted()).toBe(true);
+      expect(screen.getByTestId('island-tab')).toBeTruthy();
+      expect(island.dragStart).not.toHaveBeenCalled();
+      expect(island.setVisible).not.toHaveBeenCalled();
+      fireEvent(pill, pointer('pointerup', 100, 30, 0));
+      expect(island.dragEnd).not.toHaveBeenCalled();
+    });
+
+    it('смахивание по карточке запроса тоже убирает остров; по кнопке решения — нет', async () => {
+      const { island, bridge, blocked } = setup();
+      render(<IslandApp bridge={bridge} />);
+      blocked('s-01');
+      await screen.findByTitle('Run: rm -rf build');
+      await waitFor(() => expect(isRetracted()).toBe(false));
+      const allow = screen.getByTestId('island-allow');
+      fireEvent(allow, pointer('pointerdown', 100, 100));
+      fireEvent(allow, pointer('pointermove', 100, 40));
+      expect(isRetracted()).toBe(false);
+      fireEvent(allow, pointer('pointerup', 100, 40, 0));
+      const summary = screen.getByTitle('Run: rm -rf build');
+      fireEvent(summary, pointer('pointerdown', 100, 100));
+      fireEvent(summary, pointer('pointermove', 100, 40));
+      expect(isRetracted()).toBe(true);
       expect(island.dragStart).not.toHaveBeenCalled();
     });
   });
@@ -368,11 +432,11 @@ describe('область под мышь', () => {
   });
 
   it('выдвинутый остров сообщает область формы, убранный — язычка', () => {
-    const { island, bridge } = setup();
+    const { island, bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
     expect(lastRect(island)).toEqual(SHAPE);
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(lastRect(island)).toEqual(TAB);
   });
 
@@ -588,11 +652,11 @@ describe('убирание острова в покое', () => {
     expect(screen.queryByTestId('island-tab')).toBeNull();
   });
 
-  it('«×» среди работы убирает остров, и сама по себе работа его не возвращает — только новая работа после покоя', () => {
+  it('стрелка среди работы убирает остров, и сама по себе работа его не возвращает — только новая работа после покоя', () => {
     seedWorking();
-    const { bridge } = setup();
+    const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(isRetracted()).toBe(true);
     // Работа идёт и дальше (другое событие того же признака) — убранный остров остаётся убранным.
     act(() => {
@@ -606,12 +670,12 @@ describe('убирание острова в покое', () => {
     expect(isRetracted()).toBe(false);
   });
 
-  it('«×» посреди отсчёта покоя убирает остров сразу', () => {
-    const { bridge } = setup();
+  it('стрелка посреди отсчёта покоя убирает остров сразу', () => {
+    const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
     advance(1000);
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(isRetracted()).toBe(true);
     // Отсчёт отменён: повторного убирания нет, язычок не мигает.
     advance(IDLE_RETRACT_MS * 2);
@@ -823,12 +887,12 @@ describe('Done на острове', () => {
     expect(screen.queryByTestId('island-done')).toBeNull();
   });
 
-  it('«×» тоже кончает показ: удержанная строка после него не возвращается', () => {
+  it('стрелка тоже кончает показ: удержанная строка после неё не возвращается', () => {
     const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     act(() => seedDone(FRESH));
     act(() => seedSeen(FRESH));
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Show the island');
     advance(RETRACT_SLIDE_MS);
@@ -842,7 +906,7 @@ describe('Done на острове', () => {
     render(<IslandApp bridge={bridge} />);
     act(() => seedDone(FRESH));
     act(() => seedSeen(FRESH));
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     advance(RETRACT_SLIDE_MS - 1);
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
     expand();
@@ -862,14 +926,14 @@ describe('Done на острове', () => {
         loaded: true,
       });
     };
-    const { bridge } = setup();
+    const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     act(() => both('unseen'));
     expect(isRetracted()).toBe(false);
     // s-01 посмотрели: пилюля держит обе строки.
     act(() => both('idle'));
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 2 done');
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    tuck(hover);
     expect(screen.getByTestId('island-tab').textContent).toBe('✅ 1');
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 2 done');
     advance(RETRACT_SLIDE_MS);

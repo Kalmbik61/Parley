@@ -77,11 +77,11 @@ describe('createUiStore', () => {
     expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
   });
 
-  it('save сливает island на один уровень: место не стирает enabled и hintShown', async () => {
+  it('save сливает island на один уровень: место не стирает enabled', async () => {
     const store = createUiStore(file);
-    await store.save({ island: { enabled: false, displayId: null, anchor: 'center', hintShown: true } });
+    await store.save({ island: { enabled: false, displayId: null, anchor: 'center' } });
     const saved = await store.save({ island: { displayId: 7, anchor: 'right' } } as Partial<Omit<UiFile, 'version'>>);
-    expect(saved.island).toEqual({ enabled: false, displayId: 7, anchor: 'right', hintShown: true });
+    expect(saved.island).toEqual({ enabled: false, displayId: 7, anchor: 'right' });
   });
 
   // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать

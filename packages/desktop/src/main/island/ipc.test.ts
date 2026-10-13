@@ -25,11 +25,10 @@ function setup() {
   const options = {
     ipcMain,
     controller,
-    config: vi.fn().mockResolvedValue({ sound: true, hintShown: false, topInset: 38, anchor: 'center' }),
+    config: vi.fn().mockResolvedValue({ sound: true, topInset: 38, anchor: 'center' }),
     pushConfig: vi.fn(),
     openTarget: vi.fn(),
     beep: vi.fn(),
-    markHintShown: vi.fn(),
     onFailed: vi.fn(),
   };
   registerIslandIpc(options);
@@ -48,7 +47,6 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
     pushConfig: state.pushConfig,
     openTarget: state.openTarget,
     beep: state.beep,
-    markHintShown: state.markHintShown,
     onFailed: state.onFailed,
   };
   return Object.entries(mocks)
@@ -97,7 +95,7 @@ describe('IPC острова', () => {
 
   it('config — острову; чужому окну — отказ', async () => {
     const { ipcMain } = setup();
-    await expect(ipcMain.emit('island:config', { sender: island })).resolves.toEqual({ sound: true, hintShown: false, topInset: 38, anchor: 'center' });
+    await expect(ipcMain.emit('island:config', { sender: island })).resolves.toEqual({ sound: true, topInset: 38, anchor: 'center' });
     await expect(ipcMain.emit('island:config', { sender: stranger })).rejects.toBeTruthy();
   });
 
@@ -116,7 +114,6 @@ describe('IPC острова', () => {
     ['island:drag-end', [{ screenX: 1, screenY: 2 }]],
     ['island:open', [TARGET]],
     ['island:beep', []],
-    ['island:hint-shown', []],
     ['island:failed', []],
   ])('%s от чужого окна не делает ничего', (channel, args) => {
     const state = setup();
@@ -152,12 +149,11 @@ describe('IPC острова', () => {
     expect(calledNames(state)).toEqual([]);
   });
 
-  it('звук и подсказка', () => {
-    const { ipcMain, beep, markHintShown } = setup();
+  it('звук; канала подсказки первого показа больше нет', () => {
+    const { ipcMain, beep } = setup();
     ipcMain.emit('island:beep', { sender: island });
-    ipcMain.emit('island:hint-shown', { sender: island });
     ipcMain.emit('island:beep', { sender: stranger });
     expect(beep).toHaveBeenCalledTimes(1);
-    expect(markHintShown).toHaveBeenCalledTimes(1);
+    expect(ipcMain.handlers.has('island:hint-shown')).toBe(false);
   });
 });

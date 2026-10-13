@@ -74,7 +74,6 @@ const bridge = {
     dragEnd: (point: IslandPoint) => ipcRenderer.send('island:drag-end', point),
     open: (target: unknown) => ipcRenderer.send('island:open', target),
     beep: () => ipcRenderer.send('island:beep'),
-    hintShown: () => ipcRenderer.send('island:hint-shown'),
     failed: () => ipcRenderer.send('island:failed'),
   } satisfies IslandApi,
 };

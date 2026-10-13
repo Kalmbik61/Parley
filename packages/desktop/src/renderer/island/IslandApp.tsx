@@ -11,11 +11,12 @@
  * сообщает «над» (окно едет за курсором).
  *
  * Остров не пропадает, а убирается (`retracted`): окно видно, пока хост подключён, а убранная форма уезжает вверх
- * за кадр, оставляя язычок (`IslandTab`). Убирают «×» и покой: нечего показывать, очередь пуста, курсор не над
- * формой и форму не тащат — через `IDLE_RETRACT_MS`, а если на острове есть строки Done (агент закончил ход, в Parley
- * его ещё не смотрели) — через `DONE_HOLD_MS`, чтобы их успели заметить. Выдвигают новый запрос, начало работы
- * агентов, новый конец хода и язычок (клик или потяжка вниз). «×» при уже идущей работе остров не возвращает:
- * выдвижение по работе — только при смене «есть работа» с нет на да.
+ * за кадр, оставляя язычок (`IslandTab`). Убирают стрелка ⌃ внизу формы (видна под курсором), смахивание вверх и
+ * покой: нечего показывать, очередь пуста, курсор не над формой и форму не тащат — через `IDLE_RETRACT_MS`, а если на
+ * острове есть строки Done (агент закончил ход, в Parley его ещё не смотрели) — через `DONE_HOLD_MS`, чтобы их успели
+ * заметить. Выдвигают новый запрос, начало работы агентов, новый конец хода и язычок (клик или потяжка вниз). Стрелка и
+ * смахивание при уже идущей работе остров не возвращают: выдвижение по работе — только при смене «есть работа» с нет
+ * на да.
  *
  * Done — новый конец хода (`turnEndedAt` не раньше момента подключения острова к хосту) выдвигает убранный остров и
  * заново заводит отсчёт удержания, без звука. Done, что остров застал уже готовым (ход кончился до подключения), в
@@ -52,7 +53,7 @@ export const DONE_HOLD_MS = 20000;
 /** Сколько уезжает убираемая форма: та же длительность, что `duration-300` у `island-slide` в `IslandView`. */
 export const RETRACT_SLIDE_MS = 300;
 
-const INITIAL_CONFIG: IslandConfig = { sound: false, hintShown: true, topInset: 0, anchor: 'center' };
+const INITIAL_CONFIG: IslandConfig = { sound: false, topInset: 0, anchor: 'center' };
 
 /** Выравнивание формы в кадре окна: влево, по центру или вправо — по точке, у которой стоит остров. */
 const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };
@@ -182,7 +183,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     setRetracted(false);
     if (config.sound) bridge.island.beep();
   }, [items, config.sound, bridge]);
-  // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: «×» среди работы его не возвращает.
+  // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: стрелка среди работы его не возвращает.
   useEffect(() => {
     if (model.active) setRetracted(false);
   }, [model.active]);
@@ -256,6 +257,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         config={config}
         listOpen={listOpen}
         retracted={retracted}
+        hovered={hovered}
         showId={show.id}
         labels={labels}
         api={bridge.island}
@@ -267,10 +269,6 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         onClearDone={() => setCleared((current) => new Set([...current, ...doneRows.map((row) => row.doneKey)]))}
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
-        onHintDone={() => {
-          bridge.island.hintShown();
-          setConfig((current) => ({ ...current, hintShown: true }));
-        }}
       />
       {retracted ? (
         <IslandTab

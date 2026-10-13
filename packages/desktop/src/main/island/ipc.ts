@@ -19,7 +19,6 @@ export interface IslandIpcOptions {
   pushConfig(): void;
   openTarget(target: FocusTarget): void;
   beep(): void;
-  markHintShown(): void;
   /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
   onFailed(): void;
 }
@@ -73,9 +72,6 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   });
   ipcMain.on('island:beep', (event) => {
     if (fromIsland(event)) options.beep();
-  });
-  ipcMain.on('island:hint-shown', (event) => {
-    if (fromIsland(event)) options.markHintShown();
   });
   ipcMain.on('island:failed', (event) => {
     if (fromIsland(event)) options.onFailed();

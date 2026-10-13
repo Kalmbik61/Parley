@@ -10,6 +10,9 @@
  *
  * Убранный остров (`retracted`) уезжает вверх за кадр: сдвигает обёртка формы (`island-slide`), а не сама форма —
  * у размера и сдвига разная длительность. Тащить остров можно за любое место формы (`useShapeDrag`), кроме кнопок.
+ * Убрать остров в язычок можно двумя способами, без «×» и подсказки: стрелка ⌃ по центру внизу формы (ряд внутри
+ * замеряемого содержимого, только пока курсор над островом — `hovered` от main; высота формы анимируется сама) и
+ * смахивание вверх (зажать мышь на острове и потянуть вверх — `onSwipeUp` хука перетаскивания).
  *
  * Строки Done (агент закончил ход, в Parley его ещё не смотрели) идут в списке после строк в работе: точка `unseen`,
  * имя сессии, время конца хода и под ними до двух строк последнего ответа агента. Текст ответа вид читает сам из
@@ -18,6 +21,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
+import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import type { FocusTarget } from '../../shared/bridge.js';
@@ -50,6 +54,8 @@ export interface IslandViewProps {
   listOpen: boolean;
   /** Остров убран: форма уехала вверх за кадр окна, на её месте — язычок (`IslandTab`). */
   retracted: boolean;
+  /** Курсор над областью острова (от main): пока он над ней, внизу формы стрелка ⌃ «убрать остров». */
+  hovered: boolean;
   /** Номер показа острова: растёт каждый раз, когда окно из скрытого становится видимым (`IslandApp`). */
   showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
@@ -60,13 +66,12 @@ export interface IslandViewProps {
   onDragStart(): void;
   onDragEnd(): void;
   onToggleList(open: boolean): void;
-  /** «×»: убрать остров до следующего запроса или выдвижения язычком. */
+  /** Стрелка ⌃ или смахивание вверх: убрать остров до следующего запроса или выдвижения язычком. */
   onHide(): void;
   /** «Clear»: спрятать все видимые строки Done. */
   onClearDone(): void;
   onSelect(index: number): void;
   onDecide(key: string, decision: FeedDecision): void;
-  onHintDone(): void;
 }
 
 const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
@@ -77,16 +82,8 @@ function rowTarget(row: IslandRow): FocusTarget {
     : { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
 }
 
-function HideButton({ onHide }: { onHide(): void }): JSX.Element {
-  return (
-    <button type="button" aria-label={S.island.tuckAway} title={S.island.tuckAway} onClick={onHide} className="cursor-pointer px-1 text-muted-foreground hover:text-foreground">
-      ×
-    </button>
-  );
-}
-
 function Pill(props: IslandViewProps): JSX.Element {
-  const { model, onToggleList, onHide } = props;
+  const { model, onToggleList } = props;
   return (
     // Список — по наведению или клику (спека, раздел 4): наведение приходит от main (`IslandApp`), он же закрывает список
     // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
@@ -107,7 +104,6 @@ function Pill(props: IslandViewProps): JSX.Element {
           {S.island.idle}
         </span>
       )}
-      <HideButton onHide={onHide} />
     </div>
   );
 }
@@ -224,7 +220,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
 }
 
 function Card(props: IslandViewProps): JSX.Element | null {
-  const { items, index, showId, labels, api, onSelect, onDecide, onHide } = props;
+  const { items, index, showId, labels, api, onSelect, onDecide } = props;
   const item = items[index] ?? items[0];
   // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
   // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
@@ -260,7 +256,6 @@ function Card(props: IslandViewProps): JSX.Element | null {
             </button>
           </span>
         ) : null}
-        <HideButton onHide={onHide} />
       </div>
       <div title={item.summary} className="truncate font-mono text-sm">
         {item.summary}
@@ -275,8 +270,8 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, shapeRef, api, onDragStart, onDragEnd, onHintDone } = props;
-  const drag = useShapeDrag(api, { onDragStart, onDragEnd });
+  const { model, items, listOpen, config, retracted, hovered, shapeRef, api, onDragStart, onDragEnd, onHide } = props;
+  const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
@@ -311,20 +306,27 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         {...drag.handlers}
       >
         <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>
-          {!config.hintShown ? (
-            <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-xs text-muted-foreground">
-              <span>{S.island.hint}</span>
-              <button type="button" className="cursor-pointer underline" onClick={onHintDone}>
-                {S.island.gotIt}
-              </button>
-            </div>
-          ) : null}
           {items.length > 0 ? <Card {...props} /> : (
             <>
               <Pill {...props} />
               {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
             </>
           )}
+          {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
+          {hovered && !retracted ? (
+            <div className="flex justify-center pb-2 pt-1.5">
+              <button
+                type="button"
+                data-testid="island-tuck"
+                aria-label={S.island.tuckAway}
+                title={S.island.tuckAway}
+                onClick={onHide}
+                className="flex h-5 min-w-8 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
+              >
+                <ChevronUp size={18} />
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

@@ -418,7 +418,7 @@ if (!gotLock) {
     });
     const islandConfig = async (): Promise<IslandConfig> => {
       const current = await uiStore.load();
-      return { sound: current.notifications.sound, hintShown: current.island.hintShown, topInset: island.topInset(), anchor: island.anchor() };
+      return { sound: current.notifications.sound, topInset: island.topInset(), anchor: island.anchor() };
     };
     const pushIslandConfig = (): void => {
       void islandConfig().then((config) => {
@@ -459,12 +459,6 @@ if (!gotLock) {
         sendFocusTarget(target);
       },
       beep: () => shell.beep(),
-      markHintShown: () => {
-        void uiStore
-          .save({ island: { hintShown: true } } as Partial<Omit<UiFile, 'version'>>)
-          .then(() => pushIslandConfig())
-          .catch(() => undefined);
-      },
       onFailed: () => {
         // Упал рендер острова: страница не считается загруженной (системные уведомления снова идут), окно прячется.
         const window = island.current();

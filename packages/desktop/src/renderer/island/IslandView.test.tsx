@@ -1,7 +1,8 @@
 /**
- * Вид острова: пилюля и «×», пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), строки Done
+ * Вид острова: пилюля (без «×» и без подсказки первого показа), стрелка ⌃ внизу формы только под курсором и смахивание
+ * вверх, пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), строки Done
  * (ответ агента, время, Clear, пилюля `✅ N done`, комната `done`), карточка
- * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, подсказка первого показа и отступ под чёлку, пауза
+ * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, отступ под чёлку, пауза
  * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров,
  * плавный размер формы (замер содержимого, переход, появление), размеры текста.
  */
@@ -15,6 +16,7 @@ import { S } from '../../shared/strings.js';
 import type { IslandModel } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
+import { SWIPE_UP_PX } from './drag.js';
 import { CARD_ARM_MS, IslandView, type IslandViewProps } from './IslandView.js';
 
 const REF = { projectPath: '/tmp/proj', workId: 'w-1', sessionId: 's-02' };
@@ -23,7 +25,7 @@ const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'p
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
+    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -66,10 +68,10 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { sound: true, hintShown: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, showId: 1,
+    model: MODEL, items: [], index: 0, config: { sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, hovered: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
-    onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(), onHintDone: vi.fn(),
+    onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
     ...patch,
   };
 }
@@ -117,20 +119,20 @@ afterEach(() => {
 });
 
 describe('вид острова', () => {
-  it('пилюля: счётчики и «×»', () => {
-    const props = view();
-    expect(screen.getByTestId('island-pill').textContent).toContain('2 working · 1 waiting');
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
-    expect(props.onHide).toHaveBeenCalled();
+  it('пилюля: только счётчики — ни «×», ни кнопок', () => {
+    view();
+    const pill = screen.getByTestId('island-pill');
+    expect(pill.textContent).toContain('2 working · 1 waiting');
+    expect(pill.textContent).not.toContain('×');
+    expect(within(pill).queryByRole('button')).toBeNull();
   });
 
-  it('пустая пилюля: «No agents running» вместо счётчиков, «×» на месте, список не открывается', () => {
-    const props = view({ model: IDLE_MODEL, listOpen: true });
+  it('пустая пилюля: «No agents running» вместо счётчиков, без «×», список не открывается', () => {
+    view({ model: IDLE_MODEL, listOpen: true });
     expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
     expect(screen.queryByTestId('island-counters')).toBeNull();
     expect(screen.queryByTestId('island-list')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
-    expect(props.onHide).toHaveBeenCalled();
+    expect(screen.getByTestId('island-pill').textContent).not.toContain('×');
   });
 
   it('строка пилюли по центру: при открытом списке содержимое шире, а пилюля не уезжает вбок', () => {
@@ -152,10 +154,9 @@ describe('вид острова', () => {
     expect(props.onToggleList).not.toHaveBeenCalledWith(false);
   });
 
-  it('пилюля и подсказка не переносят строки — окно растёт по содержимому', () => {
-    view({ config: { sound: true, hintShown: false, topInset: 0, anchor: 'center' } });
+  it('пилюля не переносит строки — окно растёт по содержимому', () => {
+    view();
     expect(screen.getByTestId('island-pill').className).toContain('whitespace-nowrap');
-    expect(screen.getByText('Drag me · × to hide · turn off in Settings').parentElement?.className).toContain('whitespace-nowrap');
   });
 
   it('список: ждущая без карточки — «waiting in terminal», точка как в сайдбаре, клик по строке открывает её в Parley', () => {
@@ -191,9 +192,11 @@ describe('вид острова', () => {
     expect(screen.queryByTestId('island-room')).toBeNull();
   });
 
-  it('карточка разрешения: шапка, суть, Allow и Deny; без правил — без Always', () => {
+  it('карточка разрешения: шапка без «×», суть, Allow и Deny; без правил — без Always', () => {
     const props = view({ items: [permissionItem()] });
     expect(screen.getByTestId('island-card').textContent).toContain('S02 api · Backend');
+    expect(screen.getByTestId('island-card').textContent).not.toContain('×');
+    expect(screen.queryByRole('button', { name: 'Tuck the island away' })).toBeNull();
     expect(screen.getByTitle('Run: rm -rf build')).toBeTruthy();
     expect(screen.queryByTestId('island-always')).toBeNull();
     fireEvent.click(screen.getByTestId('island-allow'));
@@ -262,14 +265,94 @@ describe('вид острова', () => {
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow' });
   });
 
-  it('подсказка первого показа и отступ под чёлку', () => {
-    const props = view({ config: { sound: true, hintShown: false, topInset: 38, anchor: 'center' } });
-    expect(screen.getByText('Drag me · × to hide · turn off in Settings')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
-    expect(props.onHintDone).toHaveBeenCalled();
+  it('подсказки первого показа нет; отступ под чёлку', () => {
+    view({ config: { sound: true, topInset: 38, anchor: 'center' } });
+    expect(screen.queryByText(/Drag me/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
     expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe('38px');
     expect((screen.getByTestId('island') as HTMLElement).style.paddingTop).toBe('');
+  });
+});
+
+describe('стрелка ⌃ «убрать остров» и смахивание вверх', () => {
+  /** Событие указателя с точкой на экране: `MouseEvent` нужного типа — не зависит от того, знает ли jsdom `PointerEvent`. */
+  const pointer = (type: string, screenX: number, screenY: number, buttons = 1): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY, buttons });
+
+  it('без наведения стрелки нет — ни у пилюли, ни у списка, ни у карточки', () => {
+    for (const patch of [{}, { listOpen: true }, { items: [permissionItem()] }]) {
+      view(patch);
+      expect(screen.queryByTestId('island-tuck')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('курсор над островом: стрелка внизу содержимого — сразу после пилюли, списка или карточки; клик зовёт onHide', () => {
+    const cases: Array<[string, Partial<IslandViewProps>, string]> = [
+      ['пилюля', {}, 'island-pill'],
+      ['список', { listOpen: true }, 'island-list'],
+      ['карточка', { items: [permissionItem()] }, 'island-card'],
+    ];
+    for (const [name, patch, above] of cases) {
+      const props = view({ ...patch, hovered: true });
+      const arrow = screen.getByTestId('island-tuck');
+      expect(screen.getByTestId('island-content').lastElementChild, name).toBe(arrow.parentElement);
+      expect(arrow.parentElement?.previousElementSibling?.getAttribute('data-testid'), name).toBe(above);
+      fireEvent.click(arrow);
+      expect(props.onHide, name).toHaveBeenCalledTimes(1);
+      cleanup();
+    }
+  });
+
+  it('стрелка: ряд по центру с отступами pt-1.5 и pb-2, значок ChevronUp 18 px, зона не меньше 32×20, подпись и подсказка', () => {
+    view({ hovered: true });
+    const arrow = screen.getByTestId('island-tuck');
+    expect(arrow.tagName).toBe('BUTTON');
+    expect(arrow.getAttribute('aria-label')).toBe(S.island.tuckAway);
+    expect(arrow.getAttribute('title')).toBe(S.island.tuckAway);
+    const row = arrow.parentElement as HTMLElement;
+    expect(row.className).toContain('flex');
+    expect(row.className).toContain('justify-center');
+    expect(row.className).toContain('pt-1.5');
+    expect(row.className).toContain('pb-2');
+    expect(arrow.className).toContain('h-5');
+    expect(arrow.className).toContain('min-w-8');
+    expect(arrow.className).toContain('cursor-pointer');
+    const icon = arrow.querySelector('svg') as SVGElement;
+    expect(icon.getAttribute('width')).toBe('18');
+    expect(icon.getAttribute('height')).toBe('18');
+  });
+
+  it('остров убран — стрелки нет, даже если main ещё считает курсор над областью', () => {
+    view({ hovered: true, retracted: true });
+    expect(screen.queryByTestId('island-tuck')).toBeNull();
+  });
+
+  it('вверх по острову дальше SWIPE_UP_PX — onHide, перетаскивание не начинается', () => {
+    const props = view();
+    const pill = screen.getByTestId('island-pill');
+    fireEvent(pill, pointer('pointerdown', 10, 100));
+    fireEvent(pill, pointer('pointermove', 10, 100 - SWIPE_UP_PX));
+    expect(props.onHide).toHaveBeenCalledTimes(1);
+    fireEvent(pill, pointer('pointermove', 10, 0));
+    fireEvent(pill, pointer('pointerup', 10, 0, 0));
+    expect(props.onHide).toHaveBeenCalledTimes(1);
+    expect(props.api.dragStart).not.toHaveBeenCalled();
+    expect(props.onDragStart).not.toHaveBeenCalled();
+    expect(props.api.dragEnd).not.toHaveBeenCalled();
+    expect(props.onDragEnd).not.toHaveBeenCalled();
+    expect(screen.getByTestId('island').className).toContain('cursor-grab');
+    expect(screen.getByTestId('island').className).not.toContain('cursor-grabbing');
+  });
+
+  it('вверх по кнопке карточки или по самой стрелке — не смахивание', () => {
+    const props = view({ items: [permissionItem()], hovered: true });
+    for (const target of [screen.getByTestId('island-allow'), screen.getByTestId('island-tuck')]) {
+      fireEvent(target, pointer('pointerdown', 10, 100));
+      fireEvent(target, pointer('pointermove', 10, 0));
+      fireEvent(target, pointer('pointerup', 10, 0, 0));
+    }
+    expect(props.onHide).not.toHaveBeenCalled();
   });
 });
 
@@ -438,11 +521,10 @@ describe('плавный размер формы', () => {
 });
 
 describe('размеры текста', () => {
-  it('форма и пилюля — text-sm, подсказка — text-xs', () => {
-    view({ config: { sound: true, hintShown: false, topInset: 0, anchor: 'center' } });
+  it('форма и пилюля — text-sm', () => {
+    view();
     expect(screen.getByTestId('island').className).toContain('text-sm');
     expect(screen.getByTestId('island-pill').className).toContain('text-sm');
-    expect(screen.getByText('Drag me · × to hide · turn off in Settings').parentElement?.className).toContain('text-xs');
   });
 
   it('список: проект, «waiting in terminal» и подзаголовок с комнатами — text-[13px], название работы — размера списка', () => {
@@ -582,13 +664,14 @@ describe('цвета острова', () => {
     Array.from(document.body.querySelectorAll('*')).filter((node) => node.closest('[data-testid="agent-state-dot"]') === null).map((node) => node.getAttribute('class') ?? '');
 
   const states: Array<[string, Partial<IslandViewProps>]> = [
-    ['пилюля с подсказкой', { config: { sound: true, hintShown: false, topInset: 0, anchor: 'center' } }],
+    ['пилюля со стрелкой под курсором', { hovered: true }],
+    ['список со стрелкой', { listOpen: true, hovered: true }],
     ['список', { listOpen: true }],
     ['пустая пилюля', { model: IDLE_MODEL }],
     ['список со строкой Done и Clear', { model: DONE_MODEL, listOpen: true }],
     ['остров убран', { retracted: true }],
     ['карточка с очередью и пометками', { items: [permissionItem({ note: 'elsewhere' }), permissionItem({ key: 'k\u0000c-2', note: 'failed' })] }],
-    ['карточка вопроса', { items: [questionItem(['Postgres', 'SQLite'])] }],
+    ['карточка вопроса со стрелкой', { items: [questionItem(['Postgres', 'SQLite'])], hovered: true }],
     ['карточка с одной кнопкой Open in Parley', { items: [permissionItem({ inWindow: false })] }],
   ];
 
@@ -602,9 +685,11 @@ describe('цвета острова', () => {
   });
 
   it('текст острова — text-foreground, второстепенный — text-muted-foreground', () => {
-    view({ items: [permissionItem()] });
+    view({ items: [permissionItem()], hovered: true });
     expect(screen.getByTestId('island').className).toContain('text-foreground');
-    expect(screen.getByRole('button', { name: 'Tuck the island away' }).className).toContain('text-muted-foreground');
+    const arrow = screen.getByTestId('island-tuck');
+    expect(arrow.className).toContain('text-muted-foreground');
+    expect(arrow.className).toContain('hover:text-foreground');
   });
 });
 
@@ -686,15 +771,13 @@ describe('перетаскивание за форму и курсоры', () =>
     view({ listOpen: true });
     expect(screen.getByTestId('island').className).toContain('cursor-grab');
     expect(screen.getByTestId('island').className).not.toContain('cursor-grabbing');
-    expect(screen.getByRole('button', { name: 'Tuck the island away' }).className).toContain('cursor-pointer');
     expect(screen.getByText('S02 api').closest('button')?.className).toContain('cursor-pointer');
   });
 
-  it('кнопки карточки (решение, «Open in Parley», стрелки, «Got it») — курсор `pointer`', () => {
-    view({ items: [permissionItem({}, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }] }]), permissionItem({ key: 'k\u0000c-2' })], config: { sound: true, hintShown: false, topInset: 0, anchor: 'center' } });
-    for (const id of ['island-allow', 'island-always', 'island-deny']) expect(screen.getByTestId(id).className, id).toContain('cursor-pointer');
+  it('кнопки карточки (решение, «Open in Parley», стрелки очереди, стрелка ⌃) — курсор `pointer`', () => {
+    view({ items: [permissionItem({}, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }] }]), permissionItem({ key: 'k\u0000c-2' })], hovered: true });
+    for (const id of ['island-allow', 'island-always', 'island-deny', 'island-tuck']) expect(screen.getByTestId(id).className, id).toContain('cursor-pointer');
     expect(screen.getByRole('button', { name: 'Next request' }).className).toContain('cursor-pointer');
-    expect(screen.getByRole('button', { name: 'Got it' }).className).toContain('cursor-pointer');
     cleanup();
     view({ items: [permissionItem({ inWindow: false })] });
     expect(screen.getByTestId('island-open').className).toContain('cursor-pointer');
@@ -732,9 +815,9 @@ describe('перетаскивание за форму и курсоры', () =>
     expect(card.api.dragStart).toHaveBeenCalledTimes(1);
   });
 
-  it('нажатие на «×», на строке списка и на кнопке решения жест не начинает', () => {
-    const props = view({ listOpen: true });
-    for (const target of [screen.getByRole('button', { name: 'Tuck the island away' }), screen.getByText('S02 api'), screen.getByRole('button', { name: 'Refunds' })]) {
+  it('нажатие на стрелке ⌃, на строке списка и на кнопке решения жест не начинает', () => {
+    const props = view({ listOpen: true, hovered: true });
+    for (const target of [screen.getByTestId('island-tuck'), screen.getByText('S02 api'), screen.getByRole('button', { name: 'Refunds' })]) {
       fireEvent(target, pointer('pointerdown', 0, 0));
       fireEvent(target, pointer('pointermove', 50, 0));
       fireEvent(target, pointer('pointerup', 50, 0, 0));
