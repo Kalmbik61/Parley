@@ -13,13 +13,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Первые `limit` кодовых точек: суррогатная пара эмодзи не рвётся. */
-export function cutCodePoints(text: string, limit: number): { text: string; cut: boolean } {
-  if (text.length <= limit) return { text, cut: false };
-  const points = Array.from(text);
-  if (points.length <= limit) return { text, cut: false };
-  return { text: points.slice(0, limit).join(''), cut: true };
-}
+/** Первые `limit` кодовых точек (ленивая, не раскладывает строку целиком): общая с окном — `shared/code-points.ts`. */
+export { cutCodePoints } from '../../shared/code-points.js';
 
 export function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);

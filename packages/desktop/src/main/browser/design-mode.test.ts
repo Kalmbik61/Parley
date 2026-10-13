@@ -55,6 +55,16 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
     expect(result?.text).toBe('😀'.repeat(500));
   });
 
+  it('значение стиля в десятки мегабайт (font-family, box-shadow задаёт страница) режется до 500 за время, не зависящее от длины', () => {
+    const huge = 'f'.repeat(50_000_000);
+    const started = performance.now();
+    const result = validatePick(rawPick({ styles: { 'font-family': huge, 'box-shadow': huge, color: 'red' } }));
+    const elapsed = performance.now() - started;
+    expect(result?.styles).toEqual({ 'font-family': 'f'.repeat(PICK_LIMITS.text), 'box-shadow': 'f'.repeat(PICK_LIMITS.text), color: 'red' });
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `Array.from` по каждому значению — две секунды и сотни МБ кучи в main.
+    expect(elapsed).toBeLessThan(300);
+  });
+
   it('нет selector или viewport, неверные типы → null', () => {
     const noSelector = rawPick();
     delete noSelector.selector;

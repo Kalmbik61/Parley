@@ -15,6 +15,7 @@
  * `<redacted>` (`redactBody`).
  */
 
+import { cutCodePoints } from './code-points.js';
 import { S } from './strings.js';
 
 export const REDACTED = '<redacted>';
@@ -131,11 +132,10 @@ export function unmaskableJson(text: string, mimeType: string | null): boolean {
   return text.trim() !== '' && isJson(text, mimeType) && !parses(text);
 }
 
-/** Первые `limit` кодовых точек и пометка обрезки; короче предела — как есть. */
+/** Первые `limit` кодовых точек и пометка обрезки; короче предела — как есть. Тело задаёт страница: строка не раскладывается целиком. */
 function cut(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const points = Array.from(text);
-  return points.length <= limit ? text : `${points.slice(0, limit).join('')}${S.contextFile.truncated}`;
+  const head = cutCodePoints(text, limit);
+  return head.cut ? `${head.text}${S.contextFile.truncated}` : head.text;
 }
 
 /** Граница из полного значения Content-Type: `boundary=x` или `boundary="x y"`; нет или пусто — `null`. */

@@ -53,6 +53,16 @@ describe('validateAnnotationPick (спека браузера 4.7)', () => {
     });
   });
 
+  it('значение стиля в десятки мегабайт режется до 500 за время, не зависящее от длины (стили метки задаёт страница)', () => {
+    const huge = 'x'.repeat(50_000_000);
+    const started = performance.now();
+    const result = validateAnnotationPick(rawElement({ styles: { color: 'red', 'font-size': huge } }));
+    const elapsed = performance.now() - started;
+    expect(result).toMatchObject({ kind: 'element', styles: { color: 'red', 'font-size': 'x'.repeat(PICK_LIMITS.text) } });
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `Array.from` по значению — секунда с лишним и сотни МБ кучи.
+    expect(elapsed).toBeLessThan(300);
+  });
+
   it('рамка: элементы под ней — первые три годных из первых трёх, доля вьюпорта — в пределах 0…1', () => {
     expect(validateAnnotationPick(rawRegion())).toEqual({
       kind: 'region',

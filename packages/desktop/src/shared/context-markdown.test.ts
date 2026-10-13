@@ -7,6 +7,7 @@ import {
   consoleLabel,
   CONTEXT_LIMITS,
   contextLabel,
+  cutText,
   elementContext,
   elementLabel,
   errorsContext,
@@ -62,6 +63,25 @@ describe('contextLabel', () => {
       expect(contextLabel(`s/${unit.repeat(200_000 / unit.length)}/x`), unit).toBe('s');
       expect(performance.now() - started, unit).toBeLessThan(500);
     }
+  });
+});
+
+describe('cutText', () => {
+  it('короче или ровно предел — как есть; длиннее — первые точки и пометка обрезки, пара-эмодзи не рвётся', () => {
+    expect(cutText('abc', 3)).toBe('abc');
+    expect(cutText('a😀', 2)).toBe('a😀');
+    expect(cutText('abcdef', 3)).toBe(`abc${S.contextFile.truncated}`);
+    expect(cutText('😀😀😀', 2)).toBe(`😀😀${S.contextFile.truncated}`);
+  });
+
+  it('текст в десятки мегабайт режется за время, не зависящее от длины: точки не раскладываются в массив (комментарий, путь — от страницы)', () => {
+    const huge = 'x'.repeat(50_000_000);
+    const started = performance.now();
+    const out = cutText(huge, CONTEXT_LIMITS.comment);
+    const elapsed = performance.now() - started;
+    expect(out).toBe(`${'x'.repeat(CONTEXT_LIMITS.comment)}${S.contextFile.truncated}`);
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `Array.from` по всему тексту — секунда с лишним и сотни МБ кучи.
+    expect(elapsed).toBeLessThan(300);
   });
 });
 

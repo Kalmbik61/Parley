@@ -1,7 +1,7 @@
 // packages/desktop/src/main/browser/element-info.test.ts
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { selectorTail } from '../../shared/css-selector.js';
-import { elementInfo, type CdpSender, nodeMatches, withTimeout } from './element-info.js';
+import { ELEMENT_INFO_LIMITS, elementInfo, type CdpSender, nodeMatches, withTimeout } from './element-info.js';
 import { REACT_INFO_FN } from './react-info.js';
 
 /** Подставной инспектор: ответ по имени метода CDP; Error — отказ; нет ответа — пустой объект. */
@@ -68,6 +68,19 @@ describe('elementInfo (спека браузера 3.8)', () => {
       'Runtime.callFunctionOn': { result: { value: 'nope' } },
     });
     expect(await elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save')).toEqual({ role: 'r'.repeat(100) });
+  });
+
+  it('имя в дереве доступности в десятки мегабайт (aria-label задаёт страница) режется до 500 за время, не зависящее от длины', async () => {
+    const { inspector } = fakeInspector({
+      ...ANSWERS,
+      'Accessibility.getPartialAXTree': { nodes: [{ backendDOMNodeId: 42, role: { value: 'button' }, name: { value: 'n'.repeat(50_000_000) } }] },
+    });
+    const started = performance.now();
+    const info = await elementInfo(inspector, 7, { x: 1, y: 1 }, 'main > button#save');
+    const elapsed = performance.now() - started;
+    expect(info).toMatchObject({ role: 'button', name: 'n'.repeat(ELEMENT_INFO_LIMITS.name) });
+    // Порог по времени, а не таймаут теста: прежний `Array.from` по имени — секунда с лишним и сотни МБ кучи в main.
+    expect(elapsed).toBeLessThan(300);
   });
 
   it('CDP отказал с первого вызова — пусто, без исключения', async () => {

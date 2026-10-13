@@ -11,6 +11,7 @@
 
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type NetworkEntry, type ResponseBody, type ViewportSpec } from './browser-devtools.js';
 import type { AnnotationTarget, ReactComponentInfo } from './browser-types.js';
+import { cutCodePoints } from './code-points.js';
 import { selectorTail } from './css-selector.js';
 import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
@@ -95,11 +96,10 @@ export function fillScreenshot(markdown: string, pngPath: string | null): string
   return `${filled.join('\n')}${rest}`;
 }
 
-/** Первые `limit` кодовых точек и пометка обрезки; короче — как есть. */
+/** Первые `limit` кодовых точек и пометка обрезки; короче — как есть. Текст может задавать страница: строка не раскладывается целиком. */
 export function cutText(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const points = Array.from(text);
-  return points.length <= limit ? text : `${points.slice(0, limit).join('')}${S.contextFile.truncated}`;
+  const head = cutCodePoints(text, limit);
+  return head.cut ? `${head.text}${S.contextFile.truncated}` : head.text;
 }
 
 function pointBytes(point: string): number {

@@ -162,6 +162,16 @@ describe('parseReactInfo', () => {
     ]);
   });
 
+  it('имя и источник в десятки мегабайт режутся до 100 и 300 за время, не зависящее от длины', () => {
+    const huge = 'n'.repeat(50_000_000);
+    const started = performance.now();
+    const result = parseReactInfo([{ name: huge, source: huge, approx: false }]);
+    const elapsed = performance.now() - started;
+    expect(result).toEqual([{ name: 'n'.repeat(REACT_LIMITS.name), source: 'n'.repeat(REACT_LIMITS.source), approx: false }]);
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `Array.from` по обеим строкам — две секунды и сотни МБ кучи.
+    expect(elapsed).toBeLessThan(300);
+  });
+
   it('не массив или пусто — undefined', () => {
     for (const value of [null, 'x', {}, [], [{ name: '' }]]) expect(parseReactInfo(value), JSON.stringify(value)).toBeUndefined();
   });
