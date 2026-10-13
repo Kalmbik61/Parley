@@ -18,7 +18,7 @@ const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'p
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), setSize: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(),
+    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -84,6 +84,13 @@ describe('вид острова', () => {
     expect(props.onHide).toHaveBeenCalled();
   });
 
+  it('строка пилюли по центру: при открытом списке корень шире, а пилюля не уезжает вбок', () => {
+    view({ listOpen: true });
+    const pill = screen.getByTestId('island-pill');
+    expect(pill.className).toContain('justify-center');
+    expect(screen.getByTestId('island-list').className).toContain('w-[360px]');
+  });
+
   it('клик по пилюле только открывает список — открытый наведением он не закрывает', () => {
     const props = view({ listOpen: true });
     fireEvent.click(within(screen.getByTestId('island-pill')).getByRole('button', { name: /working/ }));
@@ -131,6 +138,20 @@ describe('вид острова', () => {
     expect(buttons.map((button) => button.textContent)).toEqual(['Postgres', 'SQLite']);
     fireEvent.click(buttons[1] as HTMLElement);
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'SQLite' } });
+  });
+
+  it('варианты с одинаковой или пустой подписью — по кнопке на каждый, без предупреждения React о ключах', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const props = view({ items: [questionItem(['Same', 'Same', '', ''])] });
+      const buttons = screen.getAllByTestId('island-option');
+      expect(buttons.map((button) => button.textContent)).toEqual(['Same', 'Same', '', '']);
+      fireEvent.click(buttons[1] as HTMLElement);
+      expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'Same' } });
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('несколько запросов — «1 of 2» и стрелки', () => {

@@ -19,6 +19,8 @@ export interface IslandIpcOptions {
   openTarget(target: FocusTarget): void;
   beep(): void;
   markHintShown(): void;
+  /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
+  onFailed(): void;
 }
 
 /** Потолок стороны окна острова (DIP): огромное число от окна не доходит до `setBounds`. */
@@ -69,5 +71,8 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   });
   ipcMain.on('island:hint-shown', (event) => {
     if (fromIsland(event)) options.markHintShown();
+  });
+  ipcMain.on('island:failed', (event) => {
+    if (fromIsland(event)) options.onFailed();
   });
 }

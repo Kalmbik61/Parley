@@ -40,6 +40,9 @@ export function islandWindowOptions(preloadPath: string): BrowserWindowConstruct
     hasShadow: false,
     alwaysOnTop: true,
     acceptFirstMouse: true,
+    // Панель никогда не становится ключевым окном: иначе после клика по острову нажатия клавиш (даже ⌘Q) шли бы в Parley.
+    // Клики мышью по-прежнему доходят (`acceptFirstMouse`).
+    focusable: false,
     skipTaskbar: true,
     hiddenInMissionControl: true,
     enableLargerThanScreen: true,

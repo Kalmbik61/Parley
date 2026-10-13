@@ -54,7 +54,7 @@ describe('окно острова', () => {
     const options = islandWindowOptions('/x/preload/island.js');
     expect(options).toMatchObject({
       type: 'panel', frame: false, transparent: true, resizable: false, movable: false, hasShadow: false,
-      alwaysOnTop: true, acceptFirstMouse: true, skipTaskbar: true, hiddenInMissionControl: true,
+      alwaysOnTop: true, acceptFirstMouse: true, focusable: false, skipTaskbar: true, hiddenInMissionControl: true,
       enableLargerThanScreen: true, show: false,
     });
     expect(options.webPreferences).toMatchObject({ contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: false, preload: '/x/preload/island.js' });

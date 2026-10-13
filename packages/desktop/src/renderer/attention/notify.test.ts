@@ -325,6 +325,19 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
       expect(h.notes).toHaveLength(1);
     });
 
+    it('остров жив, карточка найдена, но работа завершена (done) — остров её не покажет, уведомление есть', async () => {
+      const done = redesign();
+      done.map.work.status = 'done';
+      const h = harness([done]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
+      expect(h.notes[0]?.body).toBe('Run: npm test\np');
+    });
+
     it('остров жив, сессия Codex — уведомление есть', async () => {
       const h = harness([entry('Redesign', [session('s-02', 'executor', { provider: 'codex' })])]);
       h.island = true;

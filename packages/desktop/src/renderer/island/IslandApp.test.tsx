@@ -39,7 +39,7 @@ function islandApi(): IslandApi {
   return {
     config: vi.fn(async () => ({ sound: false, hintShown: true, topInset: 0 })),
     onConfig: vi.fn(() => () => undefined),
-    setSize: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(),
+    setSize: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -55,7 +55,17 @@ function setup() {
       fake.emit('activity.changed', makeActivity(ref(sessionId), 'blocked'));
     });
   };
-  return { island, bridge, blocked };
+  const disconnect = (): void => {
+    act(() => {
+      fake.emitStatus({ state: 'disconnected', reason: 'host gone' });
+    });
+  };
+  const reconnect = (): void => {
+    act(() => {
+      fake.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [] });
+    });
+  };
+  return { island, bridge, blocked, disconnect, reconnect };
 }
 
 beforeEach(() => {
@@ -92,6 +102,31 @@ describe('проводка острова', () => {
     expect(island.setVisible).toHaveBeenLastCalledWith(false);
     blocked('s-02');
     await screen.findByTitle('Run: ls');
+    await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
+  });
+
+  it('хост отключился — остров спрятан: пилюля с устаревшими счётчиками не висит', async () => {
+    const { island, bridge, blocked, disconnect } = setup();
+    render(<IslandApp bridge={bridge} />);
+    blocked('s-01');
+    await screen.findByTitle('Run: rm -rf build');
+    await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
+    disconnect();
+    await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(false));
+    expect(useIslandRequests.getState().items).toEqual([]);
+  });
+
+  it('после переподключения всё ещё ждущая карточка — новая: возвращает спрятанный «×» остров', async () => {
+    const { island, bridge, blocked, disconnect, reconnect } = setup();
+    render(<IslandApp bridge={bridge} />);
+    blocked('s-01');
+    await screen.findByTitle('Run: rm -rf build');
+    await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Hide until the next request' }));
+    expect(island.setVisible).toHaveBeenLastCalledWith(false);
+    disconnect();
+    reconnect();
+    await screen.findByTitle('Run: rm -rf build');
     await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
   });
 

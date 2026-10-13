@@ -62,8 +62,10 @@ function HideButton({ onHide }: { onHide(): void }): JSX.Element {
 function Pill(props: IslandViewProps): JSX.Element {
   const { model, api, onToggleList, onHide } = props;
   return (
-    // Список — по наведению или клику (спека, раздел 4); уход курсора с острова закрывает его (`IslandApp`).
-    <div data-testid="island-pill" className="flex items-center gap-2 whitespace-nowrap px-3 py-1.5 text-xs" onMouseEnter={() => onToggleList(true)}>
+    // Список — по наведению или клику (спека, раздел 4); уход курсора с острова закрывает его (`IslandApp`). Строка занимает
+    // всю ширину корня, а при открытом списке тот растёт до 360 px и окно выравнивается по центру: содержимое строки
+    // по центру, чтобы пилюля не уезжала вбок из-под курсора.
+    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-xs" onMouseEnter={() => onToggleList(true)}>
       <DragHandle api={api} />
       {/* Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы. */}
       <button type="button" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
@@ -133,8 +135,9 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
   if (simple !== null) {
     return (
       <>
-        {simple.options.map((label) => (
-          <Button key={label} data-testid="island-option" size="sm" variant="outline" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
+        {/* Подписи могут повторяться или быть пустыми — ключ с номером. */}
+        {simple.options.map((label, at) => (
+          <Button key={`${at}:${label}`} data-testid="island-option" size="sm" variant="outline" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
             {label}
           </Button>
         ))}

@@ -30,6 +30,7 @@ function setup() {
     openTarget: vi.fn(),
     beep: vi.fn(),
     markHintShown: vi.fn(),
+    onFailed: vi.fn(),
   };
   registerIslandIpc(options);
   return { ipcMain, ...options };
@@ -48,6 +49,7 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
     openTarget: state.openTarget,
     beep: state.beep,
     markHintShown: state.markHintShown,
+    onFailed: state.onFailed,
   };
   return Object.entries(mocks)
     .filter(([, mock]) => mock.mock.calls.length > 0)
@@ -55,6 +57,14 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
 }
 
 describe('IPC острова', () => {
+  it('failed от острова зовёт onFailed, от чужого окна — нет', () => {
+    const { ipcMain, onFailed } = setup();
+    ipcMain.emit('island:failed', { sender: stranger });
+    expect(onFailed).not.toHaveBeenCalled();
+    ipcMain.emit('island:failed', { sender: island });
+    expect(onFailed).toHaveBeenCalledTimes(1);
+  });
+
   it('размер, видимость и перетаскивание — только от окна острова и только целые данные', () => {
     const { ipcMain, controller, pushConfig } = setup();
     ipcMain.emit('island:size', { sender: island }, 380, 150);
@@ -96,6 +106,7 @@ describe('IPC острова', () => {
     ['island:open', [TARGET]],
     ['island:beep', []],
     ['island:hint-shown', []],
+    ['island:failed', []],
   ])('%s от чужого окна не делает ничего', (channel, args) => {
     const state = setup();
     state.ipcMain.emit(channel, { sender: stranger }, ...args);

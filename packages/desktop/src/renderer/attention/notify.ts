@@ -215,8 +215,9 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     const current = findSession(deps.entries(), ref);
     if (current === null) return;
     const { entry, session } = current;
-    // Остров покажет этот запрос сам (спека 2026-10-12); Codex вне острова — его уведомление остаётся.
-    if (found !== null && deps.islandOn() && !ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) return;
+    // Остров покажет этот запрос сам (спека 2026-10-12), но только у активной работы: у завершённой он запросы
+    // пропускает. Codex вне острова — его уведомление остаётся.
+    if (found !== null && deps.islandOn() && entry.map.work.status === 'active' && !ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) return;
     let more = 0;
     for (const [other, level] of levels) if (other !== key && level === 'needs-you') more += 1;
     const lines = [

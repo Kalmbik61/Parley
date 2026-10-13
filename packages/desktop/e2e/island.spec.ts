@@ -292,4 +292,22 @@ test.describe('остров одобрений', () => {
     await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_mode: 'default', permission_suggestions: [] });
     await expect.poll(() => loggedNotes(app), { timeout: 10_000 }).toContainEqual(expect.objectContaining({ body: expect.stringContaining('Run: ls') }));
   });
+
+  test('карточка на острове — системного уведомления о запросе нет', async () => {
+    const { app, window, ref, hooks } = await open({ PARLEY_ISLAND: '' });
+    // Тот же переход «working → blocked» и окно без фокуса, что в предыдущем тесте: без острова уведомление пришло бы.
+    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+    await hooks.fire('UserPromptSubmit', { prompt: 'Run ls', permission_mode: 'default' });
+    await expect(window.locator(`[data-session-id="${ref.sessionId}"] [data-state="working"]`)).toHaveCount(1, { timeout: 15_000 });
+    await window.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'echo island-only' }, permission_mode: 'default', permission_suggestions: [] });
+
+    await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
+    await expect(islandPage(app)!.getByTestId('island-card')).toContainText('Run: echo island-only');
+    // Уведомление, будь оно, ушло бы после запроса карточки (до 0,5 с на повтор): ждём с запасом и только потом проверяем,
+    // что строки запроса ни в одном уведомлении нет. `expect.poll(...).not` тут не годится — он проходит с первого опроса.
+    await window.waitForTimeout(2000);
+    const notes = await loggedNotes(app);
+    expect(notes.filter((note) => note.body.includes('Run: echo island-only'))).toEqual([]);
+  });
 });

@@ -32,6 +32,8 @@ export interface IslandApi {
   open(target: FocusTarget): void;
   beep(): void;
   hintShown(): void;
+  /** Отрисовка острова упала: main снимает признак «страница загружена» (уведомления снова идут) и прячет окно. */
+  failed(): void;
 }
 
 export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };

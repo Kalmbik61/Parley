@@ -383,7 +383,7 @@ if (!gotLock) {
       sendFocusTarget,
     });
 
-    // Остров одобрений (спека 2026-10-12): окно по настройке «Island»; место — кеш из ui.json, запись асинхронная.
+    // Остров одобрений (спека 2026-10-12): окно по настройке «Island»; место — кеш из ui.json (читается один раз на старте), запись асинхронная.
     let islandPlacement: IslandPlacement = { displayId: ui.island.displayId, anchor: ui.island.anchor };
     const island = createIslandController<BrowserWindow>({
       createWindow: () => {
@@ -421,9 +421,11 @@ if (!gotLock) {
         if (window !== null) window.webContents.send('island:config', config);
       });
     };
-    /** Настройка решает, есть ли окно; `PARLEY_ISLAND=off` (E2E) — острова нет в любом случае. */
+    /**
+     * Настройка решает, есть ли окно; `PARLEY_ISLAND=off` (E2E) — острова нет в любом случае. Место отсюда не читается:
+     * его пишет только main (`savePlacement`), и чтение файла, обогнавшее незавершённую запись, откатило бы место назад.
+     */
     const syncIsland = (current: UiFile): void => {
-      islandPlacement = { displayId: current.island.displayId, anchor: current.island.anchor };
       if (current.island.enabled && !switches.islandOff) island.open();
       else island.close();
       pushIslandConfig();
@@ -457,6 +459,14 @@ if (!gotLock) {
           .save({ island: { hintShown: true } } as Partial<Omit<UiFile, 'version'>>)
           .then(() => pushIslandConfig())
           .catch(() => undefined);
+      },
+      onFailed: () => {
+        // Упал рендер острова: страница не считается загруженной (системные уведомления снова идут), окно прячется.
+        const window = island.current();
+        if (window === null) return;
+        loadedWindows.delete(window);
+        window.hide();
+        console.warn('[parley] island render failed');
       },
     });
 

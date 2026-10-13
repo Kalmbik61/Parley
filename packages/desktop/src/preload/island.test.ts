@@ -58,7 +58,7 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
-      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'hintShown', 'onConfig', 'open', 'setSize', 'setVisible'].sort(),
+      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'hintShown', 'onConfig', 'open', 'setSize', 'setVisible'].sort(),
     );
   });
 
@@ -105,11 +105,13 @@ describe('preload острова', () => {
     const target = { kind: 'mail', projectPath: '/p', workId: 'w' } as const;
     bridge.island.open(target);
     bridge.island.hintShown();
+    bridge.island.failed();
     expect(send.mock.calls).toEqual([
       ['island:drag-start', { screenX: 3, screenY: 4 }],
       ['island:drag-move', { screenX: 5, screenY: 6 }],
       ['island:open', target],
       ['island:hint-shown'],
+      ['island:failed'],
     ]);
     void bridge.call('works.list', {});
     expect(invoke).toHaveBeenLastCalledWith('host:call', 'works.list', {});

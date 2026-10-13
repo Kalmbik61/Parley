@@ -26,13 +26,19 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const byRef = useActivityStore((state) => state.byRef);
   const items = useIslandRequests((state) => state.items);
   const index = useIslandRequests((state) => state.index);
+  /** Ключи запросов, что остров уже показывал: показанный раз не поднимает окно и не звучит повторно. */
+  const seen = useRef(new Set<string>());
 
   useEffect(
     () =>
       bridge.onStatus((status) => {
         const ok = status.state === 'connected';
         setConnected(ok);
-        if (!ok) useIslandRequests.getState().clear();
+        if (!ok) {
+          useIslandRequests.getState().clear();
+          // После переподключения всё ещё ждущая карточка — новая: возвращает окно, выбирается и звучит.
+          seen.current.clear();
+        }
       }),
     [bridge],
   );
@@ -57,7 +63,6 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const model = useMemo(() => islandModel(entries, byRef, withCard), [entries, byRef, withCard]);
   const labels = useMemo(() => sessionLabels(entries), [entries]);
 
-  const seen = useRef(new Set<string>());
   useEffect(() => {
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
     let firstFresh = -1;
@@ -72,7 +77,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     if (config.sound) bridge.island.beep();
   }, [items, config.sound, bridge]);
 
-  const visible = !hidden && (model.active || items.length > 0);
+  // Хост не подключён — окна нет: сторы остались от прошлого подключения, и счётчики пилюли были бы устаревшими.
+  const visible = connected && !hidden && (model.active || items.length > 0);
   // Номер показа растёт при каждом переходе «скрыт → виден» и считается прямо при отрисовке: карточка, оставшаяся на
   // экране с прошлого показа, не успевает мелькнуть с уже взведёнными кнопками.
   const [show, setShow] = useState({ visible: false, id: 0 });
