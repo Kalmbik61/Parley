@@ -3,12 +3,14 @@
  *
  * Скрипт выбора (`guest-pick.js` после помощников `guest-dom.js`) исполняется в изолированном мире гостя; всё, что он
  * вернул, — данные недоверенной страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес берёт у
- * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решение 2026-10-08): основной — обрезка CDP
- * `Page.captureScreenshot` в координатах документа × масштаб страницы, высотой не больше поверхности вида (выше
- * Chromium повторяет первую поверхность); запасной — `capturePage()` видимой части и вырезка по множителю «ширина
- * картинки / ширина вьюпорта». По точке документа main дочитывает роль, имя и компонент React (`element-info.ts`).
+ * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решения 2026-10-08): основной — `capturePage()` видимой
+ * части и вырезка по множителю «ширина картинки / ширина вьюпорта»; обрезка CDP `Page.captureScreenshot` в
+ * координатах документа × масштаб страницы, высотой не больше поверхности вида (выше Chromium повторяет первую
+ * поверхность), — только для элемента больше вьюпорта, которого видимая часть не вместит: в `<webview>` она порой
+ * отдаёт не тот участок (пробы настоящего Electron), поэтому помещающемуся элементу её не зовут. По точке документа main
+ * дочитывает роль, имя и компонент React (`element-info.ts`).
  *
- * Запасной снимок (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
+ * Снимок видимой части (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
  * (stablyai/orca b1cd858, MIT): множитель не вычисляется из масштаба и эмуляции, а измеряется по картинке. Изменено:
  * ширина вьюпорта — из проверенного выбора (`pick.viewport.width`), без запроса к странице; оверлей не прячется —
  * `guest-pick.js` снимает его сам и ждёт два кадра; вырезка — пересечением с картинкой; наружу — PNG в `drops/`, а не
@@ -122,6 +124,15 @@ export interface CaptureClip extends Rect {
 }
 
 /**
+ * Элемент больше вьюпорта: шире или выше. Видимая часть его не вместит, и для снимка нужна обрезка CDP за краем вьюпорта.
+ * Остальные — и помещающиеся, и частью за краем (скрипт выбора прокручивает такой в видимую часть) — снимаются
+ * вырезкой из `capturePage()`: она надёжнее.
+ */
+export function exceedsViewport(rect: Rect, viewport: { width: number; height: number }): boolean {
+  return rect.width > viewport.width || rect.height > viewport.height;
+}
+
+/**
  * Обрезка CDP (спайк 0.7, решение 2026-10-08): прямоугольник вьюпорта плюс прокрутка — координаты документа, — умноженный
  * на масштаб страницы `zoom` (`getZoomFactor()`: без него при масштабе 2 обрезка пуста). Высота — не больше поверхности
  * вида `surface` (CSS-пиксели): выше Chromium повторяет первую поверхность. Сторона — не больше `captureSide`.
@@ -140,7 +151,7 @@ export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>, zoom: numb
 }
 
 /**
- * Запасной снимок по Orca: прямоугольник элемента в пикселях картинки `capturePage()` всей видимой части. Множитель
+ * Снимок видимой части по Orca: прямоугольник элемента в пикселях картинки `capturePage()` всей видимой части. Множитель
  * измеряется — ширина картинки / ширина вьюпорта: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле
  * при эмуляции. Края — наружу, по пересечению с картинкой; элемент вне видимой части — null.
  */
@@ -181,9 +192,10 @@ export function createDesignMode(deps: {
   const pending = new Map<number, (result: PickResult | null) => void>();
 
   /**
-   * Снимок элемента: обрезка CDP, без неё — вырезка из `capturePage()` по Orca. Картинка видимой части снимается
-   * первой: её высота — мера поверхности вида для обрезки CDP (в CSS-пикселях — делённая на DPR страницы). Не вышло ни
-   * так, ни так — null: файл уйдёт без снимка.
+   * Снимок элемента: вырезка из `capturePage()` видимой части по Orca. Элементу больше вьюпорта (`exceedsViewport`)
+   * сперва пробуется обрезка CDP за краем вьюпорта, не вышла — та же вырезка. Остальным CDP не зовётся и когда видимая
+   * часть не снялась: пустой файл честнее участка не оттуда. Картинка видимой части снимается первой: её высота — мера
+   * поверхности вида для обрезки CDP (в CSS-пикселях — делённая на DPR страницы). Не вышло — null: файл уйдёт без снимка.
    */
   async function snapshot(contents: WebContents, id: number, pick: ValidPick): Promise<string | null> {
     const view: NativeImage | null = await contents.capturePage().then(
@@ -194,14 +206,16 @@ export function createDesignMode(deps: {
       },
     );
     const size = view === null ? null : view.getSize();
-    const surface = size === null ? pick.viewport.height : size.height / pick.viewport.dpr;
-    const clip = captureClip(pick, contents.getZoomFactor(), surface);
-    if (clip !== null) {
-      try {
-        const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
-        if (typeof shot.data === 'string' && shot.data !== '') return await deps.saveImage(Buffer.from(shot.data, 'base64'));
-      } catch (error) {
-        console.warn('[parley] select: CDP capture failed, falling back to capturePage', error);
+    if (exceedsViewport(pick.rect, pick.viewport)) {
+      const surface = size === null ? pick.viewport.height : size.height / pick.viewport.dpr;
+      const clip = captureClip(pick, contents.getZoomFactor(), surface);
+      if (clip !== null) {
+        try {
+          const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
+          if (typeof shot.data === 'string' && shot.data !== '') return await deps.saveImage(Buffer.from(shot.data, 'base64'));
+        } catch (error) {
+          console.warn('[parley] select: CDP capture failed, falling back to capturePage', error);
+        }
       }
     }
     if (view === null || size === null) return null;

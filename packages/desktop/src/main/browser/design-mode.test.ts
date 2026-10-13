@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { S } from '../../shared/strings.js';
-import { captureClip, createDesignMode, cropRect, PICK_LIMITS, PICK_WORLD_ID, pickUrl, validatePick } from './design-mode.js';
+import { captureClip, createDesignMode, cropRect, exceedsViewport, PICK_LIMITS, PICK_WORLD_ID, pickUrl, validatePick } from './design-mode.js';
 import type { CdpSender } from './element-info.js';
 
 /** Данные элемента, как их шлёт guest-pick.js. */
@@ -103,7 +103,19 @@ describe('validatePick — предел длины селектора (fix-9)', 
   });
 });
 
-describe('cropRect — запасной снимок по Orca (вырезка из capturePage видимой части)', () => {
+describe('exceedsViewport — какой элемент видимая часть не вместит (проба настоящего Electron: обрезка CDP в webview порой отдаёт не тот участок)', () => {
+  const viewport = { width: 800, height: 600 };
+
+  it('не больше вьюпорта — нет (и ровно с него, и частью за краем: скрипт выбора прокручивает такой в видимую часть); шире или выше — да', () => {
+    expect(exceedsViewport({ x: 10, y: 20, width: 100, height: 40 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 600 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 750, y: -10, width: 100, height: 40 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 801, height: 600 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 601 }, viewport)).toBe(true);
+  });
+});
+
+describe('cropRect — снимок видимой части по Orca (вырезка из capturePage)', () => {
   const viewport = { width: 800 };
   const bitmap = { width: 800, height: 600 };
 
@@ -182,6 +194,11 @@ function fakeInspector(answers: Record<string, unknown> = {}) {
   };
 }
 
+/** Запросы снимка CDP, которые ушли в инспектор. */
+function cdpShots(inspector: ReturnType<typeof fakeInspector>): unknown[][] {
+  return inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot');
+}
+
 function setup(guestUrl?: string, answers: Record<string, unknown> = {}) {
   const { guest, scripts } = fakeGuest(guestUrl);
   const saveImage = vi.fn<(png: Buffer) => Promise<string | null>>(async () => '/h/drops/a.png');
@@ -201,7 +218,7 @@ function setup(guestUrl?: string, answers: Record<string, unknown> = {}) {
 
 describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
   it('скрипт — в изолированном мире 1001; url — pickUrl(getURL()), а не из данных страницы; снимок в drops', async () => {
-    const { guest, scripts, saveImage, mode, scriptCalled } = setup();
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup();
     const pending = mode.start(7);
     await scriptCalled();
     expect(guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(PICK_WORLD_ID, [{ code: 'GUEST_SCRIPT' }]);
@@ -211,14 +228,15 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(result?.url).toBe('https://x.y/a');
     expect(result?.selector).toBe('body > main > button.save');
     expect(result?.imagePath).toBe('/h/drops/a.png');
-    // CDP снимка не дал (подставной инспектор отвечает пустым) — вырезка из capturePage() видимой части по Orca.
+    // Элемент не больше вьюпорта — основной путь: вырезка из capturePage() видимой части по Orca; обрезка CDP не нужна.
     expect(guest.capturePage).toHaveBeenCalledWith();
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x40'));
+    expect(cdpShots(inspector)).toEqual([]);
     expect(result?.thumbnail).toBeNull();
     expect(result).toMatchObject({ point: { x: 30, y: 40 }, shift: false, viewport: { width: 800, height: 600, dpr: 2 } });
   });
 
-  it('запасной снимок: множитель — ширина картинки / ширина вьюпорта (DPR, масштаб и эмуляция — измерены)', async () => {
+  it('снимок видимой части: множитель — ширина картинки / ширина вьюпорта (DPR, масштаб и эмуляция — измерены)', async () => {
     const { guest, scripts, mode, scriptCalled, saveImage } = setup();
     const view = fakeImage(1200, 900);
     guest.capturePage.mockResolvedValueOnce(view);
@@ -230,8 +248,8 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-150x60'));
   });
 
-  it('capturePage бросил — imagePath и thumbnail равны null, данные есть', async () => {
-    const { guest, scripts, saveImage, mode, scriptCalled } = setup();
+  it('capturePage бросил — imagePath и thumbnail равны null, данные есть; обрезка CDP помещающемуся во вьюпорт элементу не зовётся', async () => {
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup();
     guest.capturePage.mockRejectedValueOnce(new Error('capture failed'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const pending = mode.start(7);
@@ -241,6 +259,7 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     warn.mockRestore();
     expect(result).toMatchObject({ selector: 'body > main > button.save', imagePath: null, thumbnail: null });
     expect(saveImage).not.toHaveBeenCalled();
+    expect(cdpShots(inspector)).toEqual([]);
   });
 
   it('saveImage не сохранил — imagePath и thumbnail равны null', async () => {
@@ -252,7 +271,7 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(await pending).toMatchObject({ imagePath: null, thumbnail: null });
   });
 
-  it('элемент вне видимой области, а CDP не ответил — без снимка: вырезать из видимой части нечего', async () => {
+  it('элемент вне видимой области — без снимка: вырезать из видимой части нечего', async () => {
     const { scripts, saveImage, mode, scriptCalled } = setup();
     const pending = mode.start(7);
     await scriptCalled();
@@ -442,7 +461,24 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     expect(captureClip({ rect: { x: 0, y: 0, width: 0, height: 50 }, scroll: { x: 0, y: 0 } }, 1, 600)).toBeNull();
   });
 
-  it('снимок — обрезка CDP с captureBeyondViewport; capturePage — только мера поверхности: картинка 800×400 при DPR 2 — 200 CSS-пикселей', async () => {
+  it.each([
+    ['небольшой', { x: 10, y: 20, width: 100, height: 40 }, 'png-100x40'],
+    ['ровно с вьюпорт', { x: 0, y: 0, width: 800, height: 600 }, 'png-800x400'],
+    ['частью за краем картинки, но не больше вьюпорта', { x: 750, y: 20, width: 100, height: 40 }, 'png-50x40'],
+  ])('элемент не больше вьюпорта (%s) — снимок видимой части; обрезка CDP не зовётся, даже когда бы ответила', async (_name, rect, png) => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(cdpShots(inspector)).toEqual([]);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from(png));
+  });
+
+  it('элемент выше вьюпорта — обрезка CDP с captureBeyondViewport; capturePage — только мера поверхности: картинка 800×400 при DPR 2 — 200 CSS-пикселей', async () => {
     const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
       'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
     });
@@ -498,17 +534,46 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     }
   });
 
-  it('CDP отказал — запасной снимок из capturePage, выбор не теряется', async () => {
-    const { scripts, saveImage, mode, scriptCalled } = setup(undefined, { 'Page.captureScreenshot': new Error('boom') });
+  it('элемент шире вьюпорта — тоже обрезка CDP: ширина не режется поверхностью вида, только captureSide', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 900, height: 40 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 10, y: 20, width: 900, height: 40, scale: 1 },
+    });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('cdp-png'));
+  });
+
+  it('элемент выше вьюпорта, CDP отказал — вырезка из видимой части, выбор не теряется', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, { 'Page.captureScreenshot': new Error('boom') });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const pending = mode.start(7);
     await scriptCalled();
-    scripts[0]?.resolve(rawPick());
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
     const result = await pending;
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
     expect(result?.imagePath).toBe('/h/drops/a.png');
-    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x40'));
+    expect(cdpShots(inspector)).toHaveLength(1);
+    // Видимая часть — картинка 800×400: ниже её края от элемента остаётся только то, что в кадре.
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x380'));
+  });
+
+  it('элемент выше вьюпорта, CDP ответил без данных — вырезка из видимой части, а не пустой файл', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, { 'Page.captureScreenshot': { data: '' } });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(cdpShots(inspector)).toHaveLength(1);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x380'));
   });
 
   it('capturePage вернул пустую картинку — поверхность по высоте вьюпорта, снимок CDP всё равно идёт', async () => {
@@ -535,12 +600,13 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     guest.getZoomFactor.mockReturnValue(1.5);
     const pending = mode.start(7);
     await scriptCalled();
-    scripts[0]?.resolve(rawPick());
+    // Выше вьюпорта: высота обрезки — поверхность вида (картинка 800×400 при DPR 2 — 200 CSS-пикселей) × 1,5.
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
     await pending;
     expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: true,
-      clip: { x: 15, y: 30, width: 150, height: 60, scale: 1 },
+      clip: { x: 15, y: 30, width: 150, height: 300, scale: 1 },
     });
   });
 
