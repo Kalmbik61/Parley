@@ -22,6 +22,12 @@
  * список попадает и красит язычок, но остров не выдвигает. Clear прячет все видимые сейчас Done: ключи (`doneKey`)
  * лежат в памяти острова до перезапуска и при переподключении не сбрасываются; новый конец хода — новый ключ. Текст
  * ответа к строкам Done берёт `useIslandReplies` (разовые снимки ленты; стор привязан к мосту вместе с очередью).
+ *
+ * Показанная Done-строка держится до конца показа. Пока остров выдвинут, ключи всех его строк Done копятся в `held`, и
+ * когда окно Parley отметит сессию просмотренной (`unseen` → `idle`, `turnEndedAt` прежний), модель строку не
+ * убирает. Показ кончается, когда курсор ушёл с острова (`onHover(false)`) или остров убрался (`retracted`): `held`
+ * очищается, и строки уже просмотренных сессий уходят; всё ещё `unseen` остаются, как обычно. Done, что убранный
+ * остров застал готовыми, не показывался — их не держим.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -49,6 +55,9 @@ const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', cent
 
 type DoneRow = Extract<IslandRow, { kind: 'session'; state: 'done' }>;
 
+/** Очистка удержанных ключей: пустое множество остаётся тем же объектом, лишнего рендера нет. */
+const releaseHeld = (current: Set<string>): Set<string> => (current.size === 0 ? current : new Set());
+
 /** Равны ли области (`null` равен только `null`). */
 const sameRect = (a: IslandHitRect | null, b: IslandHitRect | null): boolean =>
   a === null || b === null ? a === b : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
@@ -68,6 +77,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const seen = useRef(new Set<string>());
   /** Скрытые Clear ключи Done: память острова до перезапуска, при переподключении не сбрасывается. */
   const [cleared, setCleared] = useState<Set<string>>(() => new Set());
+  /** Ключи Done, что остров уже показал и держит до конца показа, даже когда сессия стала `idle`; модель от них зависит. */
+  const [held, setHeld] = useState<Set<string>>(() => new Set());
   /** Ключи Done, что остров уже видел, и момент (мс) последнего подключения к хосту: выдвигает только свежий конец хода. */
   const seenDone = useRef(new Set<string>());
   const connectedAt = useRef(0);
@@ -109,6 +120,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
       bridge.island.onHover((over) => {
         setHovered(over);
         setListOpen(over);
+        // Курсор ушёл — показ кончился: просмотренные сессии больше не держат свои строки Done.
+        if (!over) setHeld(releaseHeld);
       }),
     [bridge],
   );
@@ -117,7 +130,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   }, [connected, entries, byRef]);
 
   const withCard = useMemo(() => new Set(items.map((item) => refKey(item.ref))), [items]);
-  const model = useMemo(() => islandModel(entries, byRef, withCard, cleared), [entries, byRef, withCard, cleared]);
+  const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
   const doneRows = useMemo(
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
@@ -132,6 +145,15 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     setListOpen(false);
   }, []);
 
+  // Удержание строк Done: пока остров выдвинут, всё, что он показывает, копится в `held`; убрался — очистка. Новых
+  // ключей нет — состояние то же, иначе модель, зависящая от `held`, перерисовывалась бы по кругу.
+  useEffect(() => {
+    if (retracted) {
+      setHeld(releaseHeld);
+      return;
+    }
+    setHeld((current) => (doneRows.every((row) => current.has(row.doneKey)) ? current : new Set([...current, ...doneRows.map((row) => row.doneKey)])));
+  }, [retracted, doneRows]);
   useEffect(() => {
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
     let firstFresh = -1;

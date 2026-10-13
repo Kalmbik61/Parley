@@ -1,6 +1,6 @@
 /**
  * Вид острова: пилюля и «×», пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), строки Done
- * (ответ агента, время, Clear, пилюля `✓ N done`, комната `done`), карточка
+ * (ответ агента, время, Clear, пилюля `✅ N done`, комната `done`), карточка
  * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, подсказка первого показа и отступ под чёлку, пауза
  * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров,
  * плавный размер формы (замер содержимого, переход, появление), размеры текста.
@@ -55,7 +55,7 @@ const DONE_REF = { ...REF, sessionId: 's-05' };
 const DONE_KEY = 'kd\u0000T';
 const ENDED_AT = '2026-10-13T10:00:00.000Z';
 const REPLY = 'Refactored the parser and updated three tests.';
-/** Ничего не идёт, но один агент закончил ход, и их комната `done`: пилюля «✓ 1 done», в списке строка Done. */
+/** Ничего не идёт, но один агент закончил ход, и их комната `done`: пилюля «✅ 1 done», в списке строка Done. */
 const DONE_MODEL: IslandModel = {
   working: 0, waiting: 0, done: 1, providers: [], active: false,
   groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
@@ -274,18 +274,18 @@ describe('вид острова', () => {
 });
 
 describe('Done на острове', () => {
-  it('пилюля без работы: «✓ 1 done» вместо «No agents running», значков провайдеров нет, клик по счётчикам открывает список', () => {
+  it('пилюля без работы: «✅ 1 done» вместо «No agents running», значков провайдеров нет, клик по счётчикам открывает список', () => {
     const props = view({ model: DONE_MODEL });
     const counters = screen.getByTestId('island-counters');
-    expect(counters.textContent).toBe('✓ 1 done');
+    expect(counters.textContent).toBe('✅ 1 done');
     expect(screen.queryByTestId('island-idle')).toBeNull();
     fireEvent.click(counters);
     expect(props.onToggleList).toHaveBeenCalledWith(true);
   });
 
-  it('пилюля с работой и Done: «2 working · 1 waiting · ✓ 3 done»', () => {
+  it('пилюля с работой и Done: «2 working · 1 waiting · ✅ 3 done»', () => {
     view({ model: { ...MODEL, done: 3 } });
-    expect(screen.getByTestId('island-pill').textContent).toContain('2 working · 1 waiting · ✓ 3 done');
+    expect(screen.getByTestId('island-pill').textContent).toContain('2 working · 1 waiting · ✅ 3 done');
   });
 
   it('строка Done: точка unseen, имя, время конца хода, под ними ответ агента; клик открывает сессию', () => {

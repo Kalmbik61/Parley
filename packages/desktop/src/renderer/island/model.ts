@@ -1,11 +1,14 @@
 /**
  * Что показывает остров в покое (спека 2026-10-12, раздел 4): счётчики пилюли и список «в работе» по работам.
  * Чистая функция: работы окна, активность, множество сессий, у которых в очереди острова есть карточка
- * (без неё ждущая сессия — «waiting in terminal»), и скрытые кнопкой Clear ключи Done. «В работе»: сессия —
- * `sessionAttention` даёт `working` или `needs-you`; комната — в работе хотя бы один её участник.
+ * (без неё ждущая сессия — «waiting in terminal»), скрытые кнопкой Clear ключи Done и удержанные ключи Done.
+ * «В работе»: сессия — `sessionAttention` даёт `working` или `needs-you`; комната — в работе хотя бы один её участник.
  *
  * Done — сессия, у которой ход окончен, а в Parley её ещё не смотрели (`sessionAttention` = `unseen`). Её строка
  * живёт, пока хост не переведёт сессию в `idle` (посмотрели), она не заработает снова или человек не нажмёт Clear.
+ * Исключение — удержанные ключи (`held`): строку, которую остров уже показал, отметка «просмотрено» (`unseen` →
+ * `idle` с тем же `turnEndedAt`) не убирает — `idle` с концом хода и ключом в `held` остаётся такой же строкой Done.
+ * Какие ключи держать и когда отпустить, решает проводка (`IslandApp`): модель только читает множество.
  * Ключ Done включает конец хода (`turnEndedAt`): новый конец хода той же сессии — новый ключ, и прежний Clear его
  * не скрывает. Done не «работа»: `active` и провайдеры пилюли его не считают, а `done` — число таких строк.
  * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done. Codex вне острова.
@@ -48,6 +51,7 @@ export function islandModel(
   byRef: Readonly<Record<string, ActivityEntry>>,
   withCard: ReadonlySet<string>,
   cleared: ReadonlySet<string>,
+  held: ReadonlySet<string>,
 ): IslandModel {
   let working = 0;
   let waiting = 0;
@@ -67,9 +71,9 @@ export function islandModel(
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
       const state = sessionAttention(session, live);
-      if (state === 'unseen') {
-        const turnEndedAt = live?.turnEndedAt ?? null;
-        const doneKey = `${key}\u0000${turnEndedAt ?? ''}`;
+      const turnEndedAt = live?.turnEndedAt ?? null;
+      const doneKey = `${key}\u0000${turnEndedAt ?? ''}`;
+      if (state === 'unseen' || (state === 'idle' && turnEndedAt !== null && held.has(doneKey))) {
         if (cleared.has(doneKey)) continue;
         finished.add(session.id);
         done += 1;
