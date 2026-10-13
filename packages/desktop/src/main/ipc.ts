@@ -346,8 +346,10 @@ export function registerIpc(options: RegisterIpcOptions): void {
     (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
   });
 
-  ipcMain.on('host:notify', (_event, method: unknown, params: unknown) => {
+  ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
+    // Остров ввод в терминал и размеры не шлёт: уведомления хосту от него тихо отбрасываются (как отказ в `host:call`).
+    if (isIslandSender?.((event as { sender?: unknown }).sender) === true) return;
     connection.notify(method, params);
   });
 

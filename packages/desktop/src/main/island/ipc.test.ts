@@ -14,6 +14,7 @@ class FakeIpcMain {
 
 const island = { id: 99 };
 const stranger = { id: 1 };
+const TARGET = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' }, cardId: 'c-1' };
 
 function setup() {
   const ipcMain = new FakeIpcMain();
@@ -32,6 +33,25 @@ function setup() {
   };
   registerIslandIpc(options);
   return { ipcMain, ...options };
+}
+
+/** Имена всех подменённых методов, которые хоть раз позвали: «ничего не случилось» — пустой список. */
+function calledNames(state: ReturnType<typeof setup>): string[] {
+  const mocks = {
+    setSize: state.controller.setSize,
+    setVisible: state.controller.setVisible,
+    dragStart: state.controller.dragStart,
+    dragMove: state.controller.dragMove,
+    dragEnd: state.controller.dragEnd,
+    config: state.config,
+    pushConfig: state.pushConfig,
+    openTarget: state.openTarget,
+    beep: state.beep,
+    markHintShown: state.markHintShown,
+  };
+  return Object.entries(mocks)
+    .filter(([, mock]) => mock.mock.calls.length > 0)
+    .map(([name]) => name);
 }
 
 describe('IPC острова', () => {
@@ -56,10 +76,49 @@ describe('IPC острова', () => {
 
   it('open ведёт в главное окно только целой целью', () => {
     const { ipcMain, openTarget } = setup();
-    const target = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' }, cardId: 'c-1' };
-    ipcMain.emit('island:open', { sender: island }, target);
+    ipcMain.emit('island:open', { sender: island }, TARGET);
     ipcMain.emit('island:open', { sender: island }, { kind: 'session' });
-    expect(openTarget.mock.calls).toEqual([[target]]);
+    expect(openTarget.mock.calls).toEqual([[TARGET]]);
+  });
+
+  it('размер режется потолком: огромное число не доходит до setBounds', () => {
+    const { ipcMain, controller } = setup();
+    ipcMain.emit('island:size', { sender: island }, 1e12, 1e12);
+    expect(controller.setSize.mock.calls).toEqual([[{ width: 2000, height: 2000 }]]);
+  });
+
+  it.each<[string, unknown[]]>([
+    ['island:size', [380, 150]],
+    ['island:visible', [true]],
+    ['island:drag-start', [{ screenX: 1, screenY: 2 }]],
+    ['island:drag-move', [{ screenX: 1, screenY: 2 }]],
+    ['island:drag-end', [{ screenX: 1, screenY: 2 }]],
+    ['island:open', [TARGET]],
+    ['island:beep', []],
+    ['island:hint-shown', []],
+  ])('%s от чужого окна не делает ничего', (channel, args) => {
+    const state = setup();
+    state.ipcMain.emit(channel, { sender: stranger }, ...args);
+    expect(calledNames(state)).toEqual([]);
+  });
+
+  it('island:config от чужого окна — отказ, настройки не читаются', async () => {
+    const state = setup();
+    await expect(state.ipcMain.emit('island:config', { sender: stranger })).rejects.toBeTruthy();
+    expect(calledNames(state)).toEqual([]);
+  });
+
+  it.each<[string, unknown[]]>([
+    ['island:size', [Number.NaN, 10]],
+    ['island:size', [Number.POSITIVE_INFINITY, 10]],
+    ['island:visible', ['yes']],
+    ['island:drag-start', [null]],
+    ['island:drag-move', [{ screenX: '1', screenY: 2 }]],
+    ['island:drag-end', [{ screenX: Number.POSITIVE_INFINITY, screenY: 0 }]],
+  ])('%s с негодными данными от острова не делает ничего (%j)', (channel, args) => {
+    const state = setup();
+    state.ipcMain.emit(channel, { sender: island }, ...args);
+    expect(calledNames(state)).toEqual([]);
   });
 
   it('звук и подсказка', () => {

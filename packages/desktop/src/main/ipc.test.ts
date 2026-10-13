@@ -761,6 +761,21 @@ describe('host:call от острова', () => {
     ipcMain.invokeWithEvent('app:island-active', event);
     expect(event.returnValue).toBe(true);
   });
+
+  it('app:island-active без опции islandActive — false', () => {
+    const event: { returnValue?: unknown } = {};
+    const { ipcMain } = setup();
+    ipcMain.invokeWithEvent('app:island-active', event);
+    expect(event.returnValue).toBe(false);
+  });
+
+  it('host:notify от острова тихо отбрасывается, от главного окна уходит в хост', () => {
+    const { ipcMain, connection } = setup(options);
+    ipcMain.invokeWithEvent('host:notify', { sender: island }, 'pty.input', { ref: REF, data: 'x' });
+    expect(connection.notify).not.toHaveBeenCalled();
+    ipcMain.invokeWithEvent('host:notify', { sender: { id: 1 } }, 'pty.input', { ref: REF, data: 'ls' });
+    expect(connection.notify).toHaveBeenCalledWith('pty.input', { ref: REF, data: 'ls' });
+  });
 });
 
 describe('registerIpc — app:version (хост другой сборки, 0.2.0)', () => {

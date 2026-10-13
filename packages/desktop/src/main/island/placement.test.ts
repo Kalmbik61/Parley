@@ -37,6 +37,11 @@ describe('остров: место у верхнего края', () => {
     expect(islandBounds(MACBOOK, 'center', { width: 4000, height: 40 }).width).toBe(1512);
   });
 
+  it('остров шире монитора у левой и правой точки — поля входят в ширину, окно не вылезает за край', () => {
+    expect(islandBounds(MACBOOK, 'right', { width: 4000, height: 40 })).toEqual({ x: 12, y: 1440, width: 1512 - 24, height: 40 });
+    expect(islandBounds(MACBOOK, 'left', { width: 4000, height: 40 })).toEqual({ x: 12, y: 1440, width: 1512 - 24, height: 40 });
+  });
+
   it('прилипание по третям ширины монитора', () => {
     expect(snapAnchor(EXTERNAL, 100)).toBe('left');
     expect(snapAnchor(EXTERNAL, 1720)).toBe('center');

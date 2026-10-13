@@ -51,7 +51,8 @@ export function resolveDisplay(displays: readonly DisplayLike[], primaryId: numb
 
 export function islandBounds(display: DisplayLike, anchor: IslandAnchor, size: Size): Rect {
   const { bounds } = display;
-  const width = Math.min(size.width, bounds.width);
+  // У левой и правой точки поле входит в доступную ширину: иначе окно шире монитора с полем вылезло бы за его край.
+  const width = Math.min(size.width, anchor === 'center' ? bounds.width : bounds.width - 2 * ISLAND_MARGIN);
   const x =
     anchor === 'left'
       ? bounds.x + ISLAND_MARGIN

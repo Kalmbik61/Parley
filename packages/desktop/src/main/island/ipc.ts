@@ -21,7 +21,11 @@ export interface IslandIpcOptions {
   markHintShown(): void;
 }
 
+/** Потолок стороны окна острова (DIP): огромное число от окна не доходит до `setBounds`. */
+const MAX_ISLAND_SIZE = 2000;
+
 const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
+const clampSize = (value: number): number => Math.min(Math.ceil(value), MAX_ISLAND_SIZE);
 
 function isPoint(value: unknown): value is IslandPoint {
   if (typeof value !== 'object' || value === null) return false;
@@ -41,7 +45,7 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
     }),
   );
   ipcMain.on('island:size', (event, width: unknown, height: unknown) => {
-    if (fromIsland(event) && isSize(width) && isSize(height)) controller.setSize({ width: Math.ceil(width), height: Math.ceil(height) });
+    if (fromIsland(event) && isSize(width) && isSize(height)) controller.setSize({ width: clampSize(width), height: clampSize(height) });
   });
   ipcMain.on('island:visible', (event, visible: unknown) => {
     if (fromIsland(event) && typeof visible === 'boolean') controller.setVisible(visible);

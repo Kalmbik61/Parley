@@ -18,7 +18,6 @@ class FakeWindow implements IslandWindowLike {
   setBounds(rect: Rect): void { this.bounds = rect; }
   getBounds(): Rect { return this.bounds; }
   setAlwaysOnTop(flag: boolean, level: string): void { this.calls.push(`top:${flag}:${level}`); }
-  setVisibleOnAllWorkspaces(flag: boolean, options: { visibleOnFullScreen: boolean }): void { this.calls.push(`spaces:${flag}:${options.visibleOnFullScreen}`); }
   showInactive(): void { this.visible = true; this.calls.push('showInactive'); }
   hide(): void { this.visible = false; this.calls.push('hide'); }
   isVisible(): boolean { return this.visible; }
@@ -58,13 +57,13 @@ describe('окно острова', () => {
       alwaysOnTop: true, acceptFirstMouse: true, skipTaskbar: true, hiddenInMissionControl: true,
       enableLargerThanScreen: true, show: false,
     });
-    expect(options.webPreferences).toMatchObject({ contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, preload: '/x/preload/island.js' });
+    expect(options.webPreferences).toMatchObject({ contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, backgroundThrottling: false, preload: '/x/preload/island.js' });
   });
 
-  it('open: уровень поверх всего, все рабочие столы и полноэкранные приложения, место по центру основного', () => {
+  it('open: уровень поверх всего (без setVisibleOnAllWorkspaces — он меняет тип процесса), место по центру основного', () => {
     const { controller, windows } = setup();
     controller.open();
-    expect(windows[0]?.calls).toEqual(['top:true:screen-saver', 'spaces:true:true']);
+    expect(windows[0]?.calls).toEqual(['top:true:screen-saver']);
     expect(windows[0]?.bounds.y).toBe(0);
     controller.open();
     expect(windows).toHaveLength(1);
@@ -110,6 +109,27 @@ describe('окно острова', () => {
     controller.open();
     controller.setSize({ width: 220, height: 40 });
     expect(windows[1]?.bounds).toEqual({ x: 3440 - 220 - 12, y: 0, width: 220, height: 40 });
+  });
+
+  it('скрытие посреди перетаскивания сбрасывает жест: потерянный drag-end не замораживает место', () => {
+    const { controller, windows } = setup({ displayId: 3, anchor: 'right' });
+    controller.open();
+    controller.setSize({ width: 380, height: 150 });
+    controller.dragStart({ screenX: 3000, screenY: 10 });
+    controller.setVisible(false);
+    controller.setVisible(true);
+    controller.setSize({ width: 220, height: 40 });
+    expect(windows[0]?.bounds).toEqual({ x: 3440 - 220 - 12, y: 0, width: 220, height: 40 });
+  });
+
+  it('relayout посреди перетаскивания сбрасывает жест', () => {
+    const { controller, windows } = setup({ displayId: 3, anchor: 'right' });
+    controller.open();
+    controller.setSize({ width: 380, height: 150 });
+    controller.dragStart({ screenX: 3000, screenY: 10 });
+    controller.relayout();
+    controller.setSize({ width: 220, height: 40 });
+    expect(windows[0]?.bounds).toEqual({ x: 3440 - 220 - 12, y: 0, width: 220, height: 40 });
   });
 
   it('монитор пропал — relayout переносит остров на основной', () => {

@@ -1,7 +1,7 @@
 /**
  * Окно острова (спека 2026-10-12, разделы 3 и 5.1). Параметры — из спайка на Electron 44: `panel`
- * (`NSWindowStyleMaskNonactivatingPanel` — клик не поднимает Parley), уровень `screen-saver`, все рабочие столы и
- * полноэкранные приложения, `acceptFirstMouse` (первый клик по неактивному окну доходит до кнопки) и
+ * (`NSWindowStyleMaskNonactivatingPanel` — клик не поднимает Parley), уровень `screen-saver`,
+ * `acceptFirstMouse` (первый клик по неактивному окну доходит до кнопки) и
  * `enableLargerThanScreen` — без него macOS сдвигает видимое окно под строку меню (y = 25 на внешнем мониторе,
  * под строку чёлки на MacBook). Показ — только `showInactive()`: `show()` и `focus()` активировали бы приложение.
  *
@@ -44,7 +44,8 @@ export function islandWindowOptions(preloadPath: string): BrowserWindowConstruct
     hiddenInMissionControl: true,
     enableLargerThanScreen: true,
     show: false,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: preloadPath, webviewTag: false },
+    // Скрытый остров не должен усыплять таймеры и ResizeObserver: иначе новый запрос не разбудит окно.
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, preload: preloadPath, webviewTag: false, backgroundThrottling: false },
   };
 }
 
@@ -54,7 +55,6 @@ export interface IslandWindowLike {
   setBounds(rect: Rect): void;
   getBounds(): Rect;
   setAlwaysOnTop(flag: boolean, level: 'screen-saver'): void;
-  setVisibleOnAllWorkspaces(flag: boolean, options: { visibleOnFullScreen: boolean }): void;
   showInactive(): void;
   hide(): void;
   isVisible(): boolean;
@@ -114,7 +114,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
     dragging = false;
     const created = deps.createWindow();
     created.setAlwaysOnTop(true, 'screen-saver');
-    created.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // `setVisibleOnAllWorkspaces` не зовём: Electron на macOS превращает тип процесса, и иконка в Dock / Cmd-Tab может
+    // пропасть. `type: 'panel'` и так плавает над полноэкранными приложениями и виден на всех рабочих столах (доки Electron).
     created.on('closed', () => {
       if (window === created) window = null;
     });
@@ -151,6 +152,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       const current = live();
       if (current === null) return;
       if (!visible) {
+        // Скрыли — жест уже не продолжится; потерянный `drag-end` не должен замораживать место.
+        dragging = false;
         if (current.isVisible()) current.hide();
         return;
       }
@@ -177,7 +180,10 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       deps.savePlacement({ displayId: under.id, anchor: snapAnchor(under, point.screenX) });
       place();
     },
-    relayout: place,
+    relayout: () => {
+      dragging = false;
+      place();
+    },
     topInset: () => notchInset(display()),
   };
 }
