@@ -1,0 +1,13 @@
+/* Окно острова прозрачное: видно только содержимое (спека 2026-10-12, раздел 3). */
+html,
+body,
+#root {
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}

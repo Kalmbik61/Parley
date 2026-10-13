@@ -854,6 +854,7 @@ export const S = {
     notifyFinished: 'finished',
     notifyMail: 'mail and mentions to you',
     notifySound: 'sound',
+    notifyIsland: 'island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
@@ -1594,6 +1595,27 @@ export const S = {
     /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
     open: 'Open',
     later: 'Later',
+  },
+
+  /** Остров одобрений (спека 2026-10-12). */
+  island: {
+    pill: (working: number, waiting: number): string =>
+      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null].filter((part) => part !== null).join(' · '),
+    waitingInTerminal: 'waiting in terminal',
+    roomBusy: (count: number): string => `${count} in work`,
+    of: (index: number, total: number): string => `${index} of ${total}`,
+    previous: 'Previous request',
+    next: 'Next request',
+    allow: 'Allow',
+    always: 'Always',
+    deny: 'Deny',
+    openInParley: 'Open in Parley',
+    answeredElsewhere: 'Answered elsewhere',
+    failed: "Couldn't send — try again",
+    hide: 'Hide until the next request',
+    drag: 'Drag along the top edge',
+    hint: 'Drag me · × to hide · turn off in Settings',
+    gotIt: 'Got it',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */

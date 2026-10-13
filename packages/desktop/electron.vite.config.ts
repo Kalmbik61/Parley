@@ -77,7 +77,8 @@ export default defineConfig({
     plugins: [react(), tailwindcss(), pdfjsAssets(), fileIcons()],
     build: {
       rollupOptions: {
-        input: resolve(dirname, 'src/renderer/index.html'),
+        // Второй вход — окно острова (спека 2026-10-12, 5.2).
+        input: { index: resolve(dirname, 'src/renderer/index.html'), island: resolve(dirname, 'src/renderer/island.html') },
       },
     },
   },
