@@ -6,7 +6,15 @@
  */
 
 import { isViewportSpec, type ViewportSpec } from '../../shared/browser-devtools.js';
-import type { FileRootSpec, GroupNode, LayoutNode, TabSpec, TerminalView, WorkLayout } from '../../shared/layout-types.js';
+import type {
+  BrowserTarget,
+  FileRootSpec,
+  GroupNode,
+  LayoutNode,
+  TabSpec,
+  TerminalView,
+  WorkLayout,
+} from '../../shared/layout-types.js';
 import { nodeId } from './ids.js';
 
 export const LIMITS: {
@@ -29,7 +37,13 @@ export interface OpResult {
 }
 export type Edge = 'left' | 'right' | 'top' | 'bottom';
 export type Where = 'active' | { groupId: string; index?: number };
-export type TabPatch = { url?: string; view?: TerminalView; viewport?: ViewportSpec | null };
+export type TabPatch = {
+  url?: string;
+  view?: TerminalView;
+  viewport?: ViewportSpec | null;
+  /** `null` — снять поле (откат на умолчание). */
+  target?: BrowserTarget | null;
+};
 
 // ---- обход и поиск в дереве ------------------------------------------------
 
@@ -246,11 +260,16 @@ export function closeTab(layout: WorkLayout, tabId: string): WorkLayout {
   return { ...layout, root, activeGroupId, closedTabs };
 }
 
-/** Адрес и размер вкладки браузера; размер null — Fit: поля нет (спека 2026-10-07, 4.2). */
+/**
+ * Адрес, размер и цель «To» вкладки браузера; размер null — Fit, цель null — умолчание: полей нет (спека 2026-10-07,
+ * 4.2, 4.5).
+ */
 function patchBrowser(tab: Extract<TabSpec, { kind: 'browser' }>, patch: TabPatch): TabSpec {
   const next = { ...tab, url: patch.url ?? tab.url };
   if (patch.viewport === null) delete next.viewport;
   else if (patch.viewport !== undefined) next.viewport = patch.viewport;
+  if (patch.target === null) delete next.target;
+  else if (patch.target !== undefined) next.target = patch.target;
   return next;
 }
 
@@ -265,7 +284,11 @@ export function updateTab(layout: WorkLayout, tabId: string, patch: TabPatch): W
   const tab = found.group.tabs[found.index];
   if (tab === undefined) return layout;
   let next: TabSpec;
-  if (tab.kind === 'browser' && (patch.url !== undefined || patch.viewport !== undefined)) next = patchBrowser(tab, patch);
+  if (
+    tab.kind === 'browser' &&
+    (patch.url !== undefined || patch.viewport !== undefined || patch.target !== undefined)
+  )
+    next = patchBrowser(tab, patch);
   else if (tab.kind === 'terminal' && patch.view !== undefined) next = { ...tab, view: patch.view };
   else return layout;
 
@@ -544,6 +567,18 @@ function parseViewport(value: unknown): ViewportSpec | null {
     : { width: value.width, height: value.height, mobile: value.mobile, dpr: value.dpr };
 }
 
+/** Цель «To» вкладки браузера: новый объект только из полей своего вида; мусор — null, то есть умолчание. */
+function parseBrowserTarget(value: unknown): BrowserTarget | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === 'session' && typeof value.sessionId === 'string') {
+    return { kind: 'session', sessionId: value.sessionId };
+  }
+  if (value.kind === 'room' && typeof value.roomId === 'string') {
+    return { kind: 'room', roomId: value.roomId };
+  }
+  return null;
+}
+
 function parseTabSpec(value: unknown): TabSpec | null {
   if (!isRecord(value) || typeof value.id !== 'string') return null;
   const id = value.id;
@@ -572,9 +607,17 @@ function parseTabSpec(value: unknown): TabSpec | null {
     }
     case 'browser': {
       if (typeof value.url !== 'string') return null;
-      // Мусор в размере — Fit, а не битая раскладка: размер — удобство, вкладка с адресом дороже (спека 2026-10-07, 4.2).
+      // Мусор в размере или цели — поля нет (Fit, цель по умолчанию), а не битая раскладка: оба поля — удобство,
+      // вкладка с адресом дороже (спека 2026-10-07, 4.2, 4.5).
       const viewport = parseViewport(value.viewport);
-      return viewport === null ? { kind: 'browser', id, url: value.url } : { kind: 'browser', id, url: value.url, viewport };
+      const target = parseBrowserTarget(value.target);
+      return {
+        kind: 'browser',
+        id,
+        url: value.url,
+        ...(viewport === null ? {} : { viewport }),
+        ...(target === null ? {} : { target }),
+      };
     }
     default:
       return null;

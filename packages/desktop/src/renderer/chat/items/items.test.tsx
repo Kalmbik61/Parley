@@ -337,6 +337,12 @@ describe('PromptItem — вложения: хвостовые упоминани
     renderPrompt(<PromptItem text="" images={1} />);
     expect(screen.getByTestId('chat-prompt').textContent).toBe(S.chat.images(1));
   });
+
+  it('файл-контекст и его снимок с тем же именем — один чип (спека браузера 4.5)', () => {
+    const md = '/h/drops/context/element-button.save-a1f3.md';
+    renderPrompt(<PromptItem text={`fix this @"${md}" @"/h/drops/context/element-button.save-a1f3.png" @"/a/notes.txt" `} />);
+    expect(paths()).toEqual([md, '/a/notes.txt']);
+  });
 });
 
 describe('ToolItem', () => {

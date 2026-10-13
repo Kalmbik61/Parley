@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
       handlers.set(channel, handler);
     },
     send: vi.fn(),
+    sendSync: vi.fn(),
     invoke: vi.fn(),
   },
   contextBridge: {
@@ -109,6 +110,14 @@ describe('preload: последний статус и тема', () => {
     expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('app:image-thumbnail', '/h/shot.png', 1600);
     await bridge.app.imageThumbnail('/h/shot.png');
     expect(ipcRenderer.invoke).toHaveBeenLastCalledWith('app:image-thumbnail', '/h/shot.png', undefined);
+  });
+
+  it('islandActive — синхронный вопрос main', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    vi.mocked(ipcRenderer.sendSync).mockReturnValueOnce(true);
+    expect(bridge.app.islandActive()).toBe(true);
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('app:island-active');
   });
 
   it('browser.onDevtools: пачка приходит подписчику, отписка снимает его (спека 2026-10-07, 3.5)', async () => {

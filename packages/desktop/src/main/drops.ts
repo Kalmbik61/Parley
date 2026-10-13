@@ -112,3 +112,12 @@ export async function cleanupDrops(dir: string, maxAgeMs: number, now: number = 
   }
   return removed;
 }
+
+/** Подкаталог файлов-контекстов браузера (спека браузера 3.6): `drops/context/`. */
+export const CONTEXT_SUBDIR = 'context';
+
+/** Очистка `drops/` и `drops/context/` — те же правила и тот же срок (спека браузера 3.6). */
+export async function cleanupDropsTree(dir: string, maxAgeMs: number, now: number = Date.now()): Promise<number> {
+  const top = await cleanupDrops(dir, maxAgeMs, now);
+  return top + (await cleanupDrops(path.join(dir, CONTEXT_SUBDIR), maxAgeMs, now));
+}

@@ -1,8 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { WebContents } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { S } from '../../shared/strings.js';
-import { captureRect, createDesignMode, PICK_LIMITS, PICK_WORLD_ID, pickUrl, validatePick } from './design-mode.js';
+import { captureClip, createDesignMode, cropRect, exceedsViewport, PICK_LIMITS, PICK_WORLD_ID, pickUrl, validatePick } from './design-mode.js';
+import type { CdpSender } from './element-info.js';
 
 /** Данные элемента, как их шлёт guest-pick.js. */
 function rawPick(extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -14,6 +18,9 @@ function rawPick(extra: Record<string, unknown> = {}): Record<string, unknown> {
     rect: { x: 10, y: 20, width: 100, height: 40 },
     viewport: { width: 800, height: 600 },
     devicePixelRatio: 2,
+    point: { x: 30, y: 40 },
+    shift: false,
+    scroll: { x: 0, y: 0 },
     ...extra,
   };
 }
@@ -27,13 +34,16 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
       html: '<button class="save">Save</button>',
       styles: { display: 'flex', color: 'rgb(0, 0, 0)' },
       rect: { x: 10, y: 20, width: 100, height: 40 },
-      viewport: { width: 800, height: 600 },
+      viewport: { width: 800, height: 600, dpr: 2 },
+      point: { x: 30, y: 40 },
+      shift: false,
+      scroll: { x: 0, y: 0 },
     });
   });
 
   it('html 10 000 символов → 4096 и …(truncated); text 1000 → 500', () => {
     const result = validatePick(rawPick({ html: 'h'.repeat(10_000), text: 't'.repeat(1000) }));
-    expect(result?.html).toBe('h'.repeat(PICK_LIMITS.html) + S.designBlock.truncated);
+    expect(result?.html).toBe('h'.repeat(PICK_LIMITS.html) + S.contextFile.truncated);
     expect(result?.text).toBe('t'.repeat(PICK_LIMITS.text));
     // Граница: ровно 4096 — без пометки.
     expect(validatePick(rawPick({ html: 'h'.repeat(4096) }))?.html).toBe('h'.repeat(4096));
@@ -43,6 +53,16 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
     const result = validatePick(rawPick({ text: '😀'.repeat(600) }));
     expect(Array.from(result?.text ?? '')).toHaveLength(500);
     expect(result?.text).toBe('😀'.repeat(500));
+  });
+
+  it('значение стиля в десятки мегабайт (font-family, box-shadow задаёт страница) режется до 500 за время, не зависящее от длины', () => {
+    const huge = 'f'.repeat(50_000_000);
+    const started = performance.now();
+    const result = validatePick(rawPick({ styles: { 'font-family': huge, 'box-shadow': huge, color: 'red' } }));
+    const elapsed = performance.now() - started;
+    expect(result?.styles).toEqual({ 'font-family': 'f'.repeat(PICK_LIMITS.text), 'box-shadow': 'f'.repeat(PICK_LIMITS.text), color: 'red' });
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `Array.from` по каждому значению — две секунды и сотни МБ кучи в main.
+    expect(elapsed).toBeLessThan(300);
   });
 
   it('нет selector или viewport, неверные типы → null', () => {
@@ -60,6 +80,9 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
     expect(validatePick(rawPick({ viewport: { width: 0, height: 600 } }))).toBeNull();
     expect(validatePick(rawPick({ styles: 'display:none' }))).toBeNull();
     expect(validatePick(rawPick({ text: 42 }))).toBeNull();
+    expect(validatePick(rawPick({ devicePixelRatio: undefined }))).toBeNull();
+    expect(validatePick(rawPick({ point: { x: 'a', y: 1 } }))?.point).toBeNull();
+    expect(validatePick(rawPick({ shift: 'yes' }))?.shift).toBe(false);
   });
 
   it('стили — только из списка и строками; селектор — не больше 12 звеньев', () => {
@@ -69,6 +92,16 @@ describe('validatePick (тест 1 куска 9.3a)', () => {
     );
     expect(result?.styles).toEqual({ display: 'block' });
     expect(result?.selector).toBe(links.slice(-PICK_LIMITS.selectorLinks).join(' > '));
+  });
+
+  it('devicePixelRatio не больше нуля — null; прокрутка без поля или мусором — {0, 0}, верная — как есть', () => {
+    expect(validatePick(rawPick({ devicePixelRatio: 0 }))).toBeNull();
+    expect(validatePick(rawPick({ devicePixelRatio: -1 }))).toBeNull();
+    const noScroll = rawPick();
+    delete noScroll.scroll;
+    expect(validatePick(noScroll)?.scroll).toEqual({ x: 0, y: 0 });
+    expect(validatePick(rawPick({ scroll: { x: 'a', y: 1 } }))?.scroll).toEqual({ x: 0, y: 0 });
+    expect(validatePick(rawPick({ scroll: { x: 5, y: 250 } }))?.scroll).toEqual({ x: 5, y: 250 });
   });
 });
 
@@ -80,46 +113,45 @@ describe('validatePick — предел длины селектора (fix-9)', 
   });
 });
 
-describe('captureRect (тест 2 куска 9.3a)', () => {
+describe('exceedsViewport — какой элемент видимая часть не вместит (проба настоящего Electron: обрезка CDP в webview порой отдаёт не тот участок)', () => {
   const viewport = { width: 800, height: 600 };
 
-  it('элемент целиком виден — тот же прямоугольник', () => {
-    expect(captureRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, 1)).toEqual({
-      x: 10,
-      y: 20,
-      width: 100,
-      height: 40,
-    });
+  it('не больше вьюпорта — нет (и ровно с него, и частью за краем: скрипт выбора прокручивает такой в видимую часть); шире или выше больше чем на 1 CSS-пиксель — да', () => {
+    expect(exceedsViewport({ x: 10, y: 20, width: 100, height: 40 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 600 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 750, y: -10, width: 100, height: 40 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 802, height: 600 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 602 }, viewport)).toBe(true);
   });
 
-  it('частично за правым краем — пересечение с видимой областью', () => {
-    expect(captureRect({ x: 750, y: 20, width: 100, height: 40 }, viewport, 1)).toEqual({
-      x: 750,
-      y: 20,
-      width: 50,
-      height: 40,
-    });
-    expect(captureRect({ x: -30, y: -10, width: 100, height: 40 }, viewport, 1)).toEqual({
-      x: 0,
-      y: 0,
-      width: 70,
-      height: 30,
-    });
+  it('допуск 1 CSS-пиксель: блок «во всю ширину» при дробном масштабе или DPR шире вьюпорта на доли пикселя, но видимая часть его вмещает', () => {
+    expect(exceedsViewport({ x: 0, y: 0, width: 800.4, height: 600 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 600.4 }, viewport)).toBe(false);
+    // Граница допуска: ровно вьюпорт плюс пиксель ещё в допуске, чуть больше — уже нет.
+    expect(exceedsViewport({ x: 0, y: 0, width: 801, height: 601 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 801.1, height: 600 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 601.1 }, viewport)).toBe(true);
+  });
+});
+
+describe('cropRect — снимок видимой части по Orca (вырезка из capturePage)', () => {
+  const viewport = { width: 800 };
+  const bitmap = { width: 800, height: 600 };
+
+  it('элемент целиком виден — тот же прямоугольник; частично за краем — пересечение с картинкой', () => {
+    expect(cropRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 10, y: 20, width: 100, height: 40 });
+    expect(cropRect({ x: 750, y: 20, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 750, y: 20, width: 50, height: 40 });
+    expect(cropRect({ x: -30, y: -10, width: 100, height: 40 }, viewport, bitmap)).toEqual({ x: 0, y: 0, width: 70, height: 30 });
   });
 
-  it('целиком вне видимой области или пустой — null', () => {
-    expect(captureRect({ x: 900, y: 20, width: 100, height: 40 }, viewport, 1)).toBeNull();
-    expect(captureRect({ x: 10, y: -100, width: 100, height: 40 }, viewport, 1)).toBeNull();
-    expect(captureRect({ x: 10, y: 20, width: 0, height: 40 }, viewport, 1)).toBeNull();
+  it('целиком вне картинки или пустой — null', () => {
+    expect(cropRect({ x: 900, y: 20, width: 100, height: 40 }, viewport, bitmap)).toBeNull();
+    expect(cropRect({ x: 10, y: -100, width: 100, height: 40 }, viewport, bitmap)).toBeNull();
+    expect(cropRect({ x: 10, y: 20, width: 0, height: 40 }, viewport, bitmap)).toBeNull();
   });
 
-  it('zoomFactor 1.5 умножает прямоугольник', () => {
-    expect(captureRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, 1.5)).toEqual({
-      x: 15,
-      y: 30,
-      width: 150,
-      height: 60,
-    });
+  it('множитель — ширина картинки / ширина вьюпорта: DPR 2 и масштаб 1,5 — ×3, без знания о них', () => {
+    expect(cropRect({ x: 10, y: 20, width: 100, height: 40 }, viewport, { width: 2400, height: 1800 })).toEqual({ x: 30, y: 60, width: 300, height: 120 });
   });
 });
 
@@ -132,22 +164,20 @@ describe('pickUrl', () => {
   });
 });
 
-/** Подставной NativeImage: размер в DIP, resize отдаёт уменьшенный. */
-function fakeImage(width: number, height: number): {
+/** Подставной NativeImage: размер в пикселях картинки, crop отдаёт вырезку (запасной снимок по Orca). */
+interface FakeImage {
   isEmpty: () => boolean;
   getSize: () => { width: number; height: number };
   toPNG: () => Buffer;
-  toDataURL: () => string;
-  resize: ReturnType<typeof vi.fn>;
-} {
+  crop: ReturnType<typeof vi.fn>;
+}
+
+function fakeImage(width: number, height: number): FakeImage {
   return {
     isEmpty: () => width === 0,
     getSize: () => ({ width, height }),
     toPNG: () => Buffer.from(`png-${width}x${height}`),
-    toDataURL: () => `data:image/png;base64,${width}x${height}`,
-    resize: vi.fn((options: { width: number }) =>
-      fakeImage(options.width, Math.round((height * options.width) / width)),
-    ),
+    crop: vi.fn((rect: { width: number; height: number }) => fakeImage(rect.width, rect.height)),
   };
 }
 
@@ -172,24 +202,42 @@ function fakeGuest(url = 'https://u:p@x.y/a?q=1#h') {
   return { guest, scripts };
 }
 
-function setup(guestUrl?: string) {
+/** Подставной инспектор: ответ по имени метода CDP; Error — отказ; нет ответа — пустой объект (снимка CDP нет — capturePage). */
+function fakeInspector(answers: Record<string, unknown> = {}) {
+  return {
+    send: vi.fn(async (_id: number, method: string): Promise<unknown> => {
+      const answer = answers[method];
+      if (answer instanceof Error) throw answer;
+      return answer ?? {};
+    }),
+  };
+}
+
+/** Запросы снимка CDP, которые ушли в инспектор. */
+function cdpShots(inspector: ReturnType<typeof fakeInspector>): unknown[][] {
+  return inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot');
+}
+
+function setup(guestUrl?: string, answers: Record<string, unknown> = {}) {
   const { guest, scripts } = fakeGuest(guestUrl);
   const saveImage = vi.fn<(png: Buffer) => Promise<string | null>>(async () => '/h/drops/a.png');
+  const inspector = fakeInspector(answers);
   const mode = createDesignMode({
     fromId: (id) => (id === 7 ? (guest as unknown as WebContents) : null),
     saveImage,
     guestScript: 'GUEST_SCRIPT',
+    inspector: inspector as unknown as CdpSender,
   });
   /** Ждём, пока start дойдёт до вызова скрипта. */
   const scriptCalled = async (count = 1): Promise<void> => {
     await vi.waitFor(() => expect(scripts.length).toBe(count));
   };
-  return { guest, scripts, saveImage, mode, scriptCalled };
+  return { guest, scripts, saveImage, mode, scriptCalled, inspector };
 }
 
 describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
   it('скрипт — в изолированном мире 1001; url — pickUrl(getURL()), а не из данных страницы; снимок в drops', async () => {
-    const { guest, scripts, saveImage, mode, scriptCalled } = setup();
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup();
     const pending = mode.start(7);
     await scriptCalled();
     expect(guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(PICK_WORLD_ID, [{ code: 'GUEST_SCRIPT' }]);
@@ -199,33 +247,27 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(result?.url).toBe('https://x.y/a');
     expect(result?.selector).toBe('body > main > button.save');
     expect(result?.imagePath).toBe('/h/drops/a.png');
-    expect(guest.capturePage).toHaveBeenCalledWith({ x: 10, y: 20, width: 100, height: 40 });
-    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-800x400'));
-    // Миниатюра — data:image/png шириной не больше 320.
-    expect(result?.thumbnail).toBe('data:image/png;base64,320x160');
+    // Элемент не больше вьюпорта — основной путь: вырезка из capturePage() видимой части по Orca; обрезка CDP не нужна.
+    expect(guest.capturePage).toHaveBeenCalledWith();
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x40'));
+    expect(cdpShots(inspector)).toEqual([]);
+    expect(result).toMatchObject({ point: { x: 30, y: 40 }, shift: false, viewport: { width: 800, height: 600, dpr: 2 } });
   });
 
-  it('узкий снимок не растягивается до 320', async () => {
-    const { guest, scripts, mode, scriptCalled } = setup();
-    guest.capturePage.mockResolvedValueOnce(fakeImage(100, 40));
-    const pending = mode.start(7);
-    await scriptCalled();
-    scripts[0]?.resolve(rawPick());
-    expect((await pending)?.thumbnail).toBe('data:image/png;base64,100x40');
-  });
-
-  it('масштаб страницы переводит CSS-пиксели в DIP', async () => {
-    const { guest, scripts, mode, scriptCalled } = setup();
-    guest.getZoomFactor.mockReturnValue(1.5);
+  it('снимок видимой части: множитель — ширина картинки / ширина вьюпорта (DPR, масштаб и эмуляция — измерены)', async () => {
+    const { guest, scripts, mode, scriptCalled, saveImage } = setup();
+    const view = fakeImage(1200, 900);
+    guest.capturePage.mockResolvedValueOnce(view);
     const pending = mode.start(7);
     await scriptCalled();
     scripts[0]?.resolve(rawPick());
     await pending;
-    expect(guest.capturePage).toHaveBeenCalledWith({ x: 15, y: 30, width: 150, height: 60 });
+    expect(view.crop).toHaveBeenCalledWith({ x: 15, y: 30, width: 150, height: 60 });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-150x60'));
   });
 
-  it('capturePage бросил — imagePath и thumbnail равны null, данные есть', async () => {
-    const { guest, scripts, saveImage, mode, scriptCalled } = setup();
+  it('capturePage бросил — imagePath равен null, данные есть; обрезка CDP помещающемуся во вьюпорт элементу не зовётся', async () => {
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup();
     guest.capturePage.mockRejectedValueOnce(new Error('capture failed'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const pending = mode.start(7);
@@ -233,26 +275,27 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     scripts[0]?.resolve(rawPick());
     const result = await pending;
     warn.mockRestore();
-    expect(result).toMatchObject({ selector: 'body > main > button.save', imagePath: null, thumbnail: null });
+    expect(result).toMatchObject({ selector: 'body > main > button.save', imagePath: null });
     expect(saveImage).not.toHaveBeenCalled();
+    expect(cdpShots(inspector)).toEqual([]);
   });
 
-  it('saveImage не сохранил — imagePath и thumbnail равны null', async () => {
+  it('saveImage не сохранил — imagePath равен null', async () => {
     const { scripts, saveImage, mode, scriptCalled } = setup();
     saveImage.mockResolvedValueOnce(null);
     const pending = mode.start(7);
     await scriptCalled();
     scripts[0]?.resolve(rawPick());
-    expect(await pending).toMatchObject({ imagePath: null, thumbnail: null });
+    expect(await pending).toMatchObject({ imagePath: null });
   });
 
-  it('элемент вне видимой области — без снимка', async () => {
-    const { guest, scripts, mode, scriptCalled } = setup();
+  it('элемент вне видимой области — без снимка: вырезать из видимой части нечего', async () => {
+    const { scripts, saveImage, mode, scriptCalled } = setup();
     const pending = mode.start(7);
     await scriptCalled();
     scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 900, width: 100, height: 40 } }));
-    expect(await pending).toMatchObject({ imagePath: null, thumbnail: null });
-    expect(guest.capturePage).not.toHaveBeenCalled();
+    expect((await pending)?.imagePath).toBeNull();
+    expect(saveImage).not.toHaveBeenCalled();
   });
 
   it('скрипт ответил null (Esc), неверной формой или упал — null', async () => {
@@ -423,5 +466,202 @@ describe('выбор прерван (тест 5 куска 9.3a)', () => {
     const { mode } = setup();
     await expect(mode.cancel(7)).resolves.toBeUndefined();
     await expect(mode.cancel(404)).resolves.toBeUndefined();
+  });
+});
+
+describe('Select: снимок CDP, роль и React (этап B, спека 3.8, 4.6; решения этапа 0)', () => {
+  it('captureClip: координаты документа × масштаб страницы; высота — не больше поверхности вида; сторона — не больше captureSide', () => {
+    const pick = { rect: { x: 10, y: 20, width: 100, height: 40 }, scroll: { x: 0, y: 2500 } };
+    expect(captureClip(pick, 1, 600)).toEqual({ x: 10, y: 2520, width: 100, height: 40, scale: 1 });
+    expect(captureClip(pick, 1.5, 600)).toEqual({ x: 15, y: 3780, width: 150, height: 60, scale: 1 });
+    expect(captureClip({ rect: { x: 0, y: 0, width: 300, height: 900 }, scroll: { x: 0, y: 0 } }, 1, 203)?.height).toBe(203);
+    expect(captureClip({ rect: { x: 0, y: 0, width: 9000, height: 50 }, scroll: { x: 0, y: 0 } }, 1, 600)?.width).toBe(PICK_LIMITS.captureSide);
+    expect(captureClip({ rect: { x: 0, y: 0, width: 0, height: 50 }, scroll: { x: 0, y: 0 } }, 1, 600)).toBeNull();
+  });
+
+  it.each([
+    ['небольшой', { x: 10, y: 20, width: 100, height: 40 }, 'png-100x40'],
+    ['ровно с вьюпорт', { x: 0, y: 0, width: 800, height: 600 }, 'png-800x400'],
+    ['частью за краем картинки, но не больше вьюпорта', { x: 750, y: 20, width: 100, height: 40 }, 'png-50x40'],
+    ['шире на долю пикселя: блок во всю ширину при дробном масштабе или DPR', { x: 0, y: 0, width: 800.4, height: 600 }, 'png-800x400'],
+  ])('элемент не больше вьюпорта плюс допуск 1 CSS-пиксель (%s) — снимок видимой части; обрезка CDP не зовётся, даже когда бы ответила', async (_name, rect, png) => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(cdpShots(inspector)).toEqual([]);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from(png));
+  });
+
+  it('элемент выше вьюпорта — обрезка CDP с captureBeyondViewport; capturePage — только мера поверхности: картинка 800×400 при DPR 2 — 200 CSS-пикселей', async () => {
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 }, scroll: { x: 0, y: 300 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 10, y: 320, width: 100, height: 200, scale: 1 },
+    });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('cdp-png'));
+    expect(guest.capturePage).toHaveBeenCalledTimes(1);
+  });
+
+  it('роль, имя и React — по точке документа (точка вьюпорта + прокрутка, спайк 0.4); точка, ⇧ и размер — в результате', async () => {
+    const { scripts, mode, scriptCalled, inspector } = setup(undefined, {
+      'DOM.getNodeForLocation': { backendNodeId: 42 },
+      'DOM.describeNode': { node: { localName: 'button', attributes: ['class', 'save'] } },
+      'Accessibility.getPartialAXTree': { nodes: [{ backendDOMNodeId: 42, role: { value: 'button' }, name: { value: 'Save' } }] },
+      'DOM.resolveNode': { object: { objectId: 'o1' } },
+      'Runtime.callFunctionOn': { result: { value: [{ name: 'SaveButton', source: 'src/SaveButton.tsx:12', approx: false }] } },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ shift: true, scroll: { x: 0, y: 300 } }));
+    expect(await pending).toMatchObject({
+      point: { x: 30, y: 40 },
+      shift: true,
+      viewport: { width: 800, height: 600, dpr: 2 },
+      role: 'button',
+      name: 'Save',
+      react: [{ name: 'SaveButton', source: 'src/SaveButton.tsx:12', approx: false }],
+    });
+    expect(inspector.send).toHaveBeenCalledWith(7, 'DOM.getNodeForLocation', { x: 30, y: 340, includeUserAgentShadowDOM: false });
+  });
+
+  it('роль и React не ответили за PICK_LIMITS.infoMs — выбор без них, не висит', async () => {
+    const { scripts, mode, scriptCalled, inspector } = setup();
+    inspector.send.mockImplementation(async (_id: number, method: string): Promise<unknown> => (method === 'DOM.enable' ? new Promise(() => undefined) : {}));
+    const pending = mode.start(7);
+    await scriptCalled();
+    vi.useFakeTimers();
+    try {
+      scripts[0]?.resolve(rawPick());
+      await vi.advanceTimersByTimeAsync(PICK_LIMITS.infoMs);
+      const result = await pending;
+      expect(result?.selector).toBe('body > main > button.save');
+      expect(result?.role).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('элемент шире вьюпорта — тоже обрезка CDP: ширина не режется поверхностью вида, только captureSide', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 900, height: 40 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 10, y: 20, width: 900, height: 40, scale: 1 },
+    });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('cdp-png'));
+  });
+
+  it('элемент выше вьюпорта, CDP отказал — вырезка из видимой части, выбор не теряется', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, { 'Page.captureScreenshot': new Error('boom') });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
+    const result = await pending;
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    expect(result?.imagePath).toBe('/h/drops/a.png');
+    expect(cdpShots(inspector)).toHaveLength(1);
+    // Видимая часть — картинка 800×400: ниже её края от элемента остаётся только то, что в кадре.
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x380'));
+  });
+
+  it('элемент выше вьюпорта, CDP ответил без данных — вырезка из видимой части, а не пустой файл', async () => {
+    const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, { 'Page.captureScreenshot': { data: '' } });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(cdpShots(inspector)).toHaveLength(1);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x380'));
+  });
+
+  it('capturePage вернул пустую картинку — поверхность по высоте вьюпорта, снимок CDP всё равно идёт', async () => {
+    const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    guest.capturePage.mockResolvedValueOnce(fakeImage(0, 0));
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
+    expect((await pending)?.imagePath).toBe('/h/drops/a.png');
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 10, y: 20, width: 100, height: 600, scale: 1 },
+    });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('cdp-png'));
+  });
+
+  it('масштаб страницы (getZoomFactor) — множитель обрезки CDP: без него при масштабе 2 она пуста', async () => {
+    const { guest, scripts, mode, scriptCalled, inspector } = setup(undefined, {
+      'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
+    });
+    guest.getZoomFactor.mockReturnValue(1.5);
+    const pending = mode.start(7);
+    await scriptCalled();
+    // Выше вьюпорта: высота обрезки — поверхность вида (картинка 800×400 при DPR 2 — 200 CSS-пикселей) × 1,5.
+    scripts[0]?.resolve(rawPick({ rect: { x: 10, y: 20, width: 100, height: 900 } }));
+    await pending;
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 15, y: 30, width: 150, height: 300, scale: 1 },
+    });
+  });
+
+  it('точки нет (под центром другой узел) — роль и React не ищутся: main не гадает; данные и снимок на месте', async () => {
+    const { scripts, mode, scriptCalled, inspector } = setup(undefined, {
+      'DOM.getNodeForLocation': { backendNodeId: 42 },
+      'DOM.describeNode': { node: { localName: 'button', attributes: ['class', 'save'] } },
+    });
+    const pending = mode.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(rawPick({ point: null }));
+    const result = await pending;
+    expect(result).toMatchObject({ selector: 'body > main > button.save', point: null, imagePath: '/h/drops/a.png' });
+    expect(result?.role).toBeUndefined();
+    expect(inspector.send.mock.calls.map(([, method]) => method)).not.toContain('DOM.getNodeForLocation');
+  });
+});
+
+describe('рамочный: скрипты страницы — только в изолированном мире (Фокус ревью 6)', () => {
+  /** Исходники main без тестов: путь от `main/` и текст. */
+  function mainSources(): Array<{ file: string; source: string }> {
+    const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const files = (readdirSync(mainDir, { recursive: true }) as string[]).filter((file) => /\.(ts|js)$/.test(file) && !file.includes('.test.'));
+    expect(files.length).toBeGreaterThan(0);
+    return files.map((file) => ({ file, source: readFileSync(path.join(mainDir, file), 'utf8') }));
+  }
+
+  it('в коде main нет executeJavaScript мира страницы (у Orca так исполнен весь выбор)', () => {
+    for (const { file, source } of mainSources()) expect(source, file).not.toMatch(/\.executeJavaScript\(/);
+  });
+
+  it('каждый вызов executeJavaScriptInIsolatedWorld( берёт мир PICK_WORLD_ID: мир 0 — сама страница, и прежняя проверка его не видит', () => {
+    const calls = mainSources().flatMap(({ file, source }) =>
+      [...source.matchAll(/executeJavaScriptInIsolatedWorld\(\s*([^,\s)]+)/g)].map((match) => ({ file, world: match[1] })),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    for (const { file, world } of calls) expect(world, file).toBe('PICK_WORLD_ID');
   });
 });

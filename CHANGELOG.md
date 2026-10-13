@@ -4,7 +4,60 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.12.0
+
+The Island at the top of the screen — in the notch on a MacBook — answers permission requests and shows which agents are working and what they just finished. Browser pages send their context to chat, your messages in rooms sit on the right, and "needs you" notifications say what is asked.
+
+### Added
+
+- **Page context in chat.** The bar above a browser page has "To: S02 ▾" — the session or room
+  where page context goes. ⌖ Select (⌘⇧C) adds the clicked element with its role, React
+  component and source, styles, HTML and a screenshot; ⇧-click keeps selecting. ✎ Annotate
+  (⌘⌥A) puts numbered pins on elements and dashed frames on areas, each with your comment, and
+  the tray adds up to 20 of them as one file with one screenshot. "Add to chat" on a console
+  line or a request and "Add errors to chat" in the panel header add those too. Each is a
+  Markdown file in `~/.parley/desktop/drops/context` with secrets replaced by `<redacted>`; it
+  becomes a chip above the Chat or room field, or one line in a terminal session's input
+  without Enter. A toast offers "Open" and "Undo". Nothing is sent by itself.
+- **Island.** A black panel at the top of the screen (in the notch on a MacBook) shows how many agents
+  are working and waiting ("N working · M waiting"); hover or click it for the list of active
+  workspaces and rooms, and a click on a row opens it in Parley. A permission request, a simple
+  question (one question, one choice, up to four options) or a plan opens a card by itself: Allow,
+  Always (when the agent offers rules) and Deny, or the answer as a button; a plan and a complex
+  question have "Open in Parley". With several requests the card shows "1 of N" and arrows, and its
+  buttons stay disabled for half a second so an accidental click does not answer it. An agent that
+  finished a turn you have not looked at yet stays on the island as a "Done" row with the start of
+  its last reply ("✅ N done" in the pill, **Clear** hides the rows). The island never disappears: at
+  rest it shrinks into a thin bar (or a small "✅ N" while there are unseen Done rows) and grows back
+  on a new request, new work or a finished turn, or when you click the bar; tuck it away yourself
+  with the ⌃ arrow or by swiping up. Drag it by any part along the top edge; it snaps to the left,
+  the center or the right and is remembered per monitor. Only the island catches the mouse, clicks
+  beside it reach the windows below. Claude and GLM sessions only: Codex requests stay system
+  notifications. On by default; Settings → Notifications → "island with requests at the top of the
+  screen". While the island is on, a request with a card there is not repeated as a macOS
+  notification.
+
+### Changed
+
+- **Design Mode is now Select.** The result card and "Send to agent ▾" are gone: the element
+  becomes an attachment of the "To" target, and its chip shows the screenshot before you send.
+- **Your messages in rooms are on the right.** Like prompts in Chat, they sit on the right on a
+  tinted bubble; agents' messages and system letters stay on the left.
+- **"Needs you" notifications say what is asked.** The notification names the request (a command,
+  a file edit, a fetch, a question or a plan), the project and how many other sessions are waiting,
+  and a click opens the session in Chat at that card.
+
+### Fixed
+
+- **Notification clicks and update notices keep working after a browser tab loads.** Once a browser tab had loaded
+  a page, clicking a macOS notification raised the window but didn't open the session, and a new-version notice
+  never reached it, until the window was reloaded.
+- **Resume works when the agent process is still alive.** After a host restart brought a whole
+  workspace up at once, a session could keep running while Parley showed it asleep, and Resume did
+  nothing. Parley now retries recording the start and, if it still can't, stops the process so
+  Resume brings the session up again.
+- **"Allow always" for Codex no longer loses the answer.** With no rules to add, Codex dropped the
+  decision; it now counts as a plain Allow.
 
 ## 0.11.0
 

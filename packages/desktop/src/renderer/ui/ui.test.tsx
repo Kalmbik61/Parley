@@ -331,6 +331,17 @@ describe('ui/sonner — угол с плавающей панелью (кусо�
     });
   });
 
+  it('геометрия столбца тостов — та, по которой блоки в углу считают, куда подняться: правый отступ 24px, ширина min(26rem, 100vw − 32px), база снизу 2.5rem', async () => {
+    render(<Toaster />);
+    toast('Проверка геометрии');
+    await waitFor(() => {
+      const list = document.querySelector<HTMLElement>('[data-sonner-toaster]');
+      expect(list?.style.getPropertyValue('--offset-right')).toBe('24px');
+      expect(list?.style.getPropertyValue('--width')).toBe('min(26rem, calc(100vw - 32px))');
+      expect(list?.style.getPropertyValue('--offset-bottom')).toContain('calc(2.5rem + var(--toast-inset-bottom, 0px))');
+    });
+  });
+
   it('свой offset из props перекрывает отступ по умолчанию', async () => {
     render(<Toaster offset={{ bottom: '10px' }} />);
     toast('Проверка своего отступа');
@@ -597,5 +608,31 @@ describe('ui/checkbox — радиус шкалы Organic', () => {
     expect(classes).toContain('rounded-[5px]');
     expect(classes).not.toMatch(/(^| )rounded-sm( |$)/);
     expect(classes).toContain('size-4');
+  });
+});
+
+describe('ui/popover — portalContainer (этап B браузера: редактор аннотаций в слое страницы)', () => {
+  it('содержимое — в переданном узле; без него — в document.body', () => {
+    const layer = document.createElement('div');
+    document.body.append(layer);
+    const view = render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent portalContainer={layer} data-testid="in-layer">
+          Содержимое
+        </PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-layer'))).toBe(true);
+    view.unmount();
+    render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent data-testid="in-body">Содержимое</PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-body'))).toBe(false);
+    expect(document.body.contains(screen.getByTestId('in-body'))).toBe(true);
+    layer.remove();
   });
 });

@@ -13,6 +13,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { useActivityStore } from '../store/activity.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import type { PendingAsk } from './ask-summary.js';
 import { createAttentionNotifier, wireAttentionNotifications } from './notify.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
@@ -76,8 +77,13 @@ interface Harness {
   entries: WorkEntry[];
   /** Окно в фокусе: решение — карточкой в окне, а не уведомлением macOS (кусок 8). */
   active: boolean;
+  /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
+  island: boolean;
   windowNotes: WindowNote[];
   hidden: string[];
+  /** Что отдаёт `pendingAsk` (по очереди: последнее значение повторяется); по умолчанию — карточки нет. */
+  asks: Array<PendingAsk | null>;
+  pendingAsk: ReturnType<typeof vi.fn>;
   notifier: ReturnType<typeof createAttentionNotifier>;
 }
 
@@ -88,10 +94,15 @@ function harness(entries: WorkEntry[]): Harness {
     visible: new Set(),
     entries,
     active: false,
+    island: false,
     windowNotes: [],
     hidden: [],
+    asks: [null],
+    pendingAsk: vi.fn(),
     notifier: null as unknown as ReturnType<typeof createAttentionNotifier>,
   };
+  let asked = 0;
+  h.pendingAsk.mockImplementation(async () => h.asks[Math.min(asked++, h.asks.length - 1)] ?? null);
   h.notifier = createAttentionNotifier({
     notify: (note) => h.notes.push(note),
     prefs: () => h.prefs,
@@ -100,9 +111,14 @@ function harness(entries: WorkEntry[]): Harness {
     windowActive: () => h.active,
     showInWindow: (note) => h.windowNotes.push(note),
     hideInWindow: (tag) => h.hidden.push(tag),
+    pendingAsk: h.pendingAsk,
+    islandOn: () => h.island,
   });
   return h;
 }
+
+/** Дать отработать запросу карточки и паузе повтора (таймеры — подставные, см. `useFakeTimers` в describe). */
+const settle = (): Promise<void> => vi.runAllTimersAsync().then(() => undefined);
 
 const redesign = (): WorkEntry =>
   entry('Redesign', [
@@ -111,20 +127,28 @@ const redesign = (): WorkEntry =>
   ]);
 
 describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('первое значение сессии — база: blocked первым — уведомления нет', () => {
     const h = harness([redesign()]);
     h.notifier.onActivity(ref2, live('blocked'));
     expect(h.notes).toEqual([]);
   });
 
-  it('после базы working → blocked при невидимой цели — одно уведомление с заголовком и первой строкой задачи', () => {
+  it('после базы working → blocked при невидимой цели — одно уведомление с заголовком и первой строкой задачи', async () => {
     const h = harness([redesign()]);
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
     expect(h.notes).toEqual([
       {
         title: 'Redesign · S02 executor — needs you',
-        body: 'Fix the login form',
+        body: 'Fix the login form\np',
         tag: `session:${refKey(ref2)}`,
         target: { kind: 'session', ref: ref2 },
         silent: false,
@@ -146,43 +170,49 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
     expect(h.notes).toMatchObject([{ title: 'Redesign · S03 backend — finished', body: '' }]);
   });
 
-  it('повтор blocked — нет', () => {
+  it('повтор blocked — нет', async () => {
     const h = harness([redesign()]);
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
     expect(h.notes).toHaveLength(1);
   });
 
-  it('цель видима — нет', () => {
+  it('цель видима — нет', async () => {
     const h = harness([redesign()]);
     h.visible.add(JSON.stringify({ kind: 'session', ref: ref2 }));
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
     expect(h.notes).toEqual([]);
   });
 
-  it('prefs().needsYou: false — нет; prefs().finished: false — нет', () => {
+  it('prefs().needsYou: false — нет; prefs().finished: false — нет', async () => {
     const h = harness([redesign()]);
     h.prefs = { ...h.prefs, needsYou: false, finished: false };
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
     h.notifier.onActivity(ref2, live('unseen'));
+    await settle();
     expect(h.notes).toEqual([]);
+    expect(h.pendingAsk).not.toHaveBeenCalled();
   });
 
-  it('sound: false → silent: true', () => {
+  it('sound: false → silent: true', async () => {
     const h = harness([redesign()]);
     h.prefs = { ...h.prefs, sound: false };
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
     expect(h.notes[0]?.silent).toBe(true);
   });
 
-  it.each(['closed', 'sleeping'] as const)('сессия %s с blocked в активности — нет', (lifecycle) => {
+  it.each(['closed', 'sleeping'] as const)('сессия %s с blocked в активности — нет', async (lifecycle) => {
     const h = harness([entry('Redesign', [session('s-02', 'executor', { lifecycle })])]);
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
     expect(h.notes).toEqual([]);
   });
 
@@ -195,6 +225,136 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
     h.entries = [redesign()];
     h.notifier.onActivity(ref2, live('blocked'));
     expect(h.notes).toEqual([]);
+  });
+  describe('«нужен ты» с вопросом: строка ask, строка проекта, повтор, цель-карточка', () => {
+    const run: PendingAsk = { cardId: 'c-1', summary: 'Run: npm test', inWindow: true };
+
+    it('ask найден — тело «Run: …» и имя проекта, цель с cardId; запрос один, без паузы', async () => {
+      const h = harness([redesign()]);
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.notes).toMatchObject([
+        { body: 'Run: npm test\np', target: { kind: 'session', ref: ref2, cardId: 'c-1' } },
+      ]);
+      expect(h.pendingAsk).toHaveBeenCalledTimes(1);
+      expect(h.pendingAsk).toHaveBeenCalledWith(ref2);
+    });
+
+    it('ask с inWindow false (одобрения в терминале) — текст есть, cardId в цели нет', async () => {
+      const h = harness([redesign()]);
+      h.asks = [{ ...run, inWindow: false }];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes[0]?.body).toBe('Run: npm test\np');
+      expect(h.notes[0]?.target).toEqual({ kind: 'session', ref: ref2 });
+    });
+
+    it('карточка не нашлась дважды — через 500 мс запасной текст: первая строка задачи и проект, цель без cardId', async () => {
+      const h = harness([redesign()]);
+      h.asks = [null, null];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await vi.advanceTimersByTimeAsync(499);
+      expect(h.notes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.pendingAsk).toHaveBeenCalledTimes(2);
+      expect(h.notes).toMatchObject([{ body: 'Fix the login form\np', target: { kind: 'session', ref: ref2 } }]);
+      expect(h.notes[0]?.target).not.toHaveProperty('cardId');
+    });
+
+    it('карточка легла ко второму запросу — берётся она; отказ запроса считается «нет карточки»', async () => {
+      const h = harness([redesign()]);
+      h.pendingAsk.mockReset();
+      h.pendingAsk.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(run);
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toMatchObject([{ body: 'Run: npm test\np', target: { cardId: 'c-1' } }]);
+    });
+
+    it('сессия без задачи и без карточки — в теле только строка проекта', async () => {
+      const h = harness([redesign()]);
+      h.notifier.onActivity(ref3, live('working'));
+      h.notifier.onActivity(ref3, live('blocked'));
+      await settle();
+      expect(h.notes[0]?.body).toBe('p');
+    });
+
+    it('человек ответил, пока шёл запрос (уровень снова working) — уведомления нет', async () => {
+      const h = harness([redesign()]);
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      h.notifier.onActivity(ref2, live('working'));
+      await settle();
+      expect(h.notes).toEqual([]);
+    });
+
+    it('другая сессия уже ждёт — вторая строка «· 1 more waiting»', async () => {
+      const h = harness([redesign()]);
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref3, live('working'));
+      h.notifier.onActivity(ref3, live('blocked'));
+      await settle();
+      h.notes.length = 0;
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes[0]?.body).toBe('Fix the login form\np · 1 more waiting');
+    });
+
+    it('остров жив и карточка найдена — уведомления о запросе нет', async () => {
+      const h = harness([redesign()]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toEqual([]);
+    });
+
+    it('остров жив, но карточки нет (ждёт в терминале) — уведомление есть', async () => {
+      const h = harness([redesign()]);
+      h.island = true;
+      h.asks = [null];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
+    });
+
+    it('остров жив, карточка найдена, но работа завершена (done) — остров её не покажет, уведомление есть', async () => {
+      const done = redesign();
+      done.map.work.status = 'done';
+      const h = harness([done]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
+      expect(h.notes[0]?.body).toBe('Run: npm test\np');
+    });
+
+    it('остров жив, сессия Codex — уведомление есть', async () => {
+      const h = harness([entry('Redesign', [session('s-02', 'executor', { provider: 'codex' })])]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
+    });
+
+    it('«закончил» — по-прежнему синхронно и без запроса карточки', () => {
+      const h = harness([redesign()]);
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('unseen'));
+      expect(h.notes).toMatchObject([{ title: 'Redesign · S02 executor — finished', body: 'Login fixed' }]);
+      expect(h.pendingAsk).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -854,10 +1014,13 @@ describe('обрезка до 200 кодовых точек (тест 12 кус�
   const codePoints = (text: string): string[] => Array.from(text);
   const noLoneSurrogates = (text: string): boolean => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
 
-  it('название работы из 201 эмодзи → заголовок ровно 200, последняя «…», непарных суррогатов нет', () => {
+  it('название работы из 201 эмодзи → заголовок ровно 200, последняя «…», непарных суррогатов нет', async () => {
+    vi.useFakeTimers();
     const h = harness([entry('😀'.repeat(201), [session('s-02', 'executor', { task: 'x' })])]);
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
+    await settle();
+    vi.useRealTimers();
     const title = h.notes[0]?.title ?? '';
     expect(codePoints(title)).toHaveLength(200);
     expect(codePoints(title)[199]).toBe('…');
@@ -918,16 +1081,20 @@ describe('wireAttentionNotifications на подставном мосте и н�
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('повтор blocked двух сессий — база; третья working → blocked — одно; после переподключения повтор снова база', () => {
+  it('повтор blocked двух сессий — база; третья working → blocked — одно; после переподключения повтор снова база', async () => {
+    vi.useFakeTimers();
     const off = wire();
     emit(ref1, 'blocked');
     emit(ref2, 'blocked');
     expect(bridge.appNotified).toEqual([]);
     emit(ref3, 'working');
     emit(ref3, 'blocked');
+    // Хост в тесте не «connected» — ленты нет, запрос пуст, уведомление уходит после паузы повтора.
+    await vi.runAllTimersAsync();
     expect(bridge.appNotified.map((note) => note.title)).toEqual(['Redesign · S03 backend — needs you']);
 
     off();
@@ -935,8 +1102,10 @@ describe('wireAttentionNotifications на подставном мосте и н�
     emit(ref1, 'blocked');
     emit(ref2, 'blocked');
     emit(ref3, 'blocked');
+    await vi.runAllTimersAsync();
     expect(bridge.appNotified).toHaveLength(1);
     offAgain();
+    vi.useRealTimers();
   });
 
   it('host.notice моста доходит до уведомителя; после отписки — нет', () => {

@@ -12,12 +12,15 @@ import { create } from 'zustand';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { toast } from 'sonner';
-import type { BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
+import type { BrowserOpenTab } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore, type LayoutState } from '../layout/store.js';
 import { findTab, groups, openTab } from '../layout/tree.js';
 import { layoutUrl } from './url.js';
+
+/** Режим вкладки (спека браузера 4.6, 4.7): Select или Annotate, взаимоисключающие; `off` — страница как обычно. */
+export type BrowserMode = 'off' | 'select' | 'annotate';
 
 export interface BrowserTabState {
   title: string | null;
@@ -29,7 +32,7 @@ export interface BrowserTabState {
   webContentsId: number | null; // с dom-ready: раньше getWebContentsId() бросает
   findOpen: boolean; // полоса поиска по странице (⌘F, 9.2b)
   loadFailed: boolean; // главный фрейм не загрузился (did-fail-load, fix-9)
-  pick: 'off' | 'picking' | { result: PickResult }; // Design Mode (9.3b): режим выбора или карточка результата
+  mode: BrowserMode; // Select или Annotate: включает человек кнопкой, клавишей или палитрой (этап B)
 } // адрес — только в раскладке (TabSpec.url)
 
 export interface BrowserState {
@@ -50,7 +53,7 @@ const INITIAL: BrowserTabState = {
   webContentsId: null,
   findOpen: false,
   loadFailed: false,
-  pick: 'off',
+  mode: 'off',
 };
 
 export const useBrowserStore: UseBoundStore<StoreApi<BrowserState>> = create<BrowserState>((set) => ({
@@ -66,6 +69,12 @@ export const useBrowserStore: UseBoundStore<StoreApi<BrowserState>> = create<Bro
       return { tabs: rest };
     }),
 }));
+
+/** ⌖, ⌘⇧C, палитра: тот же режим — выключить, другой — включить вместо прежнего. */
+export function toggleBrowserMode(tabId: string, mode: Exclude<BrowserMode, 'off'>): void {
+  const current = useBrowserStore.getState().tabs[tabId]?.mode ?? 'off';
+  useBrowserStore.getState().update(tabId, { mode: current === mode ? 'off' : mode });
+}
 
 export const BROWSER_LIMITS = { tabsPerWork: 10 } as const; // спека 12.4
 

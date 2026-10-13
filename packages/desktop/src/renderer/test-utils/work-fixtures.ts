@@ -85,6 +85,7 @@ export function makeActivity(
   activity: Activity,
   patch: {
     lastEventAt?: string | null;
+    turnEndedAt?: string | null;
     metrics?: LiveMetrics | null;
     heldByBackground?: boolean;
   } = {},
@@ -97,7 +98,7 @@ export function makeActivity(
       tasks: [],
       waitingFor: null,
       heldByBackground: patch.heldByBackground ?? false,
-      turnEndedAt: null,
+      turnEndedAt: patch.turnEndedAt ?? null,
       lastEventAt: patch.lastEventAt === undefined ? '2026-09-27T09:00:00.000Z' : patch.lastEventAt,
       source: 'hooks',
       exited: false,

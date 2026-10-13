@@ -63,6 +63,8 @@ export default defineConfig({
       // работает, даже когда package.json пакета говорит "type": "module".
       // Форсируем CommonJS независимо от типа пакета.
       rollupOptions: {
+        // Второй вход — узкий preload острова (спека 2026-10-12, 5.2); оба кладутся рядом: out/preload/<имя>.js.
+        input: { index: resolve(dirname, 'src/preload/index.ts'), island: resolve(dirname, 'src/preload/island.ts') },
         output: {
           format: 'cjs',
           entryFileNames: '[name].js',
@@ -75,7 +77,8 @@ export default defineConfig({
     plugins: [react(), tailwindcss(), pdfjsAssets(), fileIcons()],
     build: {
       rollupOptions: {
-        input: resolve(dirname, 'src/renderer/index.html'),
+        // Второй вход — окно острова (спека 2026-10-12, 5.2).
+        input: { index: resolve(dirname, 'src/renderer/index.html'), island: resolve(dirname, 'src/renderer/island.html') },
       },
     },
   },
