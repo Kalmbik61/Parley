@@ -11,7 +11,7 @@
 - окно (рендерер) открывает вкладку агента, пишет размер в раскладку, сообщает main, что у вкладки включён Select или Annotate (`human_busy`), и показывает значок агента со Stop;
 - третий встроенный скилл `parley-browser` ставится `core/work/skill-install.ts`, а скилл `parley` и `read_guide` указывают на него.
 
-**Стек:** Electron 44.4.5 (CDP 1.3 через `webContents.debugger`), React 18, zustand 5, Radix, `lucide-react`, `sonner`, Tailwind 4 (`@container`); `@modelcontextprotocol/sdk` 1.30, zod 4 в протоколе; vitest + Testing Library + jsdom; Playwright `_electron`.
+**Стек:** Electron 44.4.5 (CDP 1.3 через `webContents.debugger`), React 18, zustand 5, Radix, `lucide-react`, `sonner`, Tailwind 4; `@modelcontextprotocol/sdk` 1.30, zod 4 в протоколе; vitest + Testing Library + jsdom; Playwright `_electron`.
 
 **Спека:** `docs/specs/2026-10-07-browser-devtools-agent-design.md` (разделы 2 п. 8–11, 3.3, 3.7, 4.8, 5.1–5.4, 6–10, 12 «Этап D»). **Индекс плана:** `docs/specs/2026-10-07-browser-devtools-agent-plan.md` — имена раздела «Общие имена» обязательны. **Этап C:** `docs/specs/2026-10-07-browser-devtools-agent-plan-c-agent-read.md` — этот план продолжает его код и его тесты. Исполнитель читает спеку, индекс, план C и этот файл.
 
@@ -4314,7 +4314,7 @@ git commit -m "feat(desktop): окно и агент — занятость че
 
 **Интерфейсы:**
 - Берёт: `onAgentActivity` и подписка с `agentCapture` (этап C, задача 15), `setAgentAccess` (этап C, задача 14), `AGENT_LIMITS.guardTailMs`, `AGENT_LIMITS.badgeOps` (задача 2).
-- Отдаёт: `AgentBadge` (`session`, `recent`, `onStop`); `BrowserChromeProps.agent: { session: string; recent: string[] } | null` и `onAgentStop()`; строки `S.browser.agent.acting`, `.stop`, `.stopHint`, `.recent`.
+- Отдаёт: `AgentBadge` (`session`, `recent`, `onStop`, `showStopLabel`); `BrowserChromeProps.agent: { session: string; recent: string[] } | null` и `onAgentStop()`; строки `S.browser.agent.acting`, `.stop`, `.stopHint`, `.recent`.
 - Спека 4.8: пока агент действует — значок «S02» со «Stop» в строке вкладки, подсвеченная рамка страницы, подсказка — последние 5 операций. Значок держится ещё `guardTailMs` после конца операции — столько же, сколько окно агента в страже: иначе он мигал бы на каждом шаге. Точку клика рисует main (задача 12).
 
 - [ ] **Шаг 1. Написать падающие тесты.**
@@ -4330,7 +4330,7 @@ import { AgentBadge } from './AgentBadge.js';
 describe('AgentBadge (спека 4.8)', () => {
   it('номер сессии; подсказка — кто действует и последние операции; Stop зовёт onStop', () => {
     const onStop = vi.fn();
-    render(<AgentBadge session="S02" recent={['S02 snapshot', 'S02 action']} onStop={onStop} />);
+    render(<AgentBadge session="S02" recent={['S02 snapshot', 'S02 action']} showStopLabel onStop={onStop} />);
     const badge = screen.getByTestId('agent-badge');
     expect(badge.textContent).toContain('S02');
     expect(badge.getAttribute('title')).toBe([S.browser.agent.acting('S02'), S.browser.agent.recent, 'S02 snapshot', 'S02 action'].join('\n'));
@@ -4338,12 +4338,14 @@ describe('AgentBadge (спека 4.8)', () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it('без операций — подсказка без списка; на узкой строке подпись Stop прячется, значок кнопки остаётся', () => {
-    render(<AgentBadge session="S02" recent={[]} onStop={vi.fn()} />);
+  it('без операций — подсказка без списка; на узкой строке подпись Stop прячется, значок кнопки остаётся; на широкой — видна', () => {
+    const view = render(<AgentBadge session="S02" recent={[]} showStopLabel={false} onStop={vi.fn()} />);
     expect(screen.getByTestId('agent-badge').getAttribute('title')).toBe(S.browser.agent.acting('S02'));
-    const label = screen.getByText(S.browser.agent.stop);
-    expect(label.className).toContain('hidden');
-    expect(label.className).toContain('@min-[560px]:inline');
+    expect(screen.getByText(S.browser.agent.stop).className).toContain('hidden');
+    expect(screen.getByRole('button', { name: S.browser.agent.stopHint })).toBeTruthy();
+    view.rerender(<AgentBadge session="S02" recent={[]} showStopLabel onStop={vi.fn()} />);
+    expect(screen.getByText(S.browser.agent.stop).className).toContain('inline');
+    expect(screen.getByText(S.browser.agent.stop).className).not.toContain('hidden');
   });
 });
 ```
@@ -4443,8 +4445,10 @@ describe('значок агента и Stop (этап D, спека 4.8)', () =>
 /**
  * Значок агента в строке вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.8): номер сессии,
  * которая сейчас действует во вкладке, подсказка с её последними операциями и Stop. Stop выключает Agent access вкладки —
- * main обрывает текущую операцию, агенту `access_denied`. На узкой строке (800×500) подпись Stop прячется
- * контейнерным запросом строки вкладки (`@container` в `BrowserChrome.tsx`), значок кнопки остаётся.
+ * main обрывает текущую операцию, агенту `access_denied`. На узкой строке (800×500) подпись Stop прячется флагом ширины
+ * строки (`wide` в `BrowserChrome.tsx`, `ResizeObserver`), значок кнопки остаётся. Контейнерного запроса в строке нет:
+ * размерный контейнер терял пересчёт `:disabled` у кнопок строки (P2 итогового ревью этапа B), и новых контейнерных
+ * запросов (container queries) в строке и ниже быть не должно.
  */
 import { Bot, Square } from 'lucide-react';
 import { S } from '../../shared/strings.js';
@@ -4454,10 +4458,12 @@ export interface AgentBadgeProps {
   session: string;
   /** Последние операции (`S02 action`), старые — первыми. */
   recent: readonly string[];
+  /** Подпись «Stop» видна (строка достаточно широка — `wide` у `BrowserChrome`); иначе остаётся значок. */
+  showStopLabel: boolean;
   onStop(): void;
 }
 
-export function AgentBadge({ session, recent, onStop }: AgentBadgeProps): JSX.Element {
+export function AgentBadge({ session, recent, showStopLabel, onStop }: AgentBadgeProps): JSX.Element {
   const hint = recent.length === 0 ? S.browser.agent.acting(session) : [S.browser.agent.acting(session), S.browser.agent.recent, ...recent].join('\n');
   return (
     <div
@@ -4475,7 +4481,7 @@ export function AgentBadge({ session, recent, onStop }: AgentBadgeProps): JSX.El
         className="flex h-5 shrink-0 items-center gap-0.5 rounded px-1 hover:bg-blue-500/20"
       >
         <Square className="size-3 shrink-0 fill-current" aria-hidden="true" />
-        <span className="hidden @min-[560px]:inline">{S.browser.agent.stop}</span>
+        <span className={showStopLabel ? 'inline' : 'hidden'}>{S.browser.agent.stop}</span>
       </button>
     </div>
   );
@@ -4495,7 +4501,7 @@ export function AgentBadge({ session, recent, onStop }: AgentBadgeProps): JSX.El
   - прямо перед кнопкой консоли (`aria-label={S.browser.devtools.toggle}`, этап A):
 
 ```tsx
-      {props.agent !== null ? <AgentBadge session={props.agent.session} recent={props.agent.recent} onStop={props.onAgentStop} /> : null}
+      {props.agent !== null ? <AgentBadge session={props.agent.session} recent={props.agent.recent} showStopLabel={wide} onStop={props.onAgentStop} /> : null}
 ```
 
 - [ ] **Шаг 6. `BrowserSurface.tsx`.**
