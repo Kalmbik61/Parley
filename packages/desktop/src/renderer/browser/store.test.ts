@@ -8,7 +8,7 @@ import type { GroupNode, TabSpec, WorkLayout } from '../../shared/layout-types.j
 import { tabId } from '../layout/ids.js';
 import type { LayoutOp } from '../layout/store.js';
 import { emptyLayout, findTab, focusTab, groups, openTab, splitGroup } from '../layout/tree.js';
-import { BROWSER_LIMITS, browserTabCount, openBrowserTab, openBrowserTabFrom, useBrowserStore, wantsAddressFocus } from './store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, openBrowserTabFrom, toggleBrowserMode, useBrowserStore, wantsAddressFocus } from './store.js';
 
 const KEY = '/tmp/p\nw-01';
 
@@ -242,7 +242,7 @@ describe('useBrowserStore', () => {
       webContentsId: null,
       findOpen: false,
       loadFailed: false,
-      pick: 'off',
+      mode: 'off',
     });
     useBrowserStore.getState().update('browser:a', { loading: true });
     expect(useBrowserStore.getState().tabs['browser:a']?.title).toBe('Page');
@@ -251,11 +251,15 @@ describe('useBrowserStore', () => {
   });
 });
 
-describe('BrowserTabState.pick (кусок 9.3b)', () => {
-  it('новая вкладка — off; update меняет pick, прочие поля не трогает', () => {
+describe('BrowserTabState.mode (этап B, спека браузера 4.6, 4.7)', () => {
+  it('новая вкладка — off; toggleBrowserMode включает, повтор выключает; Select и Annotate взаимоисключающие', () => {
     useBrowserStore.getState().update('browser:1', { title: 'T' });
-    expect(useBrowserStore.getState().tabs['browser:1']?.pick).toBe('off');
-    useBrowserStore.getState().update('browser:1', { pick: 'picking' });
-    expect(useBrowserStore.getState().tabs['browser:1']).toMatchObject({ title: 'T', pick: 'picking' });
+    expect(useBrowserStore.getState().tabs['browser:1']?.mode).toBe('off');
+    toggleBrowserMode('browser:1', 'select');
+    expect(useBrowserStore.getState().tabs['browser:1']).toMatchObject({ title: 'T', mode: 'select' });
+    toggleBrowserMode('browser:1', 'annotate');
+    expect(useBrowserStore.getState().tabs['browser:1']?.mode).toBe('annotate');
+    toggleBrowserMode('browser:1', 'annotate');
+    expect(useBrowserStore.getState().tabs['browser:1']?.mode).toBe('off');
   });
 });

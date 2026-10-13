@@ -8,6 +8,15 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- **Page context in chat.** The bar above a browser page has "To: S02 ▾" — the session or room
+  where page context goes. ⌖ Select (⌘⇧C) adds the clicked element with its role, React
+  component and source, styles, HTML and a screenshot; ⇧-click keeps selecting. ✎ Annotate
+  (⌘⌥A) puts numbered pins on elements and dashed frames on areas, each with your comment, and
+  the tray adds up to 20 of them as one file with one screenshot. "Add to chat" on a console
+  line or a request and "Add errors to chat" in the panel header add those too. Each is a
+  Markdown file in `~/.parley/desktop/drops/context` with secrets replaced by `<redacted>`; it
+  becomes a chip above the Chat or room field, or one line in a terminal session's input
+  without Enter. A toast offers "Open" and "Undo". Nothing is sent by itself.
 - **Island.** A black panel at the top of the screen (in the notch on a MacBook) shows how many agents
   are working and waiting ("N working · M waiting"); hover or click it for the list of active
   workspaces and rooms, and a click on a row opens it in Parley. A permission request, a simple
@@ -25,6 +34,17 @@ All notable changes to Parley are documented in this file.
   notifications. On by default; Settings → Notifications → "island with requests at the top of the
   screen". While the island is on, a request with a card there is not repeated as a macOS
   notification.
+
+### Changed
+
+- **Design Mode is now Select.** The result card and "Send to agent ▾" are gone: the element
+  becomes an attachment of the "To" target, and its chip shows the screenshot before you send.
+
+### Fixed
+
+- **Notification clicks and update notices keep working after a browser tab loads.** Once a browser tab had loaded
+  a page, clicking a macOS notification raised the window but didn't open the session, and a new-version notice
+  never reached it, until the window was reloaded.
 
 ## 0.11.0
 

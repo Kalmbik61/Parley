@@ -2,7 +2,7 @@ import { lstat, lutimes, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, u
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 
 let base: string;
 let dir: string;
@@ -118,5 +118,42 @@ describe('cleanupDrops (тест 2)', () => {
 
   it('каталога нет → 0', async () => {
     expect(await cleanupDrops(path.join(base, 'missing'), WEEK)).toBe(0);
+  });
+});
+
+describe('cleanupDropsTree (спека браузера 3.6)', () => {
+  const WEEK = 7 * 24 * 60 * 60 * 1000;
+
+  it('старые файлы drops/ и drops/context/ удалены, свежие и сам каталог context — на месте', async () => {
+    const context = path.join(dir, 'context');
+    await mkdir(context, { recursive: true });
+    const now = Date.now();
+    const old = new Date(now - WEEK - 60_000);
+    for (const file of [path.join(dir, 'old.png'), path.join(context, 'element-a-0000.md'), path.join(context, 'element-a-0000.png')]) {
+      await writeFile(file, 'x');
+      await utimes(file, old, old);
+    }
+    await writeFile(path.join(context, 'console-b-0001.md'), 'y');
+    await utimes(context, old, old);
+
+    expect(await cleanupDropsTree(dir, WEEK, now)).toBe(3);
+    expect(await readdir(dir)).toEqual(['context']);
+    expect(await readdir(context)).toEqual(['console-b-0001.md']);
+  });
+
+  it('каталога context нет — чистится только drops/', async () => {
+    await mkdir(dir, { recursive: true });
+    expect(await cleanupDropsTree(dir, WEEK)).toBe(0);
+  });
+
+  it('срок считается от переданного now — и в drops/, и в drops/context/', async () => {
+    const context = path.join(dir, 'context');
+    await mkdir(context, { recursive: true });
+    await writeFile(path.join(dir, 'a.png'), 'x');
+    await writeFile(path.join(context, 'element-a-0000.md'), 'y');
+    // По часам файлы свежие, а относительно заданного now — старше недели.
+    expect(await cleanupDropsTree(dir, WEEK, Date.now() + 2 * WEEK)).toBe(2);
+    expect(await readdir(dir)).toEqual(['context']);
+    expect(await readdir(context)).toEqual([]);
   });
 });

@@ -73,4 +73,34 @@ describe('AttachmentChip', () => {
     expect(screen.getByTestId('chat-attachment').className).toContain('h-[120px] w-[160px]');
     expect(screen.queryByRole('button')).toBeNull();
   });
+
+  it('файл-контекст drops/context: значок вида, подпись — метка, у element — миниатюра соседнего .png', async () => {
+    const bridge = createFakeBridge();
+    const md = '/h/.parley/desktop/drops/context/element-button.save-a1f3.md';
+    bridge.setThumbnail('/h/.parley/desktop/drops/context/element-button.save-a1f3.png', PNG);
+    const onRemove = vi.fn();
+    render(<AttachmentChip path={md} bridge={bridge} size="composer" onRemove={onRemove} />);
+    await act(async () => {});
+    const chip = screen.getByTestId('chat-attachment');
+    expect(chip.getAttribute('data-context-kind')).toBe('element');
+    expect(chip.getAttribute('title')).toBe(md);
+    expect(chip.querySelector('span.truncate')?.textContent).toBe('button.save');
+    expect(chip.querySelector('img')?.getAttribute('src')).toBe(PNG);
+    expect(chip.querySelector('svg')?.getAttribute('class')).toContain('lucide-square-mouse-pointer');
+    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.removeAttachment('button.save') }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('console — без миниатюры и без запроса её; .md вне drops/context — обычный файл', async () => {
+    const bridge = createFakeBridge();
+    const view = render(<AttachmentChip path="/h/drops/context/console-error-boom-0001.md" bridge={bridge} size="composer" />);
+    await act(async () => {});
+    const chip = screen.getByTestId('chat-attachment');
+    expect(chip.getAttribute('data-context-kind')).toBe('console');
+    expect(chip.querySelector('img')).toBeNull();
+    expect(bridge.thumbnailCalls).toEqual([]);
+    view.unmount();
+    render(<AttachmentChip path="/h/notes/element-x-0001.md" bridge={bridge} size="composer" />);
+    expect(screen.getByTestId('chat-attachment').hasAttribute('data-context-kind')).toBe(false);
+  });
 });

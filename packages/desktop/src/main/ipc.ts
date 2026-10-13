@@ -8,6 +8,7 @@ import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
+import type { ContextInput, SavedContext } from '../shared/browser-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -22,6 +23,8 @@ import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
+import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
+import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
 import type { Inspector } from './browser/inspector.js';
@@ -214,6 +217,10 @@ export interface RegisterIpcOptions {
     session: Pick<Session, 'clearStorageData' | 'clearCache'>;
     /** Выбор элемента Design Mode (кусок 9.3a, спека 12.3): main/browser/design-mode.ts#createDesignMode. */
     designMode: ReturnType<typeof createDesignMode>;
+    /** Файл-контекст браузера (этап B, спека 3.6): main/browser/context-files.ts#saveContextFile в drops/context. */
+    saveContext(input: ContextInput): Promise<SavedContext>;
+    /** Аннотации (этап B, спека браузера 4.7): main/browser/annotate.ts#createAnnotate. */
+    annotate: ReturnType<typeof createAnnotate>;
     /** Журнал консоли и сети гостей (спека 2026-10-07, 3.3): main/browser/inspector.ts#createInspector. */
     inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
@@ -721,6 +728,37 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async (_event, id: unknown) => {
       await browser.designMode.cancel(browserGuest(browser, id).id);
     }),
+  );
+
+  // Файл-контекст браузера (спека браузера 3.6): форма — до записи; снимок и имя проверяет saveContextFile.
+  ipcMain.handle(
+    'browser:save-context',
+    withIpcError(async (_event, input: unknown) => browser.saveContext(parseContextInput(input))),
+  );
+
+  // Аннотации (спека браузера 4.7): тот же страж гостя, что у выбора; метки — проверенной формы.
+  ipcMain.handle(
+    'browser:annotate-start',
+    withIpcError(async (_event, id: unknown) => browser.annotate.start(browserGuest(browser, id).id)),
+  );
+  ipcMain.handle(
+    'browser:annotate-cancel',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.annotate.cancel(browserGuest(browser, id).id);
+    }),
+  );
+  ipcMain.handle(
+    'browser:annotate-sync',
+    withIpcError(async (_event, id: unknown, pins: unknown) => {
+      const guest = browserGuest(browser, id);
+      const parsed = parseAnnotationPins(pins);
+      if (parsed === null) throw new HostError('bad_request', 'invalid annotation pins');
+      return browser.annotate.sync(guest.id, parsed);
+    }),
+  );
+  ipcMain.handle(
+    'browser:annotate-capture',
+    withIpcError(async (_event, id: unknown) => browser.annotate.capture(browserGuest(browser, id).id)),
   );
 
   ipcMain.handle(

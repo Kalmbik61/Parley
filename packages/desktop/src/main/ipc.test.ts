@@ -55,6 +55,15 @@ const designMode = {
   start: vi.fn().mockResolvedValue(null),
   cancel: vi.fn().mockResolvedValue(undefined),
 };
+/** Запись файла-контекста (этап B браузера): main/browser/context-files.ts подменён — мост только проверяет форму. */
+const saveContext = vi.fn().mockResolvedValue({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
+/** Аннотации моста (этап B браузера): main/browser/annotate.ts подменён — мост только проверяет гостя и метки. */
+const annotate = {
+  start: vi.fn().mockResolvedValue(null),
+  cancel: vi.fn().mockResolvedValue(undefined),
+  sync: vi.fn().mockResolvedValue([]),
+  capture: vi.fn().mockResolvedValue({ path: null }),
+};
 /** Журнал и эмуляция моста (спека 2026-10-07, 3.5): подменены — мост проверяет гостя и аргументы. */
 const inspector = {
   snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
@@ -223,6 +232,8 @@ function setup(
       fromId: (id) => (overrides.webContents?.get(id) as WebContents | undefined) ?? null,
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
       designMode,
+      saveContext,
+      annotate,
       inspector,
       emulation,
     },
@@ -1205,7 +1216,17 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(designMode.start).not.toHaveBeenCalled();
     expect(designMode.cancel).not.toHaveBeenCalled();
 
-    const picked = { url: 'https://x.y/a', selector: 'body', text: '', html: '', styles: {}, imagePath: null, thumbnail: null };
+    const picked = {
+      url: 'https://x.y/a',
+      selector: 'body',
+      text: '',
+      html: '',
+      styles: {},
+      imagePath: null,
+      point: null,
+      shift: false,
+      viewport: { width: 800, height: 600, dpr: 1 },
+    };
     designMode.start.mockResolvedValueOnce(picked);
     expect(await ipcMain.invoke('browser:pick-start', 7)).toEqual(picked);
     expect(designMode.start).toHaveBeenCalledWith(7);
@@ -1273,6 +1294,36 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(emulation.set).toHaveBeenLastCalledWith(7, mobile, area);
     await ipcMain.invoke('browser:set-viewport', 7, null, area);
     expect(emulation.set).toHaveBeenLastCalledWith(7, null, area);
+  });
+
+  it('save-context (этап B): неверная форма — bad_request без записи; верная — browser.saveContext', async () => {
+    saveContext.mockClear();
+    const { ipcMain } = browserSetup();
+    const good = { kind: 'console', label: 'error-boom', markdown: '# x\n', imagePath: null };
+    expect(await codeOf(ipcMain.invoke('browser:save-context', { ...good, kind: 'cookie' }))).toBe('bad_request');
+    expect(await codeOf(ipcMain.invoke('browser:save-context', { ...good, imagePath: 'relative.png' }))).toBe('bad_request');
+    expect(saveContext).not.toHaveBeenCalled();
+    expect(await ipcMain.invoke('browser:save-context', good)).toEqual({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
+    expect(saveContext).toHaveBeenCalledWith(good);
+  });
+
+  it('annotate-* (этап B): не гость раздела — bad_request; неверные метки — bad_request; гость — annotate.*', async () => {
+    for (const fn of Object.values(annotate)) fn.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const channel of ['browser:annotate-start', 'browser:annotate-cancel', 'browser:annotate-capture']) {
+      for (const id of [1, 404, 8, 9, 7.5, '7', null]) expect(await codeOf(ipcMain.invoke(channel, id)), `${channel} ${String(id)}`).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:annotate-sync', 7, [{ n: 1, key: 'x"' }]))).toBe('bad_request');
+    expect(annotate.sync).not.toHaveBeenCalled();
+
+    await ipcMain.invoke('browser:annotate-start', 7);
+    await ipcMain.invoke('browser:annotate-cancel', 7);
+    await ipcMain.invoke('browser:annotate-sync', 7, [{ n: 1, key: 'a1' }]);
+    await ipcMain.invoke('browser:annotate-capture', 7);
+    expect(annotate.start).toHaveBeenCalledWith(7);
+    expect(annotate.cancel).toHaveBeenCalledWith(7);
+    expect(annotate.sync).toHaveBeenCalledWith(7, [{ n: 1, key: 'a1' }]);
+    expect(annotate.capture).toHaveBeenCalledWith(7);
   });
 });
 

@@ -37,6 +37,13 @@ export type FileRootSpec = { kind: 'project' } | { kind: 'worktree'; sessionId: 
 /** Вид вкладки сессии (план 2026-10-01, решение 6): лента «Chat» или терминал. */
 export type TerminalView = 'chat' | 'terminal';
 
+/**
+ * Цель «To» вкладки браузера (спека браузера 4.5): куда ложатся файлы-контексты — сессия или комната работы. В
+ * раскладке только id: путей `drops/` здесь нет (спека окна 15.2).
+ */
+export type BrowserTarget =
+  { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string };
+
 export type TabSpec =
   // view: нет поля — умолчание по сессии (`renderer/lib/feed-view.ts`); есть — выбор человека переключателем.
   | { kind: 'terminal'; id: string; sessionId: string; view?: TerminalView }
@@ -47,7 +54,8 @@ export type TabSpec =
   // path — относительный.
   | { kind: 'file'; id: string; root: FileRootSpec; path: string }
   // viewport: нет поля — Fit (спека 2026-10-07-browser-devtools-agent-design.md, 4.2); размер переживает перезапуск.
-  | { kind: 'browser'; id: string; url: string; viewport?: ViewportSpec };
+  // target: нет поля — умолчание, сессия в фокусе работы (спека браузера 4.5).
+  | { kind: 'browser'; id: string; url: string; viewport?: ViewportSpec; target?: BrowserTarget };
 
 export interface WorkLayout {
   root: LayoutNode;

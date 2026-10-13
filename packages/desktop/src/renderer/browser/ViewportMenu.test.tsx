@@ -80,6 +80,18 @@ describe('ViewportMenu (спека 4.2)', () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
+  it('подпись рядом со значком: по умолчанию скрыта, с showName видна; классов контейнерного запроса нет (P2)', () => {
+    const view = render(<ViewportMenu viewport={{ preset: 'mobile-m', rotated: false, dpr: 2 }} disabled={false} onChange={vi.fn()} />);
+    const label = (): HTMLElement => document.querySelector('[data-viewport-name]') as HTMLElement;
+    expect(label().textContent).toBe('Mobile M');
+    expect(label().className).toMatch(/\bhidden\b/);
+    expect(label().className).not.toMatch(/\binline\b/);
+    view.rerender(<ViewportMenu viewport={{ preset: 'mobile-m', rotated: false, dpr: 2 }} disabled={false} showName onChange={vi.fn()} />);
+    expect(label().className).toMatch(/\binline\b/);
+    expect(label().className).not.toMatch(/\bhidden\b/);
+    expect(label().className).not.toContain('@');
+  });
+
   it('Rotate и DPR меняют текущий размер', () => {
     const onChange = vi.fn();
     const mobile: ViewportSpec = { preset: 'mobile-m', rotated: false, dpr: 2 };

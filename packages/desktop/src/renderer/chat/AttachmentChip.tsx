@@ -1,16 +1,21 @@
 /**
  * Вложение «Chat» одним чипом: картинка с готовой миниатюрой (`use-thumbnail.ts`) — самой миниатюрой, всё
  * прочее и картинка без миниатюры (грузится, файла уже нет, больше 20 МБ) — значком и именем файла; полный
- * путь — в `title`. Тот же чип стоит над полем ввода (с крестиком) и в пузыре промпта ленты (без него).
- * Рамка миниатюры фиксированного размера: высота строки виртуального списка не зависит от пропорций
+ * путь — в `title`. Тот же чип стоит над полем ввода (с крестиком), над полем комнаты и в пузыре промпта ленты
+ * (без него). Рамка миниатюры фиксированного размера: высота строки виртуального списка не зависит от пропорций
  * картинки. Длинное имя режется многоточием, а не раздвигает поле и пузырь.
+ *
+ * Файл-контекст браузера (`drops/context/*.md`, спека браузера 4.5) — значок по виду и метка из имени файла; у
+ * элемента и аннотаций — ещё миниатюра соседнего `.png`: человек видит снимок до отправки.
  */
 
-import { FileText, ImageIcon, X } from 'lucide-react';
+import { FileText, ImageIcon, MessageSquareText, Network, SquareMousePointer, SquareTerminal, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import type { ContextKind } from '../../shared/context-markdown.js';
 import { isImagePath } from '../../shared/image-path.js';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
+import { contextAttachment } from './context-attachments.js';
 import { useThumbnail } from './use-thumbnail.js';
 
 export interface AttachmentChipProps {
@@ -23,16 +28,55 @@ export interface AttachmentChipProps {
   onRemove?: () => void;
 }
 
+/** Значок файла-контекста по виду. */
+const CONTEXT_ICONS: Record<ContextKind, LucideIcon> = {
+  element: SquareMousePointer,
+  console: SquareTerminal,
+  request: Network,
+  errors: TriangleAlert,
+  annotations: MessageSquareText,
+};
+
 /** Имя файла из пути: разделители `/` и `\`, хвостовой разделитель не в счёт. */
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter((part) => part !== '').at(-1) ?? path;
 }
 
+const PILL =
+  'inline-flex min-w-0 max-w-[min(16rem,100%)] items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground';
+
 export function AttachmentChip({ path, bridge, size, onRemove }: AttachmentChipProps): JSX.Element {
   const name = fileName(path);
   const image = isImagePath(path);
-  const thumbnail = useThumbnail(bridge, image ? path : null);
-  const label = S.chat.composer.removeAttachment(name);
+  const context = contextAttachment(path);
+  const thumbnail = useThumbnail(bridge, context !== null ? context.imagePath : image ? path : null);
+  const label = S.chat.composer.removeAttachment(context === null ? name : context.label);
+  const inlineRemove =
+    onRemove === undefined ? null : (
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        onClick={onRemove}
+        className="flex size-[18px] shrink-0 items-center justify-center rounded-full transition-colors hover:bg-foreground/12"
+      >
+        <X className="size-3" aria-hidden="true" />
+      </button>
+    );
+
+  if (context !== null) {
+    const Icon = CONTEXT_ICONS[context.kind];
+    return (
+      <div data-testid="chat-attachment" data-path={path} data-context-kind={context.kind} title={path} className={PILL}>
+        {thumbnail === null ? null : (
+          <img src={thumbnail} alt="" className={cn('shrink-0 rounded-sm border border-border object-cover', size === 'feed' ? 'size-10' : 'size-6')} />
+        )}
+        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 truncate">{context.label}</span>
+        {inlineRemove}
+      </div>
+    );
+  }
 
   if (thumbnail !== null) {
     return (
@@ -63,25 +107,10 @@ export function AttachmentChip({ path, bridge, size, onRemove }: AttachmentChipP
 
   const Icon = image ? ImageIcon : FileText;
   return (
-    <div
-      data-testid="chat-attachment"
-      data-path={path}
-      title={path}
-      className="inline-flex min-w-0 max-w-[min(16rem,100%)] items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
-    >
+    <div data-testid="chat-attachment" data-path={path} title={path} className={PILL}>
       <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="min-w-0 truncate">{name}</span>
-      {onRemove === undefined ? null : (
-        <button
-          type="button"
-          aria-label={label}
-          title={label}
-          onClick={onRemove}
-          className="flex size-[18px] shrink-0 items-center justify-center rounded-full transition-colors hover:bg-foreground/12"
-        >
-          <X className="size-3" aria-hidden="true" />
-        </button>
-      )}
+      {inlineRemove}
     </div>
   );
 }
