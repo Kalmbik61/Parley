@@ -20,7 +20,8 @@
 // - мир 1001, без токена и без console.debug: инспектор пишет все console.* страницы в журнал Console человека;
 // - на beforeunload слой не снимается: мир умирает вместе с документом, а скачивание и отменённый переход документ не
 //   меняют — метки должны остаться;
-// - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок в её левом верхнем углу.
+// - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок с центром в её левом верхнем углу, прижатый
+//   внутрь вьюпорта (у цели вплотную к краю иначе слой обрезал бы его); скрытый display:none элемент — пропавший.
 (() => {
   if (globalThis.__parleyAnnotate === undefined) {
     // Помощники DOM — guest-dom.js в той же строке перед этим файлом (задача 2).
@@ -78,16 +79,37 @@
       if (!host.isConnected && parent) parent.appendChild(host);
     }
 
-    /** Прямоугольник цели во вьюпорте: элемент — живой, рамка — из координат документа; элемента больше нет — null. */
+    /**
+     * Прямоугольник цели во вьюпорте: элемент — живой, рамка — из координат документа. Элемента больше нет в DOM или он
+     * скрыт (display:none: вкладка, v-show, свёрнутый блок) — null: у скрытого узла коробок нет, а getBoundingClientRect
+     * даёт нули в (0, 0), и метка торчала бы в углу вьюпорта.
+     */
     function viewRect(key) {
       const target = targets.get(key);
       if (target === undefined) return null;
       if (target.rect !== undefined) {
         return { x: target.rect.x - window.scrollX, y: target.rect.y - window.scrollY, width: target.rect.width, height: target.rect.height };
       }
-      if (!target.el.isConnected) return null;
+      if (!target.el.isConnected || target.el.getClientRects().length === 0) return null;
       const r = target.el.getBoundingClientRect();
       return { x: r.left, y: r.top, width: r.width, height: r.height };
+    }
+
+    /** Цель хотя бы краем во вьюпорте: иначе метка спрятана (Orca positionMarkers). */
+    function inView(rect) {
+      return rect !== null && rect.x + rect.width >= 0 && rect.y + rect.height >= 0 && rect.x <= window.innerWidth && rect.y <= window.innerHeight;
+    }
+
+    /**
+     * Левый верхний угол кружка: центр на левом верхнем углу цели, но кружок целиком во вьюпорте. У цели вплотную к краю
+     * (шапка, боковая панель, main, body) слой с overflow:hidden обрезал бы его, и номера не было бы видно ни на странице,
+     * ни на снимке для агента. Клик по номеру (hitPin) считается по тому же месту.
+     */
+    function badgeAt(rect) {
+      return {
+        x: Math.max(0, Math.min(rect.x - BADGE_PX / 2, window.innerWidth - BADGE_PX)),
+        y: Math.max(0, Math.min(rect.y - BADGE_PX / 2, window.innerHeight - BADGE_PX)),
+      };
     }
 
     function shown() {
@@ -96,20 +118,19 @@
 
     /** Положение меток по живым прямоугольникам; без элемента и за краем вьюпорта — спрятаны (Orca positionMarkers). */
     function positionMarkers() {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
       for (const pin of shown()) {
         const node = nodes.get(pin.key);
         if (node === undefined) continue;
         const rect = viewRect(pin.key);
-        const visible = rect !== null && rect.x + rect.width >= 0 && rect.y + rect.height >= 0 && rect.x <= width && rect.y <= height;
+        const visible = inView(rect);
         node.outline.style.display = visible ? 'block' : 'none';
         node.badge.style.display = visible ? 'flex' : 'none';
         if (!visible) continue;
         node.outline.style.width = `${rect.width}px`;
         node.outline.style.height = `${rect.height}px`;
         node.outline.style.transform = `translate3d(${rect.x}px,${rect.y}px,0)`;
-        node.badge.style.transform = `translate3d(${rect.x - BADGE_PX / 2}px,${rect.y - BADGE_PX / 2}px,0)`;
+        const at = badgeAt(rect);
+        node.badge.style.transform = `translate3d(${at.x}px,${at.y}px,0)`;
       }
     }
 
@@ -188,12 +209,13 @@
       return key;
     }
 
-    /** Номер готовой метки под точкой: кружок BADGE_PX с центром в левом верхнем углу цели. */
+    /** Номер готовой метки под точкой: кружок BADGE_PX там, где он нарисован (badgeAt); спрятанная метка не кликается. */
     function hitPin(x, y) {
       for (const pin of pins) {
         const rect = viewRect(pin.key);
-        if (rect === null) continue;
-        if (Math.abs(x - rect.x) <= BADGE_PX / 2 && Math.abs(y - rect.y) <= BADGE_PX / 2) return pin.n;
+        if (!inView(rect)) continue;
+        const at = badgeAt(rect);
+        if (x >= at.x && x <= at.x + BADGE_PX && y >= at.y && y <= at.y + BADGE_PX) return pin.n;
       }
       return null;
     }

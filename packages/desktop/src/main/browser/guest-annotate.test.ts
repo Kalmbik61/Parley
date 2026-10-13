@@ -35,6 +35,10 @@ function click(target: EventTarget, x = 30, y = 30): void {
   dispatchTrusted(target, mouse('mouseup', { clientX: x, clientY: y }));
 }
 
+function domRect(x: number, y: number, width: number, height: number): DOMRect {
+  return { x, y, width, height, top: y, left: x, right: x + width, bottom: y + height, toJSON: () => ({}) };
+}
+
 interface Controller {
   pick(): Promise<unknown>;
   cancel(): void;
@@ -94,6 +98,9 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     document.elementFromPoint = vi.fn(() => form);
     document.elementsFromPoint = vi.fn(() => [button, form, document.querySelector('main') as Element, document.body, document.documentElement]);
     form.getBoundingClientRect = () => ({ x: 10, y: 20, width: 300, height: 120, top: 20, left: 10, right: 310, bottom: 140, toJSON: () => ({}) });
+    // Вёрстки в jsdom нет, и getClientRects пуст у любого элемента — как у скрытого display:none (скрипт считает такой элемент
+    // пропавшим). Форма на странице — одна коробка.
+    form.getClientRects = () => [form.getBoundingClientRect()] as unknown as DOMRectList;
   });
 
   afterEach(() => {
@@ -134,13 +141,14 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     expect(document.querySelector('.badge')).toBeNull();
     expect(layer?.host.shadowRoot).toBeNull();
     const badge = layer?.querySelector<HTMLElement>('[data-pin="1"]');
-    // Кружок 24 px с центром в левом верхнем углу элемента (10, 20).
-    expect(badge?.style.transform).toBe('translate3d(-2px,8px,0)');
+    // Кружок 24 px с центром в левом верхнем углу элемента (10, 20), но целиком во вьюпорте: слева -2 прижат к 0.
+    expect(badge?.style.transform).toBe('translate3d(0px,8px,0)');
     // Элемент уехал вместе с вложенным контейнером: прокрутка любого контейнера — пересчёт в следующем кадре.
+    // Верх элемента выше вьюпорта (-40), сам он ещё виден — кружок остался у верхнего края.
     form.getBoundingClientRect = () => ({ x: 10, y: -40, width: 300, height: 120, top: -40, left: 10, right: 310, bottom: 80, toJSON: () => ({}) });
     document.querySelector('main')?.dispatchEvent(new Event('scroll'));
     await nextFrame();
-    expect(badge?.style.transform).toBe('translate3d(-2px,-52px,0)');
+    expect(badge?.style.transform).toBe('translate3d(0px,0px,0)');
     form.getBoundingClientRect = () => ({ x: 10, y: -400, width: 300, height: 120, top: -400, left: 10, right: 310, bottom: -280, toJSON: () => ({}) });
     window.dispatchEvent(new Event('resize'));
     await nextFrame();
@@ -197,6 +205,101 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     expect(await second).toEqual({ kind: 'edit', n: 1 });
   });
 
+  it('помеченный элемент скрыт display:none (вкладка, v-show, свёрнутый блок), но остался в DOM — как пропавший: rect null, не считается, номера нет; показан снова — метка на месте', async () => {
+    const picking = runScript();
+    click(button);
+    await picking;
+    const marks = [{ n: 1, key: 'a1' }];
+    controller().sync(marks);
+    expect(controller().count()).toBe(1);
+    // display:none в Chromium: узел в документе (isConnected), коробок нет (getClientRects пуст), getBoundingClientRect — нули в (0, 0).
+    form.getClientRects = () => [] as unknown as DOMRectList;
+    form.getBoundingClientRect = () => domRect(0, 0, 0, 0);
+    expect(controller().sync(marks)).toEqual([{ n: 1, rect: null }]);
+    expect(controller().count()).toBe(0);
+    expect(pins()).toBe(0);
+    form.getClientRects = () => [domRect(10, 20, 300, 120)] as unknown as DOMRectList;
+    form.getBoundingClientRect = () => domRect(10, 20, 300, 120);
+    expect(controller().sync(marks)).toEqual([
+      { n: 1, rect: { x: 10 / window.innerWidth, y: 20 / window.innerHeight, width: 300 / window.innerWidth, height: 120 / window.innerHeight } },
+    ]);
+    expect(controller().count()).toBe(1);
+    expect(pins()).toBe(1);
+  });
+
+  it('угол вьюпорта (0, 0) — не номер скрытой метки: клик туда ставит новую, а не правит скрытую', async () => {
+    const first = runScript();
+    click(button);
+    await first;
+    controller().sync([{ n: 1, key: 'a1' }]);
+    form.getClientRects = () => [] as unknown as DOMRectList;
+    form.getBoundingClientRect = () => domRect(0, 0, 0, 0);
+    const second = runScript();
+    click(button, 3, 3);
+    expect(await second).toMatchObject({ kind: 'element', key: 'a2' });
+  });
+
+  it('номер целиком во вьюпорте: у цели вплотную к краю кружок прижат внутрь, а не обрезан слоем; цель частично прокручена — номер у края', async () => {
+    const picking = runScript();
+    click(button);
+    await picking;
+    const marks = [{ n: 1, key: 'a1' }];
+    /** Положение кружка метки 1 для элемента с таким прямоугольником. */
+    const badgeFor = (rect: DOMRect): string | undefined => {
+      form.getBoundingClientRect = () => rect;
+      controller().sync(marks);
+      return layer?.querySelector<HTMLElement>('[data-pin="1"]')?.style.transform;
+    };
+    // Шапка у левого верхнего угла: с центром на самом углу кружок ушёл бы за слой на три четверти, номера не видно.
+    expect(badgeFor(domRect(0, 0, window.innerWidth, 60))).toBe('translate3d(0px,0px,0)');
+    // Верх цели выше вьюпорта, сама она ещё видна: кружок у верхнего края, по горизонтали на своём месте.
+    expect(badgeFor(domRect(100, -40, 300, 120))).toBe('translate3d(88px,0px,0)');
+    // Угол цели у правого нижнего края вьюпорта: кружок целиком внутри.
+    expect(badgeFor(domRect(window.innerWidth - 5, window.innerHeight - 5, 300, 120))).toBe(
+      `translate3d(${window.innerWidth - 24}px,${window.innerHeight - 24}px,0)`,
+    );
+    // Цель в глубине вьюпорта — как прежде, центр кружка на её углу.
+    expect(badgeFor(domRect(100, 200, 300, 120))).toBe('translate3d(88px,188px,0)');
+  });
+
+  it('клик попадает в номер там, где он нарисован: у прижатого к краю кружка — по кружку, а не по углу цели', async () => {
+    const first = runScript();
+    click(button);
+    await first;
+    form.getBoundingClientRect = () => domRect(0, 0, 300, 120);
+    controller().sync([{ n: 1, key: 'a1' }]);
+    // Кружок прижат к (0, 0)–(24, 24): точка (20, 20) в нём, хотя от угла цели дальше 12 px.
+    const edit = runScript();
+    click(button, 20, 20);
+    expect(await edit).toEqual({ kind: 'edit', n: 1 });
+    // Рядом с кружком — под ним, правее него и по диагонали — не номер, а новая метка.
+    for (const [x, y] of [[10, 40], [40, 10], [30, 30]] as const) {
+      const next = runScript();
+      click(button, x, y);
+      expect(await next, `${x},${y}`).toMatchObject({ kind: 'element' });
+    }
+    // Не у края кружок стоит вокруг угла цели (100, 200), то есть в (88, 188)–(112, 212): левее и выше него — не номер.
+    form.getBoundingClientRect = () => domRect(100, 200, 300, 120);
+    controller().sync([{ n: 1, key: 'a1' }]);
+    for (const [x, y] of [[80, 200], [100, 180]] as const) {
+      const next = runScript();
+      click(button, x, y);
+      expect(await next, `${x},${y}`).toMatchObject({ kind: 'element' });
+    }
+  });
+
+  it('спрятанный номер (цель целиком за краем вьюпорта) не кликается: угол вьюпорта — не его кружок', async () => {
+    const first = runScript();
+    click(button);
+    await first;
+    form.getBoundingClientRect = () => domRect(0, -400, 300, 120);
+    controller().sync([{ n: 1, key: 'a1' }]);
+    expect(pins()).toBe(0);
+    const second = runScript();
+    click(button, 5, 5);
+    expect(await second).toMatchObject({ kind: 'element', key: 'a2' });
+  });
+
   it('Esc — null и режим выключен; недоверенные события ничего не ставят и не гасятся', async () => {
     const picking = runScript();
     let settled = false;
@@ -238,6 +341,59 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     click(button);
     const pick = (await picking) as { html: string };
     expect(pick.html).toHaveLength(CONTEXT_LIMITS.annotationHtml + 1);
+  });
+
+  it('недоверенные click, pointerdown и Esc страницы доходят до неё, не гасятся, метку не ставят и режим не выключают', async () => {
+    const pageSeen = vi.fn();
+    for (const type of ['click', 'pointerdown', 'keydown']) button.addEventListener(type, pageSeen);
+    const picking = runScript();
+    let settled = false;
+    void picking.then(() => {
+      settled = true;
+    });
+    // Всё это страница делает сама (el.click(), dispatchEvent): метки ставит и режим выключает только человек.
+    const fakes = [mouse('click'), mouse('pointerdown'), new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })];
+    for (const fake of fakes) button.dispatchEvent(fake);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(pageSeen).toHaveBeenCalledTimes(3);
+    for (const fake of fakes) expect(fake.defaultPrevented, fake.type).toBe(false);
+    expect(settled).toBe(false);
+    expect(controller().waiting()).toBe(true);
+    expect(controller().armed()).toBe(true);
+  });
+
+  it('недоверенный mousemove между mousedown и mouseup человека не делает из клика рамку', async () => {
+    const picking = runScript();
+    dispatchTrusted(button, mouse('mousedown', { clientX: 30, clientY: 30 }));
+    button.dispatchEvent(mouse('mousemove', { clientX: 100, clientY: 80 }));
+    dispatchTrusted(button, mouse('mouseup', { clientX: 31, clientY: 31 }));
+    expect(((await picking) as { kind: string }).kind).toBe('element');
+  });
+
+  it.each([
+    { how: 'Esc', leave: () => dispatchTrusted(document, new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) },
+    { how: 'cancel()', leave: () => controller().cancel() },
+  ])('после $how режим выключен: страница снова получает события человека, метки остались, а новый запуск с кликом ставит ещё одну', async ({ leave }) => {
+    for (const type of ['click', 'pointerdown', 'keydown']) button.addEventListener(type, pageHandler);
+    const first = runScript();
+    click(button);
+    await first;
+    controller().sync([{ n: 1, key: 'a1' }]);
+    const picking = runScript();
+    leave();
+    expect(await picking).toBeNull();
+    expect(controller().armed()).toBe(false);
+    // Режим выключен: всё, что делает человек, доходит до страницы и не отменяется.
+    pageHandler.mockClear();
+    const human = [mouse('mousedown'), mouse('mouseup'), mouse('click'), mouse('pointerdown'), new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })];
+    for (const event of human) expect(dispatchTrusted(button, event).defaultPrevented, event.type).toBe(false);
+    expect(pageHandler).toHaveBeenCalledTimes(human.length);
+    // Метка на странице осталась; новый запуск и клик ставят следующую.
+    expect(pins()).toBe(1);
+    const again = runScript();
+    click(button, 200, 200);
+    expect(await again).toMatchObject({ kind: 'element', key: 'a2' });
+    expect(pins()).toBe(2);
   });
 
   it('второй запуск — тот же объект: метки живут дольше вызова; новый pick отвечает прежнему null', async () => {
