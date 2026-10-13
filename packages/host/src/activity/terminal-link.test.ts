@@ -132,8 +132,11 @@ describe('linkTerminalActivity', () => {
     await waitFor(() => state(activity, ref) === 'working');
     pty.input(ref, 'STUB_APPROVAL\r');
     await waitFor(() => state(activity, ref) === 'blocked');
+    // Поток заглушки — OSC 9 с командой, затем заголовок Action Required: одобрение, а не вопрос.
+    expect(activity.get(ref)?.activity.need).toMatchObject({ kind: 'approval', detail: 'ls -la' });
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => state(activity, ref) === 'working');
+    expect(activity.get(ref)?.activity.need).toBeNull();
     pty.input(ref, 'STUB_READY\r');
     await waitFor(() => state(activity, ref) === 'unseen');
   }, 30_000);

@@ -211,10 +211,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());
 
+  // Лимиты подписок (спека комнат Organic, 3.5): файлы строки статуса Claude Code и логи Codex, раз в
+  // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
+  // старта, когда снимок работ уже прочитан. Создаётся до активности: время сброса лимита сессии она берёт
+  // у этой службы (спека «Застрявшие сессии», 3.4).
+  const limitsService = createLimitsService(handle.context, worksService, options.limits);
+  handle.context.onShutdown(async () => limitsService.stop());
+
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
   // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
   const activityService = createActivityService(handle.context, worksService, {
     ...(options.startupWaitMs === undefined ? {} : { startupWaitMs: options.startupWaitMs }),
+    limits: limitsService,
   });
   handle.context.onShutdown(() => activityService.stop());
 
@@ -312,11 +320,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Отказ читают только ожидающие методы; без них он не должен стать необработанным.
   worksReady.catch(() => undefined);
 
-  // Лимиты подписок (спека комнат Organic, 3.5): файлы строки статуса Claude Code и логи Codex, раз в
-  // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
-  // старта, когда снимок работ уже прочитан.
-  const limitsService = createLimitsService(handle.context, worksService, options.limits);
-  handle.context.onShutdown(async () => limitsService.stop());
   // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
 

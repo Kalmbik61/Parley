@@ -6,6 +6,7 @@ import {
   addSession,
   createWork,
   freezeUsage,
+  hookedSince,
   readMap,
   transitionSession,
   updateMap,
@@ -14,9 +15,11 @@ import {
   NEW_LABEL,
   UNTITLED_WORK,
 } from '@parley/core';
+import type { ProviderLimits } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { LimitsService } from '../limits/limits-service.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createActivityService } from './activity-service.js';
@@ -115,6 +118,7 @@ const hook = (name: string, extra: Record<string, unknown> = {}): string =>
  * сборки (метка на диске: `addSession` сама её уже не оставляет), `label: ''` — имя по умолчанию.
  */
 async function activeSession(over: {
+  provider?: string;
   launchedBy?: 'tui' | 'cli' | 'host';
   providerSessionId?: string | null;
   label?: string;
@@ -125,7 +129,7 @@ async function activeSession(over: {
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
     const created = addSession(current, {
-      provider: 'claude',
+      provider: over.provider ?? 'claude',
       label: over.label ?? 'план',
       task: 'сделать',
     });
@@ -1067,6 +1071,268 @@ describe('удержанный вопрос агента (план 2026-10-01, �
     const unknown: SessionRef = { projectPath: project, workId: 'w-нет', sessionId: 's-99' };
     expect(() => a.questionHeld(unknown, true)).not.toThrow();
     expect(() => a.questionHeld(unknown, false)).not.toThrow();
+  }, 20_000);
+});
+
+describe('need: потребность сессии (спека «Застрявшие сессии», 3.2, 3.4, 4.3)', () => {
+  const journal = (ref: SessionRef): string =>
+    path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+
+  /** Дата с годом: время сброса не зависит ни от часов машины, ни от года, в котором идёт тест. */
+  const SESSION_LIMIT = "You've hit your session limit · resets Jan 5 2031 at 4pm (Europe/Moscow)";
+  const SESSION_LIMIT_AT = '2031-01-05T13:00:00.000Z';
+  const GLM_LIMIT = 'Usage limit reached for 5 hour. Your limit will reset at 2031-01-05 19:03:01';
+
+  const failure = (text: string): string =>
+    hook('StopFailure', { error: 'rate_limit', last_assistant_message: text });
+
+  /** Служба лимитов с подменным ответом `get` и счётчиком `refresh`; `onRefresh` вносит квоту, как настоящее чтение. */
+  function fakeLimits(onRefresh?: () => ProviderLimits | null) {
+    let current: ProviderLimits | null = null;
+    const refresh = vi.fn<LimitsService['refresh']>(async () => {
+      if (onRefresh !== undefined) current = onRefresh();
+    });
+    const get = vi.fn<LimitsService['get']>(() => current);
+    const limits: Pick<LimitsService, 'get' | 'refresh'> = { get, refresh };
+    return {
+      limits,
+      get,
+      refresh,
+      set: (next: ProviderLimits | null) => {
+        current = next;
+      },
+    };
+  }
+
+  const exhausted = (resetsAt: string): ProviderLimits => ({
+    fiveHour: { usedPercent: 100, resetsAt },
+    week: { usedPercent: 10, resetsAt: null },
+    at: new Date().toISOString(),
+  });
+
+  it('StopFailure rate_limit в журнале — limit: текст ошибки, окно и время сброса из текста', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'limit',
+      detail: SESSION_LIMIT,
+      resetsAt: SESSION_LIMIT_AT,
+      window: 'session',
+      account: null,
+    });
+  }, 20_000);
+
+  it('окно провайдера на 100 % с будущим сбросом главнее времени из текста; службе лимитов — провайдер сессии', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const fake = fakeLimits();
+    fake.set(exhausted('2031-01-04T20:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      resetsAt: '2031-01-04T20:00:00.000Z',
+      window: 'session',
+    });
+    expect(fake.get).toHaveBeenCalledWith('claude');
+    // Не GLM: квоту Z.ai никто не перечитывает.
+    expect(fake.refresh).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('GLM без окна провайдера: refresh(true) ровно один раз за эпизод, по готовности время сброса из квоты', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits(() => exhausted('2031-01-05T11:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    // Сначала — время из текста (пекинское, UTC+8); когда служба лимитов отдала окно, оно главнее.
+    await waitFor(() => a.get(ref)?.activity.need?.resetsAt === '2031-01-05T11:00:00.000Z');
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+    expect(fake.refresh).toHaveBeenCalledWith(true);
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', window: 'session' });
+  }, 20_000);
+
+  it('GLM, квота окна не дала: пересчёты внутри эпизода refresh не повторяют, новый эпизод — перечитывает снова', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits();
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    await waitFor(() => fake.refresh.mock.calls.length === 1);
+
+    // Пересчёты того же эпизода: просмотр и пассивное событие журнала.
+    a.markSeen(ref);
+    await appendFile(journal(ref), hook('Notification', { notification_type: 'idle_prompt' }));
+    await settle(400);
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+
+    // Человек написал — эпизод кончился; следующий лимит — новый эпизод.
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    await appendFile(journal(ref), failure(GLM_LIMIT));
+    await waitFor(() => fake.refresh.mock.calls.length === 2);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+  }, 20_000);
+
+  it('GLM: окно провайдера уже дало время — квоту не перечитывают', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits();
+    fake.set(exhausted('2031-01-05T11:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    await settle(200);
+
+    expect(a.get(ref)?.activity.need?.resetsAt).toBe('2031-01-05T11:00:00.000Z');
+    expect(fake.refresh).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('спящая сессия с ошибкой лимита в журнале — need: null; пока она жива, он есть', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'sleeping');
+    });
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    // Журнал не менялся: ход всё так же окончен ошибкой, но процесса, который ждал бы человека, нет.
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.current().find((entry) => refKey(entry.ref) === refKey(ref))?.activity.need).toBeNull();
+  }, 20_000);
+
+  it('Claude, запущенный хостом, молчит срок после старта — blocked и startup; первое событие журнала снимает', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 300 });
+    const launched = Date.now();
+    await a.start();
+
+    // Срок наступает сам, без события: пересчёт на нём заводит таймер.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'startup');
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'startup', detail: null });
+    // Экран старта — не хук: «хост в курсе» и «сессия стартовала» (вид Chat) от него не наступают.
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    await appendFile(journal(ref), hook('SessionStart', { source: 'startup' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    // Событие настоящее: экран старта не превращается в «закончил ход».
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+    expect(activityChanges(ref).map((change) => change.activity)).not.toContain('unseen');
+  }, 20_000);
+
+  it('экран старта наступает ровно на сроке (20 с по умолчанию) после запуска; since — момент истечения срока', async () => {
+    const { ref } = await activeSession();
+    const startedAt = Date.parse(
+      (await readMap(project, ref.workId)).sessions.find((s) => s.id === ref.sessionId)?.startedAt ?? '',
+    );
+    let clock = startedAt + 1000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = startedAt + 19_999;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(startedAt + 20_000).toISOString(),
+    });
+  }, 20_000);
+
+  it('экран старта ждут только от запущенных хостом: сессия чужого запуска молчит без need', async () => {
+    const { ref } = await activeSession({ launchedBy: 'cli' });
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 150 });
+    await a.start();
+    await settle(600);
+
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+  }, 20_000);
+
+  it('questionHeld(ref, true, текст) — blocked с need вопроса: detail из текста, since — момент удержания', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    const before = Date.now();
+    a.questionHeld(ref, true, 'Which DB?');
+    const need = a.get(ref)?.activity.need;
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(need).toMatchObject({
+      kind: 'question',
+      detail: 'Which DB?',
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+    expect(Date.parse(need?.since ?? '')).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(need?.since ?? '')).toBeLessThanOrEqual(Date.now());
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('working');
+  }, 20_000);
+
+  it('удержанный вопрос при свёртке, которая и так blocked, её need не заменяет', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    await appendFile(
+      journal(ref),
+      hook('UserPromptSubmit') +
+        hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' } }),
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'approval');
+
+    a.questionHeld(ref, true, 'Which DB?');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'approval', detail: 'ls' });
   }, 20_000);
 });
 

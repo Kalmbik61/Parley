@@ -15,12 +15,15 @@
 import { existsSync } from 'node:fs';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  PARLEY_STARTUP_NOTIFICATION,
   TERMINAL_WORKING_EVENT,
   activityOf,
   claudeProjectRoots,
   applyAutoTitle,
   autoTitleOf,
   bareEvent,
+  clampDetail,
+  codexFailureError,
   envValue,
   isNewLabel,
   isPointerText,
@@ -29,6 +32,7 @@ import {
   loadConfig,
   legacyUsage,
   openEvents,
+  pickResetsAt,
   resetPointerLabel,
   selectUsage,
   sessionTag,
@@ -43,6 +47,7 @@ import {
   type MetricsRoots,
   type SessionActivity,
   type SessionIndex,
+  type SessionNeed,
   type UsageSummary,
   type WorkEntry,
   type WorkSession,
@@ -57,6 +62,7 @@ import {
   type WorksSnapshot,
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
@@ -90,6 +96,11 @@ export interface ActivityServiceOptions extends MetricsRoots {
    * входа или доверия к папке, и сессии «нужен ты» (спека комнат, 3.6, «Экраны старта»).
    */
   startupWaitMs?: number;
+  /**
+   * Служба лимитов хоста: время сброса лимита берётся у неё раньше, чем из текста ошибки (спека «Застрявшие сессии»,
+   * 3.4), а у GLM без окна квоту перечитывает `refresh(true)`. Без неё — только текст ошибки.
+   */
+  limits?: Pick<LimitsService, 'get' | 'refresh'>;
   now?: () => number;
 }
 
@@ -120,9 +131,10 @@ export interface ActivityService {
   /**
    * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
    * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
-   * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
+   * idle. Таймер тишины и метрики при этом считаются по настоящему значению. Публикуемое `blocked` несёт `need`
+   * вида `question`: `detail` — текст первого вопроса, `since` — момент удержания.
    */
-  questionHeld(ref: SessionRef, held: boolean): void;
+  questionHeld(ref: SessionRef, held: boolean, detail?: string | null): void;
   /**
    * Почему письма сессии ещё не забраны (причина будильника) — уходит окну в `LiveMetrics.mailWaiting`:
    * комната пишет её рядом с «not picked up yet». `null` — писем нет.
@@ -182,6 +194,12 @@ export function startupWaitFromEnv(env: NodeJS.ProcessEnv): number | undefined {
 interface TerminalState {
   /** Последнее известное состояние как событие журнала; `null` — с запуска не было ни одного известного. */
   last: EventRecord | null;
+  /**
+   * События ожидания человека идущего эпизода — первое и первое одобрение (`episodeWith`); вне эпизода пусто.
+   * Свёртке от терминала достаётся одно событие, `last`, а заголовок `Action Required` и OSC 9 об одобрении приходят
+   * вместе и в любом порядке: по одному последнему начало эпизода (`since`) и вид (одобрение, а не вопрос) терялись бы.
+   */
+  waiting: EventRecord[];
   /** Срок экранов старта: сработает, если `last` так и останется `null`. */
   startupTimer: NodeJS.Timeout | undefined;
   /**
@@ -189,6 +207,8 @@ interface TerminalState {
    * — приглашение у ещё не начатой сессии, а не конец хода.
    */
   turnSeen: boolean;
+  /** Когда запущен этот процесс, мс: ошибка хода в rollout старше него — прошлого процесса того же разговора. */
+  startedAt: number;
 }
 
 /**
@@ -203,22 +223,68 @@ const TERMINAL_READY_EVENT = 'TerminalReady';
  * Событие журнала, которым `activityOf` читает сигнал терминала: те же имена, что у хуков Claude Code, а
  * первый `Ready` с запуска — нейтральное (`TERMINAL_READY_EVENT`). Кадр спиннера — своё имя
  * (`TERMINAL_WORKING_EVENT`): время сигнала обновляется на каждом кадре, и `UserPromptSubmit` с таким
- * временем снимал бы ожидание `wait_for` (его строку дописал MCP-сервер), хотя нового хода нет.
+ * временем снимал бы ожидание `wait_for` (его строку дописал MCP-сервер), хотя нового хода нет. Ожидание
+ * человека — `Notification` с типом, как у Claude Code, и причина доходит до свёртки: одобрение
+ * (`permission_prompt`, `message` — команда или правка) и вопрос (`agent_needs_input`) дают `approval` и
+ * `question` (спека «Застрявшие сессии», 3.2).
  */
-const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
+const eventOfSignal = (signal: CodexSignal, turnSeen: boolean, at: string): EventRecord | null => {
   switch (signal.kind) {
     case 'working':
-      return TERMINAL_WORKING_EVENT;
+      return bareEvent(at, TERMINAL_WORKING_EVENT);
     case 'ready':
-      return turnSeen ? 'Stop' : TERMINAL_READY_EVENT;
+      return bareEvent(at, turnSeen ? 'Stop' : TERMINAL_READY_EVENT);
     case 'turn-complete':
-      return 'Stop';
+      return bareEvent(at, 'Stop');
     case 'needs-you':
-      return 'PermissionRequest';
+      return signal.reason === 'approval-requested'
+        ? {
+            ...bareEvent(at, 'Notification'),
+            notificationType: 'permission_prompt',
+            message: signal.detail,
+          }
+        : { ...bareEvent(at, 'Notification'), notificationType: 'agent_needs_input' };
     default:
       return null;
   }
 };
+
+const isApproval = (event: EventRecord): boolean => event.notificationType === 'permission_prompt';
+
+/**
+ * Эпизод ожидания человека продолжается, пока приходят сигналы `needs-you`; в нём остаются первое событие (его
+ * время — `since`) и первое одобрение (вид и команда): внутри эпизода одобрение не понижается до вопроса, а
+ * вопрос, за которым пришло одобрение, повышается с прежним `since` — «конкретнее — сильнее» (3.2).
+ */
+const episodeWith = (episode: readonly EventRecord[], event: EventRecord): EventRecord[] =>
+  episode.length === 0
+    ? [event]
+    : isApproval(event) && !episode.some(isApproval)
+      ? [...episode, event]
+      : [...episode];
+
+/** Тот же сигнал терминала: имя, вид уведомления и текст совпадают (время не в счёт). */
+const sameSignal = (a: EventRecord, b: EventRecord): boolean =>
+  a.name === b.name && a.notificationType === b.notificationType && a.message === b.message;
+
+/**
+ * Ход Codex, оборванный ошибкой, которая ждёт человека, — как `StopFailure` Claude Code: лимит подписки
+ * (`usage_limit_exceeded`) и слетевший вход (`unauthorized`); прочее Codex повторяет сам, и `need` оно не даёт.
+ * Ошибка раньше запуска нынешнего процесса принадлежит прошлому процессу того же разговора (resume) и не в счёт.
+ */
+function failureOf(
+  turn: NonNullable<SessionIndex['lastTurnEvent']>,
+  startedAt: number,
+): EventRecord | null {
+  if (turn.type !== 'task_complete' || turn.error === undefined) return null;
+  const error = codexFailureError(turn.error.info);
+  if (error === null || !(Date.parse(turn.at) >= startedAt)) return null;
+  return {
+    ...bareEvent(turn.at, 'StopFailure'),
+    error,
+    lastAssistantMessage: turn.error.message === '' ? null : turn.error.message,
+  };
+}
 
 /**
  * Согласно ли выведенное состояние с последним сигналом терминала. Расходятся они, когда в свёртку
@@ -235,6 +301,21 @@ const agreesWith = (derived: Activity | undefined, signal: CodexSignal): boolean
       return derived !== undefined && derived !== 'working' && derived !== 'blocked';
   }
 };
+
+/** Удержанный вопрос агента: когда окно его удержало и текст первого вопроса. */
+interface HeldQuestion {
+  since: string;
+  detail: string | null;
+}
+
+const questionNeedOf = (held: HeldQuestion): SessionNeed => ({
+  kind: 'question',
+  since: held.since,
+  detail: held.detail,
+  resetsAt: null,
+  window: null,
+  account: null,
+});
 
 interface WorkWatch {
   journal: EventsLog;
@@ -256,6 +337,7 @@ export function createActivityService(
   const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
+  const limits = options.limits;
 
   const logIndex: LogIndex = createLogIndex(roots);
   const live = new Map<string, SessionLive>();
@@ -265,13 +347,21 @@ export function createActivityService(
   const autoTitled = new Set<string>();
   /** Сессии, чей ярлык-указатель хост уже возвращает (или вернул) к метке новой сессии (`resetPointerLabel`). */
   const pointerLabelReset = new Set<string>();
-  /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
-  const questionHeldKeys = new Set<string>();
+  /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked` с `need` вопроса. */
+  const questionHeldKeys = new Map<string, HeldQuestion>();
   /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
   const mailWaits = new Map<string, MailWait>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
+  /** Срок экрана старта у Claude и GLM (`withStartup`): по таймеру на сессию, чтобы пересчитать её на сроке. */
+  const startupTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Сессии GLM, у которых лимит уже вызвал перечитывание квоты Z.ai (`maybeRefreshQuota`). Ключ живёт, пока `need`
+   * лимита идёт без перерыва: эпизод — это сессия плюс вид, а не точное `since` (оно сдвигается, когда индекс лога
+   * догоняет журнал, а после перезапуска хоста равно времени файла).
+   */
+  const quotaRefreshed = new Set<string>();
   const linkInFlight = new Set<string>();
   const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
@@ -315,6 +405,13 @@ export function createActivityService(
     trustWaitTimers.delete(key);
   }
 
+  function clearStartupTimer(key: string): void {
+    const timer = startupTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    startupTimers.delete(key);
+  }
+
   /** Забывает состояние терминала сессии и срок экранов старта. */
   function clearTerminal(key: string): void {
     const state = terminals.get(key);
@@ -328,20 +425,29 @@ export function createActivityService(
    * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
    * последнее известное состояние терминала — по времени, как если бы это был хук. Сессия codex — и та,
    * чей процесс под хостом (`terminals`), и та, что записана в карте как codex: снимок работ мог отстать
-   * от `applyChoice`, а запуск уже знает провайдера точно.
+   * от `applyChoice`, а запуск уже знает провайдера точно. У Claude и GLM, не отозвавшихся за срок после
+   * запуска, к пустому журналу добавляется экран старта (`withStartup`).
    */
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
-    if (terminal === undefined && session.provider !== 'codex') return journal;
+    if (terminal === undefined && session.provider !== 'codex') {
+      return waitsForStartup(session, key) ? withStartup(session, journal) : journal;
+    }
     let base = journal ?? [];
     const last = terminal?.last;
-    if (last === null || last === undefined) return base;
-    const signals = [last];
+    if (terminal === undefined || last === null || last === undefined) return base;
+    // События ожидания человека идущего эпизода идут раньше последнего сигнала (`TerminalState.waiting`).
+    const signals = [...terminal.waiting.filter((event) => event !== last), last];
     // Codex может не прислать Ready/notify после ответа. Явное событие rollout
     // завершает такой ход; старый конец хода не перекрывает более новый сигнал терминала.
     const turn = logIndex.index(session)?.lastTurnEvent;
-    if (turn !== undefined && Date.parse(turn.at) >= Date.parse(last.at)) {
+    const failure = turn === undefined ? null : failureOf(turn, terminal.startedAt);
+    if (failure !== null) {
+      // Ошибка, ждущая человека (лимит, вход), встаёт по своему времени всегда, а не только когда новее сигнала:
+      // Codex пишет заголовок `Ready` сразу за ошибкой, и правило конца хода выше потеряло бы её.
+      signals.push(failure);
+    } else if (turn !== undefined && Date.parse(turn.at) >= Date.parse(last.at)) {
       signals.push(
         bareEvent(turn.at, turn.type === 'task_started' ? TERMINAL_WORKING_EVENT : 'Stop'),
       );
@@ -355,6 +461,69 @@ export function createActivityService(
       base = [...base.slice(0, index), signal, ...base.slice(index)];
     }
     return base;
+  }
+
+  /**
+   * Срок экрана старта: через `trustWaitMs` после запуска процесса, `NaN` — запуск неизвестен. Тот же срок, что у
+   * уведомления `trust-wait`.
+   */
+  const startupDue = (session: WorkSession): number =>
+    session.startedAt === null ? Number.NaN : Date.parse(session.startedAt) + trustWaitMs;
+
+  /**
+   * Ждёт ли хост первого события от Claude или GLM: процесс запущен им, жив, а журнал событий пуст. Codex сюда не
+   * входит — у него свой срок (`startupExpired`) и своё состояние по терминалу.
+   */
+  function waitsForStartup(session: WorkSession, key: string): boolean {
+    return (
+      session.launchedBy === 'host' &&
+      session.lifecycle === 'active' &&
+      session.provider !== 'codex' &&
+      !terminals.has(key) &&
+      (journals.get(key)?.length ?? 0) === 0
+    );
+  }
+
+  /**
+   * Claude и GLM, промолчавшие `trustWaitMs` после запуска, стоят на экране входа или доверия к папке: хуков оттуда
+   * нет. К журналу добавляется внутреннее `Notification` `parley_startup` со временем истечения срока — свёртка
+   * читает его как `need` вида `startup`. Журнал пуст (`waitsForStartup`), поэтому первое же настоящее событие снимает
+   * его совсем: иначе `SessionStart` после него превратил бы «нужен ты» в «закончил ход», а `hookedSince` соврал бы.
+   */
+  function withStartup(
+    session: WorkSession,
+    journal: readonly EventRecord[] | null,
+  ): readonly EventRecord[] | null {
+    const due = startupDue(session);
+    if (!(due <= nowFn())) return journal;
+    return [
+      {
+        ...bareEvent(new Date(due).toISOString(), 'Notification'),
+        notificationType: PARLEY_STARTUP_NOTIFICATION,
+      },
+    ];
+  }
+
+  /**
+   * Срок экрана старта наступает сам, без события: пересчёт на нём — один таймер на сессию. Срок, уже вышедший,
+   * таймера не заводит — `eventsFor` читает его по часам. Сессия, у которой ждать уже нечего (событие пришло, процесс
+   * ушёл), таймер теряет.
+   */
+  function maybeStartupWait(ref: SessionRef, key: string, session: WorkSession): void {
+    if (!waitsForStartup(session, key)) {
+      clearStartupTimer(key);
+      return;
+    }
+    if (startupTimers.has(key)) return;
+    const delay = startupDue(session) - nowFn();
+    if (!(delay > 0)) return;
+    startupTimers.set(
+      key,
+      setTimeout(() => {
+        startupTimers.delete(key);
+        recompute(ref);
+      }, delay),
+    );
   }
 
   /**
@@ -625,14 +794,18 @@ export function createActivityService(
 
   /**
    * Codex не показал ни `Ready`, ни `Working` за `startupWaitMs` после запуска: он на экране входа или
-   * доверия к папке (спека комнат, 3.6). Проходит их человек, в терминале Codex, — сессия «нужен ты»,
-   * а причину называет уведомление хоста. Как только придёт известный сигнал, состояние заменится им.
+   * доверия к папке (спека комнат, 3.6). Проходит их человек, в терминале Codex, — сессия «нужен ты»
+   * (`need` вида `startup`), а причину называет уведомление хоста. Как только придёт известный сигнал,
+   * состояние заменится им.
    */
   function startupExpired(ref: SessionRef, key: string, state: TerminalState): void {
     state.startupTimer = undefined;
     if (stopped || terminals.get(key) !== state || state.last !== null) return;
     const at = new Date(nowFn()).toISOString();
-    state.last = bareEvent(at, 'PermissionRequest');
+    state.last = {
+      ...bareEvent(at, 'Notification'),
+      notificationType: PARLEY_STARTUP_NOTIFICATION,
+    };
     host.broadcast('host.notice', {
       kind: 'startup-wait',
       ref,
@@ -673,7 +846,7 @@ export function createActivityService(
       backgroundHoldMs,
     });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
-    const activity = activityOf({
+    const folded = activityOf({
       events,
       log,
       seen,
@@ -681,13 +854,24 @@ export function createActivityService(
       silenceThresholdMs: threshold,
       backgroundHoldMs,
     });
+    // Пока в журнале нет ни одного настоящего события, свёртка видит только внутренний экран старта (`withStartup`).
+    // Хука в нём не было, и от него не наступают ни «хост в курсе» (`hookedSince`: печатать в экран старта нельзя),
+    // ни «сессия стартовала» (по ней окно выбирает вид Chat, а человеку нужен терминал).
+    const activity: SessionActivity =
+      folded.lastEventAt !== null && waitsForStartup(session, key)
+        ? { ...folded, lastEventAt: null }
+        : folded;
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
-    // Удержанный вопрос агента: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
-    const published: SessionActivity =
-      questionHeldKeys.has(key) && activity.activity !== 'blocked'
-        ? { ...activity, activity: 'blocked' }
+    // Удержанный вопрос агента: публикуется 'blocked' с `need` вопроса, а таймер тишины и метрики — по настоящему
+    // значению. Если свёртка и так 'blocked', её `need` (одобрение, экран старта) точнее и остаётся.
+    const held = questionHeldKeys.get(key);
+    const waiting: SessionActivity =
+      held !== undefined && activity.activity !== 'blocked'
+        ? { ...activity, activity: 'blocked', need: questionNeedOf(held) }
         : activity;
+    const need = publishedNeed(session, waiting.need, now);
+    const published: SessionActivity = need === waiting.need ? waiting : { ...waiting, need };
     const value: SessionLive = { activity: published, metrics };
 
     if (driven) clearSilenceTimer(key);
@@ -702,8 +886,64 @@ export function createActivityService(
 
     maybeAutoTitle(ref, key, session, entry.map.work.title);
     maybeLink(ref, key, session);
-    maybeHooksMissing(ref, key, session, events);
+    // Журнал настоящий, без экрана старта (`withStartup`): тот не должен прятать отсутствие хуков.
+    maybeHooksMissing(ref, key, session, journals.get(key) ?? null);
     maybeTrustWait(ref, key, session);
+    maybeStartupWait(ref, key, session);
+    maybeRefreshQuota(ref, key, session, need, now);
+  }
+
+  /**
+   * `need` в том виде, в каком его видят окно и службы. У спящей и закрытой сессии его нет: процесса нет, ждать человека
+   * в терминале некому (спека «Застрявшие сессии», 3.1). Время сброса лимита уточняет служба лимитов (3.4): исчерпанное
+   * окно провайдера главнее времени из текста ошибки, а текст — «уже сброшен».
+   */
+  function publishedNeed(
+    session: WorkSession,
+    need: SessionNeed | null,
+    now: number,
+  ): SessionNeed | null {
+    if (need === null || session.lifecycle !== 'active') return null;
+    if (need.kind !== 'limit') return need;
+    return {
+      ...need,
+      ...pickResetsAt(need, limits?.get(session.provider) ?? null, need.since, now),
+    };
+  }
+
+  /**
+   * Квоту Z.ai служба лимитов читает только по явному запросу, а время сброса берётся из неё раньше текста ошибки (3.4).
+   * Поэтому, когда у GLM данные провайдера времени сброса не дали, квота перечитывается один раз за эпизод лимита, а по
+   * готовности сессия пересчитывается. Эпизод — сессия, пока её `need` остаётся лимитом без перерыва: `since` тут не
+   * ключ, он сдвигается, когда индекс лога догоняет журнал.
+   */
+  function maybeRefreshQuota(
+    ref: SessionRef,
+    key: string,
+    session: WorkSession,
+    need: SessionNeed | null,
+    now: number,
+  ): void {
+    if (need?.kind !== 'limit') {
+      quotaRefreshed.delete(key);
+      return;
+    }
+    if (limits === undefined || session.provider !== 'glm' || quotaRefreshed.has(key)) return;
+    const quota = pickResetsAt(
+      { resetsAt: null, window: need.window },
+      limits.get(session.provider),
+      need.since,
+      now,
+    );
+    if (quota.resetsAt !== null) return;
+    quotaRefreshed.add(key);
+    void limits.refresh(true).then(
+      () => {
+        if (!stopped) recompute(ref);
+      },
+      // Ключа Z.ai нет или квота не прочиталась: время сброса остаётся из текста ошибки или неизвестным.
+      () => undefined,
+    );
   }
 
   /**
@@ -823,8 +1063,11 @@ export function createActivityService(
     for (const key of Array.from(mailWaits.keys())) {
       if (!validSessions.has(key)) mailWaits.delete(key);
     }
-    for (const key of Array.from(questionHeldKeys)) {
+    for (const key of Array.from(questionHeldKeys.keys())) {
       if (!validSessions.has(key)) questionHeldKeys.delete(key);
+    }
+    for (const key of Array.from(quotaRefreshed)) {
+      if (!validSessions.has(key)) quotaRefreshed.delete(key);
     }
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
@@ -835,6 +1078,7 @@ export function createActivityService(
     for (const [key] of Array.from(terminals)) if (!validSessions.has(key)) clearTerminal(key);
     for (const [key] of Array.from(silenceTimers)) if (!validSessions.has(key)) clearSilenceTimer(key);
     for (const [key] of Array.from(trustWaitTimers)) if (!validSessions.has(key)) clearTrustWaitTimer(key);
+    for (const [key] of Array.from(startupTimers)) if (!validSessions.has(key)) clearStartupTimer(key);
   }
 
   function handleWorksChange(snapshot: WorksSnapshot): void {
@@ -893,11 +1137,14 @@ export function createActivityService(
       else mailWaits.set(key, reason);
       recompute(ref);
     },
-    questionHeld(ref, held) {
+    questionHeld(ref, held, detail = null) {
       const key = refKey(ref);
       if (questionHeldKeys.has(key) === held) return;
-      if (held) questionHeldKeys.add(key);
-      else questionHeldKeys.delete(key);
+      if (held) {
+        questionHeldKeys.set(key, { since: new Date(nowFn()).toISOString(), detail: clampDetail(detail) });
+      } else {
+        questionHeldKeys.delete(key);
+      }
       recompute(ref);
     },
     onLogChange(listener) {
@@ -921,7 +1168,13 @@ export function createActivityService(
       const key = refKey(ref);
       // Новый процесс — своё состояние: сигналы прошлого (resume) к нему не относятся.
       clearTerminal(key);
-      const state: TerminalState = { last: null, startupTimer: undefined, turnSeen: false };
+      const state: TerminalState = {
+        last: null,
+        waiting: [],
+        startupTimer: undefined,
+        turnSeen: false,
+        startedAt: nowFn(),
+      };
       state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
       terminals.set(key, state);
       recompute(ref);
@@ -932,23 +1185,26 @@ export function createActivityService(
       const state = terminals.get(key);
       if (state === undefined) return;
       // Неизвестное состояния не меняет и «работает» не значит (спека комнат, 3.6).
-      const name = eventNameOf(signal, state.turnSeen);
-      if (name === null) return;
-      if (signal.kind !== 'ready') state.turnSeen = true;
-      const previous = state.last;
       // Время обновляется на каждом сигнале, даже повторном: он новее любого `Stop` от notify, который
       // журнал успел принять между кадрами, — так следующий кадр спиннера ставит терминальное событие
       // после него.
-      state.last = bareEvent(new Date(nowFn()).toISOString(), name);
+      const event = eventOfSignal(signal, state.turnSeen, new Date(nowFn()).toISOString());
+      if (event === null) return;
+      if (signal.kind !== 'ready') state.turnSeen = true;
+      const previous = state.last;
+      state.last = event;
+      // Эпизод ожидания человека длится, пока идут сигналы `needs-you`; любой другой его заканчивает.
+      state.waiting = signal.kind === 'needs-you' ? episodeWith(state.waiting, event) : [];
       if (state.startupTimer !== undefined) {
         clearTimeout(state.startupTimer);
         state.startupTimer = undefined;
       }
-      // Пересчёт и рассылка — на смене сигнала и когда выведенное состояние с ним разошлось (чужое
-      // событие журнала новее сигнала), а не на каждом кадре спиннера: согласный повтор ничего не меняет.
+      // Пересчёт и рассылка — на смене сигнала (имя, вид уведомления, текст) и когда выведенное состояние с ним
+      // разошлось (чужое событие журнала новее сигнала), а не на каждом кадре спиннера: согласный повтор ничего не
+      // меняет.
       if (
         previous === null ||
-        previous.name !== name ||
+        !sameSignal(previous, event) ||
         !agreesWith(live.get(key)?.activity.activity, signal)
       ) {
         recompute(ref);
@@ -995,6 +1251,8 @@ export function createActivityService(
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
+      for (const timer of startupTimers.values()) clearTimeout(timer);
+      startupTimers.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);
       for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();
