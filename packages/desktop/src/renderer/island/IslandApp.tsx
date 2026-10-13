@@ -1,21 +1,28 @@
 /**
  * Проводка острова (спека 2026-10-12, раздел 6): статус хоста, сторы работ и активности, очередь запросов, настройки,
- * видимость и размер окна. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
- * поднимаются. Новый запрос снимает «×», выбирается в карточке и звучит (`beep` у main, если включён Sound). Размер
- * содержимого уходит в main: окно острова прозрачное и ровно по содержимому, а корень не сжимается до текущей ширины
- * окна (`w-max`) — иначе окно, стартовавшее узким, никогда бы не выросло.
+ * видимость и интерактивность окна. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
+ * поднимаются. Новый запрос снимает «×», выбирается в карточке и звучит (`beep` у main, если включён Sound).
+ *
+ * Окно острова — фиксированный прозрачный кадр, сквозной для мыши. Корень заполняет кадр и выравнивает форму по
+ * точке (`config.anchor`), а размер формы анимирует сам вид (`IslandView`). Окно ловит мышь, только пока курсор над
+ * формой: вход — `setInteractive(true)`, уход — `setInteractive(false)` и закрытый список; во время перетаскивания
+ * уход не в счёт (окно едет за курсором), а после него интерактивность снимается, если курсор уже не над формой.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { refKey } from '@parley/protocol';
 import type { IslandBridge, IslandConfig } from '../../shared/island.js';
+import type { IslandAnchor } from '../../shared/ui-types.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { IslandView } from './IslandView.js';
 import { islandModel, sessionLabels } from './model.js';
 import { useIslandRequests } from './requests.js';
 
-const INITIAL_CONFIG: IslandConfig = { sound: false, hintShown: true, topInset: 0 };
+const INITIAL_CONFIG: IslandConfig = { sound: false, hintShown: true, topInset: 0, anchor: 'center' };
+
+/** Выравнивание формы в кадре окна: влево, по центру или вправо — по точке, у которой стоит остров. */
+const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };
 
 export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const [connected, setConnected] = useState(false);
@@ -85,19 +92,16 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   if (show.visible !== visible) setShow({ visible, id: visible ? show.id + 1 : show.id });
   useEffect(() => bridge.island.setVisible(visible), [visible, bridge]);
 
-  const rootRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const element = rootRef.current;
-    if (element === null) return undefined;
-    const report = (): void => bridge.island.setSize(Math.max(1, Math.ceil(element.offsetWidth)), Math.max(1, Math.ceil(element.offsetHeight)));
-    report();
-    const observer = new ResizeObserver(report);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [bridge]);
+  const shapeRef = useRef<HTMLDivElement>(null);
+  /** Идёт перетаскивание за ручку: окно едет за курсором, и «курсор ушёл с формы» в этот момент ничего не значит. */
+  const dragging = useRef(false);
+  const leaveShape = (): void => {
+    bridge.island.setInteractive(false);
+    setListOpen(false);
+  };
 
   return (
-    <div ref={rootRef} className="inline-block w-max" onMouseLeave={() => setListOpen(false)}>
+    <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`}>
       <IslandView
         model={model}
         items={items}
@@ -107,6 +111,19 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         showId={show.id}
         labels={labels}
         api={bridge.island}
+        shapeRef={shapeRef}
+        onShapeEnter={() => bridge.island.setInteractive(true)}
+        onShapeLeave={() => {
+          if (!dragging.current) leaveShape();
+        }}
+        onDragStart={() => {
+          dragging.current = true;
+        }}
+        onDragEnd={() => {
+          dragging.current = false;
+          // Уход с формы во время жеста пропущен: если курсор уже не над формой, окно снова сквозное.
+          if (shapeRef.current?.matches(':hover') !== true) leaveShape();
+        }}
         onToggleList={setListOpen}
         onHide={() => {
           setHidden(true);

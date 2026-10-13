@@ -3,9 +3,13 @@
  * приходит пропсами, решения и переходы — колбэками. Остров всегда тёмный (чёрный, как чёлка). Цвет текста — только
  * семантические токены темы (`text-foreground`, `text-muted-foreground`): рампа `neutral-*` в тёмной теме перевёрнута
  * (100 — самый тёмный), и `text-neutral-100` на чёрном фоне невидим.
+ *
+ * Чёрная форма плавно меняет размер, как Dynamic Island: внешний элемент (`data-testid="island"`) получает явные
+ * `width`/`height` в пикселях по замеру внутреннего содержимого (`w-max`), а CSS-переход анимирует их. Окно при этом
+ * не меняется — это фиксированный прозрачный кадр (`ISLAND_FRAME`), форма живёт внутри него.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import type { FocusTarget } from '../../shared/bridge.js';
@@ -38,6 +42,14 @@ export interface IslandViewProps {
   showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
   api: IslandApi;
+  /** Ссылка на внешнюю форму: `IslandApp` по ней спрашивает `:hover` после перетаскивания. */
+  shapeRef: Ref<HTMLDivElement>;
+  /** Курсор вошёл в форму / ушёл с неё: окно ловит мышь только над формой (`IslandApp`). */
+  onShapeEnter(): void;
+  onShapeLeave(): void;
+  /** Перетаскивание за ручку началось / закончилось: пока оно идёт, уход курсора с формы не в счёт. */
+  onDragStart(): void;
+  onDragEnd(): void;
   onToggleList(open: boolean): void;
   onHide(): void;
   onSelect(index: number): void;
@@ -62,13 +74,13 @@ function HideButton({ onHide }: { onHide(): void }): JSX.Element {
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
-  const { model, api, onToggleList, onHide } = props;
+  const { model, api, onToggleList, onHide, onDragStart, onDragEnd } = props;
   return (
-    // Список — по наведению или клику (спека, раздел 4); уход курсора с острова закрывает его (`IslandApp`). Строка занимает
-    // всю ширину корня, а при открытом списке тот растёт до 360 px и окно выравнивается по центру: содержимое строки
-    // по центру, чтобы пилюля не уезжала вбок из-под курсора.
-    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-xs" onMouseEnter={() => onToggleList(true)}>
-      <DragHandle api={api} />
+    // Список — по наведению или клику (спека, раздел 4); уход курсора с формы закрывает его (`IslandApp`). Строка занимает
+    // всю ширину содержимого, а при открытом списке оно растёт до 400 px: содержимое строки по центру, чтобы пилюля
+    // не уезжала вбок из-под курсора.
+    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm" onMouseEnter={() => onToggleList(true)}>
+      <DragHandle api={api} onDragStart={onDragStart} onDragEnd={onDragEnd} />
       {/* Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы. */}
       <button type="button" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
         {model.providers.map((provider) => (
@@ -83,10 +95,10 @@ function Pill(props: IslandViewProps): JSX.Element {
 
 function List({ model, api }: IslandViewProps): JSX.Element {
   return (
-    <div data-testid="island-list" className="flex max-h-80 w-[360px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-xs">
+    <div data-testid="island-list" className="island-reveal flex max-h-[360px] w-[400px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-sm">
       {model.groups.map((group) => (
         <div key={group.key} className="flex flex-col gap-1">
-          <div className="text-muted-foreground">
+          <div className="text-[13px] text-muted-foreground">
             {group.title} <span className="text-muted-foreground">· {group.project}</span>
           </div>
           {group.rows.map((row) => (
@@ -94,8 +106,8 @@ function List({ model, api }: IslandViewProps): JSX.Element {
               {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе, комната) — «working». */}
               <AgentStateDot state={row.kind === 'session' && row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
               <span className="min-w-0 flex-1 truncate">{row.kind === 'session' ? row.label : row.title}</span>
-              {row.kind === 'session' && row.inTerminal ? <span className="text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
-              {row.kind === 'room' ? <span className="text-muted-foreground">{S.island.roomBusy(row.busy)}</span> : null}
+              {row.kind === 'session' && row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+              {row.kind === 'room' ? <span className="text-[13px] text-muted-foreground">{S.island.roomBusy(row.busy)}</span> : null}
             </button>
           ))}
         </div>
@@ -110,7 +122,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
   // Решение выключено, пока оно уходит, и первые `CARD_ARM_MS` после показа запроса.
   const disabled = item.deciding || !armed;
   const openButton = (
-    <Button data-testid="island-open" size="sm" variant="outline" onClick={open}>
+    <Button data-testid="island-open" size="default" variant="outline" className="text-sm" onClick={open}>
       {S.island.openInParley}
     </Button>
   );
@@ -119,15 +131,15 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
     const rules = alwaysRules(card.suggestions);
     return (
       <>
-        <Button data-testid="island-allow" size="sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow' })}>
+        <Button data-testid="island-allow" size="default" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow' })}>
           {S.island.allow}
         </Button>
         {rules !== null ? (
-          <Button data-testid="island-always" size="sm" variant="outline" title={rules.join(', ')} disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow', always: true })}>
+          <Button data-testid="island-always" size="default" variant="outline" className="text-sm" title={rules.join(', ')} disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow', always: true })}>
             {S.island.always}
           </Button>
         ) : null}
-        <Button data-testid="island-deny" size="sm" variant="outline" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'deny' })}>
+        <Button data-testid="island-deny" size="default" variant="outline" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'deny' })}>
           {S.island.deny}
         </Button>
       </>
@@ -139,7 +151,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
       <>
         {/* Подписи могут повторяться или быть пустыми — ключ с номером. */}
         {simple.options.map((label, at) => (
-          <Button key={`${at}:${label}`} data-testid="island-option" size="sm" variant="outline" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
+          <Button key={`${at}:${label}`} data-testid="island-option" size="default" variant="outline" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
             {label}
           </Button>
         ))}
@@ -150,7 +162,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
 }
 
 function Card(props: IslandViewProps): JSX.Element | null {
-  const { items, index, showId, labels, api, onSelect, onDecide, onHide } = props;
+  const { items, index, showId, labels, api, onSelect, onDecide, onHide, onDragStart, onDragEnd } = props;
   const item = items[index] ?? items[0];
   // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
   // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
@@ -168,19 +180,20 @@ function Card(props: IslandViewProps): JSX.Element | null {
   if (item === undefined) return null;
   const label = labels.get(sessionKeyOf(item));
   return (
-    <div data-testid="island-card" className="flex w-[380px] flex-col gap-2 px-3 pb-3 pt-1.5 text-xs">
+    // Ключ по показанному запросу: новая карточка (стрелки, новый запрос) заново проигрывает появление.
+    <div key={item.key} data-testid="island-card" className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
       <div className="flex items-center gap-2">
-        <DragHandle api={api} />
+        <DragHandle api={api} onDragStart={onDragStart} onDragEnd={onDragEnd} />
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
-          {label === undefined ? null : <span className="text-muted-foreground"> · {label.project}</span>}
+          {label === undefined ? null : <span className="text-[13px] text-muted-foreground"> · {label.project}</span>}
         </span>
         {items.length > 1 ? (
           <span className="flex items-center gap-1 text-muted-foreground">
             <button type="button" aria-label={S.island.previous} onClick={() => onSelect(index - 1)} disabled={index === 0}>
               ‹
             </button>
-            <span>{S.island.of(index + 1, items.length)}</span>
+            <span className="text-[13px]">{S.island.of(index + 1, items.length)}</span>
             <button type="button" aria-label={S.island.next} onClick={() => onSelect(index + 1)} disabled={index >= items.length - 1}>
               ›
             </button>
@@ -188,7 +201,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
         ) : null}
         <HideButton onHide={onHide} />
       </div>
-      <div title={item.summary} className="truncate font-mono text-[12px]">
+      <div title={item.summary} className="truncate font-mono text-sm">
         {item.summary}
       </div>
       {item.note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.answeredElsewhere}</div> : null}
@@ -201,23 +214,50 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { items, listOpen, config, onHintDone } = props;
+  const { items, listOpen, config, shapeRef, onShapeEnter, onShapeLeave, onHintDone } = props;
+  const contentRef = useRef<HTMLDivElement>(null);
+  /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const element = contentRef.current;
+    if (element === null) return undefined;
+    const measure = (): void => {
+      const width = Math.ceil(element.offsetWidth);
+      const height = Math.ceil(element.offsetHeight);
+      // Нулевой размер — страница ещё не разложена: форма схлопнулась бы и потом росла «из точки».
+      if (width === 0 || height === 0) return;
+      setSize((current) => (current !== null && current.width === width && current.height === height ? current : { width, height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <div data-testid="island" className="rounded-b-[18px] bg-black text-foreground shadow-lg" style={{ paddingTop: config.topInset }}>
-      {!config.hintShown ? (
-        <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-[11px] text-muted-foreground">
-          <span>{S.island.hint}</span>
-          <button type="button" className="underline" onClick={onHintDone}>
-            {S.island.gotIt}
-          </button>
-        </div>
-      ) : null}
-      {items.length > 0 ? <Card {...props} /> : (
-        <>
-          <Pill {...props} />
-          {listOpen ? <List {...props} /> : null}
-        </>
-      )}
+    <div
+      ref={shapeRef}
+      data-testid="island"
+      className="overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground shadow-lg transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none"
+      style={size ?? undefined}
+      onMouseEnter={onShapeEnter}
+      onMouseLeave={onShapeLeave}
+    >
+      <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>
+        {!config.hintShown ? (
+          <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-xs text-muted-foreground">
+            <span>{S.island.hint}</span>
+            <button type="button" className="underline" onClick={onHintDone}>
+              {S.island.gotIt}
+            </button>
+          </div>
+        ) : null}
+        {items.length > 0 ? <Card {...props} /> : (
+          <>
+            <Pill {...props} />
+            {listOpen ? <List {...props} /> : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -11,3 +11,25 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* Появление списка и карточки: лёгкий сдвиг сверху с проявлением, пока форма растёт до нового размера. */
+@keyframes island-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.island-reveal {
+  animation: island-reveal 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .island-reveal {
+    animation: none;
+  }
+}
