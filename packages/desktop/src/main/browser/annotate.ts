@@ -7,7 +7,7 @@
  * проверяются здесь (`validateAnnotationPick`).
  */
 
-import type { WebContents } from 'electron';
+import type { NativeImage, WebContents } from 'electron';
 import type {
   AnnotationElementTarget,
   AnnotationPick,
@@ -113,6 +113,14 @@ export function parseAnnotationPins(value: unknown): AnnotationPin[] | null {
   return pins;
 }
 
+/**
+ * Гость, которому можно слать скрипты: не закрыт и не упал. На упавшем кадре промис скрипта не завершается никогда
+ * (Electron 44, проба с `forcefullyCrashRenderer()`), поэтому такого гостя не трогает ни один из четырёх входов.
+ */
+function usable(contents: WebContents | null): contents is WebContents {
+  return contents !== null && !contents.isDestroyed() && !contents.isCrashed();
+}
+
 function readPositions(raw: unknown, pins: readonly AnnotationPin[]): AnnotationPosition[] {
   const answers: unknown[] = Array.isArray(raw) ? raw : [];
   return pins.map(({ n }) => {
@@ -137,7 +145,7 @@ export function createAnnotate(deps: {
 
   function start(id: number): Promise<AnnotationPick | null> {
     const contents = deps.fromId(id);
-    if (contents === null || contents.isDestroyed()) return Promise.resolve(null);
+    if (!usable(contents)) return Promise.resolve(null);
     pending.get(id)?.(null);
     return new Promise((resolve) => {
       let done = false;
@@ -187,20 +195,24 @@ export function createAnnotate(deps: {
   async function cancel(id: number): Promise<void> {
     pending.get(id)?.(null);
     const contents = deps.fromId(id);
-    if (contents === null || contents.isDestroyed()) return;
-    await contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: CANCEL_SCRIPT }]).then(
-      () => undefined,
-      () => undefined,
-    );
+    if (!usable(contents)) return;
+    // Отказ и молчание страницы одинаково не важны: замёрзшую не ждём дольше `scriptMs` — вызов уже ушёл в неё и
+    // сработает, когда она оживёт.
+    await withTimeout<unknown>(contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: CANCEL_SCRIPT }]), PICK_LIMITS.scriptMs, undefined);
   }
 
   async function sync(id: number, pins: AnnotationPin[]): Promise<AnnotationPosition[]> {
     const gone = pins.map(({ n }) => ({ n, rect: null }));
     const contents = deps.fromId(id);
-    if (contents === null || contents.isDestroyed()) return gone;
+    if (!usable(contents)) return gone;
     try {
-      // Метки проверены parseAnnotationPins: номер и ключ `a<число>` — JSON в коде скрипта безопасен.
-      const raw = await contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: `globalThis.__parleyAnnotate?.sync(${JSON.stringify(pins)}) ?? null` }]);
+      // Метки проверены parseAnnotationPins: номер и ключ `a<число>` — JSON в коде скрипта безопасен. Страница не
+      // ответила за `scriptMs` (замёрзла) — null: все метки пропали, как при отказе.
+      const raw = await withTimeout<unknown>(
+        contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: `globalThis.__parleyAnnotate?.sync(${JSON.stringify(pins)}) ?? null` }]),
+        PICK_LIMITS.scriptMs,
+        null,
+      );
       return readPositions(raw, pins);
     } catch {
       return gone;
@@ -209,21 +221,37 @@ export function createAnnotate(deps: {
 
   async function capture(id: number): Promise<{ path: string | null }> {
     const contents = deps.fromId(id);
-    if (contents === null || contents.isDestroyed()) return { path: null };
+    if (!usable(contents)) return { path: null };
     // Меток на странице нет (новый документ после навигации): снимок без них солгал бы — файл уйдёт без снимка.
-    const count: unknown = await contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: COUNT_SCRIPT }]).catch(() => 0);
+    // Страница не ответила за `scriptMs` (замёрзла) — тоже без снимка.
+    const count = await withTimeout<unknown>(contents.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: COUNT_SCRIPT }]), PICK_LIMITS.scriptMs, 0);
     if (typeof count !== 'number' || count < 1) return { path: null };
     try {
       // Только видимая часть (этап 0, 0.7): снимок всей страницы через captureBeyondViewport двоит фиксированный
-      // заголовок и теряет метки ниже первой поверхности вида.
-      const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png' });
-      if (typeof shot.data === 'string' && shot.data !== '') return { path: await deps.saveImage(Buffer.from(shot.data, 'base64')) };
+      // заголовок и теряет метки ниже первой поверхности вида. Скрытый гость на снимок CDP не отвечает вовсе (этап 0,
+      // 0.2; инспектор ждёт 10 с): за `scriptMs` не вышло — тот же путь, что при отказе.
+      const shot = await withTimeout<{ data?: unknown } | null>(
+        deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png' }).catch((error: unknown) => {
+          console.warn('[parley] annotate: CDP capture failed, falling back to capturePage', error);
+          return null;
+        }),
+        PICK_LIMITS.scriptMs,
+        null,
+      );
+      if (shot !== null && typeof shot.data === 'string' && shot.data !== '') return { path: await deps.saveImage(Buffer.from(shot.data, 'base64')) };
     } catch (error) {
       console.warn('[parley] annotate: CDP capture failed, falling back to capturePage', error);
     }
     try {
-      const image = await contents.capturePage();
-      return { path: image.isEmpty() ? null : await deps.saveImage(image.toPNG()) };
+      const image = await withTimeout<NativeImage | null>(
+        contents.capturePage().catch((error: unknown) => {
+          console.warn('[parley] annotate: capturePage failed', error);
+          return null;
+        }),
+        PICK_LIMITS.scriptMs,
+        null,
+      );
+      return { path: image === null || image.isEmpty() ? null : await deps.saveImage(image.toPNG()) };
     } catch (error) {
       console.warn('[parley] annotate capture failed', error);
       return { path: null };

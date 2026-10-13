@@ -31,9 +31,11 @@ export const PICK_WORLD_ID = 1001;
  * а одно звено (класс или id) пишет страница — длина своя (fix-9). `captureSide` — сторона обрезки снимка в
  * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `viewportSlack` — допуск
  * «больше вьюпорта» в CSS-пикселях (`exceedsViewport`). `infoMs` — сколько ждём роль и React: страница в бесконечном цикле
- * не держит выбор. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
+ * не держит выбор. `scriptMs` — сколько ждём ответ страницы на служебный вызов аннотаций (перерисовка, счёт и снятие
+ * меток) и на снимок с метками: упавший или замёрзший гость не отвечает вовсе, скрытый не отдаёт снимок, и без предела окно
+ * ждало бы вечно. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
  */
-export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, viewportSlack: 1, infoMs: 2000 } as const;
+export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, viewportSlack: 1, infoMs: 2000, scriptMs: 3000 } as const;
 
 /** Вычисленные стили, которые уходят агенту (таблица спеки 12.3); остальные ключи выкидываются. */
 const STYLE_KEYS = new Set([

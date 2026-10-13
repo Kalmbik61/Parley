@@ -1,11 +1,11 @@
 // packages/desktop/src/main/browser/annotate.test.ts
 import { EventEmitter } from 'node:events';
 import type { WebContents } from 'electron';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTEXT_LIMITS } from '../../shared/context-markdown.js';
 import { S } from '../../shared/strings.js';
 import { createAnnotate, parseAnnotationPins, validateAnnotationPick } from './annotate.js';
-import { PICK_WORLD_ID } from './design-mode.js';
+import { PICK_LIMITS, PICK_WORLD_ID } from './design-mode.js';
 import type { CdpSender } from './element-info.js';
 
 const VIEWPORT = { width: 1280, height: 800, dpr: 2 };
@@ -101,22 +101,31 @@ describe('parseAnnotationPins', () => {
   });
 });
 
-/** Подставной гость: события — EventEmitter; скрипт меток ждёт теста, служебные скрипты отвечают сразу. */
+/**
+ * Подставной гость: события — EventEmitter; скрипт меток ждёт теста, служебные скрипты отвечают сразу. `worlds` — мир
+ * каждого вызова (по порядку с `codes`); `setHang(true)` — страница не отвечает на служебные скрипты, как упавшая или
+ * замёрзшая (в настоящем Electron промис такого вызова не завершается никогда).
+ */
 function fakeGuest() {
   const scripts: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
   const codes: string[] = [];
+  const worlds: number[] = [];
   let count: unknown = 1;
   let syncAnswer: unknown = null;
+  let hang = false;
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     isDestroyed: vi.fn().mockReturnValue(false),
+    isCrashed: vi.fn().mockReturnValue(false),
     capturePage: vi.fn(async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('visible-png') })),
     executeJavaScriptInIsolatedWorld: vi.fn(
-      (_world: number, sources: Array<{ code: string }>) =>
+      (world: number, sources: Array<{ code: string }>) =>
         new Promise((resolve, reject) => {
           const code = sources[0]?.code ?? '';
+          worlds.push(world);
           codes.push(code);
           if (code === 'GUEST_SCRIPT') scripts.push({ resolve, reject });
+          else if (hang) return;
           else if (code.includes('count()')) resolve(count);
           else if (code.includes('.sync(')) resolve(syncAnswer);
           else resolve(undefined);
@@ -127,11 +136,15 @@ function fakeGuest() {
     guest,
     scripts,
     codes,
+    worlds,
     setCount: (value: unknown) => {
       count = value;
     },
     setSync: (value: unknown) => {
       syncAnswer = value;
+    },
+    setHang: (value: boolean) => {
+      hang = value;
     },
   };
 }
@@ -246,5 +259,139 @@ describe('createAnnotate.sync и capture', () => {
     expect(await annotate.capture(7)).toEqual({ path: '/h/drops/page.png' });
     expect(guest.capturePage).toHaveBeenCalledWith();
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('visible-png'));
+  });
+
+  it('capture: отказы CDP и capturePage не молчат — каждый попадает в журнал, снимка нет', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { annotate, guest, saveImage } = setup({ 'Page.captureScreenshot': new Error('not attached') });
+    guest.capturePage.mockRejectedValue(new Error('page is hidden'));
+    expect(await annotate.capture(7)).toEqual({ path: null });
+    expect(saveImage).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map(([, error]) => (error as Error).message)).toEqual(['not attached', 'page is hidden']);
+  });
+});
+
+describe('createAnnotate — все вызовы страницы идут в мир 1001 (Фокус ревью 6)', () => {
+  it('start, sync, счёт меток при capture и cancel — в PICK_WORLD_ID, а не в мир страницы (0)', async () => {
+    const { scripts, annotate, scriptCalled, codes, worlds } = setup();
+    const pending = annotate.start(7);
+    await scriptCalled();
+    scripts[0]?.resolve(null);
+    await pending;
+    await annotate.sync(7, [{ n: 1, key: 'a1' }]);
+    await annotate.capture(7);
+    await annotate.cancel(7);
+    // Все четыре вида вызова состоялись — иначе «все в мире 1001» было бы пустым утверждением.
+    expect(codes).toEqual([
+      'GUEST_SCRIPT',
+      'globalThis.__parleyAnnotate?.sync([{"n":1,"key":"a1"}]) ?? null',
+      'globalThis.__parleyAnnotate?.count() ?? 0',
+      'globalThis.__parleyAnnotate?.cancel()',
+    ]);
+    expect(worlds).toEqual(codes.map(() => PICK_WORLD_ID));
+  });
+});
+
+/** Вызов, который может не завершиться: исход виден без `await` — зависший вызов даёт красный тест, а не зависший прогон. */
+function track<T>(promise: Promise<T>): { settled: boolean; value: T | undefined } {
+  const state: { settled: boolean; value: T | undefined } = { settled: false, value: undefined };
+  void promise.then((value) => {
+    state.settled = true;
+    state.value = value;
+  });
+  return state;
+}
+
+describe('createAnnotate — упавший, замёрзший и скрытый гость (в Electron 44 вызов страницы на таком госте не завершается)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('упавший гость (isCrashed): start — null, sync — все пропали, capture — без снимка; ни скрипт, ни CDP, ни capturePage не зовутся', async () => {
+    const { guest, annotate, send } = setup();
+    guest.isCrashed.mockReturnValue(true);
+    const start = track(annotate.start(7));
+    const sync = track(annotate.sync(7, [{ n: 1, key: 'a1' }, { n: 3, key: 'a2' }]));
+    const capture = track(annotate.capture(7));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(start).toEqual({ settled: true, value: null });
+    expect(sync).toEqual({ settled: true, value: [{ n: 1, rect: null }, { n: 3, rect: null }] });
+    expect(capture).toEqual({ settled: true, value: { path: null } });
+    expect(guest.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(guest.capturePage).not.toHaveBeenCalled();
+  });
+
+  it('упавший гость: cancel отвечает ожидающему start null и не шлёт скрипт отмены', async () => {
+    const { guest, annotate } = setup();
+    const start = track(annotate.start(7));
+    expect(guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);
+    guest.isCrashed.mockReturnValue(true);
+    const cancel = track(annotate.cancel(7));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel.settled).toBe(true);
+    expect(start).toEqual({ settled: true, value: null });
+    expect(guest.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(1);
+  });
+
+  it('замёрзшая страница: sync не отвечает — через PICK_LIMITS.scriptMs все метки пропали', async () => {
+    const { annotate, setHang } = setup();
+    setHang(true);
+    const sync = track(annotate.sync(7, [{ n: 1, key: 'a1' }, { n: 2, key: 'a2' }]));
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs - 1);
+    expect(sync.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sync).toEqual({ settled: true, value: [{ n: 1, rect: null }, { n: 2, rect: null }] });
+  });
+
+  it('замёрзшая страница: cancel не отвечает — через PICK_LIMITS.scriptMs возвращается', async () => {
+    const { annotate, setHang } = setup();
+    setHang(true);
+    const cancel = track(annotate.cancel(7));
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs - 1);
+    expect(cancel.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cancel.settled).toBe(true);
+  });
+
+  it('замёрзшая страница: capture — счёт меток не отвечает, через PICK_LIMITS.scriptMs снимка нет; CDP и capturePage не зовутся', async () => {
+    const { annotate, guest, send, setHang } = setup();
+    setHang(true);
+    const capture = track(annotate.capture(7));
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs - 1);
+    expect(capture.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(capture).toEqual({ settled: true, value: { path: null } });
+    expect(send).not.toHaveBeenCalled();
+    expect(guest.capturePage).not.toHaveBeenCalled();
+  });
+
+  it('скрытый гость (display:none): CDP-снимок не отвечает — через PICK_LIMITS.scriptMs видимая часть через capturePage', async () => {
+    const { annotate, guest, send, saveImage } = setup();
+    send.mockImplementation(() => new Promise<never>(() => undefined));
+    const capture = track(annotate.capture(7));
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs - 1);
+    expect(capture.settled).toBe(false);
+    expect(guest.capturePage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(capture).toEqual({ settled: true, value: { path: '/h/drops/page.png' } });
+    expect(saveImage).toHaveBeenCalledWith(Buffer.from('visible-png'));
+  });
+
+  it('скрытый гость: capturePage тоже не отвечает — ещё через PICK_LIMITS.scriptMs снимка нет, а не вечное ожидание', async () => {
+    const { annotate, guest, send, saveImage } = setup();
+    send.mockImplementation(() => new Promise<never>(() => undefined));
+    guest.capturePage.mockImplementation(() => new Promise<never>(() => undefined));
+    const capture = track(annotate.capture(7));
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs);
+    expect(guest.capturePage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(PICK_LIMITS.scriptMs - 1);
+    expect(capture.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(capture).toEqual({ settled: true, value: { path: null } });
+    expect(saveImage).not.toHaveBeenCalled();
   });
 });

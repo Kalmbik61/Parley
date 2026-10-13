@@ -635,10 +635,23 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
 });
 
 describe('рамочный: скрипты страницы — только в изолированном мире (Фокус ревью 6)', () => {
-  it('в коде main нет executeJavaScript мира страницы (у Orca так исполнен весь выбор)', () => {
+  /** Исходники main без тестов: путь от `main/` и текст. */
+  function mainSources(): Array<{ file: string; source: string }> {
     const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const files = (readdirSync(mainDir, { recursive: true }) as string[]).filter((file) => /\.(ts|js)$/.test(file) && !file.includes('.test.'));
     expect(files.length).toBeGreaterThan(0);
-    for (const file of files) expect(readFileSync(path.join(mainDir, file), 'utf8'), file).not.toMatch(/\.executeJavaScript\(/);
+    return files.map((file) => ({ file, source: readFileSync(path.join(mainDir, file), 'utf8') }));
+  }
+
+  it('в коде main нет executeJavaScript мира страницы (у Orca так исполнен весь выбор)', () => {
+    for (const { file, source } of mainSources()) expect(source, file).not.toMatch(/\.executeJavaScript\(/);
+  });
+
+  it('каждый вызов executeJavaScriptInIsolatedWorld( берёт мир PICK_WORLD_ID: мир 0 — сама страница, и прежняя проверка его не видит', () => {
+    const calls = mainSources().flatMap(({ file, source }) =>
+      [...source.matchAll(/executeJavaScriptInIsolatedWorld\(\s*([^,\s)]+)/g)].map((match) => ({ file, world: match[1] })),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    for (const { file, world } of calls) expect(world, file).toBe('PICK_WORLD_ID');
   });
 });
