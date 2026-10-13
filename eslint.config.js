@@ -43,7 +43,7 @@ export default tseslint.config(
   },
   // Скрипты выбора и меток (кусок 9.3a, этап B браузера) лежат в src/main, но исполняются в странице гостя.
   {
-    files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js'],
+    files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],
     languageOptions: {
       globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly', NodeFilter: 'readonly' },
     },
