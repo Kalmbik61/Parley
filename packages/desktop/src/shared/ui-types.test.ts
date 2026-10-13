@@ -174,6 +174,26 @@ describe('раздел browser (спека 2026-10-07, 4.3)', () => {
   });
 });
 
+describe('normalizeUi: остров', () => {
+  it('нет поля — умолчания: включён, по центру, монитор не выбран, подсказка не показана', () => {
+    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center', hintShown: false });
+  });
+
+  it('битые значения заменяются умолчаниями по одному, целые остаются', () => {
+    expect(normalizeUi({ island: { enabled: false, displayId: 'x', anchor: 'top', hintShown: true } }).island).toEqual({
+      enabled: false,
+      displayId: null,
+      anchor: 'center',
+      hintShown: true,
+    });
+  });
+
+  it('displayId — только целое число', () => {
+    expect(normalizeUi({ island: { displayId: 3 } }).island.displayId).toBe(3);
+    expect(normalizeUi({ island: { displayId: 2.5 } }).island.displayId).toBeNull();
+  });
+});
+
 // Спека архива комнат и проектов, 6.3: проекты, убранные из списка пунктом «Remove from list…».
 describe('hiddenProjects (спека архива, 6.3)', () => {
   it('по умолчанию пусто; файл прежней версии без ключа читается с пустым списком', () => {

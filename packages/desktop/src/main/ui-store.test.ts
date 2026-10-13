@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_UI } from '../shared/ui-types.js';
+import { DEFAULT_UI, type UiFile } from '../shared/ui-types.js';
 import { createUiStore } from './ui-store.js';
 
 describe('createUiStore', () => {
@@ -75,6 +75,13 @@ describe('createUiStore', () => {
     await store.save({ browser: { devtoolsHeight: 260 } });
     await store.save({ browser: {} });
     expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
+  });
+
+  it('save сливает island на один уровень: место не стирает enabled и hintShown', async () => {
+    const store = createUiStore(file);
+    await store.save({ island: { enabled: false, displayId: null, anchor: 'center', hintShown: true } });
+    const saved = await store.save({ island: { displayId: 7, anchor: 'right' } } as Partial<Omit<UiFile, 'version'>>);
+    expect(saved.island).toEqual({ enabled: false, displayId: 7, anchor: 'right', hintShown: true });
   });
 
   // Тест 12 раунда исправлений: частичный вложенный патч не должен откатывать
