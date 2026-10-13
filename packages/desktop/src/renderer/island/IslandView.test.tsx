@@ -549,11 +549,11 @@ describe('убранный остров', () => {
     expect(slide.hasAttribute('aria-hidden')).toBe(false);
   });
 
-  it('убран: обёртка уезжает вверх на свою высоту плюс 8 px, плавно; у reduced motion перехода нет', () => {
+  it('убран: обёртка уезжает вверх на свою высоту плюс 40 px, плавно; у reduced motion перехода нет', () => {
     view({ retracted: true });
     const slide = screen.getByTestId('island-slide');
     expect(slide.getAttribute('data-retracted')).toBe('true');
-    expect(slide.className).toContain('-translate-y-[calc(100%_+_8px)]');
+    expect(slide.className).toContain('-translate-y-[calc(100%_+_40px)]');
     expect(slide.className).toContain('transition-transform');
     expect(slide.className).toContain('duration-300');
     expect(slide.className).toContain('ease-out');
@@ -562,6 +562,16 @@ describe('убранный остров', () => {
     expect(slide.getAttribute('aria-hidden')).toBe('true');
     // Форма внутри сохраняет свой размерный переход: у размера и сдвига разная длительность.
     expect(screen.getByTestId('island').className).toContain('duration-[250ms]');
+  });
+
+  it('убран: у формы нет тени (иначе у верхнего края кадра серая полоса); на месте — shadow-lg', () => {
+    view({ retracted: true });
+    expect(screen.getByTestId('island').className).toContain('shadow-none');
+    expect(screen.getByTestId('island').className).not.toContain('shadow-lg');
+    cleanup();
+    view();
+    expect(screen.getByTestId('island').className).toContain('shadow-lg');
+    expect(screen.getByTestId('island').className).not.toContain('shadow-none');
   });
 
   it('форма внутри обёртки: ссылка на неё и мышь работают, как у стоящего на месте острова', () => {

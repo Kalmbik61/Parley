@@ -261,17 +261,17 @@ export function IslandView(props: IslandViewProps): JSX.Element {
     return () => observer.disconnect();
   }, []);
   return (
-    // Убранный остров уезжает вверх на свою высоту плюс запас под тень; без `retracted` обёртка стоит на месте.
+    // Убранный остров уезжает вверх на свою высоту плюс 40 px и без тени (иначе у верхнего края кадра остаётся серая полоса); без `retracted` обёртка стоит на месте.
     <div
       data-testid="island-slide"
       data-retracted={retracted}
       aria-hidden={retracted || undefined}
-      className={`transition-transform duration-300 ease-out motion-reduce:transition-none ${retracted ? '-translate-y-[calc(100%_+_8px)]' : ''}`}
+      className={`transition-transform duration-300 ease-out motion-reduce:transition-none ${retracted ? '-translate-y-[calc(100%_+_40px)]' : ''}`}
     >
       <div
         ref={shapeRef}
         data-testid="island"
-        className={`overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground shadow-lg transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground ${retracted ? 'shadow-none' : 'shadow-lg'} transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         style={size ?? undefined}
         onMouseEnter={onShapeEnter}
         onMouseLeave={onShapeLeave}

@@ -314,14 +314,16 @@ describe('язычок убранного острова', () => {
     expect(isRetracted()).toBe(true);
     const tab = screen.getByRole('button', { name: 'Show the island' });
     expect(tab).toBe(screen.getByTestId('island-tab'));
-    // Полоска 40×5 с невидимой областью нажатия 64×16.
+    // Чёрная полоска 40×5 со светлой обводкой (видна и на светлом фоне) и невидимой областью нажатия 64×16.
     expect(tab.className).toContain('w-16');
     expect(tab.className).toContain('h-4');
     const bar = tab.firstElementChild as HTMLElement;
     expect(bar.className).toContain('h-[5px]');
     expect(bar.className).toContain('w-10');
     expect(bar.className).toContain('rounded-full');
-    expect(bar.className).toContain('bg-foreground/60');
+    expect(bar.className).toContain('bg-black');
+    expect(bar.className).toContain('ring-1');
+    expect(bar.className).toContain('ring-white/50');
   });
 
   it('язычок стоит там же, где форма: по точке и под чёлкой', async () => {
