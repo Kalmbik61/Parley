@@ -23,11 +23,13 @@
  * лежат в памяти острова до перезапуска и при переподключении не сбрасываются; новый конец хода — новый ключ. Текст
  * ответа к строкам Done берёт `useIslandReplies` (разовые снимки ленты; стор привязан к мосту вместе с очередью).
  *
- * Показанная Done-строка держится до конца показа. Пока остров выдвинут, ключи всех его строк Done копятся в `held`, и
- * когда окно Parley отметит сессию просмотренной (`unseen` → `idle`, `turnEndedAt` прежний), модель строку не
- * убирает. Показ кончается, когда курсор ушёл с острова (`onHover(false)`) или остров убрался (`retracted`): `held`
- * очищается, и строки уже просмотренных сессий уходят; всё ещё `unseen` остаются, как обычно. Done, что убранный
- * остров застал готовыми, не показывался — их не держим.
+ * Показанная Done-строка держится до конца показа. Пока остров выдвинут, ключи его непросмотренных строк Done (`seen`
+ * ложно) копятся в `held`, и когда окно Parley отметит сессию просмотренной (`unseen` → `idle`, `turnEndedAt` прежний),
+ * модель строку не убирает. Показ кончается, когда курсор ушёл с острова (`onHover(false)`) или остров убрался
+ * (`retracted`): `held` очищается, и строки уже просмотренных сессий уходят; всё ещё `unseen` остаются, как обычно. При
+ * уборке очистка идёт не сразу, а через `RETRACT_SLIDE_MS` — пока форма уезжает, пилюля и строки не меняются; выдвинули
+ * раньше срока — очистка в тот же миг. Done, что убранный остров застал готовыми, не показывался — их не держим.
+ * Язычок убранного острова показывает число непросмотренных Done (`seen` ложно): просмотренные удержанные не считаются.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -47,6 +49,8 @@ import { useIslandRequests } from './requests.js';
 export const IDLE_RETRACT_MS = 4000;
 /** То же, но пока на острове есть строки Done: их надо успеть заметить. */
 export const DONE_HOLD_MS = 20000;
+/** Сколько уезжает убираемая форма: та же длительность, что `duration-300` у `island-slide` в `IslandView`. */
+export const RETRACT_SLIDE_MS = 300;
 
 const INITIAL_CONFIG: IslandConfig = { sound: false, hintShown: true, topInset: 0, anchor: 'center' };
 
@@ -135,6 +139,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
   );
+  /** Непросмотренные Done: их число показывает язычок убранного острова. */
+  const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
   const idle = !model.active && items.length === 0;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
@@ -145,15 +151,24 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     setListOpen(false);
   }, []);
 
-  // Удержание строк Done: пока остров выдвинут, всё, что он показывает, копится в `held`; убрался — очистка. Новых
-  // ключей нет — состояние то же, иначе модель, зависящая от `held`, перерисовывалась бы по кругу.
+  // Удержание строк Done: пока остров выдвинут, непросмотренные строки, что он показывает, копятся в `held` (удержанные
+  // уже там, а после очистки вернулись бы, пока ещё видны в том же кадре). Новых ключей нет — состояние то же, иначе
+  // модель, зависящая от `held`, перерисовывалась бы по кругу.
   useEffect(() => {
-    if (retracted) {
-      setHeld(releaseHeld);
-      return;
-    }
-    setHeld((current) => (doneRows.every((row) => current.has(row.doneKey)) ? current : new Set([...current, ...doneRows.map((row) => row.doneKey)])));
+    if (retracted) return;
+    const keys = doneRows.filter((row) => !row.seen).map((row) => row.doneKey);
+    setHeld((current) => (keys.every((key) => current.has(key)) ? current : new Set([...current, ...keys])));
   }, [retracted, doneRows]);
+  // Остров убрался — очистка `held` после того, как форма уехала: пока она в пути, пилюля и строки те же. Выдвинули
+  // раньше срока — показ всё равно кончился, очищаем в тот же миг.
+  useEffect(() => {
+    if (!retracted) return undefined;
+    const timer = setTimeout(() => setHeld(releaseHeld), RETRACT_SLIDE_MS);
+    return () => {
+      clearTimeout(timer);
+      setHeld(releaseHeld);
+    };
+  }, [retracted]);
   useEffect(() => {
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
     let firstFresh = -1;
@@ -261,7 +276,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         <IslandTab
           anchorClass={ANCHOR_CLASS[config.anchor]}
           topInset={config.topInset}
-          done={model.done > 0}
+          doneCount={unseenDone}
           tabRef={tabRef}
           onExpand={() => setRetracted(false)}
         />

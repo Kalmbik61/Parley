@@ -59,7 +59,7 @@ const REPLY = 'Refactored the parser and updated three tests.';
 const DONE_MODEL: IslandModel = {
   working: 0, waiting: 0, done: 1, providers: [], active: false,
   groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
-    { kind: 'session', key: 'kd', ref: DONE_REF, label: 'S05 parser', provider: 'claude', state: 'done', inTerminal: false, doneKey: DONE_KEY, turnEndedAt: ENDED_AT },
+    { kind: 'session', key: 'kd', ref: DONE_REF, label: 'S05 parser', provider: 'claude', state: 'done', inTerminal: false, doneKey: DONE_KEY, turnEndedAt: ENDED_AT, seen: false },
     { kind: 'room', key: 'rd', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: true },
   ] }],
 };

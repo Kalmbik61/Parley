@@ -1,7 +1,8 @@
 /**
  * Модель острова: счётчики пилюли, группы «в работе» по работам, комнаты по участникам, Codex вне острова, подписи
  * сессий; Done (ход окончен, не смотрели): строка с ключом конца хода, Clear, порядок после работы, комната `done`;
- * удержанные ключи: посмотренная (`idle`) сессия с концом хода и ключом в `held` остаётся строкой Done.
+ * удержанные ключи: посмотренная (`idle`) сессия с концом хода и ключом в `held` остаётся строкой Done; `seen` у строки
+ * Done: ложно для `unseen`, истинно для удержанной `idle`.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -76,8 +77,17 @@ describe('модель острова', () => {
     const model = islandModel([work()], byRef, new Set(), NONE, NONE);
     expect(model).toMatchObject({ working: 0, waiting: 0, done: 1, providers: [], active: false });
     expect(model.groups[0]?.rows).toEqual([
-      { kind: 'session', key: refKey(ref('s-05')), ref: ref('s-05'), label: 'S05 done', provider: 'claude', state: 'done', inTerminal: false, doneKey: doneKey('s-05'), turnEndedAt: ENDED },
+      { kind: 'session', key: refKey(ref('s-05')), ref: ref('s-05'), label: 'S05 done', provider: 'claude', state: 'done', inTerminal: false, doneKey: doneKey('s-05'), turnEndedAt: ENDED, seen: false },
     ]);
+  });
+
+  it('seen: unseen-сессия — false, удержанная idle — true', () => {
+    const unseen = activityMap([makeActivity(ref('s-05'), 'unseen', { turnEndedAt: ENDED })]);
+    expect(islandModel([work()], unseen, new Set(), NONE, NONE).groups[0]?.rows[0]).toMatchObject({ state: 'done', seen: false });
+    // Ключ в held, но сессия всё ещё unseen — она не просмотрена.
+    expect(islandModel([work()], unseen, new Set(), NONE, new Set([doneKey('s-05')])).groups[0]?.rows[0]).toMatchObject({ state: 'done', seen: false });
+    const idle = activityMap([makeActivity(ref('s-05'), 'idle', { turnEndedAt: ENDED })]);
+    expect(islandModel([work()], idle, new Set(), NONE, new Set([doneKey('s-05')])).groups[0]?.rows[0]).toMatchObject({ state: 'done', seen: true });
   });
 
   it('Done без времени конца хода — ключ с пустым хвостом, turnEndedAt null', () => {
@@ -108,7 +118,7 @@ describe('модель острова', () => {
       expect(model).toMatchObject({ working: 1, done: 1, active: true });
       const rows = model.groups[0]?.rows ?? [];
       expect(rows.map((row) => row.kind === 'session' && `${row.ref.sessionId}:${row.state}`)).toEqual(['s-01:working', 's-05:done']);
-      expect(rows[1]).toEqual({ kind: 'session', key: refKey(ref('s-05')), ref: ref('s-05'), label: 'S05 done', provider: 'claude', state: 'done', inTerminal: false, doneKey: doneKey('s-05'), turnEndedAt: ENDED });
+      expect(rows[1]).toEqual({ kind: 'session', key: refKey(ref('s-05')), ref: ref('s-05'), label: 'S05 done', provider: 'claude', state: 'done', inTerminal: false, doneKey: doneKey('s-05'), turnEndedAt: ENDED, seen: true });
     });
 
     it('комната done и для удержанной строки', () => {

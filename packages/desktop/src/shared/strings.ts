@@ -1608,6 +1608,7 @@ export const S = {
     roomDone: 'done',
     clearDone: 'Clear',
     doneTab: 'Agents finished — show the island',
+    donePeek: (count: number): string => `✅ ${count}`,
     of: (index: number, total: number): string => `${index} of ${total}`,
     previous: 'Previous request',
     next: 'Next request',

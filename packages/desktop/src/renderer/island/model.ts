@@ -8,7 +8,9 @@
  * живёт, пока хост не переведёт сессию в `idle` (посмотрели), она не заработает снова или человек не нажмёт Clear.
  * Исключение — удержанные ключи (`held`): строку, которую остров уже показал, отметка «просмотрено» (`unseen` →
  * `idle` с тем же `turnEndedAt`) не убирает — `idle` с концом хода и ключом в `held` остаётся такой же строкой Done.
- * Какие ключи держать и когда отпустить, решает проводка (`IslandApp`): модель только читает множество.
+ * Какие ключи держать и когда отпустить, решает проводка (`IslandApp`): модель только читает множество. У строки Done
+ * поле `seen`: `false` — сессию ещё не смотрели (`unseen`), `true` — удержанная `idle`; число `seen === false` — то, что
+ * показывает язычок убранного острова.
  * Ключ Done включает конец хода (`turnEndedAt`): новый конец хода той же сессии — новый ключ, и прежний Clear его
  * не скрывает. Done не «работа»: `active` и провайдеры пилюли его не считают, а `done` — число таких строк.
  * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done. Codex вне острова.
@@ -26,7 +28,7 @@ import type { ActivityEntry } from '../store/activity.js';
 
 export type IslandRow =
   | { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; state: 'working' | 'needs-you'; inTerminal: boolean }
-  | { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null }
+  | { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null; seen: boolean }
   | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; title: string; busy: number; done: boolean };
 
 export interface IslandGroup {
@@ -73,11 +75,12 @@ export function islandModel(
       const state = sessionAttention(session, live);
       const turnEndedAt = live?.turnEndedAt ?? null;
       const doneKey = `${key}\u0000${turnEndedAt ?? ''}`;
-      if (state === 'unseen' || (state === 'idle' && turnEndedAt !== null && held.has(doneKey))) {
+      const unseen = state === 'unseen';
+      if (unseen || (state === 'idle' && turnEndedAt !== null && held.has(doneKey))) {
         if (cleared.has(doneKey)) continue;
         finished.add(session.id);
         done += 1;
-        doneRows.push({ kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider, state: 'done', inTerminal: false, doneKey, turnEndedAt });
+        doneRows.push({ kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider, state: 'done', inTerminal: false, doneKey, turnEndedAt, seen: !unseen });
         continue;
       }
       if (state !== 'working' && state !== 'needs-you') continue;
