@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -12,6 +12,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * Контекст из браузера в чат (этап B браузера, спека 2026-10-07-browser-devtools-agent-design.md, 10 — E2E 2–4 и 7):
  * - «Add to chat» из консоли и сети — чип в поле Chat стаб-сессии и в поле комнаты; секретов (токен в адресе, Bearer,
  *   пароль в JSON и в multipart, Referer, ответ с session и Set-Cookie, адрес самой страницы) в файлах на диске нет;
+ *   каталог `drops/context` — 0700, файлы — 0600;
  * - сессия без Chat — строка в ввод CLI без Enter;
  * - Select: ⇧-клик по двум элементам — два чипа, снимки лежат на нужном элементе (цвет в файле, DPR 1 и 2), Send —
  *   `@"…md" @"…png"` в промпте;
@@ -34,8 +35,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * (`stale-disabled-style`) и жмёт кнопку событием click.
  *
  * DPR: тесты со своим масштабом (Select, 800×500) задают его сами, остальные берут масштаб экрана. Весь файл при одном
- * масштабе: `PARLEY_E2E_DPR=2 pnpm exec playwright test e2e/browser-context.spec.ts` (1 или 2). Снимки экрана — в
- * `test-results/browser-context/` (не коммитятся).
+ * масштабе — общим для спеков переключателем: `E2E_DPR=2 pnpm exec playwright test e2e/browser-context.spec.ts` (1 или 2).
+ * Снимки экрана — в `test-results/browser-context/` (не коммитятся).
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,8 +49,8 @@ const PICK_WORLD_ID = 1001;
 const LONG = 'x'.repeat(60);
 /** Допуск сравнения краёв: границы блоков в Chromium бывают дробными. */
 const EDGE = 0.5;
-/** Масштаб экрана всего файла из окружения (1 или 2); нет — как у экрана. Свой `dpr` теста главнее. */
-const FORCED_DPR = ['1', '2'].includes(process.env.PARLEY_E2E_DPR ?? '') ? Number(process.env.PARLEY_E2E_DPR) : undefined;
+/** Масштаб экрана всего файла из окружения (1 или 2, общий переключатель спеков `E2E_DPR`); нет — как у экрана. Свой `dpr` теста главнее. */
+const FORCED_DPR = ['1', '2'].includes(process.env.E2E_DPR ?? '') ? Number(process.env.E2E_DPR) : undefined;
 
 /**
  * Секреты страницы: ни одного из них не должно быть в файлах-контекстах на диске. Имена выбраны так, чтобы по одной
@@ -90,13 +91,14 @@ function pageHtml(extra: string): string {
   body{font:14px system-ui,sans-serif;margin:24px}
   main{display:flex;flex-direction:column;gap:16px;align-items:flex-start}
   button{font:inherit}
+ * Клик по ним ставит флаг в `body.dataset` (`saved`, `cancelled`): выбор и метки глотают клик, и флаг остаётся пустым.
   .save,.cancel{box-sizing:border-box;border:0;border-radius:0;color:#fff}
   .save{width:${SAVE.width}px;height:${SAVE.height}px;padding:8px 16px;background:rgb(20,71,230)}
   .cancel{width:${CANCEL.width}px;height:${CANCEL.height}px;padding:6px 16px;background:rgb(200,40,40)}
 </style></head>
 <body><main>
-  <section class="settings"><button id="save" class="save" type="button">Save</button></section>
-  <button id="cancel" class="cancel" type="button">Cancel</button>
+  <section class="settings"><button id="save" class="save" type="button" onclick="document.body.dataset.saved = '1'">Save</button></section>
+  <button id="cancel" class="cancel" type="button" onclick="document.body.dataset.cancelled = '1'">Cancel</button>
   <p id="note">A long paragraph for the region annotation, wide enough to drag over.</p>
   <button id="fail" type="button" onclick="fail()">Fail</button>
   <button id="upload" type="button" onclick="upload()">Upload</button>
@@ -230,6 +232,20 @@ async function screenText(window: Page): Promise<string> {
 async function addConsoleToChat(window: Page, text: string): Promise<void> {
   const row = window.locator('[data-console-row]', { hasText: text }).first();
   await row.hover();
+/**
+ * Дошёл ли до страницы клик по её кнопкам `#save` и `#cancel` (фикстура ставит флаги в `body.dataset`). Выбор и метки глотают
+ * клик в странице: флаги пусты. `''` — флага нет, `'1'` — клик дошёл.
+ */
+async function pageClicks(app: ElectronApplication, url: string): Promise<{ saved: string; cancelled: string }> {
+  const flags = await guestEval<{ saved: string; cancelled: string }>(
+    app,
+    url,
+    "({ saved: document.body.dataset.saved ?? '', cancelled: document.body.dataset.cancelled ?? '' })",
+  );
+  if (flags === null) throw new Error(`нет гостя ${url}`);
+  return flags;
+}
+
   await row.getByRole('button', { name: 'Add to chat' }).click();
 }
 
@@ -260,6 +276,11 @@ async function contextFiles(home: string, prefix: string): Promise<string[]> {
 /**
  * Клик по кнопке строки вкладки. Раз в сотню запусков кнопка, включённая после `dom-ready`, остаётся со стилем выключенной
  * (`pointer-events: none`, `opacity: .4`), хотя в DOM она включена, `:disabled` к ней не подходит, а пересчёт стиля ничего
+/** Права файла или каталога (последние три восьмеричные цифры). */
+async function modeOf(file: string): Promise<number> {
+  return (await stat(file)).mode & 0o777;
+}
+
  * не меняет. Клик мышью до неё не доходит: под центром оказывается сама строка `browser-chrome`, и Playwright ждёт 30 с. В
  * пойманных случаях так застревали все кнопки, что шли «выключена → включена» внутри `@container` строки (Reload или Stop,
  * размер, Select, Annotate, консоль, «⋯»), а «To», которая не выключалась, оставалась цела: человек увидел бы тусклые мёртвые
@@ -604,6 +625,9 @@ test.describe('контекст из браузера в чат (этап B)', (
   });
 
   for (const dpr of [1, 2]) {
+    // Каталог и файлы контекста закрыты для остальных пользователей машины: тела запросов и ответов лежат в них.
+    expect((await modeOf(contextDir(home))).toString(8), 'права drops/context').toBe('700');
+    expect((await modeOf(settingsFile as string)).toString(8), `права ${settingsFile}`).toBe('600');
     test(`E2E 3 (DPR ${dpr}): Select — ⇧-клик по двум элементам, два чипа, снимки на своих элементах; Send — @"…md" @"…png" в промпте`, async () => {
       const { electronApp, window, url } = await openPage({ chat: true, dpr });
       const select = window.getByRole('button', { name: 'Select' });
@@ -621,10 +645,21 @@ test.describe('контекст из браузера в чат (этап B)', (
       await clickChromeButton(window, select, 'Select');
       await expect(select).toHaveAttribute('aria-pressed', 'false');
 
+      expect((await modeOf(path.join(contextDir(home), name))).toString(8), `права ${name}`).toBe('600');
       const [saveMd, savePng] = await contextFiles(home, 'element-button-save-');
       const [cancelMd, cancelPng] = await contextFiles(home, 'element-button-cancel-');
       for (const file of [saveMd, savePng, cancelMd, cancelPng]) expect(file).toBeDefined();
-      expect(await readFile(saveMd as string, 'utf8')).toContain(`Screenshot: ${savePng}`);
+      const saveText = await readFile(saveMd as string, 'utf8');
+      const cancelText = await readFile(cancelMd as string, 'utf8');
+      expect(saveText).toContain(`Screenshot: ${savePng}`);
+      // Роль и имя дочитывает main настоящим CDP (DOM.getNodeForLocation по точке документа и Accessibility.getPartialAXTree):
+      // юнит-тесты держат это на подставных ответах, а сбой CDP глотает таймаут и просто убирает строку из файла.
+      expect(saveText).toContain('Role: button "Save"');
+      expect(cancelText).toContain('Role: button "Cancel"');
+      expect(saveText).toMatch(/^Selector: (?:.+ > )?button#save$/m);
+      expect(cancelText).toMatch(/^Selector: (?:.+ > )?button#cancel$/m);
+      // Снимок переехал из drops/ в drops/context/ и остался закрытым так же, как файл с текстом.
+      for (const file of [saveMd, savePng, cancelMd, cancelPng]) expect((await modeOf(file as string)).toString(8), `права ${file}`).toBe('600');
 
       // Снимок лёг на свой элемент (решение 2026-10-08: основной путь — видимая часть, не обрезка CDP): размер — размер
       // кнопки на DPR, поля кнопки — её цвет, а не белый фон документа. capturePage отдаёт цвета профиля экрана, поэтому — допуск.
@@ -666,6 +701,8 @@ test.describe('контекст из браузера в чат (этап B)', (
 
   test('E2E 4: Annotate — метка на элементе и рамка с комментариями дают один .md и один .png; Esc вне редактора ничего не отменяет', async () => {
     const { electronApp, window, roomId, url } = await openPage({ chat: false });
+      // Оба клика выбора проглочены в самой странице: до обработчиков её кнопок они не дошли.
+      expect(await pageClicks(electronApp, url), 'клик выбора дошёл до кнопки страницы').toEqual({ saved: '', cancelled: '' });
     await chooseTarget(window, `room:${roomId}`);
     const annotate = await startAnnotate(electronApp, window, url);
     const editor = window.getByTestId('annotation-editor');
@@ -709,6 +746,14 @@ test.describe('контекст из браузера в чат (этап B)', (
       // Esc в поле редактора: новая метка и её пункт уходят, режим включён, страница снова ждёт клика.
       await third.click();
       await window.keyboard.press('Escape');
+
+      // Контроль проглоченных кликов — в конце, чтобы не задерживать «Open» тоста: назад во вкладку браузера; режим выключен, и
+      // тот же доверенный клик доходит до страницы, так что проверка после ⇧-кликов могла бы упасть.
+      await window.locator('[role="tab"][data-tab-id^="browser:"]').click();
+      await expect.poll(() => pickArmed(electronApp, url)).toBe(false);
+      await clickInGuest(electronApp, url, '#save');
+      await clickInGuest(electronApp, url, '#cancel');
+      await expect.poll(() => pageClicks(electronApp, url)).toEqual({ saved: '1', cancelled: '1' });
       await expect(editor).toHaveCount(0);
       await expect(tray).toContainText('2 annotations');
       await expect(annotate).toHaveAttribute('aria-pressed', 'true');
@@ -773,8 +818,51 @@ test.describe('контекст из браузера в чат (этап B)', (
     await expectInField(window.getByTestId('browser-field'), 'annotation-editor');
     const field = window.getByRole('textbox', { name: 'Comment for annotation 1' });
     await expect(field).toBeFocused();
+    // Роль и имя метки на элементе — от настоящего CDP, как у Select: сбой CDP глотает таймаут и просто убирает строку из файла.
+    expect(markdown).toContain('Role: button "Save"');
+    expect(markdown).toMatch(/^Selector: (?:.+ > )?button#save$/m);
     await expect(field).toBeVisible();
     await expect(field).toHaveValue('Make it green');
+
+    await test.step('номера на снимке стоят там, где метки на странице (спека 4.7): янтарный кружок у каждой метки, а чистое место снимка — не янтарное', async () => {
+      const page = await guestEval<{ w: number; h: number; save: { x: number; y: number }; note: { x: number; y: number } }>(
+        electronApp,
+        url,
+        `(() => {
+          const at = (selector, dx, dy) => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.left + dx, y: r.top + dy }; };
+          return { w: innerWidth, h: innerHeight, save: at('#save', 0, 0), note: at('#note', 5, 5) };
+        })()`,
+      );
+      if (page === null) throw new Error('нет гостя');
+      // Кружок в 24 px стоит центром на левом верхнем углу цели, но целиком во вьюпорте (`badgeAt` скрипта меток).
+      const center = (point: { x: number; y: number }): [number, number] => [Math.max(12, Math.min(point.x, page.w - 12)), Math.max(12, Math.min(point.y, page.h - 12))];
+      const [saveX, saveY] = center(page.save);
+      const [noteX, noteY] = center(page.note);
+      // Левее центра на 8 px: внутри кружка радиусом 12 и в стороне от цифры.
+      const shot = await samplePng(
+        electronApp,
+        png as string,
+        [
+          [(saveX - 8) / page.w, saveY / page.h],
+          [(noteX - 8) / page.w, noteY / page.h],
+          [0.6, 0.5],
+        ],
+      );
+      test.info().annotations.push({ type: 'pins', description: `снимок ${shot.width}×${shot.height}, вьюпорт ${page.w}×${page.h}: ${JSON.stringify(shot.colors)}` });
+      // Кружок цвета #f59e0b (245,158,11); допуск — на профиль экрана, как у проверки снимков Select.
+      const amber = ([r, g, b]: readonly [number, number, number]): boolean => r >= 215 && g >= 120 && g <= 195 && b <= 90;
+      expect(amber(shot.colors[0] as [number, number, number]), `кружок метки 1 не на снимке: ${JSON.stringify(shot.colors[0])}`).toBe(true);
+      expect(amber(shot.colors[1] as [number, number, number]), `кружок метки 2 не на снимке: ${JSON.stringify(shot.colors[1])}`).toBe(true);
+      expect(amber(shot.colors[2] as [number, number, number]), `чистое место снимка янтарное: ${JSON.stringify(shot.colors[2])}`).toBe(false);
+    });
+
+    // Клики по кнопкам страницы, пока метки включены, до неё не дошли (метка ставится вместо клика); режим выключен — доходят.
+    expect(await pageClicks(electronApp, url), 'клик метки дошёл до кнопки страницы').toEqual({ saved: '', cancelled: '' });
+    await clickChromeButton(window, annotate, 'Annotate');
+    await expect(annotate).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => annotateArmed(electronApp, url)).toBe(false);
+    await clickInGuest(electronApp, url, '#save');
+    await expect.poll(() => pageClicks(electronApp, url)).toEqual({ saved: '1', cancelled: '' });
     const fieldBox = await boxOf(window.getByTestId('browser-field'), 'поле страницы');
     const box = await boxOf(editor, 'редактор');
     expectInside(box, fieldBox, 'редактор прокрученной за край метки в поле страницы');
@@ -948,12 +1036,16 @@ test.describe('контекст из браузера в чат (этап B)', (
     await expect(editor).toHaveCount(0);
     await expect(tray).toContainText('1 annotation');
   });
+    // Страница первой вкладки взведена, пока метка в правке (клики она глотает): контроль для проверки ниже.
+    expect(await annotateArmed(electronApp, url), 'страница первой вкладки не взведена до перехода во вторую').toBe(true);
 
   test('Переход, не сменивший документ (ответ 204): режим снят, прежняя страница снята со взвода — её клики не перехватываются, метки лотка на месте', async () => {
     const { electronApp, window, url } = await openPage({ chat: false });
     const annotate = await startAnnotate(electronApp, window, url);
     await markElement(electronApp, window, url, '#save', 1, 'still on the page');
     const tray = window.getByTestId('annotation-tray');
+    // Страница скрытой вкладки снята со взвода: иначе она глотала бы клики страницы, которой никто не видит.
+    await expect.poll(() => annotateArmed(electronApp, url)).toBe(false);
     await expect(tray).toContainText('still on the page');
     await expect.poll(() => annotateWaiting(electronApp, url)).toBe(true);
 
