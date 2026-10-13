@@ -653,6 +653,42 @@ describe('WakeService: лид закончил ход и ждёт фоновых
   });
 });
 
+describe('WakeService: письма ждут застрявшую сессию (спека «Застрявшие сессии», 6.1)', () => {
+  const hookLine = (name: string, extra: Record<string, unknown> = {}): string =>
+    `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+
+  it('лимит: письмо удержано — mailWaiting stuck, в терминале тишина; ход без ошибки лимита — указатель уходит', async () => {
+    const { workId, sessionId } = await activeSession();
+    // Как при настоящем запуске: `events/` заводит запись настроек до старта процесса.
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, activity, ref } = await rig(sessionId, workId);
+    const journal = path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
+
+    // Ход упёрся в лимит: он окончен, сессия у приглашения, но ждёт сброса, а не письма.
+    await appendFile(
+      journal,
+      hookLine('UserPromptSubmit') +
+        hookLine('StopFailure', { error: 'rate_limit', last_assistant_message: "You've hit your limit" }),
+    );
+    await waitFor(() => activity.get(ref)?.activity.need?.kind === 'limit', 3000);
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'stuck', 3000);
+    await settle(300);
+    expect(stream()).not.toContain(pointer(1));
+    // Причина в логе хоста — раз на причину, как у прочих ожиданий живой сессии.
+    const reasons = logInfos
+      .filter((entry) => entry.message === 'будильник: письма ждут')
+      .map((entry) => entry.reason);
+    expect(reasons.filter((reason) => reason === 'stuck')).toHaveLength(1);
+
+    // Эпизод кончился — ход начался и закончился без ошибки лимита: письма доставляются как обычно.
+    await appendFile(journal, hookLine('UserPromptSubmit') + hookLine('Stop'));
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(activity.get(ref)?.activity.need).toBeNull();
+  });
+});
+
 describe('WakeService: сбой Enter указателя (кусок 5.1, раунд исправлений 2)', () => {
   it('запись Enter бросает — будильник не падает, пишет в лог, предохранитель срабатывает, новое письмо доставляется', async () => {
     const { workId, sessionId } = await activeSession();

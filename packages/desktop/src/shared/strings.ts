@@ -742,6 +742,7 @@ export const S = {
      */
     mailWait: {
       busy: 'busy',
+      stuck: 'waiting',
       draft: 'unsent text in its terminal',
       'no-hooks': 'waiting in its terminal',
       'in-flight': 'notified, not started',

@@ -92,7 +92,7 @@ const CHOICE_RETRIES = 150;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 /** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
-const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks']);
+const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks', 'stuck']);
 
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
@@ -641,6 +641,7 @@ export function createWakeService(
         return 'pending';
       case 'resume-limit':
         return 'resume-limit';
+      case 'stuck':
       case 'no-hooks':
       case 'busy':
       case 'draft':

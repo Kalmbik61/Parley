@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
 import { oneLine } from '../counters.js';
 import { deliveryAction, isPointerText, pointerText } from './delivery.js';
+import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
@@ -56,6 +57,7 @@ const activityOf = (
   source: 'hooks',
   exited: false,
   hooksMissing: false,
+  need: null,
   ...patch,
 });
 
@@ -310,6 +312,85 @@ describe('deliveryAction', () => {
     expect(
       deliveryAction({ ...base, hooked: false, session: sessionOf({ lifecycle: 'sleeping' }), activity: null }).kind,
     ).toBe('resume');
+  });
+
+  describe('need — сессия ждёт человека или сброса лимита (спека «Застрявшие сессии», 6.1)', () => {
+    const needOf = (kind: SessionNeed['kind'], patch: Partial<SessionNeed> = {}): SessionNeed => ({
+      kind,
+      since: '2026-10-12T10:00:00.000Z',
+      detail: null,
+      resetsAt: null,
+      window: null,
+      account: null,
+      ...patch,
+    });
+    const limit = needOf('limit', {
+      detail: "You've hit your limit",
+      resetsAt: '2026-10-12T19:27:00.000Z',
+      window: 'session',
+    });
+    const stuck = { kind: 'none', reason: 'stuck' } as const;
+
+    it('unseen и idle с need limit и письмом — none(stuck); тот же снимок без need — указатель', () => {
+      for (const state of ['unseen', 'idle'] as const) {
+        expect(deliveryAction({ ...base, activity: activityOf(state, { need: limit }) }), state).toEqual(stuck);
+        expect(deliveryAction({ ...base, activity: activityOf(state, { need: null }) }), state).toEqual({
+          kind: 'type-pointer',
+          text: 'New messages (1). Call check_inbox.',
+          letterIds: ['m-01'],
+        });
+      }
+    });
+
+    it('любой вид need держит письма: одобрение и вопрос у blocked раньше были busy, экран старта — no-hooks', () => {
+      for (const kind of ['approval', 'question'] as const) {
+        expect(deliveryAction({ ...base, activity: activityOf('blocked', { need: needOf(kind) }) }), kind).toEqual(stuck);
+      }
+      // Экран старта: хуков с запуска ещё нет, но «застрял» точнее, чем «нет хуков».
+      expect(
+        deliveryAction({ ...base, hooked: false, activity: activityOf('blocked', { need: needOf('startup') }) }),
+      ).toEqual(stuck);
+      expect(
+        deliveryAction({ ...base, activity: activityOf('idle', { need: needOf('sign-in', { account: 'auth' }) }) }),
+      ).toEqual(stuck);
+    });
+
+    it('правило стоит сразу после not-live: прежние отказы остаются, черновик и указатель в полёте уступают ему', () => {
+      const waiting = { ...base, activity: activityOf('unseen', { need: limit }) };
+
+      expect(deliveryAction({ ...waiting, paused: true })).toEqual({ kind: 'none', reason: 'paused' });
+      expect(deliveryAction({ ...waiting, session: sessionOf({ lifecycle: 'closed' }) })).toEqual({
+        kind: 'none',
+        reason: 'closed',
+      });
+      expect(deliveryAction({ ...waiting, unread: [] })).toEqual({ kind: 'none', reason: 'no-letters' });
+      expect(deliveryAction({ ...waiting, pointed: new Set(['m-01']) })).toEqual({
+        kind: 'none',
+        reason: 'already-pointed',
+      });
+      expect(deliveryAction({ ...waiting, session: sessionOf({ lifecycle: 'pending' }) })).toEqual({
+        kind: 'none',
+        reason: 'not-live',
+      });
+
+      expect(deliveryAction({ ...waiting, hasDraft: true })).toEqual(stuck);
+      expect(deliveryAction({ ...waiting, inFlight: true })).toEqual(stuck);
+    });
+
+    it('спящую need не держит: пришёл старый снимок — письмо по-прежнему поднимает её, сверх лимита — resume-limit', () => {
+      const sleeping = sessionOf({ lifecycle: 'sleeping' });
+      const old = activityOf('unseen', { need: limit });
+
+      expect(deliveryAction({ ...base, session: sleeping, activity: old })).toEqual({
+        kind: 'resume',
+        text: 'New messages (1). Call check_inbox.',
+        letterIds: ['m-01'],
+      });
+      expect(deliveryAction({ ...base, session: sleeping, activity: old, resumeAllowed: false })).toEqual({
+        kind: 'none',
+        reason: 'resume-limit',
+      });
+    });
   });
 
   describe('queueWhileBusy — Codex принимает письмо занятому агенту в очередь (Tab)', () => {

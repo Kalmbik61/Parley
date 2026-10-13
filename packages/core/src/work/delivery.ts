@@ -49,7 +49,8 @@ export type DeliveryAction =
         | 'busy'
         | 'draft'
         | 'in-flight'
-        | 'no-hooks';
+        | 'no-hooks'
+        | 'stuck';
     }
   | {
       kind: 'type-pointer';
@@ -145,6 +146,10 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     };
   }
   if (session.lifecycle !== 'active') return { kind: 'none', reason: 'not-live' };
+  // Сессия ждёт человека или сброса лимита (`need`, спека «Застрявшие сессии», 6.1): указатель в её терминал не
+  // печатается, пока эпизод не кончится. Правило раньше `no-hooks` и `busy`: у экрана старта причина «застрял» точнее.
+  // `!= null`: активности может не быть вовсе (после `?.` это `undefined`), а `need` у неё — `null`.
+  if (activity?.need != null) return { kind: 'none', reason: 'stuck' };
   // Без единого хука с запуска `idle` ничего не значит: агент может ждать ответа на вопрос
   // доверия к папке, и Enter указателя его подтвердил бы (рамка 15.1).
   if (!hooked) return { kind: 'none', reason: 'no-hooks' };

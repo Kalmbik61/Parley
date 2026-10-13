@@ -1371,6 +1371,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
   it('каждая причина хоста — своими словами в скобках после тега', () => {
     const words: Record<MailWait, string> = {
       busy: 'busy',
+      stuck: 'waiting',
       draft: 'unsent text in its terminal',
       'no-hooks': 'waiting in its terminal',
       'in-flight': 'notified, not started',
