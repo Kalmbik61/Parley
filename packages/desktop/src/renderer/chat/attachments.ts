@@ -2,10 +2,12 @@
  * Вложения поля ввода «Chat» (скриншот из буфера, брошенные на вид файлы, скрепка): над полем они живут
  * чипами, а в CLI уходят упоминаниями Claude Code `@"абсолютный путь"` в конце текста — при отправке CLI
  * сам прикладывает файл (картинку — картинкой), текст промпта в хуке и в журнале остаётся как набран.
+ * Файл-контекст браузера уходит вместе со своим снимком (`withContextImages`).
  * Лента делает обратное: хвостовые упоминания промпта показывает чипами, а не текстом.
  */
 
 import { shellQuote } from '../terminal/drop.js';
+import { withContextImages } from './context-attachments.js';
 
 /**
  * Упоминание файла для CLI: `@"путь"`. Путь с `"`, `#` (у CLI это диапазон строк) или переводом строки
@@ -24,7 +26,7 @@ export function attachmentMention(path: string): string {
 export function composePrompt(text: string, paths: readonly string[]): string {
   if (paths.length === 0) return text;
   const head = text.trimEnd();
-  return `${head === '' ? '' : `${head} `}${paths.map(attachmentMention).join(' ')} `;
+  return `${head === '' ? '' : `${head} `}${withContextImages(paths).map(attachmentMention).join(' ')} `;
 }
 
 /** Хвостовое упоминание с абсолютным путём (`/…` или `C:\…`), за которым только пробелы. */

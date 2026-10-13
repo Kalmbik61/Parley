@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Путь, а не URL: в jsdom глобальный URL — его, и readFileSync такой не примет.
-const guestScript = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'guest-pick.js'), 'utf8');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const guestScript = readFileSync(path.join(here, 'guest-pick.js'), 'utf8');
+const domScript = readFileSync(path.join(here, 'guest-dom.js'), 'utf8');
 
 /**
  * isTrusted у jsdom — неподделываемое свойство (как в браузере), а dispatchEvent сбрасывает его в
@@ -29,9 +31,9 @@ function mouse(type: string, init: MouseEventInit = {}): MouseEvent {
   return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 30, clientY: 30, ...init });
 }
 
-/** Скрипт как в госте: выражение, значение которого — промис выбора. */
+/** Скрипт как в госте: помощники DOM и скрипт выбора одной строкой, её значение — промис выбора. */
 function runScript(): Promise<unknown> {
-  return (0, eval)(guestScript) as Promise<unknown>;
+  return (0, eval)(`${domScript}\n${guestScript}`) as Promise<unknown>;
 }
 
 describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
@@ -76,6 +78,8 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
   });
 
   afterEach(() => {
+    // ⇧-клик оставляет перехватчики стоять до нового запуска или отмены: тест не тянет их в следующий.
+    (globalThis as { __parleyPickCancel?: () => void }).__parleyPickCancel?.();
     document.body.innerHTML = '';
   });
 
@@ -104,12 +108,17 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     for (const secret of ['secret', 'tok', '4111', 'pw2']) expect(html).not.toContain(secret);
     expect(html).not.toMatch(/onclick|onmouseover|srcdoc|<script|<style/i);
 
-    expect(result.selector).toBe('body > main.page > form#f');
+    // Кратчайший уникальный селектор (guest-dom.js, по Orca): у формы есть id.
+    expect(result.selector).toBe('form#f');
     expect(result.text).toMatch(/frame Save$/);
     expect(result.rect).toEqual({ x: 10, y: 20, width: 300, height: 120 });
     expect(result.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight });
     expect(result.styles).toMatchObject({ display: 'block' });
     expect(result).toHaveProperty('devicePixelRatio');
+    // Этап B: точка для CDP — сам клик (под ним выбранный элемент), без ⇧, прокрутка документа.
+    expect(result.point).toEqual({ x: 30, y: 30 });
+    expect(result.shift).toBe(false);
+    expect(result.scroll).toEqual({ x: 0, y: 0 });
 
     // Оверлей и перехватчики сняты: клик снова доходит до страницы.
     expect(document.documentElement.textContent).not.toContain('form.login ·');
@@ -148,9 +157,131 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
     });
     const picking = runScript();
     dispatchTrusted(button, mouse('click'));
-    const result = (await picking) as { rect: { y: number } };
+    const result = (await picking) as { rect: { y: number }; point: unknown };
     expect(form.scrollIntoView).toHaveBeenCalledWith({ block: 'center', inline: 'center', behavior: 'instant' });
     expect(result.rect.y).toBe(100);
+    expect(result.point).toEqual({ x: 160, y: 160 });
+  });
+
+  it('⇧-клик — shift: true (Select держит режим, спека браузера 4.6)', async () => {
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click', { shiftKey: true }));
+    expect(((await picking) as { shift: boolean }).shift).toBe(true);
+  });
+
+  it('после прокрутки под центром другой узел — точки нет', async () => {
+    let top = 5000;
+    form.getBoundingClientRect = () => ({ x: 10, y: top, width: 300, height: 120, top, left: 10, right: 310, bottom: top + 120, toJSON: () => ({}) });
+    form.scrollIntoView = vi.fn(() => {
+      top = 100;
+    });
+    document.elementFromPoint = vi.fn((x: number) => (x === 30 ? form : button));
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click'));
+    expect(((await picking) as { point: unknown }).point).toBeNull();
+  });
+
+  it('центр элемента за краем окна (он шире и выше окна) — точка прижата к видимой части', async () => {
+    form.getBoundingClientRect = () => ({ x: 10, y: 100, width: 3000, height: 4000, top: 100, left: 10, right: 3010, bottom: 4100, toJSON: () => ({}) });
+    const picking = runScript();
+    dispatchTrusted(button, mouse('click'));
+    // Окно jsdom 1024×768: центр элемента (1510; 2100) прижимается к последнему столбцу и последней строке окна.
+    expect(((await picking) as { point: unknown }).point).toEqual({ x: window.innerWidth - 1, y: window.innerHeight - 1 });
+  });
+
+  it('прокрутка документа — в результате: точка документа для CDP = точка вьюпорта + прокрутка', async () => {
+    const scrollX = Object.getOwnPropertyDescriptor(window, 'scrollX');
+    const scrollY = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    Object.defineProperty(window, 'scrollX', { configurable: true, value: 5 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 250 });
+    try {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('click'));
+      expect(((await picking) as { scroll: unknown }).scroll).toEqual({ x: 5, y: 250 });
+    } finally {
+      if (scrollX !== undefined) Object.defineProperty(window, 'scrollX', scrollX);
+      if (scrollY !== undefined) Object.defineProperty(window, 'scrollY', scrollY);
+    }
+  });
+
+  describe('⇧-клик держит перехватчики до нового запуска (ревью задачи 16, I2)', () => {
+    /** ⇧-клик по кнопке и ожидание ответа скрипта: дальше страница «между выборами» — окно ещё не перезапустило выбор. */
+    async function shiftPick(): Promise<void> {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('click', { shiftKey: true }));
+      expect(((await picking) as { shift: boolean }).shift).toBe(true);
+    }
+
+    it('клик человека между выборами гасится и ничего не выбирает: до страницы не доходит, страница не прокручивается', async () => {
+      await shiftPick();
+
+      // Main снимает снимок и дочитывает роль и React ещё десятки миллисекунд (на тяжёлой странице — до секунды), а окно
+      // перезапускает выбор только после ответа: клик человека в этот промежуток не должен дойти до страницы.
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'dblclick', 'auxclick', 'contextmenu']) {
+        const event = type.startsWith('pointer') ? new PointerEvent(type, { bubbles: true, cancelable: true }) : mouse(type);
+        dispatchTrusted(button, event);
+        expect(event.defaultPrevented, type).toBe(true);
+      }
+      // Второй клик — по элементу вне видимой части: настоящий выбор прокрутил бы страницу к нему.
+      form.getBoundingClientRect = () => ({ x: 10, y: 5000, width: 300, height: 120, top: 5000, left: 10, right: 310, bottom: 5120, toJSON: () => ({}) });
+      form.scrollIntoView = vi.fn();
+      const click = dispatchTrusted(button, mouse('click'));
+      expect(click.defaultPrevented).toBe(true);
+      expect(form.scrollIntoView).not.toHaveBeenCalled();
+      for (const handler of Object.values(pageHandlers)) expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('оверлей уходит сразу, не дожидаясь нового запуска: снимок main — без него', async () => {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('mousemove'));
+      expect(document.documentElement.textContent).toContain('form.login · 300×120');
+      dispatchTrusted(button, mouse('click', { shiftKey: true }));
+      await picking;
+      expect(document.documentElement.textContent).not.toContain('form.login ·');
+    });
+
+    it('наведение между выборами ничего не подсвечивает и страницу не опрашивает', async () => {
+      await shiftPick();
+      vi.mocked(document.elementFromPoint).mockClear();
+      dispatchTrusted(button, mouse('mousemove'));
+      expect(document.elementFromPoint).not.toHaveBeenCalled();
+    });
+
+    it('отмена мира (dismissScript main) снимает перехватчики: клик снова идёт в страницу', async () => {
+      await shiftPick();
+      // Пока отмены нет, перехватчики стоят.
+      expect(dispatchTrusted(button, mouse('click')).defaultPrevented).toBe(true);
+      expect(pageHandlers.onclick).not.toHaveBeenCalled();
+
+      (globalThis as { __parleyPickCancel?: () => void }).__parleyPickCancel?.();
+      expect((globalThis as { __parleyPickCancel?: unknown }).__parleyPickCancel).toBeUndefined();
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
+
+    it('Esc между выборами гасится и тоже снимает перехватчики', async () => {
+      await shiftPick();
+      const esc = dispatchTrusted(document, new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(esc.defaultPrevented).toBe(true);
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
+
+    it('цепочка: ⇧-клик, новый запуск, обычный клик — прежние перехватчики не мешают новым, обычный клик снимает всё', async () => {
+      await shiftPick();
+
+      // Окно перезапускает выбор (pickStart): первая строка скрипта снимает прежние перехватчики. Иначе stopImmediatePropagation
+      // прежних съел бы клик новых, и выбор повис бы.
+      const second = runScript();
+      dispatchTrusted(button, mouse('click'));
+      expect(await second).toMatchObject({ selector: 'form#f', shift: false });
+      expect(pageHandlers.onclick).not.toHaveBeenCalled();
+
+      // Обычный клик снял всё сразу: следующий клик человека идёт в страницу.
+      expect((globalThis as { __parleyPickCancel?: unknown }).__parleyPickCancel).toBeUndefined();
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('новый запуск снимает прежний выбор (null), отмена мира — тоже', async () => {

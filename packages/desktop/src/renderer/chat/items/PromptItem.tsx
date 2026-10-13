@@ -4,7 +4,8 @@
  * оно ждёт в очереди CLI, пока не придёт настоящий промпт с тем же текстом (решение 8).
  *
  * Хвостовые упоминания `@"путь"` — вложения, которые окно дописало при отправке (`attachments.ts`): в
- * пузыре они над текстом чипами (картинка — миниатюрой), самих путей в тексте нет.
+ * пузыре они над текстом чипами (картинка — миниатюрой), самих путей в тексте нет. Снимок файла-контекста
+ * браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его миниатюра — в чипе `.md`.
  */
 
 import { useContext } from 'react';
@@ -14,6 +15,7 @@ import { cn } from '../../lib/cn.js';
 import { AttachmentChip } from '../AttachmentChip.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
+import { pairContextAttachments } from '../context-attachments.js';
 
 export interface PromptItemProps {
   text: string;
@@ -26,6 +28,7 @@ export function PromptItem({ text, images = 0, queued = false }: PromptItemProps
   const bridge = useContext(ChatEnvContext)?.bridge ?? null;
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
   const { text: body, attachments } = splitAttachments(text);
+  const shown = pairContextAttachments(attachments);
   return (
     <div data-testid={queued ? 'chat-queued' : 'chat-prompt'} className="flex min-w-0 justify-end">
       <div
@@ -34,9 +37,9 @@ export function PromptItem({ text, images = 0, queued = false }: PromptItemProps
           queued ? 'border border-dashed border-border text-muted-foreground' : 'bg-secondary text-secondary-foreground',
         )}
       >
-        {attachments.length > 0 ? (
+        {shown.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
-            {attachments.map((path, index) => (
+            {shown.map((path, index) => (
               <AttachmentChip key={`${index}:${path}`} path={path} bridge={bridge} size="feed" />
             ))}
           </div>

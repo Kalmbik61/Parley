@@ -21,13 +21,17 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parl
 import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { createAnnotate } from './browser/annotate.js';
+import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
+import guestAnnotateScript from './browser/guest-annotate.js?raw';
+import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
-import { cleanupDrops, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
@@ -304,18 +308,29 @@ if (!gotLock) {
     const downloadLog: Array<{ filename: string; url: string }> = [];
     const testGlobals = globalThis as { __parleyDownloads?: typeof downloadLog; __parleySaveAnswer?: string | null };
     if (logDownloads) testGlobals.__parleyDownloads = downloadLog;
+    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
+    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя. Создаётся
+    // до выбора элемента: Select берёт у него снимок, роль и React (спека 3.8).
+    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
+    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
+    const emulation = createEmulation({ inspector });
     // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
     // стража: загрузка из гостя снимает его выбор (fix-9b).
     const designMode = createDesignMode({
       fromId: (id) => webContents.fromId(id) ?? null,
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
-      guestScript: guestPickScript,
+      // Помощники DOM (guest-dom.js, по Orca) — в той же строке перед скриптом выбора: значение строки — промис выбора.
+      guestScript: `${guestDomScript}\n${guestPickScript}`,
+      inspector,
     });
-    // Журнал консоли и сети вкладок браузера (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): инспектор CDP на
-    // каждого гостя — до стража, тот подключает гостя на web-contents-created. Пачки — окну-хозяину гостя.
-    const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
-    forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
-    const emulation = createEmulation({ inspector });
+    // Аннотации (этап B, спека браузера 4.7): снимок видимой части с метками — в drops/, как у выбора.
+    const annotate = createAnnotate({
+      fromId: (id) => webContents.fromId(id) ?? null,
+      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      // Помощники DOM (guest-dom.js) — в той же строке перед скриптом меток, как у выбора (задача 2).
+      guestScript: `${guestDomScript}\n${guestAnnotateScript}`,
+      inspector,
+    });
     // Журнал снят вместе с гостем — размер его вкладки тоже.
     inspector.onDestroyed((id) => emulation.forget(id));
     installBrowserGuard({
@@ -375,9 +390,10 @@ if (!gotLock) {
     // Реестр корней файлов (кусок 5.2, спека 10.8). `works.list` — на каждое (пере)подключение:
     // снимок работ новому клиенту хост не шлёт, а первый `connect()` выше мог упасть.
     // `onStatus` отдаёт текущий статус сразу при подписке — уже поднятая связь читается тут же.
-    // Старые скриншоты `drops/` (кусок 5.4): только обычные файлы и сами ссылки, по lstat.
+    // Старые скриншоты `drops/` (кусок 5.4) и файлы-контексты браузера в `drops/context/` (спека браузера 3.6):
+    // только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
-    void cleanupDrops(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
+    void cleanupDropsTree(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -463,6 +479,8 @@ if (!gotLock) {
         fromId: (id) => webContents.fromId(id) ?? null,
         session: browserSession,
         designMode,
+        saveContext: (input) => saveContextFile({ ...input, dir: contextDir(), dropsDir: dropsDir() }),
+        annotate,
         inspector,
         emulation,
       },

@@ -8,8 +8,9 @@
  * начинает отсчёт заново, новая карточка стоит сверху, а стоящие не сдвигаются (`window-notes.ts`). Ниже диалогов и
  * палитры (`z-40` против их `z-50`): пока человек занят ими, карточка не перехватывает клики.
  *
- * Угол с карточками делят тосты sonner: пока столбец стоит, его высота с зазором лежит в `--toast-inset-bottom` на
- * `<html>`, и тосты встают над ним, а не на кнопки `Open` и `Later` (`ui/sonner.tsx`).
+ * Угол с карточками делят тосты sonner: пока столбец стоит, его высота с зазором заявлена в `--toast-inset-bottom` на
+ * `<html>`, и тосты встают над ним, а не на кнопки `Open` и `Later` (`ui/sonner.tsx`). Угол делит и лоток аннотаций вкладки
+ * браузера, поэтому столбец заявляет отступ своим издателем (`ui/toast-inset.ts`), а не пишет переменную сам.
  */
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
@@ -17,12 +18,9 @@ import { MessageCircleQuestion } from 'lucide-react';
 import { toast } from 'sonner';
 import { S } from '../../shared/strings.js';
 import { Button } from '../ui/button.js';
-import { TOAST_INSET_VAR } from '../ui/sonner.js';
+import { createToastInsetPublisher, TOAST_GAP } from '../ui/toast-inset.js';
 import { applyFocusTarget, buildFocusTargetDeps } from './focus-target.js';
 import { useWindowNotesStore, WINDOW_NOTE_MS, type ShownWindowNote } from './window-notes.js';
-
-/** Зазор между столбцом карточек и поднятым над ним тостом, px (как `gap-2` между карточками). */
-const TOAST_GAP = 8;
 
 function WindowNoteCard({ note, onOpen }: { note: ShownWindowNote; onOpen: (note: ShownWindowNote) => void }): JSX.Element {
   const dismiss = useWindowNotesStore((state) => state.dismiss);
@@ -79,22 +77,22 @@ export function WindowNotes(): JSX.Element | null {
     if (!applyFocusTarget(note.target, buildFocusTargetDeps(unmounted.current?.signal))) toast(S.notifications.targetGone);
   };
 
-  // Высота столбца — тостам (`TOAST_INSET_VAR`): пока он стоит, `ResizeObserver` держит её свежей при каждой смене числа
-  // и высоты карточек, а уход столбца снимает переменную. Эффект — по появлению и исчезновению столбца, а не по каждой
+  // Высота столбца — тостам (`ui/toast-inset.ts`): пока он стоит, `ResizeObserver` держит её свежей при каждой смене числа
+  // и высоты карточек, а уход столбца снимает заявку. Эффект — по появлению и исчезновению столбца, а не по каждой
   // карточке: пока он на месте, следит наблюдатель.
   const column = useRef<HTMLDivElement>(null);
   const shown = notes.length > 0;
   useLayoutEffect(() => {
     const element = column.current;
     if (element === null) return;
-    const root = document.documentElement;
-    const publish = (): void => root.style.setProperty(TOAST_INSET_VAR, `${element.offsetHeight + TOAST_GAP}px`);
+    const publisher = createToastInsetPublisher();
+    const publish = (): void => publisher.set(element.offsetHeight + TOAST_GAP);
     publish();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(publish);
     observer?.observe(element);
     return () => {
       observer?.disconnect();
-      root.style.removeProperty(TOAST_INSET_VAR);
+      publisher.release();
     };
   }, [shown]);
 

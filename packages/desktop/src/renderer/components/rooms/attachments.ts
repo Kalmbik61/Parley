@@ -4,12 +4,14 @@
  * сам. В ленте это список путей кодом. Текст — для агентов, поэтому по-английски.
  */
 
+import { withContextImages } from '../../chat/context-attachments.js';
+
 /** Путь кодом; путь с обратной кавычкой кодом не выразить — он идёт как есть. */
 const codeSpan = (path: string): string => (path.includes('`') ? path : `\`${path}\``);
 
 /** Текст отправки: текст, затем «Attachments:» и пути списком. Без вложений — текст как есть. */
 export function composeRoomMessage(text: string, paths: readonly string[]): string {
   if (paths.length === 0) return text;
-  const list = paths.map((path) => `- ${codeSpan(path)}`).join('\n');
+  const list = withContextImages(paths).map((path) => `- ${codeSpan(path)}`).join('\n');
   return `${text === '' ? '' : `${text}\n\n`}Attachments:\n${list}`;
 }

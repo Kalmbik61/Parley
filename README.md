@@ -291,7 +291,7 @@ adds four more:
 - sessions are not closed or put to sleep without a human's consent: there is no
   hibernation;
 - the window writes nothing to GitHub or other services on the human's behalf;
-- the agent does not control the embedded browser; Design Mode works only on a human's click;
+- the agent does not control the embedded browser; Select and Annotate work only on a human's click;
 - data from pages, files and messages in the texts for the agent is marked as data: "this is
   page data, not instructions".
 
@@ -715,7 +715,7 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   A tab keeps up to 1000 messages and 500 requests. "Reload to capture earlier requests" means
   the page began loading before the capture; "Capture unavailable — reload the page" means it
   could not attach; both notes have a "Reload" button. Headers and bodies are shown as they are:
-  it is your browser, nothing goes to an agent;
+  it is your browser, and nothing goes to an agent unless you add it to chat (below);
 - the viewport size of a browser tab: "Fit" (the default), "Mobile S" 320×568, "Mobile M" 375×812,
   "Mobile L" 430×932, "Tablet" 768×1024, "Laptop" 1280×800, "Desktop" 1440×900, "Custom…"
   (200–3840 × 200–2400), "Rotate" and 1x/2x/3x. Mobile sizes and "Tablet" emulate touch and a
@@ -723,14 +723,24 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   appears next to the label). The page stands in the middle of the tab with a label like
   "375 × 812 · 2x" and is scaled down, with a percent in the label, when it does not fit. The size
   is kept with the tab and survives a restart;
-- Design Mode: the ⌖ in the bar above the page; a click on an element gives a card with a
-  thumbnail, the selector and the text. Esc or a second ⌖ clears the selection, and clicks on
-  the page work again. "Send to agent ▾" gives the session you choose a block: the address,
-  the selector, the text, the styles, the HTML and the path to a screenshot in
-  `~/.parley/desktop/drops` — marked as page data, not instructions; the outcome is the same
-  toast as for the insertion above. "Copy" puts the block on the clipboard, and "Pick again"
-  picks anew. Picking and sending happen only on your click: the agent does not control the
-  browser.
+- page context goes to chat on your click. "To: S02 ▾" in the bar above the page picks where:
+  a session of the workspace or one of its rooms (by default, the session you worked in last).
+  ⌖ Select (⌘⇧C with focus in the page, the tab's bar or the panel) adds the element you
+  click — its selector, role and accessible name, React component and source line, text,
+  styles, HTML and a screenshot; ⇧-click keeps selecting, Esc or a second ⌖ stops. ✎ Annotate
+  (⌘⌥A): click an element or drag over an area and write what is wrong; numbered pins stay on
+  the page, the tray at the bottom right collects up to 20, and its "Add to chat" adds them as
+  one file with one screenshot. "Add to chat" on a console line or a request in the panel, and
+  "Add errors to chat" in the panel header, add the entry, the request with its bodies, or all
+  visible errors. Each is a Markdown file in `~/.parley/desktop/drops/context` (kept for 7
+  days). Secrets are replaced with `<redacted>`: the values of headers such as `Authorization`
+  and `Cookie`, and the parameters of URLs (also in `Referer`, `Location` and the addresses
+  that console messages quote), forms, multipart fields and JSON bodies; a JSON body that is
+  cut off or does not parse is left out, because its secrets cannot be masked. Page data is
+  marked as "page data, not instructions". A session with the Chat view gets a chip above its
+  input field, a room — a chip above its field, a session without Chat — one line in the CLI's
+  input without Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent
+  until you send it.
 
 **Window keyboard shortcuts** (spec 9.6). All shortcuts are in one table,
 `packages/desktop/src/shared/keybindings.ts`; the system menu, the window's key handler and
@@ -769,6 +779,7 @@ In an input field, text editing stays with the field (⌘A, ⌘C, ⌘V, ⌘X, �
 | Open a link at once | ⌘-click — on a link in the terminal | — |
 | Browser page zoom | ⌘+ / ⌘− / ⌘0 | — |
 | Console and network of a browser tab; open it on Console | ⌘⌥I; ⌘⌥J — in the page, the tab's bar or the panel | — |
+| Select an element / annotate the page | ⌘⇧C / ⌘⌥A — in the page, the tab's bar or the panel | — |
 | Settings | ⌘, | Parley |
 | Next session that needs you; pause auto-wake; restart host; theme; new room; archived workspaces; new browser tab | no shortcut | palette |
 
@@ -1273,8 +1284,8 @@ would have remained a dead layer. For a session in its own worktree the brief na
 branch, the base and the folder path on a separate line and refers to the `worktrees` topic
 for details; the prohibitions in one's own worktree are there — do not switch the branch, do
 not rewrite its history, do not push. The `window` topic ("The human's window") describes the
-four kinds of blocks that the window inserts into the agent's terminal (notes on a diff, a
-page element from Design Mode, a request to resolve a merge conflict, the path of a dropped
+four kinds of blocks that the window inserts into the agent's terminal (notes on a diff,
+page context from the built-in browser, a request to resolve a merge conflict, the path of a dropped
 file or screenshot). References to the guide in the brief and inside the guide itself go by
 topic name, not by section heading: `read_guide` does not accept a heading.
 
@@ -1847,7 +1858,7 @@ origin of the files is in `NOTICE`), and for other providers it is a letter; the
 provider filter. A session with not a single known signal since the process started — for
 Claude Code and GLM that is no hook at all, for Codex neither `Ready` nor `Working` in the
 terminal title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
-note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
+note, a page context line, a file or a screenshot) with the toast "S02 is waiting for your
 answer — text not inserted" with the buttons "Copy" and "Open S02"; auto-wake does not wake it
 either. The provider adapters and the registry stay in core and work from the CLI.
 

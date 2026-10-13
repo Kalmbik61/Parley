@@ -1,23 +1,41 @@
 /**
- * Design Mode в main (кусок 9.3a, спека 12.3): выбор элемента страницы кликом человека.
+ * Select в main (спека браузера 3.8, 4.6; прежде Design Mode, кусок 9.3a): выбор элемента страницы кликом человека.
  *
- * Скрипт выбора (`guest-pick.js`) исполняется в изолированном мире гостя; всё, что он вернул, —
- * данные недоверенной страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес
- * берёт у `getURL()`, а снимок делает сам — `capturePage` по проверенному прямоугольнику.
+ * Скрипт выбора (`guest-pick.js` после помощников `guest-dom.js`) исполняется в изолированном мире гостя; всё, что он
+ * вернул, — данные недоверенной страницы. Поэтому main сам проверяет форму и длины (`validatePick`), адрес берёт у
+ * `getURL()`, а снимок делает сам (`snapshot`, спайк 0.7 и решения 2026-10-08): основной — `capturePage()` видимой
+ * части и вырезка по множителю «ширина картинки / ширина вьюпорта»; обрезка CDP `Page.captureScreenshot` в
+ * координатах документа × масштаб страницы, высотой не больше поверхности вида (выше Chromium повторяет первую
+ * поверхность), — только для элемента больше вьюпорта, которого видимая часть не вместит: в `<webview>` она порой
+ * отдаёт не тот участок (пробы настоящего Electron), поэтому помещающемуся элементу её не зовут. По точке документа main
+ * дочитывает роль, имя и компонент React (`element-info.ts`).
+ *
+ * Снимок видимой части (`snapshot`, `cropRect`) — адаптация Orca `src/main/browser/browser-grab-screenshot.ts`
+ * (stablyai/orca b1cd858, MIT): множитель не вычисляется из масштаба и эмуляции, а измеряется по картинке. Изменено:
+ * ширина вьюпорта — из проверенного выбора (`pick.viewport.width`), без запроса к странице; оверлей не прячется —
+ * `guest-pick.js` снимает его сам и ждёт два кадра; вырезка — пересечением с картинкой; наружу — PNG в `drops/`, а не
+ * data-URL; потолка 2 МиБ нет — предел файла у `saveImage`. Copyright (c) 2026 Lovecast Inc.; полный текст лицензии — в
+ * NOTICE в корне репозитория.
  */
 import type { NativeImage, WebContents } from 'electron';
-import type { PickResult } from '../../shared/browser-types.js';
+import type { PickResult, Rect } from '../../shared/browser-types.js';
 import { S } from '../../shared/strings.js';
+import { elementInfo, withTimeout, type CdpSender, type ElementInfo } from './element-info.js';
+import { cutCodePoints, documentPoint, finite, isRecord, readPoint, readRect } from './guest-data.js';
 
 /** Мир скрипта выбора: не 0 (мир страницы) и не занятые Electron. */
 export const PICK_WORLD_ID = 1001;
 
 /**
- * Пределы данных элемента (спека 12.3, «Числа» плана). `selector` спека ограничивает только звеньями,
- * а одно звено (класс или id) пишет страница — длина своя (fix-9): 12 звеньев обычной длины в неё
- * входят с запасом.
+ * Пределы данных элемента (спека 12.3, «Числа» плана; спека браузера 8). `selector` спека ограничивает только звеньями,
+ * а одно звено (класс или id) пишет страница — длина своя (fix-9). `captureSide` — сторона обрезки снимка в
+ * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `viewportSlack` — допуск
+ * «больше вьюпорта» в CSS-пикселях (`exceedsViewport`). `infoMs` — сколько ждём роль и React: страница в бесконечном цикле
+ * не держит выбор. `scriptMs` — сколько ждём ответ страницы на служебный вызов аннотаций (перерисовка, счёт и снятие
+ * меток) и на снимок с метками: упавший или замёрзший гость не отвечает вовсе, скрытый не отдаёт снимок, и без предела окно
+ * ждало бы вечно. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
  */
-export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, thumbnailWidth: 320 } as const;
+export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, viewportSlack: 1, infoMs: 2000, scriptMs: 3000 } as const;
 
 /** Вычисленные стили, которые уходят агенту (таблица спеки 12.3); остальные ключи выкидываются. */
 const STYLE_KEYS = new Set([
@@ -49,49 +67,25 @@ const STYLE_KEYS = new Set([
 /** Отмена выбора в том же изолированном мире: страница эту функцию не видит. */
 const CANCEL_SCRIPT = 'globalThis.__parleyPickCancel?.()';
 
-type Rect = { x: number; y: number; width: number; height: number };
-type ValidPick = Omit<PickResult, 'url' | 'imagePath' | 'thumbnail'> & {
+export type ValidPick = Pick<PickResult, 'selector' | 'text' | 'html' | 'styles' | 'point' | 'shift' | 'viewport'> & {
   rect: Rect;
-  viewport: { width: number; height: number };
+  scroll: { x: number; y: number };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Первые `limit` кодовых точек: суррогатная пара эмодзи не рвётся. */
-function cutCodePoints(text: string, limit: number): { text: string; cut: boolean } {
-  if (text.length <= limit) return { text, cut: false };
-  const points = Array.from(text);
-  if (points.length <= limit) return { text, cut: false };
-  return { text: points.slice(0, limit).join(''), cut: true };
-}
-
-function finite(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function readRect(value: unknown): Rect | null {
-  if (!isRecord(value)) return null;
-  const { x, y, width, height } = value;
-  if (!finite(x) || !finite(y) || !finite(width) || !finite(height) || width < 0 || height < 0) return null;
-  return { x, y, width, height };
-}
-
 /**
- * Проверка формы данных из гостя: лишние поля выкинуты, строки обрезаны (html — с
- * S.designBlock.truncated), неверная форма → null.
+ * Проверка формы данных из гостя: лишние поля выкинуты, строки обрезаны (html — с S.contextFile.truncated),
+ * неверная форма → null. Битая точка — не повод отвергать выбор: без неё нет только роли и React.
  */
 export function validatePick(raw: unknown): ValidPick | null {
   if (!isRecord(raw)) return null;
-  const { selector, text, html, styles, viewport } = raw;
+  const { selector, text, html, styles, viewport, devicePixelRatio: dpr } = raw;
   if (typeof selector !== 'string' || typeof text !== 'string' || typeof html !== 'string' || !isRecord(styles)) {
     return null;
   }
   const rect = readRect(raw.rect);
   if (rect === null || !isRecord(viewport)) return null;
   const { width: viewWidth, height: viewHeight } = viewport;
-  if (!finite(viewWidth) || !finite(viewHeight) || viewWidth <= 0 || viewHeight <= 0) return null;
+  if (!finite(viewWidth) || !finite(viewHeight) || viewWidth <= 0 || viewHeight <= 0 || !finite(dpr) || dpr <= 0) return null;
 
   // Значения стилей таблица спеки не ограничивает, а их пишет страница (font-family): режем
   // пределом текста — план этого не задал. Селектор — своим пределом (PICK_LIMITS.selector).
@@ -105,10 +99,13 @@ export function validatePick(raw: unknown): ValidPick | null {
   return {
     selector: cutCodePoints(links, PICK_LIMITS.selector).text,
     text: cutCodePoints(text, PICK_LIMITS.text).text,
-    html: cutHtml.cut ? cutHtml.text + S.designBlock.truncated : cutHtml.text,
+    html: cutHtml.cut ? cutHtml.text + S.contextFile.truncated : cutHtml.text,
     styles: cleanStyles,
     rect,
-    viewport: { width: viewWidth, height: viewHeight },
+    viewport: { width: viewWidth, height: viewHeight, dpr },
+    point: readPoint(raw.point),
+    shift: raw.shift === true,
+    scroll: readPoint(raw.scroll) ?? { x: 0, y: 0 },
   };
 }
 
@@ -124,21 +121,53 @@ export function pickUrl(pageUrl: string): string {
   return url.origin === 'null' ? `${url.protocol}${url.pathname}` : `${url.origin}${url.pathname}`;
 }
 
-/** Прямоугольник снимка в DIP: CSS-пиксели × zoomFactor, пересечение с видимой областью. */
-export function captureRect(
-  rect: Rect,
-  viewport: { width: number; height: number },
-  zoomFactor: number,
-): Rect | null {
-  const left = Math.max(rect.x, 0);
-  const top = Math.max(rect.y, 0);
-  const right = Math.min(rect.x + rect.width, viewport.width);
-  const bottom = Math.min(rect.y + rect.height, viewport.height);
+/** Обрезка CDP `Page.captureScreenshot`: прямоугольник в CSS-пикселях документа × масштаб страницы. */
+export interface CaptureClip extends Rect {
+  scale: 1;
+}
+
+/**
+ * Элемент больше вьюпорта: шире или выше больше чем на `viewportSlack` (1 CSS-пиксель). Видимая часть его не вместит, и для
+ * снимка нужна обрезка CDP за краем вьюпорта. Остальные — и помещающиеся, и частью за краем (скрипт выбора прокручивает
+ * такой в видимую часть) — снимаются вырезкой из `capturePage()`: она надёжнее. Допуск нужен, потому что при дробном
+ * масштабе страницы или DPR блок «во всю ширину» измеряется шире вьюпорта на доли пикселя; без допуска он уходил бы в
+ * обрезку CDP, которая в `<webview>` порой отдаёт не тот участок.
+ */
+export function exceedsViewport(rect: Rect, viewport: { width: number; height: number }): boolean {
+  return rect.width > viewport.width + PICK_LIMITS.viewportSlack || rect.height > viewport.height + PICK_LIMITS.viewportSlack;
+}
+
+/**
+ * Обрезка CDP (спайк 0.7, решение 2026-10-08): прямоугольник вьюпорта плюс прокрутка — координаты документа, — умноженный
+ * на масштаб страницы `zoom` (`getZoomFactor()`: без него при масштабе 2 обрезка пуста). Высота — не больше поверхности
+ * вида `surface` (CSS-пиксели): выше Chromium повторяет первую поверхность. Сторона — не больше `captureSide`.
+ */
+export function captureClip(pick: Pick<ValidPick, 'rect' | 'scroll'>, zoom: number, surface: number): CaptureClip | null {
+  const width = Math.min(pick.rect.width, PICK_LIMITS.captureSide);
+  const height = Math.min(pick.rect.height, PICK_LIMITS.captureSide, surface);
+  if (width < 1 || height < 1) return null;
+  return {
+    x: Math.max(0, pick.rect.x + pick.scroll.x) * zoom,
+    y: Math.max(0, pick.rect.y + pick.scroll.y) * zoom,
+    width: width * zoom,
+    height: height * zoom,
+    scale: 1,
+  };
+}
+
+/**
+ * Снимок видимой части по Orca: прямоугольник элемента в пикселях картинки `capturePage()` всей видимой части. Множитель
+ * измеряется — ширина картинки / ширина вьюпорта: он уже учитывает DPR экрана, масштаб страницы и уменьшение под поле
+ * при эмуляции. Края — наружу, по пересечению с картинкой; элемент вне видимой части — null.
+ */
+export function cropRect(rect: Rect, viewport: { width: number }, bitmap: { width: number; height: number }): Rect | null {
+  const scale = bitmap.width / viewport.width;
+  const left = Math.max(0, Math.floor(rect.x * scale));
+  const top = Math.max(0, Math.floor(rect.y * scale));
+  const right = Math.min(bitmap.width, Math.ceil((rect.x + rect.width) * scale));
+  const bottom = Math.min(bitmap.height, Math.ceil((rect.y + rect.height) * scale));
   if (right <= left || bottom <= top) return null;
-  // capturePage ждёт целые DIP: наружу, чтобы край элемента не срезался.
-  const x = Math.floor(left * zoomFactor);
-  const y = Math.floor(top * zoomFactor);
-  return { x, y, width: Math.ceil(right * zoomFactor) - x, height: Math.ceil(bottom * zoomFactor) - y };
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 /**
@@ -157,6 +186,7 @@ export function createDesignMode(deps: {
   fromId(id: number): WebContents | null;
   saveImage(png: Buffer): Promise<string | null>;
   guestScript: string;
+  inspector: CdpSender;
 }): {
   start(id: number): Promise<PickResult | null>;
   cancel(id: number): Promise<void>;
@@ -166,27 +196,41 @@ export function createDesignMode(deps: {
   // скрипта навсегда без ответа — тогда отвечает main, иначе карточка зависла бы в «выбираю».
   const pending = new Map<number, (result: PickResult | null) => void>();
 
-  /** Снимок проверенного прямоугольника; не вышло — оба поля null, блок уйдёт без Screenshot. */
-  async function snapshot(
-    contents: WebContents,
-    pick: ValidPick,
-  ): Promise<{ imagePath: string | null; thumbnail: string | null }> {
-    const none = { imagePath: null, thumbnail: null };
-    const rect = captureRect(pick.rect, pick.viewport, contents.getZoomFactor());
-    if (rect === null) return none;
+  /**
+   * Снимок элемента: вырезка из `capturePage()` видимой части по Orca. Элементу больше вьюпорта (`exceedsViewport`)
+   * сперва пробуется обрезка CDP за краем вьюпорта, не вышла — та же вырезка. Остальным CDP не зовётся и когда видимая
+   * часть не снялась: пустой файл честнее участка не оттуда. Картинка видимой части снимается первой: её высота — мера
+   * поверхности вида для обрезки CDP (в CSS-пикселях — делённая на DPR страницы). Не вышло — null: файл уйдёт без снимка.
+   */
+  async function snapshot(contents: WebContents, id: number, pick: ValidPick): Promise<string | null> {
+    const view: NativeImage | null = await contents.capturePage().then(
+      (image) => (image.isEmpty() ? null : image),
+      (error: unknown) => {
+        console.warn('[parley] select: capturePage failed', error);
+        return null;
+      },
+    );
+    const size = view === null ? null : view.getSize();
+    if (exceedsViewport(pick.rect, pick.viewport)) {
+      const surface = size === null ? pick.viewport.height : size.height / pick.viewport.dpr;
+      const clip = captureClip(pick, contents.getZoomFactor(), surface);
+      if (clip !== null) {
+        try {
+          const shot = await deps.inspector.send<{ data?: unknown }>(id, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip });
+          if (typeof shot.data === 'string' && shot.data !== '') return await deps.saveImage(Buffer.from(shot.data, 'base64'));
+        } catch (error) {
+          console.warn('[parley] select: CDP capture failed, falling back to capturePage', error);
+        }
+      }
+    }
+    if (view === null || size === null) return null;
+    const crop = cropRect(pick.rect, pick.viewport, size);
+    if (crop === null) return null;
     try {
-      const image: NativeImage = await contents.capturePage(rect);
-      if (image.isEmpty()) return none;
-      const imagePath = await deps.saveImage(image.toPNG());
-      if (imagePath === null) return none;
-      // PNG лежит в drops/ вне корней работы: files.readBytes его не отдаст, file:// окну нельзя —
-      // карточке идёт уменьшенная копия data:-адресом.
-      const small =
-        image.getSize().width > PICK_LIMITS.thumbnailWidth ? image.resize({ width: PICK_LIMITS.thumbnailWidth }) : image;
-      return { imagePath, thumbnail: small.toDataURL() };
+      return await deps.saveImage(view.crop(crop).toPNG());
     } catch (error) {
-      console.warn('[parley] design mode capture failed', error);
-      return none;
+      console.warn('[parley] select capture failed', error);
+      return null;
     }
   }
 
@@ -230,7 +274,11 @@ export function createDesignMode(deps: {
             finish(null);
             return;
           }
-          const shot = await snapshot(contents, pick);
+          // DOM.getNodeForLocation — в координатах документа (спайк 0.4, 0.6): точка вьюпорта плюс прокрутка.
+          const [imagePath, info] = await Promise.all([
+            snapshot(contents, id, pick),
+            withTimeout<ElementInfo>(elementInfo(deps.inspector, id, documentPoint(pick.point, pick.scroll), pick.selector), PICK_LIMITS.infoMs, {}),
+          ]);
           if (done || contents.isDestroyed()) {
             finish(null);
             return;
@@ -241,7 +289,11 @@ export function createDesignMode(deps: {
             text: pick.text,
             html: pick.html,
             styles: pick.styles,
-            ...shot,
+            imagePath,
+            point: pick.point,
+            shift: pick.shift,
+            viewport: pick.viewport,
+            ...info,
           });
         })
         .catch((error: unknown) => {

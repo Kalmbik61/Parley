@@ -9,10 +9,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
-import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
+import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { BrowserTarget, GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { makeRoom, makeSession } from '../test-utils/work-fixtures.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { LayoutView } from '../layout/LayoutView.js';
@@ -21,13 +22,17 @@ import { SurfaceLayer } from '../layout/SurfaceLayer.js';
 import { findTab, updateTab } from '../layout/tree.js';
 import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
 import { toast } from 'sonner';
-import type { PickResult } from '../../shared/browser-types.js';
+import type { AnnotationPick, AnnotationPosition, PickResult } from '../../shared/browser-types.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { consoleEntry, devtoolsBatch, networkEntry } from '../test-utils/devtools-fixtures.js';
 import { useDevtoolsStore } from './devtools/store.js';
+import { useAnnotateStore } from './annotate/store.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
+import { roomKey } from '../lib/room-view.js';
+import { resetDeliveryForTests } from './context/deliver.js';
+import { TOAST_INSET_VAR } from '../ui/toast-inset.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -53,8 +58,8 @@ function entry(): WorkEntry {
   };
 }
 
-function setBrowserTab(url: string): void {
-  const tab: TabSpec = { kind: 'browser', id: TAB, url };
+function setBrowserTab(url: string, target?: BrowserTarget): void {
+  const tab: TabSpec = target === undefined ? { kind: 'browser', id: TAB, url } : { kind: 'browser', id: TAB, url, target };
   const root: GroupNode = { type: 'group', id: 'g1', tabs: [tab], activeTabId: TAB };
   useLayoutStore.setState({
     activeWorkKey: WORK_KEY,
@@ -148,6 +153,7 @@ afterEach(() => {
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useBrowserStore.setState({ tabs: {}, limitToasted: {} });
   useDevtoolsStore.setState({ tabs: {} });
+  useAnnotateStore.setState({ tabs: {} });
   useUiStore.setState({ ui: DEFAULT_UI });
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -413,44 +419,129 @@ const PICK: PickResult = {
   text: 'Save',
   html: '<button class="save">Save</button>',
   styles: { display: 'block' },
-  imagePath: null,
-  thumbnail: 'data:image/png;base64,AAAA',
+  imagePath: '/h/drops/a.png',
+  point: { x: 10, y: 10 },
+  shift: false,
+  viewport: { width: 800, height: 600, dpr: 2 },
 };
 
-function pickOf(): unknown {
-  return useBrowserStore.getState().tabs[TAB]?.pick;
+function modeOf(): unknown {
+  return useBrowserStore.getState().tabs[TAB]?.mode;
 }
 
-describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
-  it('⌖ неактивна до dom-ready; результат pickStart — карточка поверх страницы', async () => {
+describe('BrowserSurface — Select (этап B, спека браузера 4.6)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    vi.mocked(toast).mockClear();
+  });
+
+  it('⌖ неактивна до dom-ready; клик — pickStart, элемент — файл-контекст в цель, режим снят, агенту ничего', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 12);
-    const button = screen.getByRole('button', { name: 'Design Mode' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: 'Select' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fire(view, 'dom-ready');
     bridge.setPickResult(PICK);
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(bridge.pickCalls).toEqual([{ method: 'pickStart', webContentsId: 12 }]);
-    expect(pickOf()).toEqual({ result: PICK });
-    expect(screen.getByTestId('design-mode-card').textContent).toContain('body > button.save');
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md']));
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+    expect(modeOf()).toBe('off');
+    expect(bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0]).toMatchObject({ kind: 'element', label: 'button.save', imagePath: '/h/drops/a.png' });
     expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
   });
 
-  it('pickStart ответил null — режим снят, карточки нет', async () => {
+  it('Фокус ревью 5: ⇧-клик держит режим — второй выбор; два файла в порядке кликов, один тост «2 elements»', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    const answers: Array<PickResult | null> = [{ ...PICK, shift: true }, { ...PICK, selector: 'body > button.cancel' }];
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return answers.shift() ?? null;
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(2));
+    expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md', '/fake/drops/context/element-button.cancel-0002.md']);
+    expect(bridge.pickCalls.filter((call) => call.method === 'pickStart')).toHaveLength(2);
+    expect(modeOf()).toBe('off');
+    expect(vi.mocked(toast).mock.calls.at(-1)?.[0]).toBe('2 elements added to review');
+  });
+
+  it('⇧-клик, затем отказ повторного pickStart — тост, режим снят и pickCancel уходит безусловно: сторож ⇧-клика не остаётся на странице (ревью задачи 16, I2)', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    const answers: Array<PickResult | { code: string; message: string }> = [{ ...PICK, shift: true }, { code: 'failed', message: 'boom' }];
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      const answer = answers.shift();
+      if (answer !== undefined && 'code' in answer) throw answer;
+      return answer ?? null;
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md']);
+    expect(toast).toHaveBeenCalledWith("Couldn't pick element: failed.");
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickStart', 'pickCancel']);
+  });
+
+  it('размер вьюпорта вкладки — пометка в файле элемента: Mobile M, emulated', async () => {
+    roomWork();
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setPickResult(PICK);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const saved = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string } | undefined;
+    expect(saved?.markdown).toContain('Mobile M, emulated');
+  });
+
+  it('режим annotate выбор не запускает; ⌖ в этом режиме заменяет annotate на select — тогда pickStart', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    act(() => useBrowserStore.getState().update(TAB, { mode: 'annotate' }));
+    expect(bridge.pickCalls).toEqual([]);
+    const button = screen.getByRole('button', { name: 'Select' });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
+  it('pickStart ответил null (Esc в странице) — режим снят, файла нет', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('off');
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(bridge.browserCalls.filter((call) => call.method === 'saveContext')).toEqual([]);
   });
 
-  it('повторный ⌖ и Esc во время выбора — pickCancel, режим снят; кнопка подсвечена только в режиме', async () => {
+  it('повторный ⌖ и Esc в окне во время выбора — pickCancel, режим снят; кнопка подсвечена только в режиме', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
@@ -459,43 +550,98 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       bridge.pickCalls.push({ method: 'pickStart', webContentsId });
       return new Promise<PickResult | null>(() => {});
     };
-    const button = screen.getByRole('button', { name: 'Design Mode' });
+    const button = screen.getByRole('button', { name: 'Select' });
     expect(button.getAttribute('aria-pressed')).toBe('false');
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     expect(button.getAttribute('aria-pressed')).toBe('true');
     await act(async () => {
       fireEvent.click(button);
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
 
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     await act(async () => {
       fireEvent.keyDown(button, { key: 'Escape' });
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel', 'pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
   });
 
-  it('отказ { code: failed } — тост Couldn\'t pick element: failed. и режим снят', async () => {
+  it('Esc, закрывший меню «To», Select не выключает: меню закрыто, режим прежний, pickCancel не уходит; следующий Esc вне меню — выключает', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    expect(modeOf()).toBe('select');
+
+    const to = screen.getByRole('button', { name: /^To:/ });
+    fireEvent.keyDown(to, { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    // Меню Radix лежит в портале, но по дереву React его события доходят до корня поверхности: Esc закрывает меню и
+    // помечен preventDefault — на режим он не действует.
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getAllByRole('menuitem')[0] as HTMLElement, { key: 'Escape' });
+    });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+
+    // Esc вне меню по-прежнему выключает режим.
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Select' }), { key: 'Escape' });
+    });
+    expect(modeOf()).toBe('off');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+  });
+
+  it('Esc в полосе поиска закрывает только её: Select остаётся включённым, pickCancel не уходит', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    act(() => useBrowserStore.getState().update(TAB, { findOpen: true }));
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText('Find…'), { key: 'Escape' });
+    });
+    expect(useBrowserStore.getState().tabs[TAB]?.findOpen).toBe(false);
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
+  it("отказ { code: failed } — тост Couldn't pick element: failed. и режим снят", async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
     bridge.setPickResult({ code: 'failed', message: 'boom' });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
     expect(toast).toHaveBeenCalledWith("Couldn't pick element: failed.");
-    expect(pickOf()).toBe('off');
   });
 
-  it('did-navigate во время выбора — pick снова off; поздний ответ прежнего выбора карточку не ставит', async () => {
+  it('did-navigate во время выбора — режим снят; поздний ответ файла не добавляет', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 12);
@@ -503,14 +649,14 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
     let answer: (value: PickResult | null) => void = () => {};
     bridge.browser.pickStart = () => new Promise<PickResult | null>((resolve) => (answer = resolve));
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
     await act(async () => answer(PICK));
-    expect(pickOf()).toBe('off');
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    expect(bridge.browserCalls.filter((call) => call.method === 'saveContext')).toEqual([]);
+    expect(roomPaths()).toEqual([]);
   });
 
   it('вкладка скрыта во время выбора — pickCancel, режим снят (fix-9)', async () => {
@@ -529,9 +675,9 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       return new Promise<PickResult | null>(() => {});
     };
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     await act(async () => {
       useLayoutStore.getState().apply(WORK_KEY, (layout) => ({
         ...layout,
@@ -539,25 +685,7 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       }));
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
-  });
-
-  it('карточка: Pick again зовёт pickStart заново; did-navigate снимает карточку', async () => {
-    setBrowserTab('http://localhost:5173/');
-    renderWork();
-    const view = arm(webview(), 12);
-    fire(view, 'dom-ready');
-    bridge.setPickResult(PICK);
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Pick again' }));
-    });
-    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickStart']);
-    expect(screen.getByTestId('design-mode-card')).toBeTruthy();
-    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    expect(modeOf()).toBe('off');
   });
 });
 
@@ -642,6 +770,43 @@ describe('BrowserSurface — журнал (спека 2026-10-07, 3.5; Фоку�
     expect(useDevtoolsStore.getState().tabs[TAB]).toMatchObject({ open: true, view: 'console' });
     cleanup();
     expect(useDevtoolsStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('⌘⇧C и ⌘⌥A с фокусом в адресной строке — Select и Annotate, как ⌘⌥I у панели (спека 4.9)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+  });
+
+  it('удержанные ⌘⇧C и ⌘⌥A (автоповтор, event.repeat) режим не переключают: считается только первое нажатие', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    // Клавишу держат: система шлёт повторы, режим не мигает.
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    // Новое нажатие (не повтор) снимает режим, как раньше.
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('off');
+
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
   });
 
   it('⌘⌥I и ⌘⌥J с фокусом внутри панели вкладки — тоже ловит поверхность (ревью задачи 10)', async () => {
@@ -964,5 +1129,616 @@ describe('BrowserSurface — первая загрузка после захва
     expect(warn).toHaveBeenCalledWith('[parley] viewport is not set before the first page', { code: 'failed', message: 'boom' });
     error.mockRestore();
     warn.mockRestore();
+  });
+});
+
+function entryWith(sessions: WorkSession[], rooms: Room[]): WorkEntry {
+  const base = entry();
+  return { ...base, map: { ...base.map, sessions, rooms } };
+}
+
+function browserTabSpec(): Extract<TabSpec, { kind: 'browser' }> | undefined {
+  const layout = useLayoutStore.getState().layouts[WORK_KEY];
+  const found = layout === undefined ? null : findTab(layout, TAB);
+  const tab = found?.group.tabs[found.index];
+  return tab?.kind === 'browser' ? tab : undefined;
+}
+
+describe('BrowserSurface — цель «To» (этап B, спека браузера 4.5)', () => {
+  it('без поля target — умолчание: первая живая сессия; выбор комнаты пишет target в раскладку', () => {
+    useWorksStore.setState({ entries: [entryWith([makeSession('s-01', 'lead')], [makeRoom('r-01', 'review')])] });
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const button = screen.getByRole('button', { name: /^To:/ });
+    expect(button.textContent).toBe('To: S01');
+    fireEvent.keyDown(button, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: /review/ }));
+    expect(browserTabSpec()?.target).toEqual({ kind: 'room', roomId: 'r-01' });
+    expect(screen.getByRole('button', { name: /^To:/ }).textContent).toBe('To: review');
+  });
+
+  it('цель пропала (сессию удалили) — поле снято, тост об откате один раз', () => {
+    vi.mocked(toast).mockClear();
+    useWorksStore.setState({ entries: [entryWith([makeSession('s-01', 'lead')], [])] });
+    setBrowserTab('http://localhost:5173/', { kind: 'session', sessionId: 's-09' });
+    renderWork();
+    expect(browserTabSpec()).toBeDefined();
+    expect(browserTabSpec()?.target).toBeUndefined();
+    expect(vi.mocked(toast).mock.calls.filter(([text]) => String(text).startsWith('The chosen'))).toEqual([
+      ['The chosen session or room is gone — page context now goes to S01'],
+    ]);
+  });
+});
+
+/** Работа с одной комнатой и без сессий: цель по умолчанию — комната, вложения видны в её поле. */
+function roomWork(): void {
+  useWorksStore.setState({ entries: [entryWith([], [makeRoom('r-01', 'review')])] });
+}
+
+const roomPaths = (): readonly string[] => useUiStore.getState().composerAttachments[roomKey(WORK_KEY, 'r-01')] ?? [];
+
+describe('BrowserSurface — «Add to chat» из панели (этап B, спека браузера 4.3–4.5)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+  });
+
+  it('строка консоли — файл console в цель «To»; «Add errors to chat» — файл errors; агенту ничего', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [consoleEntry(1, { level: 'error', text: 'boom' })], network: [] });
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => useDevtoolsStore.getState().show(TAB, 'console'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/console-error-boom-0001.md']));
+    fireEvent.click(screen.getByRole('button', { name: 'Add errors to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/console-error-boom-0001.md', '/fake/drops/context/errors-page-0002.md']));
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+
+  it('запрос в деталях Network — файл request в цель «To»; тело ответа читается у гостя своей вкладки в момент клика', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/settings');
+    renderWork();
+    bridge.setResponseBody({ text: '{"ok":false}', base64: false, truncated: false });
+    bridge.setDevtoolsSnapshot({ epoch: 0, capture: 'on', console: [], network: [networkEntry('r1', { status: 500, statusText: 'Internal Server Error' })] });
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    act(() => {
+      useDevtoolsStore.getState().show(TAB, 'network');
+      useDevtoolsStore.getState().patch(TAB, { selected: 'r1' });
+    });
+    // Детали открыты, а тело ещё не читалось: оно читается по клику «Add to chat», а не заранее.
+    expect(bridge.browserCalls.filter((call) => call.method === 'responseBody')).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }));
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/request-get-api-r1-500-0001.md']));
+    expect(bridge.browserCalls.filter((call) => call.method === 'responseBody')).toEqual([{ method: 'responseBody', args: [7, 'r1'] }]);
+    // В файле — адрес страницы вкладки на момент клика и тело ответа, прочитанное у её гостя.
+    const saved = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string } | undefined;
+    expect(saved?.markdown).toContain('URL: http://localhost:5173/settings');
+    expect(saved?.markdown).toContain('"ok": false');
+    expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
+  });
+});
+
+const ELEMENT_PICK: AnnotationPick = {
+  kind: 'element',
+  key: 'a1',
+  selector: 'body > button.save',
+  text: 'Save',
+  html: '<button class="save">Save</button>',
+  styles: {},
+  anchor: { fx: 0.1, fy: 0.2 },
+  viewport: { width: 800, height: 600, dpr: 2 },
+};
+
+describe('BrowserSurface — Annotate (этап B, спека браузера 4.7)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** ✎, первая метка и комментарий в редакторе окна. */
+  async function firstPin(comment: string): Promise<HTMLElement> {
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks([ELEMENT_PICK]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: comment } });
+    return field;
+  }
+
+  it('✎ — метка: редактор в окне, Save — пункт в лотке, метки страницы перерисованы; режим держится', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    const tray = screen.getByTestId('annotation-tray');
+    expect(tray.textContent).toContain('1 annotation');
+    expect(tray.textContent).toContain('make it green');
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateSync').at(-1)?.args).toEqual([12, [{ n: 1, key: 'a1' }]]);
+    expect(modeOf()).toBe('annotate');
+    await vi.waitFor(() => expect(bridge.browserCalls.filter((call) => call.method === 'annotateStart')).toHaveLength(2));
+  });
+
+  it('Esc в редакторе новой метки — метки и лотка нет, режим держится', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(modeOf()).toBe('annotate');
+  });
+
+  it('Select и Annotate взаимоисключающие: ⌖ во время ✎ — annotateCancel и pickStart', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    expect(modeOf()).toBe('annotate');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    expect(modeOf()).toBe('select');
+    expect(bridge.browserCalls.some((call) => call.method === 'annotateCancel')).toBe(true);
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
+  it('«Add to chat» в лотке — файл annotations со снимком в цель «To»; лоток пуст', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/annotations-page-0001.md']));
+    expect(bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0]).toMatchObject({ kind: 'annotations', imagePath: '/fake/drops/annotate.png' });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+  });
+
+  it('новый документ — пункты лотка «element gone», данные на месте', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(modeOf()).toBe('off');
+    expect(screen.getByTestId('annotation-tray').textContent).toContain('element gone');
+  });
+
+  it('метка, новый документ, ещё метка, «Add to chat»: файл называет страницу первой метки, её пункт не оживает, на страницу уходит только новая метка', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/settings');
+    renderWork();
+    const first = await firstPin('make it green');
+    await act(async () => {
+      fireEvent.keyDown(first, { key: 'Enter' });
+    });
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/profile' });
+    expect(modeOf()).toBe('off');
+    // Скрипт меток нового документа нумерует с a1 заново — ключ тот же, что у первой метки.
+    bridge.setAnnotatePicks([{ ...ELEMENT_PICK, selector: 'body > a.next' }]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const second = await screen.findByRole('textbox', { name: 'Comment for annotation 2' });
+    fireEvent.change(second, { target: { value: 'and this link' } });
+    await act(async () => {
+      fireEvent.keyDown(second, { key: 'Enter' });
+    });
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateSync').at(-1)?.args).toEqual([12, [{ n: 2, key: 'a1' }]]);
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const { markdown } = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string };
+    expect(markdown).toContain('URL: http://localhost:5173/profile\n');
+    expect(markdown).toContain(
+      '## 1. button.save\n> make it green\n(The element is gone from the page; it is not on the screenshot.)\n\n```text\nMarked on: http://localhost:5173/settings\nSelector: body > button.save\n',
+    );
+    expect(markdown).toContain('## 2. a.next\n> and this link\n\n```text\nSelector: body > a.next\n');
+  });
+});
+
+describe('BrowserSurface — Annotate: заметки отчётов задач 20-22 (этап B, задача 23)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** ✎ и первая метка: редактор открыт, в поле набрано `comment` (Enter не нажат). */
+  async function markWith(comment: string, picks: AnnotationPick[] = [ELEMENT_PICK]): Promise<HTMLElement> {
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks(picks);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: comment } });
+    return field;
+  }
+
+  const cancels = (): number => bridge.browserCalls.filter((call) => call.method === 'annotateCancel').length;
+
+  it('редактор и лоток — внутри поля страницы (browser-field): редактор рисуется в его слое, а не в body', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('x');
+    const fieldBox = screen.getByTestId('browser-field');
+    expect(fieldBox.contains(screen.getByTestId('annotation-editor'))).toBe(true);
+    expect(fieldBox.contains(screen.getByTestId('annotation-tray'))).toBe(true);
+    expect(fieldBox.contains(screen.getByTestId('annotation-anchor'))).toBe(true);
+  });
+
+  it('Esc вне открытого редактора (на заголовке лотка) ничего не отменяет: редактор владеет Esc, режим держится; Esc в самом поле — отмена новой метки', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('typed');
+    const header = within(screen.getByTestId('annotation-tray')).getAllByRole('button')[0] as HTMLElement;
+    await act(async () => {
+      fireEvent.keyDown(header, { key: 'Escape' });
+    });
+    expect(screen.getByTestId('annotation-editor')).toBeTruthy();
+    expect(modeOf()).toBe('annotate');
+    expect(cancels()).toBe(0);
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(modeOf()).toBe('annotate');
+  });
+
+  it('редактор закрыт (Save): фокус упавшего поля возвращается странице — ⌘⌥A и Esc продолжают приходить', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    const field = await markWith('x');
+    expect(document.activeElement).toBe(field);
+    expect(focus).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(document.activeElement).toBe(document.body);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('лоток исчез вместе с кнопкой, державшей фокус («Add to chat»): фокус падает на body — страница получает его назад', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    focus.mockClear();
+    const add = within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' });
+    act(() => add.focus());
+    expect(document.activeElement).toBe(add);
+    await act(async () => {
+      fireEvent.click(add);
+    });
+    await vi.waitFor(() => expect(screen.queryByTestId('annotation-tray')).toBeNull());
+    expect(document.activeElement).toBe(document.body);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('редактор закрыт, а фокус уже у адресной строки — страница фокус не забирает', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = webview();
+    if (view === null) throw new Error('нет <webview>');
+    const focus = vi.spyOn(view, 'focus');
+    await markWith('x');
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    act(() => address.focus());
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-editor')).getByRole('button', { name: 'Save' }));
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(document.activeElement).toBe(address);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('✎ в лотке: положение метки обновляется до редактора — он открывается у свежего места (N1 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('first');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items[0]?.rect).toMatchObject({ x: 0.1, y: 0.1 });
+    // Страницу прокрутили, пока человек читал лоток: метка теперь в другом месте.
+    bridge.setAnnotatePositions([{ n: 1, rect: { x: 0.5, y: 0.6, width: 0.2, height: 0.05 } }]);
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    await screen.findByTestId('annotation-editor');
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing?.anchor).toEqual({ fx: 0.5, fy: 0.6 });
+  });
+
+  it('набранное в редакторе не теряется, что бы человек ни нажал в лотке: ✎ и корзина другого пункта сохраняют его (N3 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    // Обе метки в очереди сразу: цикл просит вторую, как только закрыт редактор первой.
+    const first = await markWith('one', [ELEMENT_PICK, { ...ELEMENT_PICK, key: 'a2', selector: 'body > a.next' }]);
+    await act(async () => {
+      fireEvent.keyDown(first, { key: 'Enter' });
+    });
+    const second = await screen.findByRole('textbox', { name: 'Comment for annotation 2' });
+    fireEvent.change(second, { target: { value: 'two, typed' } });
+    const tray = screen.getByTestId('annotation-tray');
+    await act(async () => {
+      fireEvent.click(within(tray).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['one', 'two, typed']);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment for annotation 1' }), { target: { value: 'one, retyped' } });
+    await act(async () => {
+      fireEvent.click(within(tray).getByRole('button', { name: 'Delete annotation 2' }));
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['one, retyped']);
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+  });
+
+  it('«Add to chat» с набранным, но не сохранённым комментарием: он в файле, «(no comment)» нет (N3 задачи 21)', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('typed, not saved');
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Add to chat' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const { markdown } = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string };
+    expect(markdown).toContain('> typed, not saved');
+    expect(markdown).not.toContain('(no comment)');
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+  });
+
+  it('did-navigate во время Annotate: режим снят и странице уходит annotateCancel (заметка задачи 20)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const view = arm(webview(), 12);
+    fire(view, 'dom-ready');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    expect(modeOf()).toBe('annotate');
+    expect(cancels()).toBe(0);
+    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
+    expect(modeOf()).toBe('off');
+    expect(cancels()).toBe(1);
+    expect(bridge.browserCalls.filter((call) => call.method === 'annotateCancel').at(-1)?.args).toEqual([12]);
+  });
+
+  it('страница ответила null (Esc в странице, начатый переход): режим снят и annotateCancel уходит — страница не остаётся взведённой (заметка задачи 20)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setAnnotatePicks([null]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Annotate' }));
+    });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(cancels()).toBe(1);
+  });
+
+  it('фокус страницы не трогается, пока редактора не было: монтирование, dom-ready, метка в лотке', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const field = await markWith('x');
+      const onPage = (): boolean => focus.mock.contexts.some((element) => (element as HTMLElement).tagName === 'WEBVIEW');
+      expect(onPage()).toBe(false);
+      await act(async () => {
+        fireEvent.keyDown(field, { key: 'Enter' });
+      });
+      // Редактор закрыт — вот теперь страница получает фокус назад.
+      expect(onPage()).toBe(true);
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  /** Перерисовки меток страницы с отметкой «редактор ещё на экране»: так видно, кто их попросил — обработчик или эффект после рендера. */
+  function watchSyncs(): Array<{ pins: unknown[]; editorMounted: boolean }> {
+    const seen: Array<{ pins: unknown[]; editorMounted: boolean }> = [];
+    const original = bridge.browser.annotateSync;
+    bridge.browser.annotateSync = async (webContentsId, pins) => {
+      seen.push({ pins, editorMounted: document.querySelector('[data-testid="annotation-editor"]') !== null });
+      return original(webContentsId, pins);
+    };
+    return seen;
+  }
+
+  it('Esc новой метки: страницу просят перерисоваться сразу, из обработчика, а не только после рендера (замечание 1 задачи 21)', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('');
+    const seen = watchSyncs();
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Escape' });
+    });
+    expect(seen.some((call) => call.pins.length === 0 && call.editorMounted)).toBe(true);
+    expect(seen.at(-1)?.pins).toEqual([]);
+  });
+
+  it('Delete в редакторе новой метки — та же отмена: перерисовка из обработчика', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    await markWith('typed');
+    const seen = watchSyncs();
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-editor')).getByRole('button', { name: 'Delete' }));
+    });
+    expect(screen.queryByTestId('annotation-tray')).toBeNull();
+    expect(seen.some((call) => call.pins.length === 0 && call.editorMounted)).toBe(true);
+  });
+
+  it('✎ в лотке, а вкладку закрыли, пока шла перерисовка: редактор не открывается и записи лотка не появляется', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    let answer: (positions: AnnotationPosition[]) => void = () => {};
+    bridge.browser.annotateSync = () => new Promise<AnnotationPosition[]>((resolve) => (answer = resolve));
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('annotation-tray')).getByRole('button', { name: 'Edit annotation 1' }));
+    });
+    cleanup();
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+    await act(async () => answer([{ n: 1, rect: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } }]));
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('закрытие вкладки — лоток убран', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    const field = await markWith('x');
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeDefined();
+    cleanup();
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+});
+
+const OTHER = 'browser:other';
+
+/** Поверхность вкладки целиком: у каждой своя строка, свои кнопки и своё поле страницы. */
+function surfaceOf(tabId: string): HTMLElement {
+  const node = document.querySelector<HTMLElement>(`[data-surface-layer] [data-tab-id="${tabId}"]`);
+  if (node === null) throw new Error(`нет поверхности ${tabId}`);
+  return node;
+}
+
+describe('BrowserSurface — Annotate: редактор скрытой вкладки (ревью задачи 23, I1)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** Вторая вкладка браузера в группе первой: пока активна одна, поверхность другой смонтирована, но скрыта. */
+  function renderTwoTabs(): void {
+    setBrowserTab('http://localhost:5173/');
+    act(() =>
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => {
+        const root = layout.root as GroupNode;
+        return { ...layout, root: { ...root, tabs: [...root.tabs, { kind: 'browser', id: OTHER, url: 'http://localhost:5173/other' }] } };
+      }),
+    );
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    fire(arm(document.querySelector<FakeWebview>(`[data-surface-layer] [data-tab-id="${OTHER}"] webview`), 13), 'dom-ready');
+  }
+
+  const showTab = (tabId: string): Promise<void> =>
+    act(async () => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => ({ ...layout, root: { ...(layout.root as GroupNode), activeTabId: tabId } }));
+    });
+
+  /** В первой вкладке открыт редактор с набранным, но не сохранённым комментарием; человек перешёл на вторую. */
+  async function leaveDraftInFirstTab(): Promise<void> {
+    renderTwoTabs();
+    bridge.setAnnotatePicks([ELEMENT_PICK]);
+    await act(async () => {
+      fireEvent.click(within(surfaceOf(TAB)).getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: 'half-typed' } });
+    await showTab(OTHER);
+  }
+
+  it('черновик в скрытой вкладке не гасит Esc видимой: слой Radix скрытого редактора каждый Esc окна помечал бы preventDefault, и ✎ второй вкладки Esc не выключал бы', async () => {
+    await leaveDraftInFirstTab();
+    // Черновик первой вкладки открыт (в сторе), а видна вторая.
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing).not.toBeNull();
+    const annotate = within(surfaceOf(OTHER)).getByRole('button', { name: 'Annotate' });
+    await act(async () => {
+      fireEvent.click(annotate);
+    });
+    expect(useBrowserStore.getState().tabs[OTHER]?.mode).toBe('annotate');
+    await act(async () => {
+      fireEvent.keyDown(annotate, { key: 'Escape' });
+    });
+    expect(useBrowserStore.getState().tabs[OTHER]?.mode).toBe('off');
+  });
+
+  it('P1: лоток скрытой вкладки не заявляет отступ тостам; вернулись — заявил над своим верхом; ушли — снял', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1400 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const own = this.dataset.testid === 'annotation-tray' ? { left: 1040, right: 1360, top: 700 } : { left: 0, right: 0, top: 0 };
+      return { ...own, bottom: own.top + 188, width: own.right - own.left, height: 188, x: own.left, y: own.top, toJSON: () => ({}) } as DOMRect;
+    });
+    const inset = (): string => document.documentElement.style.getPropertyValue(TOAST_INSET_VAR);
+    try {
+      await leaveDraftInFirstTab();
+      // Лоток первой вкладки в DOM (скрыт вместе с поверхностью), а тостам он не мешает.
+      expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
+      expect(inset()).toBe('');
+      await showTab(TAB);
+      // Верх лотка 700 при окне 900: 900 − 700 + зазор 8 − база 2.5rem (40) = 168.
+      expect(inset()).toBe('168px');
+      await showTab(OTHER);
+      expect(inset()).toBe('');
+    } finally {
+      vi.restoreAllMocks();
+      document.documentElement.style.removeProperty(TOAST_INSET_VAR);
+    }
+  });
+
+  it('скрытая вкладка: редактора в окне нет, набранное в сторе; вернулись — редактор и набранное на месте, Save кладёт комментарий в лоток', async () => {
+    await leaveDraftInFirstTab();
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing).toMatchObject({ n: 1, isNew: true, draft: 'half-typed' });
+    await showTab(TAB);
+    const field = (await screen.findByRole('textbox', { name: 'Comment for annotation 1' })) as HTMLTextAreaElement;
+    expect(field.value).toBe('half-typed');
+    expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
+    fireEvent.change(field, { target: { value: 'half-typed, finished' } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
   });
 });

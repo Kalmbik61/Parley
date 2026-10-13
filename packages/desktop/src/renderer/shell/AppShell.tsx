@@ -213,7 +213,7 @@ interface WorkContainerProps {
   bridge: ParleyBridge;
   fontFamily: string;
   fontSize: number;
-  sendDeps: SendWithToastDeps; // карточке Design Mode через слой поверхностей (9.3b)
+  sendDeps: SendWithToastDeps; // строке «To» вкладки браузера через слой поверхностей (этап B)
 }
 
 /**
