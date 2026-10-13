@@ -89,6 +89,22 @@ export function createMainWindow(input: {
   return window;
 }
 
+/**
+ * Признак «страница окна загружена» (`loadedWindows` в `main/index.ts`): только такому окну main шлёт события, на
+ * которые подписан прелоад (`app:focus-target`, `app:update-available`), — раньше прелоад ещё не слушает. Признак
+ * ставит `did-finish-load`, снимает навигация главного кадра на другой документ, то есть перезагрузка окна.
+ *
+ * По `did-start-loading` признак не снимается: загрузка `<webview>` (вкладка браузера), подкадра страницы окна и
+ * переход внутри документа приходят окну тем же `did-start-loading`, а `did-finish-load` за ними не следует.
+ * Первая же вкладка браузера отключила бы окно от этих событий насовсем — клик по уведомлению терялся бы.
+ */
+export function trackLoadedWindow<W extends { webContents: Pick<WebContents, 'on'> }>(window: W, loaded: WeakSet<W>): void {
+  window.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) loaded.delete(window);
+  });
+  window.webContents.on('did-finish-load', () => loaded.add(window));
+}
+
 /** Что `guardWindowClose` трогает у окна — ради теста на подставном (настоящий BrowserWindow под vitest не поднять). */
 export interface ClosableWindow {
   on(event: 'close', listener: (event: { preventDefault(): void }) => void): unknown;

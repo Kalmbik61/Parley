@@ -63,7 +63,7 @@ import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
 import { createModelStore, freeBytes, voiceModelsDir } from './voice/models.js';
 import { createFakeVoiceServices, createVoiceServices } from './voice/services.js';
 import { killRunningEngines, removeStaleRecordings } from './voice/transcribe.js';
-import { createMainWindow, guardWindowClose, titlebarDoubleClickAction } from './window.js';
+import { createMainWindow, guardWindowClose, titlebarDoubleClickAction, trackLoadedWindow } from './window.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -241,7 +241,8 @@ if (!gotLock) {
     if (logDialogs) (globalThis as { __parleyDialogs?: string[] }).__parleyDialogs = dialogLog;
 
     // Окна, у которых был did-finish-load: только им событие `app:focus-target` дойдёт —
-    // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца.
+    // раньше прелоад ещё не слушает. Перезагрузка страницы снимает признак до нового конца, загрузка <webview> — нет
+    // (`trackLoadedWindow`).
     const loadedWindows = new WeakSet<BrowserWindow>();
     const pendingFocusTarget = createPendingFocusTarget();
     // Вопрос о несохранённых буферах при закрытии окна и ⌘Q (кусок 7.3a) — по окну-отправителю.
@@ -263,8 +264,7 @@ if (!gotLock) {
       window.webContents.once('did-finish-load', () => {
         forwardAppearanceToWindow(nativeTheme, window);
       });
-      window.webContents.on('did-start-loading', () => loadedWindows.delete(window));
-      window.webContents.on('did-finish-load', () => loadedWindows.add(window));
+      trackLoadedWindow(window, loadedWindows);
       const closeGuard = guardWindowClose(window, app, {
         askUnresponsive: async () => {
           // E2E (`PARLEY_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
