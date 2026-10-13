@@ -4,6 +4,7 @@
  * браузер, голос, отложенная цель клика) острову не даётся.
  */
 
+import type { EventName } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 
 /** Точка курсора на экране (DIP), из `PointerEvent.screenX/Y` острова. */
@@ -37,6 +38,13 @@ export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'acti
 
 /** Методы хоста, которые main пропускает от острова (`host:call` по отправителю). */
 export const ISLAND_METHODS: ReadonlySet<string> = new Set(['works.list', 'feed.snapshot', 'feed.decide']);
+
+/**
+ * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ и активность
+ * сессий. Остальное (`pty.output` всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода
+ * терминалов шёл бы в его renderer впустую. Тип `EventName` ловит опечатку при сборке.
+ */
+export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed']);
 
 /** Провайдеры вне острова (решение 2026-10-12): Codex — системными уведомлениями, как раньше. */
 export const ISLAND_EXCLUDED_PROVIDERS: ReadonlySet<string> = new Set(['codex']);

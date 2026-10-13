@@ -789,13 +789,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
  * отдаёт текущий статус немедленно при подписке, а если подписаться до того,
  * как прелоад этого окна навесил свои слушатели `ipcRenderer.on`, самое первое
  * сообщение (обычно самое важное — «хост подключён») уйдёт в пустоту.
+ *
+ * `options.events` — белый список событий: окну уходят только `host:event` с этим именем (остров, спека 2026-10-12:
+ * `pty.output` всех сессий в его renderer не нужен). Статус хоста шлётся всегда. Без списка — все события.
  */
 export function forwardHostToWindow(
   connection: HostConnection,
   window: BrowserWindow,
+  options: { events?: ReadonlySet<string> } = {},
 ): { dispose: () => void } {
+  const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
     if (window.isDestroyed()) return;
+    if (events !== undefined && !events.has(message.event)) return;
     window.webContents.send('host:event', message);
   });
   const unsubStatus = connection.onStatus((status) => {
@@ -815,11 +821,15 @@ export function forwardHostToWindow(
  * страница, её стор связи снова `connecting`, а статус хоста main слал только первой. Новая
  * подписка отдаёт текущий статус сразу (`onStatus`), прежняя снимается — подписка одна.
  */
-export function forwardHostToPages(connection: HostConnection, window: BrowserWindow): void {
+export function forwardHostToPages(
+  connection: HostConnection,
+  window: BrowserWindow,
+  options: { events?: ReadonlySet<string> } = {},
+): void {
   let current: { dispose: () => void } | null = null;
   window.webContents.on('did-finish-load', () => {
     current?.dispose();
-    current = forwardHostToWindow(connection, window);
+    current = forwardHostToWindow(connection, window, options);
   });
   window.on('closed', () => {
     current?.dispose();

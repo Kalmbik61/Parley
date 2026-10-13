@@ -10,20 +10,25 @@ import type { IslandBridge, IslandConfig } from '../shared/island.js';
 type Handler = (event: unknown, ...args: unknown[]) => void;
 
 const handlers = new Map<string, Handler>();
+/** Каналы, на которые preload подписался через `ipcRenderer.on`, — по порядку вызовов, без схлопывания повторов. */
+const subscribed: string[] = [];
 let exposed: IslandBridge | null = null;
+let exposedKey: string | null = null;
 const send = vi.fn();
 const invoke = vi.fn();
 
 vi.mock('electron', () => ({
   ipcRenderer: {
     on: (channel: string, handler: Handler) => {
+      subscribed.push(channel);
       handlers.set(channel, handler);
     },
     send,
     invoke,
   },
   contextBridge: {
-    exposeInMainWorld: (_key: string, api: unknown) => {
+    exposeInMainWorld: (key: string, api: unknown) => {
+      exposedKey = key;
       exposed = api as IslandBridge;
     },
   },
@@ -32,7 +37,9 @@ vi.mock('electron', () => ({
 /** Свежий модуль preload на каждый тест: его состояние — на уровне модуля. */
 async function loadPreload(): Promise<IslandBridge> {
   handlers.clear();
+  subscribed.length = 0;
   exposed = null;
+  exposedKey = null;
   vi.resetModules();
   await import('./island.js');
   if (exposed === null) throw new Error('preload острова не выставил мост');
@@ -89,5 +96,58 @@ describe('preload острова', () => {
     ]);
     void bridge.island.config();
     expect(invoke).toHaveBeenCalledWith('island:config');
+  });
+
+  it('остальные каналы острова и вызовы хоста: каждому члену моста — свой канал', async () => {
+    const bridge = await loadPreload();
+    bridge.island.dragStart({ screenX: 3, screenY: 4 });
+    bridge.island.dragMove({ screenX: 5, screenY: 6 });
+    const target = { kind: 'mail', projectPath: '/p', workId: 'w' } as const;
+    bridge.island.open(target);
+    bridge.island.hintShown();
+    expect(send.mock.calls).toEqual([
+      ['island:drag-start', { screenX: 3, screenY: 4 }],
+      ['island:drag-move', { screenX: 5, screenY: 6 }],
+      ['island:open', target],
+      ['island:hint-shown'],
+    ]);
+    void bridge.call('works.list', {});
+    expect(invoke).toHaveBeenLastCalledWith('host:call', 'works.list', {});
+    void bridge.activitySnapshot();
+    expect(invoke).toHaveBeenLastCalledWith('host:activity-snapshot');
+  });
+
+  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно три канала', async () => {
+    await loadPreload();
+    expect(exposedKey).toBe('parley');
+    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:config']);
+  });
+
+  it('отписка работает: после неё слушатель событий хоста, статуса и настроек молчит, соседний — нет', async () => {
+    const bridge = await loadPreload();
+
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const offFirst = bridge.on('works.changed', (data) => first.push(data));
+    bridge.on('works.changed', (data) => second.push(data));
+    emit('host:event', { event: 'works.changed', data: 1 });
+    offFirst();
+    emit('host:event', { event: 'works.changed', data: 2 });
+    expect(first).toEqual([1]);
+    expect(second).toEqual([1, 2]);
+
+    const statuses: HostStatus[] = [];
+    const offStatus = bridge.onStatus((status) => statuses.push(status));
+    emit('host:status', { state: 'connecting' } satisfies HostStatus);
+    offStatus();
+    emit('host:status', { state: 'disconnected', reason: 'x' } satisfies HostStatus);
+    expect(statuses).toEqual([{ state: 'connecting' }]);
+
+    const configs: IslandConfig[] = [];
+    const offConfig = bridge.island.onConfig((config) => configs.push(config));
+    emit('island:config', { sound: true, hintShown: false, topInset: 0 });
+    offConfig();
+    emit('island:config', { sound: false, hintShown: true, topInset: 38 });
+    expect(configs).toEqual([{ sound: true, hintShown: false, topInset: 0 }]);
   });
 });

@@ -1310,6 +1310,58 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     windowEvents.emit('closed');
     expect(statusListeners.size).toBe(0);
   });
+
+  /** Подставное соединение: `emit` рассылает событие подписчикам, статус отдаётся при подписке. */
+  function fakeForwarding(options?: { events?: ReadonlySet<string> }) {
+    const eventListeners = new Set<(message: unknown) => void>();
+    const connection = {
+      onEvent: (listener: (message: unknown) => void) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+      onStatus: (listener: (s: unknown) => void) => {
+        listener({ state: 'connected' });
+        return () => {};
+      },
+    } as unknown as HostConnection;
+    const contents = new EventEmitter();
+    const sent: unknown[] = [];
+    const window = {
+      isDestroyed: () => false,
+      on: () => {},
+      webContents: Object.assign(contents, { send: (channel: string, data: unknown) => sent.push([channel, data]) }),
+    };
+    forwardHostToPages(connection, window as unknown as BrowserWindow, options);
+    contents.emit('did-finish-load');
+    const emit = (event: string): void => {
+      for (const listener of eventListeners) listener({ event, data: {} });
+    };
+    return { sent, emit };
+  }
+
+  it('с белым списком окну уходят только события из списка, статус — всегда (остров: без pty.output)', () => {
+    const { sent, emit } = fakeForwarding({ events: new Set(['works.changed', 'activity.changed']) });
+    emit('pty.output');
+    emit('works.changed');
+    emit('pty.exit');
+    emit('activity.changed');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'works.changed', data: {} }],
+      ['host:event', { event: 'activity.changed', data: {} }],
+    ]);
+  });
+
+  it('без белого списка окно получает все события, как раньше', () => {
+    const { sent, emit } = fakeForwarding();
+    emit('pty.output');
+    emit('works.changed');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'pty.output', data: {} }],
+      ['host:event', { event: 'works.changed', data: {} }],
+    ]);
+  });
 });
 
 describe('app:parley-md project boundary', () => {

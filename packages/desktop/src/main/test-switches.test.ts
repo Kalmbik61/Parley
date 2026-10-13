@@ -12,7 +12,7 @@ const ALL_ON = {
 };
 
 describe('testSwitches', () => {
-  it('неупакованное окно (E2E, pnpm dev) слушает все шесть переключателей', () => {
+  it('неупакованное окно (E2E, pnpm dev) слушает все семь переключателей набора ALL_ON', () => {
     expect(testSwitches(ALL_ON, false)).toEqual({
       downloads: true,
       dialogs: true,

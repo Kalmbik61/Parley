@@ -8,7 +8,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
-import type { IslandBridge, IslandConfig, IslandPoint } from '../shared/island.js';
+import type { IslandApi, IslandBridge, IslandConfig, IslandPoint } from '../shared/island.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
@@ -48,6 +48,7 @@ const bridge = {
     };
   },
   activitySnapshot: () => ipcRenderer.invoke('host:activity-snapshot'),
+  // `satisfies`: член, добавленный в `IslandApi`, но не реализованный здесь, не пройдёт сборку; внешнее приведение — ради `call`.
   island: {
     config: () => ipcRenderer.invoke('island:config') as Promise<IslandConfig>,
     onConfig: (listener: (config: IslandConfig) => void) => {
@@ -64,7 +65,7 @@ const bridge = {
     open: (target: unknown) => ipcRenderer.send('island:open', target),
     beep: () => ipcRenderer.send('island:beep'),
     hintShown: () => ipcRenderer.send('island:hint-shown'),
-  },
+  } satisfies IslandApi,
 };
 
 contextBridge.exposeInMainWorld('parley', bridge as unknown as IslandBridge);

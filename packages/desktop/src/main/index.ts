@@ -22,7 +22,7 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parl
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
-import type { IslandConfig } from '../shared/island.js';
+import { ISLAND_EVENTS, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
 import { createDesignMode } from './browser/design-mode.js';
@@ -389,7 +389,7 @@ if (!gotLock) {
       createWindow: () => {
         const window = new BrowserWindow(islandWindowOptions(islandPreloadPath));
         guardNavigation(window.webContents, `file://${islandHtmlPath}`);
-        void window.loadFile(islandHtmlPath);
+        void window.loadFile(islandHtmlPath).catch((error: unknown) => console.warn('[parley] island load failed', error));
         return window;
       },
       displays: () => screen.getAllDisplays(),
@@ -400,8 +400,14 @@ if (!gotLock) {
         void uiStore.save({ island: { ...placement } } as Partial<Omit<UiFile, 'version'>>).catch(() => undefined);
       },
       onCreated: (window) => {
-        forwardHostToPages(connection, window);
-        window.webContents.on('did-finish-load', () => pushIslandConfig());
+        // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
+        forwardHostToPages(connection, window, { events: ISLAND_EVENTS });
+        // Как у главного окна: «страница загружена» — для `islandActive`; перезагрузка снимает признак до нового конца.
+        window.webContents.on('did-start-loading', () => loadedWindows.delete(window));
+        window.webContents.on('did-finish-load', () => {
+          loadedWindows.add(window);
+          pushIslandConfig();
+        });
       },
       log: (message) => console.warn('[parley]', message),
     });
@@ -422,7 +428,12 @@ if (!gotLock) {
       else island.close();
       pushIslandConfig();
     };
-    syncIsland(ui);
+    // Второстепенное окно не должно ронять старт: сбой создания — в журнал, остальное приложение работает.
+    try {
+      syncIsland(ui);
+    } catch (error) {
+      console.warn('[parley] island sync failed', error);
+    }
     // Мониторы подключили, отключили, сменили разрешение — место заново из сохранённой точки, отступ под чёлку заново.
     const relayoutIsland = (): void => {
       island.relayout();
@@ -519,10 +530,21 @@ if (!gotLock) {
       onUiSaved: () => {
         void updates.settingsChanged();
         // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
-        void uiStore.load().then(syncIsland);
+        void uiStore.load().then((current) => {
+          // Сбой острова не должен ломать сохранение настроек.
+          try {
+            syncIsland(current);
+          } catch (error) {
+            console.warn('[parley] island sync failed', error);
+          }
+        });
       },
       isIslandSender: (sender) => island.isIsland(sender),
-      islandActive: () => island.current() !== null,
+      // «Страница острова загружена», а не просто «окно есть»: пока она грузится или не загрузилась, системные уведомления не глушатся.
+      islandActive: () => {
+        const window = island.current();
+        return window !== null && loadedWindows.has(window);
+      },
       notesStore: createNotesStore(),
       setAppearance: (mode) => {
         nativeTheme.themeSource = mode;
