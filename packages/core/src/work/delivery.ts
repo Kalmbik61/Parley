@@ -134,9 +134,9 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
   // Сессия ждёт человека или сброса лимита (`need`, спека «Застрявшие сессии», 6.1): указатель в её терминал не
   // печатается, пока эпизод не кончится. Правило раньше `already-pointed`, `no-hooks` и `busy`: человек должен видеть,
   // что сессия застряла, и когда указатель напечатан до этого, а у экрана старта причина «застрял» точнее «нет хуков».
-  // Спящей `need` не передают: хост публикует его только у активной сессии (`publishedNeed`), а будильник без процесса
-  // передаёт `activity: null`. `!= null`: после `?.` у отсутствующей активности `undefined`, а не `null`.
-  if (activity?.need != null) return { kind: 'none', reason: 'stuck' };
+  // Только у активной сессии: старый снимок с `need` не мешает письму поднять спящую (7.2) и не меняет `not-live`
+  // у остальных. `!= null`: после `?.` у отсутствующей активности `undefined`, а не `null`.
+  if (session.lifecycle === 'active' && activity?.need != null) return { kind: 'none', reason: 'stuck' };
   if (letters.every((message) => pointed.has(message.id))) {
     return { kind: 'none', reason: 'already-pointed' };
   }

@@ -355,7 +355,7 @@ describe('deliveryAction', () => {
       ).toEqual(stuck);
     });
 
-    it('пауза, закрытая сессия и отсутствие писем отвечают раньше need; черновик и указатель в полёте уступают ему', () => {
+    it('need — только у живой сессии: пауза, закрытая, pending и отсутствие писем отвечают по-прежнему, черновик и указатель в полёте уступают ему', () => {
       const waiting = { ...base, activity: activityOf('unseen', { need: limit }) };
 
       expect(deliveryAction({ ...waiting, paused: true })).toEqual({ kind: 'none', reason: 'paused' });
@@ -364,6 +364,10 @@ describe('deliveryAction', () => {
         reason: 'closed',
       });
       expect(deliveryAction({ ...waiting, unread: [] })).toEqual({ kind: 'none', reason: 'no-letters' });
+      expect(deliveryAction({ ...waiting, session: sessionOf({ lifecycle: 'pending' }) })).toEqual({
+        kind: 'none',
+        reason: 'not-live',
+      });
 
       expect(deliveryAction({ ...waiting, hasDraft: true })).toEqual(stuck);
       expect(deliveryAction({ ...waiting, inFlight: true })).toEqual(stuck);
@@ -377,6 +381,21 @@ describe('deliveryAction', () => {
       expect(deliveryAction({ ...base, pointed, activity: activityOf('unseen', { need: null }) })).toEqual({
         kind: 'none',
         reason: 'already-pointed',
+      });
+    });
+
+    it('спящую need не держит: пришёл старый снимок — письмо по-прежнему поднимает её, сверх лимита — resume-limit', () => {
+      const sleeping = sessionOf({ lifecycle: 'sleeping' });
+      const old = activityOf('unseen', { need: limit });
+
+      expect(deliveryAction({ ...base, session: sleeping, activity: old })).toEqual({
+        kind: 'resume',
+        text: 'New messages (1). Call check_inbox.',
+        letterIds: ['m-01'],
+      });
+      expect(deliveryAction({ ...base, session: sleeping, activity: old, resumeAllowed: false })).toEqual({
+        kind: 'none',
+        reason: 'resume-limit',
       });
     });
   });
