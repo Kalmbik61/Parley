@@ -784,6 +784,31 @@ describe('BrowserSurface — журнал (спека 2026-10-07, 3.5; Фоку�
     expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
   });
 
+  it('удержанные ⌘⇧C и ⌘⌥A (автоповтор, event.repeat) режим не переключают: считается только первое нажатие', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 7), 'dom-ready');
+    await act(async () => {});
+    const address = screen.getByRole('textbox', { name: 'Address' });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    // Клавишу держат: система шлёт повторы, режим не мигает.
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true, repeat: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('select');
+    // Новое нажатие (не повтор) снимает режим, как раньше.
+    fireEvent.keyDown(address, { key: 'C', code: 'KeyC', metaKey: true, shiftKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('off');
+
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    fireEvent.keyDown(address, { key: 'å', code: 'KeyA', metaKey: true, altKey: true, repeat: true });
+    expect(useBrowserStore.getState().tabs[TAB]?.mode).toBe('annotate');
+  });
+
   it('⌘⌥I и ⌘⌥J с фокусом внутри панели вкладки — тоже ловит поверхность (ревью задачи 10)', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
@@ -1677,22 +1702,6 @@ describe('BrowserSurface — Annotate: редактор скрытой вкла�
     expect(useBrowserStore.getState().tabs[OTHER]?.mode).toBe('off');
   });
 
-  it('скрытая вкладка: редактора в окне нет, набранное в сторе; вернулись — редактор и набранное на месте, Save кладёт комментарий в лоток', async () => {
-    await leaveDraftInFirstTab();
-    expect(screen.queryByTestId('annotation-editor')).toBeNull();
-    expect(useAnnotateStore.getState().tabs[TAB]?.editing).toMatchObject({ n: 1, isNew: true, draft: 'half-typed' });
-    await showTab(TAB);
-    const field = (await screen.findByRole('textbox', { name: 'Comment for annotation 1' })) as HTMLTextAreaElement;
-    expect(field.value).toBe('half-typed');
-    expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
-    fireEvent.change(field, { target: { value: 'half-typed, finished' } });
-    await act(async () => {
-      fireEvent.keyDown(field, { key: 'Enter' });
-    });
-    expect(screen.queryByTestId('annotation-editor')).toBeNull();
-    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
-  });
-});
   it('P1: лоток скрытой вкладки не заявляет отступ тостам; вернулись — заявил над своим верхом; ушли — снял', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1400 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
@@ -1717,3 +1726,19 @@ describe('BrowserSurface — Annotate: редактор скрытой вкла�
     }
   });
 
+  it('скрытая вкладка: редактора в окне нет, набранное в сторе; вернулись — редактор и набранное на месте, Save кладёт комментарий в лоток', async () => {
+    await leaveDraftInFirstTab();
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing).toMatchObject({ n: 1, isNew: true, draft: 'half-typed' });
+    await showTab(TAB);
+    const field = (await screen.findByRole('textbox', { name: 'Comment for annotation 1' })) as HTMLTextAreaElement;
+    expect(field.value).toBe('half-typed');
+    expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
+    fireEvent.change(field, { target: { value: 'half-typed, finished' } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
+  });
+});

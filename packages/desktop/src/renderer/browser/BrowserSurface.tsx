@@ -560,7 +560,8 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
         if (action === null) return;
         event.preventDefault();
         if (action === 'browser.select' || action === 'browser.annotate') {
-          toggleBrowserMode(tabId, action === 'browser.select' ? 'select' : 'annotate');
+          // Удержанная клавиша шлёт автоповтор (`repeat`): режим переключает только первое нажатие, а не мигает вкл и выкл.
+          if (!event.repeat) toggleBrowserMode(tabId, action === 'browser.select' ? 'select' : 'annotate');
           return;
         }
         if (action === 'browser.console') useDevtoolsStore.getState().show(tabId, 'console');
@@ -660,8 +661,8 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
             items={annotate.items}
             collapsed={annotate.collapsed}
             busy={annotateBusy}
-            onToggle={() => useAnnotateStore.getState().setCollapsed(tabId, !annotate.collapsed)}
             visible={visible}
+            onToggle={() => useAnnotateStore.getState().setCollapsed(tabId, !annotate.collapsed)}
             onEdit={editAnnotation}
             onDelete={(n) => {
               saveDraft(tabId);
