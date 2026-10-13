@@ -131,6 +131,12 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
 
   const letters = unread.filter((message) => message.deleted !== true);
   if (letters.length === 0) return { kind: 'none', reason: 'no-letters' };
+  // Сессия ждёт человека или сброса лимита (`need`, спека «Застрявшие сессии», 6.1): указатель в её терминал не
+  // печатается, пока эпизод не кончится. Правило раньше `already-pointed`, `no-hooks` и `busy`: человек должен видеть,
+  // что сессия застряла, и когда указатель напечатан до этого, а у экрана старта причина «застрял» точнее «нет хуков».
+  // Спящей `need` не передают: хост публикует его только у активной сессии (`publishedNeed`), а будильник без процесса
+  // передаёт `activity: null`. `!= null`: после `?.` у отсутствующей активности `undefined`, а не `null`.
+  if (activity?.need != null) return { kind: 'none', reason: 'stuck' };
   if (letters.every((message) => pointed.has(message.id))) {
     return { kind: 'none', reason: 'already-pointed' };
   }
@@ -146,10 +152,6 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     };
   }
   if (session.lifecycle !== 'active') return { kind: 'none', reason: 'not-live' };
-  // Сессия ждёт человека или сброса лимита (`need`, спека «Застрявшие сессии», 6.1): указатель в её терминал не
-  // печатается, пока эпизод не кончится. Правило раньше `no-hooks` и `busy`: у экрана старта причина «застрял» точнее.
-  // `!= null`: активности может не быть вовсе (после `?.` это `undefined`), а `need` у неё — `null`.
-  if (activity?.need != null) return { kind: 'none', reason: 'stuck' };
   // Без единого хука с запуска `idle` ничего не значит: агент может ждать ответа на вопрос
   // доверия к папке, и Enter указателя его подтвердил бы (рамка 15.1).
   if (!hooked) return { kind: 'none', reason: 'no-hooks' };

@@ -656,6 +656,10 @@ describe('WakeService: лид закончил ход и ждёт фоновых
 describe('WakeService: письма ждут застрявшую сессию (спека «Застрявшие сессии», 6.1)', () => {
   const hookLine = (name: string, extra: Record<string, unknown> = {}): string =>
     `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+  /** Ход упёрся в лимит: он окончен, сессия у приглашения, но ждёт сброса, а не письма (`need` `limit`). */
+  const limitHit =
+    hookLine('UserPromptSubmit') +
+    hookLine('StopFailure', { error: 'rate_limit', last_assistant_message: "You've hit your limit" });
 
   it('лимит: письмо удержано — mailWaiting stuck, в терминале тишина; ход без ошибки лимита — указатель уходит', async () => {
     const { workId, sessionId } = await activeSession();
@@ -664,12 +668,7 @@ describe('WakeService: письма ждут застрявшую сессию (
     const { stream, activity, ref } = await rig(sessionId, workId);
     const journal = path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
 
-    // Ход упёрся в лимит: он окончен, сессия у приглашения, но ждёт сброса, а не письма.
-    await appendFile(
-      journal,
-      hookLine('UserPromptSubmit') +
-        hookLine('StopFailure', { error: 'rate_limit', last_assistant_message: "You've hit your limit" }),
-    );
+    await appendFile(journal, limitHit);
     await waitFor(() => activity.get(ref)?.activity.need?.kind === 'limit', 3000);
 
     await sendLetter(workId, sessionId);
@@ -686,6 +685,21 @@ describe('WakeService: письма ждут застрявшую сессию (
     await appendFile(journal, hookLine('UserPromptSubmit') + hookLine('Stop'));
     await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
     expect(activity.get(ref)?.activity.need).toBeNull();
+  });
+
+  it('указатель уже напечатан, потом сессия застряла — mailWaiting stuck, а не pointed', async () => {
+    const { workId, sessionId } = await activeSession();
+    await mkdir(workPaths(project, workId).events, { recursive: true });
+    const { stream, activity, ref } = await rig(sessionId, workId);
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    // Письмо указано, прочитать его агент не успел.
+    await waitFor(() => ['in-flight', 'pointed'].includes(activity.get(ref)?.metrics?.mailWaiting ?? ''), 3000);
+
+    // Ход по указателю упёрся в лимит: человек должен видеть, что сессия застряла, а не что «указатель напечатан».
+    await appendFile(path.join(workPaths(project, workId).events, `${sessionId}.jsonl`), limitHit);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'stuck', 3000);
   });
 });
 
