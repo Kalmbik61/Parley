@@ -11,14 +11,16 @@
  * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network».
  * Под строкой — полоса загрузки 2px.
  *
- * Узкая строка (окно 800×500): подписи прячет контейнерный запрос самой строки (`@container`), остаются значки;
- * сжимается первым адрес — у остальных `shrink-0`.
+ * Узкая строка (окно 800×500): подпись кнопки размера прячет флаг ширины строки (`ResizeObserver`), остаются значки;
+ * сжимается первым адрес — у остальных `shrink-0`. Контейнерного запроса в строке нет (размерного контейнера — тем более):
+ * Chromium порой не пересчитывал `:disabled` у его потомков, и включённые после `dom-ready` кнопки оставались со стилем
+ * выключенных (`pointer-events: none`, `opacity: .4`) — мёртвые тусклые значки (P2 итогового ревью этапа B).
  *
  * Страницей строка не управляет сама: всё — колбэками `BrowserSurface`, у которого `<webview>`.
  */
 
 import { ArrowLeft, ArrowRight, Crosshair, MoreHorizontal, PencilLine, RotateCw, SquareTerminal, X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
@@ -61,6 +63,9 @@ export interface BrowserChromeProps {
   targetMenu?: ReactNode;
 }
 
+/** Ширина содержимого строки (без отступов), с которой видна подпись кнопки размера: порог прежнего контейнерного запроса. */
+const VIEWPORT_NAME_MIN_WIDTH = 560;
+
 /** Выше этого значка счётчика пишут «999+»: число в журнале не ограничено, а строка 36px и так узка. */
 const BADGE_MAX = 999;
 
@@ -97,8 +102,22 @@ function ModeButton({ label, title, pressed, disabled, onClick, children }: { la
 
 export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
   const { url, loading, canGoBack, canGoForward, live, counters } = props;
+  // Ширину строки меряет сам компонент: пересчёт стиля потомков не зависит от размера контейнера (см. шапку файла).
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (row === null || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver((entries) => {
+      // `contentRect` — содержимое без отступов, как мерил контейнерный запрос.
+      const width = entries[entries.length - 1]?.contentRect.width;
+      if (width !== undefined) setWide(width >= VIEWPORT_NAME_MIN_WIDTH);
+    });
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <div data-testid="browser-chrome" className="@container relative flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-1.5">
+    <div ref={rowRef} data-testid="browser-chrome" className="relative flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-1.5">
       <IconButton label={S.actions.back} disabled={!live || !canGoBack} onClick={props.onBack}>
         <ArrowLeft className="size-3.5" aria-hidden="true" />
       </IconButton>
@@ -115,7 +134,7 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
         </IconButton>
       )}
       <AddressBar url={url} onNavigate={props.onNavigate} autoFocus={props.focusAddress} />
-      <ViewportMenu viewport={props.viewport} disabled={!live} onChange={props.onViewport} />
+      <ViewportMenu viewport={props.viewport} disabled={!live} showName={wide} onChange={props.onViewport} />
       <ModeButton label={S.browser.select.button} title={S.browser.select.title} pressed={props.mode === 'select'} disabled={!live} onClick={props.onSelect}>
         <Crosshair className="size-3.5" aria-hidden="true" />
       </ModeButton>

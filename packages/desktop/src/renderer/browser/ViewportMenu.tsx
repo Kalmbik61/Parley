@@ -2,8 +2,8 @@
 /**
  * Меню размера вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.2): Fit, пресеты как в device
  * toolbar Chrome, Custom… (W × H в пределах `DEVTOOLS_LIMITS`), Rotate и DPR 1x/2x/3x. Выбор уходит колбэком: размер
- * хранит раскладка (`TabSpec.viewport`), эмуляцию ставит поверхность. Подпись кнопки прячется на узкой строке —
- * контейнерный запрос строки вкладки (`@container` в `BrowserChrome.tsx`).
+ * хранит раскладка (`TabSpec.viewport`), эмуляцию ставит поверхность. Подпись кнопки прячется на узкой строке:
+ * `showName` ведёт `BrowserChrome` по ширине строки.
  */
 import { MonitorSmartphone } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -16,6 +16,7 @@ import {
   type ViewportSpec,
 } from '../../shared/browser-devtools.js';
 import { S } from '../../shared/strings.js';
+import { cn } from '../lib/cn.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,10 +74,12 @@ export interface ViewportMenuProps {
   viewport: ViewportSpec | null;
   /** Страницы ещё нет — эмулировать нечего. */
   disabled: boolean;
+  /** Подпись рядом со значком: строка достаточно широка (по умолчанию — только значок). */
+  showName?: boolean;
   onChange(spec: ViewportSpec | null): void;
 }
 
-export function ViewportMenu({ viewport, disabled, onChange }: ViewportMenuProps): JSX.Element {
+export function ViewportMenu({ viewport, disabled, showName = false, onChange }: ViewportMenuProps): JSX.Element {
   const [customOpen, setCustomOpen] = useState(false);
   const [widthText, setWidthText] = useState('');
   const [heightText, setHeightText] = useState('');
@@ -118,7 +121,7 @@ export function ViewportMenu({ viewport, disabled, onChange }: ViewportMenuProps
               className="flex h-6 shrink-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
             >
               <MonitorSmartphone className="size-3.5 shrink-0" aria-hidden="true" />
-              <span data-viewport-name className="hidden max-w-24 truncate @min-[560px]:inline">
+              <span data-viewport-name className={cn('max-w-24 truncate', showName ? 'inline' : 'hidden')}>
                 {viewportName(viewport)}
               </span>
             </button>

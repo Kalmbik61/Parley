@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserChrome, type BrowserChromeProps } from './BrowserChrome.js';
 
 afterEach(cleanup);
@@ -126,10 +126,9 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     }
   });
 
-  it('строка на 800 px (Фокус ревью 2): сжимается только адрес; прочее — значки с aria-label и shrink-0; подпись размера прячет контейнерный запрос', () => {
+  it('строка на 800 px (Фокус ревью 2): сжимается только адрес; прочее — значки с aria-label и shrink-0', () => {
     renderChrome({ viewport: { preset: 'mobile-m', rotated: false, dpr: 2 }, counters: { errors: 12, warnings: 3 } });
     const chrome = screen.getByTestId('browser-chrome');
-    expect(chrome.className).toContain('@container');
     const address = screen.getByRole('textbox', { name: 'Address' }).parentElement as HTMLElement;
     expect(address.className).toMatch(/\bmin-w-0\b/);
     expect(address.className).toMatch(/\bflex-1\b/);
@@ -137,6 +136,90 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
       expect(button.getAttribute('aria-label'), button.outerHTML).not.toBeNull();
       expect(button.className, button.getAttribute('aria-label') ?? '').toMatch(/\bshrink-0\b/);
     }
-    expect(chrome.querySelector('[data-viewport-name]')?.className).toContain('@min-[560px]:inline');
+  });
+});
+
+/**
+ * P2 (итоговое ревью этапа B): включённые после `dom-ready` кнопки строки раз в ~40 запусков окна оставались со стилем
+ * выключенных (`pointer-events: none`, `opacity: .4`) при `disabled === false` и `:disabled` не подходит. Залипание снимало
+ * только `container-type: normal` на строке (замер в живом окне, 2 случая из 80 запусков): Chromium теряет пересчёт
+ * `:disabled` у потомков размерного контейнера. Поэтому в строке контейнерных запросов нет, а подпись кнопки размера зависит
+ * от ширины строки, которую меряет `ResizeObserver` (порог прежний — 560 px содержимого).
+ */
+describe('BrowserChrome — без контейнерного запроса (P2)', () => {
+  type Entry = { callback: ResizeObserverCallback; target: Element | null; disconnected: boolean };
+  const observers: Entry[] = [];
+
+  beforeEach(() => {
+    observers.length = 0;
+    class ResizeObserverStub {
+      private readonly entry: Entry;
+      constructor(callback: ResizeObserverCallback) {
+        this.entry = { callback, target: null, disconnected: false };
+        observers.push(this.entry);
+      }
+      observe(target: Element): void {
+        this.entry.target = target;
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.entry.disconnected = true;
+      }
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Строке сообщили новую ширину содержимого (без отступов — как у контейнерного запроса). */
+  function resizeRow(contentWidth: number): void {
+    act(() => {
+      for (const entry of observers) {
+        entry.callback([{ target: entry.target, contentRect: { width: contentWidth } } as ResizeObserverEntry], {} as ResizeObserver);
+      }
+    });
+  }
+
+  const label = (): HTMLElement => screen.getByTestId('browser-chrome').querySelector('[data-viewport-name]') as HTMLElement;
+
+  it('ни строка, ни её потомки не заводят контейнерного запроса: ни `@container`, ни `@min-`, ни `@max-` в разметке', () => {
+    renderChrome({ viewport: { preset: 'mobile-m', rotated: false, dpr: 2 }, counters: { errors: 12, warnings: 3 }, targetMenu: <button type="button">To: S01</button> });
+    const html = screen.getByTestId('browser-chrome').outerHTML;
+    expect(html).not.toContain('@container');
+    expect(html).not.toMatch(/@(min|max)-/);
+    expect(html).not.toContain('container-type');
+  });
+
+  it('подпись размера: строка уже порога (559 px содержимого) — скрыта, 560 и шире — видна; порог пересекают в обе стороны', () => {
+    renderChrome({ viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } });
+    expect(label().className).toMatch(/\bhidden\b/);
+    resizeRow(559);
+    expect(label().className).toMatch(/\bhidden\b/);
+    resizeRow(560);
+    expect(label().className).toMatch(/\binline\b/);
+    expect(label().className).not.toMatch(/\bhidden\b/);
+    resizeRow(1200);
+    expect(label().className).toMatch(/\binline\b/);
+    resizeRow(300);
+    expect(label().className).toMatch(/\bhidden\b/);
+    expect(label().className).not.toMatch(/\binline\b/);
+  });
+
+  it('наблюдатель следит за самой строкой и отключается вместе с ней', () => {
+    renderChrome();
+    const row = screen.getByTestId('browser-chrome');
+    expect(observers).toHaveLength(1);
+    expect(observers[0]?.target).toBe(row);
+    expect(observers[0]?.disconnected).toBe(false);
+    cleanup();
+    expect(observers[0]?.disconnected).toBe(true);
+  });
+
+  it('размер строки не трогает кнопки: включённые остаются включёнными, а выключенные — выключенными', () => {
+    renderChrome({ live: true, canGoBack: false });
+    resizeRow(700);
+    resizeRow(400);
+    const buttons = within(screen.getByTestId('browser-chrome')).getAllByRole('button') as HTMLButtonElement[];
+    expect(buttons.filter((button) => button.disabled).map((button) => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward']);
   });
 });
