@@ -1,8 +1,9 @@
 /**
  * Проводка острова (спека 2026-10-12, раздел 6): статус хоста, сторы работ и активности, очередь запросов, настройки,
  * видимость и размер окна. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
- * поднимаются. Новый запрос снимает «×» и звучит (`beep` у main, если включён Sound). Размер содержимого уходит в main:
- * окно острова прозрачное и ровно по содержимому.
+ * поднимаются. Новый запрос снимает «×», выбирается в карточке и звучит (`beep` у main, если включён Sound). Размер
+ * содержимого уходит в main: окно острова прозрачное и ровно по содержимому, а корень не сжимается до текущей ширины
+ * окна (`w-max`) — иначе окно, стартовавшее узким, никогда бы не выросло.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -58,18 +59,24 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
 
   const seen = useRef(new Set<string>());
   useEffect(() => {
-    let fresh = false;
-    for (const item of items) {
-      if (seen.current.has(item.key)) continue;
+    // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
+    let firstFresh = -1;
+    items.forEach((item, at) => {
+      if (seen.current.has(item.key)) return;
       seen.current.add(item.key);
-      fresh = true;
-    }
-    if (!fresh) return;
+      if (firstFresh === -1) firstFresh = at;
+    });
+    if (firstFresh === -1) return;
+    useIslandRequests.getState().select(firstFresh);
     setHidden(false);
     if (config.sound) bridge.island.beep();
   }, [items, config.sound, bridge]);
 
   const visible = !hidden && (model.active || items.length > 0);
+  // Номер показа растёт при каждом переходе «скрыт → виден» и считается прямо при отрисовке: карточка, оставшаяся на
+  // экране с прошлого показа, не успевает мелькнуть с уже взведёнными кнопками.
+  const [show, setShow] = useState({ visible: false, id: 0 });
+  if (show.visible !== visible) setShow({ visible, id: visible ? show.id + 1 : show.id });
   useEffect(() => bridge.island.setVisible(visible), [visible, bridge]);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -84,13 +91,14 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   }, [bridge]);
 
   return (
-    <div ref={rootRef} className="inline-block" onMouseLeave={() => setListOpen(false)}>
+    <div ref={rootRef} className="inline-block w-max" onMouseLeave={() => setListOpen(false)}>
       <IslandView
         model={model}
         items={items}
         index={index}
         config={config}
         listOpen={listOpen}
+        showId={show.id}
         labels={labels}
         api={bridge.island}
         onToggleList={setListOpen}

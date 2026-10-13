@@ -18,9 +18,11 @@ import type { IslandRequest } from './requests.js';
 import { simpleChoices } from './simple-question.js';
 
 /**
- * Сколько кнопки решения (Allow / Always / Deny / варианты ответа) выключены после первого показа запроса: карточка
- * вырастает под курсором у верхнего края экрана, а `acceptFirstMouse` пропускает первый клик — без паузы случайный
- * клик по чужому окну разрешил бы команду. «Open in Parley» и стрелки не защищены: они ничего не решают.
+ * Сколько кнопки решения (Allow / Always / Deny / варианты ответа) выключены после каждого показа карточки: остров
+ * появляется под курсором у верхнего края экрана, а `acceptFirstMouse` пропускает первый клик — без паузы случайный
+ * клик по чужому окну разрешил бы команду. Пауза — на показ и на карточку: заново после скрытия и нового появления
+ * острова (`showId`) и при переходе к любой карточке, в том числе уже виденной. «Open in Parley» и стрелки не
+ * защищены: они ничего не решают.
  */
 export const CARD_ARM_MS = 500;
 
@@ -30,6 +32,8 @@ export interface IslandViewProps {
   index: number;
   config: IslandConfig;
   listOpen: boolean;
+  /** Номер показа острова: растёт каждый раз, когда окно из скрытого становится видимым (`IslandApp`). */
+  showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
   api: IslandApi;
   onToggleList(open: boolean): void;
@@ -56,12 +60,13 @@ function HideButton({ onHide }: { onHide(): void }): JSX.Element {
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
-  const { model, api, onToggleList, onHide, listOpen } = props;
+  const { model, api, onToggleList, onHide } = props;
   return (
     // Список — по наведению или клику (спека, раздел 4); уход курсора с острова закрывает его (`IslandApp`).
-    <div data-testid="island-pill" className="flex items-center gap-2 px-3 py-1.5 text-xs" onMouseEnter={() => onToggleList(true)}>
+    <div data-testid="island-pill" className="flex items-center gap-2 whitespace-nowrap px-3 py-1.5 text-xs" onMouseEnter={() => onToggleList(true)}>
       <DragHandle api={api} />
-      <button type="button" className="flex items-center gap-1.5" onClick={() => onToggleList(!listOpen)}>
+      {/* Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы. */}
+      <button type="button" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
         {model.providers.map((provider) => (
           <AgentIcon key={provider} provider={provider} size={14} />
         ))}
@@ -140,17 +145,21 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
 }
 
 function Card(props: IslandViewProps): JSX.Element | null {
-  const { items, index, labels, api, onSelect, onDecide, onHide } = props;
+  const { items, index, showId, labels, api, onSelect, onDecide, onHide } = props;
   const item = items[index] ?? items[0];
-  const shownKey = item?.key;
-  // Ключи, показанные дольше `CARD_ARM_MS`: у каждого нового запроса своя пауза, у уже «взведённого» — нет.
-  const [armedKeys, setArmedKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const armed = shownKey !== undefined && armedKeys.has(shownKey);
+  // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
+  // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
+  const showKey = item === undefined ? null : `${showId}\u0000${item.key}`;
+  const [armedKey, setArmedKey] = useState<string | null>(null);
+  const armed = showKey !== null && armedKey === showKey;
   useEffect(() => {
-    if (shownKey === undefined || armedKeys.has(shownKey)) return undefined;
-    const timer = setTimeout(() => setArmedKeys((current) => new Set(current).add(shownKey)), CARD_ARM_MS);
-    return () => clearTimeout(timer);
-  }, [shownKey, armedKeys]);
+    if (showKey === null) return undefined;
+    const timer = setTimeout(() => setArmedKey(showKey), CARD_ARM_MS);
+    return () => {
+      clearTimeout(timer);
+      setArmedKey(null);
+    };
+  }, [showKey]);
   if (item === undefined) return null;
   const label = labels.get(sessionKeyOf(item));
   return (
@@ -191,7 +200,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   return (
     <div data-testid="island" className="rounded-b-[18px] bg-black text-neutral-100 shadow-lg" style={{ paddingTop: config.topInset }}>
       {!config.hintShown ? (
-        <div className="flex items-center gap-2 px-3 pt-1.5 text-[11px] text-neutral-300">
+        <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-[11px] text-neutral-300">
           <span>{S.island.hint}</span>
           <button type="button" className="underline" onClick={onHintDone}>
             {S.island.gotIt}

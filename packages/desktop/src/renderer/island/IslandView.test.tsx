@@ -1,9 +1,10 @@
 /**
  * Вид острова: пилюля и «×», список «в работе», карточка разрешения и вопроса, стрелки очереди, «Open in Parley»,
- * пометки, подсказка первого показа и отступ под чёлку, пауза кнопок решения после показа запроса (таймеры подставные).
+ * пометки, подсказка первого показа и отступ под чёлку, пауза кнопок решения после показа карточки (таймеры подставные),
+ * ручка перетаскивания.
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
 import type { IslandApi } from '../../shared/island.js';
@@ -44,7 +45,7 @@ const MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { sound: true, hintShown: true, topInset: 0 }, listOpen: false,
+    model: MODEL, items: [], index: 0, config: { sound: true, hintShown: true, topInset: 0 }, listOpen: false, showId: 1,
     labels: LABELS, api: api(),
     onToggleList: vi.fn(), onHide: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(), onHintDone: vi.fn(),
     ...patch,
@@ -81,6 +82,19 @@ describe('вид острова', () => {
     expect(screen.getByTestId('island-pill').textContent).toContain('2 working · 1 waiting');
     fireEvent.click(screen.getByRole('button', { name: 'Hide until the next request' }));
     expect(props.onHide).toHaveBeenCalled();
+  });
+
+  it('клик по пилюле только открывает список — открытый наведением он не закрывает', () => {
+    const props = view({ listOpen: true });
+    fireEvent.click(within(screen.getByTestId('island-pill')).getByRole('button', { name: /working/ }));
+    expect(props.onToggleList).toHaveBeenCalledWith(true);
+    expect(props.onToggleList).not.toHaveBeenCalledWith(false);
+  });
+
+  it('пилюля и подсказка не переносят строки — окно растёт по содержимому', () => {
+    view({ config: { sound: true, hintShown: false, topInset: 0 } });
+    expect(screen.getByTestId('island-pill').className).toContain('whitespace-nowrap');
+    expect(screen.getByText('Drag me · × to hide · turn off in Settings').parentElement?.className).toContain('whitespace-nowrap');
   });
 
   it('список: ждущая без карточки — «waiting in terminal», точки как в сайдбаре, клик по строке открывает её в Parley', () => {
@@ -197,10 +211,11 @@ describe('пауза кнопок решения после показа зап�
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
   });
 
-  it('новый запрос получает свою паузу, уже показанный дольше паузы — нет', () => {
+  it('возврат к прежней карточке снова ставит паузу — даже к той, что уже нажималась', () => {
     const props = viewProps({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
     const { rerender } = render(<IslandView {...props} />);
     const allowDisabled = (): boolean => (screen.getByTestId('island-allow') as HTMLButtonElement).disabled;
+    expect(allowDisabled()).toBe(true);
     arm();
     expect(allowDisabled()).toBe(false);
     rerender(<IslandView {...props} index={1} />);
@@ -208,6 +223,58 @@ describe('пауза кнопок решения после показа зап�
     arm();
     expect(allowDisabled()).toBe(false);
     rerender(<IslandView {...props} index={0} />);
+    expect(allowDisabled()).toBe(true);
+    arm();
     expect(allowDisabled()).toBe(false);
+  });
+
+  it('возврат раньше, чем взвелась соседняя карточка, тоже ставит паузу заново', () => {
+    const props = viewProps({ items: [permissionItem(), permissionItem({ key: 'k\u0000c-2' })] });
+    const { rerender } = render(<IslandView {...props} />);
+    const allowDisabled = (): boolean => (screen.getByTestId('island-allow') as HTMLButtonElement).disabled;
+    arm();
+    rerender(<IslandView {...props} index={1} />);
+    act(() => {
+      vi.advanceTimersByTime(CARD_ARM_MS / 2);
+    });
+    rerender(<IslandView {...props} index={0} />);
+    expect(allowDisabled()).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(CARD_ARM_MS - 1);
+    });
+    expect(allowDisabled()).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(allowDisabled()).toBe(false);
+  });
+
+  it('новый показ острова (showId) снова ставит паузу той же карточке', () => {
+    const props = viewProps({ items: [permissionItem()] });
+    const { rerender } = render(<IslandView {...props} showId={1} />);
+    const allowDisabled = (): boolean => (screen.getByTestId('island-allow') as HTMLButtonElement).disabled;
+    arm();
+    expect(allowDisabled()).toBe(false);
+    rerender(<IslandView {...props} showId={2} />);
+    expect(allowDisabled()).toBe(true);
+    arm();
+    expect(allowDisabled()).toBe(false);
+  });
+});
+
+describe('ручка перетаскивания', () => {
+  /** Событие указателя с точкой на экране: `MouseEvent` нужного типа — не зависит от того, знает ли jsdom `PointerEvent`. */
+  const pointer = (type: string, screenX: number, screenY: number): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY });
+
+  it('отпускание, отмена жеста и потеря захвата — каждое шлёт dragEnd с точкой своего события', () => {
+    const props = view();
+    const handle = screen.getByTestId('island-drag');
+    fireEvent(handle, pointer('pointerup', 5, 6));
+    expect(props.api.dragEnd).toHaveBeenLastCalledWith({ screenX: 5, screenY: 6 });
+    fireEvent(handle, pointer('pointercancel', 11, 22));
+    expect(props.api.dragEnd).toHaveBeenLastCalledWith({ screenX: 11, screenY: 22 });
+    fireEvent(handle, pointer('lostpointercapture', 33, 44));
+    expect(props.api.dragEnd).toHaveBeenLastCalledWith({ screenX: 33, screenY: 44 });
+    expect(props.api.dragEnd).toHaveBeenCalledTimes(3);
   });
 });

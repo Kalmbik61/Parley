@@ -8,6 +8,9 @@ import { S } from '../../shared/strings.js';
 import type { IslandApi } from '../../shared/island.js';
 
 export function DragHandle({ api }: { api: Pick<IslandApi, 'dragStart' | 'dragMove' | 'dragEnd'> }): JSX.Element {
+  // Отпускание, отмена жеста и потеря захвата заканчивают перетаскивание одинаково: потерянный `pointerup` не должен
+  // оставить main в «тащим» (повторный `dragEnd` main отбрасывает — отпускание само снимает захват).
+  const end = (event: { screenX: number; screenY: number }): void => api.dragEnd({ screenX: event.screenX, screenY: event.screenY });
   return (
     <span
       data-testid="island-drag"
@@ -22,7 +25,9 @@ export function DragHandle({ api }: { api: Pick<IslandApi, 'dragStart' | 'dragMo
       onPointerMove={(event) => {
         if (event.currentTarget.hasPointerCapture?.(event.pointerId) === true) api.dragMove({ screenX: event.screenX, screenY: event.screenY });
       }}
-      onPointerUp={(event) => api.dragEnd({ screenX: event.screenX, screenY: event.screenY })}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onLostPointerCapture={end}
     >
       ⠿
     </span>
