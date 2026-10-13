@@ -1613,3 +1613,82 @@ describe('BrowserSurface — Annotate: заметки отчётов задач 
     expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
   });
 });
+
+const OTHER = 'browser:other';
+
+/** Поверхность вкладки целиком: у каждой своя строка, свои кнопки и своё поле страницы. */
+function surfaceOf(tabId: string): HTMLElement {
+  const node = document.querySelector<HTMLElement>(`[data-surface-layer] [data-tab-id="${tabId}"]`);
+  if (node === null) throw new Error(`нет поверхности ${tabId}`);
+  return node;
+}
+
+describe('BrowserSurface — Annotate: редактор скрытой вкладки (ревью задачи 23, I1)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    useAnnotateStore.setState({ tabs: {} });
+  });
+
+  /** Вторая вкладка браузера в группе первой: пока активна одна, поверхность другой смонтирована, но скрыта. */
+  function renderTwoTabs(): void {
+    setBrowserTab('http://localhost:5173/');
+    act(() =>
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => {
+        const root = layout.root as GroupNode;
+        return { ...layout, root: { ...root, tabs: [...root.tabs, { kind: 'browser', id: OTHER, url: 'http://localhost:5173/other' }] } };
+      }),
+    );
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    fire(arm(document.querySelector<FakeWebview>(`[data-surface-layer] [data-tab-id="${OTHER}"] webview`), 13), 'dom-ready');
+  }
+
+  const showTab = (tabId: string): Promise<void> =>
+    act(async () => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => ({ ...layout, root: { ...(layout.root as GroupNode), activeTabId: tabId } }));
+    });
+
+  /** В первой вкладке открыт редактор с набранным, но не сохранённым комментарием; человек перешёл на вторую. */
+  async function leaveDraftInFirstTab(): Promise<void> {
+    renderTwoTabs();
+    bridge.setAnnotatePicks([ELEMENT_PICK]);
+    await act(async () => {
+      fireEvent.click(within(surfaceOf(TAB)).getByRole('button', { name: 'Annotate' }));
+    });
+    const field = await screen.findByRole('textbox', { name: 'Comment for annotation 1' });
+    fireEvent.change(field, { target: { value: 'half-typed' } });
+    await showTab(OTHER);
+  }
+
+  it('черновик в скрытой вкладке не гасит Esc видимой: слой Radix скрытого редактора каждый Esc окна помечал бы preventDefault, и ✎ второй вкладки Esc не выключал бы', async () => {
+    await leaveDraftInFirstTab();
+    // Черновик первой вкладки открыт (в сторе), а видна вторая.
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing).not.toBeNull();
+    const annotate = within(surfaceOf(OTHER)).getByRole('button', { name: 'Annotate' });
+    await act(async () => {
+      fireEvent.click(annotate);
+    });
+    expect(useBrowserStore.getState().tabs[OTHER]?.mode).toBe('annotate');
+    await act(async () => {
+      fireEvent.keyDown(annotate, { key: 'Escape' });
+    });
+    expect(useBrowserStore.getState().tabs[OTHER]?.mode).toBe('off');
+  });
+
+  it('скрытая вкладка: редактора в окне нет, набранное в сторе; вернулись — редактор и набранное на месте, Save кладёт комментарий в лоток', async () => {
+    await leaveDraftInFirstTab();
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.editing).toMatchObject({ n: 1, isNew: true, draft: 'half-typed' });
+    await showTab(TAB);
+    const field = (await screen.findByRole('textbox', { name: 'Comment for annotation 1' })) as HTMLTextAreaElement;
+    expect(field.value).toBe('half-typed');
+    expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
+    fireEvent.change(field, { target: { value: 'half-typed, finished' } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter' });
+    });
+    expect(screen.queryByTestId('annotation-editor')).toBeNull();
+    expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
+  });
+});

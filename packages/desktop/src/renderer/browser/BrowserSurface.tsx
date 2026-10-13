@@ -632,7 +632,11 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
             }}
           />
         ) : null}
-        {annotate.editing === null ? null : (
+        {!visible || annotate.editing === null ? null : (
+          // Редактор — только у видимой вкладки: слой Radix (DismissableLayer) ловит Esc на документе и помечает его preventDefault,
+          // пока смонтирован, в том числе у скрытой поверхности — тогда ветка Esc корня видимой вкладки (выше) не выключала бы
+          // Select и Annotate. Черновик остаётся в сторе и возвращается вместе с вкладкой. Остаток: две группы рядом показывают
+          // две вкладки сразу, и редактор в группе, где человек сейчас не работает, по-прежнему гасит Esc в другой.
           <AnnotationEditor
             key={`${annotate.editing.n}:${annotate.editing.isNew ? 'new' : 'edit'}`}
             n={annotate.editing.n}
