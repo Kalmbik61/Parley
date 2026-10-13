@@ -1,8 +1,11 @@
 /**
  * Очередь запросов острова (спека 2026-10-12, раздел 6). Сессия Claude или GLM перешла в «ждёт» — разовый
- * `feed.snapshot` и в очередь все её ждущие карточки; карточки ещё нет (хук ложится позже активности) — один повтор
- * через `ASK_RETRY_MS` и новый снимок при каждом следующем изменении активности этой сессии, пока она ждёт.
- * Сессия перестала ждать — её карточки уходят. Порядок — по времени перехода в «ждёт», внутри сессии — по ленте.
+ * `feed.snapshot` и в очередь все её ждущие карточки; карточки ещё нет (хук ложится позже активности) — повторы по
+ * `ASK_RETRY_SCHEDULE_MS`, пока сессия ждёт и карточек у неё нет, и новый снимок при каждом следующем изменении
+ * активности этой сессии, пока она ждёт. У каждого снимка свой номер по сессии: ответ не последнего запроса
+ * отбрасывается; удавшийся снимок без ждущих карточек убирает прежние карточки сессии (ответили в терминале), а
+ * отказавший их не трогает. Сессия перестала ждать — её карточки уходят. Порядок — по времени перехода в «ждёт»,
+ * внутри сессии — по ленте.
  *
  * На ленты остров не подписывается: подписки на хосте общие на клиента-main, и отписка острова оборвала бы ленту
  * главного окна. Поэтому и решение — свой `feed.decide`, а не `useFeedStore.decide`: тот держит «решается» до дельты
@@ -21,7 +24,8 @@ import { askSummary, pendingCards } from '../attention/ask-summary.js';
 import { sessionAttention } from '../attention/derive.js';
 import type { ActivityEntry } from '../store/activity.js';
 
-export const ASK_RETRY_MS = 500;
+/** Паузы перед повторами снимка, пока у ждущей сессии нет карточки; после последней повторов нет. */
+export const ASK_RETRY_SCHEDULE_MS: readonly number[] = [500, 1500, 4000];
 export const ELSEWHERE_MS = 1000;
 
 export interface IslandRequest {
@@ -51,6 +55,10 @@ interface IslandRequestsState {
 let call: IslandBridge['call'] | null = null;
 /** Последняя запись активности ждущей сессии: новая — повод снять снимок заново. */
 const lastSeen = new Map<string, ActivityEntry | undefined>();
+/** Номер последнего запрошенного снимка по сессии (`refKey`): ответ с другим номером устарел. */
+const requestIds = new Map<string, number>();
+/** Сквозной счётчик номеров: номер не повторяется, даже когда запись сессии удалена и заведена заново. */
+let requestSeq = 0;
 
 const clampIndex = (index: number, length: number): number => (length === 0 ? 0 : Math.min(Math.max(index, 0), length - 1));
 
@@ -63,34 +71,52 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       return { items, index: clampIndex(state.index, items.length) };
     });
 
-  const fetchCards = async (ref: SessionRef, retry: boolean): Promise<void> => {
+  const dropSession = (sessionKey: string): void =>
+    set((state) => {
+      if (!state.items.some((item) => refKey(item.ref) === sessionKey)) return state;
+      const items = state.items.filter((item) => refKey(item.ref) !== sessionKey);
+      return { items, index: clampIndex(state.index, items.length) };
+    });
+
+  /** `attempt` — номер повтора: 0 — снимок по переходу или смене активности, дальше — по `ASK_RETRY_SCHEDULE_MS`. */
+  const fetchCards = async (ref: SessionRef, attempt: number): Promise<void> => {
     const current = call;
-    if (current === null) return;
     const sessionKey = refKey(ref);
+    if (current === null || get().waitingSince[sessionKey] === undefined) return;
+    requestSeq += 1;
+    const id = requestSeq;
+    requestIds.set(sessionKey, id);
     let snapshot: Result<'feed.snapshot'> | null;
     try {
       snapshot = await current('feed.snapshot', { ref });
     } catch {
       snapshot = null;
     }
-    // Сессия за время запроса перестала ждать — снимок уже не нужен.
+    // Ушёл более новый запрос по этой сессии (или она перестала ждать) — этот ответ устарел.
+    if (requestIds.get(sessionKey) !== id) return;
     const since = get().waitingSince[sessionKey];
     if (since === undefined) return;
     const cards = snapshot === null ? [] : pendingCards(snapshot.items);
-    if (cards.length === 0) {
-      if (retry) setTimeout(() => void fetchCards(ref, false), ASK_RETRY_MS);
+    if (cards.length > 0) {
+      const inWindow = snapshot?.decisions !== 'terminal';
+      set((state) => {
+        const known = new Map(state.items.map((item) => [item.key, item]));
+        const mine = cards.map((card): IslandRequest => {
+          const key = `${sessionKey}\u0000${card.cardId}`;
+          return known.get(key) ?? { key, ref, card, summary: askSummary(card, ref.projectPath), inWindow, since, deciding: false, note: null };
+        });
+        const items = [...state.items.filter((item) => refKey(item.ref) !== sessionKey), ...mine].sort((a, b) => a.since - b.since);
+        return { items, index: clampIndex(state.index, items.length) };
+      });
       return;
     }
-    const inWindow = snapshot?.decisions !== 'terminal';
-    set((state) => {
-      const known = new Map(state.items.map((item) => [item.key, item]));
-      const mine = cards.map((card): IslandRequest => {
-        const key = `${sessionKey}\u0000${card.cardId}`;
-        return known.get(key) ?? { key, ref, card, summary: askSummary(card, ref.projectPath), inWindow, since, deciding: false, note: null };
-      });
-      const items = [...state.items.filter((item) => refKey(item.ref) !== sessionKey), ...mine].sort((a, b) => a.since - b.since);
-      return { items, index: clampIndex(state.index, items.length) };
-    });
+    // Удавшийся снимок без ждущих карточек: прежние ответили в терминале. Отказ сети карточки не трогает.
+    if (snapshot !== null) dropSession(sessionKey);
+    const delay = ASK_RETRY_SCHEDULE_MS[attempt];
+    if (delay === undefined || get().items.some((item) => refKey(item.ref) === sessionKey)) return;
+    setTimeout(() => {
+      if (requestIds.get(sessionKey) === id) void fetchCards(ref, attempt + 1);
+    }, delay);
   };
 
   return {
@@ -107,6 +133,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       const waitingSince: Record<string, number> = {};
       const toFetch: SessionRef[] = [];
       for (const entry of entries) {
+        if (entry.map.work.status !== 'active') continue;
         for (const session of entry.map.sessions) {
           if (ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) continue;
           const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
@@ -118,11 +145,12 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
         }
       }
       for (const key of [...lastSeen.keys()]) if (waitingSince[key] === undefined) lastSeen.delete(key);
+      for (const key of [...requestIds.keys()]) if (waitingSince[key] === undefined) requestIds.delete(key);
       set((state) => {
         const items = state.items.filter((item) => waitingSince[refKey(item.ref)] !== undefined);
         return { waitingSince, items, index: clampIndex(state.index, items.length) };
       });
-      for (const ref of toFetch) void fetchCards(ref, true);
+      for (const ref of toFetch) void fetchCards(ref, 0);
     },
     decide: async (key, decision) => {
       const item = get().items.find((candidate) => candidate.key === key);
@@ -151,6 +179,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
     },
     clear: () => {
       lastSeen.clear();
+      requestIds.clear();
       set({ items: [], index: 0, waitingSince: {} });
     },
   };
