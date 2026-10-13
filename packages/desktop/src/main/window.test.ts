@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
-import { createMainWindow, guardNavigation, guardWindowClose, mainWindowOptions, titlebarDoubleClickAction } from './window.js';
+import { createMainWindow, guardNavigation, guardWindowClose, mainWindowOptions, titlebarDoubleClickAction, trackLoadedWindow } from './window.js';
 
 /**
  * Подставной `BrowserWindow` (тест 7 куска 9.1): `createMainWindow` берёт его из `electron` сам,
@@ -106,6 +106,87 @@ describe('createMainWindow (тест 7 куска 9.1)', () => {
     const load = electronLog.indexOf('loadFile');
     expect(attach).toBeGreaterThanOrEqual(0);
     expect(load).toBeGreaterThan(attach);
+  });
+});
+
+describe('trackLoadedWindow (страница окна загружена)', () => {
+  /** Подставное окно: `webContents.on` копит слушателей, `emit` зовёт их, как Electron, — с полями события. */
+  function fakeLoadedWindow() {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const webContents: Pick<WebContents, 'on'> = {
+      on: ((event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+        return webContents as WebContents;
+      }) as WebContents['on'],
+    };
+    const window = { webContents };
+    const loaded = new WeakSet<object>();
+    trackLoadedWindow(window, loaded);
+    return {
+      window,
+      loaded,
+      emit: (event: string, ...args: unknown[]) => {
+        for (const listener of listeners.get(event) ?? []) listener(...args);
+      },
+    };
+  }
+
+  // Поля событий — те, что окно получило на Electron 44 (E2E `window-ready.spec.ts`): навигация `<webview>` и подкадра
+  // окна — не главного кадра, переход по `#hash` — главного кадра, но внутри документа.
+  const pageReload = { isMainFrame: true, isSameDocument: false, url: 'file:///app/index.html' };
+  const webviewAttach = { isMainFrame: false, isSameDocument: false, url: 'about:blank' };
+  const hashChange = { isMainFrame: true, isSameDocument: true, url: 'file:///app/index.html#x' };
+
+  it('до первого did-finish-load окно не загружено, после него — загружено', () => {
+    const { window, loaded, emit } = fakeLoadedWindow();
+    emit('did-start-loading');
+    emit('did-start-navigation', pageReload);
+    expect(loaded.has(window)).toBe(false);
+
+    emit('did-finish-load');
+    expect(loaded.has(window)).toBe(true);
+  });
+
+  it('загрузка <webview> или подкадра (did-start-loading без did-finish-load) признак не снимает', () => {
+    const { window, loaded, emit } = fakeLoadedWindow();
+    emit('did-finish-load');
+
+    // Первая вкладка браузера: окну приходят did-start-loading, навигация не главного кадра и did-stop-loading.
+    emit('did-start-loading');
+    emit('did-start-navigation', webviewAttach);
+    emit('did-frame-finish-load');
+    emit('did-stop-loading');
+
+    expect(loaded.has(window)).toBe(true);
+  });
+
+  it('переход внутри документа главного кадра (#hash) признак не снимает', () => {
+    const { window, loaded, emit } = fakeLoadedWindow();
+    emit('did-finish-load');
+
+    emit('did-start-loading');
+    emit('did-start-navigation', hashChange);
+    emit('did-stop-loading');
+
+    expect(loaded.has(window)).toBe(true);
+  });
+
+  it('перезагрузка окна (главный кадр, другой документ) снимает признак до нового did-finish-load', () => {
+    const { window, loaded, emit } = fakeLoadedWindow();
+    emit('did-finish-load');
+
+    emit('did-start-loading');
+    emit('did-start-navigation', pageReload);
+    expect(loaded.has(window)).toBe(false);
+
+    emit('did-finish-load');
+    expect(loaded.has(window)).toBe(true);
+
+    // Страница после перезагрузки снова ставит вкладку браузера — признак остаётся.
+    emit('did-start-loading');
+    emit('did-start-navigation', webviewAttach);
+    emit('did-stop-loading');
+    expect(loaded.has(window)).toBe(true);
   });
 });
 
