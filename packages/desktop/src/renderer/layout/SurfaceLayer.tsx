@@ -49,7 +49,7 @@ export interface SurfaceLayerProps {
   fontFamily: string;
   fontSize: number;
   /**
-   * Отправка агенту окна (7.2) — карточке Design Mode (9.3b). Слой — сосед `LayoutView`, контекст тел
+   * Отправка агенту окна (7.2) — строке «To» вкладки браузера (этап B). Слой — сосед `LayoutView`, контекст тел
    * групп до него не доходит, поэтому пропом.
    */
   sendDeps: SendWithToastDeps;

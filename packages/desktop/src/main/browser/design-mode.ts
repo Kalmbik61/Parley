@@ -285,7 +285,6 @@ export function createDesignMode(deps: {
             html: pick.html,
             styles: pick.styles,
             imagePath,
-            thumbnail: null,
             point: pick.point,
             shift: pick.shift,
             viewport: pick.viewport,

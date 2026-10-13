@@ -232,7 +232,6 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(guest.capturePage).toHaveBeenCalledWith();
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-100x40'));
     expect(cdpShots(inspector)).toEqual([]);
-    expect(result?.thumbnail).toBeNull();
     expect(result).toMatchObject({ point: { x: 30, y: 40 }, shift: false, viewport: { width: 800, height: 600, dpr: 2 } });
   });
 
@@ -248,7 +247,7 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     expect(saveImage).toHaveBeenCalledWith(Buffer.from('png-150x60'));
   });
 
-  it('capturePage бросил — imagePath и thumbnail равны null, данные есть; обрезка CDP помещающемуся во вьюпорт элементу не зовётся', async () => {
+  it('capturePage бросил — imagePath равен null, данные есть; обрезка CDP помещающемуся во вьюпорт элементу не зовётся', async () => {
     const { guest, scripts, saveImage, mode, scriptCalled, inspector } = setup();
     guest.capturePage.mockRejectedValueOnce(new Error('capture failed'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -257,18 +256,18 @@ describe('createDesignMode.start (тест 4 куска 9.3a)', () => {
     scripts[0]?.resolve(rawPick());
     const result = await pending;
     warn.mockRestore();
-    expect(result).toMatchObject({ selector: 'body > main > button.save', imagePath: null, thumbnail: null });
+    expect(result).toMatchObject({ selector: 'body > main > button.save', imagePath: null });
     expect(saveImage).not.toHaveBeenCalled();
     expect(cdpShots(inspector)).toEqual([]);
   });
 
-  it('saveImage не сохранил — imagePath и thumbnail равны null', async () => {
+  it('saveImage не сохранил — imagePath равен null', async () => {
     const { scripts, saveImage, mode, scriptCalled } = setup();
     saveImage.mockResolvedValueOnce(null);
     const pending = mode.start(7);
     await scriptCalled();
     scripts[0]?.resolve(rawPick());
-    expect(await pending).toMatchObject({ imagePath: null, thumbnail: null });
+    expect(await pending).toMatchObject({ imagePath: null });
   });
 
   it('элемент вне видимой области — без снимка: вырезать из видимой части нечего', async () => {

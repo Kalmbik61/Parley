@@ -1147,7 +1147,17 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(designMode.start).not.toHaveBeenCalled();
     expect(designMode.cancel).not.toHaveBeenCalled();
 
-    const picked = { url: 'https://x.y/a', selector: 'body', text: '', html: '', styles: {}, imagePath: null, thumbnail: null };
+    const picked = {
+      url: 'https://x.y/a',
+      selector: 'body',
+      text: '',
+      html: '',
+      styles: {},
+      imagePath: null,
+      point: null,
+      shift: false,
+      viewport: { width: 800, height: 600, dpr: 1 },
+    };
     designMode.start.mockResolvedValueOnce(picked);
     expect(await ipcMain.invoke('browser:pick-start', 7)).toEqual(picked);
     expect(designMode.start).toHaveBeenCalledWith(7);

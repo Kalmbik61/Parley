@@ -1355,10 +1355,11 @@ export const S = {
     /** Главный фрейм не загрузился (`did-fail-load`, fix-9). */
     loadFailed: "Couldn't load page",
     tooManyTabs: 'No more than 10 browser tabs per workspace',
-    /** ⌖ в строке над страницей (9.3b). */
-    designMode: 'Design Mode',
-    sendToAgent: 'Send to agent',
-    pickAgain: 'Pick again',
+    /** ⌖ Select (спека браузера 4.6). */
+    select: {
+      button: 'Select',
+      title: 'Select an element — ⇧-click to keep selecting (⌘⇧C)',
+    },
     /** Цель «To» (спека браузера 4.1, 4.5): кнопка строки вкладки, меню и тост добавления. */
     target: {
       button: (name: string): string => `To: ${name}`,
@@ -1664,6 +1665,7 @@ export const S = {
     zoomIn: 'Zoom in',
     zoomOut: 'Zoom out',
     actualSize: 'Actual size',
+    selectElement: 'Select element',
     toggleDevtools: 'Toggle console and network',
     showConsole: 'Show console',
   },

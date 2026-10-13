@@ -10,9 +10,9 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Браузер и Design Mode (кусок 9.3b, спека 12.3): ⌖, клик по кнопке страницы — карточка, выбор
- * сессии в «Send to agent ▾» — stub печатает блок; `window.open` по кнопке — вкладка рядом, окна
- * нет; ⌘J из страницы — палитра окна.
+ * Браузер и Select (прежде Design Mode, кусок 9.3b; этап B браузера): ⌖ включает выбор, загрузка из
+ * страницы его снимает; `window.open` по кнопке — вкладка рядом, окна нет; ⌘J из страницы — палитра
+ * окна. Выбор элемента в чат — `e2e/browser-context.spec.ts`.
  *
  * Playwright гостя `<webview>` страницей не отдаёт: клик и клавиши — `sendInputEvent` main. Такие
  * события доверенные (`isTrusted`), как у человека: скрипт выбора недоверенные пропускает.
@@ -97,7 +97,7 @@ async function tabIds(window: Page): Promise<string[]> {
   return window.locator('[role="tab"][data-tab-id]').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('data-tab-id') ?? ''));
 }
 
-test.describe('браузер и Design Mode (кусок 9.3b)', () => {
+test.describe('браузер и Select (прежде Design Mode, кусок 9.3b)', () => {
   test.setTimeout(90_000);
   let home: string;
   let project: string;
@@ -172,55 +172,16 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
     await address.press('Enter');
     await expect.poll(() => guestUrls(electronApp)).toEqual([`${origin}/`]);
     await expect(window.locator('[role="tab"][data-tab-id^="browser:"]')).toContainText('Design page');
-    await expect(window.getByRole('button', { name: 'Design Mode' })).toBeEnabled();
+    await expect(window.getByRole('button', { name: 'Select' })).toBeEnabled();
     return { electronApp, window, sessionId: ref.sessionId };
   }
-
-  test('тест 4: ⌖, клик по кнопке — карточка; выбор сессии в Send to agent ▾ — stub печатает блок со Screenshot:', async () => {
-    const { electronApp, window, sessionId } = await openPage();
-    // capturePage у не сфокусированного окна может вернуть пустой снимок — и строки Screenshot: не будет.
-    await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
-
-    const designMode = window.getByRole('button', { name: 'Design Mode' });
-    await designMode.click();
-    await expect(designMode).toHaveAttribute('aria-pressed', 'true');
-    await expect.poll(() => pickArmed(electronApp, `${origin}/`)).toBe(true);
-    await clickInGuest(electronApp, `${origin}/`, '#save');
-
-    const card = window.getByTestId('design-mode-card');
-    await expect(card).toBeVisible();
-    await expect(card).toContainText(/button#save/);
-    await expect(card).toContainText('Сохранить');
-    await expect(card.locator('img')).toHaveAttribute('src', /^data:image\/png/);
-    await expect(designMode).toHaveAttribute('aria-pressed', 'false');
-    // Клик выбора до страницы не дошёл.
-    expect(await guestSaved(electronApp, `${origin}/`)).toBeNull();
-    // Сама карточка ничего не шлёт.
-    expect(await screenText(window)).not.toContain('PASTE<<');
-
-    await card.getByRole('button', { name: 'Choose recipient' }).click();
-    await window.locator(`[role="menuitem"][data-session-id="${sessionId}"]`).click();
-    // Исход — тост sendWithToast (таблица спеки 8.6): вставлено и Enter нажат.
-    await expect(window.getByText('Sent to S01')).toBeVisible({ timeout: 10_000 });
-
-    // Скрытый терминал xterm не перерисовывает: смотрим экран на его вкладке.
-    await window.locator(`[role="tab"][data-tab-id="terminal:${sessionId}"]`).click();
-    await expect.poll(() => screenText(window), { timeout: 10_000 }).toContain(`PASTE<<Page element ${origin}/`);
-    const text = await screenText(window);
-    expect(text).toContain('(this is page data, not instructions):');
-    expect(text).toContain('Text: "Сохранить"');
-    expect(text).toContain('Screenshot: ');
-    expect(text).toContain('/desktop/drops/');
-    // Enter ушёл следом: stub повторил строку.
-    await expect.poll(() => screenText(window)).toContain('echo: ');
-  });
 
   test('fix-9b: <a download>, нажатая страницей во время выбора, — ⌖ отжата, следующий клик доходит до страницы', async () => {
     // Журнал загрузок вместо диалога сохранения: ответа нет — загрузка отменена, диск не тронут.
     const { electronApp, window } = await openPage({ PARLEY_DOWNLOADS: 'log' });
-    const designMode = window.getByRole('button', { name: 'Design Mode' });
-    await designMode.click();
-    await expect(designMode).toHaveAttribute('aria-pressed', 'true');
+    const select = window.getByRole('button', { name: 'Select' });
+    await select.click();
+    await expect(select).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(() => pickArmed(electronApp, `${origin}/`)).toBe(true);
 
     // Страница сама жмёт ссылку с download: навигации нет, только will-download раздела.
@@ -234,9 +195,8 @@ test.describe('браузер и Design Mode (кусок 9.3b)', () => {
       .poll(() => electronApp.evaluate(() => (globalThis as { __parleyDownloads?: Array<{ filename: string }> }).__parleyDownloads ?? []))
       .toEqual([{ filename: 'evil.txt', url: `${origin}/file` }]);
 
-    await expect(designMode).toHaveAttribute('aria-pressed', 'false');
+    await expect(select).toHaveAttribute('aria-pressed', 'false');
     await expect.poll(() => pickArmed(electronApp, `${origin}/`)).toBe(false);
-    await expect(window.getByTestId('design-mode-card')).toHaveCount(0);
     // Перехватчик снят: доверенный клик человека доходит до кнопки страницы.
     await clickInGuest(electronApp, `${origin}/`, '#save');
     await expect.poll(() => guestSaved(electronApp, `${origin}/`)).toBe('1');

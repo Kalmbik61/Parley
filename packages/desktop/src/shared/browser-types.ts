@@ -93,7 +93,6 @@ export interface PickResult {
   html: string;
   styles: Record<string, string>;
   imagePath: string | null;
-  thumbnail: string | null; // 9.3a, карточка Design Mode: main отдаёт null, поле уходит с карточкой (задача 17 этапа B)
   /** Точка, по которой main нашёл узел через CDP (CSS-пиксели вьюпорта; main прибавляет прокрутку); `null` — под точкой не выбранный элемент. */
   point: { x: number; y: number } | null;
   /** Клик с ⇧: Select остаётся включённым (спека браузера 4.6). */

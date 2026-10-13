@@ -5,11 +5,11 @@
  * - «назад», «вперёд», «перезагрузить» или «остановить»;
  * - адрес;
  * - размер вьюпорта (`ViewportMenu`);
- * - ⌖ Design Mode — подсвечен, пока идёт выбор элемента;
+ * - ⌖ Select (этап B) — после меню размеров, перед «To»; подсвечен, пока режим включён (✎ Annotate встанет рядом);
  * - меню цели «To» (`targetMenu`, этап B, спека браузера 4.1) — после ⌖, перед консолью;
  * - консоль: значок со счётчиками ошибок (красный) и предупреждений (жёлтый); нули не показываются;
  * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network».
- * Под строкой — полоса загрузки 2px. ⌖ Select и ✎ Annotate займут место ⌖ на этапе B.
+ * Под строкой — полоса загрузки 2px.
  *
  * Узкая строка (окно 800×500): подписи прячет контейнерный запрос самой строки (`@container`), остаются значки;
  * сжимается первым адрес — у остальных `shrink-0`.
@@ -24,6 +24,7 @@ import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
 import { AddressBar } from './AddressBar.js';
+import type { BrowserMode } from './store.js';
 import { ViewportMenu } from './ViewportMenu.js';
 
 export interface BrowserChromeProps {
@@ -42,9 +43,9 @@ export interface BrowserChromeProps {
   onNavigate(url: string): void;
   /** «⋯ → Open full DevTools»: полный Chromium DevTools отдельным окном. */
   onDevTools(): void;
-  /** Идёт выбор элемента Design Mode: ⌖ подсвечен, повторное нажатие выбор снимает. */
-  picking: boolean;
-  onDesignMode(): void;
+  /** Режим вкладки: подсвечены ⌖ или ✎ (этап B, спека браузера 4.6, 4.7). */
+  mode: BrowserMode;
+  onSelect(): void;
   /** Размер вьюпорта вкладки (`TabSpec.viewport`); null — Fit. */
   viewport: ViewportSpec | null;
   onViewport(spec: ViewportSpec | null): void;
@@ -77,6 +78,22 @@ function IconButton({ label, disabled, onClick, children }: { label: string; dis
   );
 }
 
+function ModeButton({ label, title, pressed, disabled, onClick, children }: { label: string; title: string; pressed: boolean; disabled: boolean; onClick(): void; children: ReactNode }): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      className={pressed ? 'flex size-6 shrink-0 items-center justify-center rounded bg-blue-500/15 text-blue-600 dark:text-blue-400' : ICON_BUTTON}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
   const { url, loading, canGoBack, canGoForward, live, counters } = props;
   return (
@@ -98,21 +115,9 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
       )}
       <AddressBar url={url} onNavigate={props.onNavigate} autoFocus={props.focusAddress} />
       <ViewportMenu viewport={props.viewport} disabled={!live} onChange={props.onViewport} />
-      <button
-        type="button"
-        aria-label={S.browser.designMode}
-        title={S.browser.designMode}
-        aria-pressed={props.picking}
-        disabled={!live}
-        onClick={props.onDesignMode}
-        className={
-          props.picking
-            ? 'flex size-6 shrink-0 items-center justify-center rounded bg-blue-500/15 text-blue-600 dark:text-blue-400'
-            : ICON_BUTTON
-        }
-      >
+      <ModeButton label={S.browser.select.button} title={S.browser.select.title} pressed={props.mode === 'select'} disabled={!live} onClick={props.onSelect}>
         <Crosshair className="size-3.5" aria-hidden="true" />
-      </button>
+      </ModeButton>
       {props.targetMenu}
       <button
         type="button"

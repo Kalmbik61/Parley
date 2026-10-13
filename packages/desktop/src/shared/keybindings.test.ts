@@ -69,6 +69,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'browser.newTab': true,
   'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,
   'browser.devtools': true, 'browser.console': true,
+  'browser.select': true,
 };
 
 describe('ACTIONS (тест 1)', () => {
@@ -127,7 +128,7 @@ describe('ACTIONS (тест 1)', () => {
   });
 
   it('действия браузера — when browser, без меню; палитровые без сочетания — без меню', () => {
-    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset', 'browser.devtools', 'browser.console'] as const) {
+    for (const id of ['browser.find', 'browser.zoomIn', 'browser.zoomOut', 'browser.zoomReset', 'browser.devtools', 'browser.console', 'browser.select'] as const) {
       const action = ACTIONS.find((candidate) => candidate.id === id);
       expect(action?.when).toBe('browser');
       expect(action?.menu).toBeNull();
@@ -185,5 +186,11 @@ describe('панель браузера (спека 2026-10-07, 4.9)', () => {
     expect(ACTIONS.find((action) => action.id === 'browser.console')).toMatchObject({ keys: 'CmdOrCtrl+Alt+J', menu: null, when: 'browser', inPalette: true });
     expect(matchesAccelerator('CmdOrCtrl+Alt+I', key({ key: 'ˆ', code: 'KeyI', metaKey: true, altKey: true }))).toBe(true);
     expect(matchesAccelerator('CmdOrCtrl+Alt+J', key({ key: '∆', code: 'KeyJ', metaKey: true, altKey: true }))).toBe(true);
+  });
+});
+
+describe('browser.select (спека браузера 4.9)', () => {
+  it('⌘⇧C, область browser, без меню, в палитре', () => {
+    expect(ACTIONS.find((action) => action.id === 'browser.select')).toMatchObject({ keys: 'CmdOrCtrl+Shift+C', menu: null, when: 'browser', inPalette: true });
   });
 });

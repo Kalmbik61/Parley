@@ -177,6 +177,8 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'browser.zoomIn': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]),
     'browser.zoomOut': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, -1] }]),
     'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
+    // Этап B: Select — режим активной вкладки браузера (toggleBrowserMode).
+    'browser.select': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('select'),
     // Спека 2026-10-07, 4.3: панель вкладки браузера активной группы.
     'browser.devtools': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(true),
     'browser.console': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' }),
@@ -584,6 +586,21 @@ it('capabilities uses the currently active project and cannot open without an ac
  const missing = makeContext({ activeWorkKey: null }); runAction('project.capabilities', missing.ctx);
  expect(missing.ui.openProjectPanel).not.toHaveBeenCalled(); expect(missing.toast).toHaveBeenCalledTimes(1);
  resetFeedHost();
+});
+
+describe('Select (этап B, спека браузера 4.6)', () => {
+  beforeEach(() => useBrowserStore.setState({ tabs: {} }));
+
+  it('browser.select дважды — режим снят; без страницы — ничего', () => {
+    const spies = makeContext();
+    runAction('browser.select', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('select');
+    runAction('browser.select', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('off');
+    useBrowserStore.setState({ tabs: {} });
+    runAction('browser.select', makeContext({ browser: false }).ctx);
+    expect(useBrowserStore.getState().tabs).toEqual({});
+  });
 });
 
 describe('панель браузера (спека 2026-10-07, 4.3)', () => {

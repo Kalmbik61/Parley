@@ -309,6 +309,12 @@ describe('isActionAvailable (тест 2 куска 6.1b)', () => {
     expect(resolveAction(cmd('∆', 'KeyJ', { altKey: true }), 'input', false)).toBeNull();
   });
 
+  it('Select (этап B, спека браузера 4.9): реализован, без методов хоста; ⌘⇧C рендерер окна не ловит — клавиша у гостя', () => {
+    expect(IMPLEMENTED_ACTIONS.has('browser.select')).toBe(true);
+    expect(isActionAvailable('browser.select', new Set())).toBe(true);
+    expect(resolveAction(cmd('C', 'KeyC', { shiftKey: true }), 'other', false)).toBeNull();
+  });
+
   it('browser.newTab реализован (9.2a) и доступен без методов хоста', () => {
     expect(IMPLEMENTED_ACTIONS.has('browser.newTab')).toBe(true);
     expect(isActionAvailable('browser.newTab', new Set())).toBe(true);

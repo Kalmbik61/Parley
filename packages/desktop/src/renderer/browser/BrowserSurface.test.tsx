@@ -416,44 +416,129 @@ const PICK: PickResult = {
   text: 'Save',
   html: '<button class="save">Save</button>',
   styles: { display: 'block' },
-  imagePath: null,
-  thumbnail: 'data:image/png;base64,AAAA',
+  imagePath: '/h/drops/a.png',
+  point: { x: 10, y: 10 },
+  shift: false,
+  viewport: { width: 800, height: 600, dpr: 2 },
 };
 
-function pickOf(): unknown {
-  return useBrowserStore.getState().tabs[TAB]?.pick;
+function modeOf(): unknown {
+  return useBrowserStore.getState().tabs[TAB]?.mode;
 }
 
-describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
-  it('⌖ неактивна до dom-ready; результат pickStart — карточка поверх страницы', async () => {
+describe('BrowserSurface — Select (этап B, спека браузера 4.6)', () => {
+  beforeEach(() => {
+    resetDeliveryForTests();
+    useUiStore.setState({ composerAttachments: {} });
+    vi.mocked(toast).mockClear();
+  });
+
+  it('⌖ неактивна до dom-ready; клик — pickStart, элемент — файл-контекст в цель, режим снят, агенту ничего', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 12);
-    const button = screen.getByRole('button', { name: 'Design Mode' }) as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: 'Select' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fire(view, 'dom-ready');
     bridge.setPickResult(PICK);
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(bridge.pickCalls).toEqual([{ method: 'pickStart', webContentsId: 12 }]);
-    expect(pickOf()).toEqual({ result: PICK });
-    expect(screen.getByTestId('design-mode-card').textContent).toContain('body > button.save');
+    await vi.waitFor(() => expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md']));
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+    expect(modeOf()).toBe('off');
+    expect(bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0]).toMatchObject({ kind: 'element', label: 'button.save', imagePath: '/h/drops/a.png' });
     expect(bridge.calls.filter((call) => call.method === 'pty.send')).toEqual([]);
   });
 
-  it('pickStart ответил null — режим снят, карточки нет', async () => {
+  it('Фокус ревью 5: ⇧-клик держит режим — второй выбор; два файла в порядке кликов, один тост «2 elements»', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    const answers: Array<PickResult | null> = [{ ...PICK, shift: true }, { ...PICK, selector: 'body > button.cancel' }];
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return answers.shift() ?? null;
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(2));
+    expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md', '/fake/drops/context/element-button.cancel-0002.md']);
+    expect(bridge.pickCalls.filter((call) => call.method === 'pickStart')).toHaveLength(2);
+    expect(modeOf()).toBe('off');
+    expect(vi.mocked(toast).mock.calls.at(-1)?.[0]).toBe('2 elements added to review');
+  });
+
+  it('⇧-клик, затем отказ повторного pickStart — тост, режим снят и pickCancel уходит безусловно: сторож ⇧-клика не остаётся на странице (ревью задачи 16, I2)', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    const answers: Array<PickResult | { code: string; message: string }> = [{ ...PICK, shift: true }, { code: 'failed', message: 'boom' }];
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      const answer = answers.shift();
+      if (answer !== undefined && 'code' in answer) throw answer;
+      return answer ?? null;
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(roomPaths()).toEqual(['/fake/drops/context/element-button.save-0001.md']);
+    expect(toast).toHaveBeenCalledWith("Couldn't pick element: failed.");
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickStart', 'pickCancel']);
+  });
+
+  it('размер вьюпорта вкладки — пометка в файле элемента: Mobile M, emulated', async () => {
+    roomWork();
+    setBrowserTabSized('http://localhost:5173/', MOBILE_M);
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.setPickResult(PICK);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    await vi.waitFor(() => expect(roomPaths()).toHaveLength(1));
+    const saved = bridge.browserCalls.find((call) => call.method === 'saveContext')?.args[0] as { markdown: string } | undefined;
+    expect(saved?.markdown).toContain('Mobile M, emulated');
+  });
+
+  it('режим annotate выбор не запускает; ⌖ в этом режиме заменяет annotate на select — тогда pickStart', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    act(() => useBrowserStore.getState().update(TAB, { mode: 'annotate' }));
+    expect(bridge.pickCalls).toEqual([]);
+    const button = screen.getByRole('button', { name: 'Select' });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
+  it('pickStart ответил null (Esc в странице) — режим снят, файла нет', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('off');
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
+    expect(bridge.browserCalls.filter((call) => call.method === 'saveContext')).toEqual([]);
   });
 
-  it('повторный ⌖ и Esc во время выбора — pickCancel, режим снят; кнопка подсвечена только в режиме', async () => {
+  it('повторный ⌖ и Esc в окне во время выбора — pickCancel, режим снят; кнопка подсвечена только в режиме', async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
@@ -462,43 +547,44 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       bridge.pickCalls.push({ method: 'pickStart', webContentsId });
       return new Promise<PickResult | null>(() => {});
     };
-    const button = screen.getByRole('button', { name: 'Design Mode' });
+    const button = screen.getByRole('button', { name: 'Select' });
     expect(button.getAttribute('aria-pressed')).toBe('false');
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     expect(button.getAttribute('aria-pressed')).toBe('true');
     await act(async () => {
       fireEvent.click(button);
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
 
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     await act(async () => {
       fireEvent.keyDown(button, { key: 'Escape' });
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel', 'pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
   });
 
-  it('отказ { code: failed } — тост Couldn\'t pick element: failed. и режим снят', async () => {
+  it("отказ { code: failed } — тост Couldn't pick element: failed. и режим снят", async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 12), 'dom-ready');
     bridge.setPickResult({ code: 'failed', message: 'boom' });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
+    await vi.waitFor(() => expect(modeOf()).toBe('off'));
     expect(toast).toHaveBeenCalledWith("Couldn't pick element: failed.");
-    expect(pickOf()).toBe('off');
   });
 
-  it('did-navigate во время выбора — pick снова off; поздний ответ прежнего выбора карточку не ставит', async () => {
+  it('did-navigate во время выбора — режим снят; поздний ответ файла не добавляет', async () => {
+    roomWork();
     setBrowserTab('http://localhost:5173/');
     renderWork();
     const view = arm(webview(), 12);
@@ -506,14 +592,14 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
     let answer: (value: PickResult | null) => void = () => {};
     bridge.browser.pickStart = () => new Promise<PickResult | null>((resolve) => (answer = resolve));
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
-    expect(pickOf()).toBe('off');
+    expect(modeOf()).toBe('off');
     await act(async () => answer(PICK));
-    expect(pickOf()).toBe('off');
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    expect(bridge.browserCalls.filter((call) => call.method === 'saveContext')).toEqual([]);
+    expect(roomPaths()).toEqual([]);
   });
 
   it('вкладка скрыта во время выбора — pickCancel, режим снят (fix-9)', async () => {
@@ -532,9 +618,9 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       return new Promise<PickResult | null>(() => {});
     };
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
-    expect(pickOf()).toBe('picking');
+    expect(modeOf()).toBe('select');
     await act(async () => {
       useLayoutStore.getState().apply(WORK_KEY, (layout) => ({
         ...layout,
@@ -542,25 +628,7 @@ describe('BrowserSurface — Design Mode (тест 3 куска 9.3b)', () => {
       }));
     });
     expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
-    expect(pickOf()).toBe('off');
-  });
-
-  it('карточка: Pick again зовёт pickStart заново; did-navigate снимает карточку', async () => {
-    setBrowserTab('http://localhost:5173/');
-    renderWork();
-    const view = arm(webview(), 12);
-    fire(view, 'dom-ready');
-    bridge.setPickResult(PICK);
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Design Mode' }));
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Pick again' }));
-    });
-    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickStart']);
-    expect(screen.getByTestId('design-mode-card')).toBeTruthy();
-    fire(view, 'did-navigate', { url: 'http://localhost:5173/other' });
-    expect(screen.queryByTestId('design-mode-card')).toBeNull();
+    expect(modeOf()).toBe('off');
   });
 });
 

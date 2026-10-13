@@ -59,6 +59,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'browser.zoomIn',
   'browser.zoomOut',
   'browser.zoomReset',
+  'browser.select',
   'browser.devtools',
   'browser.console',
 ]);

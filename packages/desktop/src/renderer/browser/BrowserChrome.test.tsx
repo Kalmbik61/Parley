@@ -18,8 +18,8 @@ function renderChrome(extra: Partial<BrowserChromeProps> = {}): BrowserChromePro
     onStop: vi.fn(),
     onNavigate: vi.fn(),
     onDevTools: vi.fn(),
-    picking: false,
-    onDesignMode: vi.fn(),
+    mode: 'off',
+    onSelect: vi.fn(),
     viewport: null,
     onViewport: vi.fn(),
     devtoolsOpen: false,
@@ -33,7 +33,7 @@ function renderChrome(extra: Partial<BrowserChromeProps> = {}): BrowserChromePro
 }
 
 describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
-  it('порядок: назад, вперёд, обновить, адрес, размер, ⌖, консоль, ⋯; кнопки «DevTools» больше нет', () => {
+  it('порядок: назад, вперёд, обновить, адрес, размер, ⌖ Select, консоль, ⋯; кнопки «DevTools» больше нет', () => {
     renderChrome();
     const chrome = screen.getByTestId('browser-chrome');
     expect(within(chrome).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
@@ -41,7 +41,7 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
       'Forward',
       'Reload',
       'Viewport size',
-      'Design Mode',
+      'Select',
       'Console and network',
       'More browser actions',
     ]);
@@ -51,12 +51,23 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     expect(screen.queryByRole('button', { name: 'DevTools' })).toBeNull();
   });
 
-  it('«To» (этап B, спека 4.1): меню цели — после ⌖ и до кнопки консоли', () => {
+  it('«To» (этап B, спека 4.1): меню цели — после ⌖ Select и до кнопки консоли', () => {
     renderChrome({ targetMenu: <button type="button">To: S01</button> });
     const names = within(screen.getByTestId('browser-chrome'))
       .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label') ?? button.textContent);
-    expect(names.slice(names.indexOf('Design Mode'), names.indexOf('Console and network') + 1)).toEqual(['Design Mode', 'To: S01', 'Console and network']);
+    expect(names.slice(names.indexOf('Select'), names.indexOf('Console and network') + 1)).toEqual(['Select', 'To: S01', 'Console and network']);
+  });
+
+  it('⌖ Select (этап B, спека 4.6): подсвечена только в режиме select; клик — onSelect', () => {
+    const props = renderChrome({ mode: 'select' });
+    const select = screen.getByRole('button', { name: 'Select' });
+    expect(select.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(select);
+    expect(props.onSelect).toHaveBeenCalledTimes(1);
+    cleanup();
+    renderChrome({ mode: 'annotate' });
+    expect(screen.getByRole('button', { name: 'Select' }).getAttribute('aria-pressed')).toBe('false');
   });
 
   it('счётчики: нули не показываются; ошибки и предупреждения — числа с подсказкой; кнопка показывает и прячет панель', () => {
