@@ -189,4 +189,112 @@ describe('useAnnotateStore (спека браузера 4.7)', () => {
     store().receive(TAB, element('a1'), PAGE);
     expect(tab()?.collapsed).toBe(false);
   });
+
+  it('повторный restore той же пачки (двойной щелчок по «Undo») ничего не добавляет: ключи в поколении уникальны', () => {
+    for (const key of ['a1', 'a2']) {
+      store().receive(TAB, element(key), PAGE);
+      store().save(TAB);
+    }
+    const removed = store().clear(TAB);
+    // Тост «Undo» ещё кликабелен, пока гаснет: второй щелчок зовёт тот же restore с той же пачкой.
+    store().restore(TAB, removed);
+    store().restore(TAB, removed);
+    expect(tab()?.items.map((item) => [item.n, item.key])).toEqual([
+      [1, 'a1'],
+      [2, 'a2'],
+    ]);
+    // Повтор ключа в списке меток отклонил бы `parseAnnotationPins`: страница перестала бы перерисовываться.
+    expect(pinsOf(tab() ?? EMPTY_ANNOTATE)).toEqual([
+      { n: 1, key: 'a1' },
+      { n: 2, key: 'a2' },
+    ]);
+  });
+
+  it('повторный restore не закрывает редактор, который человек успел открыть, и не трогает его черновик', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    const removed = store().clear(TAB);
+    store().restore(TAB, removed);
+    store().receive(TAB, region('a2'), PAGE);
+    store().setDraft(TAB, 'half-written');
+    store().restore(TAB, removed);
+    expect(tab()?.editing).toEqual({ n: 2, isNew: true, anchor: { fx: 0.3, fy: 0.4 }, draft: 'half-written' });
+    expect(tab()?.items.map((item) => item.key)).toEqual(['a1', 'a2']);
+  });
+
+  it('повторный restore после нового документа: вернувшийся пункт прошлого поколения тоже не двоится', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    const removed = store().clear(TAB);
+    store().markAllGone(TAB);
+    store().restore(TAB, removed);
+    store().restore(TAB, removed);
+    expect(tab()?.items.map((item) => [item.n, item.key, item.generation, item.gone])).toEqual([[1, 'a1', 0, true]]);
+  });
+
+  it('поздний ответ sync прежнего документа не оживляет пункт: markPositions трогает только пункты текущего поколения', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    // `annotateSync` ушёл с метками старого документа, а страница сменилась, пока ответ был в пути.
+    store().markAllGone(TAB);
+    store().markPositions(TAB, [{ n: 1, rect: { x: 0.2, y: 0.3, width: 0.1, height: 0.1 } }]);
+    expect(tab()?.items.map((item) => [item.gone, item.rect])).toEqual([[true, null]]);
+  });
+
+  it('startEdit не теряет черновик открытого редактора: набранное становится комментарием его пункта', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    store().receive(TAB, region('a2'), PAGE);
+    store().setDraft(TAB, '  typed but not saved  ');
+    // Редактор не модальный, поэтому кнопка «изменить» лотка доступна при открытом редакторе.
+    store().startEdit(TAB, 1);
+    expect(tab()?.items.map((item) => [item.n, item.comment])).toEqual([
+      [1, ''],
+      [2, 'typed but not saved'],
+    ]);
+    expect(tab()?.editing).toEqual({ n: 1, isNew: false, anchor: { fx: 0.1, fy: 0.2 }, draft: '' });
+  });
+
+  it('startEdit пункта, чей редактор уже открыт, не сбрасывает набранное: редактор встаёт с ним', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().setDraft(TAB, 'typed but not saved');
+    store().startEdit(TAB, 1);
+    expect(tab()?.editing).toEqual({ n: 1, isNew: false, anchor: { fx: 0.1, fy: 0.2 }, draft: 'typed but not saved' });
+    expect(tab()?.items.map((item) => item.comment)).toEqual(['typed but not saved']);
+  });
+
+  it('remove не теряет черновик редактора другого пункта: комментарий переезжает вместе с пересчитанным номером', () => {
+    for (const key of ['a1', 'a2']) {
+      store().receive(TAB, element(key), PAGE);
+      store().save(TAB);
+    }
+    store().startEdit(TAB, 2);
+    store().setDraft(TAB, 'typed but not saved');
+    store().remove(TAB, 1);
+    expect(tab()?.items.map((item) => [item.n, item.key, item.comment])).toEqual([[1, 'a2', 'typed but not saved']]);
+    expect(tab()?.editing).toBeNull();
+  });
+
+  it('clear уносит в пачку «Undo» и набранный, но не сохранённый комментарий', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().setDraft(TAB, 'typed but not saved');
+    const removed = store().clear(TAB);
+    expect(removed.map((item) => item.comment)).toEqual(['typed but not saved']);
+    store().restore(TAB, removed);
+    expect(tab()?.items.map((item) => item.comment)).toEqual(['typed but not saved']);
+  });
+
+  it('restore не теряет черновик открытого редактора: набранное становится комментарием его пункта', () => {
+    store().receive(TAB, element('a1'), PAGE);
+    store().save(TAB);
+    const removed = store().clear(TAB);
+    store().receive(TAB, region('a2'), PAGE);
+    store().setDraft(TAB, 'typed but not saved');
+    store().restore(TAB, removed);
+    expect(tab()?.items.map((item) => [item.n, item.key, item.comment])).toEqual([
+      [1, 'a1', ''],
+      [2, 'a2', 'typed but not saved'],
+    ]);
+    expect(tab()?.editing).toBeNull();
+  });
 });

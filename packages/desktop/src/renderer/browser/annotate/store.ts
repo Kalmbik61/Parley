@@ -9,6 +9,11 @@
  * пункты прошлых: без различия «a1» нового документа совпал бы с «a1» прошлого, и страница нарисовала бы обе метки на
  * одной цели. Поэтому у вкладки есть `generation` (растёт на каждом новом документе), а у пункта — поколение документа,
  * где он поставлен. В страницу уходят только пункты текущего поколения; пункты прошлых в её мире не существуют.
+ *
+ * Черновик комментария. Редактор не модальный: кнопки лотка доступны при открытом редакторе. Поэтому всё, что редактор
+ * закрывает (`startEdit`, `remove`, `clear`, `restore`), сперва сохраняет набранное в комментарий его пункта
+ * (`flushDraft`); черновик отбрасывает только `cancelEdit` (Esc). `receive` ждёт закрытого редактора: цикл режима не
+ * просит у страницы следующую метку, пока редактор открыт, и черновика под ним нет.
  */
 
 import { create } from 'zustand';
@@ -59,9 +64,22 @@ function renumber(items: readonly AnnotationItem[]): AnnotationItem[] {
   return items.map((item, index) => (item.n === index + 1 ? item : { ...item, n: index + 1 }));
 }
 
+/** Опознавательный знак пункта: ключ метки уникален лишь в пределах поколения документа, поэтому в знак входит и оно. */
+function identityOf(item: AnnotationItem): string {
+  return `${item.generation}:${item.key}`;
+}
+
 /** Комментарий человека: без пробелов по краям, не длиннее предела в кодовых точках. */
 function limitComment(text: string): string {
   return Array.from(text.trim()).slice(0, CONTEXT_LIMITS.comment).join('');
+}
+
+/** Открытый редактор → набранное становится комментарием его пункта (это и есть Save), редактор закрыт; редактора нет — вкладка как есть. */
+function flushDraft(tab: AnnotateTabState): AnnotateTabState {
+  const editing = tab.editing;
+  if (editing === null) return tab;
+  const comment = limitComment(editing.draft);
+  return { ...tab, editing: null, items: tab.items.map((item) => (item.n === editing.n ? { ...item, comment } : item)) };
 }
 
 function editOf(tab: AnnotateTabState, n: number): AnnotationEditing | null {
@@ -80,9 +98,11 @@ export interface AnnotateState {
   cancelEdit(tabId: string): void;
   startEdit(tabId: string, n: number): void;
   remove(tabId: string, n: number): void;
-  /** Убрать все пункты; убранные — для «Undo». */
+  /** Убрать все пункты; убранные — для «Undo» (набранный, но не сохранённый комментарий — в них). */
   clear(tabId: string): AnnotationItem[];
+  /** Вернуть убранную пачку перед текущими пунктами; те, что уже в лотке, повторно не возвращаются (тост «Undo» кликабелен, пока гаснет). */
   restore(tabId: string, items: readonly AnnotationItem[]): void;
+  /** Положения из ответа `annotateSync` (доли вьюпорта); пункты прошлых документов не трогает — они «gone» всегда. */
   markPositions(tabId: string, positions: readonly AnnotationPosition[]): void;
   markAllGone(tabId: string): void;
   setCollapsed(tabId: string, collapsed: boolean): void;
@@ -108,36 +128,48 @@ export const useAnnotateStore: UseBoundStore<StoreApi<AnnotateState>> = create<A
         };
       }),
     setDraft: (tabId, draft) => patch(tabId, (tab) => (tab.editing === null ? tab : { ...tab, editing: { ...tab.editing, draft } })),
-    save: (tabId) =>
-      patch(tabId, (tab) => {
-        const editing = tab.editing;
-        if (editing === null) return tab;
-        const comment = limitComment(editing.draft);
-        return { ...tab, editing: null, items: tab.items.map((item) => (item.n === editing.n ? { ...item, comment } : item)) };
-      }),
+    save: (tabId) => patch(tabId, flushDraft),
     cancelEdit: (tabId) =>
       patch(tabId, (tab) => {
         const editing = tab.editing;
         if (editing === null) return tab;
         return { ...tab, editing: null, items: editing.isNew ? renumber(tab.items.filter((item) => item.n !== editing.n)) : tab.items };
       }),
-    startEdit: (tabId, n) => patch(tabId, (tab) => ({ ...tab, editing: editOf(tab, n) })),
-    remove: (tabId, n) => patch(tabId, (tab) => ({ ...tab, editing: null, items: renumber(tab.items.filter((item) => item.n !== n)) })),
+    startEdit: (tabId, n) =>
+      patch(tabId, (tab) => {
+        const flushed = flushDraft(tab);
+        return { ...flushed, editing: editOf(flushed, n) };
+      }),
+    remove: (tabId, n) =>
+      patch(tabId, (tab) => {
+        const { items } = flushDraft(tab);
+        return { ...tab, editing: null, items: renumber(items.filter((item) => item.n !== n)) };
+      }),
     clear: (tabId) => {
-      const removed = get().tabs[tabId]?.items ?? [];
+      // Набранное, но не сохранённое тоже уходит в пачку «Undo».
+      const removed = flushDraft(get().tabs[tabId] ?? EMPTY_ANNOTATE).items;
       patch(tabId, (tab) => ({ ...tab, items: [], editing: null }));
       return removed;
     },
     restore: (tabId, items) =>
       patch(tabId, (tab) => {
+        // Двойной щелчок по «Undo» зовёт restore дважды с той же пачкой. Что уже в лотке, повторно не возвращается: иначе
+        // ключ в поколении повторился бы, и `parseAnnotationPins` отклонял бы каждую перерисовку меток. Нового нет — лоток
+        // и открытый редактор остаются как есть.
+        const present = new Set(tab.items.map(identityOf));
+        const fresh = items.filter((item) => !present.has(identityOf(item)));
+        if (fresh.length === 0) return tab;
         // Пока тост «Undo» висел, страница могла смениться: пункты прошлого документа возвращаются, но «gone».
-        const back = items.map((item) => (item.generation === tab.generation ? item : { ...item, gone: true, rect: null }));
-        return { ...tab, editing: null, items: renumber([...back, ...tab.items].slice(0, CONTEXT_LIMITS.annotations)) };
+        const back = fresh.map((item) => (item.generation === tab.generation ? item : { ...item, gone: true, rect: null }));
+        const current = flushDraft(tab).items;
+        return { ...tab, editing: null, items: renumber([...back, ...current].slice(0, CONTEXT_LIMITS.annotations)) };
       }),
     markPositions: (tabId, positions) =>
       patch(tabId, (tab) => ({
         ...tab,
         items: tab.items.map((item) => {
+          // Ответ мог опоздать: пока `annotateSync` был в пути, страница сменилась. Пункты прошлых документов — «gone» всегда.
+          if (item.generation !== tab.generation) return item;
           const position = positions.find((candidate) => candidate.n === item.n);
           return position === undefined ? item : { ...item, rect: position.rect, gone: position.rect === null };
         }),
