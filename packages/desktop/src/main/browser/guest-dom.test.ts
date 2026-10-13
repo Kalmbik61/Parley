@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { selectorTail } from '../../shared/css-selector.js';
 import { PICK_LIMITS } from './design-mode.js';
 import { nodeMatches } from './element-info.js';
@@ -36,6 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   document.body.innerHTML = '';
 });
 
@@ -180,5 +181,19 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
   it('стили — только переданные ключи, вычисленными значениями', () => {
     document.body.innerHTML = '<p id="s" style="display:flex;position:absolute">x</p>';
     expect(dom().stylesOf($('#s'), ['display', 'position'])).toEqual({ display: 'flex', position: 'absolute' });
+  });
+
+  it('стили: значение длиннее LIMITS.text режется в скрипте на символ сверх предела — длину font-family и box-shadow задаёт страница', () => {
+    // Встроенные методы строк в изолированном мире целы (страница их не подменит), поэтому предел здесь настоящий, а не
+    // в main: туда не должна доходить строка в сотни мегабайт. На символ длиннее — как у htmlOf: так main видит обрезку.
+    document.body.innerHTML = '<p id="s">x</p>';
+    const { stylesOf, LIMITS } = dom();
+    const huge = 'f'.repeat(50_000_000);
+    vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: (key: string) => (key === 'font-family' ? huge : 'block') }));
+    const styles = stylesOf($('#s'), ['font-family', 'display']);
+    // Длина и сравнение булевым значением: упавший toEqual пытался бы показать разницу строк в 50 млн знаков.
+    expect(styles['font-family']?.length).toBe(LIMITS.text + 1);
+    expect(styles['font-family'] === 'f'.repeat(LIMITS.text + 1)).toBe(true);
+    expect(styles.display).toBe('block');
   });
 });

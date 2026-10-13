@@ -19,7 +19,8 @@
 // - htmlOf — прежняя `cleanHtml` Parley (без `script`, `style`, `on*`, `srcdoc` и значений секретных полей) плюс мысль
 //   `getSafeAttributes` и `sanitizeUrl` Orca: у `href`, `src` и `action` снимаются query и hash, чужая схема
 //   (`javascript:`, `data:`) — пустая строка;
-// - stylesOf — вычисленные стили по списку ключей вызывающего (23 у Select, 10 у метки).
+// - stylesOf — вычисленные стили по списку ключей вызывающего (23 у Select, 10 у метки); значение режется на символ
+//   длиннее LIMITS.text: его длину задаёт страница.
 //
 // Файл — одно выражение без значения: значение строки даёт скрипт режима, который стоит после него.
 (() => {
@@ -172,11 +173,15 @@
     return clone.outerHTML.slice(0, max + 1);
   }
 
-  /** Вычисленные стили по списку ключей (kebab-case). */
+  /**
+   * Вычисленные стили по списку ключей (kebab-case). Значение режется на символ длиннее LIMITS.text, как html у htmlOf:
+   * длину font-family, box-shadow и прочего задаёт страница, и строка в сотни мегабайт в main не должна доходить вовсе.
+   * Предел ставит именно скрипт: в изолированном мире встроенные методы строк целы, у ответа CDP такого предела нет.
+   */
   function stylesOf(el, keys) {
     const computed = getComputedStyle(el);
     const styles = {};
-    for (const key of keys) styles[key] = computed.getPropertyValue(key);
+    for (const key of keys) styles[key] = computed.getPropertyValue(key).slice(0, LIMITS.text + 1);
     return styles;
   }
 
