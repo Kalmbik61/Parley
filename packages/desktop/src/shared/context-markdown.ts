@@ -23,7 +23,10 @@ export function isContextKind(value: unknown): value is ContextKind {
   return typeof value === 'string' && (CONTEXT_KINDS as readonly string[]).includes(value);
 }
 
-/** Пределы раздела 8 спеки для файлов-контекстов. Снимок аннотаций — видимая часть (этап 0, 0.7): своей границы у него нет. */
+/**
+ * Пределы раздела 8 спеки для файлов-контекстов. Снимок аннотаций — видимая часть (этап 0, 0.7): своей границы у него нет.
+ * `headerUrl` — адрес в строке `URL:` шапки и в `Marked on:` (кодовые точки): путь адреса задаёт сама страница.
+ */
 export const CONTEXT_LIMITS = {
   markdown: 262_144,
   body: 4096,
@@ -32,6 +35,7 @@ export const CONTEXT_LIMITS = {
   comment: 2000,
   annotationHtml: 1024,
   label: 40,
+  headerUrl: 300,
 } as const;
 
 /** Ограда из обратных кавычек: на одну длиннее самой длинной серии внутри, не короче трёх. */
@@ -55,7 +59,13 @@ export function contextLabel(raw: string): string {
   return cut === '' ? 'page' : cut;
 }
 
-/** URL в шапке: origin + pathname, без query, hash и user:pass@ (спека 3.6). */
+/**
+ * URL в шапке: origin + pathname, без query, hash и user:pass@ (спека 3.6), не длиннее `CONTEXT_LIMITS.headerUrl` с пометкой
+ * обрезки. Путь задаёт сама страница (`history.replaceState`), а строка `URL:` стоит вне ограды и выше пометки «page data»:
+ * без предела это канал для её текста к агенту, а путь больше 256 КБ делал бы файл любого вида недопустимым для записи.
+ * Предел здесь, чтобы он покрывал и шапку, и «Marked on:» меток. Пути длиннее предела с общим началом выглядят одинаково и
+ * считаются одной страницей.
+ */
 export function headerUrl(url: string): string {
   let parsed: URL;
   try {
@@ -64,7 +74,8 @@ export function headerUrl(url: string): string {
     return '';
   }
   // У about:blank и data: origin — 'null': адрес без него.
-  return parsed.origin === 'null' ? `${parsed.protocol}${parsed.pathname}` : `${parsed.origin}${parsed.pathname}`;
+  const address = parsed.origin === 'null' ? `${parsed.protocol}${parsed.pathname}` : `${parsed.origin}${parsed.pathname}`;
+  return cutText(address, CONTEXT_LIMITS.headerUrl);
 }
 
 /**
