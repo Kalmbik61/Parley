@@ -7,7 +7,7 @@
  * Путь снимка в шапку подставляет main (`fillScreenshot`): имя файла знает только он.
  */
 
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
 import { CONTEXT_LIMITS, contextLabel, fillScreenshot, isContextKind, type ContextKind } from '../../shared/context-markdown.js';
@@ -83,14 +83,17 @@ export async function saveContextFile(input: {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
       throw error;
     }
-    let pngPath: string | null = null;
+    // Путь снимка известен заранее — его имя строится от `base`, — поэтому сперва пишется .md, а снимок переезжает после: не
+    // записался .md (диск полон) — снимок так и лежит в drops/, а не осиротел в context/ без файла, который на него ссылается.
+    const pngPath = input.imagePath === null ? null : path.join(input.dir, `${base}.png`);
     try {
-      if (input.imagePath !== null) {
-        pngPath = path.join(input.dir, `${base}.png`);
-        // Тот же каталог `drops/` — тот же диск: rename без копии, права 0600 у снимка от saveImage.
+      await handle.writeFile(fillScreenshot(input.markdown, pngPath), 'utf8');
+      if (input.imagePath !== null && pngPath !== null) {
+        // Принимается любой .png из `drops/`, не только от saveImage (0600): права снимка ставятся здесь, как у .md.
+        await chmod(input.imagePath, 0o600);
+        // Тот же каталог `drops/` — тот же диск: rename без копии.
         await rename(input.imagePath, pngPath);
       }
-      await handle.writeFile(fillScreenshot(input.markdown, pngPath), 'utf8');
     } catch (error) {
       await handle.close();
       await unlink(mdPath).catch(() => undefined);

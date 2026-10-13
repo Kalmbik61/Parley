@@ -1,10 +1,16 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTEXT_LIMITS, SCREENSHOT_SLOT } from '../../shared/context-markdown.js';
 import { S } from '../../shared/strings.js';
 import { contextDir, parseContextInput, saveContextFile } from './context-files.js';
+
+// `open` — обёртка над настоящим: по умолчанию зовёт его, а тест отказа записи подменяет `writeFile` дескриптора одного вызова.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 let base: string;
 let drops: string;
@@ -98,6 +104,27 @@ describe('saveContextFile (спека 3.6)', () => {
     const saved = await saveContextFile({ kind: 'console', label: 'a', markdown: '# x\n', imagePath: null, dir, dropsDir: drops, random: sequence(0, 1 / 0x10000, 2 / 0x10000) });
     expect(saved.mdPath).toBe(path.join(dir, 'console-a-0002.md'));
     expect(await readFile(outside, 'utf8')).toBe('чужое');
+  });
+
+  it('снимок получает права 0600, даже если в drops/ он лежал с другими: принимается любой .png оттуда', async () => {
+    const png = path.join(drops, 'a.png');
+    await writeFile(png, 'png-bytes', { mode: 0o644 });
+    const saved = await saveContextFile({ kind: 'element', label: 'x', markdown: MD, imagePath: png, dir, dropsDir: drops, random: sequence(0) });
+    expect((await stat(saved.pngPath ?? '')).mode & 0o777).toBe(0o600);
+  });
+
+  it('.md не записался (диск полон) — снимок остался в drops/, а не осиротел в context/; пустой .md убран, ошибка не проглочена', async () => {
+    const png = path.join(drops, 'a.png');
+    await writeFile(png, 'png-bytes');
+    const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof real.open>) => {
+      const handle = await real.open(...args);
+      handle.writeFile = (): Promise<void> => Promise.reject(Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }));
+      return handle;
+    });
+    await expect(saveContextFile({ kind: 'element', label: 'x', markdown: MD, imagePath: png, dir, dropsDir: drops, random: sequence(0) })).rejects.toHaveProperty('code', 'ENOSPC');
+    expect(await readFile(png, 'utf8')).toBe('png-bytes');
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('снимок не переехал (на его месте каталог) — .md убран, снимок остался в drops/, ошибка не проглочена', async () => {
