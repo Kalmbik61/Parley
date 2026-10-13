@@ -32,6 +32,7 @@ import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
 import { roomKey } from '../lib/room-view.js';
 import { resetDeliveryForTests } from './context/deliver.js';
+import { TOAST_INSET_VAR } from '../ui/toast-inset.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
@@ -1692,3 +1693,27 @@ describe('BrowserSurface — Annotate: редактор скрытой вкла�
     expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
   });
 });
+  it('P1: лоток скрытой вкладки не заявляет отступ тостам; вернулись — заявил над своим верхом; ушли — снял', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1400 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const own = this.dataset.testid === 'annotation-tray' ? { left: 1040, right: 1360, top: 700 } : { left: 0, right: 0, top: 0 };
+      return { ...own, bottom: own.top + 188, width: own.right - own.left, height: 188, x: own.left, y: own.top, toJSON: () => ({}) } as DOMRect;
+    });
+    const inset = (): string => document.documentElement.style.getPropertyValue(TOAST_INSET_VAR);
+    try {
+      await leaveDraftInFirstTab();
+      // Лоток первой вкладки в DOM (скрыт вместе с поверхностью), а тостам он не мешает.
+      expect(useAnnotateStore.getState().tabs[TAB]?.items).toHaveLength(1);
+      expect(inset()).toBe('');
+      await showTab(TAB);
+      // Верх лотка 700 при окне 900: 900 − 700 + зазор 8 − база 2.5rem (40) = 168.
+      expect(inset()).toBe('168px');
+      await showTab(OTHER);
+      expect(inset()).toBe('');
+    } finally {
+      vi.restoreAllMocks();
+      document.documentElement.style.removeProperty(TOAST_INSET_VAR);
+    }
+  });
+

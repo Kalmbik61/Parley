@@ -661,6 +661,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
             collapsed={annotate.collapsed}
             busy={annotateBusy}
             onToggle={() => useAnnotateStore.getState().setCollapsed(tabId, !annotate.collapsed)}
+            visible={visible}
             onEdit={editAnnotation}
             onDelete={(n) => {
               saveDraft(tabId);

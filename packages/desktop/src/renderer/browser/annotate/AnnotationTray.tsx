@@ -13,14 +13,19 @@
  * - строки — `S.browser.annotate`; вариант `can-hover:` (его у нас нет) заменён на `group-hover`;
  * - высота — `min(100% − 1.5rem, max(45%, 8.5rem))`, а не 45 % поля: в низком поле (800×500 с панелью DevTools поле около
  *   200 px) 45 % оставляли списку 12 px без единой строки, а ниже ~185 px кнопки внизу уходили за край карточки; 8.5rem —
- *   шапка, одна строка и кнопки.
+ *   шапка, одна строка и кнопки;
+ * - место для тостов: лоток стоит в углу поля, тост «N annotations added to …» — в углу окна, и без этого тост закрывал
+ *   «Add to chat» следующей пачки (под курсором он не гаснет вовсе). Пока вкладка видна, лоток заявляет, насколько тостам
+ *   подняться (`ui/toast-inset.ts`), — его положение живое, а не по числам вёрстки.
  */
 
 import { ChevronDown, ChevronUp, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
 import type { AnnotationTarget } from '../../../shared/browser-types.js';
 import { elementLabel } from '../../../shared/context-markdown.js';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
+import { useToastInsetAbove } from '../../ui/toast-inset.js';
 import type { AnnotationItem } from './store.js';
 
 export function annotationTargetText(target: AnnotationTarget): string {
@@ -34,6 +39,8 @@ export interface AnnotationTrayProps {
   collapsed: boolean;
   /** Идёт «Add to chat»: кнопки неактивны. */
   busy: boolean;
+  /** Вкладка на экране: лоток скрытой вкладки тостам не мешает. По умолчанию — да. */
+  visible?: boolean;
   onToggle(): void;
   onEdit(n: number): void;
   onDelete(n: number): void;
@@ -41,10 +48,13 @@ export interface AnnotationTrayProps {
   onAddToChat(): void;
 }
 
-export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDelete, onClear, onAddToChat }: AnnotationTrayProps): JSX.Element {
+export function AnnotationTray({ items, collapsed, busy, visible = true, onToggle, onEdit, onDelete, onClear, onAddToChat }: AnnotationTrayProps): JSX.Element {
   const title = S.browser.annotate.tray(items.length);
+  const root = useRef<HTMLDivElement>(null);
+  useToastInsetAbove(root, visible);
   return (
     <div
+      ref={root}
       data-testid="annotation-tray"
       className="absolute bottom-3 right-3 z-10 flex max-h-[min(calc(100%-1.5rem),max(45%,8.5rem))] w-[min(20rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
     >

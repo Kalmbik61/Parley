@@ -1,6 +1,7 @@
 // packages/desktop/src/renderer/browser/annotate/AnnotationTray.test.tsx
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { TOAST_GAP, TOAST_INSET_VAR } from '../../ui/toast-inset.js';
 import type { AnnotationItem } from './store.js';
 import { AnnotationTray } from './AnnotationTray.js';
 
@@ -97,5 +98,124 @@ describe('AnnotationTray (спека браузера 4.7; каркас — по
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
     expect(errors).not.toHaveBeenCalled();
     errors.mockRestore();
+  });
+});
+
+/**
+ * P1 итогового ревью этапа B: тост «N annotations added to …» стоял на кнопках лотка следующей пачки («Add to chat» закрыт на
+ * 96%, пока тост на экране, а под курсором он не гаснет вовсе). Лоток стоит в углу поля вкладки, тост — в углу окна: лоток
+ * заявляет, насколько тостам подняться (`ui/toast-inset.ts`), по своему живому положению и только пока вкладка видна.
+ */
+describe('AnnotationTray — место для тостов (--toast-inset-bottom)', () => {
+  const inset = (): string => document.documentElement.style.getPropertyValue(TOAST_INSET_VAR);
+  const WINDOW = { width: 1400, height: 900 };
+  /** Положение лотка в окне, которое «видит» getBoundingClientRect: у лотка внизу справа поля. */
+  let trayRect = { left: 1040, right: 1360, top: 700 };
+  const observers: Array<{ callback: () => void; targets: Element[]; disconnected: boolean }> = [];
+  const originalWidth = window.innerWidth;
+  const originalHeight = window.innerHeight;
+
+  beforeEach(() => {
+    trayRect = { left: 1040, right: 1360, top: 700 };
+    observers.length = 0;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: WINDOW.width });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: WINDOW.height });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const own = this.dataset.testid === 'annotation-tray' ? trayRect : { left: 0, right: 0, top: 0 };
+      return { ...own, bottom: own.top + 188, width: own.right - own.left, height: 188, x: own.left, y: own.top, toJSON: () => ({}) } as DOMRect;
+    });
+    class ResizeObserverStub {
+      private readonly entry: { callback: () => void; targets: Element[]; disconnected: boolean };
+      constructor(callback: () => void) {
+        this.entry = { callback, targets: [], disconnected: false };
+        observers.push(this.entry);
+      }
+      observe(target: Element): void {
+        this.entry.targets.push(target);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.entry.disconnected = true;
+      }
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    document.documentElement.style.removeProperty(TOAST_INSET_VAR);
+  });
+
+  // 2.5rem базы при rem 16 = 40 px: из расстояния «от низа окна до верха лотка» они уже учтены формулой Toaster.
+  const expected = (top: number): string => `${WINDOW.height - top + TOAST_GAP - 40}px`;
+
+  it('лоток виден и стоит под столбцом тостов — тосты поднимаются над его верхом: «Add to chat» не под тостом', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    expect(inset()).toBe(expected(700));
+  });
+
+  it('лоток по умолчанию считается видимым: прежние вызовы без `visible` ведут себя как раньше', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} {...handlers()} />);
+    expect(inset()).toBe(expected(700));
+  });
+
+  it('лоток слева от столбца тостов (браузер в левой группе) — тостам нечего обходить', () => {
+    trayRect = { left: 100, right: 420, top: 700 };
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    expect(inset()).toBe('');
+  });
+
+  it('вкладка скрыта — лоток ничего не заявляет; показана — заявляет; снова скрыта — снимает', () => {
+    const h = handlers();
+    const view = render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible={false} {...h} />);
+    expect(inset()).toBe('');
+    view.rerender(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...h} />);
+    expect(inset()).toBe(expected(700));
+    view.rerender(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible={false} {...h} />);
+    expect(inset()).toBe('');
+  });
+
+  it('лоток ушёл («Add to chat», Clear): заявка снята, тосты опускаются на обычное место', () => {
+    const view = render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    expect(inset()).toBe(expected(700));
+    view.unmount();
+    expect(inset()).toBe('');
+  });
+
+  it('лоток подвинули, не меняя его размера (панель DevTools подняла дно поля): пересчёт по наблюдателю поля и по окну', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    const tray = screen.getByTestId('annotation-tray');
+    // Наблюдатель следит за лотком и за полем, в котором он лежит.
+    expect(observers).toHaveLength(1);
+    expect(observers[0]?.targets).toEqual([tray, tray.parentElement]);
+    trayRect = { left: 1040, right: 1360, top: 520 };
+    act(() => observers[0]?.callback());
+    expect(inset()).toBe(expected(520));
+    // Окно уменьшили: верх лотка и высота окна другие.
+    trayRect = { left: 1040, right: 1360, top: 400 };
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(inset()).toBe(`${600 - 400 + TOAST_GAP - 40}px`);
+  });
+
+  it('лоток свернули (шапка вместо списка): верх ниже, тосты опускаются следом', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    trayRect = { left: 1040, right: 1360, top: 850 };
+    act(() => observers[0]?.callback());
+    expect(inset()).toBe(expected(850));
+  });
+
+  it('уход лотка отключает наблюдатель и слушателя окна', () => {
+    const removeListener = vi.spyOn(window, 'removeEventListener');
+    const view = render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} visible {...handlers()} />);
+    view.unmount();
+    expect(observers[0]?.disconnected).toBe(true);
+    expect(removeListener).toHaveBeenCalledWith('resize', expect.any(Function));
   });
 });

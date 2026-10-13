@@ -331,6 +331,17 @@ describe('ui/sonner — угол с плавающей панелью (кусо�
     });
   });
 
+  it('геометрия столбца тостов — та, по которой блоки в углу считают, куда подняться: правый отступ 24px, ширина min(26rem, 100vw − 32px), база снизу 2.5rem', async () => {
+    render(<Toaster />);
+    toast('Проверка геометрии');
+    await waitFor(() => {
+      const list = document.querySelector<HTMLElement>('[data-sonner-toaster]');
+      expect(list?.style.getPropertyValue('--offset-right')).toBe('24px');
+      expect(list?.style.getPropertyValue('--width')).toBe('min(26rem, calc(100vw - 32px))');
+      expect(list?.style.getPropertyValue('--offset-bottom')).toContain('calc(2.5rem + var(--toast-inset-bottom, 0px))');
+    });
+  });
+
   it('свой offset из props перекрывает отступ по умолчанию', async () => {
     render(<Toaster offset={{ bottom: '10px' }} />);
     toast('Проверка своего отступа');
