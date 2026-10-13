@@ -6,6 +6,21 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Island.** A black panel at the top of the screen (in the notch on a MacBook) shows how many agents
+  are working and waiting ("N working · M waiting"); hover or click it for the list of active
+  sessions and rooms, and a click on a row opens it in Parley. A permission request, a simple
+  question (one question, one choice, up to four options) or a plan opens a card by itself: Allow,
+  Always (when the agent offers rules) and Deny, or the answer as a button; a plan and a complex
+  question have "Open in Parley". With several requests the card shows "1 of N" and arrows, and its
+  buttons stay disabled for half a second so an accidental click does not answer it. Drag the island
+  along the top edge; it snaps to the left, the center or the right and is remembered per monitor,
+  and × hides it until the next request. Claude and GLM sessions only: Codex requests stay system
+  notifications. On by default; Settings → Notifications → "island with requests at the top of the
+  screen". While the island is on, a request with a card there is not repeated as a macOS
+  notification.
+
 ## 0.11.0
 
 Screenshots an agent takes — with Chrome DevTools MCP, Claude in Chrome or Playwright, or an image it reads — now show in Chat as thumbnails under the call, and a click opens them larger. A live agent that has reported "done" no longer looks finished.

@@ -571,7 +571,8 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   focus. What to notify about, and whether with sound, is set in Settings, in the
   "Notifications" section; if notifications do not arrive, allow them in System Settings →
   Notifications → Parley. The texts of the notifications are in English, like the whole
-  window;
+  window. While the island is on (see "Island"), a request with a card there is not repeated as a
+  macOS notification;
 - a room lead's decision: a new one ("Decision waiting for you" — "{room} · S01 collected
   positions") and a revised one ("… S01 revised the decision": the lead replaced the text
   before your answer, or brought a corrected one after "Return for rework") notify, but the
@@ -895,6 +896,29 @@ indexed the transcript — without streamed text.
 - A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
 - A question with two identical question texts collapses into one answer.
 
+### Island
+
+A small black island at the top of the screen — in the notch on a MacBook — shows how many agents
+are working and waiting: a pill "N working · M waiting". Hover or click it for the list of active
+sessions and rooms; a click on a row opens it in Parley.
+
+When an agent asks for permission, asks a question or brings a plan, the island opens a card by
+itself, without switching to Parley:
+
+- a permission request: **Allow**, **Always** (only when the agent offers rules) and **Deny**;
+- a simple question — one question with one choice and up to four options — as buttons;
+- a plan or a complex question: **Open in Parley**.
+
+With several requests the card shows "1 of N" and arrows. The buttons are disabled for half a
+second after a card appears, so a click aimed at something else does not answer it. Drag the
+island along the top edge: it snaps to the left, the center or the right, and the place is
+remembered per monitor. × hides it until the next request.
+
+The island is on by default; turn it off in Settings → Notifications ("island with requests at
+the top of the screen"). Codex sessions are not on the island yet: their requests come as system
+notifications, as before. While the island is on, a request that has a card is not repeated as a
+macOS notification.
+
 ## Settings
 
 The window has Settings (⌘,), with six tabs:
@@ -905,7 +929,8 @@ The window has Settings (⌘,), with six tabs:
   (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Skill
   navigator", "Worktree root", and the "Work limits" block (see "Limits of a workspace and a
   room").
-- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound"; if notifications do
+- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound" / "island with
+  requests at the top of the screen" (see "Island"); if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
