@@ -1,18 +1,19 @@
 /**
  * Каналы острова в main (спека 2026-10-12, 5.1). Каждый слушает только окно острова (`controller.isIsland`):
- * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: видимость и интерактивность —
- * булевы, точка — два числа, цель — `isFocusTarget`, как у уведомлений.
+ * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: видимость — булево, точка — два
+ * числа, область под мышь — `null` или четыре конечных числа (размеры не отрицательны, значения не больше
+ * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений.
  */
 
 import type { IpcMain } from 'electron';
 import type { FocusTarget } from '../../shared/bridge.js';
-import type { IslandConfig, IslandPoint } from '../../shared/island.js';
+import type { IslandConfig, IslandHitRect, IslandPoint } from '../../shared/island.js';
 import { isFocusTarget, withIpcError } from '../ipc.js';
 import type { IslandController, IslandWindowLike } from './window.js';
 
 export interface IslandIpcOptions {
   ipcMain: Pick<IpcMain, 'on' | 'handle'>;
-  controller: Pick<IslandController<IslandWindowLike>, 'isIsland' | 'setInteractive' | 'setVisible' | 'dragStart' | 'dragMove' | 'dragEnd'>;
+  controller: Pick<IslandController<IslandWindowLike>, 'isIsland' | 'setHitRect' | 'setVisible' | 'dragStart' | 'dragMove' | 'dragEnd'>;
   config(): Promise<IslandConfig>;
   /** Место могло смениться (другой монитор — другой отступ под чёлку): отдать острову настройки заново. */
   pushConfig(): void;
@@ -29,6 +30,16 @@ function isPoint(value: unknown): value is IslandPoint {
   return typeof screenX === 'number' && Number.isFinite(screenX) && typeof screenY === 'number' && Number.isFinite(screenY);
 }
 
+/** Верхняя граница чисел области под мышь: кадр окна — 480×520, всё, что заметно больше, — мусор. */
+const MAX_HIT_RECT_VALUE = 2000;
+
+function isHitRect(value: unknown): value is IslandHitRect {
+  if (typeof value !== 'object' || value === null) return false;
+  const { x, y, width, height } = value as Record<string, unknown>;
+  const fits = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n <= MAX_HIT_RECT_VALUE;
+  return fits(x) && fits(y) && fits(width) && width >= 0 && fits(height) && height >= 0;
+}
+
 export function registerIslandIpc(options: IslandIpcOptions): void {
   const { ipcMain, controller } = options;
   const fromIsland = (event: unknown): boolean => controller.isIsland((event as { sender?: unknown }).sender);
@@ -40,8 +51,8 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
       return options.config();
     }),
   );
-  ipcMain.on('island:interactive', (event, interactive: unknown) => {
-    if (fromIsland(event) && typeof interactive === 'boolean') controller.setInteractive(interactive);
+  ipcMain.on('island:hit-rect', (event, rect: unknown) => {
+    if (fromIsland(event) && (rect === null || isHitRect(rect))) controller.setHitRect(rect);
   });
   ipcMain.on('island:visible', (event, visible: unknown) => {
     if (fromIsland(event) && typeof visible === 'boolean') controller.setVisible(visible);

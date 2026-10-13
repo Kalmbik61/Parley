@@ -20,7 +20,7 @@ function setup() {
   const ipcMain = new FakeIpcMain();
   const controller = {
     isIsland: (sender: unknown) => sender === island,
-    setInteractive: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(),
+    setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(),
   };
   const options = {
     ipcMain,
@@ -39,7 +39,7 @@ function setup() {
 /** Имена всех подменённых методов, которые хоть раз позвали: «ничего не случилось» — пустой список. */
 function calledNames(state: ReturnType<typeof setup>): string[] {
   const mocks = {
-    setInteractive: state.controller.setInteractive,
+    setHitRect: state.controller.setHitRect,
     setVisible: state.controller.setVisible,
     dragStart: state.controller.dragStart,
     dragMove: state.controller.dragMove,
@@ -65,18 +65,34 @@ describe('IPC острова', () => {
     expect(onFailed).toHaveBeenCalledTimes(1);
   });
 
-  it('интерактивность, видимость и перетаскивание — только от окна острова и только целые данные', () => {
+  it('видимость и перетаскивание — только от окна острова и только целые данные', () => {
     const { ipcMain, controller, pushConfig } = setup();
-    ipcMain.emit('island:interactive', { sender: island }, true);
-    ipcMain.emit('island:interactive', { sender: island }, false);
-    ipcMain.emit('island:interactive', { sender: stranger }, true);
-    ipcMain.emit('island:interactive', { sender: island }, 1);
-    expect(controller.setInteractive.mock.calls).toEqual([[true], [false]]);
     ipcMain.emit('island:visible', { sender: island }, true);
     expect(controller.setVisible).toHaveBeenCalledWith(true);
     ipcMain.emit('island:drag-end', { sender: island }, { screenX: 10, screenY: 20 });
     expect(controller.dragEnd).toHaveBeenCalledWith({ screenX: 10, screenY: 20 });
     expect(pushConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('hit-rect: от острова проходят null и целая область (в том числе нулевого размера и с отрицательным сдвигом)', () => {
+    const { ipcMain, controller } = setup();
+    ipcMain.emit('island:hit-rect', { sender: island }, { x: 100, y: 0, width: 280, height: 40 });
+    ipcMain.emit('island:hit-rect', { sender: island }, null);
+    ipcMain.emit('island:hit-rect', { sender: island }, { x: 0, y: 0, width: 0, height: 0 });
+    ipcMain.emit('island:hit-rect', { sender: island }, { x: -300, y: -20, width: 2000, height: 2000 });
+    expect(controller.setHitRect.mock.calls).toEqual([
+      [{ x: 100, y: 0, width: 280, height: 40 }],
+      [null],
+      [{ x: 0, y: 0, width: 0, height: 0 }],
+      [{ x: -300, y: -20, width: 2000, height: 2000 }],
+    ]);
+  });
+
+  it('hit-rect от чужого окна не передаётся контроллеру, даже целая область и null', () => {
+    const state = setup();
+    state.ipcMain.emit('island:hit-rect', { sender: stranger }, { x: 1, y: 2, width: 3, height: 4 });
+    state.ipcMain.emit('island:hit-rect', { sender: stranger }, null);
+    expect(calledNames(state)).toEqual([]);
   });
 
   it('config — острову; чужому окну — отказ', async () => {
@@ -93,7 +109,7 @@ describe('IPC острова', () => {
   });
 
   it.each<[string, unknown[]]>([
-    ['island:interactive', [true]],
+    ['island:hit-rect', [{ x: 1, y: 2, width: 3, height: 4 }]],
     ['island:visible', [true]],
     ['island:drag-start', [{ screenX: 1, screenY: 2 }]],
     ['island:drag-move', [{ screenX: 1, screenY: 2 }]],
@@ -115,9 +131,17 @@ describe('IPC острова', () => {
   });
 
   it.each<[string, unknown[]]>([
-    ['island:interactive', ['yes']],
-    ['island:interactive', [1]],
-    ['island:interactive', [undefined]],
+    ['island:hit-rect', ['yes']],
+    ['island:hit-rect', [undefined]],
+    ['island:hit-rect', [[]]],
+    ['island:hit-rect', [{ x: 1, y: 2, width: 3 }]],
+    ['island:hit-rect', [{ x: '1', y: 2, width: 3, height: 4 }]],
+    ['island:hit-rect', [{ x: 1, y: Number.NaN, width: 3, height: 4 }]],
+    ['island:hit-rect', [{ x: Number.POSITIVE_INFINITY, y: 2, width: 3, height: 4 }]],
+    ['island:hit-rect', [{ x: 1, y: 2, width: -1, height: 4 }]],
+    ['island:hit-rect', [{ x: 1, y: 2, width: 3, height: -0.5 }]],
+    ['island:hit-rect', [{ x: 2001, y: 2, width: 3, height: 4 }]],
+    ['island:hit-rect', [{ x: 1, y: 2, width: 3, height: 2001 }]],
     ['island:visible', ['yes']],
     ['island:drag-start', [null]],
     ['island:drag-move', [{ screenX: '1', screenY: 2 }]],

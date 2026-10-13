@@ -47,12 +47,9 @@ export interface IslandViewProps {
   showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
   api: IslandApi;
-  /** Ссылка на внешнюю форму: `IslandApp` по ней спрашивает `:hover` после перетаскивания. */
+  /** Ссылка на внешнюю форму: `IslandApp` по ней замеряет область, которую остров ловит мышью. */
   shapeRef: Ref<HTMLDivElement>;
-  /** Курсор вошёл в форму / ушёл с неё: окно ловит мышь только над формой (`IslandApp`). */
-  onShapeEnter(): void;
-  onShapeLeave(): void;
-  /** Перетаскивание формы началось / закончилось: пока оно идёт, уход курсора с формы не в счёт. */
+  /** Перетаскивание формы началось / закончилось: пока оно идёт, остров не убирается в покое. */
   onDragStart(): void;
   onDragEnd(): void;
   onToggleList(open: boolean): void;
@@ -82,10 +79,10 @@ function HideButton({ onHide }: { onHide(): void }): JSX.Element {
 function Pill(props: IslandViewProps): JSX.Element {
   const { model, onToggleList, onHide } = props;
   return (
-    // Список — по наведению или клику (спека, раздел 4); уход курсора с формы закрывает его (`IslandApp`). Строка занимает
-    // всю ширину содержимого, а при открытом списке оно растёт до 400 px: содержимое строки по центру, чтобы пилюля
-    // не уезжала вбок из-под курсора.
-    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm" onMouseEnter={() => onToggleList(true)}>
+    // Список — по наведению или клику (спека, раздел 4): наведение приходит от main (`IslandApp`), он же закрывает список
+    // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
+    // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
+    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
       {model.active ? (
         // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
         // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли.
@@ -240,7 +237,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, shapeRef, api, onShapeEnter, onShapeLeave, onDragStart, onDragEnd, onHintDone } = props;
+  const { model, items, listOpen, config, retracted, shapeRef, api, onDragStart, onDragEnd, onHintDone } = props;
   const drag = useShapeDrag(api, { onDragStart, onDragEnd });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -273,8 +270,6 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         data-testid="island"
         className={`overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground ${retracted ? 'shadow-none' : 'shadow-lg'} transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         style={size ?? undefined}
-        onMouseEnter={onShapeEnter}
-        onMouseLeave={onShapeLeave}
         {...drag.handlers}
       >
         <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>

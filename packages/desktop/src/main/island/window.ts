@@ -8,15 +8,18 @@
  * Контроллер не знает Electron: окно, мониторы и запись места приходят зависимостями — так его можно проверить на
  * подменах. Окно всегда одного размера (`ISLAND_FRAME`) и целиком прозрачное: чёрная форма острова анимирует размер
  * внутри кадра (CSS), а окно не меняет границы. Прозрачная часть не должна перехватывать клики по приложениям под ней,
- * поэтому окно игнорирует мышь (`setIgnoreMouseEvents(true, { forward: true })` — macOS пересылает движения мыши,
- * renderer всё ещё видит вход курсора) и становится интерактивным только пока курсор над формой (`setInteractive`).
+ * поэтому окно игнорирует мышь (`setIgnoreMouseEvents(true, …)`) и становится интерактивным только пока курсор над
+ * областью острова. Наведение решает main, а не DOM: в сквозном окне с пересылкой движений Chromium не получал
+ * `mouseleave` (`:hover` формы оставался истинным при курсоре за 1800 px). Renderer сообщает область
+ * (`setHitRect`: форма или язычок в координатах окна), а раз в `HOVER_POLL_MS`, пока окно видно, main сверяет с ней
+ * настоящий курсор (`deps.cursor()`) и при смене «над / не над» переключает окно и зовёт `deps.onHover`.
  * Место держит верхний край и точку (`anchor`): перетаскивание и смена монитора пересчитывают прямоугольник через
  * `placement.ts`. Упал renderer — одно пересоздание; второе падение — острова нет до перезапуска приложения:
  * зависшее прозрачное окно поверх всего хуже, чем его отсутствие.
  */
 
 import type { BrowserWindowConstructorOptions } from 'electron';
-import type { IslandPoint } from '../../shared/island.js';
+import type { IslandHitRect, IslandPoint } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import {
   displayAt,
@@ -35,6 +38,9 @@ import {
  * до ~360 px высотой вместе с шапкой. Форма острова растёт и сжимается внутри кадра, само окно границ не меняет.
  */
 export const ISLAND_FRAME: Size = { width: 480, height: 520 };
+
+/** Как часто, пока окно видно, main сверяет настоящий курсор с областью острова. */
+export const HOVER_POLL_MS = 100;
 
 export function islandWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
@@ -85,6 +91,10 @@ export interface IslandControllerDeps<W extends IslandWindowLike> {
   /** Текущее место из настроек (кеш main: запись в `ui.json` асинхронная). */
   placement(): IslandPlacement;
   savePlacement(placement: IslandPlacement): void;
+  /** Настоящее положение курсора на экране (DIP) — `screen.getCursorScreenPoint()`. */
+  cursor(): { x: number; y: number };
+  /** Курсор вошёл в область острова или ушёл из неё: main отдаёт это renderer острова. */
+  onHover(hovered: boolean): void;
   /** Окно создано: main вешает пересылку событий хоста и отдаёт настройки. */
   onCreated(window: W): void;
   log(message: string): void;
@@ -95,8 +105,8 @@ export interface IslandController<W extends IslandWindowLike> {
   close(): void;
   current(): W | null;
   isIsland(sender: unknown): boolean;
-  /** Окно ловит мышь (курсор над формой) или пропускает её сквозь прозрачный кадр к приложениям под ним. */
-  setInteractive(interactive: boolean): void;
+  /** Область острова в координатах окна (форма или язычок) от renderer; `null` — ничего не показано, курсор всегда «вне». */
+  setHitRect(rect: IslandHitRect | null): void;
   setVisible(visible: boolean): void;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
@@ -114,6 +124,10 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
   let crashes = 0;
   let dragging = false;
   let dragOffsetX = 0;
+  let hitRect: IslandHitRect | null = null;
+  /** Курсор над областью острова (или остров тащат): окно ловит мышь, renderer знает об этом из `onHover`. */
+  let hovered = false;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const live = (): W | null => (window !== null && !window.isDestroyed() ? window : null);
   const display = (): DisplayLike => resolveDisplay(deps.displays(), deps.primaryDisplayId(), deps.placement().displayId);
@@ -123,23 +137,63 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
     current.setBounds(islandBounds(display(), deps.placement().anchor, ISLAND_FRAME));
   };
 
+  const stopPolling = (): void => {
+    if (pollTimer === null) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  };
+  const insideHitRect = (current: W): boolean => {
+    if (hitRect === null) return false;
+    const bounds = current.getBounds();
+    const cursor = deps.cursor();
+    const left = bounds.x + hitRect.x;
+    const top = bounds.y + hitRect.y;
+    return cursor.x >= left && cursor.x < left + hitRect.width && cursor.y >= top && cursor.y < top + hitRect.height;
+  };
+  const poll = (): void => {
+    const current = live();
+    // Окно спрятали мимо контроллера (`window.hide()` в main) или закрыли — опрашивать нечего.
+    if (current === null || !current.isVisible()) {
+      stopPolling();
+      return;
+    }
+    // Остров тащат — окно едет за курсором и остаётся ловящим мышь, что бы ни говорила область.
+    const inside = dragging || insideHitRect(current);
+    if (inside === hovered) return;
+    hovered = inside;
+    current.setIgnoreMouseEvents(!inside, { forward: false });
+    deps.onHover(inside);
+  };
+  const startPolling = (): void => {
+    if (pollTimer === null) pollTimer = setInterval(poll, HOVER_POLL_MS);
+  };
+
   const open = (): void => {
     if (live() !== null) return;
-    // Перетаскивание старого окна не переживает пересоздание (закрытие или падение renderer посреди жеста).
+    // Перетаскивание и область старого окна не переживают пересоздание (закрытие или падение renderer посреди жеста).
     dragging = false;
+    hovered = false;
+    hitRect = null;
+    stopPolling();
     const created = deps.createWindow();
     created.setAlwaysOnTop(true, 'screen-saver');
-    // Прозрачный кадр не ловит клики: интерактивным окно делает renderer, пока курсор над формой (`setInteractive`).
-    created.setIgnoreMouseEvents(true, { forward: true });
+    // Прозрачный кадр не ловит клики: ловящим окно делает опрос курсора (`poll`), пока курсор над областью острова.
+    created.setIgnoreMouseEvents(true, { forward: false });
     // `setVisibleOnAllWorkspaces` не зовём: Electron на macOS превращает тип процесса, и иконка в Dock / Cmd-Tab может
     // пропасть. `type: 'panel'` и так плавает над полноэкранными приложениями и виден на всех рабочих столах (доки Electron).
     created.on('closed', () => {
-      if (window === created) window = null;
+      if (window === created) {
+        window = null;
+        stopPolling();
+      }
     });
     created.webContents.on('render-process-gone', () => {
       crashes += 1;
       deps.log(`island renderer gone (${crashes})`);
-      if (window === created) window = null;
+      if (window === created) {
+        window = null;
+        stopPolling();
+      }
       if (!created.isDestroyed()) created.destroy();
       if (crashes === 1) open();
     });
@@ -154,6 +208,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       const current = live();
       window = null;
       dragging = false;
+      hovered = false;
+      stopPolling();
       current?.destroy();
     },
     current: live,
@@ -161,8 +217,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       const current = live();
       return current !== null && sender === current.webContents;
     },
-    setInteractive: (interactive) => {
-      live()?.setIgnoreMouseEvents(!interactive, { forward: true });
+    setHitRect: (rect) => {
+      hitRect = rect;
     },
     setVisible: (visible) => {
       const current = live();
@@ -170,15 +226,22 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       if (!visible) {
         // Скрыли — жест уже не продолжится; потерянный `drag-end` не должен замораживать место.
         dragging = false;
-        // Скрытое окно возвращается сквозным: `mouseleave` над скрытой формой не придёт, и после показа прозрачный кадр
-        // ловил бы клики, пока renderer не снимет интерактивность.
-        current.setIgnoreMouseEvents(true, { forward: true });
+        stopPolling();
+        // Скрытое окно возвращается сквозным: опроса нет, и после показа прозрачный кадр ловил бы клики, пока не придёт
+        // первый опрос. Renderer узнаёт об уходе курсора, иначе его «над островом» пережило бы скрытие.
+        current.setIgnoreMouseEvents(true, { forward: false });
+        if (hovered) {
+          hovered = false;
+          deps.onHover(false);
+        }
         if (current.isVisible()) current.hide();
         return;
       }
-      if (current.isVisible()) return;
-      place();
-      current.showInactive();
+      if (!current.isVisible()) {
+        place();
+        current.showInactive();
+      }
+      startPolling();
     },
     dragStart: (point) => {
       const current = live();

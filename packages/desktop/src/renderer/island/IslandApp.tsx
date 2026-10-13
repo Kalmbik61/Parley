@@ -1,12 +1,14 @@
 /**
  * Проводка острова (спека 2026-10-12, раздел 6): статус хоста, сторы работ и активности, очередь запросов, настройки,
- * видимость и интерактивность окна. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
+ * видимость окна и область под мышь. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
  * поднимаются. Новый запрос выдвигает убранный остров, выбирается в карточке и звучит (`beep` у main, если включён Sound).
  *
  * Окно острова — фиксированный прозрачный кадр, сквозной для мыши. Корень заполняет кадр и выравнивает форму по
  * точке (`config.anchor`), а размер формы анимирует сам вид (`IslandView`). Окно ловит мышь, только пока курсор над
- * формой: вход — `setInteractive(true)`, уход — `setInteractive(false)` и закрытый список; во время перетаскивания
- * уход не в счёт (окно едет за курсором), а после него интерактивность снимается, если курсор уже не над формой.
+ * областью острова, и решает это main, а не DOM (в сквозном окне `mouseleave` мог не прийти вовсе): renderer лишь
+ * сообщает область (`setHitRect` — форма выдвинутого острова или язычок убранного, `null`, пока окно не показано) и
+ * получает «над / не над» из `onHover`. Наведение открывает список, уход закрывает; во время перетаскивания main
+ * сообщает «над» (окно едет за курсором).
  *
  * Остров не пропадает, а убирается (`retracted`): окно видно, пока хост подключён, а убранная форма уезжает вверх
  * за кадр, оставляя язычок (`IslandTab`). Убирают «×» и покой: нечего показывать, очередь пуста, курсор не над
@@ -15,9 +17,9 @@
  * «есть работа» с нет на да.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { refKey } from '@parley/protocol';
-import type { IslandBridge, IslandConfig } from '../../shared/island.js';
+import type { IslandBridge, IslandConfig, IslandHitRect } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -34,11 +36,15 @@ const INITIAL_CONFIG: IslandConfig = { sound: false, hintShown: true, topInset: 
 /** Выравнивание формы в кадре окна: влево, по центру или вправо — по точке, у которой стоит остров. */
 const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };
 
+/** Равны ли области (`null` равен только `null`). */
+const sameRect = (a: IslandHitRect | null, b: IslandHitRect | null): boolean =>
+  a === null || b === null ? a === b : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
 export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
   const [listOpen, setListOpen] = useState(false);
-  /** Курсор над формой и идёт перетаскивание — условия покоя; их смена отменяет и заново заводит таймер уборки. */
+  /** Курсор над областью острова (от main) и идёт перетаскивание — условия покоя; их смена отменяет и заново заводит таймер уборки. */
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
   const entries = useWorksStore((state) => state.entries);
@@ -74,6 +80,15 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     void bridge.island.config().then(setConfig, () => undefined);
     return bridge.island.onConfig(setConfig);
   }, [bridge]);
+  // Наведение решает main по настоящему курсору: над областью острова список открыт, вне её — закрыт.
+  useEffect(
+    () =>
+      bridge.island.onHover((over) => {
+        setHovered(over);
+        setListOpen(over);
+      }),
+    [bridge],
+  );
   useEffect(() => {
     if (connected) useIslandRequests.getState().sync(entries, byRef);
   }, [connected, entries, byRef]);
@@ -84,13 +99,11 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const idle = !model.active && items.length === 0;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
+  // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над язычком.
   const retract = useCallback(() => {
     setRetracted(true);
     setListOpen(false);
-    setHovered(false);
-    // Форма уехала из-под курсора и «уход» мог не прийти: окно снова сквозное, мышь ловит только язычок.
-    bridge.island.setInteractive(false);
-  }, [bridge]);
+  }, []);
 
   useEffect(() => {
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
@@ -126,16 +139,31 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   if (show.visible !== shown) setShow({ visible: shown, id: shown ? show.id + 1 : show.id });
 
   const shapeRef = useRef<HTMLDivElement>(null);
-  /** Идёт перетаскивание формы: окно едет за курсором, и «курсор ушёл с формы» в этот момент ничего не значит. */
-  const draggingRef = useRef(false);
-  const leaveShape = (): void => {
-    bridge.island.setInteractive(false);
-    setListOpen(false);
-    setHovered(false);
-  };
+  const tabRef = useRef<HTMLButtonElement>(null);
+  /** Последняя область, отправленная main: равную ей не шлём повторно (`undefined` — ещё ничего не слали). */
+  const sentHitRect = useRef<IslandHitRect | null | undefined>(undefined);
+  // Область под мышь: форма у выдвинутого острова, язычок у убранного, ничего — пока хост не подключён (окно спрятано).
+  const reportHitRect = useCallback(() => {
+    const target = !connected ? null : retracted ? tabRef.current : shapeRef.current;
+    const box = target?.getBoundingClientRect();
+    const next: IslandHitRect | null = box === undefined ? null : { x: box.x, y: box.y, width: box.width, height: box.height };
+    const last = sentHitRect.current;
+    if (last !== undefined && sameRect(last, next)) return;
+    sentHitRect.current = next;
+    bridge.island.setHitRect(next);
+  }, [bridge, connected, retracted]);
+  // Область меняется при монтировании, смене вида, размере формы или язычка и при смене места в кадре (точка, отступ под
+  // чёлку); сдвиг убирающейся / выдвигающейся формы размера не меняет — его ловит `transitionend` на корне.
+  useLayoutEffect(() => {
+    reportHitRect();
+    const observer = new ResizeObserver(reportHitRect);
+    if (shapeRef.current !== null) observer.observe(shapeRef.current);
+    if (tabRef.current !== null) observer.observe(tabRef.current);
+    return () => observer.disconnect();
+  }, [reportHitRect, config.anchor, config.topInset]);
 
   return (
-    <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`}>
+    <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`} onTransitionEnd={reportHitRect}>
       <IslandView
         model={model}
         items={items}
@@ -147,23 +175,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         labels={labels}
         api={bridge.island}
         shapeRef={shapeRef}
-        onShapeEnter={() => {
-          setHovered(true);
-          bridge.island.setInteractive(true);
-        }}
-        onShapeLeave={() => {
-          if (!draggingRef.current) leaveShape();
-        }}
-        onDragStart={() => {
-          draggingRef.current = true;
-          setDragging(true);
-        }}
-        onDragEnd={() => {
-          draggingRef.current = false;
-          setDragging(false);
-          // Уход с формы во время жеста пропущен: если курсор уже не над формой, окно снова сквозное.
-          if (shapeRef.current?.matches(':hover') !== true) leaveShape();
-        }}
+        onDragStart={() => setDragging(true)}
+        onDragEnd={() => setDragging(false)}
         onToggleList={setListOpen}
         onHide={retract}
         onSelect={(next) => useIslandRequests.getState().select(next)}
@@ -177,8 +190,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         <IslandTab
           anchorClass={ANCHOR_CLASS[config.anchor]}
           topInset={config.topInset}
-          onEnter={() => bridge.island.setInteractive(true)}
-          onLeave={() => bridge.island.setInteractive(false)}
+          tabRef={tabRef}
           onExpand={() => setRetracted(false)}
         />
       ) : null}

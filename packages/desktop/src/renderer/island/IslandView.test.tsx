@@ -20,7 +20,7 @@ const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'p
 
 function api(): IslandApi {
   return {
-    config: vi.fn(), onConfig: vi.fn(), setInteractive: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
+    config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
     dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
   };
 }
@@ -53,7 +53,7 @@ function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
     model: MODEL, items: [], index: 0, config: { sound: true, hintShown: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
-    onShapeEnter: vi.fn(), onShapeLeave: vi.fn(), onDragStart: vi.fn(), onDragEnd: vi.fn(),
+    onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(), onHintDone: vi.fn(),
     ...patch,
   };
@@ -315,14 +315,14 @@ describe('плавный размер формы', () => {
     expect(screen.getByTestId('island-content').className).toContain('w-max');
   });
 
-  it('мышь: вход в форму и уход с неё сообщаются наверх, форма доступна по ссылке', () => {
+  it('форма доступна по ссылке, а наведение DOM-ом наверх не сообщается: его решает main', () => {
     const props = view();
     const shape = screen.getByTestId('island');
     expect(props.shapeRef).toHaveProperty('current', shape);
+    fireEvent.mouseEnter(screen.getByTestId('island-pill'));
     fireEvent.mouseEnter(shape);
-    expect(props.onShapeEnter).toHaveBeenCalledTimes(1);
     fireEvent.mouseLeave(shape);
-    expect(props.onShapeLeave).toHaveBeenCalledTimes(1);
+    expect(props.onToggleList).not.toHaveBeenCalled();
   });
 
   it('список и карточка появляются с island-reveal', () => {
@@ -574,7 +574,7 @@ describe('убранный остров', () => {
     expect(screen.getByTestId('island').className).not.toContain('shadow-none');
   });
 
-  it('форма внутри обёртки: ссылка на неё и мышь работают, как у стоящего на месте острова', () => {
+  it('форма внутри обёртки: ссылка на неё работает, как у стоящего на месте острова', () => {
     const props = view({ retracted: true });
     expect(screen.getByTestId('island-slide').contains(screen.getByTestId('island'))).toBe(true);
     expect(props.shapeRef).toHaveProperty('current', screen.getByTestId('island'));

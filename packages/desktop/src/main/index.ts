@@ -399,6 +399,11 @@ if (!gotLock) {
         islandPlacement = placement;
         void uiStore.save({ island: { ...placement } } as Partial<Omit<UiFile, 'version'>>).catch(() => undefined);
       },
+      cursor: () => screen.getCursorScreenPoint(),
+      onHover: (hovered) => {
+        const window = island.current();
+        if (window !== null) window.webContents.send('island:hover', hovered);
+      },
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
         forwardHostToPages(connection, window, { events: ISLAND_EVENTS });

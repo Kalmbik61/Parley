@@ -58,7 +58,7 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
-      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'hintShown', 'onConfig', 'open', 'setInteractive', 'setVisible'].sort(),
+      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'hintShown', 'onConfig', 'onHover', 'open', 'setHitRect', 'setVisible'].sort(),
     );
   });
 
@@ -82,16 +82,25 @@ describe('preload острова', () => {
     expect(configs).toEqual([{ sound: false, hintShown: true, topInset: 38, anchor: 'right' }]);
   });
 
+  it('наведение от main приходит событием island:hover', async () => {
+    const bridge = await loadPreload();
+    const seen: boolean[] = [];
+    bridge.island.onHover((hovered) => seen.push(hovered));
+    emit('island:hover', true);
+    emit('island:hover', false);
+    expect(seen).toEqual([true, false]);
+  });
+
   it('каналы острова — island:*', async () => {
     const bridge = await loadPreload();
-    bridge.island.setInteractive(true);
-    bridge.island.setInteractive(false);
+    bridge.island.setHitRect({ x: 100, y: 0, width: 280, height: 40 });
+    bridge.island.setHitRect(null);
     bridge.island.setVisible(true);
     bridge.island.dragEnd({ screenX: 1, screenY: 2 });
     bridge.island.beep();
     expect(send.mock.calls).toEqual([
-      ['island:interactive', true],
-      ['island:interactive', false],
+      ['island:hit-rect', { x: 100, y: 0, width: 280, height: 40 }],
+      ['island:hit-rect', null],
       ['island:visible', true],
       ['island:drag-end', { screenX: 1, screenY: 2 }],
       ['island:beep'],
@@ -121,13 +130,13 @@ describe('preload острова', () => {
     expect(invoke).toHaveBeenLastCalledWith('host:activity-snapshot');
   });
 
-  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно три канала', async () => {
+  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно четыре канала', async () => {
     await loadPreload();
     expect(exposedKey).toBe('parley');
-    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:config']);
+    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:config', 'island:hover']);
   });
 
-  it('отписка работает: после неё слушатель событий хоста, статуса и настроек молчит, соседний — нет', async () => {
+  it('отписка работает: после неё слушатель событий хоста, статуса, настроек и наведения молчит, соседний — нет', async () => {
     const bridge = await loadPreload();
 
     const first: unknown[] = [];
@@ -153,5 +162,15 @@ describe('preload острова', () => {
     offConfig();
     emit('island:config', { sound: false, hintShown: true, topInset: 38, anchor: 'left' });
     expect(configs).toEqual([{ sound: true, hintShown: false, topInset: 0, anchor: 'center' }]);
+
+    const hoversOfFirst: boolean[] = [];
+    const hoversOfSecond: boolean[] = [];
+    const offHover = bridge.island.onHover((hovered) => hoversOfFirst.push(hovered));
+    bridge.island.onHover((hovered) => hoversOfSecond.push(hovered));
+    emit('island:hover', true);
+    offHover();
+    emit('island:hover', false);
+    expect(hoversOfFirst).toEqual([true]);
+    expect(hoversOfSecond).toEqual([true, false]);
   });
 });

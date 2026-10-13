@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { IslandHitRect } from '../../shared/island.js';
 import type { DisplayLike, IslandPlacement, Rect } from './placement.js';
-import { createIslandController, ISLAND_FRAME, islandWindowOptions, type IslandWindowLike } from './window.js';
+import { createIslandController, HOVER_POLL_MS, ISLAND_FRAME, islandWindowOptions, type IslandWindowLike } from './window.js';
 
 const EXTERNAL: DisplayLike = { id: 3, bounds: { x: 0, y: 0, width: 3440, height: 1440 }, workArea: { x: 0, y: 25, width: 3440, height: 1415 }, internal: false };
 const MACBOOK: DisplayLike = { id: 1, bounds: { x: 0, y: 1440, width: 1512, height: 982 }, workArea: { x: 0, y: 1478, width: 1512, height: 944 }, internal: true };
@@ -10,7 +11,7 @@ class FakeWindow implements IslandWindowLike {
   visible = false;
   destroyed = false;
   readonly calls: string[] = [];
-  /** Вызовы `setIgnoreMouseEvents` по порядку: первый — начальный сквозной режим, остальные — `setInteractive`. */
+  /** Вызовы `setIgnoreMouseEvents` по порядку: первый — начальный сквозной режим, остальные — опрос курсора и скрытие. */
   readonly mouseCalls: Array<[boolean, { forward: boolean }]> = [];
   private readonly listeners = new Map<string, Array<() => void>>();
   readonly webContents = {
@@ -35,7 +36,10 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
   const windows: FakeWindow[] = [];
   let saved = placement;
   let displays: DisplayLike[] = [EXTERNAL, MACBOOK];
+  let cursor = { x: 0, y: 0 };
   const log = vi.fn();
+  const onHover = vi.fn();
+  const cursorSpy = vi.fn(() => cursor);
   const controller = createIslandController<FakeWindow>({
     createWindow: () => {
       const window = new FakeWindow();
@@ -46,11 +50,34 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
     primaryDisplayId: () => 3,
     placement: () => saved,
     savePlacement: (next) => { saved = next; },
+    cursor: cursorSpy,
+    onHover,
     onCreated: vi.fn(),
     log,
   });
-  return { controller, windows, log, setDisplays: (next: DisplayLike[]) => { displays = next; }, placement: () => saved };
+  return {
+    controller, windows, log, onHover, cursorSpy,
+    setDisplays: (next: DisplayLike[]) => { displays = next; },
+    setCursor: (next: { x: number; y: number }) => { cursor = next; },
+    placement: () => saved,
+  };
 }
+
+/** Кадр по центру внешнего монитора: окно в (1480, 0), размер 480×520. */
+const FRAME_X = 1480;
+/** Область формы в координатах окна: на экране это x 1580…1860, y 0…40. */
+const SHAPE: IslandHitRect = { x: 100, y: 0, width: 280, height: 40 };
+const INSIDE = { x: 1700, y: 20 };
+const OUTSIDE = { x: 3000, y: 900 };
+
+// Показанное окно опрашивает курсор по таймеру: таймеры подставные во всех тестах файла.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('окно острова', () => {
   it('параметры спайка: panel, без рамки, прозрачное, без активации, выше экрана можно', () => {
@@ -156,49 +183,22 @@ describe('окно острова', () => {
     expect(windows[0]?.bounds).toEqual({ x: 1480, y: 0, width: 480, height: 520 });
   });
 
-  it('open: окно сразу сквозное для мыши (с пересылкой движений), интерактивным его делает setInteractive', () => {
-    const { controller, windows } = setup();
+  it('open: окно сразу сквозное для мыши, без пересылки движений и без опроса, пока оно скрыто', () => {
+    const { controller, windows, cursorSpy } = setup();
     controller.open();
-    expect(windows[0]?.mouseCalls).toEqual([[true, { forward: true }]]);
-    controller.setInteractive(true);
-    controller.setInteractive(false);
-    expect(windows[0]?.mouseCalls).toEqual([
-      [true, { forward: true }],
-      [false, { forward: true }],
-      [true, { forward: true }],
-    ]);
+    expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }]]);
+    vi.advanceTimersByTime(HOVER_POLL_MS * 5);
+    expect(cursorSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('скрытие возвращает окну сквозной режим: интерактивный остров после hide снова пропускает клики', () => {
+  it('setHitRect без окна не падает; после close старое окно не трогается', () => {
     const { controller, windows } = setup();
-    controller.open();
-    controller.setVisible(true);
-    controller.setInteractive(true);
-    controller.setVisible(false);
-    expect(windows[0]?.mouseCalls).toEqual([
-      [true, { forward: true }],
-      [false, { forward: true }],
-      [true, { forward: true }],
-    ]);
-    expect(windows[0]?.visible).toBe(false);
-  });
-
-  it('setInteractive без окна ничего не делает; после close старое окно не трогает', () => {
-    const { controller, windows } = setup();
-    expect(() => controller.setInteractive(true)).not.toThrow();
+    expect(() => controller.setHitRect(SHAPE)).not.toThrow();
     controller.open();
     controller.close();
-    controller.setInteractive(true);
-    expect(windows[0]?.mouseCalls).toEqual([[true, { forward: true }]]);
-  });
-
-  it('новое окно (после close и open) снова начинает сквозным', () => {
-    const { controller, windows } = setup();
-    controller.open();
-    controller.setInteractive(true);
-    controller.close();
-    controller.open();
-    expect(windows[1]?.mouseCalls).toEqual([[true, { forward: true }]]);
+    controller.setHitRect(SHAPE);
+    expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }]]);
   });
 
   it('isIsland — только webContents живого окна острова', () => {
@@ -223,11 +223,228 @@ describe('окно острова', () => {
     expect(log).toHaveBeenCalledTimes(2);
   });
 
-  it('после падения renderer пересозданное окно снова сквозное, даже если упавшее было интерактивным', () => {
-    const { controller, windows } = setup();
+  it('после падения renderer пересозданное окно снова сквозное и без области, даже если упавшее ловило мышь', () => {
+    const { controller, windows, setCursor } = setup();
     controller.open();
-    controller.setInteractive(true);
+    controller.setHitRect(SHAPE);
+    controller.setVisible(true);
+    setCursor(INSIDE);
+    vi.advanceTimersByTime(HOVER_POLL_MS);
+    expect(windows[0]?.mouseCalls.at(-1)).toEqual([false, { forward: false }]);
     windows[0]?.emit('wc:render-process-gone');
-    expect(windows[1]?.mouseCalls).toEqual([[true, { forward: true }]]);
+    expect(windows[1]?.mouseCalls).toEqual([[true, { forward: false }]]);
+    // Область прежнего renderer новому окну не принадлежит: пока он не пришлёт свою, курсор «вне».
+    controller.setVisible(true);
+    vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+    expect(windows[1]?.mouseCalls).toEqual([[true, { forward: false }]]);
+  });
+
+  describe('наведение по настоящему курсору', () => {
+    /** Остров показан, область формы известна, курсор вне неё. */
+    function shown(placement?: IslandPlacement) {
+      const rig = setup(placement ?? { displayId: 3, anchor: 'center' });
+      rig.controller.open();
+      rig.controller.setHitRect(SHAPE);
+      rig.controller.setVisible(true);
+      rig.setCursor(OUTSIDE);
+      return rig;
+    }
+
+    it('курсор над областью — окно ловит мышь и renderer узнаёт об этом один раз', () => {
+      const { windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS - 1);
+      expect(onHover).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }], [false, { forward: false }]]);
+      expect(onHover.mock.calls).toEqual([[true]]);
+    });
+
+    it('курсор ушёл — окно снова сквозное, renderer узнаёт об уходе', () => {
+      const { windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      setCursor(OUTSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }], [false, { forward: false }], [true, { forward: false }]]);
+      expect(onHover.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('пока состояние то же, повторных вызовов нет: ни вне области, ни над ней', () => {
+      const { windows, onHover, setCursor } = shown();
+      vi.advanceTimersByTime(HOVER_POLL_MS * 5);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }]]);
+      expect(onHover).not.toHaveBeenCalled();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS * 5);
+      setCursor({ x: 1750, y: 30 });
+      vi.advanceTimersByTime(HOVER_POLL_MS * 5);
+      expect(windows[0]?.mouseCalls).toHaveLength(2);
+      expect(onHover).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<[string, { x: number; y: number }, boolean]>([
+      ['левый верхний угол — внутри', { x: 1580, y: 0 }, true],
+      ['правее правого края — вне', { x: 1860, y: 20 }, false],
+      ['ниже нижнего края — вне', { x: 1700, y: 40 }, false],
+      ['левее левого края — вне', { x: 1579, y: 20 }, false],
+      ['выше верха кадра — вне', { x: 1700, y: -1 }, false],
+    ])('граница области: %s', (_name, point, inside) => {
+      const { onHover, setCursor } = shown();
+      setCursor(point);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover.mock.calls).toEqual(inside ? [[true]] : []);
+    });
+
+    it('область — в координатах окна: сдвиг окна сдвигает и её', () => {
+      const { controller, windows, onHover, setCursor, setDisplays } = shown({ displayId: 1, anchor: 'center' });
+      // Окно на втором мониторе: (516, 1440). Курсор на прежнем месте над первым монитором — уже вне области.
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover).not.toHaveBeenCalled();
+      setCursor({ x: 516 + 100 + 10, y: 1440 + 10 });
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover.mock.calls).toEqual([[true]]);
+      // Монитор пропал — окно переехало на основной, прежняя точка экрана снова вне области.
+      setDisplays([EXTERNAL]);
+      controller.relayout();
+      expect(windows[0]?.bounds.x).toBe(FRAME_X);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('перетаскивание: окно остаётся ловящим мышь, а наведение «над», даже если курсор вне области', () => {
+      const { controller, windows, onHover, setCursor } = shown();
+      controller.dragStart({ screenX: 1700, screenY: 20 });
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }], [false, { forward: false }]]);
+      expect(onHover.mock.calls).toEqual([[true]]);
+      // Окно едет за курсором — область уходит из-под него, но жест не прерывается.
+      setCursor(OUTSIDE);
+      controller.dragMove({ screenX: 700, screenY: 20 });
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(windows[0]?.mouseCalls).toHaveLength(2);
+      expect(onHover).toHaveBeenCalledTimes(1);
+      // Отпустили вне области: следующий опрос возвращает сквозной режим.
+      controller.dragEnd({ screenX: 700, screenY: 20 });
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }], [false, { forward: false }], [true, { forward: false }]]);
+      expect(onHover.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('перетаскивание закончилось над областью — окно остаётся ловящим мышь', () => {
+      const { controller, windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.dragStart({ screenX: 1700, screenY: 20 });
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.dragEnd({ screenX: 1700, screenY: 20 });
+      // Прилипание сдвинуло окно, но курсор остался над формой: оно снова под ним.
+      setCursor({ x: (windows[0]?.bounds.x ?? 0) + 150, y: 20 });
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(onHover.mock.calls).toEqual([[true]]);
+    });
+
+    it('область null — курсор вне: окно снова сквозное', () => {
+      const { controller, windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.setHitRect(null);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(windows[0]?.mouseCalls.at(-1)).toEqual([true, { forward: false }]);
+      expect(onHover.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('без области курсор вне, как бы он ни стоял', () => {
+      const { controller, onHover, setCursor } = setup({ displayId: 3, anchor: 'center' });
+      controller.open();
+      controller.setVisible(true);
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(onHover).not.toHaveBeenCalled();
+    });
+
+    it('опрос идёт только пока окно показано: скрытое окно курсор не читает', () => {
+      const { controller, cursorSpy } = setup();
+      controller.open();
+      controller.setHitRect(SHAPE);
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(cursorSpy).not.toHaveBeenCalled();
+      controller.setVisible(true);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(HOVER_POLL_MS * 2);
+      expect(cursorSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('повторный показ не заводит второй таймер', () => {
+      const { controller } = shown();
+      controller.setVisible(true);
+      controller.setVisible(true);
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it('скрытие останавливает опрос, возвращает окну сквозной режим и сообщает об уходе курсора', () => {
+      const { controller, windows, onHover, cursorSpy, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.setVisible(false);
+      expect(windows[0]?.mouseCalls.at(-1)).toEqual([true, { forward: false }]);
+      expect(onHover.mock.calls).toEqual([[true], [false]]);
+      expect(windows[0]?.visible).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      cursorSpy.mockClear();
+      vi.advanceTimersByTime(HOVER_POLL_MS * 5);
+      expect(cursorSpy).not.toHaveBeenCalled();
+    });
+
+    it('скрытие без наведения об уходе не сообщает', () => {
+      const { controller, onHover } = shown();
+      controller.setVisible(false);
+      expect(onHover).not.toHaveBeenCalled();
+    });
+
+    it('показ после скрытия снова запускает опрос, а курсор над областью ловится заново', () => {
+      const { controller, windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.setVisible(false);
+      controller.setVisible(true);
+      expect(windows[0]?.visible).toBe(true);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover.mock.calls).toEqual([[true], [false], [true]]);
+      expect(windows[0]?.mouseCalls.at(-1)).toEqual([false, { forward: false }]);
+    });
+
+    it('close останавливает опрос; новое окно после open начинает сквозным и без области', () => {
+      const { controller, windows, onHover, setCursor } = shown();
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      controller.close();
+      expect(vi.getTimerCount()).toBe(0);
+      controller.open();
+      controller.setVisible(true);
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(windows[1]?.mouseCalls).toEqual([[true, { forward: false }]]);
+      expect(onHover.mock.calls).toEqual([[true]]);
+    });
+
+    it('падение renderer останавливает опрос упавшего окна', () => {
+      const { windows, cursorSpy } = shown();
+      windows[0]?.emit('wc:render-process-gone');
+      expect(vi.getTimerCount()).toBe(0);
+      cursorSpy.mockClear();
+      vi.advanceTimersByTime(HOVER_POLL_MS * 3);
+      expect(cursorSpy).not.toHaveBeenCalled();
+    });
+
+    it('окно спрятано мимо контроллера — опрос сам останавливается, не трогая окно', () => {
+      const { windows, cursorSpy } = shown();
+      windows[0]?.hide();
+      cursorSpy.mockClear();
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(cursorSpy).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }]]);
+    });
   });
 });

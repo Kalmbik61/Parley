@@ -1,12 +1,13 @@
 /**
  * Язычок убранного острова (итерация 2026-10-12): форма уехала вверх за кадр окна, а у верхнего края остался тонкий
  * язычок на том же месте по горизонтали (`anchorClass` — то же выравнивание, что у формы) и под чёлкой (`topInset`).
- * Видна чёрная полоска 40×5 со светлой обводкой (видна и на светлом, и на тёмном фоне под прозрачным окном), ловит мышь невидимая область 64×16. Наведение делает окно интерактивным (иначе клик ушёл бы
- * приложению под прозрачным кадром), клик и потяжка вниз дальше `PULL_EXPAND_PX` выдвигают остров. Потяжка — не
- * перетаскивание окна: форма стоит на месте, пока язычок не выдвинет её.
+ * Видна чёрная полоска 40×5 со светлой обводкой (видна и на светлом, и на тёмном фоне под прозрачным окном), ловит мышь невидимая область 64×16.
+ * Область кнопки (`tabRef`) `IslandApp` сообщает main как область острова: пока курсор над ней, main делает окно
+ * ловящим мышь (иначе клик ушёл бы приложению под прозрачным кадром). Клик и потяжка вниз дальше `PULL_EXPAND_PX`
+ * выдвигают остров. Потяжка — не перетаскивание окна: форма стоит на месте, пока язычок не выдвинет её.
  */
 
-import { useRef } from 'react';
+import { useRef, type Ref } from 'react';
 import { S } from '../../shared/strings.js';
 
 /** Насколько вниз надо потянуть язычок, чтобы остров выдвинулся без клика. */
@@ -15,14 +16,13 @@ export const PULL_EXPAND_PX = 8;
 export function IslandTab({
   anchorClass,
   topInset,
-  onEnter,
-  onLeave,
+  tabRef,
   onExpand,
 }: {
   anchorClass: string;
   topInset: number;
-  onEnter(): void;
-  onLeave(): void;
+  /** Ссылка на кнопку: по ней `IslandApp` замеряет область, которую язычок ловит мышью. */
+  tabRef: Ref<HTMLButtonElement>;
   onExpand(): void;
 }): JSX.Element {
   /** Высота курсора на экране в момент нажатия; `null` — язычок не зажат. */
@@ -30,13 +30,12 @@ export function IslandTab({
   return (
     <div className={`absolute inset-x-0 flex ${anchorClass}`} style={{ top: topInset }}>
       <button
+        ref={tabRef}
         type="button"
         data-testid="island-tab"
         aria-label={S.island.showIsland}
         title={S.island.showIsland}
         className="flex h-4 w-16 cursor-pointer items-start justify-center"
-        onMouseEnter={onEnter}
-        onMouseLeave={onLeave}
         onClick={onExpand}
         onPointerDown={(event) => {
           if (event.button !== 0) return;

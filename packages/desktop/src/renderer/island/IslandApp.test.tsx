@@ -1,9 +1,9 @@
 /**
  * Проводка острова на подставном мосту: новый запрос выбирается в карточке (а не остаётся прежний) и выдвигает убранный
  * остров, «×» убирает его (окно при этом остаётся видимым, пока хост подключён), покой в 4 с убирает сам, язычок
- * выдвигает остров кликом или потяжкой вниз, корень заполняет кадр окна и выравнивает форму по точке, окно ловит мышь
- * только над формой (и не отпускает её посреди перетаскивания). Где нужна цепочка «событие → снимок ленты → карточка»,
- * таймеры настоящие; отсчёт покоя идёт на подставных таймерах и на заранее заполненных сторах (без обмена с хостом).
+ * выдвигает остров кликом или потяжкой вниз, корень заполняет кадр окна и выравнивает форму по точке, наведение приходит
+ * от main (`onHover`) и открывает список, а область под мышь (форма или язычок) уходит main и не повторяется. Где нужна
+ * цепочка «событие → снимок ленты → карточка», таймеры настоящие; отсчёт покоя идёт на подставных таймерах и на заранее заполненных сторах (без обмена с хостом).
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
  */
 
@@ -33,18 +33,31 @@ function permission(cardId: string, command: string): FeedCard {
 
 const CARDS: Record<string, FeedCard[]> = { 's-01': [permission('c-1', 'rm -rf build')], 's-02': [permission('c-2', 'ls')] };
 
+/** Колбэки живых подставных `ResizeObserver` и то, что они наблюдают: тест «шевелит» замер, вызывая последний колбэк. */
+let resizeCallbacks: Array<() => void> = [];
+let observed: Element[] = [];
+
 // jsdom не знает ResizeObserver — форма острова заводит его при монтировании, чтобы замерять содержимое.
 class ResizeObserverStub {
-  observe(): void {}
+  private readonly callback: () => void;
+  constructor(callback: () => void) {
+    this.callback = callback;
+    resizeCallbacks.push(callback);
+  }
+  observe(element: Element): void {
+    observed.push(element);
+  }
   unobserve(): void {}
-  disconnect(): void {}
+  disconnect(): void {
+    resizeCallbacks = resizeCallbacks.filter((callback) => callback !== this.callback);
+  }
 }
 
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
     config: vi.fn(async (): Promise<IslandConfig> => ({ sound: false, hintShown: true, topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
-    setInteractive: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
+    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), hintShown: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -75,7 +88,13 @@ function setup(config: Partial<IslandConfig> = {}) {
       fake.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [] });
     });
   };
-  return { island, bridge, blocked, working, disconnect, reconnect };
+  /** Main сообщает «курсор над областью острова» / «ушёл»: вызывает всех, кто подписан на `onHover`. */
+  const hover = (over: boolean): void => {
+    act(() => {
+      for (const [listener] of vi.mocked(island.onHover).mock.calls) listener(over);
+    });
+  };
+  return { island, bridge, blocked, working, disconnect, reconnect, hover };
 }
 
 /** Работа идёт к моменту открытия острова: сторы заполнены заранее, обмена с хостом ждать не надо. */
@@ -99,6 +118,8 @@ const expand = (): void => {
 };
 
 beforeEach(() => {
+  resizeCallbacks = [];
+  observed = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   useIslandRequests.getState().clear();
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
@@ -145,8 +166,6 @@ describe('проводка острова', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab')).toBeTruthy();
-    // Форма уехала из-под курсора: окно снова сквозное, мышь ловит только язычок.
-    expect(island.setInteractive).toHaveBeenLastCalledWith(false);
     // Окно не прячется: убирается только то, что нарисовано.
     expect(island.setVisible).not.toHaveBeenCalled();
     blocked('s-02');
@@ -206,18 +225,35 @@ describe('проводка острова', () => {
     await waitFor(() => expect(second.container.firstElementChild?.className).toContain('justify-start'));
   });
 
-  it('курсор над формой — окно ловит мышь, ушёл — снова сквозное, а список закрыт', async () => {
-    const { island, bridge, working } = setup();
+  it('наведение приходит от main: над областью список открыт, ушёл — закрыт', async () => {
+    const { bridge, working, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     working('s-01');
     await screen.findByText('1 working');
-    const shape = screen.getByTestId('island');
-    fireEvent.mouseEnter(screen.getByTestId('island-pill'));
-    expect(island.setInteractive).toHaveBeenLastCalledWith(true);
-    expect(screen.queryByTestId('island-list')).not.toBeNull();
-    fireEvent.mouseLeave(shape);
-    expect(island.setInteractive).toHaveBeenLastCalledWith(false);
     expect(screen.queryByTestId('island-list')).toBeNull();
+    hover(true);
+    expect(screen.queryByTestId('island-list')).not.toBeNull();
+    hover(false);
+    expect(screen.queryByTestId('island-list')).toBeNull();
+  });
+
+  it('DOM-наведение остров не слушает: mouseenter и mouseleave по форме список не трогают', async () => {
+    const { bridge, working } = setup();
+    render(<IslandApp bridge={bridge} />);
+    working('s-01');
+    await screen.findByText('1 working');
+    fireEvent.mouseEnter(screen.getByTestId('island-pill'));
+    fireEvent.mouseEnter(screen.getByTestId('island'));
+    expect(screen.queryByTestId('island-list')).toBeNull();
+  });
+
+  it('подписка на наведение снимается при размонтировании', () => {
+    const { island, bridge } = setup();
+    const off = vi.fn();
+    vi.mocked(island.onHover).mockReturnValue(off);
+    render(<IslandApp bridge={bridge} />).unmount();
+    expect(island.onHover).toHaveBeenCalledTimes(1);
+    expect(off).toHaveBeenCalledTimes(1);
   });
 
   describe('перетаскивание', () => {
@@ -229,71 +265,45 @@ describe('проводка острова', () => {
       return pill;
     }
 
-    /** Остров с работой и открытым списком: курсор вошёл в форму. */
+    /** Остров с работой и открытым списком: main сообщил, что курсор над формой. */
     async function openedList() {
       const rig = setup();
       render(<IslandApp bridge={rig.bridge} />);
       rig.working('s-01');
       await screen.findByText('1 working');
-      fireEvent.mouseEnter(screen.getByTestId('island-pill'));
+      rig.hover(true);
       return rig;
     }
 
-    it('уход курсора с формы посреди жеста не делает окно сквозным и не закрывает список', async () => {
+    it('жест уходит main: старт с точкой нажатия, отпускание с точкой отпускания; окно едет за курсором без участия renderer', async () => {
       const { island } = await openedList();
+      const pill = startDrag();
+      expect(island.dragStart).toHaveBeenCalledWith({ screenX: 10, screenY: 20 });
+      expect(island.dragMove).toHaveBeenCalledWith({ screenX: 40, screenY: 20 });
+      fireEvent(pill, pointer('pointerup', 41, 20, 0));
+      expect(island.dragEnd).toHaveBeenCalledWith({ screenX: 41, screenY: 20 });
+    });
+
+    it('посреди жеста список остаётся открытым: main сообщает «над» и во время жеста', async () => {
+      await openedList();
       startDrag();
-      expect(island.dragStart).toHaveBeenCalledTimes(1);
-      vi.mocked(island.setInteractive).mockClear();
-      fireEvent.mouseLeave(screen.getByTestId('island'));
-      expect(island.setInteractive).not.toHaveBeenCalled();
       expect(screen.queryByTestId('island-list')).not.toBeNull();
     });
 
-    it('нажатие без сдвига за порог — не жест: уход курсора по-прежнему делает окно сквозным', async () => {
+    it('после жеста main сообщает «вне» — список закрыт; сам renderer список по отпусканию не трогает', async () => {
+      const { hover } = await openedList();
+      const pill = startDrag();
+      fireEvent(pill, pointer('pointerup', 41, 20, 0));
+      expect(screen.queryByTestId('island-list')).not.toBeNull();
+      hover(false);
+      expect(screen.queryByTestId('island-list')).toBeNull();
+    });
+
+    it('нажатие без сдвига за порог — не жест', async () => {
       const { island } = await openedList();
       fireEvent(screen.getByTestId('island-pill'), pointer('pointerdown', 10, 20));
       fireEvent(screen.getByTestId('island-pill'), pointer('pointermove', 12, 20));
       expect(island.dragStart).not.toHaveBeenCalled();
-      vi.mocked(island.setInteractive).mockClear();
-      fireEvent.mouseLeave(screen.getByTestId('island'));
-      expect(island.setInteractive).toHaveBeenCalledWith(false);
-      expect(screen.queryByTestId('island-list')).toBeNull();
-    });
-
-    it('после жеста курсор не над формой — окно снова сквозное и список закрыт', async () => {
-      const { island } = await openedList();
-      const pill = startDrag();
-      fireEvent.mouseLeave(screen.getByTestId('island'));
-      // jsdom не считает `:hover`: курсор «не над формой».
-      fireEvent(pill, pointer('pointerup', 41, 20, 0));
-      expect(island.dragEnd).toHaveBeenCalledWith({ screenX: 41, screenY: 20 });
-      expect(island.setInteractive).toHaveBeenLastCalledWith(false);
-      expect(screen.queryByTestId('island-list')).toBeNull();
-    });
-
-    it('после жеста курсор всё ещё над формой — окно остаётся интерактивным', async () => {
-      const { island } = await openedList();
-      const pill = startDrag();
-      vi.mocked(island.setInteractive).mockClear();
-      const original = Element.prototype.matches;
-      const spy = vi.spyOn(Element.prototype, 'matches').mockImplementation(function (this: Element, selector: string) {
-        return selector === ':hover' ? true : original.call(this, selector);
-      });
-      try {
-        fireEvent(pill, pointer('pointerup', 41, 20, 0));
-      } finally {
-        spy.mockRestore();
-      }
-      expect(island.setInteractive).not.toHaveBeenCalled();
-    });
-
-    it('жест закончен — следующий уход курсора снова делает окно сквозным', async () => {
-      const { island } = await openedList();
-      const pill = startDrag();
-      fireEvent(pill, pointer('pointerup', 41, 20, 0));
-      vi.mocked(island.setInteractive).mockClear();
-      fireEvent.mouseLeave(screen.getByTestId('island'));
-      expect(island.setInteractive).toHaveBeenCalledWith(false);
     });
 
     it('нажатие на «×» остров не тащит: только убирает', async () => {
@@ -304,6 +314,111 @@ describe('проводка острова', () => {
       fireEvent(tuck, pointer('pointerup', 80, 20, 0));
       expect(island.dragStart).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('область под мышь', () => {
+  const SHAPE = { x: 100, y: 0, width: 280, height: 40 };
+  const TAB = { x: 208, y: 0, width: 64, height: 16 };
+  /** Что вернёт `getBoundingClientRect` форме и язычку; тест меняет, как будто форма выросла или уехала. */
+  let rects = { shape: SHAPE, tab: TAB };
+  let spy: { mockRestore(): void } | null = null;
+
+  beforeEach(() => {
+    rects = { shape: SHAPE, tab: TAB };
+    spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const id = (this as HTMLElement).dataset.testid;
+      // Язычок стоит там же, где форма: у правой точки кадра он правее.
+      const shifted = this.parentElement?.className.includes('justify-end') === true ? 208 : 0;
+      const rect = id === 'island' ? rects.shape : id === 'island-tab' ? { ...rects.tab, x: rects.tab.x + shifted } : { x: 0, y: 0, width: 0, height: 0 };
+      return rect as DOMRect;
+    });
+  });
+
+  afterEach(() => {
+    spy?.mockRestore();
+    spy = null;
+  });
+
+  /** Последний вызов `setHitRect`. */
+  const lastRect = (island: IslandApi): unknown => vi.mocked(island.setHitRect).mock.calls.at(-1)?.[0];
+  /** Наблюдатели замера пересчитали размер: вызывает последний живой колбэк. */
+  const resized = (): void => {
+    act(() => {
+      resizeCallbacks.at(-1)?.();
+    });
+  };
+
+  it('до подключения хоста область null, потом язычок убранного острова; хост отключился — снова null', () => {
+    const { island, bridge, disconnect, reconnect } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expect(vi.mocked(island.setHitRect).mock.calls[0]).toEqual([null]);
+    expect(lastRect(island)).toEqual(TAB);
+    disconnect();
+    expect(lastRect(island)).toBeNull();
+    reconnect();
+    expect(lastRect(island)).toEqual(TAB);
+  });
+
+  it('выдвинутый остров сообщает область формы, убранный — язычка', () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    expect(lastRect(island)).toEqual(SHAPE);
+    fireEvent.click(screen.getByRole('button', { name: 'Tuck the island away' }));
+    expect(lastRect(island)).toEqual(TAB);
+  });
+
+  it('форму и язычок замеряет ResizeObserver', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expect(observed).toContain(screen.getByTestId('island'));
+    expect(observed).toContain(screen.getByTestId('island-tab'));
+  });
+
+  it('форма выросла — уходит новая область; равная прежней не повторяется', () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    const before = vi.mocked(island.setHitRect).mock.calls.length;
+    resized();
+    resized();
+    expect(vi.mocked(island.setHitRect).mock.calls).toHaveLength(before);
+    rects.shape = { x: 40, y: 0, width: 400, height: 220 };
+    resized();
+    expect(lastRect(island)).toEqual({ x: 40, y: 0, width: 400, height: 220 });
+    expect(vi.mocked(island.setHitRect).mock.calls).toHaveLength(before + 1);
+    resized();
+    expect(vi.mocked(island.setHitRect).mock.calls).toHaveLength(before + 1);
+  });
+
+  it('форма доехала до места (transitionend), размер при этом не менялся — область обновляется', () => {
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expand();
+    // Начало выдвижения: форма ещё за кадром.
+    rects.shape = { x: 100, y: -200, width: 280, height: 40 };
+    fireEvent.transitionEnd(screen.getByTestId('island-slide'));
+    expect(lastRect(island)).toEqual({ x: 100, y: -200, width: 280, height: 40 });
+    rects.shape = SHAPE;
+    fireEvent.transitionEnd(screen.getByTestId('island-slide'));
+    expect(lastRect(island)).toEqual(SHAPE);
+  });
+
+  it('точка острова сменилась — область замеряется заново', async () => {
+    const { island, bridge } = setup({ anchor: 'right' });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(lastRect(island)).toEqual({ ...TAB, x: 416 }));
+  });
+
+  it('смена вида пересоздаёт наблюдателя: прежний отключён, новый следит за формой, а не за ушедшим язычком', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    const before = resizeCallbacks.length;
+    expand();
+    // Язычок ушёл — остался один живой наблюдатель, а колбэк прежнего вида не сработает.
+    expect(resizeCallbacks).toHaveLength(before);
+    expect(observed.at(-1)).toBe(screen.getByTestId('island'));
   });
 });
 
@@ -334,16 +449,6 @@ describe('язычок убранного острова', () => {
       expect(wrapper.className).toContain('justify-end');
       expect(wrapper.style.top).toBe('38px');
     });
-  });
-
-  it('наведение делает окно интерактивным, уход — сквозным', () => {
-    const { island, bridge } = setup();
-    render(<IslandApp bridge={bridge} />);
-    const tab = screen.getByTestId('island-tab');
-    fireEvent.mouseEnter(tab);
-    expect(island.setInteractive).toHaveBeenLastCalledWith(true);
-    fireEvent.mouseLeave(tab);
-    expect(island.setInteractive).toHaveBeenLastCalledWith(false);
   });
 
   it('клик выдвигает остров: язычок уходит, в покое пилюля «No agents running»', () => {
@@ -398,8 +503,8 @@ describe('убирание острова в покое', () => {
     vi.useFakeTimers();
   });
 
-  it('покой 4 с — остров убирается; за мгновение до срока ещё нет, окно сквозное и мышь ловит язычок', () => {
-    const { island, bridge } = setup();
+  it('покой 4 с — остров убирается; за мгновение до срока ещё нет', () => {
+    const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
     advance(IDLE_RETRACT_MS - 1);
@@ -407,25 +512,24 @@ describe('убирание острова в покое', () => {
     advance(1);
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab')).toBeTruthy();
-    expect(island.setInteractive).toHaveBeenLastCalledWith(false);
   });
 
-  it('курсор над формой посреди отсчёта — остров не убирается; ушёл — отсчёт заново', () => {
-    const { bridge } = setup();
+  it('курсор над формой (по main) посреди отсчёта — остров не убирается; ушёл — отсчёт заново', () => {
+    const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
     advance(IDLE_RETRACT_MS - 1000);
-    fireEvent.mouseEnter(screen.getByTestId('island'));
+    hover(true);
     advance(IDLE_RETRACT_MS * 3);
     expect(isRetracted()).toBe(false);
-    fireEvent.mouseLeave(screen.getByTestId('island'));
+    hover(false);
     advance(IDLE_RETRACT_MS - 1);
     expect(isRetracted()).toBe(false);
     advance(1);
     expect(isRetracted()).toBe(true);
   });
 
-  it('форму тащат — остров не убирается; отпустили не над формой — отсчёт заново', () => {
+  it('форму тащат — остров не убирается; отпустили — отсчёт заново', () => {
     const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
@@ -434,7 +538,6 @@ describe('убирание острова в покое', () => {
     fireEvent(pill, pointer('pointermove', 40, 20));
     advance(IDLE_RETRACT_MS * 3);
     expect(isRetracted()).toBe(false);
-    // jsdom не считает `:hover`: курсор «не над формой» — отпускание приравнено к уходу.
     fireEvent(pill, pointer('pointerup', 41, 20, 0));
     advance(IDLE_RETRACT_MS - 1);
     expect(isRetracted()).toBe(false);

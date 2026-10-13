@@ -14,6 +14,14 @@ export interface IslandPoint {
   screenY: number;
 }
 
+/** Прямоугольник относительно окна острова (CSS px = DIP): то, что ловит мышь; вне него клики проходят сквозь окно. */
+export interface IslandHitRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Что острову нужно из настроек и места: звук по Sound, показана ли подсказка, отступ под чёлку, точка у края монитора. */
 export interface IslandConfig {
   sound: boolean;
@@ -26,8 +34,14 @@ export interface IslandConfig {
 export interface IslandApi {
   config(): Promise<IslandConfig>;
   onConfig(listener: (config: IslandConfig) => void): () => void;
-  /** Окно ловит мышь, пока курсор над формой; вне формы клики проходят сквозь прозрачный кадр к приложениям под ним. */
-  setInteractive(interactive: boolean): void;
+  /**
+   * Курсор над областью острова (`setHitRect`) или нет — решает main по настоящему положению курсора: DOM-наведение
+   * в сквозном окне ненадёжно (`mouseleave` могло не прийти вовсе). Над областью окно ловит мышь, вне её клики проходят
+   * сквозь прозрачный кадр к приложениям под ним; во время перетаскивания main сообщает «над областью».
+   */
+  onHover(listener: (hovered: boolean) => void): () => void;
+  /** Область, которую остров ловит мышью: форма (выдвинутый), язычок (убранный) или `null`, если ничего не показано. */
+  setHitRect(rect: IslandHitRect | null): void;
   setVisible(visible: boolean): void;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
