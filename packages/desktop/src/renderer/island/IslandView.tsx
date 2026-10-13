@@ -7,6 +7,9 @@
  * Чёрная форма плавно меняет размер, как Dynamic Island: внешний элемент (`data-testid="island"`) получает явные
  * `width`/`height` в пикселях по замеру внутреннего содержимого (`w-max`), а CSS-переход анимирует их. Окно при этом
  * не меняется — это фиксированный прозрачный кадр (`ISLAND_FRAME`), форма живёт внутри него.
+ *
+ * Убранный остров (`retracted`) уезжает вверх за кадр: сдвигает обёртка формы (`island-slide`), а не сама форма —
+ * у размера и сдвига разная длительность. Тащить остров можно за любое место формы (`useShapeDrag`), кроме кнопок.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
@@ -18,7 +21,7 @@ import { alwaysRules } from '../chat/cards/always-rules.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { Button } from '../ui/button.js';
-import { DragHandle } from './DragHandle.js';
+import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
 import type { IslandRequest } from './requests.js';
 import { simpleChoices } from './simple-question.js';
@@ -38,6 +41,8 @@ export interface IslandViewProps {
   index: number;
   config: IslandConfig;
   listOpen: boolean;
+  /** Остров убран: форма уехала вверх за кадр окна, на её месте — язычок (`IslandTab`). */
+  retracted: boolean;
   /** Номер показа острова: растёт каждый раз, когда окно из скрытого становится видимым (`IslandApp`). */
   showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
@@ -47,10 +52,11 @@ export interface IslandViewProps {
   /** Курсор вошёл в форму / ушёл с неё: окно ловит мышь только над формой (`IslandApp`). */
   onShapeEnter(): void;
   onShapeLeave(): void;
-  /** Перетаскивание за ручку началось / закончилось: пока оно идёт, уход курсора с формы не в счёт. */
+  /** Перетаскивание формы началось / закончилось: пока оно идёт, уход курсора с формы не в счёт. */
   onDragStart(): void;
   onDragEnd(): void;
   onToggleList(open: boolean): void;
+  /** «×»: убрать остров до следующего запроса или выдвижения язычком. */
   onHide(): void;
   onSelect(index: number): void;
   onDecide(key: string, decision: FeedDecision): void;
@@ -67,49 +73,70 @@ function rowTarget(row: IslandRow): FocusTarget {
 
 function HideButton({ onHide }: { onHide(): void }): JSX.Element {
   return (
-    <button type="button" aria-label={S.island.hide} title={S.island.hide} onClick={onHide} className="px-1 text-muted-foreground hover:text-foreground">
+    <button type="button" aria-label={S.island.tuckAway} title={S.island.tuckAway} onClick={onHide} className="cursor-pointer px-1 text-muted-foreground hover:text-foreground">
       ×
     </button>
   );
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
-  const { model, api, onToggleList, onHide, onDragStart, onDragEnd } = props;
+  const { model, onToggleList, onHide } = props;
   return (
     // Список — по наведению или клику (спека, раздел 4); уход курсора с формы закрывает его (`IslandApp`). Строка занимает
     // всю ширину содержимого, а при открытом списке оно растёт до 400 px: содержимое строки по центру, чтобы пилюля
     // не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm" onMouseEnter={() => onToggleList(true)}>
-      <DragHandle api={api} onDragStart={onDragStart} onDragEnd={onDragEnd} />
-      {/* Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы. */}
-      <button type="button" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
-        {model.providers.map((provider) => (
-          <AgentIcon key={provider} provider={provider} size={14} />
-        ))}
-        <span>{S.island.pill(model.working, model.waiting)}</span>
-      </button>
+      {model.active ? (
+        // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
+        // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли.
+        <div data-testid="island-counters" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
+          {model.providers.map((provider) => (
+            <AgentIcon key={provider} provider={provider} size={14} />
+          ))}
+          <span>{S.island.pill(model.working, model.waiting)}</span>
+        </div>
+      ) : (
+        <span data-testid="island-idle" className="text-muted-foreground">
+          {S.island.idle}
+        </span>
+      )}
       <HideButton onHide={onHide} />
     </div>
   );
 }
+
+type RoomRow = Extract<IslandRow, { kind: 'room' }>;
+type SessionRow = Extract<IslandRow, { kind: 'session' }>;
 
 function List({ model, api }: IslandViewProps): JSX.Element {
   return (
     <div data-testid="island-list" className="island-reveal flex max-h-[360px] w-[400px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-sm">
       {model.groups.map((group) => (
         <div key={group.key} className="flex flex-col gap-1">
-          <div className="text-[13px] text-muted-foreground">
-            {group.title} <span className="text-muted-foreground">· {group.project}</span>
+          <div>
+            <span className="font-semibold text-foreground">{group.title}</span> <span className="text-[13px] text-muted-foreground">· {group.project}</span>
           </div>
-          {group.rows.map((row) => (
-            <button key={row.key} type="button" className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
-              {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе, комната) — «working». */}
-              <AgentStateDot state={row.kind === 'session' && row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
-              <span className="min-w-0 flex-1 truncate">{row.kind === 'session' ? row.label : row.title}</span>
-              {row.kind === 'session' && row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
-              {row.kind === 'room' ? <span className="text-[13px] text-muted-foreground">{S.island.roomBusy(row.busy)}</span> : null}
-            </button>
-          ))}
+          {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
+          {group.rows
+            .filter((row): row is RoomRow => row.kind === 'room')
+            .map((room) => (
+              <div key={room.key} data-testid="island-room" className="flex min-w-0 gap-1 text-[13px] text-foreground/75">
+                <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
+                  {room.title}
+                </button>
+                <span className="shrink-0">· {S.island.roomBusy(room.busy)}</span>
+              </div>
+            ))}
+          {group.rows
+            .filter((row): row is SessionRow => row.kind === 'session')
+            .map((row) => (
+              <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
+                {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
+                <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+              </button>
+            ))}
         </div>
       ))}
     </div>
@@ -122,7 +149,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
   // Решение выключено, пока оно уходит, и первые `CARD_ARM_MS` после показа запроса.
   const disabled = item.deciding || !armed;
   const openButton = (
-    <Button data-testid="island-open" size="default" variant="outline" className="text-sm" onClick={open}>
+    <Button data-testid="island-open" size="default" variant="outline" className="cursor-pointer text-sm" onClick={open}>
       {S.island.openInParley}
     </Button>
   );
@@ -131,15 +158,15 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
     const rules = alwaysRules(card.suggestions);
     return (
       <>
-        <Button data-testid="island-allow" size="default" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow' })}>
+        <Button data-testid="island-allow" size="default" className="cursor-pointer text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow' })}>
           {S.island.allow}
         </Button>
         {rules !== null ? (
-          <Button data-testid="island-always" size="default" variant="outline" className="text-sm" title={rules.join(', ')} disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow', always: true })}>
+          <Button data-testid="island-always" size="default" variant="outline" className="cursor-pointer text-sm" title={rules.join(', ')} disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'allow', always: true })}>
             {S.island.always}
           </Button>
         ) : null}
-        <Button data-testid="island-deny" size="default" variant="outline" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'deny' })}>
+        <Button data-testid="island-deny" size="default" variant="outline" className="cursor-pointer text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'permission', behavior: 'deny' })}>
           {S.island.deny}
         </Button>
       </>
@@ -151,7 +178,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
       <>
         {/* Подписи могут повторяться или быть пустыми — ключ с номером. */}
         {simple.options.map((label, at) => (
-          <Button key={`${at}:${label}`} data-testid="island-option" size="default" variant="outline" className="text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
+          <Button key={`${at}:${label}`} data-testid="island-option" size="default" variant="outline" className="cursor-pointer text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
             {label}
           </Button>
         ))}
@@ -162,7 +189,7 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
 }
 
 function Card(props: IslandViewProps): JSX.Element | null {
-  const { items, index, showId, labels, api, onSelect, onDecide, onHide, onDragStart, onDragEnd } = props;
+  const { items, index, showId, labels, api, onSelect, onDecide, onHide } = props;
   const item = items[index] ?? items[0];
   // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
   // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
@@ -183,18 +210,17 @@ function Card(props: IslandViewProps): JSX.Element | null {
     // Ключ по показанному запросу: новая карточка (стрелки, новый запрос) заново проигрывает появление.
     <div key={item.key} data-testid="island-card" className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
       <div className="flex items-center gap-2">
-        <DragHandle api={api} onDragStart={onDragStart} onDragEnd={onDragEnd} />
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
           {label === undefined ? null : <span className="text-[13px] text-muted-foreground"> · {label.project}</span>}
         </span>
         {items.length > 1 ? (
           <span className="flex items-center gap-1 text-muted-foreground">
-            <button type="button" aria-label={S.island.previous} onClick={() => onSelect(index - 1)} disabled={index === 0}>
+            <button type="button" aria-label={S.island.previous} className="cursor-pointer disabled:cursor-default" onClick={() => onSelect(index - 1)} disabled={index === 0}>
               ‹
             </button>
             <span className="text-[13px]">{S.island.of(index + 1, items.length)}</span>
-            <button type="button" aria-label={S.island.next} onClick={() => onSelect(index + 1)} disabled={index >= items.length - 1}>
+            <button type="button" aria-label={S.island.next} className="cursor-pointer disabled:cursor-default" onClick={() => onSelect(index + 1)} disabled={index >= items.length - 1}>
               ›
             </button>
           </span>
@@ -214,7 +240,8 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { items, listOpen, config, shapeRef, onShapeEnter, onShapeLeave, onHintDone } = props;
+  const { model, items, listOpen, config, retracted, shapeRef, api, onShapeEnter, onShapeLeave, onDragStart, onDragEnd, onHintDone } = props;
+  const drag = useShapeDrag(api, { onDragStart, onDragEnd });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
@@ -234,29 +261,38 @@ export function IslandView(props: IslandViewProps): JSX.Element {
     return () => observer.disconnect();
   }, []);
   return (
+    // Убранный остров уезжает вверх на свою высоту плюс запас под тень; без `retracted` обёртка стоит на месте.
     <div
-      ref={shapeRef}
-      data-testid="island"
-      className="overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground shadow-lg transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none"
-      style={size ?? undefined}
-      onMouseEnter={onShapeEnter}
-      onMouseLeave={onShapeLeave}
+      data-testid="island-slide"
+      data-retracted={retracted}
+      aria-hidden={retracted || undefined}
+      className={`transition-transform duration-300 ease-out motion-reduce:transition-none ${retracted ? '-translate-y-[calc(100%_+_8px)]' : ''}`}
     >
-      <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>
-        {!config.hintShown ? (
-          <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-xs text-muted-foreground">
-            <span>{S.island.hint}</span>
-            <button type="button" className="underline" onClick={onHintDone}>
-              {S.island.gotIt}
-            </button>
-          </div>
-        ) : null}
-        {items.length > 0 ? <Card {...props} /> : (
-          <>
-            <Pill {...props} />
-            {listOpen ? <List {...props} /> : null}
-          </>
-        )}
+      <div
+        ref={shapeRef}
+        data-testid="island"
+        className={`overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground shadow-lg transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        style={size ?? undefined}
+        onMouseEnter={onShapeEnter}
+        onMouseLeave={onShapeLeave}
+        {...drag.handlers}
+      >
+        <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>
+          {!config.hintShown ? (
+            <div className="flex items-center gap-2 whitespace-nowrap px-3 pt-1.5 text-xs text-muted-foreground">
+              <span>{S.island.hint}</span>
+              <button type="button" className="cursor-pointer underline" onClick={onHintDone}>
+                {S.island.gotIt}
+              </button>
+            </div>
+          ) : null}
+          {items.length > 0 ? <Card {...props} /> : (
+            <>
+              <Pill {...props} />
+              {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
