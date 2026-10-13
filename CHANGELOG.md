@@ -4,7 +4,9 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.12.0
+
+The Island at the top of the screen — in the notch on a MacBook — answers permission requests and shows which agents are working and what they just finished. Browser pages send their context to chat, your messages in rooms sit on the right, and "needs you" notifications say what is asked.
 
 ### Added
 
@@ -39,12 +41,23 @@ All notable changes to Parley are documented in this file.
 
 - **Design Mode is now Select.** The result card and "Send to agent ▾" are gone: the element
   becomes an attachment of the "To" target, and its chip shows the screenshot before you send.
+- **Your messages in rooms are on the right.** Like prompts in Chat, they sit on the right on a
+  tinted bubble; agents' messages and system letters stay on the left.
+- **"Needs you" notifications say what is asked.** The notification names the request (a command,
+  a file edit, a fetch, a question or a plan), the project and how many other sessions are waiting,
+  and a click opens the session in Chat at that card.
 
 ### Fixed
 
 - **Notification clicks and update notices keep working after a browser tab loads.** Once a browser tab had loaded
   a page, clicking a macOS notification raised the window but didn't open the session, and a new-version notice
   never reached it, until the window was reloaded.
+- **Resume works when the agent process is still alive.** After a host restart brought a whole
+  workspace up at once, a session could keep running while Parley showed it asleep, and Resume did
+  nothing. Parley now retries recording the start and, if it still can't, stops the process so
+  Resume brings the session up again.
+- **"Allow always" for Codex no longer loses the answer.** With no rules to add, Codex dropped the
+  decision; it now counts as a plain Allow.
 
 ## 0.11.0
 
