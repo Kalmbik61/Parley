@@ -479,8 +479,10 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
       onKeyDown={(event) => {
-        // Esc при фокусе в окне (после клика по ⌖ или ✎ он на кнопке): в странице Esc ловит сам скрипт.
-        if (event.key === 'Escape' && state.mode !== 'off') {
+        // Esc при фокусе в окне (после клика по ⌖ или ✎ он на кнопке): в странице Esc ловит сам скрипт. Esc, который уже
+        // закрыл меню Radix (его события идут по дереву React сквозь портал, в том числе из меню «To») или полосу поиска,
+        // помечен preventDefault — режим он не выключает.
+        if (event.key === 'Escape' && !event.defaultPrevented && state.mode !== 'off') {
           event.preventDefault();
           useBrowserStore.getState().update(tabId, { mode: 'off' });
           return;

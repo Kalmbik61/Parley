@@ -29,10 +29,11 @@ export const PICK_WORLD_ID = 1001;
 /**
  * Пределы данных элемента (спека 12.3, «Числа» плана; спека браузера 8). `selector` спека ограничивает только звеньями,
  * а одно звено (класс или id) пишет страница — длина своя (fix-9). `captureSide` — сторона обрезки снимка в
- * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `infoMs` — сколько ждём
- * роль и React: страница в бесконечном цикле не держит выбор. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
+ * CSS-пикселях: выбранный `body` длинной страницы не превращается в PNG на десятки мегабайт. `viewportSlack` — допуск
+ * «больше вьюпорта» в CSS-пикселях (`exceedsViewport`). `infoMs` — сколько ждём роль и React: страница в бесконечном цикле
+ * не держит выбор. Зеркало первых четырёх — `guest-dom.js` (`LIMITS`).
  */
-export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, infoMs: 2000 } as const;
+export const PICK_LIMITS = { html: 4096, text: 500, selectorLinks: 12, selector: 1024, captureSide: 4096, viewportSlack: 1, infoMs: 2000 } as const;
 
 /** Вычисленные стили, которые уходят агенту (таблица спеки 12.3); остальные ключи выкидываются. */
 const STYLE_KEYS = new Set([
@@ -124,12 +125,14 @@ export interface CaptureClip extends Rect {
 }
 
 /**
- * Элемент больше вьюпорта: шире или выше. Видимая часть его не вместит, и для снимка нужна обрезка CDP за краем вьюпорта.
- * Остальные — и помещающиеся, и частью за краем (скрипт выбора прокручивает такой в видимую часть) — снимаются
- * вырезкой из `capturePage()`: она надёжнее.
+ * Элемент больше вьюпорта: шире или выше больше чем на `viewportSlack` (1 CSS-пиксель). Видимая часть его не вместит, и для
+ * снимка нужна обрезка CDP за краем вьюпорта. Остальные — и помещающиеся, и частью за краем (скрипт выбора прокручивает
+ * такой в видимую часть) — снимаются вырезкой из `capturePage()`: она надёжнее. Допуск нужен, потому что при дробном
+ * масштабе страницы или DPR блок «во всю ширину» измеряется шире вьюпорта на доли пикселя; без допуска он уходил бы в
+ * обрезку CDP, которая в `<webview>` порой отдаёт не тот участок.
  */
 export function exceedsViewport(rect: Rect, viewport: { width: number; height: number }): boolean {
-  return rect.width > viewport.width || rect.height > viewport.height;
+  return rect.width > viewport.width + PICK_LIMITS.viewportSlack || rect.height > viewport.height + PICK_LIMITS.viewportSlack;
 }
 
 /**

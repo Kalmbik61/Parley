@@ -106,12 +106,21 @@ describe('validatePick — предел длины селектора (fix-9)', 
 describe('exceedsViewport — какой элемент видимая часть не вместит (проба настоящего Electron: обрезка CDP в webview порой отдаёт не тот участок)', () => {
   const viewport = { width: 800, height: 600 };
 
-  it('не больше вьюпорта — нет (и ровно с него, и частью за краем: скрипт выбора прокручивает такой в видимую часть); шире или выше — да', () => {
+  it('не больше вьюпорта — нет (и ровно с него, и частью за краем: скрипт выбора прокручивает такой в видимую часть); шире или выше больше чем на 1 CSS-пиксель — да', () => {
     expect(exceedsViewport({ x: 10, y: 20, width: 100, height: 40 }, viewport)).toBe(false);
     expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 600 }, viewport)).toBe(false);
     expect(exceedsViewport({ x: 750, y: -10, width: 100, height: 40 }, viewport)).toBe(false);
-    expect(exceedsViewport({ x: 0, y: 0, width: 801, height: 600 }, viewport)).toBe(true);
-    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 601 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 802, height: 600 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 602 }, viewport)).toBe(true);
+  });
+
+  it('допуск 1 CSS-пиксель: блок «во всю ширину» при дробном масштабе или DPR шире вьюпорта на доли пикселя, но видимая часть его вмещает', () => {
+    expect(exceedsViewport({ x: 0, y: 0, width: 800.4, height: 600 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 600.4 }, viewport)).toBe(false);
+    // Граница допуска: ровно вьюпорт плюс пиксель ещё в допуске, чуть больше — уже нет.
+    expect(exceedsViewport({ x: 0, y: 0, width: 801, height: 601 }, viewport)).toBe(false);
+    expect(exceedsViewport({ x: 0, y: 0, width: 801.1, height: 600 }, viewport)).toBe(true);
+    expect(exceedsViewport({ x: 0, y: 0, width: 800, height: 601.1 }, viewport)).toBe(true);
   });
 });
 
@@ -464,7 +473,8 @@ describe('Select: снимок CDP, роль и React (этап B, спека 3.
     ['небольшой', { x: 10, y: 20, width: 100, height: 40 }, 'png-100x40'],
     ['ровно с вьюпорт', { x: 0, y: 0, width: 800, height: 600 }, 'png-800x400'],
     ['частью за краем картинки, но не больше вьюпорта', { x: 750, y: 20, width: 100, height: 40 }, 'png-50x40'],
-  ])('элемент не больше вьюпорта (%s) — снимок видимой части; обрезка CDP не зовётся, даже когда бы ответила', async (_name, rect, png) => {
+    ['шире на долю пикселя: блок во всю ширину при дробном масштабе или DPR', { x: 0, y: 0, width: 800.4, height: 600 }, 'png-800x400'],
+  ])('элемент не больше вьюпорта плюс допуск 1 CSS-пиксель (%s) — снимок видимой части; обрезка CDP не зовётся, даже когда бы ответила', async (_name, rect, png) => {
     const { scripts, saveImage, mode, scriptCalled, inspector } = setup(undefined, {
       'Page.captureScreenshot': { data: Buffer.from('cdp-png').toString('base64') },
     });

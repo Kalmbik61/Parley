@@ -571,6 +571,60 @@ describe('BrowserSurface — Select (этап B, спека браузера 4.6
     expect(modeOf()).toBe('off');
   });
 
+  it('Esc, закрывший меню «To», Select не выключает: меню закрыто, режим прежний, pickCancel не уходит; следующий Esc вне меню — выключает', async () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    expect(modeOf()).toBe('select');
+
+    const to = screen.getByRole('button', { name: /^To:/ });
+    fireEvent.keyDown(to, { key: 'Enter' });
+    const menu = screen.getByRole('menu');
+    // Меню Radix лежит в портале, но по дереву React его события доходят до корня поверхности: Esc закрывает меню и
+    // помечен preventDefault — на режим он не действует.
+    await act(async () => {
+      fireEvent.keyDown(within(menu).getAllByRole('menuitem')[0] as HTMLElement, { key: 'Escape' });
+    });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+
+    // Esc вне меню по-прежнему выключает режим.
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Select' }), { key: 'Escape' });
+    });
+    expect(modeOf()).toBe('off');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart', 'pickCancel']);
+  });
+
+  it('Esc в полосе поиска закрывает только её: Select остаётся включённым, pickCancel не уходит', async () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 12), 'dom-ready');
+    bridge.browser.pickStart = async (webContentsId) => {
+      bridge.pickCalls.push({ method: 'pickStart', webContentsId });
+      return new Promise<PickResult | null>(() => {});
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Select' }));
+    });
+    act(() => useBrowserStore.getState().update(TAB, { findOpen: true }));
+    await act(async () => {
+      fireEvent.keyDown(screen.getByPlaceholderText('Find…'), { key: 'Escape' });
+    });
+    expect(useBrowserStore.getState().tabs[TAB]?.findOpen).toBe(false);
+    expect(modeOf()).toBe('select');
+    expect(bridge.pickCalls.map((call) => call.method)).toEqual(['pickStart']);
+  });
+
   it("отказ { code: failed } — тост Couldn't pick element: failed. и режим снят", async () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();
