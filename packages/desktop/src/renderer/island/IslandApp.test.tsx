@@ -7,8 +7,9 @@
  * Строки Done: новый конец хода выдвигает остров (без звука), конец хода до подключения — нет, удержание `DONE_HOLD_MS`
  * вместо покоя, Clear прячет строки до нового конца хода. Показанная строка Done держится до конца показа: сессию отметили
  * просмотренной (`idle` с прежним концом хода) — строка остаётся, пока курсор не ушёл с острова; при уборке острова она
- * держится ещё `RETRACT_SLIDE_MS` (пока форма уезжает), выдвинули раньше — уходит в тот же миг. Убранный остров с
- * непросмотренными Done выглядывает сверху маленькой формой «✅ N» (просмотренные в число не входят), без Done — полоска.
+ * держится ещё `RETRACT_MORPH_MS` (пока форма сжимается), выдвинули раньше — уходит в тот же миг. Убранный остров — та же
+ * форма, сжатая в брусок; с непросмотренными Done (просмотренные в число не входят) вместо бруска в ней «✅ N». Поверх
+ * убранной формы лежит прозрачная зона нажатия `island-tab` (подпись, размер, клик и потяжка вниз).
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
  */
 
@@ -21,7 +22,7 @@ import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_SLIDE_MS } from './IslandApp.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
@@ -117,7 +118,7 @@ function seedIdle(): void {
 /** Событие указателя с точкой на экране: `MouseEvent` нужного типа — не зависит от того, знает ли jsdom `PointerEvent`. */
 const pointer = (type: string, screenX = 10, screenY = 20, buttons = 1): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY, buttons });
 
-const isRetracted = (): boolean => screen.getByTestId('island-slide').getAttribute('data-retracted') === 'true';
+const isRetracted = (): boolean => screen.getByTestId('island').getAttribute('data-retracted') === 'true';
 /** Убирает остров стрелкой ⌃: она есть только под курсором, поэтому сначала main сообщает «над областью». */
 const tuck = (hover: (over: boolean) => void): void => {
   hover(true);
@@ -467,12 +468,12 @@ describe('область под мышь', () => {
     const { island, bridge } = setup();
     render(<IslandApp bridge={bridge} />);
     expand();
-    // Начало выдвижения: форма ещё за кадром.
-    rects.shape = { x: 100, y: -200, width: 280, height: 40 };
-    fireEvent.transitionEnd(screen.getByTestId('island-slide'));
-    expect(lastRect(island)).toEqual({ x: 100, y: -200, width: 280, height: 40 });
+    // Начало выдвижения: форма ещё ниже места (отступ сверху доезжает переходом).
+    rects.shape = { x: 100, y: 40, width: 280, height: 40 };
+    fireEvent.transitionEnd(screen.getByTestId('island'));
+    expect(lastRect(island)).toEqual({ x: 100, y: 40, width: 280, height: 40 });
     rects.shape = SHAPE;
-    fireEvent.transitionEnd(screen.getByTestId('island-slide'));
+    fireEvent.transitionEnd(screen.getByTestId('island'));
     expect(lastRect(island)).toEqual(SHAPE);
   });
 
@@ -494,25 +495,39 @@ describe('область под мышь', () => {
 });
 
 describe('язычок убранного острова', () => {
-  it('в покое при открытии остров убран: форма за кадром, язычок «Show the island» на месте', () => {
+  it('в покое при открытии остров убран: форма сжата в брусок, прозрачная зона «Show the island» поверх неё', () => {
     const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
     expect(isRetracted()).toBe(true);
     const tab = screen.getByRole('button', { name: 'Show the island' });
     expect(tab).toBe(screen.getByTestId('island-tab'));
-    // Чёрная полоска 40×5 со светлой обводкой (видна и на светлом фоне) и невидимой областью нажатия 64×16.
+    // Зона нажатия 64×16 ничего не рисует: ни полоски, ни текста, ни цвета «закончено».
     expect(tab.className).toContain('w-16');
     expect(tab.className).toContain('h-4');
-    const bar = tab.firstElementChild as HTMLElement;
+    expect(tab.childElementCount).toBe(0);
+    expect(tab.textContent).toBe('');
+    // Чёрный брусок 40×5 со светлой обводкой (видна и на светлом фоне) рисует сама форма.
+    const shape = screen.getByTestId('island');
+    expect(shape.className).toContain('rounded-full');
+    expect(shape.className).toContain('bg-black');
+    expect(shape.className).toContain('ring-1');
+    expect(shape.className).toContain('ring-white/50');
+    expect(shape.className).not.toContain('bg-[var(--state-done)]');
+    const bar = screen.getByTestId('island-content').firstElementChild as HTMLElement;
     expect(bar.className).toContain('h-[5px]');
     expect(bar.className).toContain('w-10');
-    expect(bar.className).toContain('rounded-full');
-    expect(bar.className).toContain('bg-black');
-    expect(bar.className).toContain('ring-1');
-    expect(bar.className).toContain('ring-white/50');
-    // Без Done на полоске ни текста, ни цвета «закончено».
-    expect(tab.textContent).toBe('');
-    expect(bar.className).not.toContain('bg-[var(--state-done)]');
+    expect(shape.textContent).toBe('');
+  });
+
+  it('зона лежит поверх убранной формы: позже в DOM и absolute, нажатия по форме ловит она', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    const shape = screen.getByTestId('island');
+    const tab = screen.getByTestId('island-tab');
+    expect(shape.compareDocumentPosition(tab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(shape.contains(tab)).toBe(false);
+    expect((tab.parentElement as HTMLElement).className).toContain('absolute');
+    expect(tab.className).toContain('cursor-pointer');
   });
 
   it('язычок стоит там же, где форма: по точке и под чёлкой', async () => {
@@ -737,18 +752,24 @@ describe('Done на острове', () => {
     const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     expect(isRetracted()).toBe(true);
-    const tab = screen.getByTestId('island-tab');
-    expect(tab.textContent).toBe('✅ 1');
-    expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
-    expect(tab.title).toBe('Agents finished — show the island');
-    // Маленькая чёрная форма со скруглением снизу и светлой обводкой, без тени и без зелёной полоски.
-    const peek = tab.firstElementChild as HTMLElement;
+    // Текст `✅ 1` и вид выглядывающего острова — у самой формы: маленькая чёрная форма со скруглением снизу и светлой
+    // обводкой, без тени и без зелёной полоски.
+    const peek = screen.getByTestId('island');
+    expect(peek.textContent).toBe('✅ 1');
     expect(peek.className).toContain('bg-black');
     expect(peek.className).toContain('rounded-b-[14px]');
     expect(peek.className).toContain('ring-1');
     expect(peek.className).toContain('ring-white/50');
-    expect(peek.className).not.toContain('shadow');
+    expect(peek.className).not.toContain('shadow-lg');
     expect(peek.className).not.toContain('bg-[var(--state-done)]');
+    // `island-tab` — прозрачная зона с подписью: видимого текста нет, невидимый тот же текст задаёт её размер.
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
+    expect(tab.title).toBe('Agents finished — show the island');
+    const sizer = tab.firstElementChild as HTMLElement;
+    expect(sizer.textContent).toBe('✅ 1');
+    expect(sizer.className).toContain('opacity-0');
+    for (const name of ['whitespace-nowrap', 'px-3', 'py-1', 'text-sm']) expect(sizer.className).toContain(name);
     // Размер кнопки — размер формы: невидимой области 64×16 у выглядывающего острова нет.
     expect(tab.className).not.toContain('w-16');
     expect(tab.className).not.toContain('h-4');
@@ -769,10 +790,25 @@ describe('Done на острове', () => {
     const { bridge } = setup();
     render(<IslandApp bridge={bridge} />);
     expect(isRetracted()).toBe(true);
-    expect(screen.getByTestId('island-tab').textContent).toBe('✅ 2');
+    expect(screen.getByTestId('island').textContent).toBe('✅ 2');
+    expect((screen.getByTestId('island-tab').firstElementChild as HTMLElement).textContent).toBe('✅ 2');
     expand();
     expect(isRetracted()).toBe(false);
     expect(screen.queryByTestId('island-tab')).toBeNull();
+  });
+
+  it('зона выглядывающего «✅ N»: потяжка вниз дальше 8 px тоже выдвигает остров', () => {
+    seedDone(STALE);
+    const { island, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    const tab = screen.getByTestId('island-tab');
+    fireEvent(tab, pointer('pointerdown', 100, 10));
+    fireEvent(tab, pointer('pointermove', 100, 10 + PULL_EXPAND_PX));
+    expect(isRetracted()).toBe(true);
+    fireEvent(tab, pointer('pointermove', 100, 10 + PULL_EXPAND_PX + 1));
+    expect(isRetracted()).toBe(false);
+    expect(screen.queryByTestId('island-tab')).toBeNull();
+    expect(island.dragStart).not.toHaveBeenCalled();
   });
 
   it('конец хода раньше подключения, но пришедший после, тоже не выдвигает', () => {
@@ -781,7 +817,7 @@ describe('Done на острове', () => {
     act(() => seedDone(STALE));
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Agents finished — show the island');
-    expect(screen.getByTestId('island-tab').textContent).toBe('✅ 1');
+    expect(screen.getByTestId('island').textContent).toBe('✅ 1');
   });
 
   it('с Done остров убирается через DONE_HOLD_MS, а не через IDLE_RETRACT_MS', () => {
@@ -796,7 +832,7 @@ describe('Done на острове', () => {
     expect(isRetracted()).toBe(true);
     const tab = screen.getByTestId('island-tab');
     expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
-    expect(tab.textContent).toBe('✅ 1');
+    expect(screen.getByTestId('island').textContent).toBe('✅ 1');
   });
 
   it('новый конец хода при выдвинутом острове заводит удержание заново', () => {
@@ -827,7 +863,8 @@ describe('Done на острове', () => {
     const tab = screen.getByTestId('island-tab');
     expect(tab.getAttribute('aria-label')).toBe('Show the island');
     expect(tab.textContent).toBe('');
-    expect((tab.firstElementChild as HTMLElement).className).toContain('bg-black');
+    expect(screen.getByTestId('island').textContent).toBe('');
+    expect(screen.getByTestId('island').className).toContain('rounded-full');
     // Хост прислал ту же активность заново — тот же ключ, строка скрыта.
     act(() => seedDone(FRESH));
     expect(isRetracted()).toBe(true);
@@ -863,7 +900,7 @@ describe('Done на острове', () => {
     expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
   });
 
-  it('удержанная строка не сокращает показ: остров убирается через DONE_HOLD_MS, а строка уходит, когда форма уехала', () => {
+  it('удержанная строка не сокращает показ: остров убирается через DONE_HOLD_MS, а строка уходит, когда форма сжалась', () => {
     const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     act(() => seedDone(FRESH));
@@ -872,17 +909,18 @@ describe('Done на острове', () => {
     expect(isRetracted()).toBe(false);
     advance(DONE_HOLD_MS - IDLE_RETRACT_MS * 2);
     expect(isRetracted()).toBe(true);
-    // Пока форма уезжает, пилюля прежняя; а у язычка числа нет: просмотренная строка не считается, полоска обычная.
-    advance(RETRACT_SLIDE_MS - 1);
-    expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
+    // Содержимое убранной формы меняется сразу: у неё числа нет (просмотренная строка не считается), это обычный брусок.
+    advance(RETRACT_MORPH_MS - 1);
+    expect(screen.queryByTestId('island-counters')).toBeNull();
     const tab = screen.getByTestId('island-tab');
     expect(tab.getAttribute('aria-label')).toBe('Show the island');
     expect(tab.textContent).toBe('');
-    expect((tab.firstElementChild as HTMLElement).className).toContain('bg-black');
+    expect(screen.getByTestId('island').textContent).toBe('');
+    expect(screen.getByTestId('island').className).toContain('rounded-full');
     advance(1);
-    expect(screen.queryByTestId('island-counters')).toBeNull();
-    expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
+    expect(screen.getByTestId('island').textContent).toBe('');
     expand();
+    expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
     hover(true);
     expect(screen.queryByTestId('island-done')).toBeNull();
   });
@@ -895,27 +933,27 @@ describe('Done на острове', () => {
     tuck(hover);
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Show the island');
-    advance(RETRACT_SLIDE_MS);
+    advance(RETRACT_MORPH_MS);
     expand();
     hover(true);
     expect(screen.queryByTestId('island-done')).toBeNull();
   });
 
-  it('выдвинули язычком раньше RETRACT_SLIDE_MS — показ всё равно кончился: просмотренной строки нет', () => {
+  it('выдвинули язычком раньше RETRACT_MORPH_MS — показ всё равно кончился: просмотренной строки нет', () => {
     const { bridge, hover } = setup();
     render(<IslandApp bridge={bridge} />);
     act(() => seedDone(FRESH));
     act(() => seedSeen(FRESH));
     tuck(hover);
-    advance(RETRACT_SLIDE_MS - 1);
-    expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
+    advance(RETRACT_MORPH_MS - 1);
+    expect(screen.queryByTestId('island-counters')).toBeNull();
     expand();
     hover(true);
     expect(screen.queryByTestId('island-done')).toBeNull();
     expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
   });
 
-  it('число на язычке — только непросмотренные: просмотренная удержанная строка не считается, пока форма уезжает и после', () => {
+  it('число в «✅ N» — только непросмотренные: просмотренная удержанная строка не считается, пока форма сжимается и после', () => {
     useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
     const both = (first: 'unseen' | 'idle'): void => {
       useActivityStore.setState({
@@ -934,11 +972,13 @@ describe('Done на острове', () => {
     act(() => both('idle'));
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 2 done');
     tuck(hover);
-    expect(screen.getByTestId('island-tab').textContent).toBe('✅ 1');
-    expect(screen.getByTestId('island-counters').textContent).toBe('✅ 2 done');
-    advance(RETRACT_SLIDE_MS);
+    expect(screen.getByTestId('island').textContent).toBe('✅ 1');
+    expect(screen.queryByTestId('island-counters')).toBeNull();
+    advance(RETRACT_MORPH_MS);
+    expect(screen.getByTestId('island').textContent).toBe('✅ 1');
+    // Выдвинули: просмотренная удержанная строка s-01 уже ушла, осталась непросмотренная.
+    expand();
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
-    expect(screen.getByTestId('island-tab').textContent).toBe('✅ 1');
   });
 
   it('unseen после ухода курсора остаётся: уходят только просмотренные', () => {

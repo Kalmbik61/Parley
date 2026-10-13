@@ -8,8 +8,14 @@
  * `width`/`height` в пикселях по замеру внутреннего содержимого (`w-max`), а CSS-переход анимирует их. Окно при этом
  * не меняется — это фиксированный прозрачный кадр (`ISLAND_FRAME`), форма живёт внутри него.
  *
- * Убранный остров (`retracted`) уезжает вверх за кадр: сдвигает обёртка формы (`island-slide`), а не сама форма —
- * у размера и сдвига разная длительность. Тащить остров можно за любое место формы (`useShapeDrag`), кроме кнопок.
+ * Убранный остров (`retracted`) не уезжает, а превращается в брусок, как Dynamic Island: форма — тот же элемент, содержимое
+ * меняется сразу, а размер, отступ сверху, скругление и тень доезжают одним CSS-переходом (250 мс), поэтому большое чёрное
+ * сжимается в маленькое. Без Done брусок — пустой блок 40×5 в форме `rounded-full` со светлой обводкой (видна и на светлом,
+ * и на тёмном фоне под прозрачным окном); с непросмотренными Done (`doneCount` > 0) вместо него выглядывает форма со
+ * скруглением снизу и `✅ N` внутри. У убранной формы нет тени: у верхнего края кадра она даёт серую полосу. Мышь по убранной
+ * форме ловит не она, а прозрачная зона `IslandTab` поверх неё. Выдвижение — обратное превращение: брусок растёт в остров, а
+ * новое содержимое проступает (`island-reveal`), пока форма растёт. Тащить остров можно за любое место формы
+ * (`useShapeDrag`), кроме кнопок.
  * Убрать остров в язычок можно двумя способами, без «×» и подсказки: стрелка ⌃ по центру внизу формы (ряд внутри
  * замеряемого содержимого, только пока курсор над островом — `hovered` от main; высота формы анимируется сама) и
  * смахивание вверх (зажать мышь на острове и потянуть вверх — `onSwipeUp` хука перетаскивания).
@@ -52,8 +58,10 @@ export interface IslandViewProps {
   index: number;
   config: IslandConfig;
   listOpen: boolean;
-  /** Остров убран: форма уехала вверх за кадр окна, на её месте — язычок (`IslandTab`). */
+  /** Остров убран: форма сжалась в брусок (или в `✅ N`), а поверх неё лежит прозрачная зона `IslandTab`. */
   retracted: boolean;
+  /** Сколько на острове непросмотренных Done: у убранного больше нуля — вместо бруска выглядывает `✅ N`. */
+  doneCount: number;
   /** Курсор над областью острова (от main): пока он над ней, внизу формы стрелка ⌃ «убрать остров». */
   hovered: boolean;
   /** Номер показа острова: растёт каждый раз, когда окно из скрытого становится видимым (`IslandApp`). */
@@ -88,7 +96,7 @@ function Pill(props: IslandViewProps): JSX.Element {
     // Список — по наведению или клику (спека, раздел 4): наведение приходит от main (`IslandApp`), он же закрывает список
     // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
-    <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
+    <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
       {model.active || model.done > 0 ? (
         // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
         // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли. Значки провайдеров — про
@@ -270,7 +278,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, hovered, shapeRef, api, onDragStart, onDragEnd, onHide } = props;
+  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide } = props;
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -290,44 +298,55 @@ export function IslandView(props: IslandViewProps): JSX.Element {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  // Три облика одной формы. Выдвинутая: чёрное под чёлкой (отступ внутри содержимого), тень. Брусок: форма под чёлкой и на
+  // 2 px ниже края. `✅ N`: сразу под чёлкой. У убранных обводка вместо тени.
+  const peek = retracted && doneCount > 0;
+  const look = !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-full shadow-none ring-1 ring-white/50';
+  const marginTop = !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
   return (
-    // Убранный остров уезжает вверх на свою высоту плюс 40 px и без тени (иначе у верхнего края кадра остаётся серая полоса); без `retracted` обёртка стоит на месте.
+    // Форма — прямой элемент flex-корня `IslandApp`: `shrink-0`, чтобы узкий кадр не сжимал её.
     <div
-      data-testid="island-slide"
+      ref={shapeRef}
+      data-testid="island"
       data-retracted={retracted}
       aria-hidden={retracted || undefined}
-      className={`transition-transform duration-300 ease-out motion-reduce:transition-none ${retracted ? '-translate-y-[calc(100%_+_40px)]' : ''}`}
+      className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} transition-[width,height,margin-top,border-radius,box-shadow] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      style={{ ...size, marginTop }}
+      {...drag.handlers}
     >
-      <div
-        ref={shapeRef}
-        data-testid="island"
-        className={`overflow-hidden rounded-b-[22px] bg-black text-sm text-foreground ${retracted ? 'shadow-none' : 'shadow-lg'} transition-[width,height] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-        style={size ?? undefined}
-        {...drag.handlers}
-      >
-        <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: config.topInset }}>
-          {items.length > 0 ? <Card {...props} /> : (
-            <>
-              <Pill {...props} />
-              {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
-            </>
-          )}
-          {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
-          {hovered && !retracted ? (
-            <div className="flex justify-center pb-2 pt-1.5">
-              <button
-                type="button"
-                data-testid="island-tuck"
-                aria-label={S.island.tuckAway}
-                title={S.island.tuckAway}
-                onClick={onHide}
-                className="flex h-5 min-w-8 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
-              >
-                <ChevronUp size={18} />
-              </button>
-            </div>
-          ) : null}
-        </div>
+      <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: retracted ? 0 : config.topInset }}>
+        {retracted ? (
+          // Содержимое убранной формы меняется сразу, а форма доезжает до него переходом.
+          peek ? (
+            <div className="whitespace-nowrap px-3 py-1 text-sm">{S.island.donePeek(doneCount)}</div>
+          ) : (
+            <div className="h-[5px] w-10" />
+          )
+        ) : (
+          <>
+            {items.length > 0 ? <Card {...props} /> : (
+              <>
+                <Pill {...props} />
+                {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
+              </>
+            )}
+            {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
+            {hovered ? (
+              <div className="flex justify-center pb-2 pt-1.5">
+                <button
+                  type="button"
+                  data-testid="island-tuck"
+                  aria-label={S.island.tuckAway}
+                  title={S.island.tuckAway}
+                  onClick={onHide}
+                  className="flex h-5 min-w-8 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronUp size={18} />
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   );

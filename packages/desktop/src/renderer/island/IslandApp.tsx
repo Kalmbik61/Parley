@@ -6,12 +6,13 @@
  * Окно острова — фиксированный прозрачный кадр, сквозной для мыши. Корень заполняет кадр и выравнивает форму по
  * точке (`config.anchor`), а размер формы анимирует сам вид (`IslandView`). Окно ловит мышь, только пока курсор над
  * областью острова, и решает это main, а не DOM (в сквозном окне `mouseleave` мог не прийти вовсе): renderer лишь
- * сообщает область (`setHitRect` — форма выдвинутого острова или язычок убранного, `null`, пока окно не показано) и
+ * сообщает область (`setHitRect` — форма выдвинутого острова или зона нажатия убранного, `null`, пока окно не показано) и
  * получает «над / не над» из `onHover`. Наведение открывает список, уход закрывает; во время перетаскивания main
  * сообщает «над» (окно едет за курсором).
  *
- * Остров не пропадает, а убирается (`retracted`): окно видно, пока хост подключён, а убранная форма уезжает вверх
- * за кадр, оставляя язычок (`IslandTab`). Убирают стрелка ⌃ внизу формы (видна под курсором), смахивание вверх и
+ * Остров не пропадает, а убирается (`retracted`): окно видно, пока хост подключён, а убранная форма сжимается в брусок
+ * (или в `✅ N`, если есть непросмотренные Done) на месте, как Dynamic Island; поверх неё лежит прозрачная зона
+ * нажатия, язычок (`IslandTab`). Убирают стрелка ⌃ внизу формы (видна под курсором), смахивание вверх и
  * покой: нечего показывать, очередь пуста, курсор не над формой и форму не тащат — через `IDLE_RETRACT_MS`, а если на
  * острове есть строки Done (агент закончил ход, в Parley его ещё не смотрели) — через `DONE_HOLD_MS`, чтобы их успели
  * заметить. Выдвигают новый запрос, начало работы агентов, новый конец хода и язычок (клик или потяжка вниз). Стрелка и
@@ -20,7 +21,7 @@
  *
  * Done — новый конец хода (`turnEndedAt` не раньше момента подключения острова к хосту) выдвигает убранный остров и
  * заново заводит отсчёт удержания, без звука. Done, что остров застал уже готовым (ход кончился до подключения), в
- * список попадает и красит язычок, но остров не выдвигает. Clear прячет все видимые сейчас Done: ключи (`doneKey`)
+ * список попадает и даёт `✅ N` убранному острову, но остров не выдвигает. Clear прячет все видимые сейчас Done: ключи (`doneKey`)
  * лежат в памяти острова до перезапуска и при переподключении не сбрасываются; новый конец хода — новый ключ. Текст
  * ответа к строкам Done берёт `useIslandReplies` (разовые снимки ленты; стор привязан к мосту вместе с очередью).
  *
@@ -28,9 +29,9 @@
  * ложно) копятся в `held`, и когда окно Parley отметит сессию просмотренной (`unseen` → `idle`, `turnEndedAt` прежний),
  * модель строку не убирает. Показ кончается, когда курсор ушёл с острова (`onHover(false)`) или остров убрался
  * (`retracted`): `held` очищается, и строки уже просмотренных сессий уходят; всё ещё `unseen` остаются, как обычно. При
- * уборке очистка идёт не сразу, а через `RETRACT_SLIDE_MS` — пока форма уезжает, пилюля и строки не меняются; выдвинули
- * раньше срока — очистка в тот же миг. Done, что убранный остров застал готовыми, не показывался — их не держим.
- * Язычок убранного острова показывает число непросмотренных Done (`seen` ложно): просмотренные удержанные не считаются.
+ * уборке очистка идёт не сразу, а через `RETRACT_MORPH_MS` — пока форма сжимается в брусок; выдвинули раньше срока —
+ * очистка в тот же миг. Done, что убранный остров застал готовыми, не показывался — их не держим. Убранный остров
+ * показывает число непросмотренных Done (`seen` ложно) в форме `✅ N`: просмотренные удержанные не считаются.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -50,8 +51,8 @@ import { useIslandRequests } from './requests.js';
 export const IDLE_RETRACT_MS = 4000;
 /** То же, но пока на острове есть строки Done: их надо успеть заметить. */
 export const DONE_HOLD_MS = 20000;
-/** Сколько уезжает убираемая форма: та же длительность, что `duration-300` у `island-slide` в `IslandView`. */
-export const RETRACT_SLIDE_MS = 300;
+/** Сколько форма сжимается в брусок: та же длительность, что `duration-[250ms]` перехода формы в `IslandView`. */
+export const RETRACT_MORPH_MS = 250;
 
 const INITIAL_CONFIG: IslandConfig = { sound: false, topInset: 0, anchor: 'center' };
 
@@ -140,13 +141,13 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
   );
-  /** Непросмотренные Done: их число показывает язычок убранного острова. */
+  /** Непросмотренные Done: их число показывает убранный остров (`✅ N`). */
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
   const idle = !model.active && items.length === 0;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
-  // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над язычком.
+  // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     setRetracted(true);
     setListOpen(false);
@@ -160,11 +161,11 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     const keys = doneRows.filter((row) => !row.seen).map((row) => row.doneKey);
     setHeld((current) => (keys.every((key) => current.has(key)) ? current : new Set([...current, ...keys])));
   }, [retracted, doneRows]);
-  // Остров убрался — очистка `held` после того, как форма уехала: пока она в пути, пилюля и строки те же. Выдвинули
-  // раньше срока — показ всё равно кончился, очищаем в тот же миг.
+  // Остров убрался — очистка `held` после того, как форма сжалась в брусок. Выдвинули раньше срока — показ всё равно
+  // кончился, очищаем в тот же миг.
   useEffect(() => {
     if (!retracted) return undefined;
-    const timer = setTimeout(() => setHeld(releaseHeld), RETRACT_SLIDE_MS);
+    const timer = setTimeout(() => setHeld(releaseHeld), RETRACT_MORPH_MS);
     return () => {
       clearTimeout(timer);
       setHeld(releaseHeld);
@@ -216,7 +217,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   }, [retracted, idle, hovered, dragging, retract, holdMs, freshDone]);
 
   // Хост не подключён — окна нет: сторы остались от прошлого подключения, и счётчики пилюли были бы устаревшими.
-  // Подключён — окно видно всегда: убранный остров лишь не рисуется (форма за кадром, на месте язычок).
+  // Подключён — окно видно всегда: убранный остров лишь сжимается в брусок (или в `✅ N`) под прозрачной зоной нажатия.
   useEffect(() => bridge.island.setVisible(connected), [connected, bridge]);
   const shown = connected && !retracted;
   // Номер показа растёт при каждом переходе «убран → выдвинут» и считается прямо при отрисовке: карточка, оставшаяся
@@ -228,7 +229,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const tabRef = useRef<HTMLButtonElement>(null);
   /** Последняя область, отправленная main: равную ей не шлём повторно (`undefined` — ещё ничего не слали). */
   const sentHitRect = useRef<IslandHitRect | null | undefined>(undefined);
-  // Область под мышь: форма у выдвинутого острова, язычок у убранного, ничего — пока хост не подключён (окно спрятано).
+  // Область под мышь: форма у выдвинутого острова, зона нажатия у убранного, ничего — пока хост не подключён (окно спрятано).
   const reportHitRect = useCallback(() => {
     const target = !connected ? null : retracted ? tabRef.current : shapeRef.current;
     const box = target?.getBoundingClientRect();
@@ -238,8 +239,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     sentHitRect.current = next;
     bridge.island.setHitRect(next);
   }, [bridge, connected, retracted]);
-  // Область меняется при монтировании, смене вида, размере формы или язычка и при смене места в кадре (точка, отступ под
-  // чёлку); сдвиг убирающейся / выдвигающейся формы размера не меняет — его ловит `transitionend` на корне.
+  // Область меняется при монтировании, смене вида, размере формы или зоны нажатия и при смене места в кадре (точка,
+  // отступ под чёлку); переход, что размера формы не меняет (отступ сверху у бруска), ловит `transitionend` на корне.
   useLayoutEffect(() => {
     reportHitRect();
     const observer = new ResizeObserver(reportHitRect);
@@ -257,6 +258,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         config={config}
         listOpen={listOpen}
         retracted={retracted}
+        doneCount={unseenDone}
         hovered={hovered}
         showId={show.id}
         labels={labels}

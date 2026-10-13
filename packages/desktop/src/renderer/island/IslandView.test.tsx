@@ -3,8 +3,9 @@
  * вверх, пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), строки Done
  * (ответ агента, время, Clear, пилюля `✅ N done`, комната `done`), карточка
  * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, отступ под чёлку, пауза
- * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров,
- * плавный размер формы (замер содержимого, переход, появление), размеры текста.
+ * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров
+ * (форма сжимается в брусок или в `✅ N`, не уезжает), плавный размер формы (замер содержимого, переход, появление),
+ * размеры текста.
  */
 
 import { createRef } from 'react';
@@ -68,7 +69,7 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, hovered: false, showId: 1,
+    model: MODEL, items: [], index: 0, config: { sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
@@ -447,10 +448,10 @@ describe('плавный размер формы', () => {
     }
   }
 
-  it('форма анимирует размер: переход ширины и высоты, у reduced motion перехода нет', () => {
+  it('форма анимирует размер и облик: переход ширины, высоты, отступа, скругления и тени, у reduced motion перехода нет', () => {
     view();
     const shape = screen.getByTestId('island');
-    expect(shape.className).toContain('transition-[width,height]');
+    expect(shape.className).toContain('transition-[width,height,margin-top,border-radius,box-shadow]');
     expect(shape.className).toContain('duration-[250ms]');
     expect(shape.className).toContain('ease-out');
     expect(shape.className).toContain('motion-reduce:transition-none');
@@ -503,7 +504,10 @@ describe('плавный размер формы', () => {
     expect(props.onToggleList).not.toHaveBeenCalled();
   });
 
-  it('список и карточка появляются с island-reveal', () => {
+  it('пилюля, список и карточка появляются с island-reveal', () => {
+    view();
+    expect(screen.getByTestId('island-pill').className).toContain('island-reveal');
+    cleanup();
     view({ listOpen: true });
     expect(screen.getByTestId('island-list').className).toContain('island-reveal');
     cleanup();
@@ -669,7 +673,8 @@ describe('цвета острова', () => {
     ['список', { listOpen: true }],
     ['пустая пилюля', { model: IDLE_MODEL }],
     ['список со строкой Done и Clear', { model: DONE_MODEL, listOpen: true }],
-    ['остров убран', { retracted: true }],
+    ['остров убран (брусок)', { retracted: true }],
+    ['остров убран (✅ N)', { retracted: true, doneCount: 2 }],
     ['карточка с очередью и пометками', { items: [permissionItem({ note: 'elsewhere' }), permissionItem({ key: 'k\u0000c-2', note: 'failed' })] }],
     ['карточка вопроса со стрелкой', { items: [questionItem(['Postgres', 'SQLite'])], hovered: true }],
     ['карточка с одной кнопкой Open in Parley', { items: [permissionItem({ inWindow: false })] }],
@@ -723,43 +728,124 @@ describe('оформление списка', () => {
 });
 
 describe('убранный остров', () => {
-  it('на месте: обёртка не сдвинута', () => {
-    view();
-    const slide = screen.getByTestId('island-slide');
-    expect(slide.getAttribute('data-retracted')).toBe('false');
-    expect(slide.className).not.toContain('-translate-y-');
-    expect(slide.hasAttribute('aria-hidden')).toBe(false);
+  const INSET = 38;
+  const config = { sound: true, topInset: INSET, anchor: 'center' as const };
+  /** Единственный элемент в содержимом убранной формы: брусок или текст `✅ N`. */
+  const only = (): HTMLElement => {
+    const content = screen.getByTestId('island-content');
+    expect(content.children).toHaveLength(1);
+    return content.firstElementChild as HTMLElement;
+  };
+
+  it('на месте: форма не сдвинута и не прячется; скругление снизу 22 px, тень, чёрное под чёлкой', () => {
+    view({ config });
+    const shape = screen.getByTestId('island') as HTMLElement;
+    expect(shape.getAttribute('data-retracted')).toBe('false');
+    expect(shape.hasAttribute('aria-hidden')).toBe(false);
+    expect(shape.className).toContain('rounded-b-[22px]');
+    expect(shape.className).toContain('shadow-lg');
+    expect(shape.className).not.toContain('ring-1');
+    expect(shape.className).not.toContain('translate');
+    expect(parseFloat(shape.style.marginTop)).toBe(0);
+    expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe(`${INSET}px`);
   });
 
-  it('убран: обёртка уезжает вверх на свою высоту плюс 40 px, плавно; у reduced motion перехода нет', () => {
+  it('обёртки со сдвигом нет: убранная форма не уезжает вверх за кадр', () => {
     view({ retracted: true });
-    const slide = screen.getByTestId('island-slide');
-    expect(slide.getAttribute('data-retracted')).toBe('true');
-    expect(slide.className).toContain('-translate-y-[calc(100%_+_40px)]');
-    expect(slide.className).toContain('transition-transform');
-    expect(slide.className).toContain('duration-300');
-    expect(slide.className).toContain('ease-out');
-    expect(slide.className).toContain('motion-reduce:transition-none');
-    // Скрытое за кадром читалка экрана не зачитывает.
-    expect(slide.getAttribute('aria-hidden')).toBe('true');
-    // Форма внутри сохраняет свой размерный переход: у размера и сдвига разная длительность.
-    expect(screen.getByTestId('island').className).toContain('duration-[250ms]');
-  });
-
-  it('убран: у формы нет тени (иначе у верхнего края кадра серая полоса); на месте — shadow-lg', () => {
-    view({ retracted: true });
-    expect(screen.getByTestId('island').className).toContain('shadow-none');
-    expect(screen.getByTestId('island').className).not.toContain('shadow-lg');
+    expect(screen.queryByTestId('island-slide')).toBeNull();
+    expect(screen.getByTestId('island').className).not.toContain('translate');
     cleanup();
-    view();
-    expect(screen.getByTestId('island').className).toContain('shadow-lg');
-    expect(screen.getByTestId('island').className).not.toContain('shadow-none');
+    view({ retracted: true, doneCount: 2 });
+    expect(screen.getByTestId('island').className).not.toContain('translate');
   });
 
-  it('форма внутри обёртки: ссылка на неё работает, как у стоящего на месте острова', () => {
-    const props = view({ retracted: true });
-    expect(screen.getByTestId('island-slide').contains(screen.getByTestId('island'))).toBe(true);
-    expect(props.shapeRef).toHaveProperty('current', screen.getByTestId('island'));
+  it('убран без Done — брусок: пустой блок 40×5 в форме rounded-full со светлой обводкой, без тени, под чёлкой и на 2 px ниже', () => {
+    view({ config, retracted: true });
+    const shape = screen.getByTestId('island') as HTMLElement;
+    expect(shape.getAttribute('data-retracted')).toBe('true');
+    // Скрытое от читалки экрана: форму читает зона нажатия (`IslandTab`).
+    expect(shape.getAttribute('aria-hidden')).toBe('true');
+    expect(shape.className).toContain('rounded-full');
+    expect(shape.className).not.toContain('rounded-b-');
+    expect(shape.className).toContain('bg-black');
+    expect(shape.className).toContain('ring-1');
+    expect(shape.className).toContain('ring-white/50');
+    // Тень у верхнего края кадра даёт серую полосу.
+    expect(shape.className).toContain('shadow-none');
+    expect(shape.className).not.toContain('shadow-lg');
+    expect(shape.style.marginTop).toBe(`${INSET + 2}px`);
+    expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe('0px');
+    const bar = only();
+    expect(bar.className).toContain('h-[5px]');
+    expect(bar.className).toContain('w-10');
+    expect(bar.textContent).toBe('');
+    // Пилюли, списка и стрелки в убранной форме нет.
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    expect(screen.queryByTestId('island-tuck')).toBeNull();
+  });
+
+  it('убран с Done — выглядывает «✅ N»: текст внутри формы, скругление снизу 14 px, обводка, без тени, сразу под чёлкой', () => {
+    view({ config, retracted: true, doneCount: 2 });
+    const shape = screen.getByTestId('island') as HTMLElement;
+    expect(shape.getAttribute('data-retracted')).toBe('true');
+    expect(shape.getAttribute('aria-hidden')).toBe('true');
+    expect(shape.textContent).toBe('✅ 2');
+    expect(shape.className).toContain('rounded-b-[14px]');
+    expect(shape.className).not.toContain('rounded-full');
+    expect(shape.className).toContain('bg-black');
+    expect(shape.className).toContain('ring-1');
+    expect(shape.className).toContain('ring-white/50');
+    expect(shape.className).toContain('shadow-none');
+    expect(shape.className).not.toContain('shadow-lg');
+    expect(shape.style.marginTop).toBe(`${INSET}px`);
+    expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe('0px');
+    const peek = only();
+    for (const name of ['whitespace-nowrap', 'px-3', 'py-1', 'text-sm']) expect(peek.className).toContain(name);
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+  });
+
+  it('выдвинули обратно: пилюля вместо бруска, отступ под чёлку снова внутри содержимого, облик как у стоящего на месте острова', () => {
+    const props = viewProps({ config, retracted: true });
+    const { rerender } = render(<IslandView {...props} />);
+    rerender(<IslandView {...props} retracted={false} />);
+    const shape = screen.getByTestId('island') as HTMLElement;
+    expect(shape.getAttribute('data-retracted')).toBe('false');
+    expect(shape.hasAttribute('aria-hidden')).toBe(false);
+    expect(shape.className).toContain('rounded-b-[22px]');
+    expect(shape.className).toContain('shadow-lg');
+    expect(shape.className).not.toContain('ring-1');
+    expect(parseFloat(shape.style.marginTop)).toBe(0);
+    expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe(`${INSET}px`);
+    expect(screen.getByTestId('island-pill').className).toContain('island-reveal');
+  });
+
+  it('форма — тот же элемент в обоих состояниях: размер из замера содержимого и ссылка на неё работают у убранной', () => {
+    const props = viewProps({ retracted: true });
+    const { rerender } = render(<IslandView {...props} />);
+    const shape = screen.getByTestId('island');
+    expect(props.shapeRef).toHaveProperty('current', shape);
+    rerender(<IslandView {...props} retracted={false} />);
+    expect(screen.getByTestId('island')).toBe(shape);
+    expect(props.shapeRef).toHaveProperty('current', shape);
+  });
+
+  it('убранная форма берёт размер бруска из замера, а не прежний размер острова', () => {
+    const props = viewProps();
+    const { rerender } = render(<IslandView {...props} />);
+    const shape = screen.getByTestId('island') as HTMLElement;
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(40);
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(5);
+    try {
+      rerender(<IslandView {...props} retracted />);
+      act(() => {
+        for (const callback of resizeCallbacks) callback();
+      });
+      expect(shape.style.width).toBe('40px');
+      expect(shape.style.height).toBe('5px');
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
   });
 });
 
