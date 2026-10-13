@@ -1344,13 +1344,19 @@ describe('need: потребность сессии (спека «Застряв
     });
   }, 20_000);
 
-  /** Сессия возобновлена: процесс прошлого запуска ушёл, в журнале остались его события, а `startedAt` — первый запуск. */
-  async function resumedSession(): Promise<{ ref: SessionRef }> {
-    const { ref } = await activeSession();
-    await appendFile(
-      journal(ref),
-      hook('SessionStart', { source: 'startup' }) + hook('UserPromptSubmit') + hook('Stop') + hook('SessionEnd'),
-    );
+  /**
+   * Сессия возобновлена: процесс прошлого запуска ушёл, в журнале остались его строки (`oldRun`), а `startedAt` — первый
+   * запуск. По умолчанию прошлый запуск кончился чисто.
+   */
+  async function resumedSession(
+    oldRun: string = hook('SessionStart', { source: 'startup' }) +
+      hook('UserPromptSubmit') +
+      hook('Stop') +
+      hook('SessionEnd'),
+    over: { providerSessionId?: string } = {},
+  ): Promise<{ ref: SessionRef }> {
+    const { ref } = await activeSession(over);
+    await appendFile(journal(ref), oldRun);
     await updateMap(project, ref.workId, (map) => {
       transitionSession(map, ref.sessionId, 'sleeping');
     });
@@ -1412,6 +1418,104 @@ describe('need: потребность сессии (спека «Застряв
     expect(a.get(ref)?.activity.need).toBeNull();
     expect(a.get(ref)?.activity.activity).not.toBe('blocked');
   }, 20_000);
+
+  it('возобновление: журнал оканчивается одобрением — новый процесс начинает с чистого, экран старта по сроку', async () => {
+    const { ref } = await resumedSession(
+      hook('SessionStart', { source: 'startup' }) +
+        hook('UserPromptSubmit') +
+        hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' } }),
+    );
+    const w = await works();
+    let clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    // Пока хост нового процесса не видел, хвост журнала для свёртки — живое ожидание.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'approval');
+    const lastEventAt = a.get(ref)?.activity.lastEventAt;
+
+    const launched = clock;
+    a.processStarted(ref);
+    // Одобрение просил прошлый процесс: граница нового снимает его и кончает оборванный ход, не дожидаясь хука.
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    // Граница — не хук нового процесса: время последнего события прежнее, «хост в курсе» не наступило.
+    expect(a.get(ref)?.activity.lastEventAt).toBe(lastEventAt);
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    // Процесс молчит срок — экран старта (а не старое одобрение), и он встаёт после границы.
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(launched + 20_000).toISOString(),
+    });
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+
+    // Первая настоящая строка нового процесса — как и раньше: `SessionStart` повторяет переход границы.
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+  }, 20_000);
+
+  it('возобновление: журнал оканчивается лимитом — новый процесс начинает с чистого; свой лимит нового процесса — новый эпизод', async () => {
+    const { ref } = await resumedSession(hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    const w = await works();
+    const clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    const stale = a.get(ref)?.activity.need;
+
+    a.processStarted(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+
+    // Строки после границы — настоящие: лимит, в который новый процесс упёрся сам, — другой эпизод.
+    await appendFile(
+      journal(ref),
+      hook('SessionStart', { source: 'resume' }) + hook('UserPromptSubmit') + failure(SESSION_LIMIT),
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(Date.parse(a.get(ref)?.activity.need?.since ?? '')).toBeGreaterThan(Date.parse(stale?.since ?? ''));
+  }, 20_000);
+
+  it('возобновление: ошибка API в логе прошлого запуска (запасной путь лимита) новым процессом не наследуется', async () => {
+    // Хуки `StopFailure` не дошли: лимит прошлого запуска виден одному логу. Граница стоит по времени запуска —
+    // новее записи об ошибке, и запасной путь ход, закончившийся на ней, больше не считает текущим.
+    const { ref } = await resumedSession(hook('UserPromptSubmit'), { providerSessionId: 's-api' });
+    const w = await works();
+    const clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-api', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-api.jsonl'),
+      `${[
+        record({
+          type: 'user',
+          timestamp: new Date(Date.now() - 1_000).toISOString(),
+          message: { role: 'user', content: 'продолжай' },
+        }),
+        record({
+          type: 'assistant',
+          timestamp: new Date(Date.now() + 2_000).toISOString(),
+          isApiErrorMessage: true,
+          error: 'rate_limit',
+          apiErrorStatus: 429,
+          message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: SESSION_LIMIT }] },
+        }),
+      ].join('\n')}\n`,
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit', 15_000);
+
+    a.processStarted(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 30_000);
 
   it('экран старта ждут только от запущенных хостом: сессия чужого запуска молчит без need', async () => {
     const { ref } = await activeSession({ launchedBy: 'cli' });

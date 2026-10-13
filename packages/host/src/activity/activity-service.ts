@@ -315,6 +315,32 @@ interface Launch {
   journalLength: number;
 }
 
+/**
+ * Граница нового процесса у Claude и GLM: сразу за строками журнала, что были при запуске (`Launch.journalLength`),
+ * ставится внутренний `SessionStart` с `source: 'startup'`. Строки до него — прошлого процесса, а свёртка узнаёт новый
+ * процесс по настоящему `SessionStart`, который приходит спустя ~0,3 с, а на экране входа или доверия не приходит вовсе:
+ * всё это время хвост прошлого журнала (одобрение, вопрос, лимит, вход, оборванный ход) давал бы `need`. Правило запуска
+ * свёртки (`SessionStart` в `activityOf`) снимает прежнее ожидание и кончает оборванный ход, а настоящий `SessionStart`
+ * потом повторит тот же переход. Граница — по позиции, а не по времени: у строк, прочитанных после записи нового процесса,
+ * время одно — mtime файла. Её время — запуск процесса: новее всего прошлого, в том числе записи об ошибке API в логе, с
+ * которой запасной путь лимита сверяет начало работы.
+ */
+function withLaunchBoundary(
+  journal: readonly EventRecord[] | null,
+  launch: Launch | null,
+): readonly EventRecord[] | null {
+  if (journal === null || launch === null) return journal;
+  const boundary: EventRecord = {
+    ...bareEvent(new Date(launch.at).toISOString(), 'SessionStart'),
+    source: 'startup',
+  };
+  return [
+    ...journal.slice(0, launch.journalLength),
+    boundary,
+    ...journal.slice(launch.journalLength),
+  ];
+}
+
 /** Удержанный вопрос агента: когда окно его удержало и текст первого вопроса. */
 interface HeldQuestion {
   since: string;
@@ -445,12 +471,15 @@ export function createActivityService(
    * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
    * последнее известное состояние терминала — по времени, как если бы это был хук. Сессия codex — и та,
    * чей процесс под хостом (`terminals`), и та, что записана в карте как codex: снимок работ мог отстать
-   * от `applyChoice`, а запуск уже знает провайдера точно.
+   * от `applyChoice`, а запуск уже знает провайдера точно. У Claude и GLM после строк прошлого запуска — граница
+   * нового процесса (`withLaunchBoundary`).
    */
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
-    if (terminal === undefined && session.provider !== 'codex') return journal;
+    if (terminal === undefined && session.provider !== 'codex') {
+      return withLaunchBoundary(journal, launchBoundaryOf(session, key));
+    }
     let base = journal ?? [];
     const last = terminal?.last;
     if (terminal === undefined || last === null || last === undefined) return base;
@@ -493,16 +522,36 @@ export function createActivityService(
   };
 
   /**
-   * Ждёт ли хост первого события от Claude или GLM: процесс запущен им, жив, а строк журнала с запуска нынешнего
-   * процесса не прибавилось. Без записи о запуске (`processStarted`) отсчёт идёт от пустого журнала. Codex сюда не
-   * входит — у него свой срок (`startupExpired`) и своё состояние по терминалу.
+   * Процесс Claude или GLM поднят хостом и жив: к нему относятся запись о запуске, граница в журнале и экран старта.
+   * Codex сюда не входит — у него свой срок (`startupExpired`) и своё состояние по терминалу.
    */
-  function waitsForStartup(session: WorkSession, key: string): boolean {
+  function hostProcessLive(session: WorkSession, key: string): boolean {
     return (
       session.launchedBy === 'host' &&
       session.lifecycle === 'active' &&
       session.provider !== 'codex' &&
-      !terminals.has(key) &&
+      !terminals.has(key)
+    );
+  }
+
+  /**
+   * Запуск нынешнего процесса, если за ним нужна граница (`withLaunchBoundary`): хост его видел (`processStarted`), а в
+   * журнале есть строки прошлого запуска. `null` — границы нет: процесса нет, журнал пуст (свежая сессия: стирать нечего)
+   * или стал короче записанного (его переписали, позиции не доверяем).
+   */
+  function launchBoundaryOf(session: WorkSession, key: string): Launch | null {
+    const launch = launches.get(key);
+    if (launch === undefined || launch.journalLength === 0 || !hostProcessLive(session, key)) return null;
+    return (journals.get(key)?.length ?? 0) >= launch.journalLength ? launch : null;
+  }
+
+  /**
+   * Ждёт ли хост первого события от Claude или GLM: процесс запущен им, жив, а строк журнала с запуска нынешнего
+   * процесса не прибавилось. Без записи о запуске (`processStarted`) отсчёт идёт от пустого журнала.
+   */
+  function waitsForStartup(session: WorkSession, key: string): boolean {
+    return (
+      hostProcessLive(session, key) &&
       (journals.get(key)?.length ?? 0) === (launches.get(key)?.journalLength ?? 0)
     );
   }
@@ -512,7 +561,7 @@ export function createActivityService(
    * входа или доверия к папке: хуков оттуда нет. К событиям свёртки (не к журналу) добавляется внутреннее `Notification`
    * `parley_startup` со временем истечения срока — свёртка читает его как `need` вида `startup`. Первая же новая строка
    * снимает его совсем (`waitsForStartup`): иначе `SessionStart` после него превратил бы «нужен ты» в «закончил ход».
-   * Строки журнала до запуска — прошлого процесса, и все старше срока, так что событие встаёт в конец по времени.
+   * Новых строк нет, поэтому событие встаёт в самый конец — сразу за границей нового процесса, а не за хвостом прошлого.
    */
   function startupEventOf(session: WorkSession, key: string, now: number): EventRecord | null {
     if (!waitsForStartup(session, key)) return null;
@@ -877,11 +926,20 @@ export function createActivityService(
       silenceThresholdMs: threshold,
       backgroundHoldMs,
     });
-    // Пока от нынешнего процесса не пришло ни одной строки, свёртка видит прошлое (журнал прошлого запуска) и внутренний
-    // экран старта (`startupEventOf`). Хука нового процесса в них не было, и от них не наступают ни «хост в курсе»
-    // (`hookedSince`: печатать в экран старта нельзя), ни «сессия стартовала» (по ней окно выбирает вид Chat, а
-    // человеку нужен терминал).
-    const activity: SessionActivity = startup === null ? folded : { ...folded, lastEventAt: null };
+    // Пока от нынешнего процесса не пришло ни одной строки, свёртка видит прошлое (журнал прошлого запуска) и то, что
+    // дописал хост: границу процесса (`withLaunchBoundary`) и экран старта (`startupEventOf`). Хука нового процесса в них
+    // не было, и от них не наступают ни «хост в курсе» (`hookedSince`: печатать в экран старта нельзя), ни «сессия
+    // стартовала» (по ней окно выбирает вид Chat). Граница времени события не меняет — вкладка возобновлённой сессии не
+    // мигает терминалом (`effectiveView`); с экраном старта человеку нужен терминал, и время скрыто совсем.
+    const boundary = launchBoundaryOf(session, key);
+    let lastEventAt = folded.lastEventAt;
+    if (startup !== null) {
+      lastEventAt = null;
+    } else if (boundary !== null && (journals.get(key)?.length ?? 0) === boundary.journalLength) {
+      lastEventAt = journals.get(key)?.[boundary.journalLength - 1]?.at ?? null;
+    }
+    const activity: SessionActivity =
+      lastEventAt === folded.lastEventAt ? folded : { ...folded, lastEventAt };
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
     // Удержанный вопрос агента: публикуется 'blocked' с `need` вопроса, а таймер тишины и метрики — по настоящему
@@ -907,8 +965,8 @@ export function createActivityService(
 
     maybeAutoTitle(ref, key, session, entry.map.work.title);
     maybeLink(ref, key, session);
-    // Журнал настоящий, без экрана старта (`startupEventOf`): тот не должен прятать отсутствие хуков.
-    maybeHooksMissing(ref, key, session, journalEvents);
+    // Журнал настоящий, без границы и экрана старта: они не должны прятать отсутствие хуков.
+    maybeHooksMissing(ref, key, session, journals.get(key) ?? null);
     maybeTrustWait(ref, key, session);
     maybeStartupWait(ref, key, session);
     maybeRefreshQuota(ref, key, session, need, now);
