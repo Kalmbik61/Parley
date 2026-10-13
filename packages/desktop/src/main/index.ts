@@ -21,10 +21,12 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parl
 import type { WorksSnapshot } from '@parley/protocol';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { S } from '../shared/strings.js';
+import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
+import guestAnnotateScript from './browser/guest-annotate.js?raw';
 import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
@@ -321,6 +323,14 @@ if (!gotLock) {
       guestScript: `${guestDomScript}\n${guestPickScript}`,
       inspector,
     });
+    // Аннотации (этап B, спека браузера 4.7): снимок видимой части с метками — в drops/, как у выбора.
+    const annotate = createAnnotate({
+      fromId: (id) => webContents.fromId(id) ?? null,
+      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      // Помощники DOM (guest-dom.js) — в той же строке перед скриптом меток, как у выбора (задача 2).
+      guestScript: `${guestDomScript}\n${guestAnnotateScript}`,
+      inspector,
+    });
     // Журнал снят вместе с гостем — размер его вкладки тоже.
     inspector.onDestroyed((id) => emulation.forget(id));
     installBrowserGuard({
@@ -470,6 +480,7 @@ if (!gotLock) {
         session: browserSession,
         designMode,
         saveContext: (input) => saveContextFile({ ...input, dir: contextDir(), dropsDir: dropsDir() }),
+        annotate,
         inspector,
         emulation,
       },

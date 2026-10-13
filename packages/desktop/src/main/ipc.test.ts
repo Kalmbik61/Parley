@@ -57,6 +57,13 @@ const designMode = {
 };
 /** Запись файла-контекста (этап B браузера): main/browser/context-files.ts подменён — мост только проверяет форму. */
 const saveContext = vi.fn().mockResolvedValue({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
+/** Аннотации моста (этап B браузера): main/browser/annotate.ts подменён — мост только проверяет гостя и метки. */
+const annotate = {
+  start: vi.fn().mockResolvedValue(null),
+  cancel: vi.fn().mockResolvedValue(undefined),
+  sync: vi.fn().mockResolvedValue([]),
+  capture: vi.fn().mockResolvedValue({ path: null }),
+};
 /** Журнал и эмуляция моста (спека 2026-10-07, 3.5): подменены — мост проверяет гостя и аргументы. */
 const inspector = {
   snapshot: vi.fn<(id: number) => DevtoolsSnapshot | null>(() => null),
@@ -222,6 +229,7 @@ function setup(
       session: browserSession as unknown as Pick<Session, 'clearStorageData' | 'clearCache'>,
       designMode,
       saveContext,
+      annotate,
       inspector,
       emulation,
     },
@@ -1236,6 +1244,25 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(saveContext).not.toHaveBeenCalled();
     expect(await ipcMain.invoke('browser:save-context', good)).toEqual({ mdPath: '/h/drops/context/console-x-0000.md', pngPath: null });
     expect(saveContext).toHaveBeenCalledWith(good);
+  });
+
+  it('annotate-* (этап B): не гость раздела — bad_request; неверные метки — bad_request; гость — annotate.*', async () => {
+    for (const fn of Object.values(annotate)) fn.mockClear();
+    const { ipcMain } = browserSetup();
+    for (const channel of ['browser:annotate-start', 'browser:annotate-cancel', 'browser:annotate-capture']) {
+      for (const id of [1, 404, 8, 9, 7.5, '7', null]) expect(await codeOf(ipcMain.invoke(channel, id)), `${channel} ${String(id)}`).toBe('bad_request');
+    }
+    expect(await codeOf(ipcMain.invoke('browser:annotate-sync', 7, [{ n: 1, key: 'x"' }]))).toBe('bad_request');
+    expect(annotate.sync).not.toHaveBeenCalled();
+
+    await ipcMain.invoke('browser:annotate-start', 7);
+    await ipcMain.invoke('browser:annotate-cancel', 7);
+    await ipcMain.invoke('browser:annotate-sync', 7, [{ n: 1, key: 'a1' }]);
+    await ipcMain.invoke('browser:annotate-capture', 7);
+    expect(annotate.start).toHaveBeenCalledWith(7);
+    expect(annotate.cancel).toHaveBeenCalledWith(7);
+    expect(annotate.sync).toHaveBeenCalledWith(7, [{ n: 1, key: 'a1' }]);
+    expect(annotate.capture).toHaveBeenCalledWith(7);
   });
 });
 

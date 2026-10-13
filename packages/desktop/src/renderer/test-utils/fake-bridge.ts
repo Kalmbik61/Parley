@@ -15,7 +15,15 @@ import type {
 } from '@parley/protocol';
 import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
-import type { BrowserFavicon, BrowserOpenTab, ContextInput, PickResult, SavedContext } from '../../shared/browser-types.js';
+import type {
+  AnnotationPick,
+  AnnotationPosition,
+  BrowserFavicon,
+  BrowserOpenTab,
+  ContextInput,
+  PickResult,
+  SavedContext,
+} from '../../shared/browser-types.js';
 import { contextLabel } from '../../shared/context-markdown.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
@@ -191,6 +199,12 @@ export interface FakeBridge extends ParleyBridge {
    * если был снимок. Отказ — объект с code.
    */
   setSaveContextResult(answer: SavedContext | IpcErrorInfo | null): void;
+  /** Ответы `browser.annotateStart` по очереди; очередь пуста — промис ждёт, как настоящий скрипт ждёт клика. Отказ — объект с code. */
+  setAnnotatePicks(picks: Array<AnnotationPick | null | IpcErrorInfo>): void;
+  /** Ответ `browser.annotateSync`; `null` — по умолчанию: у каждой метки прямоугольник 0.1, 0.1, 0.2 × 0.05. */
+  setAnnotatePositions(positions: AnnotationPosition[] | null): void;
+  /** Путь снимка `browser.annotateCapture`; по умолчанию `/fake/drops/annotate.png`. */
+  setAnnotateCapture(path: string | null): void;
   /** Ответ browser.devtoolsSnapshot (спека 2026-10-07, 3.5); по умолчанию пустой журнал с capture 'on'. */
   setDevtoolsSnapshot(snapshot: DevtoolsSnapshot): void;
   /** Пачка журнала: событие `browser:devtools` слушателям `browser.onDevtools`. */
@@ -291,6 +305,9 @@ export function createFakeBridge(): FakeBridge {
   const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
   let saveContextAnswer: SavedContext | IpcErrorInfo | null = null;
   let savedContexts = 0;
+  let annotatePicks: Array<AnnotationPick | null | IpcErrorInfo> = [];
+  let annotatePositions: AnnotationPosition[] | null = null;
+  let annotateCapturePath: string | null = '/fake/drops/annotate.png';
   let devtoolsSnapshot: DevtoolsSnapshot = { epoch: 0, capture: 'on', console: [], network: [] };
   const devtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
   let responseBodyAnswer: ResponseBody | null | IpcErrorInfo = null;
@@ -438,6 +455,15 @@ export function createFakeBridge(): FakeBridge {
     setSaveContextResult: (answer) => {
       saveContextAnswer = answer;
     },
+    setAnnotatePicks: (picks) => {
+      annotatePicks = [...picks];
+    },
+    setAnnotatePositions: (positions) => {
+      annotatePositions = positions;
+    },
+    setAnnotateCapture: (path) => {
+      annotateCapturePath = path;
+    },
     setDevtoolsSnapshot: (snapshot) => {
       devtoolsSnapshot = snapshot;
     },
@@ -543,6 +569,24 @@ export function createFakeBridge(): FakeBridge {
         savedContexts += 1;
         const base = `/fake/drops/context/${input.kind}-${contextLabel(input.label)}-${savedContexts.toString(16).padStart(4, '0')}`;
         return { mdPath: `${base}.md`, pngPath: input.imagePath === null ? null : `${base}.png` };
+      },
+      annotateStart: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateStart', args: [webContentsId] });
+        const next = annotatePicks.shift();
+        if (next === undefined) return new Promise<AnnotationPick | null>(() => {});
+        if (next !== null && 'code' in next) throw next;
+        return next;
+      },
+      annotateCancel: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateCancel', args: [webContentsId] });
+      },
+      annotateSync: async (webContentsId, pins) => {
+        browserCalls.push({ method: 'annotateSync', args: [webContentsId, pins] });
+        return annotatePositions ?? pins.map(({ n }) => ({ n, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 } }));
+      },
+      annotateCapture: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateCapture', args: [webContentsId] });
+        return { path: annotateCapturePath };
       },
       devtoolsSnapshot: async (webContentsId) => {
         browserCalls.push({ method: 'devtoolsSnapshot', args: [webContentsId] });

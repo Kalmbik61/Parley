@@ -208,3 +208,22 @@ describe('fake-bridge: browser.saveContext (этап B браузера)', () =>
     await expect(bridge.browser.saveContext({ kind: 'errors', label: 'x', markdown: '#', imagePath: null })).rejects.toMatchObject({ code: 'failed' });
   });
 });
+
+describe('fake-bridge: browser.annotate* (этап B браузера)', () => {
+  it('метки — по очереди, очередь пуста — ждёт; sync — положения по номерам; capture — по сеттеру; журнал browserCalls', async () => {
+    const bridge = createFakeBridge();
+    const pick = { kind: 'edit', n: 1 } as const;
+    bridge.setAnnotatePicks([pick]);
+    await expect(bridge.browser.annotateStart(7)).resolves.toEqual(pick);
+    let settled = false;
+    void bridge.browser.annotateStart(7).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await expect(bridge.browser.annotateSync(7, [{ n: 2, key: 'a2' }])).resolves.toEqual([{ n: 2, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 } }]);
+    bridge.setAnnotateCapture(null);
+    await expect(bridge.browser.annotateCapture(7)).resolves.toEqual({ path: null });
+    expect(bridge.browserCalls.map((call) => call.method)).toEqual(['annotateStart', 'annotateStart', 'annotateSync', 'annotateCapture']);
+  });
+});

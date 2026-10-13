@@ -149,6 +149,13 @@ export interface BrowserApi {
   onFocus(listener: (e: { webContentsId: number }) => void): () => void;
   /** Файл-контекст в `drops/context/` (спека браузера 3.6): main проверяет форму и снимок, сам выбирает имя. */
   saveContext(input: ContextInput): Promise<SavedContext>;
+  /** Одна метка аннотаций (спека браузера 4.7); окно зовёт снова, пока режим включён. null — Esc, навигация, отмена. */
+  annotateStart(webContentsId: number): Promise<AnnotationPick | null>;
+  annotateCancel(webContentsId: number): Promise<void>;
+  /** Перерисовать метки страницы по лотку (пункты её документа) и узнать, где они (доли вьюпорта) и какие элементы пропали. */
+  annotateSync(webContentsId: number, pins: AnnotationPin[]): Promise<AnnotationPosition[]>;
+  /** Снимок страницы с номерами меток в `drops/`; меток на странице нет — `null`. */
+  annotateCapture(webContentsId: number): Promise<{ path: string | null }>;
   /**
    * Журнал консоли и сети гостя (спека 2026-10-07-browser-devtools-agent-design.md, 3.5). Журнала нет (захват не
    * подключался) — пустой с `capture: 'unavailable'`.
