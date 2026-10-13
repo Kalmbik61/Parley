@@ -1517,6 +1517,145 @@ describe('need: потребность сессии (спека «Застряв
     expect(a.get(ref)?.activity.need).toBeNull();
   }, 30_000);
 
+  /** Служба активности со своим журналом хоста: тест видит, что и с чем она записала. */
+  function activityWithLog(
+    worksService: WorksService,
+    log: { warn?: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> },
+    options: ActivityServiceOptions = {},
+  ): ActivityService {
+    const service = createActivityService(
+      { ...fakeHost(), log: { info: () => {}, warn: log.warn ?? (() => {}), error: log.error ?? (() => {}) } },
+      worksService,
+      { silenceThresholdMs: 30_000, claudeRoot, codexRoot, ...options },
+    );
+    services.push(service);
+    return service;
+  }
+
+  it('запуск процесса: сбой пересчёта не уходит в слушатель start менеджера PTY, а пишется в журнал хоста', async () => {
+    const { ref } = await activeSession();
+    const { ref: codexRef } = await activeSession({ provider: 'codex' });
+    const w = await works();
+    // Слушатели `start` у менеджера PTY идут без защиты: бросок оборвал бы `pty.start` уже после запуска процесса.
+    let broken = false;
+    const flaky: WorksService = {
+      ...w,
+      entry: (projectPath, workId) => {
+        if (broken) throw new Error('сбой');
+        return w.entry(projectPath, workId);
+      },
+    };
+    const error = vi.fn();
+    const a = activityWithLog(flaky, { error });
+    await a.start();
+    await settle();
+
+    broken = true;
+    expect(() => a.processStarted(ref)).not.toThrow();
+    expect(() => a.terminalStarted(codexRef)).not.toThrow();
+    broken = false;
+
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(error.mock.calls.map((call) => (call[1] as { ref: SessionRef }).ref)).toEqual([ref, codexRef]);
+  }, 20_000);
+
+  it('процесс вышел — запись о запуске забыта: прежний счёт строк больше не держит экран старта и границу', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+
+    const launched = clock;
+    a.processStarted(ref);
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+
+    a.terminalStopped(ref);
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 20_000);
+
+  /** Начало работы сессии `ref` по карте: от него считается срок экрана старта, когда хост запуска не видел. */
+  const startedAtOf = async (ref: SessionRef): Promise<number> =>
+    Date.parse(
+      (await readMap(project, ref.workId)).sessions.find((session) => session.id === ref.sessionId)?.startedAt ?? '',
+    );
+
+  it('Claude без хуков: запись транскрипта после запуска — экрана старта нет (экран входа транскрипт не пишет)', async () => {
+    const { ref } = await activeSession({ providerSessionId: 's-hookless' });
+    const startedAt = await startedAtOf(ref);
+    let clock = startedAt + 1_000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+
+    // Журнал молчит и транскрипта нет: срок вышел — экран старта.
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+
+    // Транскрипт показал работу после запуска: человек экран прошёл, хуки просто не доходят — «ждёт на старте» залипло бы.
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-hookless', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-hookless.jsonl'),
+      `${[
+        record({
+          type: 'user',
+          timestamp: new Date(startedAt + 5_000).toISOString(),
+          message: { role: 'user', content: 'привет' },
+        }),
+        record({
+          type: 'assistant',
+          timestamp: new Date(startedAt + 6_000).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: 'ок' }] },
+        }),
+      ].join('\n')}\n`,
+    );
+    await waitFor(() => a.get(ref)?.activity.need === null, 15_000);
+  }, 30_000);
+
+  it('сессия без каталога events/: экран старта не прячет hooksMissing — он считается по настоящему журналу', async () => {
+    const { ref } = await activeSession({ createEventsDir: false });
+    const startedAt = await startedAtOf(ref);
+    let clock = startedAt + 1_000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref) !== undefined);
+    expect(a.get(ref)?.activity.hooksMissing).toBe(true);
+
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+    expect(a.get(ref)?.activity.hooksMissing).toBe(true);
+  }, 20_000);
+
+  it('GLM: перечитывание квоты отказало — одна строка в журнале хоста, время сброса остаётся из текста', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const warn = vi.fn();
+    const refresh = vi.fn<LimitsService['refresh']>(async () => {
+      throw new Error('нет ключа Z.ai');
+    });
+    const a = activityWithLog(w, { warn }, { limits: { get: () => null, refresh } });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => refresh.mock.calls.length === 1);
+    const quotaWarnings = (): unknown[][] =>
+      warn.mock.calls.filter((call) => String(call[0]).includes('квота Z.ai'));
+    await waitFor(() => quotaWarnings().length === 1);
+
+    expect(quotaWarnings()[0]?.[1]).toEqual({ ref, error: 'Error: нет ключа Z.ai' });
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', resetsAt: '2031-01-05T11:03:01.000Z' });
+  }, 20_000);
+
   it('экран старта ждут только от запущенных хостом: сессия чужого запуска молчит без need', async () => {
     const { ref } = await activeSession({ launchedBy: 'cli' });
     const w = await works();

@@ -245,11 +245,14 @@ describe('поток терминала Codex', () => {
   });
 
   it('длинная, но закрытая последовательность разбирается: терминатор в том же куске', () => {
-    const long = `Approval requested: ${'x'.repeat(MAX_OSC_LENGTH * 2)}`;
-    const signals = run(osc(`9;${long}`), (data) => [data]);
+    const tail = 'x'.repeat(MAX_OSC_LENGTH * 2);
+    const signals = run(osc(`9;Approval requested: ${tail}`), (data) => [data]);
     expect(signals).toHaveLength(1);
-    // Текст не режется разбором: до `NEED_DETAIL_MAX` его сокращает свёртка активности.
-    expect(signals[0]).toMatchObject({ kind: 'needs-you', reason: 'approval-requested' });
+    const signal = signals[0];
+    expect(signal).toMatchObject({ kind: 'needs-you', reason: 'approval-requested' });
+    // Текст не режется разбором: до `NEED_DETAIL_MAX` его сокращает свёртка активности. Сравнение булевым, чтобы
+    // при расхождении в вывод не попадали шестнадцать тысяч знаков.
+    expect(signal?.kind === 'needs-you' && signal.detail === tail).toBe(true);
   });
 
   it('многократные вызовы на пустых и обычных кусках ничего не портят', () => {

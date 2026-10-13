@@ -127,7 +127,10 @@ export interface ActivityService {
   terminalStarted(ref: SessionRef): void;
   /** Сигнал терминала Codex (`pty/codex-terminal.ts`): заголовок окна или уведомление OSC 9. */
   terminalSignal(ref: SessionRef, signal: CodexSignal): void;
-  /** Процесс вышел: состояние по терминалу больше не действует, сессия снова читается по журналу и логу. */
+  /**
+   * Процесс вышел: состояние по терминалу больше не действует, сессия снова читается по журналу и логу; запись о запуске
+   * (`processStarted`) снята.
+   */
   terminalStopped(ref: SessionRef): void;
   /**
    * Хост запустил процесс агента, не Codex (у Codex — `terminalStarted`): от этого запуска считаются срок экрана старта
@@ -510,16 +513,16 @@ export function createActivityService(
   }
 
   /**
-   * Срок экрана старта: через `trustWaitMs` после запуска нынешнего процесса. Запуск, который видел хост
-   * (`processStarted`), точнее первого запуска сессии (`startedAt`): у возобновлённой сессии тот остаётся прежним.
-   * Тот же срок, что у уведомления `trust-wait`; `NaN` — запуск неизвестен.
+   * Когда запущен нынешний процесс: по метке хоста (`processStarted`), без неё — по первому запуску сессии (`startedAt`).
+   * Метка точнее: у возобновлённой сессии `startedAt` остаётся прежним. `NaN` — запуск неизвестен.
    */
-  const startupDue = (session: WorkSession, key: string): number => {
-    const launched =
-      launches.get(key)?.at ??
-      (session.startedAt === null ? Number.NaN : Date.parse(session.startedAt));
-    return launched + trustWaitMs;
-  };
+  const launchedAtOf = (session: WorkSession, key: string): number =>
+    launches.get(key)?.at ??
+    (session.startedAt === null ? Number.NaN : Date.parse(session.startedAt));
+
+  /** Срок экрана старта: через `trustWaitMs` после запуска нынешнего процесса — тот же, что у уведомления `trust-wait`. */
+  const startupDue = (session: WorkSession, key: string): number =>
+    launchedAtOf(session, key) + trustWaitMs;
 
   /**
    * Процесс Claude или GLM поднят хостом и жив: к нему относятся запись о запуске, граница в журнале и экран старта.
@@ -562,11 +565,19 @@ export function createActivityService(
    * `parley_startup` со временем истечения срока — свёртка читает его как `need` вида `startup`. Первая же новая строка
    * снимает его совсем (`waitsForStartup`): иначе `SessionStart` после него превратил бы «нужен ты» в «закончил ход».
    * Новых строк нет, поэтому событие встаёт в самый конец — сразу за границей нового процесса, а не за хвостом прошлого.
+   * Транскрипт, показавший работу после запуска, экран старта отменяет: экран входа и доверия в него не пишет, и если
+   * журнал молчит оттого, что хуки не доходят (старый Claude Code, выключены), «ждёт на старте» залипло бы навсегда.
    */
-  function startupEventOf(session: WorkSession, key: string, now: number): EventRecord | null {
+  function startupEventOf(
+    session: WorkSession,
+    key: string,
+    now: number,
+    log: ActivityLog | null,
+  ): EventRecord | null {
     if (!waitsForStartup(session, key)) return null;
     const due = startupDue(session, key);
     if (!(due <= now)) return null;
+    if (Date.parse(log?.lastRecordAt ?? '') > launchedAtOf(session, key)) return null;
     return {
       ...bareEvent(new Date(due).toISOString(), 'Notification'),
       notificationType: PARLEY_STARTUP_NOTIFICATION,
@@ -884,6 +895,19 @@ export function createActivityService(
     recompute(ref);
   }
 
+  /**
+   * Пересчёт из слушателя `start` менеджера PTY (`terminalStarted`, `processStarted`): слушатели там идут без защиты, и
+   * бросок оборвал бы `pty.start` уже после запуска процесса — PTY остался бы сиротой. Сбой пишется в журнал хоста, а
+   * сессия досчитается на следующем событии.
+   */
+  function recomputeOnStart(ref: SessionRef): void {
+    try {
+      recompute(ref);
+    } catch (error) {
+      host.log.error('пересчёт активности при запуске процесса не удался', { ref, error: String(error) });
+    }
+  }
+
   function recompute(ref: SessionRef): void {
     if (stopped) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -893,14 +917,15 @@ export function createActivityService(
     const key = refKey(ref);
     const now = nowFn();
     const journalEvents = eventsFor(session, key);
-    // Экран старта Claude и GLM — событие свёртки, а не журнала: настоящих строк с запуска процесса ещё нет.
-    const startup = startupEventOf(session, key, now);
-    const events = startup === null ? journalEvents : [...(journalEvents ?? []), startup];
     // Под хостом состояние Codex ведут сигналы терминала и явные события хода из rollout (eventsFor).
     // Общая свежесть лога не годится: token_count после ответа снова вернул бы working.
     // Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
     const driven = terminals.has(key);
     const log = driven ? null : logIndex.log(session);
+    // Экран старта Claude и GLM — событие свёртки, а не журнала: настоящих строк с запуска процесса ещё нет, а работы в
+    // транскрипте — тоже.
+    const startup = startupEventOf(session, key, now, log);
+    const events = startup === null ? journalEvents : [...(journalEvents ?? []), startup];
     // Порог тишины у такой сессии не действует: заголовок Codex пишет не весь ход (личный
     // `tui.animations=false`, долгий инструмент), а ложный конец хода — это «finished» в macOS и Enter
     // вместо Tab в идущий ход. Выход процесса известен (`terminalStopped`), конец хода — сигнал терминала
@@ -938,8 +963,12 @@ export function createActivityService(
     } else if (boundary !== null && (journals.get(key)?.length ?? 0) === boundary.journalLength) {
       lastEventAt = journals.get(key)?.[boundary.journalLength - 1]?.at ?? null;
     }
+    // `hooksMissing` — по настоящему журналу: экран старта делает события непустыми, но хуки от этого не появились.
+    const hooksMissing = journalEvents === null;
     const activity: SessionActivity =
-      lastEventAt === folded.lastEventAt ? folded : { ...folded, lastEventAt };
+      lastEventAt === folded.lastEventAt && hooksMissing === folded.hooksMissing
+        ? folded
+        : { ...folded, lastEventAt, hooksMissing };
 
     const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
     // Удержанный вопрос агента: публикуется 'blocked' с `need` вопроса, а таймер тишины и метрики — по настоящему
@@ -1035,7 +1064,12 @@ export function createActivityService(
         if (!stopped) recompute(ref);
       },
       // Ключа Z.ai нет или квота не прочиталась: время сброса остаётся из текста ошибки или неизвестным.
-      () => undefined,
+      (error: unknown) => {
+        host.log.warn('квота Z.ai не перечитана — время сброса лимита остаётся из текста ошибки', {
+          ref,
+          error: String(error),
+        });
+      },
     );
   }
 
@@ -1276,7 +1310,7 @@ export function createActivityService(
       };
       state.startupTimer = setTimeout(() => startupExpired(ref, key, state), startupWaitMs);
       terminals.set(key, state);
-      recompute(ref);
+      recomputeOnStart(ref);
     },
     processStarted(ref) {
       if (stopped) return;
@@ -1284,7 +1318,7 @@ export function createActivityService(
       launches.set(key, { at: nowFn(), journalLength: journals.get(key)?.length ?? 0 });
       // Срок и счёт новых строк начинаются заново: таймер прежнего запуска (Resume) к этому процессу не относится.
       clearStartupTimer(key);
-      recompute(ref);
+      recomputeOnStart(ref);
     },
     terminalSignal(ref, signal) {
       if (stopped) return;
@@ -1319,6 +1353,8 @@ export function createActivityService(
     },
     terminalStopped(ref) {
       const key = refKey(ref);
+      // Запись о запуске относится к процессу: у Claude и GLM состояния терминала нет, и выход иначе её не снимал бы.
+      launches.delete(key);
       if (!terminals.has(key)) return;
       clearTerminal(key);
       recompute(ref);
