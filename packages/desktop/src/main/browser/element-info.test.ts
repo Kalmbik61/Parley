@@ -205,6 +205,32 @@ describe('звено селектора guest-dom (id и классы через
     expect(nodeMatches({ localName: 'div', attributes: ['class', 'a b'] }, tail)).toBe(false);
   });
 
+  it('nodeMatches: границы класса — пробелы HTML, а не подстрока; знаки регулярки в имени (`py-1.5`) ищутся буквально', () => {
+    const tail = selectorTail('div.save');
+    expect(nodeMatches({ localName: 'div', attributes: ['class', 'save'] }, tail)).toBe(true);
+    expect(nodeMatches({ localName: 'div', attributes: ['class', '\tx  save\n'] }, tail)).toBe(true);
+    expect(nodeMatches({ localName: 'div', attributes: ['class', 'save-all'] }, tail)).toBe(false);
+    expect(nodeMatches({ localName: 'div', attributes: ['class', 'unsave'] }, tail)).toBe(false);
+    expect(nodeMatches({ localName: 'div', attributes: ['class', ''] }, tail)).toBe(false);
+    expect(nodeMatches({ localName: 'div', attributes: [] }, tail)).toBe(false);
+    const dotted = selectorTail('div.py-1\\.5');
+    expect(nodeMatches({ localName: 'div', attributes: ['class', 'py-1.5'] }, dotted)).toBe(true);
+    expect(nodeMatches({ localName: 'div', attributes: ['class', 'py-1x5'] }, dotted)).toBe(false);
+  });
+
+  it('nodeMatches: атрибут class в десятки мегабайт (его задаёт страница) не раскладывается на классы — сверка за время, не зависящее от длины', () => {
+    const tail = selectorTail('div.save');
+    const crowded = 'a '.repeat(25_000_000);
+    const started = performance.now();
+    const hit = nodeMatches({ localName: 'div', attributes: ['class', `${crowded}save`] }, tail);
+    const miss = nodeMatches({ localName: 'div', attributes: ['class', crowded] }, tail);
+    const elapsed = performance.now() - started;
+    expect(hit).toBe(true);
+    expect(miss).toBe(false);
+    // Порог по времени, а не таймаут теста: вызов синхронный. Прежний `split` по значению — секунды и больше гигабайта кучи в main.
+    expect(elapsed).toBeLessThan(500);
+  });
+
   it('elementInfo: селектор с экранированным id находит узел — роль и имя на месте, React спрошен', async () => {
     for (const [selector, localName, id] of [
       ['form > input#\\:r0\\:', 'input', ':r0:'],

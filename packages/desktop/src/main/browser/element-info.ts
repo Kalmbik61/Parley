@@ -37,6 +37,19 @@ interface AxNode {
   name?: { value?: unknown };
 }
 
+/** Пробельные знаки ASCII, которыми HTML делит имена в `class` (и `guest-dom` — в `stableClasses`). */
+const HTML_SPACE = '[ \\t\\n\\f\\r]';
+
+/**
+ * Есть ли `name` среди имён в `value`. Значение не раскладывается на имена: атрибут `class` задаёт страница, и `split`
+ * по значению в десятки мегабайт — секунды и больше гигабайта кучи в main; регулярка читает его, ничего не выделяя.
+ */
+function hasClass(value: string, name: string): boolean {
+  if (name === '') return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|${HTML_SPACE})${escaped}(?=${HTML_SPACE}|$)`).test(value);
+}
+
 /** Узел CDP (`DOM.describeNode`) — тот, что выбрал скрипт: тег, id и все классы последнего звена селектора. */
 export function nodeMatches(node: DescribedNode | undefined, tail: SelectorTail): boolean {
   if (node === undefined || typeof node.localName !== 'string' || node.localName.toLowerCase() !== tail.tag) return false;
@@ -50,8 +63,8 @@ export function nodeMatches(node: DescribedNode | undefined, tail: SelectorTail)
   if (tail.id !== null && attribute('id') !== tail.id) return false;
   // Имена в class делят пробельные знаки ASCII, как в HTML и в guest-dom (`stableClasses`), а не `\s`: тот режет и
   // неразрывный пробел, который CSS.escape в имени класса не экранирует, — звено селектора не нашло бы свой класс.
-  const classes = new Set((attribute('class') ?? '').split(/[ \t\n\f\r]+/).filter((name) => name !== ''));
-  return tail.classes.every((name) => classes.has(name));
+  const classes = attribute('class') ?? '';
+  return tail.classes.every((name) => hasClass(classes, name));
 }
 
 /** Ответ или запасное значение, если не уложился в `ms` или отказал: страница в цикле не держит выбор. */
