@@ -316,6 +316,74 @@ describe('addAnnotationsToChat — черновик и Undo (N3, N4 задачи
   });
 });
 
+describe('addAnnotationsToChat — вкладку закрыли или лоток опустел, пока шли перерисовка и снимок (заметки задачи 23)', () => {
+  /** «Add to chat» стоит на снимке; `during` — что делает человек, пока он идёт. Возвращает то, что ушло в добавление. */
+  async function addWhile(during: () => void, answer: Delivered = 'room') {
+    const bridge = createFakeBridge();
+    const store = useAnnotateStore.getState();
+    store.receive(TAB, ELEMENT, PAGE);
+    store.setDraft(TAB, 'first');
+    store.save(TAB);
+    const capture = deferred<{ path: string | null }>();
+    bridge.browser.annotateCapture = () => capture.promise;
+    const { drafts, add } = collector(answer);
+    const run = addAnnotationsToChat({ bridge, tabId: TAB, webContentsId: 7, pageUrl: PAGE, viewportNote: null, add });
+    await settle();
+    during();
+    capture.resolve({ path: '/h/drops/page.png' });
+    await run;
+    return drafts;
+  }
+
+  it('вкладку закрыли (drop), пока шёл снимок: в чат ничего не уходит, запись лотка закрытой вкладки не воскресает', async () => {
+    const drafts = await addWhile(() => useAnnotateStore.getState().drop(TAB));
+    expect(drafts).toEqual([]);
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('«Clear», пока шёл снимок: пачка пуста — в чат ничего не уходит («0 annotations added» не будет)', async () => {
+    const drafts = await addWhile(() => useAnnotateStore.getState().clear(TAB));
+    expect(drafts).toEqual([]);
+    expect(items()).toEqual([]);
+  });
+
+  it('пункт убран по одному и поставлен новый, пока шёл снимок: в файл вошло только прежнее — его нет, пачка пуста, новая метка в лотке', async () => {
+    const drafts = await addWhile(() => {
+      const store = useAnnotateStore.getState();
+      store.remove(TAB, 1);
+      store.receive(TAB, { ...ELEMENT, key: 'a2', selector: 'main > button.two' }, PAGE);
+      store.setDraft(TAB, 'second');
+      store.save(TAB);
+    });
+    expect(drafts).toEqual([]);
+    expect(items().map((item) => [item.n, item.comment])).toEqual([[1, 'second']]);
+  });
+
+  it('вкладку закрыли, пока тост «Undo» висел: возврат пачки не воскрешает запись лотка', async () => {
+    const bridge = createFakeBridge();
+    twoPins();
+    const { drafts, add } = collector('room');
+    await addAnnotationsToChat({ bridge, tabId: TAB, webContentsId: 7, pageUrl: PAGE, viewportNote: null, add });
+    useAnnotateStore.getState().drop(TAB);
+    drafts[0]?.onUndo?.();
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+
+  it('доставка не вышла, а вкладку закрыли за время записи: пачка не возвращается в несуществующий лоток', async () => {
+    const bridge = createFakeBridge();
+    twoPins();
+    const drafts: ContextDraft[] = [];
+    const add = async (draft: ContextDraft): Promise<Delivered> => {
+      drafts.push(draft);
+      useAnnotateStore.getState().drop(TAB);
+      return 'failed';
+    };
+    await addAnnotationsToChat({ bridge, tabId: TAB, webContentsId: 7, pageUrl: PAGE, viewportNote: null, add });
+    expect(drafts).toHaveLength(1);
+    expect(useAnnotateStore.getState().tabs[TAB]).toBeUndefined();
+  });
+});
+
 describe('useAnnotateMode — цикл меток (N1, N5 задачи 21; замечание 1; заметки задач 22 и 20)', () => {
   afterEach(() => vi.mocked(toast).mockClear());
 

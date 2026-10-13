@@ -186,6 +186,8 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
             return null;
           },
         );
+  // Вкладку закрыли, пока шли перерисовка и снимок: запись лотка снята (`drop`), а `clear` завёл бы её заново пустой.
+  if (useAnnotateStore.getState().tabs[deps.tabId] === undefined) return;
   const built = annotationsContext({
     pageUrl: deps.pageUrl,
     viewport: items[0]?.target.viewport ?? null,
@@ -200,7 +202,12 @@ export async function addAnnotationsToChat(deps: AnnotationsToChat): Promise<voi
   const pack = removed.filter((item) => filed.has(identity(item)));
   const later = removed.filter((item) => !filed.has(identity(item)));
   if (later.length > 0) useAnnotateStore.getState().restore(deps.tabId, later);
-  const restore = (): void => useAnnotateStore.getState().restore(deps.tabId, pack);
+  // «Clear» или удаление по одному за это время опустошили пачку: в чат нечего класть, и тост «0 annotations added» ни к чему.
+  if (pack.length === 0) return;
+  // Вкладку могли закрыть к «Undo» или к отказу доставки: возвращать пачку некуда, а `restore` завёл бы запись закрытой вкладки.
+  const restore = (): void => {
+    if (useAnnotateStore.getState().tabs[deps.tabId] !== undefined) useAnnotateStore.getState().restore(deps.tabId, pack);
+  };
   const delivered = await deps.add({ ...built, imagePath: path, count: pack.length, onUndo: restore });
   if (delivered === 'failed') restore();
 }
