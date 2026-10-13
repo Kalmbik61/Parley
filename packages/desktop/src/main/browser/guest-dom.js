@@ -148,11 +148,16 @@
     return tokens.some((token) => SECRET_AUTOCOMPLETE.test(token));
   }
 
-  /** URL атрибута без query и hash; схема не http, https или file — пустая строка (`sanitizeUrl` Orca). */
+  /**
+   * URL атрибута без query и hash; схема не http, https или file — пустая строка (`sanitizeUrl` Orca). Разбор URL в
+   * браузере выбрасывает ASCII-табуляцию и переводы строки отовсюду, в том числе из схемы (`java<TAB>script:alert(1)` — это
+   * `javascript:`), поэтому схема проверяется по значению без них, без них же значение и возвращается.
+   */
   function cleanUrl(value) {
-    const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(value);
+    const bare = value.replace(/[\t\n\r]/g, '');
+    const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(bare);
     if (scheme !== null && !SAFE_SCHEMES.has(scheme[1].toLowerCase())) return '';
-    return value.replace(/[?#][\s\S]*$/, '');
+    return bare.replace(/[?#][\s\S]*$/, '');
   }
 
   /** HTML элемента без скриптов, обработчиков и секретов полей; на символ длиннее `max` — так main видит обрезку. */

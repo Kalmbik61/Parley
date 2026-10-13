@@ -178,6 +178,21 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
     expect(htmlOf($('#f'), 10)).toHaveLength(11);
   });
 
+  it('HTML: табуляция и перевод строки внутри адреса (java<TAB>script:) схему не прячут — браузер выбрасывает их из адреса; без них адрес и остаётся', () => {
+    // Разбор URL в браузере убирает ASCII-табуляцию и переводы строки отовсюду: `java&#9;script:alert(1)` — это javascript:.
+    document.body.innerHTML = `
+      <div id="d">
+        <a href="java&#9;script:alert(1)">tab</a>
+        <a href="jav&#10;ascript:alert(2)">lf</a>
+        <a href="data&#9;:text/html,leak">data</a>
+        <a href="https://exa&#10;mple.test/p?token=zzz#frag">ok</a>
+      </div>`;
+    const html = dom().htmlOf($('#d'), 4096);
+    for (const leak of ['alert', 'text/html', 'leak', 'token=', 'zzz', 'frag']) expect(html, leak).not.toContain(leak);
+    expect(html.match(/href=""/g)).toHaveLength(3);
+    expect(html).toContain('href="https://example.test/p"');
+  });
+
   it('стили — только переданные ключи, вычисленными значениями', () => {
     document.body.innerHTML = '<p id="s" style="display:flex;position:absolute">x</p>';
     expect(dom().stylesOf($('#s'), ['display', 'position'])).toEqual({ display: 'flex', position: 'absolute' });
