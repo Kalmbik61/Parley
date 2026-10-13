@@ -1331,7 +1331,13 @@ test.describe('контекст из браузера в чат (этап B)', (
             wrong.push(`#${index} ${button.getAttribute('aria-label') ?? button.getAttribute('title') ?? ''}: disabled=${button.disabled} op=${computed.opacity} pe=${computed.pointerEvents}`);
           }
         }
-        const shown = getComputedStyle(label).display !== 'none';
+        // Ответ наблюдателя React выполняет отдельной задачей, и под нагрузкой она бывает позже пары задач выше: ждём до восьми кадров,
+        // прежде чем счесть подпись неверной (залипшая подпись не выправится и за них).
+        let shown = getComputedStyle(label).display !== 'none';
+        for (let tries = 0; tries < 8 && shown !== wide; tries += 1) {
+          await frame();
+          shown = getComputedStyle(label).display !== 'none';
+        }
         if (shown !== wide) wrong.push(`#${index} подпись размера: ширина содержимого ${wide ? 560 : 559}, подпись ${shown ? 'видна' : 'скрыта'}`);
       }
       row.style.width = '';
