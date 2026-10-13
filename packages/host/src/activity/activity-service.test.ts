@@ -1082,6 +1082,9 @@ describe('need: потребность сессии (спека «Застряв
   const SESSION_LIMIT = "You've hit your session limit · resets Jan 5 2031 at 4pm (Europe/Moscow)";
   const SESSION_LIMIT_AT = '2031-01-05T13:00:00.000Z';
   const GLM_LIMIT = 'Usage limit reached for 5 hour. Your limit will reset at 2031-01-05 19:03:01';
+  /** Тексты ошибки без времени сброса: его неоткуда взять, кроме данных провайдера. */
+  const LIMIT_NO_TIME = "You've hit your limit";
+  const GLM_LIMIT_NO_TIME = 'Usage limit reached for 5 hour.';
 
   const failure = (text: string): string =>
     hook('StopFailure', { error: 'rate_limit', last_assistant_message: text });
@@ -1159,8 +1162,9 @@ describe('need: потребность сессии (спека «Застряв
     await a.start();
     await settle();
 
-    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
-    // Сначала — время из текста (пекинское, UTC+8); когда служба лимитов отдала окно, оно главнее.
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT_NO_TIME));
+    // В тексте времени нет: пока квота не перечитана, `resetsAt` пуст, а окно, которое отдала служба лимитов, его задаёт.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
     await waitFor(() => a.get(ref)?.activity.need?.resetsAt === '2031-01-05T11:00:00.000Z');
     expect(fake.refresh).toHaveBeenCalledTimes(1);
     expect(fake.refresh).toHaveBeenCalledWith(true);
@@ -1210,6 +1214,67 @@ describe('need: потребность сессии (спека «Застряв
 
     expect(a.get(ref)?.activity.need?.resetsAt).toBe('2031-01-05T11:00:00.000Z');
     expect(fake.refresh).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('время сброса держится весь эпизод: «уже сброшен» не уезжает на пересчётах и не рассылается заново', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const fake = fakeLimits();
+    // Данные провайдера новее удара, все окна ниже 100 %, а в тексте времени нет: лимит «уже сброшен», `resetsAt` — сейчас.
+    fake.set({
+      fiveHour: { usedPercent: 40, resetsAt: new Date(clock + 3_600_000).toISOString() },
+      week: { usedPercent: 10, resetsAt: null },
+      at: new Date(clock + 600_000).toISOString(),
+    });
+    const a = activity(w, { limits: fake.limits, now: () => clock });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    const first = a.get(ref)?.activity.need?.resetsAt;
+    expect(first).toBe(new Date(clock).toISOString());
+
+    // Пересчёт через 30 с: правило «сейчас» дало бы новое время, а эпизод держит первое.
+    const broadcast = activityChanges(ref).length;
+    clock += 30_000;
+    await createWork(project, { title: 'Ещё одна' });
+    await settle(300);
+    expect(a.get(ref)?.activity.need?.resetsAt).toBe(first);
+    expect(activityChanges(ref).length).toBe(broadcast);
+  }, 20_000);
+
+  it('окно провайдера пропало после сброса — время эпизода не откатывается; после снятия need выбирается заново', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const fake = fakeLimits();
+    const firstReset = new Date(clock + 60_000).toISOString();
+    fake.set(exhausted(firstReset));
+    const a = activity(w, { limits: fake.limits, now: () => clock });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: firstReset, window: 'session' });
+
+    // Сброс прошёл: служба лимитов окно уже не отдаёт (`dropExpiredWindows`), а эпизод всё ещё идёт.
+    clock = Date.parse(firstReset) + 1000;
+    fake.set(null);
+    await createWork(project, { title: 'Ещё одна' });
+    await settle(300);
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: firstReset, window: 'session' });
+
+    // Человек написал — эпизод кончился; следующий лимит выбирает время заново, по новому окну.
+    const secondReset = new Date(clock + 3_600_000).toISOString();
+    fake.set(exhausted(secondReset));
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    await appendFile(journal(ref), failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: secondReset, window: 'session' });
   }, 20_000);
 
   it('спящая сессия с ошибкой лимита в журнале — need: null; пока она жива, он есть', async () => {
@@ -1277,6 +1342,75 @@ describe('need: потребность сессии (спека «Застряв
       kind: 'startup',
       since: new Date(startedAt + 20_000).toISOString(),
     });
+  }, 20_000);
+
+  /** Сессия возобновлена: процесс прошлого запуска ушёл, в журнале остались его события, а `startedAt` — первый запуск. */
+  async function resumedSession(): Promise<{ ref: SessionRef }> {
+    const { ref } = await activeSession();
+    await appendFile(
+      journal(ref),
+      hook('SessionStart', { source: 'startup' }) + hook('UserPromptSubmit') + hook('Stop') + hook('SessionEnd'),
+    );
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'sleeping');
+    });
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'active');
+    });
+    return { ref };
+  }
+
+  it('возобновлённая сессия: журнал прошлого запуска не пуст, новый процесс молчит срок — startup; первая новая строка снимает', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    // Журнал прошлого запуска прочитан: у активности есть время последнего события.
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+
+    // Хост поднял новый процесс: журнал на этот миг — прошлое, считаются только строки после него; срок — от запуска.
+    const launched = clock;
+    a.processStarted(ref);
+    clock = launched + 19_999;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(launched + 20_000).toISOString(),
+    });
+    // События прошлого запуска — не хуки нового процесса: «хост в курсе» и «сессия стартовала» не наступили.
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+  }, 20_000);
+
+  it('возобновлённая сессия: новый процесс успел написать строку до срока — экрана старта нет', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+    const before = a.get(ref)?.activity.lastEventAt;
+
+    const launched = clock;
+    a.processStarted(ref);
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.lastEventAt !== before);
+
+    clock = launched + 60_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
   }, 20_000);
 
   it('экран старта ждут только от запущенных хостом: сессия чужого запуска молчит без need', async () => {
