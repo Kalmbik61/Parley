@@ -6,6 +6,12 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Notification clicks and update notices keep working after a browser tab loads.** Once a browser tab had loaded
+  a page, clicking a macOS notification raised the window but didn't open the session, and a new-version notice
+  never reached it, until the window was reloaded.
+
 ## 0.11.0
 
 Screenshots an agent takes — with Chrome DevTools MCP, Claude in Chrome or Playwright, or an image it reads — now show in Chat as thumbnails under the call, and a click opens them larger. A live agent that has reported "done" no longer looks finished.
