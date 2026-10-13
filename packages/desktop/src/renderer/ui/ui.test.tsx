@@ -599,3 +599,29 @@ describe('ui/checkbox — радиус шкалы Organic', () => {
     expect(classes).toContain('size-4');
   });
 });
+
+describe('ui/popover — portalContainer (этап B браузера: редактор аннотаций в слое страницы)', () => {
+  it('содержимое — в переданном узле; без него — в document.body', () => {
+    const layer = document.createElement('div');
+    document.body.append(layer);
+    const view = render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent portalContainer={layer} data-testid="in-layer">
+          Содержимое
+        </PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-layer'))).toBe(true);
+    view.unmount();
+    render(
+      <Popover open>
+        <PopoverTrigger>Триггер</PopoverTrigger>
+        <PopoverContent data-testid="in-body">Содержимое</PopoverContent>
+      </Popover>,
+    );
+    expect(layer.contains(screen.getByTestId('in-body'))).toBe(false);
+    expect(document.body.contains(screen.getByTestId('in-body'))).toBe(true);
+    layer.remove();
+  });
+});

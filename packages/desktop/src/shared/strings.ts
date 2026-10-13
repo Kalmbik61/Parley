@@ -1360,6 +1360,26 @@ export const S = {
       button: 'Select',
       title: 'Select an element — ⇧-click to keep selecting (⌘⇧C)',
     },
+    /** ✎ Annotate (спека браузера 4.7): кнопка, редактор комментария и лоток. */
+    annotate: {
+      button: 'Annotate',
+      title: 'Annotate the page — click an element or drag over an area (⌘⌥A)',
+      tray: (count: number): string => `${count} annotation${count === 1 ? '' : 's'}`,
+      region: (width: number, height: number): string => `Region ${width} × ${height}`,
+      gone: 'element gone',
+      noComment: 'No comment',
+      comment: (n: number): string => `Comment for annotation ${n}`,
+      placeholder: 'What is wrong here, or what should change?',
+      save: 'Save',
+      delete: 'Delete',
+      edit: (n: number): string => `Edit annotation ${n}`,
+      remove: (n: number): string => `Delete annotation ${n}`,
+      clear: 'Clear',
+      addToChat: 'Add to chat',
+      collapse: 'Hide annotations',
+      expand: 'Show annotations',
+      limit: 'No more than 20 annotations — add these to chat or clear them first',
+    },
     /** Цель «To» (спека браузера 4.1, 4.5): кнопка строки вкладки, меню и тост добавления. */
     target: {
       button: (name: string): string => `To: ${name}`,
