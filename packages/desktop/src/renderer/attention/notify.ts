@@ -10,12 +10,16 @@
  * план — `ask-summary.ts`, из ленты сессии), вторая — проект и сколько ещё сессий ждут. Карточка из хука может лечь
  * чуть позже активности, поэтому пустой ответ повторяется один раз через `ASK_RETRY_MS`; если человек успел ответить,
  * уведомления нет. Клик ведёт к самой карточке (`cardId` цели), если ответить можно в окне.
+ *
+ * Пока окно острова живо (спека 2026-10-12), запрос с найденной карточкой показывает остров, а не уведомление: двух
+ * сигналов об одном и том же не нужно. Без карточки (ждёт в терминале) и у Codex (вне острова) уведомление остаётся.
  */
 
 import type { Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
+import { ISLAND_EXCLUDED_PROVIDERS } from '../../shared/island.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
 import { replyExcerpt } from '../components/rooms/excerpt.js';
@@ -23,6 +27,7 @@ import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
 import { sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
+import { projectName } from '../lib/project-name.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
@@ -61,6 +66,11 @@ export interface NotifyDeps {
    * ленты нет (хост старый), карточки ещё нет или запрос не удался; отказ запроса считается тем же `null`.
    */
   pendingAsk(ref: SessionRef): Promise<PendingAsk | null>;
+  /**
+   * Живо ли окно острова (спека 2026-10-12): пока живо, запрос с найденной карточкой показывает остров, а не
+   * уведомление macOS. Codex и «ждёт без карточки» — уведомлением, как раньше.
+   */
+  islandOn(): boolean;
 }
 
 /** Пауза перед повторным запросом карточки: хук с ней может прийти чуть позже события активности. */
@@ -86,11 +96,6 @@ const decisionTag = (key: string, roomId: string): string => `proposal:${key}:${
 function firstLine(text: string | null): string {
   if (text === null) return '';
   return text.split(/\r?\n/).find((line) => line.trim() !== '')?.trim() ?? '';
-}
-
-/** Имя проекта в уведомлении — последний сегмент пути (хвостовые слеши не считаются). */
-function projectName(projectPath: string): string {
-  return projectPath.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) ?? projectPath;
 }
 
 function findSession(entries: readonly WorkEntry[], ref: SessionRef): { entry: WorkEntry; session: WorkSession } | null {
@@ -210,6 +215,8 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     const current = findSession(deps.entries(), ref);
     if (current === null) return;
     const { entry, session } = current;
+    // Остров покажет этот запрос сам (спека 2026-10-12); Codex вне острова — его уведомление остаётся.
+    if (found !== null && deps.islandOn() && !ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) return;
     let more = 0;
     for (const [other, level] of levels) if (other !== key && level === 'needs-you') more += 1;
     const lines = [
@@ -364,7 +371,7 @@ export function isWindowActive(): boolean {
  */
 export function wireAttentionNotifications(
   bridge: ParleyBridge,
-  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk'>,
+  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn'>,
 ): () => void {
   const notifier = createAttentionNotifier({
     ...deps,
@@ -372,6 +379,7 @@ export function wireAttentionNotifications(
     windowActive: isWindowActive,
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
+    islandOn: () => bridge.app.islandActive(),
     // Ленты нет на старом хосте — вопроса не узнать, уведомление уйдёт с задачей сессии.
     pendingAsk: (ref) =>
       hostMethods(useHostStore.getState().status).has('feed.snapshot')

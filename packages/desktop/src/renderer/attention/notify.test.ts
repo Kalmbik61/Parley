@@ -77,6 +77,8 @@ interface Harness {
   entries: WorkEntry[];
   /** Окно в фокусе: решение — карточкой в окне, а не уведомлением macOS (кусок 8). */
   active: boolean;
+  /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
+  island: boolean;
   windowNotes: WindowNote[];
   hidden: string[];
   /** Что отдаёт `pendingAsk` (по очереди: последнее значение повторяется); по умолчанию — карточки нет. */
@@ -92,6 +94,7 @@ function harness(entries: WorkEntry[]): Harness {
     visible: new Set(),
     entries,
     active: false,
+    island: false,
     windowNotes: [],
     hidden: [],
     asks: [null],
@@ -109,6 +112,7 @@ function harness(entries: WorkEntry[]): Harness {
     showInWindow: (note) => h.windowNotes.push(note),
     hideInWindow: (tag) => h.hidden.push(tag),
     pendingAsk: h.pendingAsk,
+    islandOn: () => h.island,
   });
   return h;
 }
@@ -299,6 +303,36 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
       h.notifier.onActivity(ref2, live('blocked'));
       await settle();
       expect(h.notes[0]?.body).toBe('Fix the login form\np · 1 more waiting');
+    });
+
+    it('остров жив и карточка найдена — уведомления о запросе нет', async () => {
+      const h = harness([redesign()]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toEqual([]);
+    });
+
+    it('остров жив, но карточки нет (ждёт в терминале) — уведомление есть', async () => {
+      const h = harness([redesign()]);
+      h.island = true;
+      h.asks = [null];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
+    });
+
+    it('остров жив, сессия Codex — уведомление есть', async () => {
+      const h = harness([entry('Redesign', [session('s-02', 'executor', { provider: 'codex' })])]);
+      h.island = true;
+      h.asks = [run];
+      h.notifier.onActivity(ref2, live('working'));
+      h.notifier.onActivity(ref2, live('blocked'));
+      await settle();
+      expect(h.notes).toHaveLength(1);
     });
 
     it('«закончил» — по-прежнему синхронно и без запроса карточки', () => {

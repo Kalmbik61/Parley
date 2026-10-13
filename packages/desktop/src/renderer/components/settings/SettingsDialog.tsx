@@ -3,8 +3,8 @@
  * 1.4 плана «облик Orca», спека 4.10 — четыре секции вместо плоского списка:
  * «Вид» (`ui.json.appearance`, спека 4.7), «Терминал» и «Агенты» (прежние
  * поля `config.json` через `settings.set`, как раньше), «Уведомления»
- * (`ui.json.notifications`, а под ними — переключатель проверки новой версии
- * `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
+ * (`ui.json.notifications` и переключатель острова `ui.json.island.enabled`, а под ними — переключатель
+ * проверки новой версии `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
  * окна задаёт «Вид» (спека 4.9).
  *
  * Заблокированное переменной окружения поле неактивно и подписано «задано
@@ -401,6 +401,18 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   label={S.settings.notifySound}
                   checked={ui.notifications.sound}
                   onCheckedChange={(checked) => toggleNotification('sound', checked)}
+                />
+                {/*
+                  Патч — только `enabled`, не `{ ...ui.island, enabled }`: `displayId`, `anchor` и `hintShown` main пишет в
+                  ui.json сам, мимо рендерера, так что копия `ui.island` здесь устарела, а целый объект перезаписал бы их.
+                  Main сливает `island` на один уровень вглубь (`mergeUiPatch`), частичного патча хватает.
+                */}
+                <NotificationRow
+                  label={S.settings.notifyIsland}
+                  checked={ui.island.enabled}
+                  onCheckedChange={(checked) =>
+                    patchUi({ island: { enabled: checked } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>)
+                  }
                 />
               </>
             ) : null}

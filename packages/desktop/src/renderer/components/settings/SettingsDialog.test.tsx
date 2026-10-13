@@ -345,6 +345,42 @@ describe('SettingsDialog — переключатель «Check for updates» (V
   });
 });
 
+// Остров одобрений (спека 2026-10-12): переключатель стоит в «Notifications», под звуком.
+describe('SettingsDialog — переключатель «Island»', () => {
+  const ISLAND_SWITCH = 'island with requests at the top of the screen';
+
+  it('включён по умолчанию; клик пишет ui.island.enabled — патчем из одного ключа; повторный — включает', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    const toggle = await screen.findByRole('switch', { name: ISLAND_SWITCH });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { enabled: false } }));
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(useUiStore.getState().ui.island.enabled).toBe(false);
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(saveUiSpy).toHaveBeenLastCalledWith({ island: { enabled: true } }));
+  });
+
+  it('в патче нет displayId, anchor и hintShown: их main пишет сам, а копия рендерера устарела', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ island: { enabled: true, displayId: 7, anchor: 'right', hintShown: true } });
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    fireEvent.click(await screen.findByRole('switch', { name: ISLAND_SWITCH }));
+
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledTimes(1));
+    expect(saveUiSpy.mock.calls[0]?.[0]).toStrictEqual({ island: { enabled: false } });
+  });
+});
+
 describe('SettingsDialog — тест 10 куска 9.1: секция Browser', () => {
   it('«Clear browser data» зовёт browser.clearData', async () => {
     const bridge = createFakeBridge();
