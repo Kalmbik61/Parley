@@ -5,7 +5,8 @@
 //
 // Main ставит перед ним `guest-dom.js` в ту же строку (помощники DOM `globalThis.__parleyDom`, этап B браузера):
 // значение строки — значение этого файла, промис, который Electron дождётся и отдаст main. По клику
-// человека — данные элемента, по Esc или отмене — null.
+// человека — данные элемента, по Esc или отмене — null. Обычный клик сразу снимает перехватчики; ⇧-клик
+// оставляет их стоять до нового запуска или отмены из main (finish, cancel).
 (() => {
   // Новый выбор того же гостя снимает прежний: два оверлея и два набора перехватчиков не нужны.
   if (typeof globalThis.__parleyPickCancel === 'function') globalThis.__parleyPickCancel();
@@ -104,14 +105,24 @@
   return new Promise((resolve) => {
     let done = false;
 
-    function finish(value) {
-      if (done) return;
-      done = true;
+    // Страница снова получает события человека: перехватчики, оверлей и ссылка на отмену сняты.
+    function teardown() {
       for (const type of BLOCKED) window.removeEventListener(type, onBlocked, true);
       window.removeEventListener('mousemove', onMove, true);
       window.removeEventListener('keydown', onKey, true);
       overlay.remove();
       if (globalThis.__parleyPickCancel === cancel) delete globalThis.__parleyPickCancel;
+    }
+
+    function finish(value) {
+      if (done) return;
+      done = true;
+      // ⇧-клик: окно перезапустит выбор само, но только после ответа main, а main до ответа снимает снимок и дочитывает
+      // роль и React — от десятков миллисекунд до секунды на тяжёлой странице. Всё это время перехватчики стоят: клик
+      // человека не должен дойти до страницы. Их снимет новый запуск (его первая строка зовёт __parleyPickCancel) или
+      // отмена из main. Оверлей уходит сразу: снимок без него.
+      if (value !== null && value.shift === true) overlay.remove();
+      else teardown();
       if (value === null) {
         resolve(null);
         return;
@@ -120,12 +131,14 @@
       requestAnimationFrame(() => requestAnimationFrame(() => resolve(value)));
     }
 
+    // Отмена снимает перехватчики и после ответа: ⇧-клик оставляет их стоять до нового запуска или этого вызова.
     function cancel() {
+      teardown();
       finish(null);
     }
 
     function onMove(event) {
-      if (!event.isTrusted) return;
+      if (done || !event.isTrusted) return;
       highlight(document.elementFromPoint(event.clientX, event.clientY));
     }
 
@@ -134,7 +147,8 @@
       if (!event.isTrusted) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (event.type !== 'click') return;
+      // После ⇧-клика выбор отдан: клик гасится, но ничего не выбирает и страницу не прокручивает.
+      if (done || event.type !== 'click') return;
       const el = document.elementFromPoint(event.clientX, event.clientY);
       if (!el || el === overlay || overlay.contains(el)) return;
       const scrolled = !fullyVisible(el);
@@ -146,7 +160,7 @@
       if (!event.isTrusted || event.key !== 'Escape') return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      finish(null);
+      cancel();
     }
 
     globalThis.__parleyPickCancel = cancel;

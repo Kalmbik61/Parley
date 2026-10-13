@@ -78,6 +78,8 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
   });
 
   afterEach(() => {
+    // ⇧-клик оставляет перехватчики стоять до нового запуска или отмены: тест не тянет их в следующий.
+    (globalThis as { __parleyPickCancel?: () => void }).__parleyPickCancel?.();
     document.body.innerHTML = '';
   });
 
@@ -200,6 +202,86 @@ describe('guest-pick.js в jsdom (тест 3 куска 9.3a)', () => {
       if (scrollX !== undefined) Object.defineProperty(window, 'scrollX', scrollX);
       if (scrollY !== undefined) Object.defineProperty(window, 'scrollY', scrollY);
     }
+  });
+
+  describe('⇧-клик держит перехватчики до нового запуска (ревью задачи 16, I2)', () => {
+    /** ⇧-клик по кнопке и ожидание ответа скрипта: дальше страница «между выборами» — окно ещё не перезапустило выбор. */
+    async function shiftPick(): Promise<void> {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('click', { shiftKey: true }));
+      expect(((await picking) as { shift: boolean }).shift).toBe(true);
+    }
+
+    it('клик человека между выборами гасится и ничего не выбирает: до страницы не доходит, страница не прокручивается', async () => {
+      await shiftPick();
+
+      // Main снимает снимок и дочитывает роль и React ещё десятки миллисекунд (на тяжёлой странице — до секунды), а окно
+      // перезапускает выбор только после ответа: клик человека в этот промежуток не должен дойти до страницы.
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'dblclick', 'auxclick', 'contextmenu']) {
+        const event = type.startsWith('pointer') ? new PointerEvent(type, { bubbles: true, cancelable: true }) : mouse(type);
+        dispatchTrusted(button, event);
+        expect(event.defaultPrevented, type).toBe(true);
+      }
+      // Второй клик — по элементу вне видимой части: настоящий выбор прокрутил бы страницу к нему.
+      form.getBoundingClientRect = () => ({ x: 10, y: 5000, width: 300, height: 120, top: 5000, left: 10, right: 310, bottom: 5120, toJSON: () => ({}) });
+      form.scrollIntoView = vi.fn();
+      const click = dispatchTrusted(button, mouse('click'));
+      expect(click.defaultPrevented).toBe(true);
+      expect(form.scrollIntoView).not.toHaveBeenCalled();
+      for (const handler of Object.values(pageHandlers)) expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('оверлей уходит сразу, не дожидаясь нового запуска: снимок main — без него', async () => {
+      const picking = runScript();
+      dispatchTrusted(button, mouse('mousemove'));
+      expect(document.documentElement.textContent).toContain('form.login · 300×120');
+      dispatchTrusted(button, mouse('click', { shiftKey: true }));
+      await picking;
+      expect(document.documentElement.textContent).not.toContain('form.login ·');
+    });
+
+    it('наведение между выборами ничего не подсвечивает и страницу не опрашивает', async () => {
+      await shiftPick();
+      vi.mocked(document.elementFromPoint).mockClear();
+      dispatchTrusted(button, mouse('mousemove'));
+      expect(document.elementFromPoint).not.toHaveBeenCalled();
+    });
+
+    it('отмена мира (dismissScript main) снимает перехватчики: клик снова идёт в страницу', async () => {
+      await shiftPick();
+      // Пока отмены нет, перехватчики стоят.
+      expect(dispatchTrusted(button, mouse('click')).defaultPrevented).toBe(true);
+      expect(pageHandlers.onclick).not.toHaveBeenCalled();
+
+      (globalThis as { __parleyPickCancel?: () => void }).__parleyPickCancel?.();
+      expect((globalThis as { __parleyPickCancel?: unknown }).__parleyPickCancel).toBeUndefined();
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
+
+    it('Esc между выборами гасится и тоже снимает перехватчики', async () => {
+      await shiftPick();
+      const esc = dispatchTrusted(document, new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(esc.defaultPrevented).toBe(true);
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
+
+    it('цепочка: ⇧-клик, новый запуск, обычный клик — прежние перехватчики не мешают новым, обычный клик снимает всё', async () => {
+      await shiftPick();
+
+      // Окно перезапускает выбор (pickStart): первая строка скрипта снимает прежние перехватчики. Иначе stopImmediatePropagation
+      // прежних съел бы клик новых, и выбор повис бы.
+      const second = runScript();
+      dispatchTrusted(button, mouse('click'));
+      expect(await second).toMatchObject({ selector: 'form#f', shift: false });
+      expect(pageHandlers.onclick).not.toHaveBeenCalled();
+
+      // Обычный клик снял всё сразу: следующий клик человека идёт в страницу.
+      expect((globalThis as { __parleyPickCancel?: unknown }).__parleyPickCancel).toBeUndefined();
+      dispatchTrusted(button, mouse('click'));
+      expect(pageHandlers.onclick).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('новый запуск снимает прежний выбор (null), отмена мира — тоже', async () => {
