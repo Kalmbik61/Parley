@@ -9,7 +9,8 @@
  * 2.13); строки — `S.browser.annotate`; Enter сохраняет (спека 4.7; у Orca — ⌘Enter), ⇧Enter — перенос; Delete
  * убирает метку; Esc отменяет новую метку (у готовой — закрывает без изменений) и до вкладки не доходит: там Esc
  * выключил бы режим. `open` без `onOpenChange`: клик мимо — в том числе в страницу, куда уходит фокус, — поповер не
- * закрывает, текст человека не теряется. Вместо `ImeTextarea` Orca — `nativeEvent.isComposing`.
+ * закрывает, текст человека не теряется. Вместо `ImeTextarea` Orca — `nativeEvent.isComposing`. Точка метки, лежащая вне
+ * слоя (метка прокручена за край страницы), прижимается к его краю: Radix держит поповер у якоря, а не у слоя.
  */
 
 import { CONTEXT_LIMITS } from '../../../shared/context-markdown.js';
@@ -20,7 +21,7 @@ import { Popover, PopoverAnchor, PopoverContent } from '../../ui/popover.js';
 export interface AnnotationEditorProps {
   n: number;
   draft: string;
-  /** Точка метки в пикселях слоя страницы (`BrowserSurface#anchorAt`): у неё якорь поповера. */
+  /** Точка метки в пикселях слоя страницы (`BrowserSurface#anchorAt`): у неё якорь поповера; вне слоя — прижимается к его краю. */
   anchor: { left: number; top: number };
   /** Слой страницы: поповер рисуется в нём и не выходит за его края; `null` — `document.body`. */
   container: HTMLElement | null;
@@ -33,10 +34,17 @@ export interface AnnotationEditorProps {
 
 export function AnnotationEditor({ n, draft, anchor, container, onDraft, onSave, onDelete, onCancel }: AnnotationEditorProps): JSX.Element {
   const label = S.browser.annotate.comment(n);
+  // Метка вне видимой части страницы (прокручена за край): `sync` отдаёт доли вьюпорта без обрезки, а Radix держит поповер
+  // у якоря, не у слоя, — без этого редактор уезжает за слой и даже за окно. Точку прижимаем к краю слоя; размер 0 (раскладки
+  // нет: jsdom, слой не показан, `container` пуст) — точка как есть.
+  const width = container?.clientWidth ?? 0;
+  const height = container?.clientHeight ?? 0;
+  const left = width > 0 ? Math.min(Math.max(anchor.left, 0), width) : anchor.left;
+  const top = height > 0 ? Math.min(Math.max(anchor.top, 0), height) : anchor.top;
   return (
     <Popover open>
       <PopoverAnchor asChild>
-        <span data-testid="annotation-anchor" className="pointer-events-none absolute size-px" style={{ left: anchor.left, top: anchor.top }} />
+        <span data-testid="annotation-anchor" className="pointer-events-none absolute size-px" style={{ left, top }} />
       </PopoverAnchor>
       <PopoverContent
         data-testid="annotation-editor"

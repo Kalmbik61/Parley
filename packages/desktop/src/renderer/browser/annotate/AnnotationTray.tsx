@@ -10,7 +10,10 @@
  * - шапка сворачивает лоток в «N annotations»; цель — `button.save` или `Region 308 × 20`, комментарий — одной
  *   строкой, пропавший элемент — «element gone»;
  * - правка — в редакторе у метки (тот же, что по клику на метку, спека 4.7), а не в строке лотка; без «намерения»;
- * - строки — `S.browser.annotate`; вариант `can-hover:` (его у нас нет) заменён на `group-hover`.
+ * - строки — `S.browser.annotate`; вариант `can-hover:` (его у нас нет) заменён на `group-hover`;
+ * - высота — `min(100% − 1.5rem, max(45%, 8.5rem))`, а не 45 % поля: в низком поле (800×500 с панелью DevTools поле около
+ *   200 px) 45 % оставляли списку 12 px без единой строки, а ниже ~185 px кнопки внизу уходили за край карточки; 8.5rem —
+ *   шапка, одна строка и кнопки.
  */
 
 import { ChevronDown, ChevronUp, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
@@ -43,7 +46,7 @@ export function AnnotationTray({ items, collapsed, busy, onToggle, onEdit, onDel
   return (
     <div
       data-testid="annotation-tray"
-      className="absolute bottom-3 right-3 z-10 flex max-h-[45%] w-[min(20rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
+      className="absolute bottom-3 right-3 z-10 flex max-h-[min(calc(100%-1.5rem),max(45%,8.5rem))] w-[min(20rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
     >
       <button
         type="button"

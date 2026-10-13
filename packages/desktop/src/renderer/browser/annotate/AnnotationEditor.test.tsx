@@ -71,4 +71,25 @@ describe('AnnotationEditor (спека браузера 4.7; поповер — 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(p.onSave).toHaveBeenCalledTimes(1);
   });
+
+  it('точка метки вне слоя (метка прокручена за край страницы) прижимается к краю слоя: Radix держит поповер у якоря, а не у слоя', () => {
+    const layer = document.createElement('div');
+    // В jsdom нет раскладки (clientWidth и clientHeight всегда 0): размер слоя задаём сами.
+    Object.defineProperty(layer, 'clientWidth', { configurable: true, value: 500 });
+    Object.defineProperty(layer, 'clientHeight', { configurable: true, value: 300 });
+    document.body.append(layer);
+    const spot = (): [string, string] => {
+      const anchor = screen.getByTestId('annotation-anchor');
+      return [anchor.style.left, anchor.style.top];
+    };
+    const view = render(<AnnotationEditor {...props({ container: layer, anchor: { left: -200, top: 2000 } })} />);
+    expect(spot()).toEqual(['0px', '300px']);
+    view.rerender(<AnnotationEditor {...props({ container: layer, anchor: { left: 3000, top: -1500 } })} />);
+    expect(spot()).toEqual(['500px', '0px']);
+    // Точка внутри слоя и точка на самой его границе остаются где были.
+    view.rerender(<AnnotationEditor {...props({ container: layer, anchor: { left: 120, top: 40 } })} />);
+    expect(spot()).toEqual(['120px', '40px']);
+    view.rerender(<AnnotationEditor {...props({ container: layer, anchor: { left: 500, top: 300 } })} />);
+    expect(spot()).toEqual(['500px', '300px']);
+  });
 });

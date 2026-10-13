@@ -81,6 +81,13 @@ describe('AnnotationTray (спека браузера 4.7; каркас — по
     expect((screen.getByRole('button', { name: 'Clear' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('высота лотка: 45% поля, но не меньше места под шапку, одну строку и кнопки — в низком поле (800×500 с DevTools) список не схлопывается, а Clear и Add to chat не обрезаются', () => {
+    render(<AnnotationTray items={ITEMS} collapsed={false} busy={false} {...handlers()} />);
+    // Раскладки в jsdom нет — здесь только сам предел; коробки в 800×500 с панелью DevTools меряет E2E задачи 24.
+    // Было `max-h-[45%]`: при поле в 204 px список получал 12 px (ни одной строки), ниже ~185 px кнопки уходили за край карточки.
+    expect(screen.getByTestId('annotation-tray').classList.contains('max-h-[min(calc(100%-1.5rem),max(45%,8.5rem))]')).toBe(true);
+  });
+
   it('пункты разных документов с одним ключом — две строки без предупреждения React о повторе ключа', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     const [first] = ITEMS as [AnnotationItem, AnnotationItem];
