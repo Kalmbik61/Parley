@@ -5,12 +5,21 @@
  * сообщение комнаты, где человека назвали через `@human`. Тексты — из `shared/strings.ts`; название
  * работы и комнаты, ярлык, задача, итог и письмо — данные, идут как есть.
  * Русский `HostNotice.text` сюда не попадает: его пишет в консоль `store/notices.ts`.
+ *
+ * «Нужен ты» у сессии — уведомление с вопросом: первая строка тела говорит, что именно просят (команда, правка, вопрос,
+ * план — `ask-summary.ts`, из ленты сессии), вторая — проект и сколько ещё сессий ждут. Карточка из хука может лечь
+ * чуть позже активности, поэтому пустой ответ повторяется один раз через `ASK_RETRY_MS`; если человек успел ответить,
+ * уведомления нет. Клик ведёт к самой карточке (`cardId` цели), если ответить можно в окне.
+ *
+ * Пока окно острова живо (спека 2026-10-12), запрос с найденной карточкой показывает остров, а не уведомление: двух
+ * сигналов об одном и том же не нужно. Без карточки (ждёт в терминале) и у Codex (вне острова) уведомление остаётся.
  */
 
 import type { Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
+import { ISLAND_EXCLUDED_PROVIDERS } from '../../shared/island.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
 import { replyExcerpt } from '../components/rooms/excerpt.js';
@@ -18,8 +27,11 @@ import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
 import { sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
+import { projectName } from '../lib/project-name.js';
+import { hostMethods } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import {
@@ -30,6 +42,7 @@ import {
   sessionAttention,
   type Attention,
 } from './derive.js';
+import { pendingAskOf, type PendingAsk } from './ask-summary.js';
 import { visibleSessions } from './seen.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
@@ -48,7 +61,20 @@ export interface NotifyDeps {
   showInWindow(note: WindowNote): void;
   /** Решение отвечено: его карточка в окне, если ещё стоит, уходит — `Open` вёл бы к уже принятому. */
   hideInWindow(tag: string): void;
+  /**
+   * Ждущая ответа карточка ленты сессии (разрешение, вопрос, план): что спрашивают и куда вести клик. `null` —
+   * ленты нет (хост старый), карточки ещё нет или запрос не удался; отказ запроса считается тем же `null`.
+   */
+  pendingAsk(ref: SessionRef): Promise<PendingAsk | null>;
+  /**
+   * Живо ли окно острова (спека 2026-10-12): пока живо, запрос с найденной карточкой показывает остров, а не
+   * уведомление macOS. Codex и «ждёт без карточки» — уведомлением, как раньше.
+   */
+  islandOn(): boolean;
 }
+
+/** Пауза перед повторным запросом карточки: хук с ней может прийти чуть позже события активности. */
+const ASK_RETRY_MS = 500;
 
 /** Уведомления хоста, которые ведут к сессии (таблица спеки 7.4), и событие их заголовка. */
 const NOTICE_EVENT: Partial<Record<HostNotice['kind'], string>> = {
@@ -173,6 +199,43 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     }
   };
 
+  /**
+   * «Нужен ты»: узнаёт, что спрашивают, и только тогда шлёт. Пока шёл запрос (и пауза повтора), человек мог ответить —
+   * тогда уровень сессии уже не `needs-you` и уведомления нет. Общего состояния, кроме `levels`, нет: два перехода
+   * подряд шлют независимо, а macOS заменяет уведомление по тегу.
+   */
+  const notifyNeedsYou = async (ref: SessionRef, key: string): Promise<void> => {
+    const ask = async (): Promise<PendingAsk | null> => deps.pendingAsk(ref).catch(() => null);
+    let found = await ask();
+    if (found === null) {
+      await new Promise((resolve) => setTimeout(resolve, ASK_RETRY_MS));
+      found = await ask();
+    }
+    if (levels.get(key) !== 'needs-you') return;
+    const current = findSession(deps.entries(), ref);
+    if (current === null) return;
+    const { entry, session } = current;
+    // Остров покажет этот запрос сам (спека 2026-10-12), но только у активной работы: у завершённой он запросы
+    // пропускает. Codex вне острова — его уведомление остаётся.
+    if (found !== null && deps.islandOn() && entry.map.work.status === 'active' && !ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) return;
+    let more = 0;
+    for (const [other, level] of levels) if (other !== key && level === 'needs-you') more += 1;
+    const lines = [
+      found === null ? firstLine(session.task) : found.summary,
+      S.notifications.waitingLine(projectName(entry.projectPath), more),
+    ].filter((line) => line !== '');
+    send({
+      title: S.notifications.sessionTitle(
+        workTitleText(entry.map.work.title),
+        sessionRowLabel(session.id, session.label),
+        S.notifications.needsYou,
+      ),
+      body: lines.join('\n'),
+      tag: `session:${key}`,
+      target: found !== null && found.inWindow ? { kind: 'session', ref, cardId: found.cardId } : { kind: 'session', ref },
+    });
+  };
+
   return {
     onActivity(ref, activity) {
       const key = refKey(ref);
@@ -186,18 +249,22 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       if (level !== 'needs-you' && level !== 'unseen') return;
       const prefs = deps.prefs();
       if (level === 'needs-you' ? !prefs.needsYou : !prefs.finished) return;
-      const { entry, session } = found;
-      send({
-        title: S.notifications.sessionTitle(
-          workTitleText(entry.map.work.title),
-          sessionRowLabel(session.id, session.label),
-          level === 'needs-you' ? S.notifications.needsYou : S.notifications.finished,
-        ),
-        // В `result` только done или failed, текста там нет — итог хода в `summary`.
-        body: firstLine(level === 'needs-you' ? session.task : session.summary),
-        tag: `session:${key}`,
-        target: { kind: 'session', ref },
-      });
+      if (level === 'unseen') {
+        const { entry, session } = found;
+        send({
+          title: S.notifications.sessionTitle(
+            workTitleText(entry.map.work.title),
+            sessionRowLabel(session.id, session.label),
+            S.notifications.finished,
+          ),
+          // В `result` только done или failed, текста там нет — итог хода в `summary`.
+          body: firstLine(session.summary),
+          tag: `session:${key}`,
+          target: { kind: 'session', ref },
+        });
+        return;
+      }
+      void notifyNeedsYou(ref, key);
     },
 
     onWorks(entries) {
@@ -305,7 +372,7 @@ export function isWindowActive(): boolean {
  */
 export function wireAttentionNotifications(
   bridge: ParleyBridge,
-  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow'>,
+  deps: Omit<NotifyDeps, 'notify' | 'windowActive' | 'showInWindow' | 'hideInWindow' | 'pendingAsk' | 'islandOn'>,
 ): () => void {
   const notifier = createAttentionNotifier({
     ...deps,
@@ -313,6 +380,15 @@ export function wireAttentionNotifications(
     windowActive: isWindowActive,
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
+    islandOn: () => bridge.app.islandActive(),
+    // Ленты нет на старом хосте — вопроса не узнать, уведомление уйдёт с задачей сессии.
+    pendingAsk: (ref) =>
+      hostMethods(useHostStore.getState().status).has('feed.snapshot')
+        ? bridge
+            .call('feed.snapshot', { ref })
+            .then((snapshot) => pendingAskOf(snapshot, ref.projectPath))
+            .catch(() => null)
+        : Promise.resolve(null),
   });
   // Активность — из стора, а не прямо из `activity.changed`: повтор после подключения,
   // пришедший раньше подписки рендерера, попадает в стор снимком main (раунд исправлений 3.1).

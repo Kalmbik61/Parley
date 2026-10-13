@@ -23,6 +23,19 @@ export interface BrowserUi {
   devtoolsHeight: number | null;
 }
 
+/** Точка острова у верхнего края монитора (спека острова, раздел 4). */
+export type IslandAnchor = 'left' | 'center' | 'right';
+
+/**
+ * Остров одобрений (спека 2026-10-12): включён ли (по умолчанию да — у всех, включая обновившихся), где стоит
+ * (`displayId` — id монитора Electron, `null` — основной; `anchor` — точка у его верхнего края).
+ */
+export interface IslandUi {
+  enabled: boolean;
+  displayId: number | null;
+  anchor: IslandAnchor;
+}
+
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
 
 export interface UiFile {
@@ -58,6 +71,8 @@ export interface UiFile {
   voice: VoiceUi;
   /** Вкладки браузера (спека 2026-10-07, 4.3). */
   browser: BrowserUi;
+  /** Остров одобрений (спека 2026-10-12). */
+  island: IslandUi;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -78,6 +93,7 @@ export const DEFAULT_UI: UiFile = {
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null },
+  island: { enabled: true, displayId: null, anchor: 'center' },
 };
 
 /**
@@ -183,6 +199,18 @@ function normalizeNotifications(value: unknown): UiFile['notifications'] {
   };
 }
 
+const ISLAND_ANCHORS: readonly IslandAnchor[] = ['left', 'center', 'right'];
+
+function normalizeIsland(value: unknown): IslandUi {
+  const source = isRecord(value) ? value : {};
+  const fallback = DEFAULT_UI.island;
+  return {
+    enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
+    displayId: Number.isInteger(source.displayId) ? (source.displayId as number) : fallback.displayId,
+    anchor: ISLAND_ANCHORS.includes(source.anchor as IslandAnchor) ? (source.anchor as IslandAnchor) : fallback.anchor,
+  };
+}
+
 /**
  * Приводит сырой JSON `ui.json` к `UiFile`: неизвестные ключи выкинуты (результат
  * собирается по известной схеме, а не копированием входа), неверные значения —
@@ -221,5 +249,6 @@ export function normalizeUi(raw: unknown): UiFile {
       typeof source.dismissedUpdate === 'string' ? source.dismissedUpdate : DEFAULT_UI.dismissedUpdate,
     voice: normalizeVoice(source.voice),
     browser: normalizeBrowser(source.browser),
+    island: normalizeIsland(source.island),
   };
 }

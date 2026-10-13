@@ -38,4 +38,10 @@ describe('CSP окна (7.3b тест 10, 7.5 тест 8)', () => {
     // Без WebAssembly: pdf.js идёт с `useWasm: false` (`PdfPreview.tsx`).
     expect(expected['script-src']).toBe("'self'");
   });
+
+  it('island.html — та же политика, что index.html', () => {
+    const policy = (file: string): string | undefined => /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(read(file))?.[1];
+    expect(policy('./island.html')).toBeDefined();
+    expect(directives(policy('./island.html') ?? '')).toEqual(directives(policy('./index.html') ?? ''));
+  });
 });

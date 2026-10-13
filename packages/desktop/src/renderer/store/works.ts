@@ -29,7 +29,7 @@ export interface WorksState {
   loading: boolean;
   error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
-  init: (bridge: ParleyBridge) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'call' | 'on'>) => () => void;
   /** Письма, пришедшие страницей (`context.messages`), встают в карту работы по номеру. */
   addMessages: (projectPath: string, workId: string, messages: readonly Message[]) => void;
 }

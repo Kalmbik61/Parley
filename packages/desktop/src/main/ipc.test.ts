@@ -119,6 +119,8 @@ function setup(
     webContents?: Map<number, unknown>;
     onUiSaved?: () => void;
     appVersion?: string | null;
+    isIslandSender?: (sender: unknown) => boolean;
+    islandActive?: () => boolean;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -216,6 +218,8 @@ function setup(
     getUpdate,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
+    ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
+    ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -693,6 +697,17 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     expect(showNotification).toHaveBeenCalledTimes(2);
   });
 
+  it('цель-сессия с cardId-строкой — верная форма; cardId не строка или с NUL — отказ', () => {
+    const { ipcMain, showNotification } = setup();
+    const withCard = { ...note, target: { ...target, cardId: 'perm:1' } };
+    ipcMain.invoke('app:notify', withCard);
+    expect(showNotification).toHaveBeenCalledWith(withCard);
+    showNotification.mockClear();
+    ipcMain.invoke('app:notify', { ...note, target: { ...target, cardId: 7 } });
+    ipcMain.invoke('app:notify', { ...note, target: { ...target, cardId: 'a\0b' } });
+    expect(showNotification).not.toHaveBeenCalled();
+  });
+
   it('title из 201 эмодзи — показано ровно 200 кодовых точек, последняя «…», суррогаты целы', () => {
     const { ipcMain, showNotification } = setup();
     ipcMain.invoke('app:notify', { ...note, title: '😀'.repeat(201), body: '😀'.repeat(201) });
@@ -725,6 +740,52 @@ describe('registerIpc — app:notify и app:take-focus-target (кусок 4.3)',
     takeFocusTarget.mockReturnValueOnce(target).mockReturnValueOnce(null);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toEqual(target);
     await expect(ipcMain.invoke('app:take-focus-target')).resolves.toBeNull();
+  });
+});
+
+describe('host:call от острова', () => {
+  const island = { id: 99 };
+  const options = { isIslandSender: (sender: unknown) => sender === island };
+  const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+
+  it('остров зовёт методы белого списка', async () => {
+    const { ipcMain, connection } = setup(options);
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF });
+  });
+
+  it('прочие методы острову отказаны, хост их не видит', async () => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'host.shutdown', {})).rejects.toBeTruthy();
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it('главное окно зовёт что угодно, как раньше', async () => {
+    const { ipcMain, connection } = setup(options);
+    await ipcMain.invokeWithEvent('host:call', { sender: { id: 1 } }, 'host.shutdown', {});
+    expect(connection.call).toHaveBeenCalledWith('host.shutdown', {});
+  });
+
+  it('app:island-active отвечает синхронно тем, что знает main', () => {
+    const event: { returnValue?: unknown } = {};
+    const { ipcMain } = setup({ islandActive: () => true });
+    ipcMain.invokeWithEvent('app:island-active', event);
+    expect(event.returnValue).toBe(true);
+  });
+
+  it('app:island-active без опции islandActive — false', () => {
+    const event: { returnValue?: unknown } = {};
+    const { ipcMain } = setup();
+    ipcMain.invokeWithEvent('app:island-active', event);
+    expect(event.returnValue).toBe(false);
+  });
+
+  it('host:notify от острова тихо отбрасывается, от главного окна уходит в хост', () => {
+    const { ipcMain, connection } = setup(options);
+    ipcMain.invokeWithEvent('host:notify', { sender: island }, 'pty.input', { ref: REF, data: 'x' });
+    expect(connection.notify).not.toHaveBeenCalled();
+    ipcMain.invokeWithEvent('host:notify', { sender: { id: 1 } }, 'pty.input', { ref: REF, data: 'ls' });
+    expect(connection.notify).toHaveBeenCalledWith('pty.input', { ref: REF, data: 'ls' });
   });
 });
 
@@ -1299,6 +1360,58 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     expect(sent).toHaveLength(3);
     windowEvents.emit('closed');
     expect(statusListeners.size).toBe(0);
+  });
+
+  /** Подставное соединение: `emit` рассылает событие подписчикам, статус отдаётся при подписке. */
+  function fakeForwarding(options?: { events?: ReadonlySet<string> }) {
+    const eventListeners = new Set<(message: unknown) => void>();
+    const connection = {
+      onEvent: (listener: (message: unknown) => void) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+      onStatus: (listener: (s: unknown) => void) => {
+        listener({ state: 'connected' });
+        return () => {};
+      },
+    } as unknown as HostConnection;
+    const contents = new EventEmitter();
+    const sent: unknown[] = [];
+    const window = {
+      isDestroyed: () => false,
+      on: () => {},
+      webContents: Object.assign(contents, { send: (channel: string, data: unknown) => sent.push([channel, data]) }),
+    };
+    forwardHostToPages(connection, window as unknown as BrowserWindow, options);
+    contents.emit('did-finish-load');
+    const emit = (event: string): void => {
+      for (const listener of eventListeners) listener({ event, data: {} });
+    };
+    return { sent, emit };
+  }
+
+  it('с белым списком окну уходят только события из списка, статус — всегда (остров: без pty.output)', () => {
+    const { sent, emit } = fakeForwarding({ events: new Set(['works.changed', 'activity.changed']) });
+    emit('pty.output');
+    emit('works.changed');
+    emit('pty.exit');
+    emit('activity.changed');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'works.changed', data: {} }],
+      ['host:event', { event: 'activity.changed', data: {} }],
+    ]);
+  });
+
+  it('без белого списка окно получает все события, как раньше', () => {
+    const { sent, emit } = fakeForwarding();
+    emit('pty.output');
+    emit('works.changed');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'pty.output', data: {} }],
+      ['host:event', { event: 'works.changed', data: {} }],
+    ]);
   });
 });
 

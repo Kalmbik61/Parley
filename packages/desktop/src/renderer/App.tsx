@@ -7,6 +7,7 @@ import { sessionAttention } from './attention/derive.js';
 import { createSeenTracker, visibleSessions } from './attention/seen.js';
 import { attentionTotals, badgeCount } from './attention/store.js';
 import { applyFocusTarget, buildFocusTargetDeps } from './attention/focus-target.js';
+import { openSessionCard } from './chat/open-agent.js';
 import { isTargetVisible, wireAttentionNotifications } from './attention/notify.js';
 import { WindowNotes } from './attention/WindowNotes.js';
 import { hostMethods } from './lib/capabilities.js';
@@ -130,7 +131,11 @@ function wireFocusTargets(bridge: ParleyBridge): () => void {
   const unmounted = new AbortController();
 
   const apply = (target: FocusTarget): void => {
-    const applied = applyFocusTarget(target, buildFocusTargetDeps(unmounted.signal));
+    // Уведомление про ждущую карточку ведёт в Chat к ней; остальные цели — обычный переход.
+    const applied =
+      target.kind === 'session' && target.cardId !== undefined
+        ? openSessionCard(target.ref, target.cardId)
+        : applyFocusTarget(target, buildFocusTargetDeps(unmounted.signal));
     if (!applied) toast(S.notifications.targetGone);
   };
 

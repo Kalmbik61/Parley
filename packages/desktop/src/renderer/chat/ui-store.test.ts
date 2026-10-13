@@ -45,6 +45,20 @@ describe('ui-store: просьба показать карточку агент�
     expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: 's2', agentId: 'agent-9' });
   });
 
+  it('requestRevealItem ставит просьбу по itemId с новым nonce и заменяет прежнюю; гаснет по сроку', () => {
+    vi.useFakeTimers();
+    const { requestReveal, requestRevealItem } = useChatUiStore.getState();
+    requestReveal('s1', 'agent-1');
+    const first = useChatUiStore.getState().reveal!;
+    requestRevealItem('s1', 'perm:1');
+    const second = useChatUiStore.getState().reveal!;
+    expect(second).toMatchObject({ sessionKey: 's1', itemId: 'perm:1' });
+    expect('agentId' in second).toBe(false);
+    expect(second.nonce).toBeGreaterThan(first.nonce);
+    vi.advanceTimersByTime(REVEAL_TTL_MS);
+    expect(useChatUiStore.getState().reveal).toBeNull();
+  });
+
   it('clearReveal гасит просьбу с этим nonce; чужой (уже заменённой) просьбы не трогает, подписчиков зря не будит', () => {
     const { requestReveal, clearReveal } = useChatUiStore.getState();
     requestReveal('s1', 'a');

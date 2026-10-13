@@ -38,6 +38,17 @@ describe('hookDecisionResponse', () => {
     });
   });
 
+  it('allow с always и пустыми предложениями (Codex) — без updatedPermissions: схема Codex закрывается отказом на это поле', () => {
+    const response = hookDecisionResponse(
+      { ...permission, suggestions: [] },
+      { kind: 'permission', behavior: 'allow', always: true },
+    );
+    expect(response).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
+    });
+    expect(JSON.stringify(response)).not.toContain('updatedPermissions');
+  });
+
   it('deny с текстом для модели и без него', () => {
     expect(
       hookDecisionResponse(permission, {

@@ -2,8 +2,8 @@ import { envValue } from '@parley/core';
 
 /**
  * Тестовые переключатели окна (`PARLEY_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL/VOICE`) подменяют
- * системные действия журналом main; `PARLEY_LOGIN_SHELL=skip` не даёт окну звать оболочку человека
- * за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
+ * системные действия журналом main; `PARLEY_ISLAND=off` убирает остров одобрений; `PARLEY_LOGIN_SHELL=skip`
+ * не даёт окну звать оболочку человека за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
  * уведомления, ссылки, Finder и загрузки (ревью M5) — поэтому они слушаются только в неупакованном
  * окне (E2E, `pnpm dev`) или при явном `PARLEY_E2E=1` (проверки самой сборки). Имена читаются
  * как все переменные (`envValue`): прежние `HARNAS_*` тоже годятся. `PARLEY_APP_DATA=<каталог>` — не действие,
@@ -20,6 +20,8 @@ export interface TestSwitches {
   readonly loginShell: boolean;
   /** Голосовой ввод на подменных службах (`main/voice/services.ts#createFakeVoiceServices`): E2E без движка и сети. */
   readonly voice: boolean;
+  /** Острова нет (`PARLEY_ISLAND=off`): E2E берут первое окно и считают окна — остров им мешал бы (спека 2026-10-12, 5.1). */
+  readonly islandOff: boolean;
   /**
    * Каталог данных приложений вместо `app.getPath('appData')` (`PARLEY_APP_DATA`): от него считается userData окна
    * (`user-data.ts`). Нужен E2E переноса данных — у них нет своего дома (перенос идёт, только когда дом не задан), а
@@ -38,6 +40,7 @@ export function testSwitches(env: Readonly<Record<string, string | undefined>>, 
     shell: allowed && envValue(env, 'SHELL') === 'log',
     loginShell: allowed && envValue(env, 'LOGIN_SHELL') === 'skip',
     voice: allowed && envValue(env, 'VOICE') === 'fake',
+    islandOff: allowed && envValue(env, 'ISLAND') === 'off',
     appData: allowed ? envValue(env, 'APP_DATA') : undefined,
   };
 }

@@ -100,6 +100,8 @@ export interface FakeBridge extends ParleyBridge {
   emitAppearance(dark: boolean): void;
   /** Ответ `app.isDark()` — тёмность `nativeTheme` main (раунд main-r2, п. 1). */
   setDark(dark: boolean): void;
+  /** Ответ `app.islandActive()` — есть ли окно острова (спека 2026-10-12). */
+  setIslandActive(active: boolean): void;
   /** Журнал вызовов `app.titlebarDoubleClick` (кусок 2.3) — по одной записи на вызов. */
   readonly titlebarDoubleClicks: number[];
   /** Журнал вызовов `app.revealWork` (кусок 3.4). */
@@ -232,6 +234,7 @@ export function createFakeBridge(): FakeBridge {
   const menuListeners = new Set<(id: ActionId) => void>();
   const appearanceListeners = new Set<(dark: boolean) => void>();
   let dark = false;
+  let islandActive = false;
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: AppNote[] = [];
@@ -798,6 +801,7 @@ export function createFakeBridge(): FakeBridge {
         return () => appearanceListeners.delete(listener);
       },
       isDark: () => dark,
+      islandActive: () => islandActive,
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
@@ -897,6 +901,9 @@ export function createFakeBridge(): FakeBridge {
     },
     setDark: (next) => {
       dark = next;
+    },
+    setIslandActive: (next) => {
+      islandActive = next;
     },
   };
 

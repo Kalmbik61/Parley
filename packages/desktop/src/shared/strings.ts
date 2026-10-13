@@ -874,6 +874,7 @@ export const S = {
     notifyFinished: 'finished',
     notifyMail: 'mail and mentions to you',
     notifySound: 'sound',
+    notifyIsland: 'island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
@@ -1702,9 +1703,44 @@ export const S = {
     decisionNew: (room: string, lead: string): string => `${room} · ${lead} collected positions`,
     /** Ведущий заменил текст, пока человек не ответил (`rev` вырос), или принёс исправленное после `Return for rework`. */
     decisionRevised: (room: string, lead: string): string => `${room} · ${lead} revised the decision`,
+    /** Строка «что спрашивают» в теле уведомления «нужен ты»: команда, правка, вопрос, план — `renderer/attention/ask-summary.ts`. */
+    askRun: (command: string): string => `Run: ${command}`,
+    /** «Edit: src/app.ts» — имя инструмента и путь (относительный, если файл внутри проекта). */
+    askTool: (tool: string, path: string): string => `${tool}: ${path}`,
+    askFetch: (url: string): string => `Fetch: ${url}`,
+    askQuestion: (question: string): string => `Question: ${question}`,
+    askPlan: 'Plan ready for review',
+    /** Вторая строка тела: проект и сколько ещё сессий ждут человека. */
+    waitingLine: (project: string, more: number): string => (more > 0 ? `${project} · ${more} more waiting` : project),
     /** Кнопки уведомления в самом окне (1.10): вкладка комнаты или скрыть. */
     open: 'Open',
     later: 'Later',
+  },
+
+  /** Остров одобрений (спека 2026-10-12). */
+  island: {
+    pill: (working: number, waiting: number, done: number): string =>
+      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null]
+        .filter((part) => part !== null)
+        .join(' · '),
+    waitingInTerminal: 'waiting in terminal',
+    roomBusy: (count: number): string => `${count} in work`,
+    roomDone: 'done',
+    clearDone: 'Clear',
+    doneTab: 'Agents finished — show the island',
+    donePeek: (count: number): string => `✅ ${count}`,
+    of: (index: number, total: number): string => `${index} of ${total}`,
+    previous: 'Previous request',
+    next: 'Next request',
+    allow: 'Allow',
+    always: 'Always',
+    deny: 'Deny',
+    openInParley: 'Open in Parley',
+    answeredElsewhere: 'Answered elsewhere',
+    failed: "Couldn't send — try again",
+    tuckAway: 'Tuck the island away',
+    showIsland: 'Show the island',
+    idle: 'No agents running',
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */

@@ -15,7 +15,7 @@ import { useLayoutStore } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
 import { useWorksStore } from '../store/works.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { openAgentCard } from './open-agent.js';
+import { openAgentCard, openSessionCard } from './open-agent.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
@@ -109,6 +109,25 @@ describe('openAgentCard', () => {
     expect(toast).toHaveBeenCalledWith(S.notifications.targetGone);
     expect(useLayoutStore.getState().layouts).toBe(before);
     expect(useLayoutStore.getState().activeWorkKey).toBe(OTHER_KEY);
+    expect(useChatUiStore.getState().reveal).toBeNull();
+  });
+});
+
+describe('openSessionCard', () => {
+  it('вкладки не было: открыта в виде Chat и в фокусе, поставлена просьба по itemId, true, тоста нет', () => {
+    expect(openSessionCard(REF, 'perm:1')).toBe(true);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(KEY);
+    expect(tabOf(KEY, 'terminal:s-02')).toMatchObject({ kind: 'terminal', view: 'chat' });
+    expect(activeTabOf(KEY)).toBe('terminal:s-02');
+    expect(useChatUiStore.getState().reveal).toMatchObject({ sessionKey: refKey(REF), itemId: 'perm:1' });
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('сессии уже нет — false без тоста, раскладка и просьба не тронуты (тост за вызывающим)', () => {
+    const before = useLayoutStore.getState().layouts;
+    expect(openSessionCard({ ...REF, sessionId: 's-99' }, 'perm:1')).toBe(false);
+    expect(toast).not.toHaveBeenCalled();
+    expect(useLayoutStore.getState().layouts).toBe(before);
     expect(useChatUiStore.getState().reveal).toBeNull();
   });
 });

@@ -45,9 +45,12 @@ export function hookDecisionResponse(held: HeldHookContext, decision: FeedDecisi
           ...(decision.message !== undefined ? { message: decision.message } : {}),
         });
       }
+      // `updatedPermissions` — только при непустых предложениях: схема выхода PermissionRequest у Codex держит это
+      // поле зарезервированным и закрывается отказом, стоит ему появиться (openai/codex, codex-rs/hooks/schema/
+      // generated/permission-request.command.output.schema.json). У карточек Codex `suggestions` всегда пуст.
       return permissionOutput({
         behavior: 'allow',
-        ...(decision.always === true ? { updatedPermissions: [...held.suggestions] } : {}),
+        ...(decision.always === true && held.suggestions.length > 0 ? { updatedPermissions: [...held.suggestions] } : {}),
       });
     }
     if (decision.kind === 'plan') {
