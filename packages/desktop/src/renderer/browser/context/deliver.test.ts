@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { refKey } from '@parley/protocol';
+import { S } from '../../../shared/strings.js';
 import { workKey } from '../../../shared/work-keys.js';
 import { contextImageOf, resetContextImagesForTests } from '../../chat/context-attachments.js';
 import { resetChatUiStoreForTests, useChatUiStore } from '../../chat/ui-store.js';
@@ -170,6 +171,50 @@ describe('deliverContext (спека браузера 4.5)', () => {
     expect(onUndo).toHaveBeenCalledTimes(1);
     expect(roomPaths()).toEqual([]);
   });
+
+  it('Undo срабатывает один раз: второй щелчок по ещё не погасшему тосту не зовёт onUndo снова (пачка аннотаций не вернётся дважды)', async () => {
+    const onUndo = vi.fn();
+    await deliverContext({ ...ITEM, onUndo }, deps({ kind: 'session', sessionId: 's-02' }));
+    const { options } = lastToast();
+    options.cancel?.onClick();
+    options.cancel?.onClick();
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(chatPaths()).toEqual([]);
+  });
+
+  it('Undo уже сработавшего тоста не трогает то, что добавлено после него: путь вернули в поле и отправили заново — второй щелчок его не уберёт', async () => {
+    await deliverContext(ITEM, deps({ kind: 'session', sessionId: 's-02' }));
+    const stale = lastToast();
+    stale.options.cancel?.onClick();
+    // Тот же файл человек добавил снова (новая пачка, новый тост); старый тост ещё на экране и кликабелен.
+    await deliverContext(ITEM, deps({ kind: 'session', sessionId: 's-02' }));
+    expect(chatPaths()).toEqual([ITEM.mdPath]);
+    stale.options.cancel?.onClick();
+    expect(chatPaths()).toEqual([ITEM.mdPath]);
+  });
+
+  it('Undo объединённой пачки идёт с конца: пачки аннотаций возвращаются в лоток в порядке добавления (restore кладёт пачку перед текущими)', async () => {
+    const order: string[] = [];
+    await deliverContext({ ...ITEM, onUndo: () => order.push('first') }, deps({ kind: 'room', roomId: 'r-01' }));
+    now += 1_000;
+    await deliverContext({ ...SECOND, onUndo: () => order.push('second') }, deps({ kind: 'room', roomId: 'r-01' }));
+    lastToast().options.cancel?.onClick();
+    expect(order).toEqual(['second', 'first']);
+  });
+
+  it('Open закрывает пачку: следующее добавление в ту же цель — новый тост со счётом с единицы, а не «2 elements» в погасшем', async () => {
+    await deliverContext(ITEM, deps({ kind: 'session', sessionId: 's-02' }));
+    const first = lastToast();
+    first.options.action?.onClick();
+    now += 1_000;
+    await deliverContext(SECOND, deps({ kind: 'session', sessionId: 's-02' }));
+    const second = lastToast();
+    expect(second.options.id).not.toBe(first.options.id);
+    expect(second.text).toBe('1 element added to S02');
+    // Undo нового тоста убирает только его путь.
+    second.options.cancel?.onClick();
+    expect(chatPaths()).toEqual([ITEM.mdPath]);
+  });
 });
 
 describe('addContext', () => {
@@ -217,6 +262,35 @@ describe('openContextTarget', () => {
     const found = layout === undefined ? null : findTab(layout, 'terminal:s-02');
     expect(found?.group.tabs[found.index]).toEqual({ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' });
     // Ожидание показа вкладки (whenShown) — опрос с пределом 2 с: доигрываем его таймеры.
+    vi.runAllTimers();
+  });
+
+  it('сессии больше нет (работу закрыли, пока висел тост) — тост «Workspace or session no longer exists», раскладка не тронута', () => {
+    useWorksStore.setState({ entries: [] });
+    useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    vi.mocked(toast).mockClear();
+    openContextTarget({ kind: 'session', ref: REF, chat: true });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(S.notifications.targetGone);
+    expect(useLayoutStore.getState().layouts).toEqual({});
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+  });
+
+  it('комнаты больше нет (работа есть, комнату удалили) — тот же тост', () => {
+    useWorksStore.setState({ entries: [ENTRY] });
+    vi.mocked(toast).mockClear();
+    openContextTarget({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-gone' });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(S.notifications.targetGone);
+  });
+
+  it('цель на месте — тоста нет', () => {
+    vi.useFakeTimers();
+    useWorksStore.setState({ entries: [ENTRY] });
+    useLayoutStore.setState({ activeWorkKey: null, layouts: { [KEY]: emptyLayout() }, hydrated: { [KEY]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    vi.mocked(toast).mockClear();
+    openContextTarget({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' });
+    expect(toast).not.toHaveBeenCalled();
     vi.runAllTimers();
   });
 });

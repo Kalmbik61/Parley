@@ -5,14 +5,15 @@
  * - сессия без Chat — одна строка в ввод CLI без Enter (`sendWithToast(…, submit: false)`); отказы (`blocked` и прочие) —
  *   тостами `sendWithToast`, как у любой отправки окна (таблица 8.6 спеки окна);
  * - комната — путь во вложения поля комнаты (`composerAttachments`), при отправке — список «Attachments:».
- * Тост «N elements added to S02»: «Open» открывает цель (сессию — в виде Chat), «Undo» убирает добавленные пути.
- * Добавления подряд в одну цель, пока тост на экране, копятся в нём счётчиком.
+ * Тост «N elements added to S02»: «Open» открывает цель (сессию — в виде Chat; цели уже нет — тост об этом), «Undo» убирает
+ * добавленные пути. Добавления подряд в одну цель, пока тост на экране, копятся в нём счётчиком. «Open» и «Undo» закрывают пачку:
+ * следующее добавление — новый тост со счётом с единицы. «Undo» срабатывает один раз и откатывает пачку с конца.
  */
 
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
-import type { ParleyBridge } from '../../../shared/bridge.js';
+import type { FocusTarget, ParleyBridge } from '../../../shared/bridge.js';
 import type { SavedContext } from '../../../shared/browser-types.js';
 import type { ContextKind } from '../../../shared/context-markdown.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -83,19 +84,31 @@ interface Batch {
   kinds: Set<ContextKind>;
   /** `null` — в пачке есть строка, вставленная в ввод CLI: её не убрать, «Undo» нет. */
   undo: Array<() => void> | null;
+  /**
+   * «Undo» уже сработал. Тост гаснет не сразу и остаётся кликабельным: второй щелчок вернул бы пачку аннотаций в лоток ещё раз
+   * (`onUndo`) или убрал путь, который человек успел добавить снова.
+   */
+  undone: boolean;
 }
 
 let batch: Batch | null = null;
 let toastSeq = 0;
 
-/** «Open» по умолчанию: работа, вкладка цели и фокус; сессия с Chat — сразу в виде Chat. */
+/**
+ * «Open» по умолчанию: работа, вкладка цели и фокус; сессия с Chat — сразу в виде Chat. Цели уже нет (сессию закрыли, комнату или
+ * работу убрали, пока висел тост) — тот же тост, что у клика по уведомлению: без него «Open» молча ничего бы не делал.
+ */
 export function openContextTarget(target: OpenTarget): void {
   const deps = buildFocusTargetDeps();
-  if (target.kind === 'room') {
-    applyFocusTarget({ kind: 'room', projectPath: target.projectPath, workId: target.workId, roomId: target.roomId }, deps);
+  const focus: FocusTarget =
+    target.kind === 'room'
+      ? { kind: 'room', projectPath: target.projectPath, workId: target.workId, roomId: target.roomId }
+      : { kind: 'session', ref: target.ref };
+  if (!applyFocusTarget(focus, deps)) {
+    toast(S.notifications.targetGone);
     return;
   }
-  if (!applyFocusTarget({ kind: 'session', ref: target.ref }, deps) || !target.chat) return;
+  if (target.kind !== 'session' || !target.chat) return;
   const key = workKeyOf(target.ref.projectPath, target.ref.workId);
   useLayoutStore.getState().apply(key, (layout) => updateTab(layout, tabId.terminal(target.ref.sessionId), { view: 'chat' }));
 }
@@ -120,7 +133,7 @@ function announce(item: ContextItem, deps: DeliverDeps, undo: (() => void) | nul
   const key = `${workKeyOf(deps.entry.projectPath, deps.entry.map.work.id)}\n${targetKey(deps.target)}`;
   if (batch === null || batch.key !== key || now - batch.at > CONTEXT_TOAST_MS) {
     toastSeq += 1;
-    batch = { key, toastId: `browser-context-${toastSeq}`, at: now, count: 0, kinds: new Set(), undo: [] };
+    batch = { key, toastId: `browser-context-${toastSeq}`, at: now, count: 0, kinds: new Set(), undo: [], undone: false };
   }
   const current = batch;
   current.at = now;
@@ -141,14 +154,24 @@ function announce(item: ContextItem, deps: DeliverDeps, undo: (() => void) | nul
   toast(S.browser.target.added(current.count, what, targetName(deps.entry, deps.target)), {
     id: current.toastId,
     duration: CONTEXT_TOAST_MS,
-    action: { label: S.browser.target.open, onClick: () => openTarget(open) },
+    action: {
+      label: S.browser.target.open,
+      onClick: () => {
+        // Sonner гасит тост после клика: пачка закрыта, а то следующее добавление дописало бы счёт в погасший тост.
+        if (batch === current) batch = null;
+        openTarget(open);
+      },
+    },
     ...(steps === null
       ? {}
       : {
           cancel: {
             label: S.browser.target.undo,
             onClick: () => {
-              for (const step of steps) step();
+              if (current.undone) return;
+              current.undone = true;
+              // С конца: `restore` лотка кладёт пачку перед текущими пунктами, и пачки возвращаются в порядке добавления только так.
+              for (const step of [...steps].reverse()) step();
               if (batch === current) batch = null;
             },
           },
