@@ -10,13 +10,18 @@ All notable changes to Parley are documented in this file.
 
 - **Island.** A black panel at the top of the screen (in the notch on a MacBook) shows how many agents
   are working and waiting ("N working · M waiting"); hover or click it for the list of active
-  sessions and rooms, and a click on a row opens it in Parley. A permission request, a simple
+  workspaces and rooms, and a click on a row opens it in Parley. A permission request, a simple
   question (one question, one choice, up to four options) or a plan opens a card by itself: Allow,
   Always (when the agent offers rules) and Deny, or the answer as a button; a plan and a complex
   question have "Open in Parley". With several requests the card shows "1 of N" and arrows, and its
-  buttons stay disabled for half a second so an accidental click does not answer it. Drag the island
-  along the top edge; it snaps to the left, the center or the right and is remembered per monitor,
-  and × hides it until the next request. Claude and GLM sessions only: Codex requests stay system
+  buttons stay disabled for half a second so an accidental click does not answer it. An agent that
+  finished a turn you have not looked at yet stays on the island as a "Done" row with the start of
+  its last reply ("✅ N done" in the pill, **Clear** hides the rows). The island never disappears: at
+  rest it shrinks into a thin bar (or a small "✅ N" while there are unseen Done rows) and grows back
+  on a new request, new work or a finished turn, or when you click the bar; tuck it away yourself
+  with the ⌃ arrow or by swiping up. Drag it by any part along the top edge; it snaps to the left,
+  the center or the right and is remembered per monitor. Only the island catches the mouse, clicks
+  beside it reach the windows below. Claude and GLM sessions only: Codex requests stay system
   notifications. On by default; Settings → Notifications → "island with requests at the top of the
   screen". While the island is on, a request with a card there is not repeated as a macOS
   notification.

@@ -900,7 +900,16 @@ indexed the transcript — without streamed text.
 
 A small black island at the top of the screen — in the notch on a MacBook — shows how many agents
 are working and waiting: a pill "N working · M waiting". Hover or click it for the list of active
-sessions and rooms; a click on a row opens it in Parley.
+workspaces: the workspace name in bold with its project, the rooms under it ("N in work" or
+"done"), then the sessions; a click on a row opens it in Parley.
+
+When an agent finishes a turn and you have not looked at its session in Parley yet, the island
+keeps it as a "Done" row: a green dot, the session name, when the turn ended and the first lines of
+the agent's last reply, and the pill adds "✅ N done". A row goes away when you look at that session
+in Parley (the window focused, the tab visible for about a second), when the agent starts working
+again, or with the quiet **Clear** under the list, which hides the rows on the island only. A row
+you have just seen in Parley stays until the pointer leaves the island or it tucks away. The
+"finished" system notification is unchanged.
 
 When an agent asks for permission, asks a question or brings a plan, the island opens a card by
 itself, without switching to Parley:
@@ -910,9 +919,16 @@ itself, without switching to Parley:
 - a plan or a complex question: **Open in Parley**.
 
 With several requests the card shows "1 of N" and arrows. The buttons are disabled for half a
-second after a card appears, so a click aimed at something else does not answer it. Drag the
-island along the top edge: it snaps to the left, the center or the right, and the place is
-remembered per monitor. × hides it until the next request.
+second after a card appears, so a click aimed at something else does not answer it.
+
+The island never disappears: when nothing is going on (4 seconds, or 20 while there are Done rows)
+it shrinks into a thin bar at the top edge, like the Dynamic Island, or into a small "✅ N" when
+finished sessions are waiting for a look. It grows back by itself on a new request, when agents
+start working or finish a turn, or when you click the bar or pull it down. To tuck it away
+yourself, click the ⌃ arrow at the bottom of the island (it shows while the pointer is over it) or
+swipe up: press on the island and pull up. Drag the island by any part of it except the buttons,
+along the top edge: it snaps to the left, the center or the right, and the place is remembered per
+monitor. Only the island itself catches the mouse; clicks next to it go to the windows below.
 
 The island is on by default; turn it off in Settings → Notifications ("island with requests at
 the top of the screen"). Codex sessions are not on the island yet: their requests come as system
