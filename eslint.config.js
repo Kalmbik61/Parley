@@ -45,7 +45,7 @@ export default tseslint.config(
   {
     files: ['packages/desktop/src/main/browser/guest-pick.js', 'packages/desktop/src/main/browser/guest-dom.js', 'packages/desktop/src/main/browser/guest-annotate.js'],
     languageOptions: {
-      globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly', NodeFilter: 'readonly' },
+      globals: { ...browserGlobals, getComputedStyle: 'readonly', CSS: 'readonly', NodeFilter: 'readonly', Element: 'readonly' },
     },
   },
 );

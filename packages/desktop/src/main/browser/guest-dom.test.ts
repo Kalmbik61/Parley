@@ -96,6 +96,23 @@ describe('guest-dom.js — помощники DOM скриптов выбора 
     expect(dom().selectorOf(form)).toBe('form.login.primary');
   });
 
+  it('селектор не зависит от перекрытого getAttribute: <input name="getAttribute"> в форме (DOM clobbering) не роняет скрипт, звено формы строится по id и по классам', () => {
+    // У <form> именованные поля перекрывают методы: <input name="getAttribute"> делает form.getAttribute этим полем, и вызов
+    // через элемент бросил бы TypeError на таком предке — выбор любого элемента внутри формы пропал бы целиком. jsdom так не
+    // делает, подмена выставлена вручную; метод берётся с прототипа Element.
+    document.body.innerHTML = `
+      <form id="f"><input name="getAttribute" type="text"><button class="save" type="button">Go</button></form>
+      <form id="g"><button class="save" type="button">Other</button></form>
+      <form class="login"><input name="getAttribute" type="text"><button class="pay" type="button">Pay</button></form>
+      <form class="signup"><button class="pay" type="button">Other</button></form>`;
+    for (const form of [$('#f'), $('form.login')]) {
+      Object.defineProperty(form, 'getAttribute', { value: form.querySelector('input') });
+    }
+    const { selectorOf } = dom();
+    expect(selectorOf($('#f > button'))).toBe('form#f > button.save');
+    expect(selectorOf($('form.login > button'))).toBe('form.login > button.pay');
+  });
+
   it('хэши CSS-modules и css-xxxx в селектор не идут; Tailwind-классы экранированы', () => {
     document.body.innerHTML = '<div class="css-1q2w3e Button_root__a1B2c3 md:flex py-1.5"><span>x</span></div><div><span>y</span></div>';
     expect(dom().selectorOf($('div'))).toBe('div.md\\:flex.py-1\\.5');

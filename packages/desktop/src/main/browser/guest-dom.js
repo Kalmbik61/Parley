@@ -37,6 +37,14 @@
   const SAFE_SCHEMES = new Set(['http', 'https', 'file']);
   // Поля, чьё value уходить агенту не должно: пароли, CSRF-токены, карты, одноразовые коды.
   const SECRET_AUTOCOMPLETE = /^(cc-.*|one-time-code|.*-password)$/i;
+  // Метод читается один раз с прототипа: у `<form>` именованные поля перекрывают методы (`<input name="getAttribute">`
+  // делает `form.getAttribute` этим полем), и вызов через элемент бросал бы на таком предке — выбор любого элемента внутри
+  // формы пропадал бы целиком. Остальные перекрываемые обращения (`attributes`, `removeAttribute`, `tagName`) не тронуты.
+  const GET_ATTRIBUTE = Element.prototype.getAttribute;
+
+  function attr(el, name) {
+    return GET_ATTRIBUTE.call(el, name);
+  }
 
   /** Класс, похожий на хэш сборщика (CSS-modules, styled-components): со сборкой он сменится. */
   function looksHashy(name) {
@@ -48,7 +56,7 @@
   // выходило бы `form#[object HTMLInputElement]` — оно ничего не находит. Атрибут от имён полей не зависит.
   function stableClasses(el) {
     const out = [];
-    for (const name of new Set((el.getAttribute('class') || '').split(/[ \t\n\f\r]+/).filter(Boolean))) {
+    for (const name of new Set((attr(el, 'class') || '').split(/[ \t\n\f\r]+/).filter(Boolean))) {
       if (out.length >= CLASSES_PER_LINK) break;
       if (name.length > CLASS_LENGTH || /^css-[a-z0-9]+$/i.test(name) || looksHashy(name)) continue;
       out.push(name);
@@ -58,7 +66,7 @@
 
   function linkOf(el) {
     const tag = el.tagName.toLowerCase();
-    const id = el.getAttribute('id');
+    const id = attr(el, 'id');
     if (id) return `${tag}#${CSS.escape(id)}`;
     return tag + stableClasses(el).map((name) => `.${CSS.escape(name)}`).join('');
   }
@@ -142,9 +150,9 @@
   function isSecretField(el) {
     const tag = el.tagName.toLowerCase();
     if (tag !== 'input' && tag !== 'textarea') return false;
-    const type = (el.getAttribute('type') || '').toLowerCase();
+    const type = (attr(el, 'type') || '').toLowerCase();
     if (tag === 'input' && (type === 'password' || type === 'hidden')) return true;
-    const tokens = (el.getAttribute('autocomplete') || '').split(/\s+/);
+    const tokens = (attr(el, 'autocomplete') || '').split(/\s+/);
     return tokens.some((token) => SECRET_AUTOCOMPLETE.test(token));
   }
 
