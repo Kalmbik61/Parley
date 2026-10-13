@@ -413,7 +413,7 @@ if (!gotLock) {
     });
     const islandConfig = async (): Promise<IslandConfig> => {
       const current = await uiStore.load();
-      return { sound: current.notifications.sound, hintShown: current.island.hintShown, topInset: island.topInset() };
+      return { sound: current.notifications.sound, hintShown: current.island.hintShown, topInset: island.topInset(), anchor: island.anchor() };
     };
     const pushIslandConfig = (): void => {
       void islandConfig().then((config) => {

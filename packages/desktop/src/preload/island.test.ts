@@ -58,7 +58,7 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
-      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'hintShown', 'onConfig', 'open', 'setSize', 'setVisible'].sort(),
+      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'hintShown', 'onConfig', 'open', 'setInteractive', 'setVisible'].sort(),
     );
   });
 
@@ -78,18 +78,20 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     const configs: IslandConfig[] = [];
     bridge.island.onConfig((config) => configs.push(config));
-    emit('island:config', { sound: false, hintShown: true, topInset: 38 });
-    expect(configs).toEqual([{ sound: false, hintShown: true, topInset: 38 }]);
+    emit('island:config', { sound: false, hintShown: true, topInset: 38, anchor: 'right' });
+    expect(configs).toEqual([{ sound: false, hintShown: true, topInset: 38, anchor: 'right' }]);
   });
 
   it('каналы острова — island:*', async () => {
     const bridge = await loadPreload();
-    bridge.island.setSize(380, 150);
+    bridge.island.setInteractive(true);
+    bridge.island.setInteractive(false);
     bridge.island.setVisible(true);
     bridge.island.dragEnd({ screenX: 1, screenY: 2 });
     bridge.island.beep();
     expect(send.mock.calls).toEqual([
-      ['island:size', 380, 150],
+      ['island:interactive', true],
+      ['island:interactive', false],
       ['island:visible', true],
       ['island:drag-end', { screenX: 1, screenY: 2 }],
       ['island:beep'],
@@ -147,9 +149,9 @@ describe('preload острова', () => {
 
     const configs: IslandConfig[] = [];
     const offConfig = bridge.island.onConfig((config) => configs.push(config));
-    emit('island:config', { sound: true, hintShown: false, topInset: 0 });
+    emit('island:config', { sound: true, hintShown: false, topInset: 0, anchor: 'center' });
     offConfig();
-    emit('island:config', { sound: false, hintShown: true, topInset: 38 });
-    expect(configs).toEqual([{ sound: true, hintShown: false, topInset: 0 }]);
+    emit('island:config', { sound: false, hintShown: true, topInset: 38, anchor: 'left' });
+    expect(configs).toEqual([{ sound: true, hintShown: false, topInset: 0, anchor: 'center' }]);
   });
 });

@@ -6,13 +6,18 @@
  * под строку чёлки на MacBook). Показ — только `showInactive()`: `show()` и `focus()` активировали бы приложение.
  *
  * Контроллер не знает Electron: окно, мониторы и запись места приходят зависимостями — так его можно проверить на
- * подменах. Место держит верхний край и точку (`anchor`): смена размера и перетаскивание пересчитывают прямоугольник
- * через `placement.ts`. Упал renderer — одно пересоздание; второе падение — острова нет до перезапуска приложения:
+ * подменах. Окно всегда одного размера (`ISLAND_FRAME`) и целиком прозрачное: чёрная форма острова анимирует размер
+ * внутри кадра (CSS), а окно не меняет границы. Прозрачная часть не должна перехватывать клики по приложениям под ней,
+ * поэтому окно игнорирует мышь (`setIgnoreMouseEvents(true, { forward: true })` — macOS пересылает движения мыши,
+ * renderer всё ещё видит вход курсора) и становится интерактивным только пока курсор над формой (`setInteractive`).
+ * Место держит верхний край и точку (`anchor`): перетаскивание и смена монитора пересчитывают прямоугольник через
+ * `placement.ts`. Упал renderer — одно пересоздание; второе падение — острова нет до перезапуска приложения:
  * зависшее прозрачное окно поверх всего хуже, чем его отсутствие.
  */
 
 import type { BrowserWindowConstructorOptions } from 'electron';
 import type { IslandPoint } from '../../shared/island.js';
+import type { IslandAnchor } from '../../shared/ui-types.js';
 import {
   displayAt,
   islandBounds,
@@ -25,10 +30,16 @@ import {
   type Size,
 } from './placement.js';
 
+/**
+ * Фиксированный прозрачный кадр окна острова под самое большое состояние: карточка запроса ~440 px шириной, список
+ * до ~360 px высотой вместе с шапкой. Форма острова растёт и сжимается внутри кадра, само окно границ не меняет.
+ */
+export const ISLAND_FRAME: Size = { width: 480, height: 520 };
+
 export function islandWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
-    width: 220,
-    height: 40,
+    width: ISLAND_FRAME.width,
+    height: ISLAND_FRAME.height,
     type: 'panel',
     frame: false,
     transparent: true,
@@ -60,6 +71,7 @@ export interface IslandWindowLike {
   setAlwaysOnTop(flag: boolean, level: 'screen-saver'): void;
   showInactive(): void;
   hide(): void;
+  setIgnoreMouseEvents(ignore: boolean, options: { forward: boolean }): void;
   isVisible(): boolean;
   destroy(): void;
   isDestroyed(): boolean;
@@ -83,7 +95,8 @@ export interface IslandController<W extends IslandWindowLike> {
   close(): void;
   current(): W | null;
   isIsland(sender: unknown): boolean;
-  setSize(size: Size): void;
+  /** Окно ловит мышь (курсор над формой) или пропускает её сквозь прозрачный кадр к приложениям под ним. */
+  setInteractive(interactive: boolean): void;
   setVisible(visible: boolean): void;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
@@ -92,13 +105,12 @@ export interface IslandController<W extends IslandWindowLike> {
   relayout(): void;
   /** Отступ содержимого под чёлку у текущего монитора острова. */
   topInset(): number;
+  /** Точка, у которой стоит остров, — renderer по ней выравнивает форму внутри кадра. */
+  anchor(): IslandAnchor;
 }
-
-const INITIAL_SIZE: Size = { width: 220, height: 40 };
 
 export function createIslandController<W extends IslandWindowLike>(deps: IslandControllerDeps<W>): IslandController<W> {
   let window: W | null = null;
-  let size: Size = INITIAL_SIZE;
   let crashes = 0;
   let dragging = false;
   let dragOffsetX = 0;
@@ -108,7 +120,7 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
   const place = (): void => {
     const current = live();
     if (current === null) return;
-    current.setBounds(islandBounds(display(), deps.placement().anchor, size));
+    current.setBounds(islandBounds(display(), deps.placement().anchor, ISLAND_FRAME));
   };
 
   const open = (): void => {
@@ -117,6 +129,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
     dragging = false;
     const created = deps.createWindow();
     created.setAlwaysOnTop(true, 'screen-saver');
+    // Прозрачный кадр не ловит клики: интерактивным окно делает renderer, пока курсор над формой (`setInteractive`).
+    created.setIgnoreMouseEvents(true, { forward: true });
     // `setVisibleOnAllWorkspaces` не зовём: Electron на macOS превращает тип процесса, и иконка в Dock / Cmd-Tab может
     // пропасть. `type: 'panel'` и так плавает над полноэкранными приложениями и виден на всех рабочих столах (доки Electron).
     created.on('closed', () => {
@@ -147,9 +161,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       const current = live();
       return current !== null && sender === current.webContents;
     },
-    setSize: (next) => {
-      size = next;
-      if (!dragging) place();
+    setInteractive: (interactive) => {
+      live()?.setIgnoreMouseEvents(!interactive, { forward: true });
     },
     setVisible: (visible) => {
       const current = live();
@@ -157,6 +170,9 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       if (!visible) {
         // Скрыли — жест уже не продолжится; потерянный `drag-end` не должен замораживать место.
         dragging = false;
+        // Скрытое окно возвращается сквозным: `mouseleave` над скрытой формой не придёт, и после показа прозрачный кадр
+        // ловил бы клики, пока renderer не снимет интерактивность.
+        current.setIgnoreMouseEvents(true, { forward: true });
         if (current.isVisible()) current.hide();
         return;
       }
@@ -174,7 +190,7 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       const current = live();
       if (current === null || !dragging) return;
       const under = displayAt(deps.displays(), point.screenX, point.screenY);
-      current.setBounds({ x: Math.round(point.screenX - dragOffsetX), y: under.bounds.y, width: size.width, height: size.height });
+      current.setBounds({ x: Math.round(point.screenX - dragOffsetX), y: under.bounds.y, width: ISLAND_FRAME.width, height: ISLAND_FRAME.height });
     },
     dragEnd: (point) => {
       if (live() === null || !dragging) return;
@@ -188,5 +204,6 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       place();
     },
     topInset: () => notchInset(display()),
+    anchor: () => deps.placement().anchor,
   };
 }

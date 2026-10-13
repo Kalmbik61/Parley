@@ -6,6 +6,7 @@
 
 import type { EventName } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
+import type { IslandAnchor } from './ui-types.js';
 
 /** Точка курсора на экране (DIP), из `PointerEvent.screenX/Y` острова. */
 export interface IslandPoint {
@@ -13,17 +14,20 @@ export interface IslandPoint {
   screenY: number;
 }
 
-/** Что острову нужно из настроек и места: звук по Sound, показана ли подсказка, отступ под чёлку. */
+/** Что острову нужно из настроек и места: звук по Sound, показана ли подсказка, отступ под чёлку, точка у края монитора. */
 export interface IslandConfig {
   sound: boolean;
   hintShown: boolean;
   topInset: number;
+  /** Точка, у которой стоит остров: форма выравнивается внутри фиксированного кадра окна влево, по центру или вправо. */
+  anchor: IslandAnchor;
 }
 
 export interface IslandApi {
   config(): Promise<IslandConfig>;
   onConfig(listener: (config: IslandConfig) => void): () => void;
-  setSize(width: number, height: number): void;
+  /** Окно ловит мышь, пока курсор над формой; вне формы клики проходят сквозь прозрачный кадр к приложениям под ним. */
+  setInteractive(interactive: boolean): void;
   setVisible(visible: boolean): void;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;

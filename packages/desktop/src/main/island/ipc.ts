@@ -1,7 +1,7 @@
 /**
  * Каналы острова в main (спека 2026-10-12, 5.1). Каждый слушает только окно острова (`controller.isIsland`):
- * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: размер — положительные
- * конечные числа, точка — два числа, цель — `isFocusTarget`, как у уведомлений.
+ * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: видимость и интерактивность —
+ * булевы, точка — два числа, цель — `isFocusTarget`, как у уведомлений.
  */
 
 import type { IpcMain } from 'electron';
@@ -12,7 +12,7 @@ import type { IslandController, IslandWindowLike } from './window.js';
 
 export interface IslandIpcOptions {
   ipcMain: Pick<IpcMain, 'on' | 'handle'>;
-  controller: Pick<IslandController<IslandWindowLike>, 'isIsland' | 'setSize' | 'setVisible' | 'dragStart' | 'dragMove' | 'dragEnd'>;
+  controller: Pick<IslandController<IslandWindowLike>, 'isIsland' | 'setInteractive' | 'setVisible' | 'dragStart' | 'dragMove' | 'dragEnd'>;
   config(): Promise<IslandConfig>;
   /** Место могло смениться (другой монитор — другой отступ под чёлку): отдать острову настройки заново. */
   pushConfig(): void;
@@ -22,12 +22,6 @@ export interface IslandIpcOptions {
   /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
   onFailed(): void;
 }
-
-/** Потолок стороны окна острова (DIP): огромное число от окна не доходит до `setBounds`. */
-const MAX_ISLAND_SIZE = 2000;
-
-const isSize = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
-const clampSize = (value: number): number => Math.min(Math.ceil(value), MAX_ISLAND_SIZE);
 
 function isPoint(value: unknown): value is IslandPoint {
   if (typeof value !== 'object' || value === null) return false;
@@ -46,8 +40,8 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
       return options.config();
     }),
   );
-  ipcMain.on('island:size', (event, width: unknown, height: unknown) => {
-    if (fromIsland(event) && isSize(width) && isSize(height)) controller.setSize({ width: clampSize(width), height: clampSize(height) });
+  ipcMain.on('island:interactive', (event, interactive: unknown) => {
+    if (fromIsland(event) && typeof interactive === 'boolean') controller.setInteractive(interactive);
   });
   ipcMain.on('island:visible', (event, visible: unknown) => {
     if (fromIsland(event) && typeof visible === 'boolean') controller.setVisible(visible);

@@ -57,7 +57,7 @@ const bridge = {
         configListeners.delete(listener);
       };
     },
-    setSize: (width: number, height: number) => ipcRenderer.send('island:size', width, height),
+    setInteractive: (interactive: boolean) => ipcRenderer.send('island:interactive', interactive),
     setVisible: (visible: boolean) => ipcRenderer.send('island:visible', visible),
     dragStart: (point: IslandPoint) => ipcRenderer.send('island:drag-start', point),
     dragMove: (point: IslandPoint) => ipcRenderer.send('island:drag-move', point),

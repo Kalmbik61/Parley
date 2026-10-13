@@ -20,12 +20,12 @@ function setup() {
   const ipcMain = new FakeIpcMain();
   const controller = {
     isIsland: (sender: unknown) => sender === island,
-    setSize: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(),
+    setInteractive: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(),
   };
   const options = {
     ipcMain,
     controller,
-    config: vi.fn().mockResolvedValue({ sound: true, hintShown: false, topInset: 38 }),
+    config: vi.fn().mockResolvedValue({ sound: true, hintShown: false, topInset: 38, anchor: 'center' }),
     pushConfig: vi.fn(),
     openTarget: vi.fn(),
     beep: vi.fn(),
@@ -39,7 +39,7 @@ function setup() {
 /** Имена всех подменённых методов, которые хоть раз позвали: «ничего не случилось» — пустой список. */
 function calledNames(state: ReturnType<typeof setup>): string[] {
   const mocks = {
-    setSize: state.controller.setSize,
+    setInteractive: state.controller.setInteractive,
     setVisible: state.controller.setVisible,
     dragStart: state.controller.dragStart,
     dragMove: state.controller.dragMove,
@@ -65,12 +65,13 @@ describe('IPC острова', () => {
     expect(onFailed).toHaveBeenCalledTimes(1);
   });
 
-  it('размер, видимость и перетаскивание — только от окна острова и только целые данные', () => {
+  it('интерактивность, видимость и перетаскивание — только от окна острова и только целые данные', () => {
     const { ipcMain, controller, pushConfig } = setup();
-    ipcMain.emit('island:size', { sender: island }, 380, 150);
-    ipcMain.emit('island:size', { sender: stranger }, 10, 10);
-    ipcMain.emit('island:size', { sender: island }, -1, 'x');
-    expect(controller.setSize.mock.calls).toEqual([[{ width: 380, height: 150 }]]);
+    ipcMain.emit('island:interactive', { sender: island }, true);
+    ipcMain.emit('island:interactive', { sender: island }, false);
+    ipcMain.emit('island:interactive', { sender: stranger }, true);
+    ipcMain.emit('island:interactive', { sender: island }, 1);
+    expect(controller.setInteractive.mock.calls).toEqual([[true], [false]]);
     ipcMain.emit('island:visible', { sender: island }, true);
     expect(controller.setVisible).toHaveBeenCalledWith(true);
     ipcMain.emit('island:drag-end', { sender: island }, { screenX: 10, screenY: 20 });
@@ -80,7 +81,7 @@ describe('IPC острова', () => {
 
   it('config — острову; чужому окну — отказ', async () => {
     const { ipcMain } = setup();
-    await expect(ipcMain.emit('island:config', { sender: island })).resolves.toEqual({ sound: true, hintShown: false, topInset: 38 });
+    await expect(ipcMain.emit('island:config', { sender: island })).resolves.toEqual({ sound: true, hintShown: false, topInset: 38, anchor: 'center' });
     await expect(ipcMain.emit('island:config', { sender: stranger })).rejects.toBeTruthy();
   });
 
@@ -91,14 +92,8 @@ describe('IPC острова', () => {
     expect(openTarget.mock.calls).toEqual([[TARGET]]);
   });
 
-  it('размер режется потолком: огромное число не доходит до setBounds', () => {
-    const { ipcMain, controller } = setup();
-    ipcMain.emit('island:size', { sender: island }, 1e12, 1e12);
-    expect(controller.setSize.mock.calls).toEqual([[{ width: 2000, height: 2000 }]]);
-  });
-
   it.each<[string, unknown[]]>([
-    ['island:size', [380, 150]],
+    ['island:interactive', [true]],
     ['island:visible', [true]],
     ['island:drag-start', [{ screenX: 1, screenY: 2 }]],
     ['island:drag-move', [{ screenX: 1, screenY: 2 }]],
@@ -120,8 +115,9 @@ describe('IPC острова', () => {
   });
 
   it.each<[string, unknown[]]>([
-    ['island:size', [Number.NaN, 10]],
-    ['island:size', [Number.POSITIVE_INFINITY, 10]],
+    ['island:interactive', ['yes']],
+    ['island:interactive', [1]],
+    ['island:interactive', [undefined]],
     ['island:visible', ['yes']],
     ['island:drag-start', [null]],
     ['island:drag-move', [{ screenX: '1', screenY: 2 }]],
