@@ -759,13 +759,13 @@ describe('убранный остров', () => {
     expect(screen.getByTestId('island').className).not.toContain('translate');
   });
 
-  it('убран без Done — брусок: пустой блок 40×5 в форме rounded-full со светлой обводкой, без тени, под чёлкой и на 2 px ниже', () => {
+  it('убран без Done — брусок: пустой блок 40×5 со скруглением rounded-[3px] и светлой обводкой, без тени, под чёлкой и на 2 px ниже', () => {
     view({ config, retracted: true });
     const shape = screen.getByTestId('island') as HTMLElement;
     expect(shape.getAttribute('data-retracted')).toBe('true');
     // Скрытое от читалки экрана: форму читает зона нажатия (`IslandTab`).
     expect(shape.getAttribute('aria-hidden')).toBe('true');
-    expect(shape.className).toContain('rounded-full');
+    expect(shape.className).toContain('rounded-[3px]');
     expect(shape.className).not.toContain('rounded-b-');
     expect(shape.className).toContain('bg-black');
     expect(shape.className).toContain('ring-1');
@@ -791,7 +791,7 @@ describe('убранный остров', () => {
     expect(shape.getAttribute('aria-hidden')).toBe('true');
     expect(shape.textContent).toBe('✅ 2');
     expect(shape.className).toContain('rounded-b-[14px]');
-    expect(shape.className).not.toContain('rounded-full');
+    expect(shape.className).not.toContain('rounded-[3px]');
     expect(shape.className).toContain('bg-black');
     expect(shape.className).toContain('ring-1');
     expect(shape.className).toContain('ring-white/50');

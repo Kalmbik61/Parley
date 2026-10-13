@@ -508,7 +508,7 @@ describe('язычок убранного острова', () => {
     expect(tab.textContent).toBe('');
     // Чёрный брусок 40×5 со светлой обводкой (видна и на светлом фоне) рисует сама форма.
     const shape = screen.getByTestId('island');
-    expect(shape.className).toContain('rounded-full');
+    expect(shape.className).toContain('rounded-[3px]');
     expect(shape.className).toContain('bg-black');
     expect(shape.className).toContain('ring-1');
     expect(shape.className).toContain('ring-white/50');
@@ -864,7 +864,7 @@ describe('Done на острове', () => {
     expect(tab.getAttribute('aria-label')).toBe('Show the island');
     expect(tab.textContent).toBe('');
     expect(screen.getByTestId('island').textContent).toBe('');
-    expect(screen.getByTestId('island').className).toContain('rounded-full');
+    expect(screen.getByTestId('island').className).toContain('rounded-[3px]');
     // Хост прислал ту же активность заново — тот же ключ, строка скрыта.
     act(() => seedDone(FRESH));
     expect(isRetracted()).toBe(true);
@@ -916,7 +916,7 @@ describe('Done на острове', () => {
     expect(tab.getAttribute('aria-label')).toBe('Show the island');
     expect(tab.textContent).toBe('');
     expect(screen.getByTestId('island').textContent).toBe('');
-    expect(screen.getByTestId('island').className).toContain('rounded-full');
+    expect(screen.getByTestId('island').className).toContain('rounded-[3px]');
     advance(1);
     expect(screen.getByTestId('island').textContent).toBe('');
     expand();
