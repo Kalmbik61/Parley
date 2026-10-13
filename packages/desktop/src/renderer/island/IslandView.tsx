@@ -10,6 +10,11 @@
  *
  * Убранный остров (`retracted`) уезжает вверх за кадр: сдвигает обёртка формы (`island-slide`), а не сама форма —
  * у размера и сдвига разная длительность. Тащить остров можно за любое место формы (`useShapeDrag`), кроме кнопок.
+ *
+ * Строки Done (агент закончил ход, в Parley его ещё не смотрели) идут в списке после строк в работе: точка `unseen`,
+ * имя сессии, время конца хода и под ними до двух строк последнего ответа агента. Текст ответа вид читает сам из
+ * `useIslandReplies` по `doneKey` (единственное исключение из «всё пропсами»: стор только для чтения). Пилюля
+ * показывает `✓ N done` рядом со счётчиками работы, а внизу списка — тихая «Clear», что прячет все видимые Done.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
@@ -20,9 +25,11 @@ import type { IslandApi, IslandConfig } from '../../shared/island.js';
 import { alwaysRules } from '../chat/cards/always-rules.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
 import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
+import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { simpleChoices } from './simple-question.js';
 
@@ -55,6 +62,8 @@ export interface IslandViewProps {
   onToggleList(open: boolean): void;
   /** «×»: убрать остров до следующего запроса или выдвижения язычком. */
   onHide(): void;
+  /** «Clear»: спрятать все видимые строки Done. */
+  onClearDone(): void;
   onSelect(index: number): void;
   onDecide(key: string, decision: FeedDecision): void;
   onHintDone(): void;
@@ -83,14 +92,15 @@ function Pill(props: IslandViewProps): JSX.Element {
     // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
-      {model.active ? (
+      {model.active || model.done > 0 ? (
         // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
-        // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли.
+        // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли. Значки провайдеров — про
+        // идущую работу, у одних Done их нет.
         <div data-testid="island-counters" className="flex items-center gap-1.5" onClick={() => onToggleList(true)}>
           {model.providers.map((provider) => (
             <AgentIcon key={provider} provider={provider} size={14} />
           ))}
-          <span>{S.island.pill(model.working, model.waiting)}</span>
+          <span>{S.island.pill(model.working, model.waiting, model.done)}</span>
         </div>
       ) : (
         <span data-testid="island-idle" className="text-muted-foreground">
@@ -105,7 +115,26 @@ function Pill(props: IslandViewProps): JSX.Element {
 type RoomRow = Extract<IslandRow, { kind: 'room' }>;
 type SessionRow = Extract<IslandRow, { kind: 'session' }>;
 
-function List({ model, api }: IslandViewProps): JSX.Element {
+/** Строка Done: имя и время конца хода, под ними последний ответ агента (если снимок ленты его нашёл). */
+function DoneLine({ row, api }: { row: Extract<SessionRow, { state: 'done' }>; api: IslandApi }): JSX.Element {
+  const reply = useIslandReplies((state) => state.texts[row.doneKey] ?? null);
+  return (
+    <button type="button" data-testid="island-done" className="flex cursor-pointer flex-col gap-0.5 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
+      <span className="flex w-full items-center gap-2">
+        <AgentStateDot state="unseen" size="sm" />
+        <span className="min-w-0 flex-1 truncate">{row.label}</span>
+        {row.turnEndedAt !== null ? <span className="shrink-0 text-[13px] text-muted-foreground">{relativeTime(row.turnEndedAt, new Date())}</span> : null}
+      </span>
+      {reply !== null ? (
+        <span title={reply} className="line-clamp-2 text-[13px] text-foreground/75">
+          {reply}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function List({ model, api, onClearDone }: IslandViewProps): JSX.Element {
   return (
     <div data-testid="island-list" className="island-reveal flex max-h-[360px] w-[400px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-sm">
       {model.groups.map((group) => (
@@ -121,21 +150,30 @@ function List({ model, api }: IslandViewProps): JSX.Element {
                 <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
                   {room.title}
                 </button>
-                <span className="shrink-0">· {S.island.roomBusy(room.busy)}</span>
+                <span className="shrink-0">· {room.busy > 0 ? S.island.roomBusy(room.busy) : S.island.roomDone}</span>
               </div>
             ))}
           {group.rows
             .filter((row): row is SessionRow => row.kind === 'session')
-            .map((row) => (
-              <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
-                {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
-                <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
-                <span className="min-w-0 flex-1 truncate">{row.label}</span>
-                {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
-              </button>
-            ))}
+            .map((row) =>
+              row.state === 'done' ? (
+                <DoneLine key={row.key} row={row} api={api} />
+              ) : (
+                <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
+                  {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
+                  <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                  <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                  {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+                </button>
+              ),
+            )}
         </div>
       ))}
+      {model.done > 0 ? (
+        <button type="button" data-testid="island-clear" onClick={onClearDone} className="cursor-pointer self-end px-1 text-muted-foreground hover:text-foreground">
+          {S.island.clearDone}
+        </button>
+      ) : null}
     </div>
   );
 }

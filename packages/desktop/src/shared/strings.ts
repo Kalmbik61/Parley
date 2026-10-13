@@ -1599,10 +1599,15 @@ export const S = {
 
   /** Остров одобрений (спека 2026-10-12). */
   island: {
-    pill: (working: number, waiting: number): string =>
-      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null].filter((part) => part !== null).join(' · '),
+    pill: (working: number, waiting: number, done: number): string =>
+      [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✓ ${done} done` : null]
+        .filter((part) => part !== null)
+        .join(' · '),
     waitingInTerminal: 'waiting in terminal',
     roomBusy: (count: number): string => `${count} in work`,
+    roomDone: 'done',
+    clearDone: 'Clear',
+    doneTab: 'Agents finished — show the island',
     of: (index: number, total: number): string => `${index} of ${total}`,
     previous: 'Previous request',
     next: 'Next request',

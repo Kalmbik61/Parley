@@ -1,5 +1,6 @@
 /**
- * Вид острова: пилюля и «×», пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), карточка
+ * Вид острова: пилюля и «×», пустая пилюля, список «в работе» (название работы, комнаты подзаголовком), строки Done
+ * (ответ агента, время, Clear, пилюля `✓ N done`, комната `done`), карточка
  * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, подсказка первого показа и отступ под чёлку, пауза
  * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров,
  * плавный размер формы (замер содержимого, переход, появление), размеры текста.
@@ -12,6 +13,7 @@ import type { FeedCard } from '@parley/core';
 import type { IslandApi } from '../../shared/island.js';
 import { S } from '../../shared/strings.js';
 import type { IslandModel } from './model.js';
+import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { CARD_ARM_MS, IslandView, type IslandViewProps } from './IslandView.js';
 
@@ -39,22 +41,35 @@ function questionItem(options: string[]): IslandRequest {
 }
 
 const MODEL: IslandModel = {
-  working: 2, waiting: 1, providers: ['claude'], active: true,
+  working: 2, waiting: 1, done: 0, providers: ['claude'], active: true,
   groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
     { kind: 'session', key: 'k', ref: REF, label: 'S02 api', provider: 'claude', state: 'needs-you', inTerminal: true },
-    { kind: 'room', key: 'r', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 1 },
+    { kind: 'room', key: 'r', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 1, done: false },
   ] }],
 };
 
 /** Ничего не идёт: пустая пилюля «No agents running». */
-const IDLE_MODEL: IslandModel = { working: 0, waiting: 0, providers: [], active: false, groups: [] };
+const IDLE_MODEL: IslandModel = { working: 0, waiting: 0, done: 0, providers: [], active: false, groups: [] };
+
+const DONE_REF = { ...REF, sessionId: 's-05' };
+const DONE_KEY = 'kd\u0000T';
+const ENDED_AT = '2026-10-13T10:00:00.000Z';
+const REPLY = 'Refactored the parser and updated three tests.';
+/** Ничего не идёт, но один агент закончил ход, и их комната `done`: пилюля «✓ 1 done», в списке строка Done. */
+const DONE_MODEL: IslandModel = {
+  working: 0, waiting: 0, done: 1, providers: [], active: false,
+  groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
+    { kind: 'session', key: 'kd', ref: DONE_REF, label: 'S05 parser', provider: 'claude', state: 'done', inTerminal: false, doneKey: DONE_KEY, turnEndedAt: ENDED_AT },
+    { kind: 'room', key: 'rd', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: true },
+  ] }],
+};
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
     model: MODEL, items: [], index: 0, config: { sound: true, hintShown: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
-    onToggleList: vi.fn(), onHide: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(), onHintDone: vi.fn(),
+    onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(), onHintDone: vi.fn(),
     ...patch,
   };
 }
@@ -89,6 +104,8 @@ class ResizeObserverStub {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-13T10:03:00.000Z'));
+  useIslandReplies.setState({ texts: {} });
   resizeCallbacks = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 });
@@ -163,8 +180,8 @@ describe('вид острова', () => {
 
   it('список: несколько комнат работы — по строке подзаголовка на каждую; без комнат подзаголовка нет', () => {
     const rooms: IslandModel['groups'][number]['rows'] = [
-      { kind: 'room', key: 'r1', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 2 },
-      { kind: 'room', key: 'r2', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-2', title: 'Billing', busy: 1 },
+      { kind: 'room', key: 'r1', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 2, done: false },
+      { kind: 'room', key: 'r2', projectPath: '/tmp/proj', workId: 'w-1', roomId: 'r-2', title: 'Billing', busy: 1, done: false },
     ];
     view({ listOpen: true, model: { ...MODEL, groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: rooms }] } });
     expect(screen.getAllByTestId('island-room').map((line) => line.textContent)).toEqual(['Refunds· 2 in work', 'Billing· 1 in work']);
@@ -253,6 +270,84 @@ describe('вид острова', () => {
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
     expect((screen.getByTestId('island-content') as HTMLElement).style.paddingTop).toBe('38px');
     expect((screen.getByTestId('island') as HTMLElement).style.paddingTop).toBe('');
+  });
+});
+
+describe('Done на острове', () => {
+  it('пилюля без работы: «✓ 1 done» вместо «No agents running», значков провайдеров нет, клик по счётчикам открывает список', () => {
+    const props = view({ model: DONE_MODEL });
+    const counters = screen.getByTestId('island-counters');
+    expect(counters.textContent).toBe('✓ 1 done');
+    expect(screen.queryByTestId('island-idle')).toBeNull();
+    fireEvent.click(counters);
+    expect(props.onToggleList).toHaveBeenCalledWith(true);
+  });
+
+  it('пилюля с работой и Done: «2 working · 1 waiting · ✓ 3 done»', () => {
+    view({ model: { ...MODEL, done: 3 } });
+    expect(screen.getByTestId('island-pill').textContent).toContain('2 working · 1 waiting · ✓ 3 done');
+  });
+
+  it('строка Done: точка unseen, имя, время конца хода, под ними ответ агента; клик открывает сессию', () => {
+    useIslandReplies.setState({ texts: { [DONE_KEY]: REPLY } });
+    const props = view({ model: DONE_MODEL, listOpen: true });
+    const row = screen.getByTestId('island-done');
+    expect(row.tagName).toBe('BUTTON');
+    expect(within(row).getByTestId('agent-state-dot').getAttribute('data-state')).toBe('unseen');
+    expect(within(row).getByText('S05 parser')).toBeTruthy();
+    expect(within(row).getByText(S.time.minutes(3)).className).toContain('text-muted-foreground');
+    const reply = within(row).getByText(REPLY);
+    expect(reply.getAttribute('title')).toBe(REPLY);
+    expect(reply.className).toContain('line-clamp-2');
+    expect(reply.className).toContain('text-[13px]');
+    expect(reply.className).toContain('text-foreground/75');
+    fireEvent.click(row);
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: DONE_REF });
+  });
+
+  it('текста ответа нет (снимок не нашёл или ещё идёт) — строки ответа нет; времени конца хода нет — без времени', () => {
+    useIslandReplies.setState({ texts: { [DONE_KEY]: null } });
+    view({ model: DONE_MODEL, listOpen: true });
+    const row = screen.getByTestId('island-done');
+    expect(row.textContent).toBe('S05 parser' + S.time.minutes(3));
+    cleanup();
+    const [session, room] = DONE_MODEL.groups[0]?.rows ?? [];
+    const rows = session?.kind === 'session' && session.state === 'done' && room !== undefined ? [{ ...session, turnEndedAt: null }, room] : [];
+    view({ model: { ...DONE_MODEL, groups: [{ key: 'g', title: 'Backend', project: 'proj', rows }] }, listOpen: true });
+    expect(screen.getByTestId('island-done').textContent).toBe('S05 parser');
+  });
+
+  it('строки Done идут после строк в работе', () => {
+    const [, room] = DONE_MODEL.groups[0]?.rows ?? [];
+    const working = MODEL.groups[0]?.rows[0];
+    const done = DONE_MODEL.groups[0]?.rows[0];
+    const rows = working !== undefined && done !== undefined && room !== undefined ? [working, done, room] : [];
+    view({ model: { ...MODEL, done: 1, groups: [{ key: 'g', title: 'Backend', project: 'proj', rows }] }, listOpen: true });
+    const list = screen.getByTestId('island-list');
+    const labels = Array.from(list.querySelectorAll('button')).map((button) => button.textContent);
+    expect(labels.findIndex((text) => text?.startsWith('S02 api'))).toBeLessThan(labels.findIndex((text) => text?.startsWith('S05 parser')));
+  });
+
+  it('комната: «Refunds · done», когда никто в ней не в работе; «· 1 in work», когда есть', () => {
+    view({ model: DONE_MODEL, listOpen: true });
+    expect(screen.getByTestId('island-room').textContent).toBe('Refunds· done');
+    cleanup();
+    view({ listOpen: true });
+    expect(screen.getByTestId('island-room').textContent).toBe('Refunds· 1 in work');
+  });
+
+  it('Clear — внизу списка, вправо; зовёт onClearDone; без Done кнопки нет', () => {
+    const props = view({ model: DONE_MODEL, listOpen: true });
+    const clear = screen.getByTestId('island-clear');
+    expect(clear.textContent).toBe('Clear');
+    expect(clear.className).toContain('self-end');
+    expect(clear.className).toContain('text-muted-foreground');
+    expect(screen.getByTestId('island-list').lastElementChild).toBe(clear);
+    fireEvent.click(clear);
+    expect(props.onClearDone).toHaveBeenCalledTimes(1);
+    cleanup();
+    view({ listOpen: true });
+    expect(screen.queryByTestId('island-clear')).toBeNull();
   });
 });
 
@@ -490,6 +585,7 @@ describe('цвета острова', () => {
     ['пилюля с подсказкой', { config: { sound: true, hintShown: false, topInset: 0, anchor: 'center' } }],
     ['список', { listOpen: true }],
     ['пустая пилюля', { model: IDLE_MODEL }],
+    ['список со строкой Done и Clear', { model: DONE_MODEL, listOpen: true }],
     ['остров убран', { retracted: true }],
     ['карточка с очередью и пометками', { items: [permissionItem({ note: 'elsewhere' }), permissionItem({ key: 'k\u0000c-2', note: 'failed' })] }],
     ['карточка вопроса', { items: [questionItem(['Postgres', 'SQLite'])] }],
@@ -497,6 +593,7 @@ describe('цвета острова', () => {
   ];
 
   it('ни в одном состоянии нет классов text-/bg-/border-neutral-N — только токены темы', () => {
+    useIslandReplies.setState({ texts: { [DONE_KEY]: REPLY } });
     for (const [name, patch] of states) {
       view(patch);
       expect(classesOf().filter((classes) => NEUTRAL.test(classes)), name).toEqual([]);

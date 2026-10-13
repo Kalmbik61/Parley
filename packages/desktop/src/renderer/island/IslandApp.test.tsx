@@ -4,7 +4,8 @@
  * выдвигает остров кликом или потяжкой вниз, корень заполняет кадр окна и выравнивает форму по точке, наведение приходит
  * от main (`onHover`) и открывает список, а область под мышь (форма или язычок) уходит main и не повторяется. Где нужна
  * цепочка «событие → снимок ленты → карточка», таймеры настоящие; отсчёт покоя идёт на подставных таймерах и на заранее заполненных сторах (без обмена с хостом).
- * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
+ * Строки Done: новый конец хода выдвигает остров (без звука), конец хода до подключения — нет, удержание `DONE_HOLD_MS`
+ * вместо покоя, Clear прячет строки до нового конца хода. Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -16,8 +17,9 @@ import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { IDLE_RETRACT_MS, IslandApp } from './IslandApp.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp } from './IslandApp.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
+import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 
 const PROJECT = '/tmp/proj';
@@ -122,6 +124,7 @@ beforeEach(() => {
   observed = [];
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   useIslandRequests.getState().clear();
+  useIslandReplies.getState().prune(new Set());
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useActivityStore.setState({ byRef: {}, loaded: false });
 });
@@ -609,3 +612,134 @@ describe('убирание острова в покое', () => {
     expect(screen.getByTestId('island-tab')).toBeTruthy();
   });
 });
+
+describe('Done на острове', () => {
+  /** Момент подключения; конец хода не раньше него — свежий, раньше — остров застал его уже готовым. */
+  const CONNECTED_AT = new Date('2026-10-13T10:00:00.000Z');
+  const FRESH = '2026-10-13T10:00:05.000Z';
+  const FRESHER = '2026-10-13T10:00:10.000Z';
+  const STALE = '2026-10-13T09:59:00.000Z';
+
+  /** Сессия s-01 закончила ход в `endedAt`: ждёт, пока на неё посмотрят в Parley. */
+  function seedDone(endedAt: string): void {
+    useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+    useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: endedAt }) }, loaded: true });
+  }
+  const advance = (ms: number): void => {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(CONNECTED_AT);
+  });
+
+  it('новый конец хода выдвигает убранный остров: в пилюле «✓ 1 done», язычка нет', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expect(isRetracted()).toBe(true);
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+    expect(screen.queryByTestId('island-tab')).toBeNull();
+    expect(screen.getByTestId('island-counters').textContent).toBe('✓ 1 done');
+  });
+
+  it('выдвигает без звука, даже если Sound включён', async () => {
+    const { island, bridge } = setup({ sound: true });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+    expect(island.beep).not.toHaveBeenCalled();
+  });
+
+  it('Done застали готовым (конец хода до подключения) — остров не выдвигается, язычок зелёный, в список строка попадает', () => {
+    seedDone(STALE);
+    const { bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    expect(isRetracted()).toBe(true);
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
+    expect(tab.title).toBe('Agents finished — show the island');
+    expect((tab.firstElementChild as HTMLElement).className).toContain('bg-[var(--state-done)]');
+    expect((tab.firstElementChild as HTMLElement).className).not.toContain('bg-black');
+    expand();
+    hover(true);
+    expect(screen.getByTestId('island-done')).toBeTruthy();
+  });
+
+  it('конец хода раньше подключения, но пришедший после, тоже не выдвигает', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(STALE));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Agents finished — show the island');
+  });
+
+  it('с Done остров убирается через DONE_HOLD_MS, а не через IDLE_RETRACT_MS', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    advance(IDLE_RETRACT_MS * 2);
+    expect(isRetracted()).toBe(false);
+    advance(DONE_HOLD_MS - IDLE_RETRACT_MS * 2 - 1);
+    expect(isRetracted()).toBe(false);
+    advance(1);
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Agents finished — show the island');
+  });
+
+  it('новый конец хода при выдвинутом острове заводит удержание заново', () => {
+    const { bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    advance(DONE_HOLD_MS - 5000);
+    act(() => seedDone(FRESHER));
+    advance(DONE_HOLD_MS - 1);
+    expect(isRetracted()).toBe(false);
+    advance(1);
+    expect(isRetracted()).toBe(true);
+  });
+
+  it('Clear прячет строки Done, пилюля снова «No agents running», язычок обычный; тот же конец хода не возвращается, новый — да', () => {
+    const { bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    hover(true);
+    fireEvent.click(screen.getByTestId('island-clear'));
+    expect(screen.queryByTestId('island-done')).toBeNull();
+    expect(screen.queryByTestId('island-clear')).toBeNull();
+    expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
+    // Done нет — покой обычный, 4 с.
+    hover(false);
+    advance(IDLE_RETRACT_MS);
+    expect(isRetracted()).toBe(true);
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.getAttribute('aria-label')).toBe('Show the island');
+    expect((tab.firstElementChild as HTMLElement).className).toContain('bg-black');
+    // Хост прислал ту же активность заново — тот же ключ, строка скрыта.
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-tab').getAttribute('aria-label')).toBe('Show the island');
+    // Новый конец хода — новый ключ: остров выдвигается.
+    act(() => seedDone(FRESHER));
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByTestId('island-counters').textContent).toBe('✓ 1 done');
+  });
+
+  it('сессию посмотрели в Parley (хост перевёл в idle) — строка уходит сама', () => {
+    const { bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    hover(true);
+    expect(screen.getByTestId('island-done')).toBeTruthy();
+    act(seedIdle);
+    expect(screen.queryByTestId('island-done')).toBeNull();
+    expect(screen.getByTestId('island-idle').textContent).toBe('No agents running');
+  });
+});
+
