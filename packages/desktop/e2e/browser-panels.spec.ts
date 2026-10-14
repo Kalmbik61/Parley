@@ -17,6 +17,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * - вид уже 720 px (окно 800×500) — панель встаёт поверх вида целиком, «Back to chat» и «Back to room» возвращают; окно
  *   стало шире — та же панель встаёт рядом; длинные названия сессии, комнаты и адреса не ломают полоску; закрытая панель
  *   остаётся нормального размера (страница не схлопывается);
+ * - Console | Network, размеры и Annotate в панели работают, как во вкладке: панель DevTools и редактор метки остаются внутри
+ *   панели, метки уходят хозяину;
  * - «⋯ → Move to browser of…» у вкладки человека переносит страницу в панель выбранной сессии, вкладка закрывается.
  *
  * Страница — свой сервер на 127.0.0.1. Клики в госте — sendInputEvent main: доверенные, как у человека. Вид Chat есть только
@@ -40,13 +42,14 @@ const LONG_ROOM = `review ${'y'.repeat(70)}`;
 const LONG_PATH = `/long/${'z'.repeat(120)}`;
 
 const PAGE = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Panel page</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Panel page</title>
 <style>
   body{font:14px system-ui,sans-serif;margin:16px}
   .save{box-sizing:border-box;width:96px;height:40px;border:0;border-radius:0;padding:8px 16px;color:#fff;background:rgb(20,71,230)}
 </style></head>
 <body><main><h1>Panel page</h1>
   <button id="save" class="save" type="button" onclick="document.body.dataset.saved = '1'">Save</button>
+  <button id="fail" type="button" onclick="console.error('boom from the panel page'); fetch('/missing')">Fail</button>
   <p>A paragraph for the page in the browser panel.</p>
 </main></body></html>`;
 
@@ -98,15 +101,29 @@ async function clickInGuest(app: ElectronApplication, url: string, selector: str
   );
 }
 
-/** Скрипт выбора в изолированном мире 1001 гостя: взведён ли он и ждёт клика человека. */
-async function pickArmed(app: ElectronApplication, url: string): Promise<unknown> {
+/** Код в изолированном мире 1001 гостя: ждёт ли скрипт выбора или меток клика человека. */
+async function inWorld(app: ElectronApplication, url: string, code: string): Promise<unknown> {
   return app.evaluate(
-    async ({ webContents }, [u, world]) => {
+    async ({ webContents }, [u, world, source]) => {
       const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === u);
-      return guest === undefined ? null : guest.executeJavaScriptInIsolatedWorld(world as number, [{ code: "typeof globalThis.__parleyPickCancel === 'function'" }]);
+      return guest === undefined ? null : guest.executeJavaScriptInIsolatedWorld(world as number, [{ code: source as string }]);
     },
-    [url, PICK_WORLD_ID] as const,
+    [url, PICK_WORLD_ID, code] as const,
   );
+}
+
+const pickArmed = (app: ElectronApplication, url: string): Promise<unknown> => inWorld(app, url, "typeof globalThis.__parleyPickCancel === 'function'");
+const annotateWaiting = (app: ElectronApplication, url: string): Promise<unknown> => inWorld(app, url, 'globalThis.__parleyAnnotate?.waiting() === true');
+
+/** JS в мире страницы гостя — только у теста: окну и агенту этого не дано. */
+async function guestEval<T>(app: ElectronApplication, url: string, code: string): Promise<T | null> {
+  return app.evaluate(
+    async ({ webContents }, [u, c]) => {
+      const guest = webContents.getAllWebContents().find((item) => item.getType() === 'webview' && item.getURL() === u);
+      return guest === undefined ? null : ((await guest.executeJavaScript(c)) as unknown);
+    },
+    [url, code] as const,
+  ) as Promise<T | null>;
 }
 
 interface Box {
@@ -409,6 +426,64 @@ test.describe('браузер чата и браузер комнаты (эта�
     }).toBe(true);
     await screenshot(window, 'room-wide-long', screenDpr);
   });
+  test('Console | Network, размер и Annotate в панели — как во вкладке: DevTools и редактор метки внутри панели, метки уходят хозяину', async () => {
+    const { electronApp, window, screenDpr } = await openApp({});
+    const url = `${origin}/`;
+    await window.getByTestId('browser-panel-toggle').click();
+    const panel = window.getByTestId('browser-panel');
+    await expect(panel).toBeVisible();
+    await loadPage(electronApp, window, url);
+
+    // Console | Network: ошибка страницы и упавший запрос; панель DevTools — в границах панели браузера.
+    await clickInGuest(electronApp, url, '#fail');
+    await panel.getByRole('button', { name: 'Console and network' }).click();
+    const devtools = panel.getByTestId('devtools-panel');
+    await expect(devtools).toBeVisible();
+    await expect(devtools.locator('[data-console-row]', { hasText: 'boom from the panel page' })).toBeVisible();
+    expectInside(await boxOf(devtools, 'панель DevTools'), await boxOf(panel, 'панель браузера'), 'DevTools в панели');
+    await devtools.getByRole('tab', { name: 'Network' }).click();
+    await expect(devtools.locator('[data-network-row]', { hasText: '/missing' })).toBeVisible();
+    await screenshot(window, 'chat-wide-network', screenDpr);
+    await panel.getByRole('button', { name: 'Console and network' }).click();
+    await expect(devtools).toBeHidden();
+
+    // Размер: Mobile M — страница видит 375 px; Fit возвращает.
+    await panel.getByRole('button', { name: 'Viewport size' }).click();
+    await window.getByRole('menuitemradio', { name: /Mobile M/ }).click();
+    // Меню размера остаётся открытым — человек может сразу выбрать DPR; Esc закрывает его.
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('menu')).toHaveCount(0);
+    await expect.poll(() => guestEval<number>(electronApp, url, 'innerWidth')).toBe(375);
+    await expect(panel.getByTestId('viewport-label')).toBeVisible();
+    await screenshot(window, 'chat-wide-mobile', screenDpr);
+    await panel.getByRole('button', { name: 'Viewport size' }).click();
+    await window.getByRole('menuitemradio', { name: 'Fit' }).click();
+    await window.keyboard.press('Escape');
+    await expect(window.getByRole('menu')).toHaveCount(0);
+    await expect.poll(() => guestEval<number>(electronApp, url, 'innerWidth')).toBeGreaterThan(375);
+
+    // Annotate: клик по кнопке страницы, редактор — внутри поля страницы панели; «Add to chat» кладёт пачку хозяину.
+    const annotate = panel.getByRole('button', { name: 'Annotate' });
+    await annotate.click();
+    await expect(annotate).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => annotateWaiting(electronApp, url)).toBe(true);
+    await focusWindow(electronApp);
+    await clickInGuest(electronApp, url, '#save');
+    const comment = window.getByRole('textbox', { name: 'Comment for annotation 1' });
+    await expect(comment).toBeFocused();
+    expectInside(await boxOf(window.getByTestId('annotation-editor'), 'редактор метки'), await boxOf(panel.getByTestId('browser-field'), 'поле страницы'), 'редактор в поле страницы панели');
+    await comment.fill('Make it green');
+    await comment.press('Enter');
+    await expect(window.getByTestId('annotation-editor')).toHaveCount(0);
+    const tray = panel.getByTestId('annotation-tray');
+    await expect(tray).toBeVisible();
+    expectInside(await boxOf(tray, 'лоток меток'), await boxOf(panel.getByTestId('browser-field'), 'поле страницы'), 'лоток в поле страницы панели');
+    await screenshot(window, 'chat-wide-annotate', screenDpr);
+    await tray.getByRole('button', { name: 'Add to chat' }).click();
+    await expect(window.getByText('1 annotation added to S01')).toBeVisible();
+    await expect(window.getByTestId('chat-view').locator('[data-testid="chat-attachments"] [data-context-kind="annotations"]')).toHaveCount(1);
+  });
+
   test('«Move to browser of…»: страница вкладки человека переезжает в панель чата, вкладка закрывается', async () => {
     const { electronApp, window, lead } = await openApp({});
     await menu(electronApp, 'browser.newTab');

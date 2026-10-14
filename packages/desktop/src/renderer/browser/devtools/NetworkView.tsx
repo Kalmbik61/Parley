@@ -118,7 +118,8 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
           >
             <span>{columns.status}</span>
             {beside ? null : <span>{columns.method}</span>}
-            <span>{columns.name}</span>
+            {/* Растяжимый столбец: в узкой панели браузера (от 320 px) подпись режется, а не налезает на «Type». */}
+            <span className="truncate">{columns.name}</span>
             {beside ? null : <span>{columns.type}</span>}
             {beside ? null : <span>{columns.size}</span>}
             {beside ? null : <span>{columns.time}</span>}

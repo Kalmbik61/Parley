@@ -5,6 +5,10 @@
  *
  * `openPageInPanel` — то, что зовёт и человек (кнопка «+», «Move to browser of…»), и агент (`browser_open`, этап B2, часть 2):
  * страница встаёт в панель хозяина и показывается; закрытая панель открывается, но клавиатурный фокус остаётся там, где был.
+ *
+ * Страницы панелей в событиях main (`browser:focus`, `browser:open-tab`) называет только их `webContentsId` → ключ записей окна
+ * (`browser/store.ts`): `focusPanelPage` и `openPopupInPanel` разбирают то, что вкладкам раскладки (`openBrowserTabFrom`) не по
+ * зубам, а `focusedPanelPage` отдаёт клавишам из страницы (⌘F, масштаб, Select, Annotate, консоль) ту, на которую кликнули.
  */
 
 import { toast } from 'sonner';
