@@ -39,7 +39,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { refKey } from '@parley/protocol';
-import type { IslandBridge, IslandConfig, IslandHitRect } from '../../shared/island.js';
+import { markSeenBatches, type IslandBridge, type IslandConfig, type IslandHitRect } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
 import { useActivityStore } from '../store/activity.js';
@@ -256,7 +256,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const clearDone = (): void => {
     setCleared((current) => new Set([...current, ...doneRows.map((row) => row.doneKey)]));
     const unseenRefs = doneRows.filter((row) => !row.seen).map((row) => row.ref);
-    if (unseenRefs.length > 0) bridge.island.markSeen(unseenRefs);
+    for (const batch of markSeenBatches(unseenRefs)) bridge.island.markSeen(batch);
   };
 
   return (

@@ -2,14 +2,14 @@
  * Каналы острова в main (спека 2026-10-12, 5.1). Каждый слушает только окно острова (`controller.isIsland`):
  * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: видимость — булево, точка — два
  * числа, область под мышь — `null` или четыре конечных числа (размеры не отрицательны, значения не больше
- * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений, «просмотрено» — от 1 до `MAX_SEEN_REFS` ссылок на сессии
+ * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений, «просмотрено» — от 1 до `ISLAND_MARK_SEEN_LIMIT` ссылок на сессии
  * (`sessionRef` протокола).
  */
 
 import type { IpcMain } from 'electron';
 import { sessionRef, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
-import type { IslandConfig, IslandHitRect, IslandPoint } from '../../shared/island.js';
+import { ISLAND_MARK_SEEN_LIMIT, type IslandConfig, type IslandHitRect, type IslandPoint } from '../../shared/island.js';
 import { isFocusTarget, withIpcError } from '../ipc.js';
 import type { IslandController, IslandWindowLike } from './window.js';
 
@@ -43,12 +43,10 @@ function isHitRect(value: unknown): value is IslandHitRect {
   return fits(x) && fits(y) && fits(width) && width >= 0 && fits(height) && height >= 0;
 }
 
-/** Сколько сессий Clear отмечает за раз: строк Done на острове немного, всё, что больше, — мусор. */
-const MAX_SEEN_REFS = 50;
 
 /** Список ссылок для «просмотрено»: каждая прошла `sessionRef` (лишние поля срезаны) или `null`, если форма негодна. */
 function parseSeenRefs(value: unknown): SessionRef[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SEEN_REFS) return null;
+  if (!Array.isArray(value) || value.length < 1 || value.length > ISLAND_MARK_SEEN_LIMIT) return null;
   const refs: SessionRef[] = [];
   for (const item of value) {
     const parsed = sessionRef.safeParse(item);

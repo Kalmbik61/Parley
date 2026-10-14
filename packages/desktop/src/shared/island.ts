@@ -72,3 +72,13 @@ export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.
 
 /** Провайдеры вне острова (решение 2026-10-12): Codex — системными уведомлениями, как раньше. */
 export const ISLAND_EXCLUDED_PROVIDERS: ReadonlySet<string> = new Set(['codex']);
+
+/** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */
+export const ISLAND_MARK_SEEN_LIMIT = 50;
+
+/** Ссылки для «просмотрено» порциями не длиннее `ISLAND_MARK_SEEN_LIMIT`: длинный Clear уходит несколькими сообщениями. */
+export function markSeenBatches(refs: readonly SessionRef[]): SessionRef[][] {
+  const batches: SessionRef[][] = [];
+  for (let at = 0; at < refs.length; at += ISLAND_MARK_SEEN_LIMIT) batches.push(refs.slice(at, at + ISLAND_MARK_SEEN_LIMIT));
+  return batches;
+}
