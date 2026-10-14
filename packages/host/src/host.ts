@@ -39,6 +39,7 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
+import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createWakeService } from './wake/wake-service.js';
@@ -236,7 +237,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
-  const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
+  // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
+  // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
+  const browserEndpoint = createBrowserEndpoint({ log, clients: () => handle.context.clients() });
+  const hookServer = createHookServer({
+    log,
+    onHook: (request) => feedService.onHook(request),
+    routes: { [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res) },
+  });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
   // запуск сессии — для порога ленты (`feedSupported`), поэтому проба заводится до сервиса сессий.
@@ -272,12 +280,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worksService,
     ptyManager,
     activityService,
-    { hooks: hookServer, providerVersions, codexHookCommand: codexHookCommandOnce },
+    {
+      hooks: hookServer,
+      providerVersions,
+      codexHookCommand: codexHookCommandOnce,
+      agent: {
+        url: () => {
+          const origin = hookServer.origin();
+          return origin === null ? null : `${origin}${AGENT_BROWSER_PATH}`;
+        },
+        register: (ref) => browserEndpoint.register(ref),
+        unregister: (ref) => browserEndpoint.unregister(ref),
+      },
+    },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
   handle.context.onShutdown(async () => {
+    // Висящим операциям агента — `window_not_connected`, а не обрыв соединения.
+    browserEndpoint.close();
     await feedService.stop();
     await hookServer.close();
   });
@@ -339,6 +361,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     wake: wakeService,
     worktrees: worktreesService,
     feed: feedService,
+    browserAgent: browserEndpoint,
   });
   const server = createHostServer({
     context: handle.context,
@@ -358,6 +381,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      browserEndpoint.dropClient(client);
       backlogService.removeClient(client.id);
     },
   });

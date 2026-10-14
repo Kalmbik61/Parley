@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,6 +177,7 @@ interface StubArgs {
     CLAUDE_CODE_SESSION_ID: string | null;
     PARLEY_HOOK_TOKEN: string | null;
     PARLEY_HOOK_URL: string | null;
+    PARLEY_AGENT_TOKEN: string | null;
   };
 }
 
@@ -817,6 +818,106 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     ).rejects.toThrow('spawn не удался');
     expect(registered).toHaveLength(1);
     expect(unregistered).toEqual([registered[0]?.ref]);
+  });
+});
+
+describe('launch(): канал агента к браузеру — токен на каждый запуск у всех провайдеров (спека браузера 3.7; этап B2)', () => {
+  const AGENT_URL = 'http://127.0.0.1:4321/agent/browser';
+
+  function fakeAgent(url: string | null = AGENT_URL) {
+    const registered: SessionRef[] = [];
+    const unregistered: SessionRef[] = [];
+    const agent: NonNullable<SessionsFeedOptions['agent']> = {
+      url: () => url,
+      register(ref) {
+        registered.push(ref);
+        return `${String(registered.length).padStart(2, '0')}${'a'.repeat(62)}`;
+      },
+      unregister(ref) {
+        unregistered.push(ref);
+      },
+    };
+    return { agent, registered, unregistered };
+  }
+
+  async function launchWith(provider: string, agent: NonNullable<SessionsFeedOptions['agent']>, extra: Record<string, string> = {}) {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    for (const [key, value] of Object.entries(extra)) setEnv(key, value);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { agent });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider, label: 'бэкенд', task: '', parent: null });
+    return { args: await readArgs(argsFile), ref, service };
+  }
+
+  it('claude: адрес и токен — в env сервера parley файла --mcp-config (0600), не в окружении процесса', async () => {
+    const { agent, registered } = fakeAgent();
+    const { args, ref, service } = await launchWith('claude', agent);
+    expect(registered).toEqual([ref]);
+    const file = args.argv[args.argv.indexOf('--mcp-config') + 1] as string;
+    const env = (JSON.parse(await readFile(file, 'utf8')) as { mcpServers: { parley: { env: Record<string, string> } } }).mcpServers.parley.env;
+    expect(env['PARLEY_AGENT_URL']).toBe(AGENT_URL);
+    expect(env['PARLEY_AGENT_TOKEN']).toBe(`01${'a'.repeat(62)}`);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(args.env.PARLEY_AGENT_TOKEN).toBeNull();
+    expect(args.argv.join('\n')).not.toContain(`01${'a'.repeat(62)}`);
+    await service.stop(ref);
+  });
+
+  it('codex: тот же канал — в таблице env сервера `-c mcp_servers.parley`', async () => {
+    const { agent } = fakeAgent();
+    const { args, ref, service } = await launchWith('codex', agent, { PARLEY_CODEX_BIN: STUB });
+    const override = args.argv.find((arg) => arg.startsWith('mcp_servers.parley=')) as string;
+    expect(override).toContain(`PARLEY_AGENT_URL=${JSON.stringify(AGENT_URL)}`);
+    expect(override).toContain(`PARLEY_AGENT_TOKEN=${JSON.stringify(`01${'a'.repeat(62)}`)}`);
+    expect(args.env.PARLEY_AGENT_TOKEN).toBeNull();
+    await service.stop(ref);
+  });
+
+  it('выход процесса снимает токен; эндпоинт не слушает — токена нет и в конфиге пусто', async () => {
+    const live = fakeAgent();
+    const launched = await launchWith('claude', live.agent);
+    await launched.service.stop(launched.ref);
+    await waitFor(() => live.unregistered.some((ref) => ref.sessionId === launched.ref.sessionId), REAL_PROCESS_WAIT_MS);
+
+    const closed = fakeAgent(null);
+    const plain = await launchWith('claude', closed.agent);
+    expect(closed.registered).toEqual([]);
+    const file = plain.args.argv[plain.args.argv.indexOf('--mcp-config') + 1] as string;
+    expect(await readFile(file, 'utf8')).not.toContain('PARLEY_AGENT');
+    await plain.service.stop(plain.ref);
+  });
+
+  it('pty.start бросил — выданный токен снимается, ошибка доходит до вызывающего', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const { agent, registered, unregistered } = fakeAgent();
+    const pty = createPtyManager(fakeHost());
+    const failing = {
+      ...pty,
+      start: () => {
+        throw new Error('spawn не удался');
+      },
+    };
+    const service = createSessionsService(fakeHost(), fakeWorks(), failing, fakeActivity(), { agent });
+    await expect(
+      service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: '', task: '', parent: null }),
+    ).rejects.toThrow('spawn не удался');
+    expect(registered).toHaveLength(1);
+    expect(unregistered).toEqual([registered[0]]);
+  });
+
+  it('новый запуск той же сессии — новый вызов register: прежний токен реестр отзывает сам', async () => {
+    const { agent, registered } = fakeAgent();
+    const first = await launchWith('claude', agent);
+    await first.service.stop(first.ref);
+    await waitFor(async () => {
+      const map = await readMap(project, first.ref.workId);
+      return map.sessions.find((candidate) => candidate.id === first.ref.sessionId)?.lifecycle !== 'active';
+    }, REAL_PROCESS_WAIT_MS);
+    await first.service.launch(first.ref, 'resume');
+    expect(registered).toHaveLength(2);
+    expect(registered[1]).toEqual(first.ref);
+    await first.service.stop(first.ref);
   });
 });
 
