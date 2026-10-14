@@ -138,6 +138,15 @@ function expectCovers(view: Box, panel: Box, what: string): void {
   expect(panel.y + panel.height, `${what}: снизу`).toBeGreaterThanOrEqual(view.y + view.height - EDGE);
 }
 
+/** Прямоугольник целиком внутри внешнего: вылет за край называется с числами. */
+function expectInside(inner: Box, outer: Box, what: string): void {
+  const detail = `${what}: внутри ${JSON.stringify(inner)}, снаружи ${JSON.stringify(outer)}`;
+  expect(inner.x, detail).toBeGreaterThanOrEqual(outer.x - EDGE);
+  expect(inner.y, detail).toBeGreaterThanOrEqual(outer.y - EDGE);
+  expect(inner.x + inner.width, detail).toBeLessThanOrEqual(outer.x + outer.width + EDGE);
+  expect(inner.y + inner.height, detail).toBeLessThanOrEqual(outer.y + outer.height + EDGE);
+}
+
 test.describe('браузер чата и браузер комнаты (этап B2, часть 1)', () => {
   test.setTimeout(120_000);
   let home: string;
@@ -253,8 +262,9 @@ test.describe('браузер чата и браузер комнаты (эта�
   }
 
   test('панель у чата: справа от Chat, страница грузится, Select кладёт чип в чат, панель переживает перезагрузку окна', async () => {
-    const { electronApp, window, screenDpr } = await openApp({});
-    const url = `${origin}/`;
+    // Длинные название сессии и адрес: полоска, шапка Chat и строка браузера держат их многоточием.
+    const { electronApp, window, screenDpr } = await openApp({ long: true });
+    const url = `${origin}${LONG_PATH}`;
     const chat = window.getByTestId('chat-view');
     const toggle = window.getByTestId('browser-panel-toggle');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
@@ -263,8 +273,10 @@ test.describe('браузер чата и браузер комнаты (эта�
     await expect(panel).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expectBeside(await boxOf(chat, 'Chat'), await boxOf(panel, 'панель'), 'чат');
+    // Кнопка не уходит за край тулбара, когда Chat сжат панелью.
+    expectInside(await boxOf(toggle, 'кнопка Browser'), await boxOf(chat.getByTestId('chat-toolbar'), 'тулбар Chat'), 'кнопка Browser в тулбаре');
     // Хозяин панели назван в полоске; меню «To» в панели нет — цель закреплена за хозяином.
-    await expect(panel.getByTestId('browser-panel-owner')).toHaveText('S01 lead');
+    await expect(panel.getByTestId('browser-panel-owner')).toContainText('S01 backend');
     await expect(panel.getByRole('button', { name: /^To:/ })).toHaveCount(0);
 
     await loadPage(electronApp, window, url);
@@ -282,6 +294,14 @@ test.describe('браузер чата и браузер комнаты (эта�
     await expect.poll(() => guestUrls(electronApp)).toEqual([url]);
     expectBeside(await boxOf(window.getByTestId('chat-view'), 'Chat после перезагрузки'), await boxOf(window.getByTestId('browser-panel'), 'панель после перезагрузки'), 'после перезагрузки');
 
+    // Пять страниц — предел: вкладки не распирают полоску, «+» неактивна.
+    const reloaded = window.getByTestId('browser-panel');
+    for (let i = 0; i < 4; i += 1) await reloaded.getByRole('button', { name: 'Add a page' }).click();
+    await expect(reloaded.getByRole('tab')).toHaveCount(5);
+    await expect(reloaded.getByRole('button', { name: 'Add a page' })).toBeDisabled();
+    expect(await reloaded.getByTestId('browser-panel-strip').evaluate((node) => node.scrollWidth <= node.clientWidth + 1), 'полоска шире панели').toBe(true);
+    await screenshot(window, 'chat-wide-5-pages', screenDpr);
+
     // Кнопка прячет панель, страницы остаются: вид снова на всю ширину.
     await window.getByTestId('browser-panel-toggle').click();
     await expect(window.getByTestId('browser-panel')).toBeHidden();
@@ -289,20 +309,22 @@ test.describe('браузер чата и браузер комнаты (эта�
   });
 
   test('панель у комнаты: справа от комнаты, страница грузится, Select кладёт чип в поле комнаты', async () => {
-    const { electronApp, window, roomId, workKey, screenDpr } = await openApp({});
+    const { electronApp, window, roomId, workKey, screenDpr } = await openApp({ long: true });
     await openRoom(window, workKey, roomId);
     const view = window.locator('[data-room-panel]');
     await window.getByTestId('browser-panel-toggle').click();
     const panel = window.getByTestId('browser-panel');
     await expect(panel).toBeVisible();
     await expect(panel).toHaveAttribute('data-panel-owner', `room:${roomId}`);
-    await expect(panel.getByTestId('browser-panel-owner')).toHaveText('e2e-room');
+    await expect(panel.getByTestId('browser-panel-owner')).toHaveText(LONG_ROOM);
     expectBeside(await boxOf(view, 'комната'), await boxOf(panel, 'панель'), 'комната');
+    // Кнопка не вытеснена из шапки длинным названием комнаты.
+    expectInside(await boxOf(window.getByTestId('browser-panel-toggle'), 'кнопка Browser'), await boxOf(view.locator('[data-room-header]'), 'шапка комнаты'), 'кнопка Browser в шапке комнаты');
 
-    const url = `${origin}/`;
+    const url = `${origin}${LONG_PATH}`;
     await loadPage(electronApp, window, url);
     await screenshot(window, 'room-wide-loaded', screenDpr);
-    await selectSave(electronApp, window, url, '1 element added to e2e-room');
+    await selectSave(electronApp, window, url, `1 element added to ${LONG_ROOM}`);
     await expect(window.locator('[data-room-attachments] [data-context-kind="element"]')).toHaveCount(1);
   });
 

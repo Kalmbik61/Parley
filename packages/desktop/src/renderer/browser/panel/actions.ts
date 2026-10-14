@@ -14,7 +14,7 @@ import { ownerKey, ownerTabId, panelPageId } from '../../layout/ids.js';
 import { activatePanelPage, addPanelPage, closePanelPage, ownerOfPage, panelOf, setPanelOpen, setPanelWidth } from '../../layout/panels.js';
 import { useLayoutStore, type LayoutOp, type LayoutState } from '../../layout/store.js';
 import { closeTab, findTab, focusTab, type OpError } from '../../layout/tree.js';
-import { requestAddressFocus } from '../store.js';
+import { requestAddressFocus, useBrowserStore } from '../store.js';
 import { layoutUrl } from '../url.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
 
@@ -117,6 +117,9 @@ function locatePanelPage(layouts: LayoutState['layouts'], pageId: string): { wor
   return null;
 }
 
+/** Страница панели, получившая фокус последней (`browser:focus`): цель ⌘F, масштаба, Select, Annotate и консоли из страницы. */
+let focusedPage: string | null = null;
+
 /**
  * Клик в страницу панели (событие `browser:focus` от main: DOM окна клик в госте не видит): панель освежается, а вкладка её
  * хозяина становится активной в своей группе — как у клика в страницу вкладки. `true` — это страница панели (событие её), даже
@@ -130,9 +133,34 @@ export function focusPanelPage(pageId: string): boolean {
   const tabId = ownerTabId(located.owner);
   const found = layout === undefined ? null : findTab(layout, tabId);
   if (layout === undefined || located.workKey !== state.activeWorkKey || found === null || found.group.activeTabId !== tabId) return true;
+  focusedPage = pageId;
   usePanelRuntime.getState().touch(panelRuntimeKey(located.workKey, located.owner));
   if (layout.activeGroupId !== found.group.id) state.apply(located.workKey, (current) => focusTab(current, tabId));
   return true;
+}
+
+/** Фокус ушёл на страницу вкладки: её клавиши принадлежат вкладке, а не панели. */
+export function forgetFocusedPanelPage(): void {
+  focusedPage = null;
+}
+
+/**
+ * Страница панели для клавиш из страницы, когда активной вкладки браузера нет (`AppShell#activeBrowserPage`): та, что получила
+ * фокус последней, пока она по-прежнему на экране — работа активна, панель открыта, вид хозяина в своей группе активен, страница
+ * активна в панели; иначе — ничего. `tabId` — ключ записей окна (`browser/store.ts`), как у вкладки.
+ */
+export function focusedPanelPage(): { tabId: string; webContentsId: number } | null {
+  if (focusedPage === null) return null;
+  const state = useLayoutStore.getState();
+  const workKey = state.activeWorkKey;
+  const layout = workKey === null ? undefined : state.layouts[workKey];
+  const owner = layout === undefined ? null : ownerOfPage(layout, focusedPage);
+  if (layout === undefined || owner === null) return null;
+  const panel = panelOf(layout, owner);
+  const found = findTab(layout, ownerTabId(owner));
+  if (panel?.open !== true || panel.active !== focusedPage || found === null || found.group.activeTabId !== ownerTabId(owner)) return null;
+  const webContentsId = useBrowserStore.getState().tabs[focusedPage]?.webContentsId ?? null;
+  return webContentsId === null ? null : { tabId: focusedPage, webContentsId };
 }
 
 /**

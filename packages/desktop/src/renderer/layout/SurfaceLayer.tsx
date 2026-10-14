@@ -26,7 +26,7 @@
  * активности не пришёл (`loaded` ложно), вид тоже не выбран.
  */
 
-import { useEffect, useMemo } from 'react';
+import { useLayoutEffect, useMemo } from 'react';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
@@ -101,14 +101,15 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
     panels.push({ owner, panel, runtimeKey, visible: active && panel.open && hosts[runtimeKey] !== undefined });
   }
   const panelsSig = JSON.stringify(panels.map((item) => [item.runtimeKey, item.visible]));
-  useEffect(() => {
+  // `useLayoutEffect`: панель, которую только что открыли, становится живой до отрисовки кадра, а не кадром позже.
+  useLayoutEffect(() => {
     usePanelRuntime.getState().publish(
       workKey,
       panels.map((item) => ({ key: item.runtimeKey, visible: item.visible })),
     );
     // Состав и видимость — в подписи; сами панели в эффекте только читаются.
   }, [workKey, panelsSig]);
-  useEffect(() => () => usePanelRuntime.getState().retract(workKey), [workKey]);
+  useLayoutEffect(() => () => usePanelRuntime.getState().retract(workKey), [workKey]);
 
   const surfaces: SurfaceSpec[] = [];
   if (layout !== undefined && entry !== undefined) {

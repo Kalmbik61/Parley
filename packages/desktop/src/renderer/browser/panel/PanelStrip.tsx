@@ -2,10 +2,12 @@
  * Полоска страниц панели браузера (спека браузера 4.11), 36 px, как строка вкладки браузера под ней: заголовок хозяина
  * (ярлык сессии или название комнаты), вкладки страниц, «+» и ×. Узкий вид закрывает панель собой, поэтому вместо × слева
  * стоит «Back to chat» («Back to room»): она прячет панель и возвращает к виду хозяина. Названия — данные, длинные режутся
- * многоточием и целиком видны в подсказке; вкладки страниц прокручиваются вбок, если не влезают.
+ * многоточием и целиком видны в подсказке; вкладки страниц прокручиваются вбок, если не влезают, а активная всегда
+ * подводится в видимую часть.
  */
 
 import { ArrowLeft, Plus, X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { WorkEntry } from '@parley/core';
 import type { BrowserOwner, BrowserPanelSpec } from '../../../shared/layout-types.js';
@@ -50,6 +52,11 @@ export function PanelStrip({ workKey, owner, panel, entry, narrow }: PanelStripP
   // Заголовки живых страниц: поверхностное сравнение — строка перерисовывается на смену заголовка, а не на загрузку.
   const liveTitles = useBrowserStore(useShallow((state) => panel.pages.map((page) => state.tabs[page.id]?.title ?? null)));
   const title = ownerTitle(entry, owner);
+  // Активная вкладка не должна оставаться за краем: пятая страница в узкой полоске иначе была бы невидима. `?.` — jsdom метода не имеет.
+  const activeRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [panel.active, panel.pages.length]);
   return (
     <div data-testid="browser-panel-strip" className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-card px-1.5">
       {narrow ? (
@@ -66,13 +73,14 @@ export function PanelStrip({ workKey, owner, panel, entry, narrow }: PanelStripP
       <span data-testid="browser-panel-owner" title={title} className="min-w-0 max-w-[40%] shrink truncate text-xs font-medium text-foreground">
         {title}
       </span>
-      <div role="tablist" aria-label={S.browser.panel.pages} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+      <div role="tablist" aria-label={S.browser.panel.pages} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]">
         {panel.pages.map((page, index) => {
           const name = pageTitle(page.url, liveTitles[index] ?? null);
           const active = page.id === panel.active;
           return (
             <div
               key={page.id}
+              ref={active ? activeRef : null}
               role="tab"
               aria-selected={active}
               data-page-id={page.id}

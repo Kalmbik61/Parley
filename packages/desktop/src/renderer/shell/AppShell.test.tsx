@@ -36,6 +36,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { usePaletteStore } from '../palette/store.js';
 import { useBrowserStore } from '../browser/store.js';
+import { forgetFocusedPanelPage } from '../browser/panel/actions.js';
 import { panelRuntimeKey, usePanelRuntime } from '../browser/panel/runtime.js';
 import { addPanelPage, panelOf, setPanelOpen } from '../layout/panels.js';
 import { Profiler } from 'react';
@@ -2273,6 +2274,7 @@ describe('AppShell — страница панели браузера хозяи
   afterEach(() => {
     useBrowserStore.setState({ tabs: {}, limitToasted: {} });
     usePanelRuntime.setState({ hosts: {}, usedAt: {}, published: {}, live: new Set() });
+    forgetFocusedPanelPage();
   });
 
   /**
@@ -2319,6 +2321,30 @@ describe('AppShell — страница панели браузера хозяи
     const before = useLayoutStore.getState().layouts[key];
     act(() => bridge.emitBrowserFocus({ webContentsId: 8 }));
     expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+
+  it('клавиши из страницы панели: ⌘F и масштаб идут к странице панели, на которую кликнули последней; без клика и со скрытой панелью — никуда', async () => {
+    const { key } = await panelInSecondGroup();
+    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot');
+    // Клика в страницу панели ещё не было, а активная вкладка — не браузер: ⌘+ и ⌘F ничего не трогают.
+    act(() => bridge.emitMenu('browser.zoomIn'));
+    act(() => bridge.emitMenu('browser.find'));
+    expect(menuCalls()).toEqual([]);
+    expect(useBrowserStore.getState().tabs[PANEL_PAGE]?.findOpen).toBeFalsy();
+
+    act(() => bridge.emitBrowserFocus({ webContentsId: 8 }));
+    act(() => bridge.emitMenu('browser.zoomIn'));
+    act(() => bridge.emitMenu('browser.find'));
+    await flush();
+    expect(menuCalls()).toEqual([{ method: 'zoom', args: [8, 1] }]);
+    expect(useBrowserStore.getState().tabs[PANEL_PAGE]?.findOpen).toBe(true);
+
+    // Панель закрыли — клавиши страницы её больше не касаются.
+    act(() => useBrowserStore.getState().update(PANEL_PAGE, { findOpen: false }));
+    act(() => useLayoutStore.getState().apply(key, (l) => setPanelOpen(l, OWNER, false)));
+    act(() => bridge.emitMenu('browser.zoomIn'));
+    await flush();
+    expect(menuCalls()).toEqual([{ method: 'zoom', args: [8, 1] }]);
   });
 
   it('window.open страницы панели — новая страница в той же панели, активная; вкладок работы не прибавляется', async () => {

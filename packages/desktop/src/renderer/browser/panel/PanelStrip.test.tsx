@@ -3,7 +3,7 @@
  * «Back to chat» («Back to room») вместо ×. Действия идут в настоящий стор раскладки.
  */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserOwner, BrowserPanelSpec, WorkLayout } from '../../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
 import { addPanelPage, panelOf } from '../../layout/panels.js';
@@ -124,5 +124,23 @@ describe('PanelStrip', () => {
     renderStrip(ROOM, withPages(ROOM, ['http://localhost:3000/']), true);
     expect(screen.getByTestId('browser-panel-back').textContent).toBe('Back to room');
     expect(screen.getByTestId('browser-panel-owner').textContent).toBe(`review ${LONG}`);
+  });
+
+  it('активная вкладка подводится в видимую часть полоски — и при смене активной, и когда страница добавлена', () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      const panel = withPages(CHAT, ['http://localhost:3000/', 'http://localhost:3001/']);
+      const { rerender } = render(<PanelStrip workKey={KEY} owner={CHAT} panel={panel} entry={WORK} narrow={false} />);
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(screen.getAllByRole('tab')[1]);
+      const first = { ...panel, active: 'bp-000001' };
+      rerender(<PanelStrip workKey={KEY} owner={CHAT} panel={first} entry={WORK} narrow={false} />);
+      expect(scroll).toHaveBeenCalledTimes(2);
+      expect(scroll.mock.contexts[1]).toBe(screen.getAllByRole('tab')[0]);
+    } finally {
+      // jsdom метода не имеет: возвращаем как было.
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 });
