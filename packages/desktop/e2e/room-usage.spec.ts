@@ -8,8 +8,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Значок и поповер расхода токенов комнаты в окне 800×500 (спека расхода токенов, 3.1–3.2, 8): длинные названия комнаты
- * и сессий, масштаб 1 и 2. Настоящий `claude` не запускается (стаб): участники не запускались, их строки `not started`,
- * итог — ноль. Проверяется раскладка; цифры — модульными тестами ядра и хоста. Снимки — в `test-results/room-usage/`.
+ * и сессий, масштаб 1 и 2. Настоящий `claude` не запускается (стаб): `sessions.create` сразу запускает стаб-сессии (с `providerSessionId`), а лога Claude стаб не пишет —
+ * по спеке (5.2) такой участник `unavailable / log-missing` (`n/a — log not found`), итог неизвестен (`?`). Проверяется раскладка; цифры — модульными тестами ядра и хоста. Снимки — в `test-results/room-usage/`.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -83,9 +83,9 @@ test.describe('расход токенов комнаты в окне 800×500',
       await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
       await expect.poll(() => window.evaluate(() => globalThis.innerWidth)).toBe(800);
 
-      // Никто не запускался — итог ноль, а не `?`.
+      // Стаб не пишет лог Claude — итог неизвестен (`?`), строки участников `n/a — log not found`.
       const chip = window.getByTestId('room-usage-chip');
-      await expect(chip).toHaveText('↑0 ↓0', { timeout: 15_000 });
+      await expect(chip).toHaveText('↑? ↓?', { timeout: 15_000 });
       const header = window.locator('[data-room-header]');
       const chipBox = await chip.boundingBox();
       const headerBox = await header.boundingBox();
@@ -96,7 +96,7 @@ test.describe('расход токенов комнаты в окне 800×500',
       await chip.click();
       const popover = window.getByTestId('room-usage-popover');
       await expect(popover).toBeVisible();
-      await expect(popover).toContainText('not started');
+      await expect(popover).toContainText('n/a — log not found');
       const box = await popover.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
