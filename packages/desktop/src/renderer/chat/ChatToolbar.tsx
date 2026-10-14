@@ -14,8 +14,7 @@
 
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
-import type { EffortOption, ModelOption } from '@parley/protocol';
-import type { LiveMetrics } from '@parley/protocol';
+import type { EffortOption, LiveMetrics, ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
