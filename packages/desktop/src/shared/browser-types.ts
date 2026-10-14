@@ -132,6 +132,30 @@ export interface SavedContext {
   pngPath: string | null;
 }
 
+/**
+ * Агент просит окно открыть вкладку (событие `browser:agent-open-tab`, спека браузера 2026-10-07, 3.5, 5.1 `browser_open`;
+ * этап B2). Адрес main уже проверил: http(s) на loopback, без учётных данных. Работу называет хост по токену сессии, а не
+ * агент.
+ */
+export interface AgentOpenTab {
+  requestId: string;
+  workKey: string;
+  url: string;
+  /** Сессия-агент: справа от её вкладки встаёт новая, если браузерных вкладок в работе нет. */
+  sessionId: string;
+  /** Короткий номер сессии для тоста «S02 opened …». */
+  session: string;
+}
+
+/**
+ * Ответ окна на `AgentOpenTab` (канал `browser:agent-open-tab-result`): id вкладки раскладки (новой или уже показывавшей эту
+ * страницу — `reused`) и смонтирована ли работа (LRU: у размонтированной гостя нет, страница загрузится, когда человек её
+ * откроет); или почему вкладки нет — предел 10 вкладок или работы нет в окне.
+ */
+export type AgentOpenTabResult =
+  | { tabId: string; reused: boolean; mounted: boolean }
+  | { error: 'limit' | 'no_work' };
+
 // Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
 export interface BrowserApi {
   /** null — выбор отменён: Esc, pickCancel, навигация главного фрейма, падение или закрытие страницы. */
