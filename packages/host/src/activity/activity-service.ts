@@ -498,7 +498,6 @@ export function createActivityService(
     return tasks;
   }
 
-
   /**
    * Токены сессии: у идущей побеждает свежий индекс лога, а снимок из карты (его ставят `report` и усыпление) годится для
    * остановленной и как запасной, когда свежего индекса нет. Какой источник выбран, видно в `usage.source`; сумма не
@@ -521,6 +520,7 @@ export function createActivityService(
       frozen,
     });
   }
+
   function metricsFor(
     ref: SessionRef,
     key: string,
