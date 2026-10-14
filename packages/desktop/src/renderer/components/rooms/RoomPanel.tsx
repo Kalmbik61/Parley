@@ -126,6 +126,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
   const status = useHostStore(state => state.status.state);
+  const hostReady = useWorksStore((state) => state.ready);
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
@@ -480,6 +481,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               labelOf={labelOf}
               onOpenExternal={onOpenExternal}
               canResolve={canResolve}
+              hostReady={hostReady}
               {...(entry.map.work.status !== 'active' ? {unavailableReason:S.plans.workClosed} : {})}
               onResolve={handleResolve}
               onLayout={keepAtBottom}
