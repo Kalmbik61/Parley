@@ -2,12 +2,15 @@ import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
 import type { HostPaths } from '@parley/host';
 import {
+  BROWSER_AGENT_FEATURE,
   COMPACT_WORKS_FEATURE,
   encodeLine,
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
   refKey,
+  type BrowserAgentOpEvent,
+  type BrowserAgentResult,
   type EventData,
   type EventMessage,
   type MethodName,
@@ -298,8 +301,9 @@ export class HostConnection {
       encodeLine({
         id,
         method: 'hello',
-        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`.
-        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE] },
+        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`, и исполняет
+        // операции агента над своим браузером (спека браузера 3.7).
+        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE] },
       }),
     );
 
@@ -491,4 +495,28 @@ export class HostConnection {
     this.candidate?.destroy();
     this.candidate = null;
   }
+}
+
+/**
+ * Операции агента над браузером окна (спека браузера 2026-10-07, 3.7; этап B2): событие хоста `browser.agentOp` исполняет
+ * `run` в main, ответ уходит методом `browser.agentResult` с тем же `opId`. Сбой `run` — `unsupported` с текстом ошибки.
+ * Ответ не дошёл (связь оборвалась) — хост сам ответит агенту `window_not_connected` или `timeout`.
+ */
+export function answerBrowserAgentOps(
+  connection: Pick<HostConnection, 'onEvent' | 'call'>,
+  run: (event: BrowserAgentOpEvent) => Promise<BrowserAgentResult>,
+): () => void {
+  return connection.onEvent((message) => {
+    if (message.event !== 'browser.agentOp') return;
+    const event = message.data as BrowserAgentOpEvent;
+    void run(event)
+      .catch(
+        (error: unknown): BrowserAgentResult => ({
+          ok: false,
+          error: { code: 'unsupported', message: error instanceof Error ? error.message : String(error) },
+        }),
+      )
+      .then((result) => connection.call('browser.agentResult', { opId: event.opId, ...result }))
+      .catch((error: unknown) => console.warn('[parley] browser.agentResult failed', error));
+  });
 }

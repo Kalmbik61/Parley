@@ -8,7 +8,7 @@ import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
-import type { ContextInput, SavedContext } from '../shared/browser-types.js';
+import type { AgentOpenTabResult, ContextInput, SavedContext } from '../shared/browser-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -24,6 +24,7 @@ import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
+import type { AgentOps } from './browser/agent-ops.js';
 import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
@@ -66,6 +67,12 @@ export function withIpcError(
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
+
+/**
+ * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
+ * окна — иначе она ответила бы агенту сама.
+ */
+const MAIN_ONLY_METHODS: ReadonlySet<string> = new Set(['browser.agentResult']);
 
 export function isMethodName(value: string): value is MethodName {
   return METHOD_NAMES.has(value);
@@ -152,6 +159,16 @@ export function isAppNote(value: unknown): value is AppNote {
   );
 }
 
+/** Ответ окна на просьбу агента открыть вкладку (спека браузера 3.5, этап B2): форма — до main. */
+export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
+  if (!isRecord(raw)) return null;
+  if (raw.error === 'limit' || raw.error === 'no_work') return { error: raw.error };
+  const { tabId, reused, mounted } = raw;
+  if (typeof tabId !== 'string' || !tabId.startsWith('browser:') || tabId.length > 200) return null;
+  if (typeof reused !== 'boolean' || typeof mounted !== 'boolean') return null;
+  return { tabId, reused, mounted };
+}
+
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
@@ -225,6 +242,8 @@ export interface RegisterIpcOptions {
     inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
+    /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
+    agent: Pick<AgentOps, 'openTabResult'>;
   };
 }
 
@@ -332,7 +351,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle(
     'host:call',
     withIpcError(async (event, method: unknown, params: unknown) => {
-      if (typeof method !== 'string' || !isMethodName(method)) {
+      if (typeof method !== 'string' || !isMethodName(method) || MAIN_ONLY_METHODS.has(method)) {
         throw new Error(`unknown method: ${String(method)}`);
       }
       // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
@@ -801,6 +820,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
+  // Ответ окна на `browser:agent-open-tab` (спека браузера 3.7, этап B2): id вкладки раскладки или причина отказа. Чужой или
+  // поздний id main просто не найдёт — просьба уже закрыта.
+  ipcMain.handle(
+    'browser:agent-open-tab-result',
+    withIpcError(async (_event, requestId: unknown, raw: unknown) => {
+      const result = parseAgentOpenTabResult(raw);
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64 || result === null) {
+        throw new HostError('bad_request', 'invalid agent open-tab result');
+      }
+      browser.agent.openTabResult(requestId, result);
+    }),
+  );
+
   ipcMain.handle(
     'browser:set-viewport',
     withIpcError(async (_event, id: unknown, spec: unknown, area: unknown) => {
@@ -839,6 +871,8 @@ export function forwardHostToWindow(
   const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
     if (window.isDestroyed()) return;
+    // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
+    if (message.event === 'browser.agentOp') return;
     if (events !== undefined && !events.has(message.event)) return;
     window.webContents.send('host:event', message);
   });

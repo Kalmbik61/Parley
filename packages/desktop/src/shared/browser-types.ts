@@ -198,4 +198,8 @@ export interface BrowserApi {
   onDevtools(listener: (batch: DevtoolsBatch) => void): () => void;
   /** Размер вьюпорта (спека 4.2), null — Fit; area — место под страницу в поле вкладки. Ответ — вписывание. */
   setViewport(webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }): Promise<{ scale: number }>;
+  /** Агент просит открыть вкладку (`browser:agent-open-tab`, этап B2): окно ставит её и отвечает `agentOpenTabResult`. */
+  onAgentOpenTab(listener: (e: AgentOpenTab) => void): () => void;
+  /** Ответ окна main на просьбу агента (`browser:agent-open-tab-result`): id вкладки раскладки или причина отказа. */
+  agentOpenTabResult(requestId: string, result: AgentOpenTabResult): Promise<void>;
 }

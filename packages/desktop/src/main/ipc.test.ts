@@ -15,7 +15,7 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, forwardHostToWindow, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
@@ -76,6 +76,8 @@ const emulation = {
     scale: 0.5,
   })),
 };
+/** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
+const agentOps = { openTabResult: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -236,6 +238,7 @@ function setup(
       annotate,
       inspector,
       emulation,
+      agent: agentOps,
     },
   });
 
@@ -1324,6 +1327,69 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(annotate.cancel).toHaveBeenCalledWith(7);
     expect(annotate.sync).toHaveBeenCalledWith(7, [{ n: 1, key: 'a1' }]);
     expect(annotate.capture).toHaveBeenCalledWith(7);
+  });
+});
+
+describe('канал агента — только для main (этап B2, спека браузера 3.7)', () => {
+  const codeOf = async (promise: unknown): Promise<string> => {
+    try {
+      await promise;
+    } catch (error) {
+      return decodeIpcError(error).code;
+    }
+    return 'resolved';
+  };
+
+  it('host:call не пускает browser.agentResult: ответ на операцию агента шлёт только main', async () => {
+    const { ipcMain, connection } = setup();
+    await expect(ipcMain.invoke('host:call', 'browser.agentResult', { opId: 'op-1', ok: true, result: {} })).rejects.toBeDefined();
+    expect(connection.call).not.toHaveBeenCalled();
+    // Положительный контроль: обычный метод проходит тем же путём.
+    await ipcMain.invoke('host:call', 'works.list', {});
+    expect(connection.call).toHaveBeenCalledWith('works.list', {});
+  });
+
+  it('forwardHostToWindow не пересылает странице browser.agentOp; прочие события — пересылает', () => {
+    const captured: { listener?: (message: unknown) => void } = {};
+    const connection = {
+      onEvent: (listener: (message: unknown) => void) => {
+        captured.listener = listener;
+        return () => {};
+      },
+      onStatus: () => () => {},
+    } as unknown as HostConnection;
+    const sent: unknown[] = [];
+    const window = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push([channel, data]) } };
+    forwardHostToWindow(connection, window as unknown as BrowserWindow);
+    captured.listener?.({ event: 'browser.agentOp', data: { opId: 'op-1', args: { url: 'http://localhost:5173/' } } });
+    captured.listener?.({ event: 'wake.changed', data: { paused: true } });
+    expect(sent).toEqual([['host:event', { event: 'wake.changed', data: { paused: true } }]]);
+  });
+
+  it('agent-open-tab-result: ответ окна — в main; чужая форма, не вкладка браузера и не строка id — bad_request', async () => {
+    const { ipcMain } = setup();
+    agentOps.openTabResult.mockClear();
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: false });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r1', { tabId: 'browser:abc123', reused: false, mounted: false });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r2', { error: 'limit' });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r2', { error: 'limit' });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r3', { error: 'no_work' });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r3', { error: 'no_work' });
+    const bad: Array<[unknown, unknown]> = [
+      ['r4', { tabId: 'terminal:s-01', reused: false, mounted: true }],
+      ['r4', { tabId: 'browser:abc123', reused: 'yes', mounted: true }],
+      ['r4', { tabId: 'browser:abc123', reused: false }],
+      ['r4', { tabId: `browser:${'x'.repeat(200)}`, reused: false, mounted: true }],
+      ['r4', { error: 'boom' }],
+      ['r4', null],
+      [7, { error: 'limit' }],
+      ['', { error: 'limit' }],
+      ['x'.repeat(65), { error: 'limit' }],
+    ];
+    for (const [requestId, raw] of bad) {
+      expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
+    }
+    expect(agentOps.openTabResult).toHaveBeenCalledTimes(3);
   });
 });
 
