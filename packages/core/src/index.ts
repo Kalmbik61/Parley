@@ -579,3 +579,5 @@ export type {
   UsageTotal,
   UsageWindow,
 } from './work/usage-ledger.js';
+export { isCurrentMember, roomMembership } from './work/room-membership.js';
+export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
