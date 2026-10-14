@@ -24,7 +24,8 @@
  * Строки Done (агент закончил ход, в Parley его ещё не смотрели) идут в списке после строк в работе: точка `unseen`,
  * имя сессии, время конца хода и под ними до двух строк последнего ответа агента. Текст ответа вид читает сам из
  * `useIslandReplies` по `doneKey` (единственное исключение из «всё пропсами»: стор только для чтения). Пилюля
- * показывает `✅ N done` рядом со счётчиками работы, а внизу списка — тихая «Clear», что прячет все видимые Done.
+ * показывает `✅ N done` рядом со счётчиками работы, а под списком — тихая «Clear», что прячет все видимые Done. Она стоит
+ * вне прокручиваемой части списка: длинный список едет под ней, а кнопка остаётся на месте.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
@@ -141,43 +142,48 @@ function DoneLine({ row, api }: { row: Extract<SessionRow, { state: 'done' }>; a
 
 function List({ model, api, onClearDone }: IslandViewProps): JSX.Element {
   return (
-    <div data-testid="island-list" className="island-reveal flex max-h-[360px] w-[400px] flex-col gap-2 overflow-y-auto px-3 pb-3 text-sm">
-      {model.groups.map((group) => (
-        <div key={group.key} className="flex flex-col gap-1">
-          <div>
-            <span className="font-semibold text-foreground">{group.title}</span> <span className="text-[13px] text-muted-foreground">· {group.project}</span>
+    <div data-testid="island-list" className="island-reveal flex w-[400px] flex-col text-sm">
+      {/* Прокручиваются только работы; «Clear» — ниже, вне прокрутки, и с ней не уезжает. */}
+      <div data-testid="island-list-scroll" className={`flex max-h-[360px] flex-col gap-2 overflow-y-auto px-3 ${model.done > 0 ? 'pb-1' : 'pb-3'}`}>
+        {model.groups.map((group) => (
+          <div key={group.key} className="flex flex-col gap-1">
+            <div>
+              <span className="font-semibold text-foreground">{group.title}</span> <span className="text-[13px] text-muted-foreground">· {group.project}</span>
+            </div>
+            {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
+            {group.rows
+              .filter((row): row is RoomRow => row.kind === 'room')
+              .map((room) => (
+                <div key={room.key} data-testid="island-room" className="flex min-w-0 gap-1 text-[13px] text-foreground/75">
+                  <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
+                    {room.title}
+                  </button>
+                  <span className="shrink-0">· {room.busy > 0 ? S.island.roomBusy(room.busy) : S.island.roomDone}</span>
+                </div>
+              ))}
+            {group.rows
+              .filter((row): row is SessionRow => row.kind === 'session')
+              .map((row) =>
+                row.state === 'done' ? (
+                  <DoneLine key={row.key} row={row} api={api} />
+                ) : (
+                  <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
+                    {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
+                    <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                    <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                    {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+                  </button>
+                ),
+              )}
           </div>
-          {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
-          {group.rows
-            .filter((row): row is RoomRow => row.kind === 'room')
-            .map((room) => (
-              <div key={room.key} data-testid="island-room" className="flex min-w-0 gap-1 text-[13px] text-foreground/75">
-                <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
-                  {room.title}
-                </button>
-                <span className="shrink-0">· {room.busy > 0 ? S.island.roomBusy(room.busy) : S.island.roomDone}</span>
-              </div>
-            ))}
-          {group.rows
-            .filter((row): row is SessionRow => row.kind === 'session')
-            .map((row) =>
-              row.state === 'done' ? (
-                <DoneLine key={row.key} row={row} api={api} />
-              ) : (
-                <button key={row.key} type="button" className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
-                  {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
-                  <AgentStateDot state={row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
-                  <span className="min-w-0 flex-1 truncate">{row.label}</span>
-                  {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
-                </button>
-              ),
-            )}
-        </div>
-      ))}
+        ))}
+      </div>
       {model.done > 0 ? (
-        <button type="button" data-testid="island-clear" onClick={onClearDone} className="cursor-pointer self-end px-1 text-muted-foreground hover:text-foreground">
-          {S.island.clearDone}
-        </button>
+        <div className="flex justify-end px-3 pb-3 pt-1">
+          <button type="button" data-testid="island-clear" onClick={onClearDone} className="cursor-pointer px-1 text-muted-foreground hover:text-foreground">
+            {S.island.clearDone}
+          </button>
+        </div>
       ) : null}
     </div>
   );
