@@ -43,6 +43,7 @@ import {
   type MetricsRoots,
   type SessionActivity,
   type SessionIndex,
+  type UsageResolver,
   type UsageSummary,
   type WorkEntry,
   type WorkSession,
@@ -133,6 +134,8 @@ export interface ActivityService {
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
    */
   onLogChange(listener: () => void): () => void;
+  /** Источник цифр итога комнаты (спека расхода токенов, 5.2): итог сессии целиком, границы её лога и срез по окнам. */
+  usageResolver(): UsageResolver;
   stop(): Promise<void>;
 }
 
@@ -240,6 +243,27 @@ interface WorkWatch {
   journal: EventsLog;
   /** `null` — каталога `events/` ещё нет или наблюдение сломалось: ждём повтора. */
   watcher: EventsWatcher | null;
+}
+
+/**
+ * Итог сессии целиком для комнаты (спека расхода токенов, 5.2): выбранный `selectUsage`. Лог уже есть, а ответов модели
+ * в нём ещё нет — ноль, а не «нет данных» (запись в кэш у Codex не наблюдается — она неизвестна). Ни лога, ни снимка — `null`.
+ */
+export function wholeSessionUsage(selected: UsageSummary, hasLog: boolean, provider: string): UsageSummary | null {
+  if (selected.source !== 'unavailable') return selected;
+  if (!hasLog) return null;
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: provider === 'codex' ? null : 0,
+    totalInput: 0,
+    source: 'native-index',
+    observedAt: null,
+    stale: false,
+    completeness: 'complete',
+    coverage: 'conversation',
+  };
 }
 
 export function createActivityService(
@@ -474,18 +498,12 @@ export function createActivityService(
     return tasks;
   }
 
-  function metricsFor(
-    ref: SessionRef,
-    key: string,
-    entry: WorkEntry,
-    session: WorkSession,
-    activity: SessionActivity,
-    indexed: SessionIndex | undefined,
-  ): LiveMetrics {
-    // Токены: у идущей сессии побеждает свежий индекс лога, а снимок из карты (его ставят `report` и
-    // усыпление) годится для остановленной и как запасной, когда свежего индекса нет. Какой источник
-    // выбран, видно в `usage.source`; сумма не выдумывается (`selectUsage`). Снимок чужого разговора
-    // (сессию перепривязали) за свой не принимается. Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
+  /**
+   * Токены сессии: у идущей побеждает свежий индекс лога, а снимок из карты (его ставят `report` и усыпление) годится для
+   * остановленной и как запасной, когда свежего индекса нет. Какой источник выбран, видно в `usage.source`; сумма не
+   * выдумывается (`selectUsage`). Снимок чужого разговора (сессию перепривязали) за свой не принимается.
+   */
+  function selectedUsage(session: WorkSession): UsageSummary {
     const snapshot = session.metrics;
     const frozen =
       snapshot === null
@@ -495,12 +513,25 @@ export function createActivityService(
           : snapshot.usage.binding === session.providerSessionId
             ? snapshot.usage
             : null;
-    const selected = selectUsage({
+    return selectUsage({
       active: session.lifecycle === 'active',
       epoch: session.startedAtProcess,
       live: logIndex.usage(session) ?? null,
       frozen,
     });
+  }
+
+  function metricsFor(
+    ref: SessionRef,
+    key: string,
+    entry: WorkEntry,
+    session: WorkSession,
+    activity: SessionActivity,
+    indexed: SessionIndex | undefined,
+  ): LiveMetrics {
+    // Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
+    const snapshot = session.metrics;
+    const selected = selectedUsage(session);
     const usage: UsageSummary = {
       ...selected,
       // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
@@ -902,6 +933,16 @@ export function createActivityService(
     },
     onLogChange(listener) {
       return logIndex.onChange(listener);
+    },
+    usageResolver() {
+      return {
+        whole: (session) => wholeSessionUsage(selectedUsage(session), logIndex.index(session) !== undefined, session.provider),
+        bounds: (session) => {
+          const found = logIndex.index(session);
+          return found === undefined ? null : { startedAt: found.startedAt, endedAt: found.endedAt };
+        },
+        slice: async (session, windows) => (await logIndex.usageIn(session, windows)) ?? null,
+      };
     },
     logFile(ref) {
       const session = works

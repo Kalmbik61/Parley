@@ -14,12 +14,13 @@ import {
   NEW_LABEL,
   UNTITLED_WORK,
 } from '@parley/core';
+import type { UsageSummary } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { createActivityService } from './activity-service.js';
+import { createActivityService, wholeSessionUsage } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 import type { SubagentMeta } from './subagent-meta.js';
 
@@ -1510,5 +1511,34 @@ describe('токены сессии: свежесть и учёт кэша (P36)
     expect(json).not.toMatch(/\.jsonl|binding|epoch/);
     // Уходящее окну событие устроено так же, как и снимок.
     expect(JSON.stringify(activityChanges(ref).at(-1)?.metrics)).not.toContain(NATIVE);
+  });
+});
+
+describe('wholeSessionUsage (спека расхода токенов, 5.2)', () => {
+  const unavailable: UsageSummary = {
+    input: null,
+    output: null,
+    cacheRead: null,
+    cacheWrite: null,
+    totalInput: null,
+    source: 'unavailable',
+    observedAt: null,
+    stale: false,
+    completeness: 'unknown',
+    coverage: 'conversation',
+  };
+
+  it('выбранный итог отдаётся как есть', () => {
+    const live = { ...unavailable, input: 5, output: 1, source: 'native-index' as const, completeness: 'complete' as const };
+    expect(wholeSessionUsage(live, true, 'claude')).toBe(live);
+  });
+
+  it('лог есть, ответов модели ещё нет — ноль; у Codex запись в кэш неизвестна', () => {
+    expect(wholeSessionUsage(unavailable, true, 'claude')).toMatchObject({ input: 0, output: 0, cacheWrite: 0, completeness: 'complete' });
+    expect(wholeSessionUsage(unavailable, true, 'codex')).toMatchObject({ input: 0, cacheWrite: null });
+  });
+
+  it('ни лога, ни снимка — посчитать нечем', () => {
+    expect(wholeSessionUsage(unavailable, false, 'claude')).toBeNull();
   });
 });

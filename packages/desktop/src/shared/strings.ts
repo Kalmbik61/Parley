@@ -238,6 +238,32 @@ export const S = {
     ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
       'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
   },
+  usage: {
+    title: 'Token usage',
+    since: 'Since each member joined',
+    sessionScope: 'This session, all time',
+    columns: ['In', 'Out', 'Cache read', 'Cache write'],
+    total: 'Total',
+    lead: 'lead',
+    partial: 'partial',
+    snapshot: 'snapshot',
+    stale: 'stale',
+    notAvailable: 'n/a',
+    left: (iso: string): string => `left ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    sharedWith: (rooms: readonly string[]): string => `shared with ${rooms.join(', ')}`,
+    logMissing: 'n/a — log not found',
+    sessionDeleted: 'n/a — session deleted',
+    notStarted: 'not started',
+    footnote: 'Tokens, not money or plan limit. Providers count tokens differently.',
+    legend: '`?` — not reported.',
+    reconstructed: 'Membership before usage tracking is partly reconstructed.',
+    updated: (iso: string): string => `Updated ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    markdownTitle: (title: string, roomId: string): string => `Room “${title}” (${roomId}) — token usage`,
+    copy: 'Copy',
+    copied: 'Copied',
+    unavailable: 'Usage unavailable',
+    counting: 'Counting…',
+  },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
@@ -756,6 +782,8 @@ export const S = {
     /** Строка доставки под сообщением: кто уже забрал его (`readBy`) и кто ещё нет. */
     pickedUp: (tags: string): string => `✓ Picked up by ${tags}`,
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Те из ждущих, кому Parley доводит письмо сам (поднимает, напечатал указатель), — со спиннером. */
+    delivering: (tags: string): string => `Delivering to ${tags}…`,
     /**
      * Почему сообщение ещё не забрано — в скобках после тега, `S01 (busy)`. Ключи — `MailWait` протокола: причину
      * присылает хост в живых метриках сессии (`metrics.mailWaiting`); таблица обязана покрывать их все.
@@ -791,6 +819,11 @@ export const S = {
     returnForRework: 'Return for rework',
     returnPlaceholder: 'What should the lead change?',
     sendToLead: 'Send to lead',
+    /**
+     * Под кнопками карточки, пока ответ в пути, а хост ещё не ответил на `works.list`: после перезапуска он сверяет,
+     * какие сессии живы, и ответ на решение ждёт этого (разбор 2026-10-14).
+     */
+    hostStarting: 'Parley is still starting — your answer goes through once it is ready',
     /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
     decisionChanged: 'The decision changed — review the latest version.',
     /**

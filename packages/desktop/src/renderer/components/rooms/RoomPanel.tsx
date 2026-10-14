@@ -76,6 +76,7 @@ import { RoomHeader } from './RoomHeader.js';
 import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
 import { RoomRecipeChip } from './RoomRecipeChip.js';
+import { RoomUsageChip } from './RoomUsageChip.js';
 
 export interface RoomPanelProps {
   entry: WorkEntry;
@@ -126,6 +127,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
   const status = useHostStore(state => state.status.state);
+  const hostReady = useWorksStore((state) => state.ready);
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
@@ -430,7 +432,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDrop={onDrop}
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
-      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -480,6 +482,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               labelOf={labelOf}
               onOpenExternal={onOpenExternal}
               canResolve={canResolve}
+              hostReady={hostReady}
               {...(entry.map.work.status !== 'active' ? {unavailableReason:S.plans.workClosed} : {})}
               onResolve={handleResolve}
               onLayout={keepAtBottom}

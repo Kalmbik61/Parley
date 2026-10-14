@@ -283,6 +283,11 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.reopen'>>().toEqualTypeOf<{ ok: true }>();
   });
 
+  it('rooms.usage: комната обязательна', () => {
+    expect(METHODS['rooms.usage'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.usage'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+  });
+
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
     const accept = { ...room, proposalId: 'p-01', action: 'accept' };
     expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);

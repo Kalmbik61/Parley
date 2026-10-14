@@ -8,6 +8,7 @@ import type {
   MergeCheck,
   MergeResult,
   ProjectChanges,
+  RoomUsage,
   WorktreeDiff,
 } from '@parley/core';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -214,6 +215,9 @@ export const METHODS = {
   // прячет пункты.
   'rooms.archive': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), stopSessions: z.boolean() }),
   'rooms.reopen': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
+  // Расход токенов комнаты (спека расхода токенов, 6.1): итог с момента входа каждого участника. Только чтение. Старый
+  // хост метода не знает — окно по списку методов значок не показывает.
+  'rooms.usage': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
   // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
   // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
@@ -400,6 +404,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   'rooms.delete': { ok: true };
   'rooms.archive': { ok: true };
   'rooms.reopen': { ok: true };
+  /** Итог токенов комнаты: целиком, по провайдерам и по участникам. Токены, а не деньги и не доля лимита. */
+  'rooms.usage': RoomUsage;
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };

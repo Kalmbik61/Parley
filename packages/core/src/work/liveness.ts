@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { DEFAULT_CONFIG } from '../config.js';
-import { finishSession, readSessionMetrics, silenceMs, type MetricsRoots } from './metrics.js';
+import { readSessionMetrics, silenceMs, sleepSessions, type MetricsRoots } from './metrics.js';
 import { transitionSession } from './map.js';
 import { readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
@@ -214,13 +214,6 @@ export async function reconcileMap(
       lock,
     );
   }
-  for (const id of dead) {
-    await finishSession(projectPath, workId, id, 'sleeping', {
-      at,
-      exitCode: null,
-      ...lock,
-      ...roots,
-    });
-  }
-  return dead;
+  if (dead.length === 0) return [];
+  return sleepSessions(projectPath, workId, dead, { at, exitCode: null, ...lock, ...roots });
 }

@@ -5,6 +5,7 @@ import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
+import { createRoomsUsage } from '../rooms/room-usage.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
@@ -194,6 +195,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.delete': roomsDelete as AnyHandler,
     'rooms.archive': createRoomsArchive(deps.sessions) as AnyHandler,
     'rooms.reopen': roomsReopen as AnyHandler,
+    'rooms.usage': createRoomsUsage(deps.works, deps.activity) as AnyHandler,
     'rooms.resolveProposal': (async (params, request) => {
       const result = await roomsResolveProposal(params, request);
       // The decision is committed. Delivery failure retains pending effects and its safe notice.

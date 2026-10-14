@@ -4,7 +4,7 @@ import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
-import { createUsageLedger, observedCount } from '../work/usage-ledger.js';
+import { createUsageLedger, observedCount, type UsageWindow } from '../work/usage-ledger.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
 function asRecord(value: unknown): RawRecord | null {
@@ -90,7 +90,11 @@ function parentThreadId(payload: RawRecord): string | null {
  * Наружу при этом отдаётся ровно тот же SessionIndex, что и у Claude Code, —
  * UI о различиях не знает. `signal` прерывает чтение (`forEachJsonlRecord`).
  */
-export async function indexCodexSession(file: string, signal?: AbortSignal): Promise<SessionIndex> {
+export async function indexCodexSession(
+  file: string,
+  signal?: AbortSignal,
+  options: { usageWindows?: readonly UsageWindow[] } = {},
+): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
   const roles = new Counter();
@@ -105,7 +109,7 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
   let lastCounters = null as ReturnType<typeof codexCounters>;
-  const ledger = createUsageLedger();
+  const ledger = createUsageLedger(options.usageWindows === undefined ? {} : { windows: options.usageWindows });
   let lastTurnEvent: SessionIndex['lastTurnEvent'];
   let spawned = false;
   let parentId: string | null = null;

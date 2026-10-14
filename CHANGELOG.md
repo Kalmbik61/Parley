@@ -18,6 +18,18 @@ All notable changes to Parley are documented in this file.
 - **Clear stays in place under a long Done list on the island.** Clear was inside the scrolling
   list and scrolled away with it; it now stands under the list.
 
+## 0.12.1
+
+After a restart, accepting a room's decision no longer hangs for half a minute: Parley's host now comes up in a few seconds, and the window shows what it is waiting for — a spinner in the pressed button and on messages that are being delivered.
+
+### Changed
+
+- **Waiting is visible.** While the answer to a decision is on its way, the pressed button (Accept or Send to lead) shows a spinner; if Parley is still starting, the card says "Parley is still starting — your answer goes through once it is ready". Under a message, recipients that Parley is delivering it to by itself — waking the session or after typing the pointer — show "Delivering to S01 (resuming)…" with a spinner; the ones that need you keep "▤ Not picked up yet by …".
+
+### Fixed
+
+- **Accept answers right after a restart.** After Parley was reopened, the host put every session whose process had ended to sleep one by one, and its own writes kept starting overlapping passes of the same check; until they finished, Accept and Return for rework on a decision waited — up to half a minute on a busy machine. Sleeping sessions of a workspace are now recorded in one write and the passes run one at a time: on a copy of real workspaces (9 workspaces, 38 sessions) the start went from 15–18 s to about 3 s, and the "invalid transition sleeping → sleeping" errors in the host log are gone. Sessions also wake on an accepted decision sooner.
+
 ## 0.12.0
 
 The Island at the top of the screen — in the notch on a MacBook — answers permission requests and shows which agents are working and what they just finished. Browser pages send their context to chat, your messages in rooms sit on the right, and "needs you" notifications say what is asked.

@@ -4,7 +4,7 @@ import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
 import { isPointerText } from './work/delivery.js';
-import { createUsageLedger, type UsageCounters, type UsageSummary } from './work/usage-ledger.js';
+import { createUsageLedger, type UsageCounters, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -135,6 +135,11 @@ export interface IndexSessionOptions {
   subsessionCount?: number;
   /** Прерывает чтение файла: промис отклоняется `AbortError` (`forEachJsonlRecord`). */
   signal?: AbortSignal;
+  /**
+   * Окна среза учёта (спека расхода токенов, 5.3): в `usage` (и в `tokens`) только записи из них. Нет — весь лог.
+   * Вызывающий со срезом берёт из индекса только `usage`.
+   */
+  usageWindows?: readonly UsageWindow[];
 }
 
 /** Счётчики записи ответа Claude: `input_tokens` — вход без кэша, полный вход — сумма трёх частей. */
@@ -156,14 +161,14 @@ function claudeCounters({ input, output, cacheRead, cacheWrite }: NonNullable<Se
 export async function indexSessionFile(
   file: string,
   root: string,
-  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, signal }: IndexSessionOptions = {},
+  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, signal, usageWindows }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
   const roles = new Counter();
   const recordTypes = new Counter();
   // Один ответ модели приходит несколькими записями: склейка по message.id — в учёте токенов.
-  const ledger = createUsageLedger();
+  const ledger = createUsageLedger(usageWindows === undefined ? {} : { windows: usageWindows });
   let hasUsage = false;
   // Родитель старых версий Claude Code пишет записи агента и у себя (`isSidechain`): их же несёт и файл
   // агента, поэтому по ним решается, можно ли склеить два файла по id ответа.

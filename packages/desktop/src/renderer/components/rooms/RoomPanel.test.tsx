@@ -17,6 +17,7 @@ import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
+import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
@@ -1322,6 +1323,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
   const deliveryLine = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-delivery]');
   const pickedPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-picked]');
   const waitingPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-waiting]');
+  const deliveringPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-delivering]');
 
   it('«Not picked up yet by …» — теги тех, кто ещё не прочитал', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
@@ -1331,11 +1333,26 @@ describe('RoomPanel — строка доставки: кто забрал со�
 
   it('и забравшие, и ждущие: одна строка, части через « · », у ждущего причина от хоста в скобках', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
-    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
+    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'paused' } }) });
     expect(document.querySelectorAll('[data-message-delivery]')).toHaveLength(1);
-    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S02 · ▤ Not picked up yet by S01 (busy), S03');
+    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S02 · ▤ Not picked up yet by S01 (auto-wake paused), S03');
     expect(pickedPart()?.textContent).toBe('✓ Picked up by S02');
-    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S03');
+    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (auto-wake paused), S03');
+  });
+
+  // Разбор 2026-10-14: после Accept спящие просыпаются десятки секунд, а строка стояла неподвижной. Причины, при
+  // которых Parley сам доводит письмо (поднимает, напечатал указатель), — со спиннером; те, где
+  // нужен человек или письма не будет без него, — прежней строкой.
+  it('Parley доставляет сам — «Delivering to …» со спиннером; ждущие человека — прежней строкой рядом', () => {
+    const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
+    renderPanel(entry, {
+      activity: withDoing({ 's-01': { mailWaiting: 'resuming' }, 's-03': { mailWaiting: 'resume-limit' } }),
+    });
+    expect(deliveryLine()?.textContent).toBe(
+      '✓ Picked up by S02 · Delivering to S01 (resuming)… · ▤ Not picked up yet by S03 (resume limit reached)',
+    );
+    expect(deliveringPart()?.querySelector('[data-busy-spinner]')).not.toBeNull();
+    expect(waitingPart()?.querySelector('[data-busy-spinner]')).toBeNull();
   });
 
   it('все забрали — только «Picked up by …»: части «не забрали» и разделителя нет', () => {
@@ -1346,8 +1363,8 @@ describe('RoomPanel — строка доставки: кто забрал со�
   });
 
   it('никто не забрал — только «Not picked up yet by …»: части «забрали» и разделителя нет', () => {
-    renderPanel(entryOf({ messages: [message('m-1')] }), { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
-    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S02, S03');
+    renderPanel(entryOf({ messages: [message('m-1')] }), { activity: withDoing({ 's-01': { mailWaiting: 'draft' } }) });
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (unsent text in its terminal), S02, S03');
     expect(pickedPart()).toBeNull();
   });
 
@@ -1381,11 +1398,18 @@ describe('RoomPanel — строка доставки: кто забрал со�
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
     };
+    const delivering = new Set<MailWait>(['in-flight', 'pointed', 'resuming']);
     for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {
       renderPanel(entryOf({ messages: [message('m-1', { to: ['s-01'] })] }), {
         activity: withDoing({ 's-01': { mailWaiting: reason } }),
       });
-      expect(waitingPart()?.textContent, reason).toBe(`▤ Not picked up yet by S01 (${text})`);
+      if (delivering.has(reason)) {
+        expect(deliveringPart()?.textContent, reason).toBe(`Delivering to S01 (${text})…`);
+        expect(waitingPart(), reason).toBeNull();
+      } else {
+        expect(waitingPart()?.textContent, reason).toBe(`▤ Not picked up yet by S01 (${text})`);
+        expect(deliveringPart(), reason).toBeNull();
+      }
       cleanup();
     }
   });
@@ -2210,6 +2234,59 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
       finish();
     });
     expect(resolveCalls()).toHaveLength(1);
+  });
+
+  // Разбор 2026-10-14: после перезапуска Accept висел до 30 с, а признаком были только погасшие кнопки.
+  const pendingResolve = (): (() => void) => {
+    let finish: () => void = () => {};
+    bridge.setHandler(
+      'rooms.resolveProposal',
+      () => new Promise<{ messageId: string }>((resolve) => (finish = () => resolve({ messageId: 'm-decision' }))),
+    );
+    return () => finish();
+  };
+  const spinnerIn = (element: HTMLElement): Element | null => element.querySelector('[data-busy-spinner]');
+  const startingHint = (): HTMLElement | null => card().querySelector('[data-host-starting]');
+
+  it('пока ответа нет — спиннер в нажатой кнопке: Accept или Send to lead', async () => {
+    useWorksStore.setState({ ready: true });
+    pendingResolve();
+    renderPanel(withProposal());
+    expect(spinnerIn(button('Accept'))).toBeNull();
+    fireEvent.click(button('Accept'));
+    expect(spinnerIn(button('Accept'))).not.toBeNull();
+    expect(spinnerIn(button('Return for rework'))).toBeNull();
+    cleanup();
+
+    pendingResolve();
+    renderPanel(withProposal());
+    fireEvent.click(button('Return for rework'));
+    fireEvent.click(button('Send to lead'));
+    expect(spinnerIn(button('Send to lead'))).not.toBeNull();
+    expect(spinnerIn(button('Cancel'))).toBeNull();
+  });
+
+  it('хост ещё не открыл снимок работ — под кнопками «Parley is still starting…», пока ответ в пути', async () => {
+    useWorksStore.setState({ ready: false });
+    const finish = pendingResolve();
+    const { rerender, initial } = renderPanel(withProposal());
+    // До нажатия подписи нет: кнопка ничего не ждёт.
+    expect(startingHint()).toBeNull();
+    fireEvent.click(button('Accept'));
+    expect(startingHint()?.textContent).toBe('Parley is still starting — your answer goes through once it is ready');
+
+    act(() => useWorksStore.setState({ ready: true }));
+    rerender(<RoomPanel {...initial} />);
+    expect(startingHint()).toBeNull();
+    await act(async () => finish());
+  });
+
+  it('хост готов — подписи о старте нет, только спиннер', () => {
+    useWorksStore.setState({ ready: true });
+    pendingResolve();
+    renderPanel(withProposal());
+    fireEvent.click(button('Accept'));
+    expect(startingHint()).toBeNull();
   });
 
   it('два клика в один тик, до перерисовки, тоже дают один вызов', async () => {

@@ -187,6 +187,8 @@ describe('список методов в hello', () => {
     // Архив комнаты: без обоих методов окно пунктов Archive и Reopen не показывает (useHostSupports).
     expect(methods).toContain('rooms.archive');
     expect(methods).toContain('rooms.reopen');
+    // Расход токенов комнаты: без метода окно значок не показывает (useHostSupports).
+    expect(methods).toContain('rooms.usage');
     client.close();
   });
 });

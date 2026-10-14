@@ -70,6 +70,10 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
     mode: init.mode ?? 'free',
     recipe: init.recipe == null ? null : { id: init.recipe.id, name: init.recipe.name, playbook: init.recipe.playbook },
     archivedAt: null,
+    // Журнал участия (спека расхода токенов, 4.2): создатель-сессия и начальные участники входят в момент создания.
+    memberLog: [...new Set([init.creator, ...init.members])]
+      .filter((id) => id !== HUMAN)
+      .map((session) => ({ session, from: at, to: null })),
   };
   map.rooms.push(room);
   return room;
@@ -130,12 +134,14 @@ export function liveLead(map: WorkMap, room: Room): string | null {
  * Ждущее решение ушедшего ведущего остаётся в слоте: человек ответит на него как на любое,
  * а письмо о принятии или возврате пойдёт нынешнему ведущему (`resolveProposal`).
  */
-export function leaveOtherRooms(map: WorkMap, sessionId: string, exceptRoomId: string): void {
+export function leaveOtherRooms(map: WorkMap, sessionId: string, exceptRoomId: string, at = new Date().toISOString()): void {
   for (const room of map.rooms) {
     if (room.id === exceptRoomId) continue;
     room.members = room.members.filter((id) => id !== sessionId);
     if (room.creator === sessionId) room.creator = HUMAN;
     if (room.lead === sessionId) room.lead = null;
+    // Уход — в журнал той комнаты, у которой он есть (спека расхода токенов, 4.2).
+    for (const entry of room.memberLog ?? []) if (entry.session === sessionId && entry.to === null) entry.to = at;
   }
 }
 
@@ -156,6 +162,11 @@ export function addSystemMessage(
   const message = addMessage(map, { from: SYSTEM, to: [HUMAN], roomId, kind: 'note', text }, at);
   message.readBy[HUMAN] = at;
   return message;
+}
+
+/** Строка ленты о входе сессии в комнату; по ней же восстанавливается участие в старых комнатах (спека расхода токенов, 4.3). */
+export function joinedLine(sessionId: string): string {
+  return `${sessionMention(sessionId)} joined the room`;
 }
 
 /**
@@ -187,9 +198,13 @@ export function addMember(
     throw new RoomRuleError(`session ${sessionId} is already a participant of room ${roomId}`);
   }
 
-  leaveOtherRooms(map, sessionId, roomId);
+  leaveOtherRooms(map, sessionId, roomId, at);
   if (!inRoom) room.members.push(sessionId);
-  return addSystemMessage(map, roomId, `${sessionMention(sessionId)} joined the room`, at);
+  // Журнал ведут только комнаты, у которых он есть: старая восстанавливается по ленте (спека расхода токенов, 4.3).
+  if (room.memberLog !== undefined && !room.memberLog.some((entry) => entry.session === sessionId && entry.to === null)) {
+    room.memberLog.push({ session: sessionId, from: at, to: null });
+  }
+  return addSystemMessage(map, roomId, joinedLine(sessionId), at);
 }
 
 /**

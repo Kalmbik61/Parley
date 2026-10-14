@@ -157,6 +157,7 @@ export {
   renameRoom,
   renameSession,
   reopenRoom,
+  joinedLine,
   requireOpenRoom,
   roomLead,
   RoomRuleError,
@@ -451,6 +452,7 @@ export type {
   MessageKind,
   Proposal,
   Room,
+  RoomMembership,
   SessionLifecycle,
   SessionMetrics,
   SessionResult,
@@ -570,8 +572,14 @@ export type {
   UsageAttribution,
   UsageCompleteness,
   UsageCounters,
+  UsageLedgerOptions,
   UsageObservation,
   UsageSource,
   UsageSummary,
   UsageTotal,
+  UsageWindow,
 } from './work/usage-ledger.js';
+export { isCurrentMember, roomMembership } from './work/room-membership.js';
+export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
+export { roomUsage } from './work/room-usage.js';
+export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';
