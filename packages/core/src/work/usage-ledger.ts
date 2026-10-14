@@ -157,14 +157,6 @@ export type UsageObservation = (
   child?: boolean;
 };
 
-/**
- * Копилка наблюдений одного разговора. Порядок прихода — порядок записей лога.
- *
- * - `delta` с уже виденным id — частичный дубль: поля склеиваются, запрос остаётся одним;
- * - `cumulative` растёт — берётся новое значение; падает без `reset` — неоднозначность: сумма не
- *   выдумывается, остаётся наибольшее и итог помечается неполным; с `reset` прежний период
- *   закрывается и прибавляется к новому.
- */
 /** Окно среза учёта (спека расхода токенов, 5.3): `to: null` — открыто до «сейчас». */
 export interface UsageWindow {
   from: string;
@@ -262,6 +254,14 @@ function sliceStreams(streams: Map<string, StreamPoint[]>, spans: readonly Span[
   return { parts, ambiguous, lastAt, child };
 }
 
+/**
+ * Копилка наблюдений одного разговора. Порядок прихода — порядок записей лога.
+ *
+ * - `delta` с уже виденным id — частичный дубль: поля склеиваются, запрос остаётся одним;
+ * - `cumulative` растёт — берётся новое значение; падает без `reset` — неоднозначность: сумма не
+ *   выдумывается, остаётся наибольшее и итог помечается неполным; с `reset` прежний период
+ *   закрывается и прибавляется к новому.
+ */
 export function createUsageLedger(options: UsageLedgerOptions = {}) {
   const deltas = new Map<string, UsageCounters>();
   const streams = new Map<string, UsageCounters[]>();
