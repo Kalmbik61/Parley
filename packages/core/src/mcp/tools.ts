@@ -86,6 +86,7 @@ import {
   type WorkSession,
 } from '../work/types.js';
 import { baseBranchOf, isGitRepo, plannedWorktree } from '../work/worktree.js';
+import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
@@ -1694,7 +1695,11 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   }
 
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: navigator ? [...TOOLS, await navigator.list()] : TOOLS }));
+  // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
+  const browser = context.agent === undefined ? null : createBrowserTools(context.agent);
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [...TOOLS, ...(browser?.tools ?? []), ...(navigator ? [await navigator.list()] : [])],
+  }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
   server.setRequestHandler(
@@ -1705,6 +1710,10 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
         return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
+      // Инструменты браузера отвечают сами: без канала — отказ с советом перезапустить сессию.
+      if (request.params.name.startsWith('browser_')) {
+        return browser === null ? { content: [{ type: 'text', text: BROWSER_UNAVAILABLE }], isError: true } : browser.call(request.params.name, args);
+      }
       try {
         const result = request.params.name === 'find_skill' ? await navigator!.find(args)
           : await dispatch(context, request.params.name, args, extra.signal);
