@@ -7,6 +7,8 @@
 
 import { isViewportSpec, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type {
+  BrowserPanelPage,
+  BrowserPanelSpec,
   BrowserTarget,
   FileRootSpec,
   GroupNode,
@@ -15,7 +17,7 @@ import type {
   TerminalView,
   WorkLayout,
 } from '../../shared/layout-types.js';
-import { nodeId } from './ids.js';
+import { nodeId, ownerOfKey } from './ids.js';
 
 export const LIMITS: {
   maxGroups: 8;
@@ -29,8 +31,20 @@ export const LIMITS: {
   closedTabs: 10,
 };
 
+/**
+ * Панели браузера хозяев (спека браузера 3.10, 4.11, 8): страниц не больше пяти; ширина от 320 px до 70 % вида хозяина,
+ * по умолчанию 480; вид уже 720 px — панель встаёт поверх него целиком.
+ */
+export const PANEL_LIMITS: { pages: 5; minWidth: 320; defaultWidth: 480; maxShare: 0.7; narrowBelow: 720 } = {
+  pages: 5,
+  minWidth: 320,
+  defaultWidth: 480,
+  maxShare: 0.7,
+  narrowBelow: 720,
+};
+
 export type GroupSizes = Record<string, { width: number; height: number }>;
-export type OpError = 'too-many-groups' | 'too-small' | 'not-found';
+export type OpError = 'too-many-groups' | 'too-small' | 'not-found' | 'too-many-pages';
 export interface OpResult {
   layout: WorkLayout;
   error: OpError | null;
@@ -488,7 +502,8 @@ export function pruneLayout(layout: WorkLayout, alive: (tab: TabSpec) => boolean
   const activeGroupId = survivors.some((g) => g.id === layout.activeGroupId)
     ? layout.activeGroupId
     : (survivors[0]?.id ?? root.id);
-  return { root, activeGroupId, closedTabs: closedChanged ? filteredClosed : layout.closedTabs };
+  // `...layout`: панели браузера (`panels`) вкладками не живут — закрытая вкладка хозяина их не стирает.
+  return { ...layout, root, activeGroupId, closedTabs: closedChanged ? filteredClosed : layout.closedTabs };
 }
 
 // ---- проверка и разбор -------------------------------------------------------
@@ -577,6 +592,52 @@ function parseBrowserTarget(value: unknown): BrowserTarget | null {
     return { kind: 'room', roomId: value.roomId };
   }
   return null;
+}
+
+/**
+ * Страница панели: новый объект из полей своего вида. Мусор в размере — Fit; страница без id или адреса пропускается
+ * (`parseBrowserPanel`): панель — удобство, раскладку из-за неё не бракуем (в отличие от вкладок).
+ */
+function parseBrowserPanelPage(value: unknown): BrowserPanelPage | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.id === '' || typeof value.url !== 'string') return null;
+  const viewport = parseViewport(value.viewport);
+  return { id: value.id, url: value.url, ...(viewport === null ? {} : { viewport }) };
+}
+
+/**
+ * Панель хозяина: не больше `PANEL_LIMITS.pages` страниц, id страниц не повторяются на всю раскладку (`seen` общий: id —
+ * ключ записей окна, дубль склеил бы две страницы); ширина — не меньше 320; активная страница есть среди страниц, иначе
+ * первая. Без страниц панели нет, открытой без страниц она не бывает. Не панель — `null`.
+ */
+function parseBrowserPanel(value: unknown, seen: Set<string>): BrowserPanelSpec | null {
+  if (!isRecord(value) || !Array.isArray(value.pages)) return null;
+  const pages: BrowserPanelPage[] = [];
+  for (const item of value.pages) {
+    const page = parseBrowserPanelPage(item);
+    if (page === null || seen.has(page.id) || pages.length >= PANEL_LIMITS.pages) continue;
+    seen.add(page.id);
+    pages.push(page);
+  }
+  if (pages.length === 0) return null;
+  const width =
+    typeof value.width === 'number' && Number.isFinite(value.width)
+      ? Math.max(value.width, PANEL_LIMITS.minWidth)
+      : PANEL_LIMITS.defaultWidth;
+  const active = pages.find((page) => page.id === value.active)?.id ?? pages[0]?.id ?? null;
+  return { open: value.open === true, width, pages, active };
+}
+
+/** Панели хозяев: чужой ключ и мусорная запись пропускаются; ни одной панели — `null` (поля в раскладке не будет). */
+function parseBrowserPanels(value: unknown): Record<string, BrowserPanelSpec> | null {
+  if (!isRecord(value)) return null;
+  const seen = new Set<string>();
+  const panels: Record<string, BrowserPanelSpec> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (ownerOfKey(key) === null) continue;
+    const panel = parseBrowserPanel(item, seen);
+    if (panel !== null) panels[key] = panel;
+  }
+  return Object.keys(panels).length === 0 ? null : panels;
 }
 
 function parseTabSpec(value: unknown): TabSpec | null {
@@ -673,6 +734,8 @@ export function parseWorkLayout(raw: unknown): WorkLayout | null {
     ? raw.activeGroupId
     : (allGroups[0]?.id ?? raw.activeGroupId);
 
-  const repaired: WorkLayout = { root, activeGroupId, closedTabs };
+  // Панелей нет в файле (раскладка до панелей) или все мусорные — поля нет, как у раскладки без панелей.
+  const panels = parseBrowserPanels(raw.panels);
+  const repaired: WorkLayout = { root, activeGroupId, closedTabs, ...(panels === null ? {} : { panels }) };
   return validateLayout(repaired).length === 0 ? repaired : null;
 }

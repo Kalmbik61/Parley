@@ -57,9 +57,38 @@ export type TabSpec =
   // target: нет поля — умолчание, сессия в фокусе работы (спека браузера 4.5).
   | { kind: 'browser'; id: string; url: string; viewport?: ViewportSpec; target?: BrowserTarget };
 
+/**
+ * Хозяин панели браузера (спека браузера 3.10): сессия или комната работы — та же форма, что у цели «To». Контекст из
+ * браузера хозяина уходит ему самому.
+ */
+export type BrowserOwner = BrowserTarget;
+
+/** Страница панели: адрес и размер, как у вкладки браузера; нет `viewport` — Fit. Id уникален на всё окно (`layout/ids.ts`). */
+export interface BrowserPanelPage {
+  id: string;
+  url: string;
+  viewport?: ViewportSpec;
+}
+
+/**
+ * Панель браузера справа от вида хозяина (спека браузера 3.10, 4.11). `open` — показана ли, `width` — ширина в
+ * CSS-пикселях (вид даёт ей от 320 px до 70 % своей ширины), `active` — id показанной страницы (`null` — страниц нет).
+ */
+export interface BrowserPanelSpec {
+  open: boolean;
+  width: number;
+  pages: BrowserPanelPage[];
+  active: string | null;
+}
+
 export interface WorkLayout {
   root: LayoutNode;
   activeGroupId: string;
   /** Стек для ⌘⇧T, не больше 10 (см. `LIMITS.closedTabs` в `layout/tree.ts`). */
   closedTabs: TabSpec[];
+  /**
+   * Панели браузера хозяев по ключу `session:<id>` или `room:<id>` (`layout/panels.ts#ownerKey`). Нет поля — панелей
+   * нет: раскладки до панелей читаются как есть. Закрытая вкладка хозяина панель не стирает, исчезнувший хозяин — стирает.
+   */
+  panels?: Record<string, BrowserPanelSpec>;
 }
