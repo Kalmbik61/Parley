@@ -24,6 +24,14 @@ function withPanel(layout: WorkLayout, owner: BrowserOwner, panel: BrowserPanelS
   return { ...layout, panels: { ...layout.panels, [ownerKey(owner)]: panel } };
 }
 
+/** Хозяин панели, в которой стоит страница `pageId` (id страниц уникальны на всё окно); такой страницы нет — `null`. */
+export function ownerOfPage(layout: WorkLayout, pageId: string): BrowserOwner | null {
+  for (const [key, panel] of Object.entries(layout.panels ?? {})) {
+    if (panel.pages.some((page) => page.id === pageId)) return ownerOfKey(key);
+  }
+  return null;
+}
+
 /** Раскладка с этими панелями; ни одной — без поля `panels`, раскладка снова как до панелей. */
 function withPanels(layout: WorkLayout, entries: Array<[string, BrowserPanelSpec]>): WorkLayout {
   if (entries.length > 0) return { ...layout, panels: Object.fromEntries(entries) };

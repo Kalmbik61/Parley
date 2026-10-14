@@ -49,6 +49,7 @@ import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { PanelToggle } from '../../browser/panel/PanelToggle.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
@@ -431,7 +432,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDrop={onDrop}
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
-      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div

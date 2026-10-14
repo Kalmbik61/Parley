@@ -8,6 +8,7 @@ import {
   activatePanelPage,
   addPanelPage,
   closePanelPage,
+  ownerOfPage,
   panelOf,
   prunePanels,
   setPanelOpen,
@@ -175,5 +176,15 @@ describe('prunePanels', () => {
   it('чужой ключ в памяти (не session: и не room:) считается мёртвым', () => {
     const layout: WorkLayout = { ...EMPTY, panels: { 'x:1': { open: true, width: 480, pages: [page(1)], active: 'bp-000001' } } };
     expect(prunePanels(layout, () => true).panels).toBeUndefined();
+  });
+});
+
+describe('ownerOfPage', () => {
+  it('хозяин панели, в которой стоит страница; такой страницы нет — null', () => {
+    const layout = addPanelPage(withPages(2), ROOM, page(8)).layout;
+    expect(ownerOfPage(layout, 'bp-000002')).toEqual(CHAT);
+    expect(ownerOfPage(layout, 'bp-000008')).toEqual(ROOM);
+    expect(ownerOfPage(layout, 'bp-nope')).toBeNull();
+    expect(ownerOfPage(EMPTY, 'bp-000001')).toBeNull();
   });
 });

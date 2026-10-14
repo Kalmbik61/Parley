@@ -13,6 +13,9 @@ import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { emptyLayout } from '../../layout/tree.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
@@ -2563,5 +2566,34 @@ describe('RoomPanel — архивная комната (5.2)', () => {
     expect(screen.getByRole('combobox', { name: 'Room mode' })).toHaveProperty('disabled', true);
     expect(screen.getAllByText('Reopen this room to change the plan.').length).toBeGreaterThan(0);
     expect(screen.queryByText('Reopen this workspace to change the plan.')).toBeNull();
+  });
+});
+
+describe('кнопка «Browser» в шапке комнаты (этап B2, спека браузера 4.11)', () => {
+  it('у открытой комнаты — справа в строке названия, нажатие создаёт панель браузера комнаты; у архивной кнопки нет', () => {
+    const key = `${PROJECT} ${WORK_ID}`;
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: emptyLayout() },
+      hydrated: { [key]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    try {
+      renderPanel(entryOf());
+      const button = screen.getByRole('button', { name: 'Browser' });
+      expect(button.closest('[data-room-header]')).not.toBeNull();
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+      fireEvent.click(button);
+      expect(useLayoutStore.getState().layouts[key]?.panels?.['room:r-01']).toMatchObject({ open: true, pages: [{ url: '' }] });
+      expect(screen.getByRole('button', { name: 'Browser' }).getAttribute('aria-pressed')).toBe('true');
+      cleanup();
+      renderPanel(entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z' }) }));
+      expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
+    } finally {
+      useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    }
   });
 });

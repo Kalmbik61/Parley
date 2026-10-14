@@ -26,12 +26,15 @@
  * активности не пришёл (`loaded` ложно), вид тоже не выбран.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
-import type { BrowserTarget } from '../../shared/layout-types.js';
+import type { BrowserOwner, BrowserPanelSpec, BrowserTarget } from '../../shared/layout-types.js';
 import { BrowserSurface } from '../browser/BrowserSurface.js';
+import { panelAnchor } from '../browser/panel/anchor.js';
+import { PanelSurface } from '../browser/panel/PanelSurface.js';
+import { panelRuntimeKey, usePanelRuntime } from '../browser/panel/runtime.js';
 import { TAB_TOOLBAR_PX } from '../chat/ChatToolbar.js';
 import { FeedSubscription } from '../chat/use-feed.js';
 import { effectiveView, useFeedAvailability, useHostHasFeed, useStartedKeys } from '../lib/feed-view.js';
@@ -39,6 +42,7 @@ import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { TerminalSurface } from '../terminal/TerminalSurface.js';
+import { ownerKey, ownerOfKey } from './ids.js';
 import { useLayoutStore } from './store.js';
 import { groups } from './tree.js';
 
@@ -56,7 +60,7 @@ export interface SurfaceLayerProps {
 }
 
 type SurfaceSpec =
-  | { kind: 'terminal'; tabId: string; sessionId: string; groupId: string; visible: boolean }
+  | { kind: 'terminal'; tabId: string; sessionId: string; groupId: string; visible: boolean; reserveAnchor: string | undefined }
   | { kind: 'feed'; tabId: string; sessionId: string }
   | { kind: 'browser'; tabId: string; url: string; viewport: ViewportSpec | null; target: BrowserTarget | undefined; groupId: string; visible: boolean };
 
@@ -83,6 +87,29 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
     return ref;
   };
 
+  // Панели браузера хозяев (спека браузера 3.10): страницы живут здесь, а не в виде хозяина, и переживают уход вкладки хозяина
+  // из группы. Видна панель, пока работа активна, панель открыта и вид хозяина на экране (`PanelHost`). Живых панелей в окне
+  // не больше шести (`browser/panel/runtime.ts`): слои работ публикуют свои панели в общий стор, остальные страницы помнят
+  // адреса в раскладке и грузятся, когда панель показывают.
+  const hosts = usePanelRuntime((state) => state.hosts);
+  const live = usePanelRuntime((state) => state.live);
+  const panels: Array<{ owner: BrowserOwner; panel: BrowserPanelSpec; runtimeKey: string; visible: boolean }> = [];
+  for (const [key, panel] of Object.entries(layout?.panels ?? {})) {
+    const owner = ownerOfKey(key);
+    if (owner === null) continue;
+    const runtimeKey = panelRuntimeKey(workKey, owner);
+    panels.push({ owner, panel, runtimeKey, visible: active && panel.open && hosts[runtimeKey] !== undefined });
+  }
+  const panelsSig = JSON.stringify(panels.map((item) => [item.runtimeKey, item.visible]));
+  useEffect(() => {
+    usePanelRuntime.getState().publish(
+      workKey,
+      panels.map((item) => ({ key: item.runtimeKey, visible: item.visible })),
+    );
+    // Состав и видимость — в подписи; сами панели в эффекте только читаются.
+  }, [workKey, panelsSig]);
+  useEffect(() => () => usePanelRuntime.getState().retract(workKey), [workKey]);
+
   const surfaces: SurfaceSpec[] = [];
   if (layout !== undefined && entry !== undefined) {
     const providers = new Map(entry.map.sessions.map((session) => [session.id, session.provider]));
@@ -102,7 +129,10 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
           surfaces.push({ kind: 'feed', tabId: tab.id, sessionId: tab.sessionId });
           continue;
         }
-        surfaces.push({ kind: 'terminal', tabId: tab.id, sessionId: tab.sessionId, groupId: group.id, visible });
+        // Открытая панель сессии отнимает у терминала свою ширину (якорь `reserve` ставит `PanelHost`, когда участок рядом с видом).
+        const owner: BrowserOwner = { kind: 'session', sessionId: tab.sessionId };
+        const reserveAnchor = layout.panels?.[ownerKey(owner)]?.open === true ? panelAnchor(workKey, owner, 'reserve') : undefined;
+        surfaces.push({ kind: 'terminal', tabId: tab.id, sessionId: tab.sessionId, groupId: group.id, visible, reserveAnchor });
       }
     }
     surfaces.sort((a, b) => (a.tabId < b.tabId ? -1 : a.tabId > b.tabId ? 1 : 0));
@@ -119,11 +149,9 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
               <BrowserSurface
                 key={surface.tabId}
                 workKey={workKey}
-                tabId={surface.tabId}
+                place={{ kind: 'tab', tabId: surface.tabId, groupId: surface.groupId, target: surface.target }}
                 url={surface.url}
                 viewport={surface.viewport}
-                target={surface.target}
-                groupId={surface.groupId}
                 visible={surface.visible}
                 bridge={bridge}
                 entry={entry}
@@ -140,9 +168,27 @@ export function SurfaceLayer({ workKey, active, bridge, fontFamily, fontSize, se
                 fontFamily={fontFamily}
                 fontSize={fontSize}
                 topInset={topInset}
+                {...(surface.reserveAnchor === undefined ? {} : { reserveAnchor: surface.reserveAnchor })}
               />
             ),
           )}
+      {/* Панели — после поверхностей вкладок: узкий вид закрывает панелью терминал или страницу, а они в этом слое выше тела группы. */}
+      {entry === undefined
+        ? null
+        : panels
+            .filter((item) => live.has(item.runtimeKey))
+            .map((item) => (
+              <PanelSurface
+                key={item.runtimeKey}
+                workKey={workKey}
+                owner={item.owner}
+                panel={item.panel}
+                visible={item.visible}
+                bridge={bridge}
+                entry={entry}
+                sendDeps={sendDeps}
+              />
+            ))}
     </div>
   );
 }

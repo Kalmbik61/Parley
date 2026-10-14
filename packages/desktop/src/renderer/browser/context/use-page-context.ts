@@ -29,13 +29,18 @@ export interface PageContextInput {
   entry: WorkEntry;
   /** `TabSpec.target` вкладки: нет поля — умолчание. */
   stored: BrowserTarget | undefined;
+  /**
+   * Страница панели хозяина (спека браузера 3.10): цель закреплена за хозяином. Умолчания, отката с тостом и смены цели нет —
+   * хозяин жив, пока жива панель (`layout/panels.ts#prunePanels`), а сессия, которую закрыли, всё ещё принимает вложение.
+   */
+  fixed?: BrowserTarget;
   sendDeps: SendWithToastDeps;
 }
 
 export function usePageContext(input: PageContextInput): PageContext {
-  const { workKey, tabId, entry, stored } = input;
+  const { workKey, tabId, entry, stored, fixed } = input;
   const focused = useLayoutStore((state) => focusedSessionOf(state, workKey));
-  const resolved = resolveTarget(entry, stored, focused);
+  const resolved = fixed === undefined ? resolveTarget(entry, stored, focused) : { target: fixed, fellBack: false };
   const latest = useRef({ input, target: resolved.target });
   latest.current = { input, target: resolved.target };
 
@@ -47,11 +52,13 @@ export function usePageContext(input: PageContextInput): PageContext {
     toast(fallback === null ? S.browser.target.fellBackNowhere : S.browser.target.fellBack(fallback));
   }, [resolved.fellBack, fallback, workKey, tabId]);
 
+  const pinned = fixed !== undefined;
   const setTarget = useCallback(
     (target: BrowserTarget): void => {
+      if (pinned) return;
       useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { target }));
     },
-    [workKey, tabId],
+    [workKey, tabId, pinned],
   );
 
   const queue = useRef<Promise<unknown>>(Promise.resolve());

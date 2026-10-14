@@ -18,6 +18,8 @@ export interface RoomHeaderProps {
   recipeChip?: ReactNode;
   /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
   historyMenu?: ReactNode;
+  /** Кнопка «Browser» панели браузера комнаты (спека браузера 4.11) — справа в строке названия. */
+  browserToggle?: ReactNode;
   title: string;
   subtitle: string;
   /** Комната в архиве: рядом с названием метка `Archived`. */
@@ -26,7 +28,7 @@ export interface RoomHeaderProps {
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu, browserToggle }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -42,6 +44,7 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
               {S.rooms.archived}
             </Badge>
           ) : null}
+          {browserToggle === undefined ? null : <div className="ml-auto shrink-0">{browserToggle}</div>}
         </div>
         <span title={subtitle} className="truncate text-[13px] text-muted-foreground">
           {subtitle}

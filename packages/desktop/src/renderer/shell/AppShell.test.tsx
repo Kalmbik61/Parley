@@ -36,6 +36,8 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { usePaletteStore } from '../palette/store.js';
 import { useBrowserStore } from '../browser/store.js';
+import { panelRuntimeKey, usePanelRuntime } from '../browser/panel/runtime.js';
+import { addPanelPage, panelOf, setPanelOpen } from '../layout/panels.js';
 import { Profiler } from 'react';
 
 // Тесты 10, 13, 14, 15 куска 2.4 зовут `toast` и из `AppShell.tsx`
@@ -2260,6 +2262,84 @@ describe('AppShell — страница в окне (тесты 1 и 3 куск�
     const before = useLayoutStore.getState().layouts[key];
     act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/x', openerWebContentsId: 99 }));
     expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+});
+
+describe('AppShell — страница панели браузера хозяина (этап B2, спека браузера 3.10)', () => {
+  const PAGE = 'browser:0000d1';
+  const PANEL_PAGE = 'bp-0000a1';
+  const OWNER = { kind: 'session', sessionId: 's-02' } as const;
+
+  afterEach(() => {
+    useBrowserStore.setState({ tabs: {}, limitToasted: {} });
+    usePanelRuntime.setState({ hosts: {}, usedAt: {}, published: {}, live: new Set() });
+  });
+
+  /**
+   * w-01: g1 — терминал s-01 (активная группа), g2 — терминал s-02 (активный в g2) с панелью, страница которой PANEL_PAGE имеет id
+   * гостя 8. Вид хозяина s-02 «на экране» — запись стора окна, как её делает `PanelHost`.
+   */
+  async function panelInSecondGroup(open = true): Promise<{ key: string; g1: string; g2: string }> {
+    await renderShell([work('w-01', '2026-01-01', 'Первая', [session('s-01', 'один'), session('s-02', 'два')]), work('w-02', '2026-01-02', 'Вторая', [session('s-03', 'три')])]);
+    const key = keyOf('w-01');
+    act(() => useLayoutStore.getState().setActiveWork(key));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[key]).toBe(true));
+    act(() => {
+      useLayoutStore.getState().apply(key, (layout) => openTab(layout, term('s-01')));
+      const layout = useLayoutStore.getState().layouts[key];
+      if (layout === undefined) throw new Error('нет раскладки');
+      useLayoutStore.getState().apply(key, (l) => splitGroup(l, layout.activeGroupId, 'row', term('s-02'), { [layout.activeGroupId]: { width: 800, height: 600 } }));
+      useLayoutStore.getState().apply(key, (l) => addPanelPage(l, OWNER, { id: PANEL_PAGE, url: 'http://127.0.0.1:5173/' }).layout);
+      if (!open) useLayoutStore.getState().apply(key, (l) => setPanelOpen(l, OWNER, false));
+    });
+    await flush();
+    act(() => {
+      useBrowserStore.getState().update(PANEL_PAGE, { webContentsId: 8 });
+      usePanelRuntime.getState().mountHost(panelRuntimeKey(key, OWNER), false);
+      useLayoutStore.getState().apply(key, (l) => focusTab(l, tabId.terminal('s-01')));
+    });
+    const layout = useLayoutStore.getState().layouts[key];
+    if (layout === undefined) throw new Error('нет раскладки');
+    const [g1, g2] = groups(layout).map((group) => group.id);
+    if (g1 === undefined || g2 === undefined) throw new Error('нет групп');
+    return { key, g1, g2 };
+  }
+
+  it('browser:focus страницы панели — активна группа её хозяина; хозяин не на экране или работа в фоне — раскладка прежняя', async () => {
+    const { key, g1, g2 } = await panelInSecondGroup();
+    expect(useLayoutStore.getState().layouts[key]?.activeGroupId).toBe(g1);
+    act(() => bridge.emitBrowserFocus({ webContentsId: 8 }));
+    expect(useLayoutStore.getState().layouts[key]?.activeGroupId).toBe(g2);
+    expect(usePanelRuntime.getState().usedAt[panelRuntimeKey(key, OWNER)]).toBeGreaterThan(0);
+
+    // Вкладка хозяина стала неактивной в своей группе (панель скрыта): событие страницы ничего не меняет и вкладкой браузера не считается.
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(focusTab(l, tabId.terminal('s-01')), tabId.terminal('s-02'))));
+    act(() => useLayoutStore.getState().apply(key, (l) => openTab(l, { kind: 'browser', id: PAGE, url: 'http://127.0.0.1:5173/' }, { groupId: g2 })));
+    act(() => useLayoutStore.getState().apply(key, (l) => focusTab(focusTab(l, PAGE), tabId.terminal('s-01'))));
+    const before = useLayoutStore.getState().layouts[key];
+    act(() => bridge.emitBrowserFocus({ webContentsId: 8 }));
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+  });
+
+  it('window.open страницы панели — новая страница в той же панели, активная; вкладок работы не прибавляется', async () => {
+    const { key } = await panelInSecondGroup();
+    const tabsBefore = groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs.map((tab) => tab.id));
+    act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/popup', openerWebContentsId: 8 }));
+    await flush();
+    const layout = useLayoutStore.getState().layouts[key]!;
+    const panel = panelOf(layout, OWNER)!;
+    expect(panel.pages.map((page) => page.url)).toEqual(['http://127.0.0.1:5173/', 'http://127.0.0.1:5173/popup']);
+    expect(panel.active).toBe(panel.pages[1]?.id);
+    expect(groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual(tabsBefore);
+  });
+
+  it('window.open страницы закрытой панели — ничего: панель человеку не открывается', async () => {
+    const { key } = await panelInSecondGroup(false);
+    const before = useLayoutStore.getState().layouts[key];
+    act(() => bridge.emitBrowserOpenTab({ url: 'http://127.0.0.1:5173/popup', openerWebContentsId: 8 }));
+    await flush();
+    expect(useLayoutStore.getState().layouts[key]).toBe(before);
+    expect(groups(before!).flatMap((group) => group.tabs.filter((tab) => tab.kind === 'browser'))).toEqual([]);
   });
 });
 

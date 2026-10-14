@@ -1502,6 +1502,30 @@ export const S = {
       /** Касания включаются с новым документом (спайк 0.3). */
       touchReload: 'Reload to apply touch',
     },
+    /**
+     * Панель браузера хозяина — справа от вида сессии или комнаты (спека браузера 3.10, 4.11). Заголовок хозяина и названия
+     * страниц — данные (ярлык сессии, название комнаты, заголовок и адрес страницы), идут как есть.
+     */
+    panel: {
+      /** Кнопка у вида хозяина (подпись для читалки экрана и подсказка). */
+      toggle: 'Browser',
+      toggleTitle: 'Show or hide the browser panel',
+      /** `aria-label` полоски страниц. */
+      pages: 'Browser pages',
+      /** Страница без адреса и без заголовка. */
+      newPage: 'New page',
+      addPage: 'Add a page',
+      closePage: (title: string): string => `Close ${title}`,
+      closePanel: 'Close the browser panel',
+      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      backToChat: 'Back to chat',
+      backToRoom: 'Back to room',
+      resize: 'Resize the browser panel',
+      tooManyPages: 'No more than 5 pages in a browser panel',
+      /** Пункт «⋯» вкладки браузера человека: страница переезжает в браузер сессии или комнаты. */
+      moveTo: 'Move to browser of…',
+      moved: (name: string): string => `Moved to the browser of ${name}`,
+    },
   },
 
   /**

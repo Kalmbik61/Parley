@@ -103,7 +103,9 @@ import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
+import { focusPanelPage, openPopupInPanel } from '../browser/panel/actions.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
+import { layoutUrl } from '../browser/url.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
@@ -595,6 +597,8 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     () =>
       bridge.browser.onFocus(({ webContentsId }) => {
         const id = browserTabOf(webContentsId);
+        // Страница панели браузера хозяина: активной делается вкладка хозяина (`browser/panel/actions.ts`).
+        if (id !== null && focusPanelPage(id)) return;
         const state = useLayoutStore.getState();
         const key = state.activeWorkKey;
         const layout = key === null ? undefined : state.layouts[key];
@@ -610,6 +614,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   useEffect(
     () =>
       bridge.browser.onOpenTab((event) => {
+        // Открыватель — страница панели браузера: новая страница встаёт в ту же панель.
+        const opener = browserTabOf(event.openerWebContentsId);
+        const popupUrl = layoutUrl(event.url);
+        if (opener !== null && popupUrl !== null && openPopupInPanel(opener, popupUrl)) return;
         const state = useLayoutStore.getState();
         openBrowserTabFrom(event, {
           apply: state.apply,

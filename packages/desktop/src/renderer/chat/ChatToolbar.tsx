@@ -9,7 +9,8 @@
  * и уровни модели из карты, выбор уходит `sessions.setModel` / `sessions.setEffort` из `ChatView`; у хоста без этих
  * методов — подпись модели простым текстом («Stop» ушёл в поле ввода).
  * Левее них, пока в ленте есть работающие карточки агентов, — «N agents running» (кусок 4b): клик ведёт ленту к первой из
- * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала.
+ * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала. Правее всего — кнопка
+ * «Browser» панели браузера сессии (`browser/panel/PanelToggle.tsx`, этап B2).
  */
 
 import { ChevronDown, LoaderCircle } from 'lucide-react';
@@ -22,6 +23,7 @@ import { RoleChip } from '../lib/role-summary.js';
 import { useWorksStore } from '../store/works.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
 import { updateTab, findTab } from '../layout/tree.js';
+import { PanelToggle } from '../browser/panel/PanelToggle.js';
 import { Button } from '../ui/button.js';
 import {
   DropdownMenu,
@@ -298,6 +300,8 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
           <MicButton targetId={micTargetId} size="sm" />
         </span>
       )}
+      {/* Панель браузера этой сессии (спека браузера 4.11): кнопка в обоих видах, правее прочего. */}
+      {session === undefined ? null : <PanelToggle workKey={workKey} owner={{ kind: 'session', sessionId: session.id }} />}
     </div>
   );
 }
