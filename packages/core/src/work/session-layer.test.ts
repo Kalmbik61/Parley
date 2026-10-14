@@ -14,6 +14,7 @@ describe('common session layer', () => {
   it('orders every block and omits empty blocks without persisting anything', () => {
     const result = buildSessionLayer({
       guidance: 'GUIDE',
+      browser: 'BROWSER',
       bridge: 'BRIDGE',
       role: 'ROLE',
       playbook: 'PLAYBOOK',
@@ -23,8 +24,11 @@ describe('common session layer', () => {
       memoryFacts: 'FACTS',
     });
     expect(result.text).toBe(
-      'GUIDE\n\nBRIDGE\n\nROLE\n\nPLAYBOOK\n\nBRIEF\n\nTeam rules of this project (PARLEY.md):\nRULES\n\nFACTS',
+      'GUIDE\n\nBROWSER\n\nBRIDGE\n\nROLE\n\nPLAYBOOK\n\nBRIEF\n\nTeam rules of this project (PARLEY.md):\nRULES\n\nFACTS',
     );
+    expect(result.blockBytes.browser).toBe(7);
+    // Без блока браузера слой прежний: пустой блок не оставляет ни пустых строк, ни следа.
+    expect(buildSessionLayer({ guidance: 'GUIDE', bridge: 'BRIDGE' }).text).toBe('GUIDE\n\nBRIDGE');
     expect(result.warnings).toEqual([]);
     expect(
       buildSessionLayer({

@@ -37,7 +37,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -411,6 +411,8 @@ async function plan(
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
       bridge,
+      // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
+      ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,
       memoryItems,

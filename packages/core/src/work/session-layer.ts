@@ -11,6 +11,8 @@ const SPAWN_RESERVE_BYTES = 32768;
 
 export interface SessionLayerInput {
   guidance: string;
+  /** Приоритет браузера Parley (`BROWSER_PRIORITY_RULE`): только запуску с каналом агента и сервером MCP. */
+  browser?: string;
   bridge?: string;
   role?: string;
   /** Native Claude roles use --agent; their prompt must not be duplicated. */
@@ -26,7 +28,7 @@ export interface SessionLayerInput {
 }
 
 export type LayerBlockBytes = Record<
-  'guidance' | 'bridge' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
+  'guidance' | 'browser' | 'bridge' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
   number
 >;
 export interface SessionLayer {
@@ -111,6 +113,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
   if (memory?.truncated) warnings.push({ code: 'memory-truncated', message: 'Parley cut project memory at 12 KiB; clean up memory.md to include the remaining facts.' });
   const parts = {
     guidance: input.guidance,
+    browser: input.browser ?? '',
     bridge: input.bridge ?? '',
     role: role.text,
     playbook: playbook.text,
@@ -125,6 +128,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     throw new SessionLayerTooLargeError({ memoryBytes: blockBytes.memoryFacts, blockBytes });
   const text = [
     parts.guidance,
+    parts.browser,
     parts.bridge,
     parts.role,
     parts.playbook,
