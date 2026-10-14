@@ -155,12 +155,13 @@ function UsageTable({ usage, labels, onCopy }: { usage: RoomUsage; labels: Usage
             {column}
           </span>
         ))}
-        <UsageRow label={U.total} marks={usage.total.completeness === 'partial' ? [U.partial] : []} counters={usage.total} strong />
+        <UsageRow label={U.total} tags={[]} marks={usage.total.completeness === 'partial' ? [U.partial] : []} counters={usage.total} strong />
         {usage.byProvider.length > 1
           ? usage.byProvider.map((item) => (
               <UsageRow
                 key={item.provider}
                 label={labels.provider(item.provider)}
+                tags={[]}
                 marks={item.total.completeness === 'partial' ? [U.partial] : []}
                 counters={item.total}
                 indent
@@ -170,7 +171,13 @@ function UsageTable({ usage, labels, onCopy }: { usage: RoomUsage; labels: Usage
       </div>
       <div data-testid="room-usage-members" className={`${GRID} max-h-[min(40vh,240px)] overflow-y-auto border-t border-border pt-2`}>
         {usage.members.map((member) => (
-          <UsageRow key={member.sessionId} label={labels.member(member)} marks={memberMarks(member)} counters={member.usage} />
+          <UsageRow
+            key={member.sessionId}
+            label={labels.memberName(member)}
+            tags={labels.memberTags(member)}
+            marks={memberMarks(member)}
+            counters={member.usage}
+          />
         ))}
       </div>
       <p className="text-muted-foreground">{U.footnote}</p>
@@ -182,12 +189,14 @@ function UsageTable({ usage, labels, onCopy }: { usage: RoomUsage; labels: Usage
 
 function UsageRow({
   label,
+  tags,
   marks,
   counters,
   strong = false,
   indent = false,
 }: {
   label: string;
+  tags: readonly string[];
   marks: readonly string[];
   counters: UsageCounters | null;
   strong?: boolean;
@@ -195,15 +204,18 @@ function UsageRow({
 }): JSX.Element {
   // У строки без цифр (не запущена, нет лога) — прочерки: `?` значил бы «число есть, но неизвестно».
   const cells = counters === null ? ['—', '—', '—', '—'] : usageCells(counters);
+  const detail = [...tags, ...marks];
   return (
     <>
-      <span
-        data-usage-label=""
-        title={[label, ...marks].join(' · ')}
-        className={`min-w-0 truncate${strong ? ' font-medium' : ''}${indent ? ' pl-3' : ''}`}
-      >
-        {label}
-        {marks.length > 0 ? <span className="text-muted-foreground"> · {marks.join(' · ')}</span> : null}
+      <span title={[label, ...detail].join(' · ')} className={`flex min-w-0 flex-col${indent ? ' pl-3' : ''}`}>
+        <span data-usage-label="" className={`min-w-0 truncate${strong ? ' font-medium' : ''}`}>
+          {label}
+        </span>
+        {detail.length > 0 ? (
+          <span data-usage-detail="" className="whitespace-normal break-words text-muted-foreground">
+            {detail.join(' · ')}
+          </span>
+        ) : null}
       </span>
       {cells.map((value, index) => (
         <span key={index} data-usage-value="" className="text-right font-mono tabular-nums">

@@ -107,6 +107,17 @@ test.describe('расход токенов комнаты в окне 800×500',
       // Длинное название сессии обрезано многоточием, а цифры и прочерки — целиком.
       const label = popover.locator('[data-usage-label]').filter({ hasText: 'S01' }).first();
       expect(await label.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+      // Вторая строка (ведущий, провайдер, пометка) переносится, а не обрезается: видна целиком и внутри поповера.
+      const detail = popover.locator('[data-usage-detail]').filter({ hasText: 'lead' }).first();
+      await expect(detail).toBeVisible();
+      await expect(detail).toContainText('lead');
+      await expect(detail).toContainText('n/a — log not found');
+      const detailBox = await detail.boundingBox();
+      expect(detailBox).not.toBeNull();
+      expect(detailBox!.x).toBeGreaterThanOrEqual(box!.x);
+      expect(detailBox!.y).toBeGreaterThanOrEqual(box!.y);
+      expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+      expect(detailBox!.y + detailBox!.height).toBeLessThanOrEqual(box!.y + box!.height + 0.5);
       for (const value of await popover.locator('[data-usage-value]').all()) {
         expect(await value.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       }

@@ -105,7 +105,8 @@ describe('RoomUsageChip (спека расхода токенов, 3.1–3.3)', 
     expect(usageCalls()).toEqual([{ method: 'rooms.usage', params: { projectPath: '/p', workId: 'w-01', roomId: 'r-01' } }]);
     fireEvent.click(chip);
     const popover = await screen.findByTestId('room-usage-popover');
-    expect(popover.textContent).toContain('S01 Planner · lead · Claude');
+    expect([...popover.querySelectorAll('[data-usage-label]')].map((node) => node.textContent)).toContain('S01 Planner');
+    expect(popover.textContent).toContain('lead · Claude');
     expect(popover.textContent).toContain('partial');
     expect(popover.textContent).toContain('not started');
     expect(popover.textContent).toContain('Tokens, not money or plan limit.');

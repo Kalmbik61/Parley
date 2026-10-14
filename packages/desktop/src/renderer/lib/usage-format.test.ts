@@ -67,6 +67,12 @@ describe('usage-format (спека расхода токенов, 3)', () => {
     expect(usageMarks(summary({ source: 'frozen-snapshot', stale: true, completeness: 'partial' }))).toEqual(['snapshot', 'stale', 'partial']);
   });
 
+  it('название и подписи участника раздельно; удалённая сессия без провайдера', () => {
+    expect(labels.memberName(member({ lead: true }))).toBe('S01 Planner');
+    expect(labels.memberTags(member({ lead: true }))).toEqual(['lead', 'Claude']);
+    expect(labels.memberTags(member({ lead: false, provider: null }))).toEqual([]);
+  });
+
   it('пометки строки участника', () => {
     expect(memberMarks(member({ status: 'not-started', usage: null }))).toEqual(['not started']);
     expect(memberMarks(member({ status: 'unavailable', reason: 'log-missing', usage: null }))).toEqual(['n/a — log not found']);

@@ -47,6 +47,10 @@ export function memberMarks(member: RoomUsageMember): string[] {
 export interface UsageLabels {
   /** `S01 Planner · lead · Claude`. */
   member(member: RoomUsageMember): string;
+  /** Только название: `S01 Planner`. */
+  memberName(member: RoomUsageMember): string;
+  /** Подписи после названия: `lead`, провайдер (удалённая сессия — без него). */
+  memberTags(member: RoomUsageMember): string[];
   provider(id: string): string;
 }
 
@@ -56,17 +60,16 @@ export function createUsageLabels(
   providers: ReadonlyArray<{ id: string; label: string }>,
 ): UsageLabels {
   const provider = (id: string): string => providers.find((item) => item.id === id)?.label ?? id;
-  return {
+  const labels: UsageLabels = {
     provider,
-    member: (member) => {
+    memberName: (member) => {
       const label = sessions.find((session) => session.id === member.sessionId)?.label ?? '';
-      return [
-        sessionRowLabel(member.sessionId, label),
-        ...(member.lead ? [U.lead] : []),
-        ...(member.provider === null ? [] : [provider(member.provider)]),
-      ].join(' · ');
+      return sessionRowLabel(member.sessionId, label);
     },
+    memberTags: (member) => [...(member.lead ? [U.lead] : []), ...(member.provider === null ? [] : [provider(member.provider)])],
+    member: (member) => [labels.memberName(member), ...labels.memberTags(member)].join(' · '),
   };
+  return labels;
 }
 
 const two = (value: number): string => String(value).padStart(2, '0');
