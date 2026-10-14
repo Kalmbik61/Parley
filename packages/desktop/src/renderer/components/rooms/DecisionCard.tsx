@@ -12,9 +12,12 @@
  * вызова. После успеха они остаются занятыми, пока карточка не сменится: хост отвечает на повтор
  * `conflict`ом, и человек увидел бы тост о том, чего не было. Новая версия текста (`rev` вырос) заменяет
  * текст на месте, форма возврата и заметка при этом остаются.
+ * Пока ответ в пути, в нажатой кнопке крутится спиннер; если хост ещё не открыл снимок работ, под кнопками
+ * подпись, что ответ уйдёт после старта (разбор 2026-10-14: после перезапуска Accept висел до 30 с молча).
  */
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { LoaderCircle } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
@@ -44,13 +47,17 @@ export interface DecisionCardProps {
   onResolve: (action: 'accept' | 'return', note: string) => Promise<boolean>;
   /** Форма возврата поменяла высоту карточки: лента снова прижимается к низу. */
   onLayout: () => void;
+  /** Хост ответил на `works.list`; `false` — ответ на решение ждёт старта хоста. По умолчанию `true`. */
+  hostReady?: boolean;
 }
 
-export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason }: DecisionCardProps): JSX.Element {
+export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason, hostReady = true }: DecisionCardProps): JSX.Element {
   const [returning, setReturning] = useState(false);
   const [note, setNote] = useState('');
   /** Версия карточки, на которую уже ушёл ответ; `null` — отвечать можно. */
   const [resolving, setResolving] = useState<string | null>(null);
+  /** Какое действие в пути — спиннер рисуется в его кнопке. */
+  const [pending, setPending] = useState<'accept' | 'return' | null>(null);
   const inFlight = useRef(false);
   const version = [proposal.id, proposal.rev, proposal.planId ?? proposal.plan?.id, proposal.planRev ?? proposal.plan?.rev].join(':');
   const busy = resolving === version;
@@ -67,10 +74,14 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
     if (inFlight.current || !canResolve) return;
     inFlight.current = true;
     setResolving(version);
+    setPending(action);
     const accepted = await onResolve(action, action === 'return' ? note.trim() : '');
     inFlight.current = false;
     if (!accepted) setResolving(null);
   };
+
+  const spinner = <LoaderCircle data-busy-spinner="" aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />;
+  const startingNote = busy && !hostReady ? <p data-host-starting="" className="text-xs text-muted-foreground">{S.rooms.hostStarting}</p> : null;
 
   return (
     <div
@@ -102,22 +113,28 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
           />
           <div className="flex flex-wrap gap-2">
             <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('return')}>
+              {busy && pending === 'return' ? spinner : null}
               {S.rooms.sendToLead}
             </Button>
             <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(false)}>
               {S.common.cancel}
             </Button>
           </div>
+          {startingNote}
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('accept')}>
-            {S.rooms.accept}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(true)}>
-            {S.rooms.returnForRework}
-          </Button>
-        </div>
+        <>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('accept')}>
+              {busy && pending === 'accept' ? spinner : null}
+              {S.rooms.accept}
+            </Button>
+            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(true)}>
+              {S.rooms.returnForRework}
+            </Button>
+          </div>
+          {startingNote}
+        </>
       )}
     </div>
   );

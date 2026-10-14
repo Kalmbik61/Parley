@@ -27,6 +27,11 @@ export interface WorksState {
   branches: Record<string, string | null>;
   /** Снимка работ ещё нет: `works.list` не ответил или отказал. */
   loading: boolean;
+  /**
+   * Хост ответил на `works.list`: снимок работ дочитан и сверен (ворота `worksReady`), методы снимка больше не ждут.
+   * Рассылка `works.changed` приходит и до ворот, поэтому `loading: false` готовности хоста не означает.
+   */
+  ready: boolean;
   error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
   init: (bridge: Pick<ParleyBridge, 'call' | 'on'>) => () => void;
@@ -44,10 +49,13 @@ export const useWorksStore = create<WorksState>((set) => ({
   entries: [],
   branches: {},
   loading: true,
+  ready: false,
   error: null,
   init: (bridge) => {
     let disposed = false;
     let applied = -1;
+    // Новое подключение — возможно, к только что запущенному хосту: готовность считается заново.
+    set({ ready: false });
     const apply = (snapshot: WorksSnapshot): void => {
       if (disposed) return;
       // Хост до P35 номера не шлёт: его снимки применяются в порядке прихода, как прежде.
@@ -68,7 +76,10 @@ export const useWorksStore = create<WorksState>((set) => ({
 
     bridge
       .call('works.list', {})
-      .then(apply)
+      .then((snapshot) => {
+        apply(snapshot);
+        if (!disposed) set({ ready: true });
+      })
       .catch((err: unknown) => {
         if (disposed) return;
         // `loading` не снимается и прежний снимок не трогается (lane-r5): отказ — не пустой список.

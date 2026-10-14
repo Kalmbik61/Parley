@@ -756,6 +756,8 @@ export const S = {
     /** Строка доставки под сообщением: кто уже забрал его (`readBy`) и кто ещё нет. */
     pickedUp: (tags: string): string => `✓ Picked up by ${tags}`,
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Те из ждущих, кому Parley доводит письмо сам (поднимает, напечатал указатель), — со спиннером. */
+    delivering: (tags: string): string => `Delivering to ${tags}…`,
     /**
      * Почему сообщение ещё не забрано — в скобках после тега, `S01 (busy)`. Ключи — `MailWait` протокола: причину
      * присылает хост в живых метриках сессии (`metrics.mailWaiting`); таблица обязана покрывать их все.
@@ -791,6 +793,11 @@ export const S = {
     returnForRework: 'Return for rework',
     returnPlaceholder: 'What should the lead change?',
     sendToLead: 'Send to lead',
+    /**
+     * Под кнопками карточки, пока ответ в пути, а хост ещё не ответил на `works.list`: после перезапуска он сверяет,
+     * какие сессии живы, и ответ на решение ждёт этого (разбор 2026-10-14).
+     */
+    hostStarting: 'Parley is still starting — your answer goes through once it is ready',
     /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
     decisionChanged: 'The decision changed — review the latest version.',
     /**
