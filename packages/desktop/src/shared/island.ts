@@ -4,7 +4,7 @@
  * браузер, голос, отложенная цель клика) острову не даётся.
  */
 
-import type { EventName } from '@parley/protocol';
+import type { EventName, SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 import type { IslandAnchor } from './ui-types.js';
 
@@ -48,6 +48,12 @@ export interface IslandApi {
   /** Показать главное окно (создать, если закрыто) и открыть в нём цель. */
   open(target: FocusTarget): void;
   beep(): void;
+  /**
+   * Clear: сессии строк Done просмотрены. Остров хосту уведомлений не шлёт (`host:notify` от него отбрасывается), поэтому
+   * для этого есть узкий канал `island:mark-seen`: main проверяет список и шлёт хосту `activity.seen`, как главное окно, когда
+   * видит сессию, — в Parley гаснет «непросмотрено».
+   */
+  markSeen(refs: SessionRef[]): void;
   /** Отрисовка острова упала: main снимает признак «страница загружена» (уведомления снова идут) и прячет окно. */
   failed(): void;
 }

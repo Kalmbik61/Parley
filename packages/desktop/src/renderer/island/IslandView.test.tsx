@@ -26,7 +26,7 @@ const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'p
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), failed: vi.fn(),
+    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
   };
 }
 

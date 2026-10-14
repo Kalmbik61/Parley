@@ -4,6 +4,20 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- **Clear on the island marks the finished sessions as seen.** The quiet **Clear** under the list
+  used to hide the "Done" rows on the island only, so the green "unseen" dot stayed in the Parley
+  sidebar. Now it also marks those sessions as seen, as if you had looked at them: the dot goes
+  away and the "✅ N" tab disappears. A row that was already seen in Parley is only hidden.
+
+### Fixed
+
+- **Clear stays in place under a long Done list on the island.** Clear was inside the scrolling
+  list and scrolled away with it; it now stands under the list.
+
 ## 0.12.0
 
 The Island at the top of the screen — in the notch on a MacBook — answers permission requests and shows which agents are working and what they just finished. Browser pages send their context to chat, your messages in rooms sit on the right, and "needs you" notifications say what is asked.

@@ -22,8 +22,11 @@
  * Done — новый конец хода (`turnEndedAt` не раньше момента подключения острова к хосту) выдвигает убранный остров и
  * заново заводит отсчёт удержания, без звука. Done, что остров застал уже готовым (ход кончился до подключения), в
  * список попадает и даёт `✅ N` убранному острову, но остров не выдвигает. Clear прячет все видимые сейчас Done: ключи (`doneKey`)
- * лежат в памяти острова до перезапуска и при переподключении не сбрасываются; новый конец хода — новый ключ. Текст
- * ответа к строкам Done берёт `useIslandReplies` (разовые снимки ленты; стор привязан к мосту вместе с очередью).
+ * лежат в памяти острова до перезапуска и при переподключении не сбрасываются; новый конец хода — новый ключ. Clear
+ * заодно отмечает эти сессии просмотренными в Parley (`island.markSeen` → `activity.seen` в хост): гаснет «непросмотрено» в
+ * боковой панели. Локальный `cleared` остаётся: строки уходят сразу, не дожидаясь ответа хоста. Удержанные просмотренные
+ * строки (`seen`) хосту не шлются. Текст ответа к строкам Done берёт `useIslandReplies` (разовые снимки ленты; стор
+ * привязан к мосту вместе с очередью).
  *
  * Показанная Done-строка держится до конца показа. Пока остров выдвинут, ключи его непросмотренных строк Done (`seen`
  * ложно) копятся в `held`, и когда окно Parley отметит сессию просмотренной (`unseen` → `idle`, `turnEndedAt` прежний),
@@ -249,6 +252,13 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     return () => observer.disconnect();
   }, [reportHitRect, config.anchor, config.topInset]);
 
+  // Clear: строки уходят с острова сразу, а ещё не просмотренные сессии отмечаются просмотренными в хосте.
+  const clearDone = (): void => {
+    setCleared((current) => new Set([...current, ...doneRows.map((row) => row.doneKey)]));
+    const unseenRefs = doneRows.filter((row) => !row.seen).map((row) => row.ref);
+    if (unseenRefs.length > 0) bridge.island.markSeen(unseenRefs);
+  };
+
   return (
     <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`} onTransitionEnd={reportHitRect}>
       <IslandView
@@ -268,7 +278,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         onDragEnd={() => setDragging(false)}
         onToggleList={setListOpen}
         onHide={retract}
-        onClearDone={() => setCleared((current) => new Set([...current, ...doneRows.map((row) => row.doneKey)]))}
+        onClearDone={clearDone}
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
       />

@@ -14,6 +14,7 @@ class FakeIpcMain {
 
 const island = { id: 99 };
 const stranger = { id: 1 };
+const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
 const TARGET = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' }, cardId: 'c-1' };
 
 function setup() {
@@ -29,6 +30,7 @@ function setup() {
     pushConfig: vi.fn(),
     openTarget: vi.fn(),
     beep: vi.fn(),
+    markSeen: vi.fn(),
     onFailed: vi.fn(),
   };
   registerIslandIpc(options);
@@ -47,6 +49,7 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
     pushConfig: state.pushConfig,
     openTarget: state.openTarget,
     beep: state.beep,
+    markSeen: state.markSeen,
     onFailed: state.onFailed,
   };
   return Object.entries(mocks)
@@ -114,6 +117,7 @@ describe('IPC острова', () => {
     ['island:drag-end', [{ screenX: 1, screenY: 2 }]],
     ['island:open', [TARGET]],
     ['island:beep', []],
+    ['island:mark-seen', [[REF]]],
     ['island:failed', []],
   ])('%s от чужого окна не делает ничего', (channel, args) => {
     const state = setup();
@@ -140,6 +144,13 @@ describe('IPC острова', () => {
     ['island:hit-rect', [{ x: 2001, y: 2, width: 3, height: 4 }]],
     ['island:hit-rect', [{ x: 1, y: 2, width: 3, height: 2001 }]],
     ['island:visible', ['yes']],
+    ['island:mark-seen', [undefined]],
+    ['island:mark-seen', [REF]],
+    ['island:mark-seen', [[]]],
+    ['island:mark-seen', [Array.from({ length: 51 }, () => REF)]],
+    ['island:mark-seen', [[REF, { projectPath: '/p', workId: 'w-1' }]]],
+    ['island:mark-seen', [[REF, 'мусор']]],
+    ['island:mark-seen', [[{ projectPath: '/p', workId: 1, sessionId: 's-01' }]]],
     ['island:drag-start', [null]],
     ['island:drag-move', [{ screenX: '1', screenY: 2 }]],
     ['island:drag-end', [{ screenX: Number.POSITIVE_INFINITY, screenY: 0 }]],
@@ -147,6 +158,15 @@ describe('IPC острова', () => {
     const state = setup();
     state.ipcMain.emit(channel, { sender: island }, ...args);
     expect(calledNames(state)).toEqual([]);
+  });
+
+  it('mark-seen: верный список (от одной до 50 ссылок) доходит до main, лишние поля срезаются', () => {
+    const { ipcMain, markSeen } = setup();
+    const other = { projectPath: '/q', workId: 'w-2', sessionId: 's-02' };
+    ipcMain.emit('island:mark-seen', { sender: island }, [REF, { ...other, extra: 1 }]);
+    const fifty = Array.from({ length: 50 }, (_, at) => ({ ...REF, sessionId: `s-${at}` }));
+    ipcMain.emit('island:mark-seen', { sender: island }, fifty);
+    expect(markSeen.mock.calls).toEqual([[[REF, other]], [fifty]]);
   });
 
   it('звук; канала подсказки первого показа больше нет', () => {

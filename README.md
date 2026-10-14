@@ -918,9 +918,10 @@ When an agent finishes a turn and you have not looked at its session in Parley y
 keeps it as a "Done" row: a green dot, the session name, when the turn ended and the first lines of
 the agent's last reply, and the pill adds "✅ N done". A row goes away when you look at that session
 in Parley (the window focused, the tab visible for about a second), when the agent starts working
-again, or with the quiet **Clear** under the list, which hides the rows on the island only. A row
-you have just seen in Parley stays until the pointer leaves the island or it tucks away. The
-"finished" system notification is unchanged.
+again, or with the quiet **Clear** under the list, which hides the rows and marks those sessions as
+seen in Parley too (the green "unseen" dot in the sidebar goes away). A row you have just seen in
+Parley stays until the pointer leaves the island or it tucks away. The "finished" system
+notification is unchanged.
 
 When an agent asks for permission, asks a question or brings a plan, the island opens a card by
 itself, without switching to Parley:
