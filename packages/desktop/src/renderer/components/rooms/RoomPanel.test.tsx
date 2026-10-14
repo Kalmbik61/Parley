@@ -1341,7 +1341,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
   });
 
   // Разбор 2026-10-14: после Accept спящие просыпаются десятки секунд, а строка стояла неподвижной. Причины, при
-  // которых Parley сам доводит письмо (поднимает, напечатал указатель, ждёт конца хода), — со спиннером; те, где
+  // которых Parley сам доводит письмо (поднимает, напечатал указатель), — со спиннером; те, где
   // нужен человек или письма не будет без него, — прежней строкой.
   it('Parley доставляет сам — «Delivering to …» со спиннером; ждущие человека — прежней строкой рядом', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
@@ -1398,7 +1398,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
     };
-    const delivering = new Set<MailWait>(['busy', 'in-flight', 'pointed', 'resuming']);
+    const delivering = new Set<MailWait>(['in-flight', 'pointed', 'resuming']);
     for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {
       renderPanel(entryOf({ messages: [message('m-1', { to: ['s-01'] })] }), {
         activity: withDoing({ 's-01': { mailWaiting: reason } }),
@@ -1428,7 +1428,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
     const { rerender, initial } = renderPanel(entryOf({ messages: [message('m-1')] }));
     expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01, S02, S03');
     rerender(<RoomPanel {...initial} activity={withDoing({ 's-01': { mailWaiting: 'busy' } })} />);
-    expect(deliveryLine()?.textContent).toBe('Delivering to S01 (busy)… · ▤ Not picked up yet by S02, S03');
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S02, S03');
     // S01 забрал: он уходит из ждущих вместе с причиной и встаёт среди забравших.
     rerender(
       <RoomPanel
