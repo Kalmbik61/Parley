@@ -920,7 +920,7 @@ describe('BrowserSurface — размер вьюпорта (спека 2026-10-0
   });
 
   it('высота панели — из ui.json; ручка пишет новую в настройки окна', async () => {
-    useUiStore.setState({ ui: { ...useUiStore.getState().ui, browser: { devtoolsHeight: 300 } } });
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, browser: { ...useUiStore.getState().ui.browser, devtoolsHeight: 300 } } });
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 7), 'dom-ready');

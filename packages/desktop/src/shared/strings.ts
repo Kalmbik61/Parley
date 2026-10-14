@@ -892,6 +892,10 @@ export const S = {
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
+    /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
+    letAgentsUseBrowser: 'Let agents use the browser',
+    letAgentsUseBrowserHint:
+      'Agents can open pages on localhost in a tab of their own workspace. Off: every browser request from an agent is refused.',
   },
 
   /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
