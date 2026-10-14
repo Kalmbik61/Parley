@@ -572,8 +572,10 @@ export type {
   UsageAttribution,
   UsageCompleteness,
   UsageCounters,
+  UsageLedgerOptions,
   UsageObservation,
   UsageSource,
   UsageSummary,
   UsageTotal,
+  UsageWindow,
 } from './work/usage-ledger.js';

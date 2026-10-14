@@ -165,9 +165,111 @@ export type UsageObservation = (
  *   выдумывается, остаётся наибольшее и итог помечается неполным; с `reset` прежний период
  *   закрывается и прибавляется к новому.
  */
-export function createUsageLedger() {
+/** Окно среза учёта (спека расхода токенов, 5.3): `to: null` — открыто до «сейчас». */
+export interface UsageWindow {
+  from: string;
+  to: string | null;
+}
+
+export interface UsageLedgerOptions {
+  /** Учитывать только наблюдения внутри окон. Нет — весь лог, как раньше. */
+  windows?: readonly UsageWindow[];
+}
+
+/** Окно в миллисекундах. */
+interface Span {
+  from: number;
+  to: number;
+}
+
+/** Окна по порядку и без перекрытий; окно с нечитаемыми границами отбрасывается. */
+function spansOf(windows: readonly UsageWindow[]): Span[] {
+  const parsed = windows
+    .map((window) => ({ from: Date.parse(window.from), to: window.to === null ? Number.POSITIVE_INFINITY : Date.parse(window.to) }))
+    .filter((span) => !Number.isNaN(span.from) && !Number.isNaN(span.to) && span.from <= span.to)
+    .sort((a, b) => a.from - b.from);
+  const merged: Span[] = [];
+  for (const span of parsed) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && span.from <= last.to) last.to = Math.max(last.to, span.to);
+    else merged.push({ ...span });
+  }
+  return merged;
+}
+
+const inside = (spans: readonly Span[], t: number): boolean => spans.some((span) => t >= span.from && t <= span.to);
+
+const zeroCounters = (): UsageCounters => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalInput: 0 });
+
+/** Поле за полем `end - base`; неизвестное у любой стороны — неизвестно. */
+function difference(end: UsageCounters, base: UsageCounters): UsageCounters {
+  const result = unknownCounters();
+  for (const field of FIELDS) {
+    const a = end[field];
+    const b = base[field];
+    result[field] = a === null || b === null ? null : Math.max(0, a - b);
+  }
+  return result;
+}
+
+/** Точка накопителя при срезе: значение и момент записи. */
+interface StreamPoint {
+  counters: UsageCounters;
+  t: number;
+  at: string;
+  reset: boolean;
+  child: boolean;
+}
+
+/**
+ * Вклад накопителей в окна (5.3). Нить делится на периоды по сбросам; вклад периода в окно — наибольшее значение внутри
+ * окна минус наибольшее до его начала (нет таких — ноль: период начался в окне). Спад внутри периода без сброса —
+ * неоднозначность, как и без среза.
+ */
+function sliceStreams(streams: Map<string, StreamPoint[]>, spans: readonly Span[]) {
+  const parts: UsageCounters[] = [];
+  let ambiguous = false;
+  let lastAt: string | null = null;
+  let child = false;
+  for (const points of streams.values()) {
+    const periods: StreamPoint[][] = [];
+    for (const point of points) {
+      const current = periods[periods.length - 1];
+      if (point.reset || current === undefined) periods.push([point]);
+      else current.push(point);
+    }
+    for (const period of periods) {
+      let peak = unknownCounters();
+      for (const point of period) {
+        if (FIELDS.some((field) => point.counters[field] !== null && peak[field] !== null && point.counters[field]! < peak[field]!)) {
+          ambiguous = true;
+        }
+        peak = maxCounters(peak, point.counters);
+      }
+      for (const span of spans) {
+        const within = period.filter((point) => point.t >= span.from && point.t <= span.to);
+        if (within.length === 0) continue;
+        const before = period.filter((point) => point.t < span.from);
+        const base = before.length === 0 ? zeroCounters() : before.map((point) => point.counters).reduce(maxCounters);
+        parts.push(difference(within.map((point) => point.counters).reduce(maxCounters), base));
+        for (const point of within) {
+          if (lastAt === null || point.at > lastAt) lastAt = point.at;
+          if (point.child) child = true;
+        }
+      }
+    }
+  }
+  return { parts, ambiguous, lastAt, child };
+}
+
+export function createUsageLedger(options: UsageLedgerOptions = {}) {
   const deltas = new Map<string, UsageCounters>();
   const streams = new Map<string, UsageCounters[]>();
+  const spans = options.windows === undefined ? null : spansOf(options.windows);
+  /** Точки накопителей при срезе: итог по ним считается в `summary`. */
+  const points = new Map<string, StreamPoint[]>();
+  /** Поля, которые лог сообщает хоть в одной записи: при пустом срезе они ноль, прочие неизвестны. */
+  const reported = new Set<keyof UsageCounters>();
   let ambiguous = false;
   let lastAt: string | null = null;
   let descendants = false;
@@ -175,6 +277,22 @@ export function createUsageLedger() {
   return {
     observe(observation: UsageObservation): void {
       const counters = pick(observation.counters);
+      for (const field of FIELDS) if (counters[field] !== null) reported.add(field);
+      if (spans !== null) {
+        const t = observation.at === null ? Number.NaN : Date.parse(observation.at);
+        // Запись без времени при срезе не отнести ни внутрь окна, ни наружу: не учитывается, итог неполный.
+        if (Number.isNaN(t)) {
+          ambiguous = true;
+          return;
+        }
+        if (observation.kind === 'cumulative') {
+          const list = points.get(observation.stream) ?? [];
+          list.push({ counters, t, at: observation.at as string, reset: observation.reset === true, child: observation.child === true });
+          points.set(observation.stream, list);
+          return;
+        }
+        if (!inside(spans, t)) return;
+      }
       if (observation.at !== null && (lastAt === null || observation.at > lastAt)) lastAt = observation.at;
       if (observation.child === true) descendants = true;
 
@@ -206,8 +324,26 @@ export function createUsageLedger() {
     },
 
     summary(): UsageSummary {
-      const contributions = [...deltas.values(), ...[...streams.values()].flat()];
-      if (contributions.length === 0) return { ...unknownCounters(), ...unobserved('native-index') };
+      const sliced = spans === null ? null : sliceStreams(points, spans);
+      const contributions = [...deltas.values(), ...(sliced === null ? [...streams.values()].flat() : sliced.parts)];
+      const unclear = ambiguous || sliced?.ambiguous === true;
+      if (contributions.length === 0) {
+        // Срез: в окна не попало ничего, а записи с usage в логе есть — расход в окнах известен и равен нулю по полям,
+        // которые лог сообщает (у Codex записи в кэш нет — она остаётся неизвестной).
+        if (sliced !== null && reported.size > 0) {
+          const zero = unknownCounters();
+          for (const field of reported) zero[field] = 0;
+          return {
+            ...zero,
+            source: 'native-index',
+            observedAt: null,
+            stale: false,
+            completeness: unclear ? 'partial' : 'complete',
+            coverage: 'conversation',
+          };
+        }
+        return { ...unknownCounters(), ...unobserved('native-index') };
+      }
 
       const totals = unknownCounters();
       let mixed = false;
@@ -220,13 +356,14 @@ export function createUsageLedger() {
           mixed = true;
         }
       }
+      const observedAt = sliced?.lastAt != null && (lastAt === null || sliced.lastAt > lastAt) ? sliced.lastAt : lastAt;
       return {
         ...totals,
         source: 'native-index',
-        observedAt: lastAt,
+        observedAt,
         stale: false,
-        completeness: ambiguous || mixed ? 'partial' : 'complete',
-        coverage: descendants ? 'conversation-and-descendants' : 'conversation',
+        completeness: unclear || mixed ? 'partial' : 'complete',
+        coverage: descendants || sliced?.child === true ? 'conversation-and-descendants' : 'conversation',
       };
     },
   };

@@ -472,3 +472,97 @@ describe('sumUsage с потомками', () => {
     expect(total).toMatchObject({ input: 10, completeness: 'partial', coverage: 'conversation' });
   });
 });
+
+describe('createUsageLedger со срезом по окнам (спека расхода токенов, 5.3)', () => {
+  const at = (hhmm: string): string => `2026-10-04T${hhmm}:00.000Z`;
+  const W = { from: at('12:00'), to: at('13:00') };
+
+  it('разовые записи: учитываются только внутри окна, границы включительно', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(delta('a', { input: 1 }, at('11:59')));
+    ledger.observe(delta('b', { input: 10 }, at('12:00')));
+    ledger.observe(delta('c', { input: 20 }, at('12:30')));
+    ledger.observe(delta('d', { input: 40 }, at('13:00')));
+    ledger.observe(delta('e', { input: 80 }, at('13:01')));
+    expect(ledger.summary()).toMatchObject({ input: 70, completeness: 'complete', observedAt: at('13:00') });
+  });
+
+  it('запись без времени при срезе не учитывается, итог неполный', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(delta('a', { input: 10 }, at('12:30')));
+    ledger.observe(delta('b', { input: 99 }, null));
+    expect(ledger.summary()).toMatchObject({ input: 10, completeness: 'partial' });
+  });
+
+  it('накопитель: наибольшее в окне минус значение до его начала', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(cumulative({ input: 100 }, { at: at('11:00') }));
+    ledger.observe(cumulative({ input: 150 }, { at: at('12:30') }));
+    ledger.observe(cumulative({ input: 300 }, { at: at('14:00') }));
+    expect(ledger.summary()).toMatchObject({ input: 50, completeness: 'complete', observedAt: at('12:30') });
+  });
+
+  it('накопитель, начатый внутри окна, считается от нуля', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(cumulative({ input: 40 }, { at: at('12:10') }));
+    ledger.observe(cumulative({ input: 70 }, { at: at('12:50') }));
+    expect(ledger.summary()).toMatchObject({ input: 70 });
+  });
+
+  it('сброс внутри окна: закрытый период — от базы окна, новый — от нуля', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(cumulative({ input: 100 }, { at: at('11:00') }));
+    ledger.observe(cumulative({ input: 150 }, { at: at('12:10') }));
+    ledger.observe(cumulative({ input: 5 }, { at: at('12:20'), reset: true }));
+    ledger.observe(cumulative({ input: 25 }, { at: at('12:50') }));
+    expect(ledger.summary()).toMatchObject({ input: 75, completeness: 'complete' });
+  });
+
+  it('спад накопителя без сброса — итог неполный, как без среза', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(cumulative({ input: 100 }, { at: at('12:10') }));
+    ledger.observe(cumulative({ input: 80 }, { at: at('12:20') }));
+    expect(ledger.summary()).toMatchObject({ completeness: 'partial' });
+  });
+
+  it('два окна: разовые записи и накопитель считаются по каждому окну', () => {
+    const windows = [W, { from: at('14:00'), to: at('15:00') }];
+    const deltas = createUsageLedger({ windows });
+    deltas.observe(delta('a', { input: 10 }, at('12:30')));
+    deltas.observe(delta('b', { input: 20 }, at('13:30')));
+    deltas.observe(delta('c', { input: 40 }, at('14:30')));
+    expect(deltas.summary()).toMatchObject({ input: 50 });
+
+    const stream = createUsageLedger({ windows });
+    stream.observe(cumulative({ input: 100 }, { at: at('11:00') }));
+    stream.observe(cumulative({ input: 150 }, { at: at('12:30') }));
+    stream.observe(cumulative({ input: 200 }, { at: at('13:30') }));
+    stream.observe(cumulative({ input: 260 }, { at: at('14:30') }));
+    expect(stream.summary()).toMatchObject({ input: 110 });
+  });
+
+  it('открытое окно (to: null) берёт всё после начала', () => {
+    const ledger = createUsageLedger({ windows: [{ from: at('12:00'), to: null }] });
+    ledger.observe(delta('a', { input: 1 }, at('11:00')));
+    ledger.observe(delta('b', { input: 10 }, at('23:00')));
+    expect(ledger.summary()).toMatchObject({ input: 10 });
+  });
+
+  it('в окна ничего не попало, а записи в логе есть — ноль по сообщаемым полям, несообщаемое неизвестно', () => {
+    const ledger = createUsageLedger({ windows: [W] });
+    ledger.observe(cumulative({ input: 100, cacheWrite: null }, { at: at('11:00') }));
+    expect(ledger.summary()).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: null,
+      totalInput: 0,
+      completeness: 'complete',
+      observedAt: null,
+    });
+  });
+
+  it('лог без записей с usage при срезе — неизвестно, как без среза', () => {
+    expect(createUsageLedger({ windows: [W] }).summary()).toMatchObject({ input: null, completeness: 'unknown' });
+  });
+});
