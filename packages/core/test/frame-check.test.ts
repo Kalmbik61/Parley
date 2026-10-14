@@ -443,7 +443,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:17',
         'packages/core/src/providers.ts:263',
-        'packages/core/src/work/mcp-config.ts:160',
+        'packages/core/src/work/mcp-config.ts:191',
       ].sort(),
     );
   });

@@ -417,6 +417,8 @@ export type { NativeSkill, SkillUnavailableReason } from './skills/types.js';
 export { scanClaudeCapabilities } from './capabilities/scan.js';
 export type { ScanOptions } from './capabilities/scan.js';
 export {
+  AGENT_TOKEN_ENV,
+  AGENT_URL_ENV,
   MCP_SERVER_BIN,
   codexMcpOverride,
   mcpConfig,
@@ -424,7 +426,7 @@ export {
   mcpConfigValue,
   writeMcpConfig,
 } from './work/mcp-config.js';
-export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export type { AgentChannel, McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
 export {
   CHANNEL_MIN_VERSION,
   CHANNEL_VALUE,

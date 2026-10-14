@@ -2240,3 +2240,38 @@ describe('GLM launch plans', () => {
     expect(plan.providerSessionId).toBe('glm-conversation');
   });
 });
+
+describe('канал агента к браузеру в запуске (спека браузера 3.7; этап B2)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const mcpEnvOf = async (args: string[]): Promise<Record<string, string>> => {
+    const file = args[args.indexOf('--mcp-config') + 1] as string;
+    return (JSON.parse(await readFile(file, 'utf8')) as { mcpServers: { parley: { env: Record<string, string> } } }).mcpServers.parley.env;
+  };
+
+  it('адрес и токен — в env сервера parley у claude (файл 0600) и codex (-c), не в окружении процесса и не в argv claude', async () => {
+    const claude = await pending('claude');
+    const plan = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { agent });
+    expect(await mcpEnvOf(plan.args)).toMatchObject({ PARLEY_AGENT_URL: agent.url, PARLEY_AGENT_TOKEN: agent.token });
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_URL');
+    expect(plan.args.join('\n')).not.toContain(agent.token);
+    expect((await stat(plan.args[plan.args.indexOf('--mcp-config') + 1] as string)).mode & 0o777).toBe(0o600);
+
+    const codex = await pending('codex');
+    const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId), { agent });
+    const table = parseTomlAssignment(codexPlan.args.find((arg) => arg.startsWith('mcp_servers.parley=')) as string).value as Record<string, TomlValue>;
+    expect(table['env']).toMatchObject({ PARLEY_AGENT_URL: agent.url, PARLEY_AGENT_TOKEN: agent.token });
+    expect(codexPlan.env).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+  });
+
+  it('без канала в конфиге MCP нет ни адреса, ни токена — у claude и codex', async () => {
+    const claude = await pending('claude');
+    const plan = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId));
+    expect(await mcpEnvOf(plan.args)).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+    expect(await mcpEnvOf(plan.args)).not.toHaveProperty('PARLEY_AGENT_URL');
+
+    const codex = await pending('codex');
+    const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId));
+    expect(codexPlan.args.join('\n')).not.toContain('PARLEY_AGENT');
+  });
+});
