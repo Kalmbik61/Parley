@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Parley island: assistant mode mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--fg:#ece6dc;--mut:#a8a095;--acc:#d67f48;--line:rgba(255,255,255,.18);--hov:rgba(255,255,255,.1);
+ --pbg:rgba(24,21,19,.82);--pfg:#ece6dc;--pmut:#a8a095;--pline:rgba(255,255,255,.16)}
+*{box-sizing:border-box}
+html{background:#1b1730}
+body{margin:0;min-height:100vh;padding-top:540px;font:14px/1.45 Figtree,ui-sans-serif,system-ui,sans-serif;color:var(--pfg);
+ background:radial-gradient(ellipse 80% 60% at 18% 8%,#4d3b80,transparent 60%),radial-gradient(ellipse 70% 60% at 88% 28%,#a24a6c,transparent 55%),linear-gradient(160deg,#1b2145,#2b1d3d 55%,#1a1a2b);background-attachment:fixed}
+body.light{--pbg:rgba(255,255,255,.8);--pfg:#1c1a17;--pmut:#5f5850;--pline:rgba(0,0,0,.14);
+ background:radial-gradient(ellipse 80% 60% at 15% 8%,#ffd9a8,transparent 60%),radial-gradient(ellipse 70% 60% at 88% 28%,#9ec5ff,transparent 55%),linear-gradient(160deg,#cfe3ff,#f5e3d8 60%,#e6dff4);background-attachment:fixed}
+button{font:inherit;color:inherit;cursor:pointer}
+#menubar{position:fixed;inset:0 0 auto 0;height:25px;z-index:40;display:flex;align-items:center;gap:18px;padding:0 14px;font-size:13px;background:rgba(0,0,0,.3);backdrop-filter:blur(20px);color:#fff}
+body.light #menubar{background:rgba(255,255,255,.5);color:#111}
+#menubar b{font-weight:600}#menubar .r{margin-left:auto}
+
+/* ---- island ---- */
+#frame{position:fixed;top:0;left:0;right:0;height:520px;z-index:50;display:flex;justify-content:center;align-items:flex-start;pointer-events:none}
+#shape{flex:none;overflow:hidden;background:#000;color:var(--fg);font-size:14px;border-radius:0 0 22px 22px;pointer-events:auto;
+ box-shadow:0 14px 40px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.35);
+ transition:width .25s ease-out,height .25s ease-out,margin-top .25s ease-out,border-radius .25s ease-out,box-shadow .25s ease-out}
+#shape[data-view=bar]{border-radius:3px;margin-top:2px;box-shadow:0 0 0 1px rgba(255,255,255,.5)}
+#content{width:max-content}
+.v{display:none;animation:reveal .22s ease-out both}
+[data-view=bar] .v-bar,[data-view=pill] .v-pill,[data-view=big] .v-big,[data-view=appr] .v-appr{display:block}
+.bar{width:40px;height:5px}
+#tab{position:absolute;top:0;left:50%;width:200px;height:18px;transform:translateX(-50%);pointer-events:auto;display:none}
+#frame[data-v=bar] #tab{display:block}
+@keyframes reveal{from{opacity:0}to{opacity:1}}
+/* pill */
+.v-pill{display:none;align-items:center;justify-content:center;gap:8px;padding:6px 12px;white-space:nowrap}
+[data-view=pill] .v-pill{display:flex}
+.dotbtn{width:26px;height:26px;border:0;border-radius:50%;background:none;padding:0;display:grid;place-items:center;margin-left:-4px}
+.dotbtn:hover{background:var(--hov)}
+.dotbtn canvas{display:block}
+.cnt{display:flex;align-items:center;gap:6px}
+[data-busy="1"] .cnt{display:none}[data-busy="0"] .mlbl{display:none}
+.mlbl i{font-style:normal;animation:blink 1.1s steps(2) infinite}
+.mlbl.nodot i{display:none}
+/* big */
+.v-big{width:420px}
+.banner{display:flex;align-items:center;gap:8px;margin:8px 12px 0;padding:5px 10px;border-radius:8px;background:rgba(214,127,72,.15);font-size:13px;cursor:pointer}
+.banner:hover{background:rgba(214,127,72,.26)}
+.banner i,.lbl i{width:7px;height:7px;border-radius:50%;background:var(--acc);flex:none}
+.sw{position:relative;height:136px}
+.sw canvas{position:absolute;inset:0}
+#halo{position:absolute;inset:0;background:radial-gradient(ellipse 46% 62% at 50% 42%,rgba(var(--hc,239,176,92),var(--ha,.17)),transparent 72%);transition:opacity .3s}
+.lbl{display:flex;justify-content:center;align-items:center;gap:7px;height:20px;margin-top:-2px;font-size:13px;color:var(--mut)}
+.lbl u{text-decoration-color:var(--acc);text-underline-offset:2px}
+#shape[data-st=error] .lbl i{background:#dc604c}#shape[data-st=offline] .lbl i{background:#9c948a}#shape[data-st=confirm] .lbl i{background:#ffc24d}
+#shape[data-st=listening] .lbl i{animation:pulse 1s ease-in-out infinite}
+.q{padding:8px 16px 0;font-size:13px;color:var(--mut)}.q:empty{display:none}
+.ans{padding:4px 16px 0;min-height:67px;line-height:1.5}
+.ans span{animation:win .3s both}
+.ans.live::after{content:'';display:inline-block;width:6px;height:12px;margin-left:2px;vertical-align:-1px;background:var(--acc);animation:blink 1s steps(2) infinite}
+@keyframes win{from{opacity:0;transform:translateY(3px)}}
+@keyframes blink{50%{opacity:.2}}
+@keyframes pulse{50%{transform:scale(1.7);opacity:.5}}
+.card{margin:2px 12px 0;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.07);display:flex;flex-direction:column;gap:8px}
+.card[hidden],.sent[hidden],.banner[hidden]{display:none}
+.ch{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--mut)}.ch b{color:var(--fg);font-weight:600}
+.ch canvas{width:16px;height:16px}
+blockquote{margin:0;padding-left:9px;border-left:2px solid var(--acc);font-size:14px}
+.cb{display:flex;align-items:center;gap:8px}.cb .ent{margin-left:auto;font-size:12px;color:var(--mut)}
+.sent{margin:2px 16px 0;font-size:13px;color:var(--mut)}.sent b{color:var(--acc);font-weight:600}
+.pri,.out{height:32px;padding:0 14px;border-radius:8px;font-size:14px;font-weight:500}
+.pri{background:var(--acc);color:#0e0d0c;border:0}.out{background:none;border:1px solid var(--line);color:var(--fg)}
+.pri:hover:not(:disabled){filter:brightness(1.1)}.out:hover:not(:disabled){background:var(--hov)}
+.pri:disabled,.out:disabled{opacity:.45;cursor:default}
+.inrow{display:flex;gap:4px;align-items:center;padding:10px 12px 0}
+#inp{flex:1;min-width:0;height:34px;border:0;border-radius:9px;background:rgba(255,255,255,.08);color:var(--fg);font:inherit;padding:0 12px;outline:0}
+#inp::placeholder{color:var(--mut)}#inp:focus{box-shadow:0 0 0 1px var(--acc)}
+.ib{position:relative;width:34px;height:34px;border:0;border-radius:9px;background:none;display:grid;place-items:center;color:var(--mut)}
+.ib:hover{background:var(--hov);color:var(--fg)}.ib svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ib.on{color:var(--acc)}
+.ib .rd{position:absolute;top:5px;right:5px;width:8px;height:8px;border-radius:50%;background:#ef4b4b;display:none}
+#mic.rec{color:#ef6b6b}#mic.rec .rd{display:block;animation:pulse 1s ease-in-out infinite}
+.hint{display:flex;justify-content:space-between;padding:6px 16px 8px;font-size:12px;color:var(--mut)}
+kbd{font:inherit;padding:0 4px;border-radius:4px;background:rgba(255,255,255,.1)}
+.tuck{display:none;justify-content:center;padding:0 0 8px}
+.hov .tuck{display:flex}
+.tuck button{height:20px;min-width:32px;border:0;background:none;color:var(--mut);display:flex;justify-content:center;align-items:center}
+.tuck button:hover{color:var(--fg)}.tuck svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* approvals */
+.v-appr{width:440px;padding:6px 12px 0}
+.ah{display:flex;align-items:center;gap:8px;padding-bottom:8px}.ah .ttl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m,.nav{font-size:13px;color:var(--mut)}
+.lnk{border:0;background:none;color:var(--acc);font-size:13px;padding:0}.lnk:hover{text-decoration:underline}
+.mono{font:13.5px ui-monospace,Menlo,monospace;padding-bottom:8px}.ab{display:flex;gap:8px;padding-bottom:10px}
+
+/* ---- page chrome ---- */
+#panel{margin:12px 16px;padding:14px;border-radius:14px;background:var(--pbg);backdrop-filter:blur(18px);border:1px solid var(--pline);font-size:13px;max-width:560px}
+@media(min-width:1100px){body{padding-right:332px}#panel{position:fixed;right:16px;top:41px;width:304px;max-height:calc(100vh - 57px);overflow:auto;margin:0;z-index:30}}
+#panel h2{margin:0 0 8px;font-size:15px}#panel h3{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--pmut);font-weight:600}
+#legend{padding:8px 10px;border-radius:9px;background:rgba(127,127,127,.16);line-height:1.5}#legend b{font-weight:600}
+#legend .m{color:var(--pmut);font-size:12px}
+.bs{display:flex;flex-wrap:wrap;gap:5px}
+.bs button{padding:4px 9px;border-radius:7px;border:1px solid var(--pline);background:none;font-size:12.5px}
+.bs button:hover{background:rgba(127,127,127,.2)}.bs button.on{background:var(--acc);border-color:var(--acc);color:#0e0d0c}
+.bs button.big{background:var(--acc);border-color:var(--acc);color:#0e0d0c;font-weight:500}
+.tg{display:flex;flex-direction:column;gap:4px}.tg label{display:flex;gap:7px;align-items:center}
+select{font:inherit;font-size:12.5px;border-radius:6px;padding:2px 4px;background:rgba(127,127,127,.2);color:inherit;border:1px solid var(--pline)}
+.keys{margin-top:10px;color:var(--pmut);font-size:12px}
+#rooms{max-width:760px;margin:28px auto 48px;padding:0 16px}
+#rooms h2{font-size:15px;margin:0 0 4px}#rooms>p{margin:0 0 14px;color:var(--pmut);font-size:13px}
+.rg{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.room{margin:0;padding:14px;border-radius:14px;background:#171513;color:#ece6dc;border:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;gap:10px}
+.room figcaption{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#a8a095}
+.msg{display:flex;flex-direction:row-reverse;gap:10px;align-self:flex-end;max-width:100%}
+.av{width:20px;height:20px;flex:none;border-radius:50%;background:#2c2823;display:grid;place-items:center;margin-top:1px}
+.av canvas{width:20px;height:20px}.av svg{width:12px;height:12px;fill:none;stroke:#a8a095;stroke-width:2;stroke-linecap:round}
+.mc{display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:0}
+.meta{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px 8px;font-size:12px;color:#a8a095}.meta b{color:#ece6dc;font-weight:600}
+.chip{padding:0 7px;border-radius:999px;background:#2c2823;font-size:11px;line-height:18px}
+.bub{padding:8px 12px;border-radius:12px;background:#26231f;font-size:14px;line-height:1.55}
+.foot{font-size:12px;color:#a8a095}
+body.rm *,body.rm *::before,body.rm *::after{transition:none!important;animation:none!important}
+</style>
+</head>
+<body>
+<div id="menubar"><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span>Help</span><span class="r">Thu 15 Oct&nbsp; 14:07</span></div>
+
+<div id="frame" data-v="pill">
+ <div id="shape" data-view="pill" data-busy="0" data-st="idle"><div id="content">
+  <div class="v v-bar"><div class="bar"></div></div>
+
+  <div class="v v-pill">
+   <button class="dotbtn" id="dot" title="Ask Jarvis (&#8997;Space)" aria-label="Ask Jarvis"><canvas id="cvMini"></canvas></button>
+   <div class="cnt">
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-label="Claude"><path d="M8 1v14M1 8h14M3 3l10 10M13 3 3 13" stroke="#d67f48" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-label="Codex"><circle cx="8" cy="8" r="6" fill="none" stroke="#ece6dc" stroke-width="1.7"/><path d="M5.6 8h4.8" stroke="#ece6dc" stroke-width="1.7" stroke-linecap="round"/></svg>
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-label="GLM"><rect x="1.5" y="1.5" width="13" height="13" rx="3.5" fill="#4f7df0"/><path d="M5 5.5h6l-6 5h6" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span>3 working · 1 waiting</span>
+   </div>
+   <div class="mlbl"><span id="mlbl"></span><i>·</i></div>
+  </div>
+
+  <div class="v v-big">
+   <div id="banner" class="banner" role="button" tabindex="0" hidden><i></i><span id="bannerTxt"></span></div>
+   <div class="sw"><div id="halo"></div><canvas id="cvBig"></canvas></div>
+   <div class="lbl" aria-live="polite"><i></i><span id="lbl"></span></div>
+   <div id="q" class="q"></div>
+   <div id="ans" class="ans"></div>
+   <div id="card" class="card" hidden>
+    <div class="ch"><canvas id="cvCard"></canvas><span>To <b>S03 Ruslan</b> · Parley</span></div>
+    <blockquote>Тесты на Safari можно пропустить.</blockquote>
+    <div class="cb"><button class="pri" id="bSend">Send</button><button class="out" id="bCancel">Cancel</button><span class="ent">Enter to send</span></div>
+   </div>
+   <div id="sent" class="sent" hidden>Sent <b>&#10003;</b></div>
+   <div class="inrow">
+    <input id="inp" placeholder="Ask Jarvis…" aria-label="Ask Jarvis" autocomplete="off">
+    <button class="ib" id="mic" aria-label="Voice input" title="Voice input"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4"/></svg><i class="rd"></i></button>
+    <button class="ib" id="spk" aria-label="Spoken replies" aria-pressed="false" title="Spoken replies (stage 3)"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path id="spkOn" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path id="spkOff" d="m16 9 5 6m0-6-5 6" style="display:none"/></svg></button>
+   </div>
+   <div class="hint"><span>Esc to close</span><span><kbd>&#8997;Space</kbd> to talk</span></div>
+   <div class="tuck"><button aria-label="Collapse island" title="Collapse island"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button></div>
+  </div>
+
+  <div class="v v-appr">
+   <div class="ah"><button class="lnk" id="bBack">‹ Jarvis</button><span class="ttl">S03 Ruslan · Auth<span class="m"> · Parley</span></span><span class="nav">‹ <span id="apN"></span> ›</span></div>
+   <div class="mono">Bash: pnpm test --filter @parley/auth</div>
+   <div class="ab"><button class="pri" data-ap="1">Allow</button><button class="out" data-ap="1">Always</button><button class="out" data-ap="1">Deny</button></div>
+   <div class="tuck"><button aria-label="Collapse island"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button></div>
+  </div>
+ </div></div>
+ <div id="tab"></div>
+</div>
+
+<aside id="panel" aria-label="Scenario controls">
+ <h2>Scenario</h2>
+ <div id="legend"></div>
+ <h3>Flows</h3>
+ <div class="bs">
+  <button class="big" data-a="hotkey">&#8997;Space hotkey</button>
+  <button data-a="ask1">Ask: Auth room status</button>
+  <button data-a="ask2">Ask: tell S03 (proposal)</button>
+  <button class="big" data-a="play">&#9654; Play full scenario</button>
+  <button data-a="stop">Stop (Esc)</button>
+  <span style="align-self:center">speed <select id="speed"><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></span>
+ </div>
+ <h3>Jump to state (hold)</h3>
+ <div class="bs" id="holds">
+  <button data-a="hold" data-v="idle">Pill (idle)</button><button data-a="hold" data-v="listening">Listening</button><button data-a="hold" data-v="thinking">Thinking</button><button data-a="hold" data-v="tool">Tool</button><button data-a="hold" data-v="answering">Answering</button><button data-a="hold" data-v="confirm">Confirm card</button><button data-a="hold" data-v="speaking">Speaking</button><button data-a="hold" data-v="error">Error</button><button data-a="hold" data-v="offline">Offline</button><button data-a="done">Done → collapse</button>
+ </div>
+ <h3>Mini view (busy, collapsed)</h3>
+ <div class="bs"><button data-a="mini" data-v="thinking">Thinking·</button><button data-a="mini" data-v="tool">Working·</button><button data-a="mini" data-v="confirm">Confirm send</button></div>
+ <h3>Face emotion (speaking)</h3>
+ <div class="bs" id="emos"><button data-a="emo" data-v="calm">calm</button><button data-a="emo" data-v="joy">joy</button><button data-a="emo" data-v="sad">sad</button><button data-a="emo" data-v="surprise">surprise</button><button data-a="emo" data-v="anger">anger</button><button data-a="emo" data-v="error">error</button></div>
+ <h3>Options</h3>
+ <div class="tg">
+  <label><input type="checkbox" id="cbAppr"> Pending approvals (banner, 2)</label>
+  <label><input type="checkbox" id="cbSpk"> Spoken replies (answer ends in a face)</label>
+  <label><input type="checkbox" id="cbLight"> Light wallpaper</label>
+  <label><input type="checkbox" id="cbRM"> Reduced motion (static frames)</label>
+ </div>
+ <div class="keys"><kbd>Space</kbd>/<kbd>J</kbd> = hotkey (again = stop recording) · <kbd>Esc</kbd> close · <kbd>Enter</kbd> send card, or ask what you typed (try “скажи S03 …”). Hover the collapsed busy pill to expand it; hover the expanded island for the ⌃ arrow.</div>
+</aside>
+
+<main id="rooms">
+ <h2>Room message preview</h2>
+ <p>How a message sent through the assistant looks in a room (spec 7.4), next to a normal one.</p>
+ <div class="rg">
+  <figure class="room"><figcaption>Via assistant</figcaption>
+   <div class="msg"><div class="av"><canvas id="cvRoom"></canvas></div><div class="mc">
+    <div class="meta"><b>You (via Jarvis)</b><span>→ S03 Ruslan</span><span class="chip">note</span><span>4m</span></div>
+    <div class="bub">Тесты на Safari можно пропустить.</div><div class="foot">✓ Picked up by S03</div></div></div></figure>
+  <figure class="room"><figcaption>Normal</figcaption>
+   <div class="msg"><div class="av"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div><div class="mc">
+    <div class="meta"><b>You</b><span>→ S03 Ruslan</span><span class="chip">note</span><span>4m</span></div>
+    <div class="bub">Тесты на Safari можно пропустить.</div><div class="foot">✓ Picked up by S03</div></div></div></figure>
+ </div>
+</main>
+
+<script>
+(()=>{
+'use strict';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const TAU=Math.PI*2,clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v,lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(2-2*t,3)/2;
+const rng=s=>()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const gauss=R=>Math.sqrt(-2*Math.log(R()+1e-9))*Math.cos(TAU*R());
+const hs=n=>{const x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)};
+const RM=()=>document.body.classList.contains('rm');
+
+/* ================= swarm engine (Canvas 2D, additive) ================= */
+// colour index per soul: 0 = c1 (most), 1 = c3 light (~25%), 2 = c2 (~10%), 3 = amber (confirm ring only)
+const PAL={amber:{c:['#EFB05C','#F0DDA5','#F48A64','#FFC24D'],h:'239,176,92'},
+ coral:{c:['#DC604C','#F8B287','#C43F40','#FFC24D'],h:'220,96,76'},
+ gray:{c:['#9C948A','#C3BCB1','#6F665F','#9C948A'],h:'156,148,138'}};
+function sprite(hex){ // bright core + soft glow
+ const c=document.createElement('canvas');c.width=c.height=48;const x=c.getContext('2d'),n=parseInt(hex.slice(1),16),
+ r=n>>16,g=n>>8&255,b=n&255,gr=x.createRadialGradient(24,24,0,24,24,24),
+ k=(a,m)=>`rgba(${r+(255-r)*m|0},${g+(255-g)*m|0},${b+(255-b)*m|0},${a})`;
+ gr.addColorStop(0,k(1,.55));gr.addColorStop(.12,k(.9,.2));gr.addColorStop(.35,k(.3,0));gr.addColorStop(1,k(0,0));
+ x.fillStyle=gr;x.fillRect(0,0,48,48);return c}
+const SPR={};for(const k in PAL)SPR[k]=PAL[k].c.map(sprite);
+
+const BLOBS=[[-.34,-.06,.2,.12,1.2],[.3,.08,.22,.13,1],[0,.12,.26,.1,1.3],[-.05,-.16,.15,.1,.8],[.52,-.1,.13,.09,.5],[-.55,.1,.12,.1,.5],[0,0,.5,.26,.8]]; // [cx,cy,sx,sy,weight] in d; last = dust
+const CT=Math.cos(16*Math.PI/180),ST=Math.sin(16*Math.PI/180); // axis tilt 16 deg
+const DUR={cloudsphere:1.8,spherecloud:1.5,sphereface:.8,facesphere:.8,cloudface:1.4,facecloud:1.2};
+const cat=s=>s==='dot'?'cloud':s;
+// face silhouettes, units of d. eye: a,b half-axes; cut = lid line [base,slope]; dome = flat-bottom; x = X-shaped; mouth: mw width, curl, H0 closed..H1 open height
+const EMO={
+ calm:{a:.095,b:.13,ey:.28,mw:.78,curl:.07,H0:.1,H1:.24,pw:.6},
+ joy:{a:.115,b:.1,dome:1,ey:.28,mw:1.04,curl:.18,H0:.14,H1:.3,pw:.55},
+ sad:{a:.095,b:.12,cut:[-.12,.8],ey:.27,mw:.72,curl:-.13,H0:.08,H1:.15,pw:.7,dim:.78},
+ surprise:{a:.11,b:.16,ey:.31,mo:1,mw:.4,H0:.3,H1:.4,nb:1},
+ anger:{a:.105,b:.085,cut:[-.1,-.95],ey:.27,mw:.6,curl:-.06,H0:.15,H1:.26,pw:.3},
+ error:{x:1,len:.1,ey:.28,mw:.86,curl:0,wave:1,H0:.05,H1:.05,pw:.1,nb:1}};
+const micAt=n=>Math.max(0,.5+.28*Math.sin(n/90)+.22*Math.sin(n/37+1))*(.55+.45*Math.sin(n/530));
+const ampAt=n=>{const t=n/1000,syl=Math.max(0,Math.sin(t*TAU*3.4+1.2*Math.sin(t*TAU*.6))),ph=clamp(Math.sin(t*TAU*.42)*2.2+.7);return clamp(Math.pow(syl,.8)*ph*(.75+.25*Math.sin(t*5.3)))};
+
+class Swarm{
+ constructor(cv,n,o){
+  Object.assign(this,{cv,W:o.w,H:o.h,d:o.d,cx:o.w/2,cy:o.cy,k:o.k||.058,minPx:o.minPx||2.4,ctx:cv.getContext('2d'),
+   on:false,fps:0,dirty:true,trans:false,tr0:-1e9,dur:1,extra:0,toFace:false,key:null,sp:null,palTo:'amber',palFrom:'amber',palT:1,
+   T:0,rot:.5,rv:.35,mic:.4,flash:0,gl:0,last:0,cnt:0,t0:0,mfps:0,nb:performance.now()+1200,b0:0,dbl:false,o:{x:0,y:0,z:0,m:1,sm:1,c:0}});
+  const dpr=devicePixelRatio||1;cv.width=o.w*dpr;cv.height=o.h*dpr;cv.style.width=o.w+'px';cv.style.height=o.h+'px';this.ctx.setTransform(dpr,0,0,dpr,0,0);
+  const R=rng(o.seed||7),tot=BLOBS.reduce((a,b)=>a+b[4],0),core=[];this.S=[];
+  this.bd=BLOBS.map(()=>({ax:.04+.07*R(),ay:.03+.04*R(),per:8+12*R(),ph:TAU*R()}));
+  for(let i=0;i<n;i++){
+   const s={x:0,y:0,z:0,fx:0,fy:0,fz:0,v:1,rd:R(),sp:R()*2-1,sz:.7+.7*R(),ci:R()<.25?1:R()<.134?2:0,tw:TAU*R(),tp:2+8*R(),rk:R(),cor:R()<.17,
+    gx:gauss(R),gy:gauss(R),gz:gauss(R),ru:R(),rv:R(),fl:R()<.22,fph:R(),rc:.54+.14*R(),wc:(R()<.5?-1:1)*(.5+R()),ra:0,ux:0,uy:0,uz:0,b:0,role:0};
+   let q=R()*tot,b=0;while(q>BLOBS[b][4]&&b<BLOBS.length-1){q-=BLOBS[b][4];b++}s.b=b;
+   const r=R();s.role=r<.24?0:r<.48?1:2;
+   if(s.cor){const l=Math.hypot(s.gx,s.gy,s.gz)||1;s.ux=s.gx/l;s.uy=s.gy/l;s.uz=s.gz/l}else core.push(s);
+   this.S.push(s)}
+  core.forEach((s,k)=>{const y=1-2*(k+.5)/core.length,r=Math.sqrt(1-y*y),f=k*2.39996;s.ux=Math.cos(f)*r;s.uy=y;s.uz=Math.sin(f)*r}); // fibonacci sphere
+  const cors=this.S.filter(s=>s.cor);cors.forEach((s,k)=>s.ra=.18+k/cors.length*(TAU-.36)); // ring with a gap
+ }
+ setSpec(E){
+  const key=[E.shape,E.fx,E.emo].join('|'),old=this.sp,now=performance.now();
+  if(E.pal!==this.palTo){this.palFrom=this.palTo;this.palTo=E.pal;this.palT=RM()?1:0}
+  if(key!==this.key){
+   this.key=key;
+   if(old&&!RM()){for(const s of this.S){s.fx=s.x;s.fy=s.y;s.fz=s.z}
+    const a=cat(old.shape),b=cat(E.shape);this.tr0=now;this.dur=a===b?(old.emo!==E.emo?.6:.7):DUR[a+b]||1;this.extra=b==='face'&&a!=='face'?.2:0;this.toFace=!!this.extra}
+   else this.tr0=-1e9;
+   if(E.emo==='surprise')this.flash=1;
+   if(E.glitch&&!(old&&old.glitch))this.gl=now+280;
+  }
+  this.sp=E;this.dirty=true}
+ // live target of soul s (units of d, origin = centre); writes into this.o
+ tg(s,t,amp,bl){
+  const E=this.sp,o=this.o,T=this.T;o.m=1;o.sm=1;o.c=s.ci;
+  if(E.shape==='dot'){const k=.15*(1+(E.fx==='listen'?.7*this.mic:0));o.x=s.gx*k;o.y=s.gy*k;o.z=s.gz*.15}
+  else if(E.shape==='cloud'){
+   const B=BLOBS[s.b],D=this.bd[s.b],br=1+.04*Math.sin(TAU*T/7),ls=E.fx==='listen'?.62+.5*this.mic:1;
+   o.x=(B[0]+D.ax*Math.sin(TAU*T/D.per+D.ph)+s.gx*B[2]*br)*ls;o.y=(B[1]+D.ay*Math.cos(TAU*T/D.per*1.3+D.ph)+s.gy*B[3]*br)*ls;o.z=s.gz*.18;
+   if(E.fx==='listen'){const r=Math.hypot(o.x,o.y),rw=((t/2400)%1)*.9,w=Math.exp(-Math.pow((r-rw)/.08,2)); // wave every 2.4 s from the centre
+    o.x+=o.x/(r+.01)*.05*w;o.y+=o.y/(r+.01)*.05*w;o.m=1+.9*w}
+  }else if(E.shape==='sphere'){
+   if(s.cor&&E.fx==='ring'){o.x=Math.cos(s.ra)*.64;o.y=Math.sin(s.ra)*.64;o.z=.3;o.c=3;o.m=1.15;return}
+   if(!s.cor&&E.fx==='flow'&&s.fl){const u=(T/2.4+s.fph)%1;o.x=(s.ru-.5)*.46*(1-.4*u);o.y=.12+.7*u;o.z=.4;o.m=Math.pow(Math.sin(Math.PI*u),.7)*1.15;return}
+   const k=s.cor?s.rc:.5*(1+.02*Math.sin(TAU*T/2.4)),a=s.cor?this.rot*s.wc:this.rot,ca=s.cor?Math.cos(a):this.cr,sa=s.cor?Math.sin(a):this.sr,
+   x1=(s.ux*ca+s.uz*sa)*k,z1=(-s.ux*sa+s.uz*ca)*k,y0=s.uy*k;
+   o.x=x1;o.y=y0*CT-z1*ST;o.z=y0*ST+z1*CT;
+   if(E.fx==='arc'&&!s.cor){ // bright 120 degree arc running around the sphere
+    const ang=Math.atan2(o.y,o.x),u=((((t/2000*TAU)-ang)%TAU)+TAU)%TAU/(TAU/3);
+    if(u<1){const b=Math.pow(1-u,1.4);o.m=1+2.2*b;o.sm=1+.7*b;o.x*=1+.07*b;o.y*=1+.07*b}}
+  }else this.face(s,EMO[E.emo]||EMO.calm,amp,bl,t)}
+ face(s,F,amp,bl,t){
+  const o=this.o,sx=s.role?1:-1;o.z=.35;
+  if(s.role<2){
+   const ex=.41*sx,ey=-F.ey;
+   if(F.x){const q=(s.ru*2-1)*F.len,k=s.rv<.5?1:-1;o.x=ex+q;o.y=ey+k*q+((s.rv*4)%1-.5)*.028}
+   else{const r=Math.sqrt(s.ru),th=TAU*s.rv,X=r*Math.cos(th);let Y=r*Math.sin(th);
+    if(F.dome)Y=-Math.abs(Y);
+    if(F.cut){const ym=clamp(F.cut[0]+F.cut[1]*sx*X,-1,.8);Y=ym+(Y+1)/2*(1-ym)} // slanted lid
+    o.x=ex+F.a*X;o.y=ey+F.b*Y*bl}
+  }else{
+   const H=lerp(F.H0,F.H1,amp),w=F.mw;
+   if(F.mo){const r=Math.sqrt(s.ru),th=TAU*s.rv,c=Math.cos(th),n=Math.sin(th);
+    o.x=Math.sign(c)*Math.pow(Math.abs(c),.8)*r*w/2*(.92+.16*amp);o.y=.25+Math.sign(n)*Math.pow(Math.abs(n),.8)*r*H/2}
+   else{const q=s.ru*2-1;o.x=q*w/2;let yc=.25-F.curl*q*q;if(F.wave)yc+=.035*Math.sin(q*3.4*Math.PI);
+    o.y=yc+(s.rv-.4)*H*Math.pow(Math.max(0,1-q*q),F.pw)}}
+  if(s.cor){o.x+=s.gx*.045+.012*Math.sin(t/1000*.8+s.tw);o.y+=s.gy*.045;o.m=.7} // corona dust around the silhouette
+  o.x*=1.2;o.y*=1.2;o.sm=1.15 // the face is drawn 20% larger than the sphere so features stay readable
+ }
+ blink(now,F){
+  if(F.nb||RM())return 1;
+  if(now>this.nb){this.b0=now;this.dbl=Math.random()<.2;this.nb=now+2400+Math.random()*2000}
+  const u=(now-this.b0)/220;let k=0;
+  if(u>=0&&u<1)k=Math.sin(Math.PI*u);else if(this.dbl){const u2=(now-this.b0-330)/180;if(u2>=0&&u2<1)k=Math.sin(Math.PI*u2)}
+  return 1-.94*k}
+ frame(now){
+  const E=this.sp,ctx=this.ctx,rm=RM(),dt=Math.min(.05,(now-this.last)/1000);
+  this.last=now;this.cnt++;this.dirty=false;
+  const t=rm?3200:now;
+  if(rm){this.T=3.2;this.rot=.9;this.mic=.5}
+  else{this.T+=dt*(E.ts??1);this.rv+=((E.rot??.35)-this.rv)*Math.min(1,dt*2);this.rot+=dt*this.rv;if(E.fx==='listen')this.mic+=(micAt(now)-this.mic)*.3}
+  if(this.palT<1)this.palT=clamp(this.palT+dt/.3);
+  this.flash=Math.max(0,this.flash-dt/.6);
+  const F=EMO[E.emo]||EMO.calm,amp=rm?.3:(E.shape==='face'?ampAt(now):0),bl=E.shape==='face'?this.blink(now,F):1;
+  const el=rm?1e9:(now-this.tr0)/1000,dur=this.dur,ex=this.extra,glitch=now<this.gl&&!rm;
+  this.trans=el<dur+ex;this.cr=Math.cos(this.rot);this.sr=Math.sin(this.rot);
+  ctx.clearRect(0,0,this.W,this.H);ctx.globalCompositeOperation='lighter';
+  const sa=SPR[this.palTo],sb=SPR[this.palFrom],pt=this.palT,o=this.o,vis=E.vis??1,dim=(E.dim??1)*(1+.8*this.flash);
+  for(const s of this.S){
+   this.tg(s,t,amp,bl);
+   let x=o.x,y=o.y,z=o.z;
+   const p=clamp((el-s.rd*.33*dur-(this.toFace&&s.role===2?.2:0))/(.67*dur)); // each soul has its own delay
+   if(p<1){const e=ease(p),dx=x-s.fx,dy=y-s.fy,k=Math.sin(Math.PI*p)*.3*s.sp; // eased move with a slight spiral
+    x=s.fx+dx*e-dy*k;y=s.fy+dy*e+dx*k;z=lerp(s.fz,z,e)}
+   s.x=x;s.y=y;s.z=z;
+   s.v+=((s.rk<vis?1:0)-s.v)*Math.min(1,dt*5);
+   const zn=clamp(z+.5);
+   let al=(s.cor?.62:.85)*o.m*(.5+.5*zn)*s.v*dim*(1+.2*Math.sin(TAU*t/1000/s.tp+s.tw)); // twinkle +-20%
+   const D=Math.max(this.minPx,this.d*this.k*s.sz*o.sm*(.85+.3*zn));
+   let px=this.cx+x*this.d;const py=this.cy+y*this.d;
+   if(glitch){const row=Math.floor(py/6);if(row%3===0)px+=(hs(row+Math.floor(now/70))-.5)*.14*this.d;if(hs(s.rd*50)<.25)al*=.2}
+   al=clamp(al);if(al<.01)continue;
+   const c=o.c;
+   if(pt>=1){ctx.globalAlpha=al;ctx.drawImage(sa[c],px-D/2,py-D/2,D,D)}
+   else{ctx.globalAlpha=al*pt;ctx.drawImage(sa[c],px-D/2,py-D/2,D,D);ctx.globalAlpha=al*(1-pt);ctx.drawImage(sb[c],px-D/2,py-D/2,D,D)}
+  }
+  ctx.globalAlpha=1}
+}
+const big=new Swarm($('#cvBig'),700,{w:420,h:136,d:86,cy:62,k:.058,minPx:2.4});
+const mini=new Swarm($('#cvMini'),150,{w:28,h:28,d:17,cy:14,k:.15,minPx:1.5,seed:5});
+const icon=(id,sz)=>{const s=new Swarm($(id),60,{w:sz,h:sz,d:sz*.62,cy:sz/2,k:.2,minPx:1.2,seed:3});s.on=true;s.setSpec({shape:'dot',pal:'amber'});return s};
+const SW=[big,mini,icon('#cvCard',16),icon('#cvRoom',20)];
+function loop(now){
+ for(const s of SW){
+  if(s.on&&(s.fps>0||s.trans||s.dirty||s.palT<1)&&now-s.last>=1000/(s.fps||30)-2)s.frame(now);
+  if(now-s.t0>=1000){s.mfps=Math.round(s.cnt*1000/(now-s.t0));s.cnt=0;s.t0=now}}
+ requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+
+/* ================= assistant state ================= */
+const Q=['Что сейчас делает комната Auth?','Скажи S03, что тесты на Safari можно пропустить'];
+const ANS='Комната Auth чинит тесты входа: S03 Ruslan работает над ними, S05 ждёт его результата. План — 3 из 5 пунктов.';
+const PANS='Подготовил сообщение для S03 — проверь и подтверди отправку.';
+const BUSY=new Set(['listening','thinking','tool','answering','speaking','confirm','settle']);
+const SPEC={idle:{shape:'cloud',pal:'amber'},listening:{shape:'cloud',fx:'listen',pal:'amber'},thinking:{shape:'sphere',pal:'amber',rot:.35},
+ tool:{shape:'sphere',fx:'arc',pal:'amber',rot:.1},answering:{shape:'sphere',fx:'flow',pal:'amber',rot:.22},confirm:{shape:'sphere',fx:'ring',pal:'amber',rot:0},
+ settle:{shape:'sphere',pal:'amber',rot:.3},speaking:{shape:'face',pal:'amber'},error:{shape:'sphere',pal:'coral',rot:0,glitch:1},offline:{shape:'cloud',pal:'gray',vis:.45,ts:.12,dim:.8}};
+const A={view:'pill',st:'idle',q:'',ans:'',tool:'',card:null,armed:true,hover:false,suppress:false,panel:'jarvis',approvals:0,spk:false,emo:'calm',qi:0,streaming:false,stopListen:false};
+let speed=1;
+function specFor(isMini){
+ const s={...SPEC[A.st]};
+ if(s.shape==='face'){s.emo=A.emo;s.pal=A.emo==='anger'||A.emo==='error'?'coral':'amber';s.dim=EMO[A.emo].dim;if(isMini){s.shape='sphere';s.emo=null}}
+ if(isMini&&s.shape==='cloud')s.shape='dot';
+ return s}
+const LABEL=()=>({idle:'Ready',listening:'Listening…',thinking:'Thinking…',tool:A.tool||'Checking rooms…',answering:'Answering',confirm:'Waiting for your confirmation',speaking:'Speaking',settle:'Done',error:'Claude limit reached — until 15:00',offline:'Claude is not connected — <u>open Settings</u>'}[A.st]);
+const MINI={listening:'Listening',thinking:'Thinking',tool:'Working',answering:'Answering',confirm:'Confirm send',speaking:'Speaking',settle:'Done'};
+
+/* ================= rendering ================= */
+const shape=$('#shape'),frame=$('#frame'),content=$('#content'),halo=$('#halo');
+let lastAns=null,lastLbl=null;
+function setAns(t){
+ const el=$('#ans'),ws=t?t.split(' '):[],cur=el.children.length;
+ if(ws.length<cur||(cur&&(el.children[0].dataset.w!==ws[0]||el.children[cur-1].dataset.w!==ws[cur-1])))el.textContent='';
+ for(let i=el.children.length;i<ws.length;i++){const s=document.createElement('span');s.textContent=ws[i]+' ';s.dataset.w=ws[i];el.appendChild(s)}}
+function render(){
+ const st=A.st,busy=BUSY.has(st),hov=A.hover&&!A.suppress;
+ let mode=A.view==='bar'?'bar':(A.view==='big'||(busy&&hov))?'big':'pill';
+ if(mode==='big'&&A.panel==='appr'&&A.approvals>0)mode='appr';
+ shape.dataset.view=frame.dataset.v=mode;shape.dataset.busy=+busy;shape.dataset.st=st;shape.classList.toggle('hov',hov);
+ const sp=specFor(false);
+ big.on=mode==='big';big.fps=RM()?0:60;mini.on=mode==='pill';mini.fps=busy&&!RM()?30:0;
+ big.setSpec(sp);mini.setSpec(specFor(true));
+ halo.style.setProperty('--hc',PAL[sp.pal].h);halo.style.setProperty('--ha',st==='confirm'?.32:st==='offline'?.07:.17);
+ const lbl=LABEL();if(lbl!==lastLbl){$('#lbl').innerHTML=lbl;lastLbl=lbl}
+ $('#q').textContent=A.q?'«'+A.q+'»':'';
+ if(A.ans!==lastAns){setAns(A.ans);lastAns=A.ans}
+ $('#ans').classList.toggle('live',A.streaming);
+ $('#card').hidden=A.card!=='proposal';$('#sent').hidden=A.card!=='sent';
+ $('#bSend').disabled=$('#bCancel').disabled=!A.armed;
+ $('#mic').classList.toggle('rec',st==='listening');
+ const sb=$('#spk');sb.classList.toggle('on',A.spk);sb.setAttribute('aria-pressed',A.spk);$('#spkOn').style.display=A.spk?'':'none';$('#spkOff').style.display=A.spk?'none':'';
+ const ml=$('#mlbl');ml.textContent=MINI[st]||'';ml.parentNode.classList.toggle('nodot',st==='confirm');
+ $('#banner').hidden=A.approvals<1;$('#bannerTxt').textContent=`S03 needs you · 1 of ${A.approvals}`;$('#apN').textContent=`1 of ${A.approvals}`;
+ $$('#holds [data-v]').forEach(b=>b.classList.toggle('on',b.dataset.v===st));
+ $$('#emos [data-v]').forEach(b=>b.classList.toggle('on',b.dataset.v===A.emo&&st==='speaking'));
+ $('#cbAppr').checked=A.approvals>0;legend()}
+function legend(){
+ const sp=specFor(false),nm=sp.shape+(sp.fx?' + '+sp.fx:'')+(sp.emo?' · '+sp.emo:'');
+ const f=s=>!s.on?'hidden':s.fps?`${s.mfps} fps (target ${s.fps})`:'static';
+ $('#legend').innerHTML=`<b>State:</b> ${A.st} <span class="m">· island ${shape.dataset.view}</span><br><span class="m">swarm: ${nm}</span><br><span class="m">big canvas: ${f(big)} · mini: ${f(mini)}</span>`}
+setInterval(legend,500);
+// island size: measured from content, animated by CSS (like IslandView)
+function measure(){const w=Math.ceil(content.offsetWidth),h=Math.ceil(content.offsetHeight);if(w&&h){shape.style.width=w+'px';shape.style.height=h+'px'}}
+shape.style.transition='none';new ResizeObserver(measure).observe(content);measure();
+requestAnimationFrame(()=>requestAnimationFrame(()=>shape.style.transition=''));
+
+/* ================= flows (async, cancellable) ================= */
+let tok=0,coll=null;const CANCEL={};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms/speed));
+function run(fn){const my=++tok;A.streaming=false;clearTimeout(coll);
+ const w=async ms=>{await sleep(ms);if(my!==tok)throw CANCEL};
+ (async()=>fn(w))().catch(e=>{if(e!==CANCEL)console.error(e)})}
+const cancel=()=>{tok++;A.streaming=false;clearTimeout(coll)};
+const setSt=(st,tool)=>{A.st=st;A.tool=tool||'';render()};
+function armCollapse(){ // 8 s without the cursor: collapse to mini (idle pill)
+ clearTimeout(coll);A.armedCollapse=true;
+ coll=setTimeout(()=>{if(A.hover&&!A.suppress){armCollapse();return}A.armedCollapse=false;A.view='pill';render()},8000/speed)}
+function armCard(){A.armed=false;render();setTimeout(()=>{A.armed=true;render()},500/speed)} // decision buttons are armed after 500 ms
+async function stream(w,text,keep){
+ if(!keep)setSt('answering');
+ if(A.view!=='big')A.view='big'; // a collapsed island expands when the answer starts
+ A.ans='';A.streaming=true;const ws=text.split(' ');
+ for(let i=0;i<ws.length;i++){A.ans=ws.slice(0,i+1).join(' ');render();await w(90+ws[i].length*16)}
+ A.streaming=false;render()}
+async function listenQ(w,ms,q){
+ A.view='big';A.q='';A.ans='';A.card=null;A.stopListen=false;setSt('listening');
+ for(let i=0;i<ms/100&&!A.stopListen;i++)await w(100);
+ A.q=q;render();await w(500)}
+async function speak(w,ms){setSt('speaking');await w(ms);setSt('settle');await w(1000)}
+async function finish(w){ // after an answer: optional spoken face, then dissolve to cloud and arm the 8 s collapse
+ if(A.spk)await speak(w,4800);else await w(900);
+ setSt('idle');armCollapse()}
+async function fStatus(w,q,voice){
+ if(voice)await listenQ(w,voice,q);else{A.view='big';A.q=q;A.ans='';A.card=null}
+ setSt('thinking');await w(1800);
+ setSt('tool','Checking rooms…');await w(2100);
+ await stream(w,ANS);await finish(w)}
+async function fProp(w,q,voice){
+ if(voice)await listenQ(w,voice,q);else{A.view='big';A.q=q;A.ans='';A.card=null}
+ setSt('thinking');await w(1600);
+ setSt('tool','Preparing a message…');await w(1800);
+ A.card='proposal';armCard();setSt('confirm');await stream(w,PANS,true)} // then waits for the human
+function decide(ok){
+ if(A.card!=='proposal'||!A.armed)return;
+ run(async w=>{A.card=ok?'sent':null;A.ans='';setSt('answering');await stream(w,ok?'Отправил.':'Отменил.',true);await w(900);
+  if(A.spk&&ok){await speak(w,2200)}setSt('idle');armCollapse()})}
+function ask(text){const prop=/safari|скаж|скажи|tell|send|отправ/i.test(text);run(w=>prop?fProp(w,text,0):fStatus(w,text,0))}
+function hotkey(){
+ if(A.st==='listening'){A.stopListen=true;return}
+ if(BUSY.has(A.st)){if(A.view!=='big'){A.view='big';A.suppress=false;render()}return}
+ run(w=>{const q=Q[A.qi++%2];return q===Q[0]?fStatus(w,q,2600):fProp(w,q,2600)})}
+function esc(){
+ if(A.st==='confirm'&&A.card==='proposal'){A.view='pill';A.suppress=true}
+ else{cancel();A.st='idle';A.card=A.card==='sent'?null:A.card;if(A.view!=='bar')A.view='pill';A.suppress=true}
+ $('#inp').blur();render()}
+function tuck(){A.view=BUSY.has(A.st)?'pill':'bar';A.suppress=true;render()} // busy: collapse to mini, never to the 40x5 bar
+async function play(w){
+ A.spk=false;$('#cbSpk').checked=false;A.panel='jarvis';
+ await fStatus(w,Q[0],2400);await w(2600);
+ A.view='pill';render();await w(2400);                        // 8 s timer, shortened: collapsed idle pill
+ A.approvals=2;await listenQ(w,1800,Q[1]);                    // second question, with approvals banner
+ setSt('thinking');await w(1500);
+ setSt('tool','Preparing a message…');A.view='pill';render();await w(2400); // collapsed: mini "Working·"
+ A.card='proposal';armCard();setSt('confirm');await stream(w,PANS,true);await w(2600); // auto-expands
+ A.card='sent';A.ans='';setSt('answering');await stream(w,'Отправил.',true);await w(900);
+ A.approvals=0;A.emo='calm';setSt('speaking');                // stage 3 preview: face + emotions
+ for(const e of['calm','joy','sad','surprise','anger','error']){A.emo=e;render();await w(e==='calm'?3200:2400)}
+ setSt('settle');await w(1100);setSt('idle');await w(2600);
+ A.card=null;A.q=Q[0];A.ans='';setSt('error');await w(3600);setSt('offline');await w(3600);
+ setSt('idle');await w(1200);A.view='pill';render()}
+const HOLD={
+ idle:w=>{A.view='pill';A.card=null;setSt('idle')},
+ listening:w=>{A.view='big';A.q='';A.ans='';A.card=null;setSt('listening')},
+ thinking:w=>{A.view='big';A.q=Q[0];A.ans='';A.card=null;setSt('thinking')},
+ tool:w=>{A.view='big';A.q=Q[0];A.ans='';A.card=null;setSt('tool','Checking rooms…')},
+ answering:async w=>{A.view='big';A.q=Q[0];A.card=null;for(;;){await stream(w,ANS);await w(1800)}},
+ confirm:async w=>{A.view='big';A.q=Q[1];A.card='proposal';A.ans=PANS;armCard();setSt('confirm')},
+ speaking:w=>{A.view='big';A.q=Q[0];A.ans=ANS;A.card=null;setSt('speaking')},
+ error:w=>{A.view='big';A.q=Q[0];A.ans='';A.card=null;setSt('error')},
+ offline:w=>{A.view='big';A.q=Q[0];A.ans='';A.card=null;setSt('offline')}};
+const ACT={
+ hotkey,stop:esc,ask1:()=>run(w=>fStatus(w,Q[0],0)),ask2:()=>run(w=>fProp(w,Q[1],0)),play:()=>run(play),
+ hold:v=>{A.suppress=false;run(HOLD[v])},
+ done:()=>{cancel();A.suppress=false;A.card=null;if(!BUSY.has(A.st)||A.st==='settle')A.st='idle';A.view='pill';render()},
+ mini:v=>{A.suppress=false;run(async w=>{A.view='pill';A.q=v==='confirm'?Q[1]:Q[0];A.ans=v==='confirm'?PANS:'';A.card=v==='confirm'?'proposal':null;if(v==='confirm')armCard();setSt(v,v==='tool'?'Checking rooms…':'')})},
+ emo:v=>{A.emo=v;if(A.st==='speaking')render();else{A.suppress=false;run(HOLD.speaking)}}};
+
+/* ================= wiring ================= */
+$('#panel').addEventListener('click',e=>{const b=e.target.closest('button[data-a]');if(b){ACT[b.dataset.a](b.dataset.v);if(e.detail)b.blur()}});
+$('#speed').onchange=e=>speed=+e.target.value;
+$('#cbAppr').onchange=e=>{A.approvals=e.target.checked?2:0;A.panel='jarvis';render()};
+$('#cbSpk').onchange=e=>{A.spk=e.target.checked;render()};
+$('#cbLight').onchange=e=>document.body.classList.toggle('light',e.target.checked);
+const mq=matchMedia('(prefers-reduced-motion: reduce)');
+const setRM=()=>{document.body.classList.toggle('rm',mq.matches||$('#cbRM').checked);SW.forEach(s=>{s.tr0=-1e9;s.dirty=true;s.palT=1});render()};
+$('#cbRM').onchange=setRM;mq.addEventListener?.('change',setRM);$('#cbRM').checked=mq.matches;
+shape.addEventListener('pointerenter',()=>{A.hover=true;render()});
+shape.addEventListener('pointerleave',()=>{A.hover=false;A.suppress=false;if(A.armedCollapse)armCollapse();render()});
+$('#tab').addEventListener('pointerenter',()=>{if(A.view==='bar'){A.view='pill';render()}});
+$('#dot').onclick=hotkey;
+$('#mic').onclick=hotkey;
+$('#spk').onclick=()=>{A.spk=!A.spk;$('#cbSpk').checked=A.spk;render()};
+$$('.tuck button').forEach(b=>b.onclick=tuck);
+$('#bSend').onclick=()=>decide(true);$('#bCancel').onclick=()=>decide(false);
+$('#banner').onclick=()=>{A.panel='appr';render()};
+$('#banner').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('#banner').click()}};
+$('#bBack').onclick=()=>{A.panel='jarvis';render()};
+$$('[data-ap]').forEach(b=>b.onclick=()=>{A.approvals--;if(A.approvals<1)A.panel='jarvis';render()});
+document.addEventListener('keydown',e=>{
+ const tag=document.activeElement.tagName,typing=tag==='INPUT'&&document.activeElement.id==='inp';
+ if(e.key==='Escape'){esc();return}
+ if(e.altKey&&e.code==='Space'){e.preventDefault();hotkey();return}
+ if(e.key==='Enter'){
+  if(typing&&$('#inp').value.trim()){const t=$('#inp').value.trim();$('#inp').value='';ask(t)}
+  else if(A.card==='proposal'&&tag!=='BUTTON'){e.preventDefault();decide(true)}
+  return}
+ if(!/INPUT|SELECT|BUTTON|TEXTAREA/.test(tag)&&(e.key===' '||e.key==='j'||e.key==='J')){e.preventDefault();hotkey()}});
+setRM();
+})();
+</script>
+</body>
+</html>
