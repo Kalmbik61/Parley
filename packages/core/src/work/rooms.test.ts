@@ -17,6 +17,7 @@ import {
   isMember,
   isRoomArchived,
   isRoomClosed,
+  joinedLine,
   joinNotice,
   leaveOtherRooms,
   liveLead,
@@ -82,6 +83,11 @@ describe('addRoom', () => {
       proposal: null,
       recipe: null,
       archivedAt: null,
+      memberLog: [
+        { session: 's-01', from: '2026-09-26T10:05:00.000Z', to: null },
+        { session: 's-02', from: '2026-09-26T10:05:00.000Z', to: null },
+        { session: 's-03', from: '2026-09-26T10:05:00.000Z', to: null },
+      ],
     });
     expect(map.rooms).toEqual([room]);
   });
@@ -1190,5 +1196,76 @@ describe('addRoomArchivedLetters', () => {
     expect(addRoomArchivedLetters(map, 'r-01', ['s-99', HUMAN], LATER)).toEqual([]);
     expect(JSON.stringify(map)).toBe(before);
     expect(() => addRoomArchivedLetters(map, 'r-09', ['s-01'], LATER)).toThrow(RoomRuleError);
+  });
+});
+
+describe('журнал участия (спека расхода токенов, 4)', () => {
+  const T0 = '2026-10-14T10:00:00.000Z';
+  const T1 = '2026-10-14T11:00:00.000Z';
+  const T2 = '2026-10-14T12:00:00.000Z';
+
+  it('addRoom пишет создателя-сессию и участников с моментом создания; человек в журнал не попадает', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x' });
+    addSession(map, { provider: 'claude', label: 'b', task: 'x' });
+    const byLead = addRoom(map, { title: 'r', creator: 's-01', members: ['s-02'] }, T0);
+    expect(byLead.memberLog).toEqual([
+      { session: 's-01', from: T0, to: null },
+      { session: 's-02', from: T0, to: null },
+    ]);
+    const byHuman = addRoom(map, { title: 'h', creator: HUMAN, members: ['s-02'] }, T0);
+    expect(byHuman.memberLog).toEqual([{ session: 's-02', from: T0, to: null }]);
+  });
+
+  it('addMember закрывает запись в прежней комнате тем же моментом и открывает новую; повторный вход — новая запись', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x' });
+    const first = addRoom(map, { title: 'r1', creator: HUMAN, members: ['s-01'] }, T0);
+    const second = addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
+    addMember(map, second.id, 's-01', T1);
+    expect(first.memberLog).toEqual([{ session: 's-01', from: T0, to: T1 }]);
+    expect(second.memberLog).toEqual([{ session: 's-01', from: T1, to: null }]);
+    addMember(map, first.id, 's-01', T2);
+    expect(first.memberLog).toEqual([
+      { session: 's-01', from: T0, to: T1 },
+      { session: 's-01', from: T2, to: null },
+    ]);
+    expect(second.memberLog).toEqual([{ session: 's-01', from: T1, to: T2 }]);
+  });
+
+  it('комната без журнала (карта до него) журнал не заводит ни при входе, ни при уходе', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x' });
+    const legacy = addRoom(map, { title: 'old', creator: HUMAN, members: ['s-01'] }, T0);
+    delete legacy.memberLog;
+    const fresh = addRoom(map, { title: 'new', creator: HUMAN, members: [] }, T0);
+    addMember(map, fresh.id, 's-01', T1);
+    expect(legacy.memberLog).toBeUndefined();
+    addMember(map, legacy.id, 's-01', T2);
+    expect(legacy.memberLog).toBeUndefined();
+    expect(fresh.memberLog).toEqual([{ session: 's-01', from: T1, to: T2 }]);
+  });
+
+  it('строка входа — joinedLine, та же, что пишет addMember', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x' });
+    const room = addRoom(map, { title: 'r', creator: HUMAN, members: [] }, T0);
+    expect(addMember(map, room.id, 's-01', T1).text).toBe(joinedLine('s-01'));
+    expect(joinedLine('s-01')).toBe('@s01 joined the room');
+  });
+
+  it('parseMap: целый журнал читается как есть, битый убирается, нет поля — не подставляется', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: 'x' });
+    addRoom(map, { title: 'r1', creator: HUMAN, members: ['s-01'] }, T0);
+    addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
+    addRoom(map, { title: 'r3', creator: HUMAN, members: [] }, T0);
+    const raw = JSON.parse(JSON.stringify(map)) as { rooms: Array<Record<string, unknown>> };
+    raw.rooms[1]!['memberLog'] = [{ session: '', from: 'вчера', to: 5 }];
+    delete raw.rooms[2]!['memberLog'];
+    const parsed = parseMap(JSON.stringify(raw), 'map.json');
+    expect(parsed.rooms[0]?.memberLog).toEqual([{ session: 's-01', from: T0, to: null }]);
+    expect(parsed.rooms[1]?.memberLog).toBeUndefined();
+    expect(parsed.rooms[2]?.memberLog).toBeUndefined();
   });
 });
