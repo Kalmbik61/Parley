@@ -1,6 +1,6 @@
 # Помощник на острове («Джарвис»)
 
-Дата: 2026-10-14. Статус: спека на ревью человека. Рабочее имя — Jarvis; в коде помощник везде `assistant`,
+Дата: 2026-10-14. Статус: спека на ревью человека; спайк этапа 0 выполнен 2026-10-15 (приложение A). Рабочее имя — Jarvis; в коде помощник везде `assistant`,
 видимое имя — одна строка (раздел 15).
 
 Связано:
@@ -131,16 +131,22 @@ Settings → Assistant (через существующий механизм `se
 1. Остров вызывает `assistant.ask { text }`. Идёт ход — он отменяется (перебивание), новый начинается.
 2. Хост строит argv по новым шаблонам реестра провайдеров — `assistantArgs` и `assistantResumeArgs` рядом с
    `printArgs` (переопределяются в `~/.parley/providers.json`, как остальные) — и запускает CLI через `spawn`
-   (как `summary.ts`), рабочая папка `~/.parley/assistant/`:
-   - Claude и GLM: `claude -p {prompt} --output-format stream-json --verbose --model {model}
-     --mcp-config {assistantMcp} --strict-mcp-config --append-system-prompt {assistantPrompt}` плюс
-     `--resume {id}` со второго хода и флаги изоляции из спайка; окружение GLM — `providerLaunchEnv`;
-   - Codex: `codex exec --json --skip-git-repo-check --sandbox read-only --model {model}
-     -c mcp_servers.parley-assistant={…} -c developer_instructions={assistantPrompt} {prompt}`, со второго хода —
-     `codex exec resume {id} …`.
+   (как `summary.ts`), рабочая папка `~/.parley/assistant/`, stdin закрыт, из окружения срезаны метки
+   родительской сессии (`agentEnv`). Наборы флагов проверены спайком (приложение A, A.2):
+   - Claude и GLM: `claude -p {prompt}` сразу за `-p` (флаги ниже вариадические и «съедают» промпт в конце),
+     `--output-format stream-json --verbose --include-partial-messages --model {model} --mcp-config {assistantMcp}
+     --strict-mcp-config --system-prompt {assistantPrompt} --allowedTools "mcp__parley-assistant__*" --tools ""
+     --setting-sources "" --disable-slash-commands --settings '{"autoMemoryEnabled":false}'` плюс `--resume {id}`
+     со второго хода; окружение GLM — `providerLaunchEnv`;
+   - Codex: `codex exec --json --skip-git-repo-check --sandbox read-only --ignore-user-config --ignore-rules`,
+     `--disable` хуков, shell и прочих встроенных возможностей (список — A.2), `--model {model}`,
+     `-c mcp_servers.parley-assistant.*` с `default_tools_approval_mode="approve"`,
+     `-c model_instructions_file={assistantPromptFile}`; со второго хода — `codex exec resume … {threadId} {prompt}`
+     (у `resume` нет `--sandbox` — `-c sandbox_mode="read-only"`). После `turn.completed` процесс завершается
+     хостом, не дожидаясь его выхода (~5 с).
 
-   Точный набор флагов — из спайка (приложение A). При подходе 3 для Claude процесс живёт весь разговор,
-   ход — строка в stdin; события те же.
+   Подход 2 для всех провайдеров (A.1): долгоживущий процесс сэкономил бы ~1,4 с — ниже порога 1,5 с. Разборщик
+   Claude общий для обоих режимов, перейти на подход 3 можно позже без переделок.
 3. Разборщики потока (`core/src/assistant/stream-claude.ts`, `stream-codex.ts`) дают общие события:
    `session {id}`, `text {delta}`, `tool {name, target?}`, `done`, `error {kind: 'limit'|'auth'|'other', message}`.
 4. Встроенные инструменты CLI отключены — модель видит только инструменты помощника (раздел 7).
@@ -156,8 +162,10 @@ Settings → Assistant (через существующий механизм `se
 - первой строкой ответа ставь метку эмоции: `[[calm]]`, `[[joy]]`, `[[sad]]`, `[[surprise]]`, `[[anger]]`;
 - служебные строки `[system: …]` в начале вопроса — от Parley (исход карточки), не от человека.
 
-Метку срезает хост (`core/src/assistant/mood.ts`): буфер первых символов до `]]` или перевода строки, не больше
-24 знаков; нет метки или незнакомая — `calm`. `error` модель не ставит — его ставит хост при сбое хода.
+Метку срезает хост (`core/src/assistant/mood.ts`): буфер первых символов **первого текста хода** (не `result` —
+там только последний блок) до `]]`, не больше 24 знаков, затем пробел или перевод строки отбрасываются (GLM
+ставит метку в одну строку с ответом); нет метки или незнакомая — `calm`. `error` модель не ставит — его ставит
+хост при сбое хода. Спайк: метку ставили все три модели в 48 из 48 ответов.
 
 ### 6.5 Протокол
 
@@ -350,7 +358,10 @@ Settings → Assistant (через существующий механизм `se
 - **Синтез** — main окна (`main/assistant/tts.ts`): `say -v <voice>` в WAV во временный файл
   `~/.parley/assistant/tts/` (0600), чтение, удаление; в renderer острова — ArrayBuffer по IPC.
 - **По предложениям.** Остров режет приходящий ответ на предложения; первое синтезируется и звучит, пока модель
-  пишет дальше; следующее синтезируется, пока играет текущее.
+  пишет дальше; следующее синтезируется, пока играет текущее. По-настоящему поток даёт только Claude: GLM отдаёт
+  текст пачкой в конце вызова, Codex — целым сообщением (A.3); у них озвучка начинается с готового ответа, тем же
+  кодом. Синтез предложения — 0,3–0,4 с; первый вызов голоса — около 2 с, поэтому голос прогревается при
+  включении «Speak answers» и при старте Parley.
 - **Перед озвучкой текст чистится** (`core/src/assistant/speakable.ts`): метка эмоции, разметка, блоки кода,
   длинные пути и id.
 - **Проигрывание** — WebAudio; `AnalyserNode` даёт громкость для рта.
@@ -416,10 +427,118 @@ openWakeWord (Apache 2.0, своё слово надо обучать), Porcupin
 1. **Имя помощника.** J.A.R.V.I.S. — персонаж Marvel; для публичного приложения нужно своё имя до выпуска этапа 1.
    В коде — `assistant`, видимое имя — одна константа (`shared/assistant-name.ts`); от имени зависит и
    слово-пробуждение (этап 4).
-2. Подход 2 или 3 для Claude и GLM, флаги изоляции, минимальные версии CLI, хоткей по умолчанию — спайк
-   (приложение A).
+2. ~~Подход 2 или 3, флаги изоляции, минимальные версии CLI~~ — решено спайком (приложение A). Хоткей по
+   умолчанию — после живой проверки пробы Electron (A.5).
 3. Порог CPU роя — по замеру в плане этапа 2.
+4. **Задержка GLM.** GLM-5.3-flash отвечает за 12–14 с (хвост до 28 с) — для голоса долго. В подсказке
+   настройки провайдера показывать ожидаемое время; по умолчанию предлагать Claude.
+5. **Снимок в вопросе.** Хост может прикладывать `parley_overview` к каждому вопросу — тогда ход обходится одним
+   вызовом модели вместо двух (у Haiku −1,2…1,5 с), ценой ~2–3 тыс. токенов на каждый ход. Решить замером на
+   этапе 1.
+6. **Следы CLI.** CLI сами пишут транскрипты: Claude — в `~/.claude/projects/<путь ~/.parley/assistant>/`, Codex —
+   в `~/.codex/sessions/` (их видит `codex resume` человека). Это поведение самих CLI, как у любой сессии Parley;
+   на этапе 1 проверить, что обнаружение сессий Parley не подхватывает папку помощника.
 
-## Приложение A. Отчёт спайка
+## Приложение A. Отчёт спайка (2026-10-14/15)
 
-Заполняется по итогам этапа 0.
+Окружение: macOS 15.3.1 arm64, `claude` 2.1.300, `codex` 0.162.0, Electron 44.4.5. Модели: Claude — Haiku,
+GLM — `glm-5.3-flash[1m]`, Codex — `gpt-6-luna`, effort low. Подделка `parley-mcp` (три инструмента, снимок
+~1,4 тыс. знаков). 81 вызов модели, расход недели Claude — 3 %. Стенд (скрипты, 20 фикстур потоков, сырые прогоны,
+проба Electron) — в `.superpowers/spikes/2026-10-14-assistant/` ветки (исключён из git); фикстуры для тестов
+этапа 1 брать оттуда, убрав пути пользователя.
+
+### A.1 Задержка (медианы, мс; вопрос с одним вызовом `parley_overview`)
+
+| Провайдер | Режим | Первый текст ответа | Конец хода | Токенов входа за ход |
+|---|---|---|---|---|
+| Claude Haiku | новый разговор | 3 560 | 4 385 | 4 103 |
+| Claude Haiku | `--resume` | 3 983 | 4 412 | 5 956 |
+| Claude Haiku | долгоживущий, ходы 2–3 | 2 595 | 3 054 | 6 294 |
+| GLM flash | новый разговор | 13 960 | 14 023 | 2 190 |
+| GLM flash | `--resume` | 12 752 | 12 945 | 3 488 |
+| GLM flash | долгоживущий, ходы 2–3 | 11 407 | 11 520 | 3 683 |
+| Codex luna, low | новый разговор | 8 337 | 8 380 | 19 743 |
+| Codex luna, low | `exec resume` | 7 309 | 7 382 | 34 390 |
+
+**Решение — подход 2 для всех.** Долгоживущий процесс экономит Claude 1 388 мс, GLM 1 345 мс — ниже порога
+1,5 с (разброс одного замера ±0,4 с). Выигрыш — это старт CLI (~1,3 с до `init`), а не модель. Основная цена хода —
+два последовательных вызова модели (решение «звать инструмент» → ответ): Haiku ~1,2–1,5 с на вызов, Codex ~4 с,
+GLM flash 6–7 с. `--effort low` у GLM не ускоряет.
+
+### A.2 Изоляция и запуск без блокировок
+
+**Claude и GLM.** Токены на первый вызов хода: без изоляции 42 866 (29 инструментов, 207 скиллов, 15 плагинов,
+хуки человека, `permissionMode auto` из его настроек) → `--tools ""` 17 286 → `--setting-sources ""` 13 241
+(глобальный `CLAUDE.md`, хуки и плагины человека не грузятся) → `--system-prompt` вместо `--append-system-prompt`
+10 138 → без автопамяти (`--settings '{"autoMemoryEnabled":false}'` или `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`;
+иначе едет индекс `MEMORY.md` человека, ~9 тыс. токенов) **1 678**.
+- `--allowedTools "mcp__parley-assistant__*"` обязателен: без него в изолированном `-p` инструмент отклоняется.
+- `-p` не спрашивает доверие к папке.
+- Не годятся: `--safe-mode` (выключает и `--mcp-config`), `--bare` (не читает вход по подписке).
+- `--resume` сохраняет `session_id`; флаги и промпт передаются заново на каждом ходе.
+- Промпт — сразу за `-p`: `--allowedTools`, `--tools`, `--mcp-config` вариадические.
+- GLM: тот же набор; в stderr безвредное `[claude-code:unrecognized_model]`; usage брать из `result`.
+
+**Codex.** Токены за ход: без изоляции 73 694 → `--ignore-user-config --ignore-rules` 64 726 → `--disable`
+`hooks shell_tool unified_exec apps plugins browser_use browser_use_external computer_use goals image_generation
+view_image multi_agent skill_search tool_suggest sleep_tool` и `-c web_search="disabled"
+-c skills.include_instructions=false -c include_apps_instructions=false
+-c include_collaboration_mode_instructions=false` 30 292 → `-c model_instructions_file=<файл промпта>` **19 954**.
+- MCP в `exec` без одобрения падает («approval policy is never»); нужен
+  `-c mcp_servers.parley-assistant.default_tools_approval_mode="approve"`.
+- Shell выключен: просьба «выполни ls» — отказ текстом, `command_execution` нет; `--sandbox read-only` — второй
+  слой. `--disable code_mode_host` нельзя — ломает MCP.
+- **Глобальный `~/.codex/AGENTS.md` (и `AGENTS.override.md`) не отключается** ничем из найденного (~7 тыс.
+  токенов на вызов). Пустой `CODEX_HOME` не пробовали: вход ChatGPT с ротацией refresh-токена.
+- `--ignore-user-config` отключает и хуки, и `notify` человека — без этого каждый ход запускал бы его хуки.
+- `codex exec` ждёт EOF stdin — закрывать. После `turn.completed` процесс живёт ещё ~5 с; убить сразу можно,
+  `exec resume` по тому же `thread_id` помнит разговор.
+- `exec resume` не принимает `--sandbox` — `-c sandbox_mode="read-only"`.
+- Список `--disable` привязан к 0.162.0.
+
+Минимальные версии: проверено только на `claude` 2.1.300 и `codex` 0.162.0 — их и берём минимальными.
+
+### A.3 Формат потоков
+
+**Claude и GLM** (`--output-format stream-json --verbose`, строка — JSON с `type`):
+- id: `system`/`init` → `session_id`, тот же на `--resume`; `init` несёт `tools`, `mcp_servers[].status`, `model`;
+- текст: с `--include-partial-messages` — `stream_event` / `content_block_delta` / `text_delta`; без флага — только
+  целое `assistant`-сообщение. Настоящий поток только у Claude; GLM отдаёт все дельты пачкой за ~10 мс в конце;
+- инструмент: `content_block_start` с `tool_use` (`name: "mcp__parley-assistant__…"`), целиком — в `assistant`;
+  результат — событие `user` с `tool_result`;
+- конец хода: `result` (`is_error`, `result`, `usage`, `permission_denials`, `terminal_reason`);
+- ошибки: смотреть на `is_error`, не на `subtype` — неверная модель Claude даёт `subtype: "success"` с
+  `is_error: true`; неверный `--resume` — `error_during_execution`, «No conversation found…», код 1; неверная
+  модель GLM — `api_error_status: 400`;
+- `rate_limit_event` несёт `utilization` и `resetsAt` (семидневное окно) — можно предупреждать до отказа;
+  сам отказ по лимиту живьём не воспроизведён;
+- игнорировать: `system:status`, `thinking_tokens`, `thinking_delta`, `signature_delta`, `message_*`.
+
+**Codex** (`exec --json`):
+- id: `thread.started` → `thread_id`, тот же на `resume`;
+- текст: потока нет — `item.completed` с `agent_message` целиком (их в ходе может быть несколько);
+- инструмент: `item.started` / `item.completed` с `mcp_tool_call` (`server`, `tool`, `arguments`, `status`);
+- конец: `turn.completed` с `usage`;
+- ошибки: неверная модель — `error` и `turn.failed`, код 1; неверный `resume` — пустой stdout, текст в stderr,
+  код 1; отказ одобрения MCP — в самом `mcp_tool_call` (`status: "failed"`).
+
+### A.4 Метка эмоции и ответы
+
+Метка первой: Claude 20/20, GLM 17/17, Codex 11/11; у GLM в 10 из 16 метка в одной строке с ответом. Вопросы
+нейтральные — почти всё `calm`; выбор эмоции по существу проверить на этапе 3 отдельным набором вопросов. Ответы
+по-русски 47/48, без markdown; длина: Claude до 4 предложений (54 слова), GLM до 3, Codex до 2. На «Привет!»
+Codex всё равно зовёт инструмент. `propose_message` (Claude): модель сама нашла id комнаты через
+`parley_overview` и предложила письмо с `kind: "decision"`.
+
+### A.5 `say` и проба Electron
+
+`say`: русские голоса — Milena и Yuri (Enhanced), Premium нет; английские — Samantha, Eddy и др. (Siri-голоса
+`say -v '?'` не показывает). `say -v <голос> -o out.wav --file-format=WAVE --data-format=LEI16@22050` —
+0,26–0,44 с на предложение из ~13 слов, первый вызов голоса ~2,1 с. WAV читается `decodeAudioData` в Electron 44
+(13 мс), `AnalyserNode` даёт громкость; `AudioContext` запускается без жеста пользователя.
+
+Проба Electron (окно как у острова): стартует и закрывается чисто; `globalShortcut.register` вернул `true` для
+всех кандидатов, но это не значит, что система отдаёт сочетание. На машине автора системой заняты ⌃Space и ⌥⌃Space
+(раскладки), ⌘Space и ⌥⌘Space; Alfred и Raycast не стоят, стоит superwhisper. Отброшены: ⌃Space, ⌃⌥Space,
+⌥J (съест ввод «∆»), ⌘⇧Space (подсказки в VS Code). Кандидат по умолчанию — **⌥Space**, окончательно — после
+живой проверки: печать в панели без вывода Parley вперёд, возврат фокуса после Esc, срабатывание хоткея.
