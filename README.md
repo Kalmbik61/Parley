@@ -18,7 +18,11 @@ See "The window" for details. On top of the coordination there is a project laye
 `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, a
 Capabilities panel and a skill navigator (on by default); see "The project layer".
 
-https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
+
+
+https://github.com/user-attachments/assets/ba828466-0c53-4565-aedf-e1e3f8f3f988
+
+
 
 ## Install
 
