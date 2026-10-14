@@ -15,6 +15,7 @@
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
 import type { EffortOption, ModelOption } from '@parley/protocol';
+import type { LiveMetrics } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -34,6 +35,7 @@ import {
 } from '../ui/dropdown-menu.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 import { MicButton } from '../voice/MicButton.js';
+import { SessionUsageChip } from './SessionUsageChip.js';
 
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
@@ -111,6 +113,8 @@ export interface ChatToolbarProps {
   agents?: { running: number; onShow: () => void };
   /** Цель диктовки вида Terminal (`terminal:<refKey>`, спека 3.2); нет — кнопки нет. */
   micTargetId?: string;
+  /** Живые цифры сессии: значок расхода токенов (спека расхода токенов, 3.4); нет или `null` — значка нет. */
+  metrics?: LiveMetrics | null;
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
@@ -202,7 +206,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null }: ChatToolbarProps): JSX.Element {
   const entries = useWorksStore(state => state.entries);
   const layout = useLayoutStore(state => state.layouts[workKey]);
   const found = layout ? findTab(layout, tabId) : null;
@@ -240,6 +244,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
       </span>
       {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
+      {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {agents === undefined ? null : (
         <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">
           <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
