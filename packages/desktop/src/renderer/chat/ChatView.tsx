@@ -188,6 +188,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const items = feed?.items ?? NO_ITEMS;
   const active = live && turnActive(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
+  const metrics = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.metrics ?? null);
   const waiting = blocked && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
   const canSetMode = useHostSupports('sessions.setMode');
@@ -398,6 +399,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           view="chat"
           available
           provider={provider}
+          metrics={metrics}
           model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
           {...(codex && feed?.mode != null ? { modeLabelText: modeLabel(feed.mode) } : {})}
           {...(canSetMode && !codex ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}

@@ -18,6 +18,8 @@ export interface RoomHeaderProps {
   recipeChip?: ReactNode;
   /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
   historyMenu?: ReactNode;
+  /** Значок расхода токенов комнаты (`RoomUsageChip`) рядом с режимом. */
+  usageChip?: ReactNode;
   title: string;
   subtitle: string;
   /** Комната в архиве: рядом с названием метка `Archived`. */
@@ -26,7 +28,7 @@ export interface RoomHeaderProps {
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu, usageChip }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -47,8 +49,8 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
           {subtitle}
         </span>
       </div>
-      {recipeChip === undefined ? modeControl : (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}</div>
+      {recipeChip === undefined && usageChip === undefined ? modeControl : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}</div>
       )}
       {historyMenu}
       <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
