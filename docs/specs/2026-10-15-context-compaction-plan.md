@@ -221,6 +221,16 @@ describe('claudeContextFill (спека 4.1)', () => {
     expect(claudeContextFill({ used_percentage: 130 }, AT)?.usedPercent).toBe(100);
     expect(claudeContextFill({ used_percentage: -5 }, AT)?.usedPercent).toBe(0);
   });
+
+  it('ровно 0 — нет наблюдения: так строка статуса приходит сразу после /compact (спека 9, п. 4)', () => {
+    expect(
+      claudeContextFill(
+        { used_percentage: 0, current_usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+        AT,
+      ),
+    ).toBeNull();
+    expect(claudeContextFill({ used_percentage: 0 }, AT)).toBeNull();
+  });
 });
 
 describe('codexContextFill (спека 4.2, формула Codex TUI)', () => {
@@ -383,6 +393,9 @@ export function claudeContextFill(contextWindow: unknown, at: string): ContextFi
   if (!isRecord(contextWindow)) return null;
   const used = contextWindow['used_percentage'];
   if (typeof used !== 'number' || !Number.isFinite(used)) return null;
+  // Сразу после `/compact` Claude Code зовёт строку статуса с нулями (спека 9, п. 4) — это не наблюдение: прежний
+  // файл остаётся, и окно показывает `compacted` до первой настоящей цифры. Живая сессия ровно 0 % не занимает.
+  if (used === 0) return null;
   const current = isRecord(contextWindow['current_usage']) ? contextWindow['current_usage'] : null;
   const parts =
     current === null
