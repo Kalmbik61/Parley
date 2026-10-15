@@ -65,13 +65,15 @@ import { useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { dragHasFiles } from '../../terminal/drop.js';
+import { ContextChip } from '../context/ContextChip.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { PlanPanel, RoomModeControl } from './PlanPanel.js';
 import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
-import { buildRoomModel } from './feed-model.js';
+import { buildRoomModel, type ParticipantModel } from './feed-model.js';
+import { RoomContextChip } from './RoomContextChip.js';
 import { RoomHeader } from './RoomHeader.js';
 import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
@@ -432,7 +434,28 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDrop={onDrop}
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
-      <RoomHeader usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader
+        contextChip={<RoomContextChip bridge={bridge} roomTitle={model.title} participants={model.participants} />}
+        participantContext={(participant: ParticipantModel) =>
+          // Без чипа (спящий, старый хост без `context`) карточка остаётся прежней — одна кнопка на обе строки.
+          participant.sessionRef === undefined ||
+          participant.lifecycle !== 'active' ||
+          (participant.context === undefined && participant.compaction === undefined) ? null : (
+            <ContextChip
+              bridge={bridge}
+              sessionRef={participant.sessionRef}
+              provider={participant.provider}
+              label={participant.label}
+              running={participant.lifecycle === 'active'}
+              context={participant.context}
+              compaction={participant.compaction}
+              defaultInstructions={S.context.roomDefault(model.title)}
+              testId="participant-context-chip"
+              className="h-5 px-1.5 text-[11px]"
+            />
+          )
+        }
+        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div

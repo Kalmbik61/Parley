@@ -89,6 +89,13 @@ export interface ParticipantModel {
   lead: boolean;
   /** Закрытая сессия: в ленте участников есть, а в меню упоминаний нет. */
   closed: boolean;
+  /**
+   * Заполненность контекста (спека 2026-10-15, 3.2): у живого — из метрик; у спящего — `null` (старое не
+   * показывается); `undefined` — хост поле не сообщает.
+   */
+  context?: import('@parley/core').ContextFill | null;
+  /** Сжатие контекста; у спящего — `null`. */
+  compaction?: import('@parley/protocol').CompactionPhase | null;
 }
 
 /** Цитата над сообщением-ответом: на что оно отвечает. */
@@ -274,6 +281,9 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       session.lifecycle === 'active'
         ? doingOf(liveEntry?.metrics?.tasks ?? [], liveEntry?.metrics?.waitingFor ?? null)
         : { doing: null, doingDetail: null, agents: [] };
+    const active = session.lifecycle === 'active';
+    const context = active ? liveEntry?.metrics?.context : null;
+    const compaction = active ? liveEntry?.metrics?.compaction : null;
     participants.push({
       id,
       role: session.role ?? null,
@@ -294,6 +304,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       agents,
       lead: id === lead,
       closed: session.lifecycle === 'closed',
+      ...(context === undefined ? {} : { context }),
+      ...(compaction === undefined ? {} : { compaction }),
     });
   }
 

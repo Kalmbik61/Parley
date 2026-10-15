@@ -12,9 +12,13 @@
  * Строка субагентов («Subagent: …», «3 subagents: …») — бейдж с поповером (`AgentsBadge`, кусок 4b плана 2026-10-01):
  * клик по агенту в поповере открывает сессию участника на карточке этого агента (`onOpenSession` вторым аргументом).
  * Кнопку в кнопку не вложить, поэтому у такой карточки кнопка открытия — только первая строка, а вторая — бейдж; у
- * остальных карточка по-прежнему одна кнопка на обе строки. Сама карточка — блок: фон, рамка наведения и тултип у него.
+ * остальных карточка по-прежнему одна кнопка на обе строки.
+ *
+ * Чип контекста (спека 2026-10-15, 3.2) — справа во второй строке; с ним кнопка открытия — только первая строка, а
+ * «чем занят» — отдельная кнопка рядом с чипом. Сама карточка — блок: фон, рамка наведения и тултип у него.
  */
 
+import type { ReactNode } from 'react';
 import { S } from '../../../shared/strings.js';
 import { RoleChip } from '../../lib/role-summary.js';
 import { cn } from '../../lib/cn.js';
@@ -27,9 +31,11 @@ export interface ParticipantStripProps {
   participants: readonly ParticipantModel[];
   /** Клик по карточке — открыть сессию; по агенту в поповере — открыть её на карточке этого агента (`agentId`). */
   onOpenSession: (sessionId: string, agentId?: string) => void;
+  /** Чип контекста участника (спека 2026-10-15, 3.2): во второй строке справа, вне кнопки открытия. */
+  contextChip?: (participant: ParticipantModel) => ReactNode;
 }
 
-export function ParticipantStrip({ participants, onOpenSession }: ParticipantStripProps): JSX.Element {
+export function ParticipantStrip({ participants, onOpenSession, contextChip }: ParticipantStripProps): JSX.Element {
   return (
     <div
       role="group"
@@ -38,6 +44,7 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
       className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
     >
       {participants.map((participant) => {
+        const chip = contextChip?.(participant) ?? null;
         const open = (): void => onOpenSession(participant.id);
         const header = (
           <span className="flex items-center gap-1.5 text-xs">
@@ -78,7 +85,34 @@ export function ParticipantStrip({ participants, onOpenSession }: ParticipantStr
                   : 'bg-[color-mix(in_srgb,currentColor_6%,transparent)]',
             )}
           >
-            {participant.agents.length > 0 && participant.doing !== null ? (
+            {chip !== null ? (
+              <>
+                <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
+                  {header}
+                </button>
+                <div className="mx-3 mb-[9px] mt-1 flex min-w-0 items-center gap-2">
+                  {participant.agents.length > 0 && participant.doing !== null ? (
+                    <AgentsBadge
+                      tasks={participant.agents}
+                      label={participant.doing}
+                      {...(participant.doingDetail === null ? {} : { title: participant.doingDetail })}
+                      onOpen={(task) => onOpenSession(participant.id, task.id)}
+                      className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={open}
+                      title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
+                      className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground"
+                    >
+                      {participant.doing ?? participant.task}
+                    </button>
+                  )}
+                  {chip}
+                </div>
+              </>
+            ) : participant.agents.length > 0 && participant.doing !== null ? (
               <>
                 <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
                   {header}
