@@ -24,6 +24,7 @@ import { HOST_ERROR_REASONS } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createContextService } from './context/context-service.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
@@ -294,6 +295,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sessionsService,
   );
   handle.context.onShutdown(async () => wakeService.stop());
+
+  // Заполненность контекста Claude/GLM (спека 2026-10-15, 4.3): опрос файлов строки статуса раз в 5 секунд.
+  const contextService = createContextService({ pty: ptyManager, activity: activityService });
+  contextService.start();
+  handle.context.onShutdown(async () => contextService.stop());
 
   // Дифф, коммит, слияние и отбрасывание worktree сессии (4.2) — «Остановить»
   // при отбрасывании она делит с обычным `sessions.stop`.
