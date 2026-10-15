@@ -227,22 +227,43 @@ describe('снимок и дельты', () => {
     expect(request.responses).toEqual([{}]);
   });
 
-  it('отписка и send() === false снимают подписку', () => {
+  it('отписка снимает подписку', () => {
     vi.useFakeTimers();
     start();
-    const slow = fakeClient(() => false);
     const gone = fakeClient();
-    service.subscribe(REF, slow);
     service.subscribe(REF, gone);
     service.unsubscribe(REF, gone);
 
     send(prompt('a'));
     vi.advanceTimersByTime(50);
+
+    expect(feedChanged(gone)).toHaveLength(0);
+  });
+
+  it('send() === false (буфер сокета выше порога) подписку не снимает: дельты идут дальше подряд', () => {
+    // Буфер переполняет большой ответ самому окну (снимок ленты в 4 МиБ), а не медленный клиент: снятая
+    // молча подписка оставляла чат на «Working…», пока человек не переключит вид (2026-10-15).
+    vi.useFakeTimers();
+    start();
+    const busy = fakeClient(() => false);
+    service.subscribe(REF, busy);
+
+    send(prompt('a'));
+    vi.advanceTimersByTime(50);
     send(prompt('b'));
     vi.advanceTimersByTime(50);
+    send(prompt('c'));
+    vi.advanceTimersByTime(50);
 
-    expect(feedChanged(slow)).toHaveLength(1);
-    expect(feedChanged(gone)).toHaveLength(0);
+    const deltas = feedChanged(busy);
+    expect(deltas).toHaveLength(3);
+    const first = deltas[0]?.revision ?? 0;
+    expect(deltas.map((delta) => delta.revision)).toEqual([first, first + 1, first + 2]);
+    expect(deltas.flatMap((delta) => ofKind(delta.upsert, 'prompt').map((item) => item.text))).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
   });
 
   it('снимок и подписка неизвестной сессии — not_found', async () => {
