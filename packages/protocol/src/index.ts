@@ -19,6 +19,7 @@ export type {
   CapabilityCommand,
   CapabilitySkill,
   CapabilitySource,
+  CompactResult,
   NoticeKind,
   ProtocolError,
   ProviderCheck,

@@ -197,7 +197,9 @@ export type NoticeKind =
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
   | 'skill-foreign'
   // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
-  | 'snapshot-too-large';
+  | 'snapshot-too-large'
+  | 'compact-cancelled'
+  | 'compact-failed';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -224,6 +226,14 @@ export interface SendResult {
   submitted: boolean;
   reason: SendReason | null;
 }
+
+/**
+ * Ответ `sessions.compact` (спека 2026-10-15, 5.1): напечатано сейчас; ждёт, пока агент освободится; отказ —
+ * экран неизвестен (ни одного хука с запуска) или процесса нет.
+ */
+export type CompactResult =
+  | { state: 'started' | 'pending' }
+  | { state: 'refused'; reason: 'unknown-screen' | 'asleep' };
 
 export type ErrorCode =
   | 'unauthorized'

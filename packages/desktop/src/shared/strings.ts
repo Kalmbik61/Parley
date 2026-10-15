@@ -2074,6 +2074,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'compact-cancelled': 'compaction cancelled — the agent stopped',
+  'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 
