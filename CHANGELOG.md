@@ -4,10 +4,18 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.13.0
+
+Rooms now show how many tokens they used and how full each agent's context is, and you can compact an agent's context right from the room. Chat no longer gets stuck on "Working…" after the agent has answered.
 
 ### Added
 
+- **See how many tokens a room used.** The room header has a chip with the room's input and output
+  tokens (`↑1.2M ↓84k`); click it for the breakdown by provider and by session, counted from the moment
+  each member joined the room until they left. **Copy** puts the table on the clipboard as Markdown.
+  Chat shows the same chip with its session's tokens over its whole life. These are tokens, not money
+  or a share of your plan limit — the limits stay at the bottom of the window; a number a provider does
+  not report shows as `?`, and an incomplete total starts with `≥`.
 - **See how full each agent's context is, and compact it on your terms.** Every room participant card shows
   how much of the model's context window the agent has used (amber from 60 %, red from 85 %), and the room
   header shows the fullest one as **Ctx 82%**. Click a chip to compact that agent with focus instructions
