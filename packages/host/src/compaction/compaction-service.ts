@@ -7,7 +7,7 @@
  */
 
 import { hookedSince } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { COMPACT_MAX_INSTRUCTIONS, refKey } from '@parley/protocol';
 import type { CompactResult, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -23,19 +23,24 @@ import type { CompactionTrack } from './context-view.js';
 
 /** Сколько ждать отчёта о конце сжатия (спека 5.5). */
 export const COMPACT_TIMEOUT_MS = 5 * 60_000;
-/** Предел инструкции после очистки (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code. */
-export const MAX_INSTRUCTIONS = 350;
 
 // Управляющие байты и DEL — в пробел: инструкция уходит одной строкой.
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\x00-\x1f\x7f]+/g;
+/** Последний токен инструкции начинается с `@` или `/` (как `TRAILING_MENU_TOKEN` в pty/codex-input.ts). */
+const TRAILING_MENU_TOKEN = /(?:^|\s)[@/]\S*$/;
 
 /** Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 350 знаков, пусто — без фокуса. */
 export function compactCommand(provider: string | null, instructions: string | null): string {
   if (provider === 'codex' || instructions === null) return '/compact';
   const line = stripEscapes(instructions).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
-  if (line.length > MAX_INSTRUCTIONS) throw new HostError('bad_request', 'instructions are longer than 350 characters');
-  return line === '' ? '/compact' : `/compact ${line}`;
+  // Предел (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code.
+  if (line.length > COMPACT_MAX_INSTRUCTIONS) {
+    throw new HostError('bad_request', `instructions are longer than ${COMPACT_MAX_INSTRUCTIONS} characters`);
+  }
+  if (line === '') return '/compact';
+  // Хвостовой `@`/`/`-токен открывает меню автодополнения Claude Code, и оно забирает Enter: закрываем пробелом.
+  return TRAILING_MENU_TOKEN.test(line) ? `/compact ${line} ` : `/compact ${line}`;
 }
 
 export interface CompactionService {

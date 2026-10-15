@@ -23,7 +23,7 @@ export async function compactSession(
     }
     return result;
   } catch (error) {
-    toast(errorText(decodeIpcError(error).code, S.context.compactAction));
+    if (options.quiet !== true) toast(errorText(decodeIpcError(error).code, S.context.compactAction));
     return null;
   }
 }

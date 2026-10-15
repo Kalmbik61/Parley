@@ -82,6 +82,7 @@ import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { ContextChip } from '../components/context/ContextChip.js';
+import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
@@ -418,7 +419,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
                 running={session.lifecycle === 'active'}
                 context={metrics.context}
                 compaction={metrics.compaction}
-                defaultInstructions={S.context.sessionDefault(sessionName)}
+                defaultInstructions={fitDefaultInstructions(S.context.sessionDefault, sessionName)}
                 testId="chat-context-chip"
               />
             )

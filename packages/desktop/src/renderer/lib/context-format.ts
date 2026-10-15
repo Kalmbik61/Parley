@@ -4,6 +4,7 @@
  */
 
 import type { ContextFill } from '@parley/core';
+import { COMPACT_MAX_INSTRUCTIONS } from '@parley/protocol';
 import type { CompactionPhase } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { knownTokens } from './usage-format.js';
@@ -12,8 +13,20 @@ const C = S.context;
 
 export const CONTEXT_WARN_PERCENT = 60;
 export const CONTEXT_CRITICAL_PERCENT = 85;
-/** Предел инструкции — как у хоста (`MAX_INSTRUCTIONS`). */
-export const COMPACT_MAX_INSTRUCTIONS = 350;
+export { COMPACT_MAX_INSTRUCTIONS };
+
+/**
+ * Текст по умолчанию (`build(name)`) в пределе хоста: длинное название обрезается с «…» по знакам UTF-16, не
+ * разрывая суррогатную пару. Короткое остаётся как есть.
+ */
+export function fitDefaultInstructions(build: (name: string) => string, name: string): string {
+  if (build(name).length <= COMPACT_MAX_INSTRUCTIONS) return build(name);
+  const budget = Math.max(0, COMPACT_MAX_INSTRUCTIONS - build('…').length);
+  let end = Math.min(name.length, budget);
+  const last = name.charCodeAt(end - 1);
+  if (end > 0 && last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return build(`${name.slice(0, end).trimEnd()}…`);
+}
 
 export type ContextLevel = 'normal' | 'warn' | 'critical';
 

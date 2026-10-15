@@ -85,6 +85,18 @@ describe('RoomContextChip (спека 3.3)', () => {
     ]);
   });
 
+  it('Compact all не трогает участника без данных о контексте (skipped)', async () => {
+    const members = [
+      participant({ id: 's-01', label: 'S01 backend', sessionRef: refOf('s-01'), context: FILL, compaction: null }),
+      participant({ id: 's-04', label: 'S04 fresh', sessionRef: refOf('s-04'), context: null, compaction: null }),
+    ];
+    render(<RoomContextChip bridge={bridge} roomTitle="Auth" participants={members} />);
+    fireEvent.click(screen.getByTestId('room-context-chip'));
+    fireEvent.click(screen.getByTestId('room-compact-all'));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Compacting 1 agent · 1 skipped'));
+    expect(bridge.calls.filter((call) => call.method === 'sessions.compact').map((call) => (call.params as { ref: SessionRef }).ref.sessionId)).toEqual(['s-01']);
+  });
+
   it('Compact в строке — одна сессия с общим текстом по умолчанию', async () => {
     render(<RoomContextChip bridge={bridge} roomTitle="Auth" participants={MEMBERS} />);
     fireEvent.click(screen.getByTestId('room-context-chip'));

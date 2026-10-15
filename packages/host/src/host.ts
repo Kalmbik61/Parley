@@ -244,7 +244,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
-      compactionService?.onHook(request.ref, request.body);
+      try {
+        compactionService?.onHook(request.ref, request.body);
+      } catch (error) {
+        log.warn(`compaction hook failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
       feedService.onHook(request);
     },
   });

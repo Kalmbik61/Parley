@@ -15,6 +15,7 @@ import {
   COMPACT_MAX_INSTRUCTIONS,
   contextChipText,
   contextLevel,
+  fitDefaultInstructions,
   LEVEL_CLASS,
   maxContext,
   percentText,
@@ -75,12 +76,13 @@ function RoomContextBody({
   members: readonly ParticipantModel[];
   supported: boolean;
 }): JSX.Element {
-  const [text, setText] = useState(C.roomDefault(roomTitle));
+  const [text, setText] = useState(fitDefaultInstructions(C.roomDefault, roomTitle));
   const instructions = text.trim() === '' ? null : text;
   const hasCodex = members.some((participant) => participant.provider === 'codex');
 
   const compactAll = async (): Promise<void> => {
-    const targets = members.filter((participant) => participant.lifecycle === 'active');
+    // Без данных о контексте (почти пустой разговор) сжимать нечего: у Claude `/compact` на нём падает без PostCompact.
+    const targets = members.filter((participant) => participant.lifecycle === 'active' && participant.context != null);
     const results = await Promise.all(
       targets.map((participant) => compactSession(bridge, participant.sessionRef!, participant.label, instructions, { quiet: true })),
     );

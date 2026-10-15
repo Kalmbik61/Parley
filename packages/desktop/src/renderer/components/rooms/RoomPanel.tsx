@@ -66,6 +66,7 @@ import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { dragHasFiles } from '../../terminal/drop.js';
 import { ContextChip } from '../context/ContextChip.js';
+import { fitDefaultInstructions } from '../../lib/context-format.js';
 import { Decisions } from '../mail/Decisions.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
@@ -449,7 +450,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               running={participant.lifecycle === 'active'}
               context={participant.context}
               compaction={participant.compaction}
-              defaultInstructions={S.context.roomDefault(model.title)}
+              defaultInstructions={fitDefaultInstructions(S.context.roomDefault, model.title)}
               testId="participant-context-chip"
               className="h-5 px-1.5 text-[11px]"
             />

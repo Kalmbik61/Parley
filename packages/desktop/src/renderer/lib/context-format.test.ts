@@ -5,6 +5,8 @@ import {
   contextLevel,
   contextNumbers,
   contextTooltip,
+  COMPACT_MAX_INSTRUCTIONS,
+  fitDefaultInstructions,
   maxContext,
   percentText,
 } from './context-format.js';
@@ -53,5 +55,21 @@ describe('context-format (спека 3.1–3.3)', () => {
     );
     expect(S.context.allResult(3, 1, 1)).toBe('Compacting 3 agents · 1 queued · 1 skipped');
     expect(S.context.allResult(1, 0, 0)).toBe('Compacting 1 agent');
+  });
+
+  it('текст по умолчанию укладывается в предел: длинное название и эмодзи', () => {
+    const brokenPair = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+    for (const name of ['я'.repeat(300), '😀'.repeat(200), 'x'.repeat(10_000)]) {
+      for (const build of [S.context.roomDefault, S.context.sessionDefault]) {
+        const text = fitDefaultInstructions(build, name);
+        expect(text.length).toBeLessThanOrEqual(COMPACT_MAX_INSTRUCTIONS);
+        expect(brokenPair.test(text)).toBe(false);
+        expect(text).toContain('…');
+      }
+    }
+  });
+
+  it('короткое название не меняется', () => {
+    expect(fitDefaultInstructions(S.context.roomDefault, 'Auth')).toBe(S.context.roomDefault('Auth'));
   });
 });

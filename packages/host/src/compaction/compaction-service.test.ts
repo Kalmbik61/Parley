@@ -16,6 +16,11 @@ describe('compactCommand (спека 5.3)', () => {
     expect(compactCommand('claude', '   ')).toBe('/compact');
     expect(compactCommand('claude', null)).toBe('/compact');
   });
+  it('хвостовой @ или / токен закрывается пробелом, чтобы меню не забрало Enter', () => {
+    expect(compactCommand('claude', 'look at @src/a.ts')).toBe('/compact look at @src/a.ts ');
+    expect(compactCommand('claude', 'see /docs')).toBe('/compact see /docs ');
+    expect(compactCommand('claude', 'a@b.c done')).toBe('/compact a@b.c done');
+  });
   it('Codex — всегда голый /compact', () => {
     expect(compactCommand('codex', 'focus')).toBe('/compact');
   });
