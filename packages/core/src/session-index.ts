@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { ContextFill } from './context-fill.js';
 import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
@@ -73,6 +74,13 @@ export interface SessionIndex {
    * (`withDescendants`). Нет поля — индекс собран кодом до P36.
    */
   usage?: UsageSummary;
+  /**
+   * Заполненность контекста сейчас (спека 2026-10-15, 4.2): у Codex — из последнего `token_count` с окном модели.
+   * У Claude поля нет: процент приходит файлом строки статуса.
+   */
+  context?: ContextFill | null;
+  /** Время последней записи `compacted` в rollout-логе Codex (спека 2026-10-15, 5.5); у Claude поля нет. */
+  compactedAt?: string | null;
   provider: Provider;
   /**
    * Лог порождённого треда (только Codex): у `session_meta` задан `parent_thread_id` или `source` не

@@ -253,6 +253,39 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.metrics?.mailWaiting).toBeNull();
   });
 
+  it('2в: контекст — setContext уходит в метрики, setCompaction прячет старый процент до свежего наблюдения', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.context ?? null).toBeNull();
+
+    const fill = { usedPercent: 82, windowTokens: 200_000, usedTokens: 164_000, at: '2026-10-15T10:00:00.000Z' };
+    a.setContext(ref, fill);
+    expect(a.get(ref)?.metrics).toMatchObject({ context: fill, compaction: null });
+    const sent = activityChanges(ref).length;
+    // То же значение — ни пересчёта, ни рассылки.
+    a.setContext(ref, { ...fill });
+    expect(activityChanges(ref)).toHaveLength(sent);
+
+    a.setCompaction(ref, { phase: 'pending', finishedAt: null });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: fill, compaction: 'pending' });
+    a.setCompaction(ref, { phase: null, finishedAt: '2026-10-15T10:05:00.000Z' });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: null, compaction: 'compacted' });
+    a.setContext(ref, { ...fill, usedPercent: 12, at: '2026-10-15T10:06:00.000Z' });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: { usedPercent: 12 }, compaction: null });
+  });
+
+  it('2г: codexCompactedAt у сессии Claude — null', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.codexCompactedAt(ref)).toBeNull();
+  });
+
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {
     const startedAt = new Date().toISOString();
     const { ref } = await activeSession({ providerSessionId: 's-log', createEventsDir: false });

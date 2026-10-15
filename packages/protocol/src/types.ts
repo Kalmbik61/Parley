@@ -1,4 +1,4 @@
-import type { UsageSummary, WorkEntry } from '@parley/core';
+import type { ContextFill, UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -124,6 +124,12 @@ export type MailWait =
   | 'resume-limit'
   | 'pending';
 
+/**
+ * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
+ * цифры заполненности ещё нет.
+ */
+export type CompactionPhase = 'pending' | 'running' | 'compacted';
+
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
   /**
@@ -154,6 +160,13 @@ export interface LiveMetrics {
    * Поля нет у хоста более ранней версии.
    */
   mailWaiting?: MailWait | null;
+  /**
+   * Заполненность контекста сейчас (спека 2026-10-15, 4.3); `null` — неизвестно. Поля нет у хоста более ранней
+   * версии: окно чипа не показывает.
+   */
+  context?: ContextFill | null;
+  /** Сжатие контекста (спека 5.6); `null` — ничего. Поля нет у хоста более ранней версии. */
+  compaction?: CompactionPhase | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */
@@ -184,7 +197,9 @@ export type NoticeKind =
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
   | 'skill-foreign'
   // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
-  | 'snapshot-too-large';
+  | 'snapshot-too-large'
+  | 'compact-cancelled'
+  | 'compact-failed';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -211,6 +226,14 @@ export interface SendResult {
   submitted: boolean;
   reason: SendReason | null;
 }
+
+/**
+ * Ответ `sessions.compact` (спека 2026-10-15, 5.1): напечатано сейчас; ждёт, пока агент освободится; отказ —
+ * экран неизвестен (ни одного хука с запуска) или процесса нет.
+ */
+export type CompactResult =
+  | { state: 'started' | 'pending' }
+  | { state: 'refused'; reason: 'unknown-screen' | 'asleep' };
 
 export type ErrorCode =
   | 'unauthorized'

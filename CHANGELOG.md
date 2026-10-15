@@ -6,6 +6,15 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **See how full each agent's context is, and compact it on your terms.** Every room participant card shows
+  how much of the model's context window the agent has used (amber from 60 %, red from 85 %), and the room
+  header shows the fullest one as **Ctx 82%**. Click a chip to compact that agent with focus instructions
+  prefilled from the room's title — edit them if you like — or use **Compact all** for the whole room. An agent
+  that is busy compacts as soon as its turn ends (⏳); Parley holds room messages for it until compaction is
+  done. Chat shows the same chip for its session. Codex compacts without focus instructions.
+
 ### Changed
 
 - **Clear on the island marks the finished sessions as seen.** The quiet **Clear** under the list

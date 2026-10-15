@@ -12,6 +12,7 @@
  * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала.
  */
 
+import type { ReactNode } from 'react';
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
 import type { EffortOption, LiveMetrics, ModelOption } from '@parley/protocol';
@@ -114,6 +115,8 @@ export interface ChatToolbarProps {
   micTargetId?: string;
   /** Живые цифры сессии: значок расхода токенов (спека расхода токенов, 3.4); нет или `null` — значка нет. */
   metrics?: LiveMetrics | null;
+  /** Чип контекста сессии (`ContextChip`, спека 2026-10-15, 3.4) — рядом со значком расхода. */
+  contextChip?: ReactNode;
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
@@ -205,7 +208,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
   const entries = useWorksStore(state => state.entries);
   const layout = useLayoutStore(state => state.layouts[workKey]);
   const found = layout ? findTab(layout, tabId) : null;
@@ -244,6 +247,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
       {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
+      {contextChip}
       {agents === undefined ? null : (
         <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">
           <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />

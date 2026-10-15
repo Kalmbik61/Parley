@@ -2,6 +2,8 @@ import type { MethodName, NotificationName } from '@parley/protocol';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
+import type { CompactionService } from '../compaction/compaction-service.js';
+import { createCompactionMethods } from '../compaction/compaction-methods.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
@@ -76,6 +78,8 @@ export interface MethodDeps {
   codexCatalog?: CodexCatalog;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
   limits?: LimitsService;
+  /** Сжатие контекста по клику человека (спека 2026-10-15); без него методов сжатия у хоста нет. */
+  compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
 }
@@ -106,6 +110,8 @@ export const WORKS_GATED_METHODS = [
   'sessions.interrupted',
   'sessions.setMode',
   'sessions.setEffort',
+  'sessions.compact',
+  'sessions.cancelCompact',
   'sessions.setModel',
   'sessions.resumeInterrupted',
   'pty.attach',
@@ -146,6 +152,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const changes = createChangesHandlers(deps);
   const capabilities = createCapabilitiesHandlers();
 
+  const compaction = deps.compaction === undefined ? null : createCompactionMethods(deps.compaction);
+
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     ...createBacklogHandlers(deps.backlog),
     ...createJournalHandlers(deps.works),
@@ -183,6 +191,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,
+    ...(compaction === null
+      ? {}
+      : {
+          'sessions.compact': compaction.compact as AnyHandler,
+          'sessions.cancelCompact': compaction.cancel as AnyHandler,
+        }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
     'wake.pause': wake.wakePause as AnyHandler,

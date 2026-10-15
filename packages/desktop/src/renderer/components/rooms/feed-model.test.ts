@@ -855,3 +855,28 @@ it('projects native plan/proposal identities and treats Parley as coordination w
  const model=build(entry); expect(model.mode).toBe('verified');expect(model.plan).toBe(plan);expect(model.proposal).toMatchObject({kind:'completion',planId:'pl-01',planRev:2});
  expect(model.messages[0]).toMatchObject({from:'Parley',sender:{kind:'system',provider:null},unread:true,needsRead:true,to:'You'});
 });
+
+describe('контекст участника (спека 2026-10-15, 3.2)', () => {
+  const FILL = { usedPercent: 82, windowTokens: 200_000, usedTokens: 164_000, at: '2026-10-15T10:00:00.000Z' };
+  const metrics = { tokensIn: 1, tokensOut: 1, durationMs: null, unread: 0, subagents: 0, model: null, context: FILL, compaction: 'pending' as const } as unknown as LiveMetrics;
+
+  it('у живого — из метрик; у спящего — null', () => {
+    const list = sessions();
+    list[1] = { ...list[1]!, lifecycle: 'sleeping' };
+    const model = build(
+      entryOf({ sessions: list }),
+      activityMap([makeActivity(REF('s-01'), 'idle', { metrics }), makeActivity(REF('s-02'), 'idle', { metrics })]),
+    );
+    const byId = Object.fromEntries(model.participants.map((p) => [p.id, p]));
+    expect(byId['s-01']).toMatchObject({ context: FILL, compaction: 'pending' });
+    expect(byId['s-02']).toMatchObject({ context: null, compaction: null });
+  });
+
+  it('метрик без поля context (старый хост) — context undefined', () => {
+    const old: Record<string, unknown> = { ...metrics };
+    delete old.context;
+    delete old.compaction;
+    const model = build(entryOf(), activityMap([makeActivity(REF('s-01'), 'idle', { metrics: old as unknown as LiveMetrics })]));
+    expect(model.participants.find((p) => p.id === 's-01')?.context).toBeUndefined();
+  });
+});

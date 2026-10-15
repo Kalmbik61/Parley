@@ -37,6 +37,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'plan-effect-failed',
   'role-truncated',
   'recipe-playbook-truncated',
+  'compact-cancelled',
+  'compact-failed',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */

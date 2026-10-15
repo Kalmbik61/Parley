@@ -264,6 +264,43 @@ export const S = {
     unavailable: 'Usage unavailable',
     counting: 'Counting…',
   },
+  /** Заполненность контекста и сжатие (спека 2026-10-15, 3). Инструкции по умолчанию — текст для агента. */
+  context: {
+    marks: { unknown: '—', pending: '⏳', running: '…', compacted: 'compacted', asleep: 'asleep' },
+    tooltip: {
+      tokens: (used: string, window: string): string => `Context: ${used} of ${window} tokens`,
+      percent: (percent: string): string => `Context: ${percent} used`,
+      unknown: 'No context data yet',
+      pending: 'Compaction queued — runs when the agent is free',
+      running: 'Compacting…',
+      compacted: 'Compacted — waiting for the next update',
+    },
+    title: (label: string): string => `Context · ${label}`,
+    roomTitle: 'Context',
+    roomChip: (value: string): string => `Ctx ${value}`,
+    numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
+    instructionsLabel: 'Focus instructions',
+    codexNoFocus: 'Codex compacts without focus',
+    compact: 'Compact',
+    compactAll: 'Compact all',
+    cancel: 'Cancel',
+    compacting: 'Compacting…',
+    compactAction: 'compact the context',
+    cancelAction: 'cancel the compaction',
+    refusedAsleep: (label: string): string => `${label} is asleep — nothing to compact`,
+    refusedUnknownScreen: (label: string): string =>
+      `Can't compact ${label} yet — it hasn't reported since launch. Check its terminal.`,
+    allResult: (started: number, queued: number, skipped: number): string =>
+      [
+        `Compacting ${started} ${started === 1 ? 'agent' : 'agents'}`,
+        ...(queued > 0 ? [`${queued} queued`] : []),
+        ...(skipped > 0 ? [`${skipped} skipped`] : []),
+      ].join(' · '),
+    roomDefault: (title: string): string =>
+      `Focus on room "${title}": the human's task, decisions made, open questions, who owns what, and files touched. Drop details unrelated to this room.`,
+    sessionDefault: (name: string): string =>
+      `Focus on "${name}": the current task, decisions made, open questions, and files touched. Drop unrelated details.`,
+  },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
@@ -2074,6 +2111,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'compact-cancelled': 'compaction cancelled — the agent stopped',
+  'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 

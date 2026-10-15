@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { contextFile } from '../context-fill.js';
 import { addSession } from './map.js';
 import type { WorkMap } from './types.js';
 import {
@@ -685,6 +686,16 @@ describe('deleteSessionFiles', () => {
   });
 });
 
+
+it('deleteSessionFiles убирает и context/<сессия>.json (спека 2026-10-15)', async () => {
+  const map = await createWork(project, { title: 'Авторизация' });
+  const paths = workPaths(project, map.work.id);
+  await mkdir(paths.context, { recursive: true });
+  const file = contextFile(paths.dir, 's-01');
+  await writeFile(file, '{}');
+  await deleteSessionFiles(project, map.work.id, 's-01');
+  await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+});
 
 describe('read-only shared ignore diagnostics', () => {
   it('does not create a state directory or ignore file on an untouched GET', async () => {

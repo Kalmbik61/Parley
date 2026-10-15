@@ -1,5 +1,6 @@
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
+import type { ExitInfo } from '../src/pty/pty-process.js';
 import type { PtyHandle, PtyManager } from '../src/pty/pty-manager.js';
 
 /**
@@ -23,10 +24,12 @@ export interface FakePty {
   /** Видимая область экрана для `screenText`; пустая по умолчанию. */
   screen: string[];
   emitDraft(ref: SessionRef): void;
+  emitExit(ref: SessionRef): void;
 }
 
 export function fakePty(): FakePty {
   const draftListeners = new Set<(ref: SessionRef, hasDraft: boolean) => void>();
+  const exitListeners = new Set<(ref: SessionRef, exit: ExitInfo) => void>();
   const state: FakePty = {
     writes: [],
     hostDraftCalls: [],
@@ -40,6 +43,10 @@ export function fakePty(): FakePty {
     screen: [],
     emitDraft(ref) {
       for (const listener of draftListeners) listener(ref, state.humanDraft || state.hostDraft);
+    },
+    emitExit(ref) {
+      state.live = false;
+      for (const listener of exitListeners) listener(ref, { exitCode: 0, signal: null });
     },
     manager: undefined as unknown as PtyManager,
   };
@@ -75,6 +82,11 @@ export function fakePty(): FakePty {
       state.hostDraft = value;
     },
     on(event: string, listener: never): () => void {
+      if (event === 'exit') {
+        const typed = listener as (ref: SessionRef, exit: ExitInfo) => void;
+        exitListeners.add(typed);
+        return () => exitListeners.delete(typed);
+      }
       if (event !== 'draft') return () => {};
       const typed = listener as (ref: SessionRef, hasDraft: boolean) => void;
       draftListeners.add(typed);
