@@ -1,7 +1,7 @@
 /**
  * Одна отправка окна агенту (кусок 5.4, спека 8.6) — на 5.4, 8.x и 9.x: `pty.send`, тост по
  * таблице 8.6 и его кнопки. Отправка — только явным действием человека (бросок, вставка,
- * кнопка тоста): никаких автоповторов. При `blocked` хост текст не вставляет, окно лишь
+ * кнопка тоста): никаких автоповторов. Исключение — очередь Chat (chat/chat-outbox.ts): она сама повторяет busy и blocked для того, что человек уже отправил. При `blocked` хост текст не вставляет, окно лишь
  * предлагает скопировать его и открыть сессию.
  */
 
@@ -122,24 +122,22 @@ interface ToastButton {
 }
 
 /**
- * Одна отправка окна на 5.4, 8.x и 9.x: sendToAgent, тост sendToast через sonner (ярлык — sessionTag) и его
- * кнопки: Copy — исходный текст в буфер, Open — openSession, Retry — тот же вызов, Resume — sessions.resume.
- * Возвращает исход первой попытки; исходы всех попыток, включая Retry, — в deps.onOutcome.
+ * Тост исхода `outcome` по таблице 8.6 и его кнопки — без отправки. `sendWithToast` зовёт его после своей попытки,
+ * очередь Chat (`chat/chat-outbox.ts`) — только на окончательных исходах.
  */
-export async function sendWithToast(
+export function showSendToast(
   deps: SendWithToastDeps,
   ref: SessionRef,
   text: string,
   submit: boolean,
+  outcome: SendOutcome,
   sendOptions: SendWithToastOptions = {},
-): Promise<SendOutcome> {
-  const outcome = await sendToAgent(deps.bridge, ref, text, submit);
-  deps.onOutcome?.(outcome);
+): void {
   const label = sessionTag(ref.sessionId);
   const session = deps.session(ref);
   const shown = sendToast(outcome, label, session !== null && canResume(session));
-  if (shown === null) return outcome;
-  if (sendOptions.silentSuccess === true && !('error' in outcome) && outcome.reason === null) return outcome;
+  if (shown === null) return;
+  if (sendOptions.silentSuccess === true && !('error' in outcome) && outcome.reason === null) return;
 
   const buttons: Record<SendToast['actions'][number], ToastButton> = {
     copy: {
@@ -167,5 +165,22 @@ export async function sendWithToast(
   };
   if (shown.error) toast.error(shown.text, options);
   else toast(shown.text, options);
+}
+
+/**
+ * Одна отправка окна на 5.4, 8.x и 9.x: sendToAgent, тост sendToast через sonner (ярлык — sessionTag) и его
+ * кнопки: Copy — исходный текст в буфер, Open — openSession, Retry — тот же вызов, Resume — sessions.resume.
+ * Возвращает исход первой попытки; исходы всех попыток, включая Retry, — в deps.onOutcome.
+ */
+export async function sendWithToast(
+  deps: SendWithToastDeps,
+  ref: SessionRef,
+  text: string,
+  submit: boolean,
+  sendOptions: SendWithToastOptions = {},
+): Promise<SendOutcome> {
+  const outcome = await sendToAgent(deps.bridge, ref, text, submit);
+  deps.onOutcome?.(outcome);
+  showSendToast(deps, ref, text, submit, outcome, sendOptions);
   return outcome;
 }
