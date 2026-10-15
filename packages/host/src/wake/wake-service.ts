@@ -56,6 +56,8 @@ export interface WakeServiceOptions {
   limiter?: ResumeLimiter;
   /** Поднятая сессия вышла раньше этого срока без единого хука — подъём не удался (спека 10). */
   resumeFailWindowMs?: number;
+  /** Сжатие контекста ждёт или идёт (`CompactionService.holds`, спека 2026-10-15, 5.4): указатель не печатается. */
+  compacting?: (ref: SessionRef) => boolean;
 }
 
 export interface WakeService {
@@ -256,8 +258,9 @@ export function createWakeService(
     }, PASTE_MODE_RETRY_MS);
   }
 
-  /** Идёт смена модели или effort, либо открыт ползунок `/effort` (общая проверка с `pty.send`). */
+  /** Идёт смена модели или effort, открыт ползунок `/effort` (общая проверка с `pty.send`) или сжатие держит сессию. */
   const choiceNow = (ref: SessionRef): boolean =>
+    options.compacting?.(ref) === true ||
     choiceInProgress(ref, { pty, switching: (target) => sessions.exclusive?.held(target) === true });
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {

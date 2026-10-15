@@ -24,6 +24,7 @@ import { HOST_ERROR_REASONS } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createContextService } from './context/context-service.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
@@ -237,7 +238,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
-  const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
+  // Сжатие контекста (спека 2026-10-15, 5): создаётся после будильника, но хук-сервер и будильник видят его уже сейчас.
+  let compactionService: CompactionService | undefined;
+  const hookServer = createHookServer({
+    log,
+    onHook: (request) => {
+      compactionService?.onHook(request.ref, request.body);
+      feedService.onHook(request);
+    },
+  });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
   // запуск сессии — для порога ленты (`feedSupported`), поэтому проба заводится до сервиса сессий.
@@ -293,8 +302,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activityService,
     ptyManager,
     sessionsService,
+    { compacting: (ref) => compactionService?.holds(ref) === true },
   );
   handle.context.onShutdown(async () => wakeService.stop());
+
+  compactionService = createCompactionService({
+    host: handle.context,
+    pty: ptyManager,
+    activity: activityService,
+    exclusive: sessionsService.exclusive,
+    wake: wakeService,
+  });
+  compactionService.start();
+  handle.context.onShutdown(async () => compactionService?.stop());
 
   // Заполненность контекста Claude/GLM (спека 2026-10-15, 4.3): опрос файлов строки статуса раз в 5 секунд.
   const contextService = createContextService({ pty: ptyManager, activity: activityService });
@@ -343,6 +363,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     pty: ptyManager,
     sessions: sessionsService,
     wake: wakeService,
+    compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
   });
