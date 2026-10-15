@@ -72,6 +72,7 @@ import { Button } from '../ui/button.js';
 import { defaultRoot } from '../files/store.js';
 import { cn } from '../lib/cn.js';
 import { effortChoices } from '../lib/effort-choices.js';
+import { sessionRowLabel } from '../lib/participant.js';
 import { activityFor, useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
@@ -80,6 +81,7 @@ import { NotRunningCard } from '../terminal/NotRunningCard.js';
 import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
+import { ContextChip } from '../components/context/ContextChip.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
@@ -189,6 +191,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const active = live && turnActive(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
   const metrics = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.metrics ?? null);
+  const session = useWorksStore((state) =>
+    state.entries
+      .find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId)
+      ?.map.sessions.find((item) => item.id === sessionRef.sessionId),
+  );
+  const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
   const canSetMode = useHostSupports('sessions.setMode');
@@ -400,6 +408,21 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           available
           provider={provider}
           metrics={metrics}
+          contextChip={
+            metrics === null || session === undefined || sessionName === null ? undefined : (
+              <ContextChip
+                bridge={bridge}
+                sessionRef={sessionRef}
+                provider={session.provider}
+                label={sessionName}
+                running={session.lifecycle === 'active'}
+                context={metrics.context}
+                compaction={metrics.compaction}
+                defaultInstructions={S.context.sessionDefault(sessionName)}
+                testId="chat-context-chip"
+              />
+            )
+          }
           model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
           {...(codex && feed?.mode != null ? { modeLabelText: modeLabel(feed.mode) } : {})}
           {...(canSetMode && !codex ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
