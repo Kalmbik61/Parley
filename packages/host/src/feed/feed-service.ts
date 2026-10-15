@@ -470,8 +470,10 @@ export function createFeedService(
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
     for (const client of Array.from(clients)) {
-      // Клиент не успевает читать — подписка снимается, как у `pty.output`: окно возьмёт снимок заново.
-      if (!client.send({ event: 'feed.changed', data })) clients.delete(client);
+      // В отличие от `pty.output`, подписку по буферу не снимаем: он обычно полон собственным большим ответом
+      // окну (снимок ленты на мегабайты), а дельты мелкие и идут пачками раз в 50 мс. Окно об отписке не
+      // узнало бы и ждало дельт вечно; ушедшего клиента снимает `dropClient`.
+      client.send({ event: 'feed.changed', data });
     }
   }
 

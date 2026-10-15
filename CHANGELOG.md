@@ -24,6 +24,12 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- **Chat no longer gets stuck on "Working…" when the agent has already answered.** Sometimes Chat
+  (and the agents panel in a room) stopped taking updates: the answer was already in the terminal,
+  and it showed up in Chat only after switching to the terminal and back. Two leaks are fixed. The
+  host no longer drops the window's feed subscription when its socket buffer is full — that happened
+  right after large feed snapshots of long sessions (up to 4 MB) — and the window no longer discards
+  an update that arrives just before the snapshot it is waiting for.
 - **Clear stays in place under a long Done list on the island.** Clear was inside the scrolling
   list and scrolled away with it; it now stands under the list.
 
