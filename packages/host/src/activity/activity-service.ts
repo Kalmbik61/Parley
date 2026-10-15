@@ -36,6 +36,7 @@ import {
   watchEvents,
   workPaths,
   type Activity,
+  type ContextFill,
   type ActivityLog,
   type EventRecord,
   type EventsLog,
@@ -61,6 +62,7 @@ import type { HostContext } from '../context.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
+import { contextView, type CompactionTrack } from '../compaction/context-view.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
 
@@ -129,6 +131,12 @@ export interface ActivityService {
    * комната пишет её рядом с «not picked up yet». `null` — писем нет.
    */
   mailWaiting(ref: SessionRef, reason: MailWait | null): void;
+  /** Заполненность контекста Claude/GLM из файла строки статуса (`ContextService`); `null` — файла нет. */
+  setContext(ref: SessionRef, fill: ContextFill | null): void;
+  /** Сжатие сессии (`CompactionService`): фаза просьбы и конец последнего сжатия. */
+  setCompaction(ref: SessionRef, track: CompactionTrack): void;
+  /** Время последней записи `compacted` в rollout-логе Codex; не Codex или записи нет — `null`. */
+  codexCompactedAt(ref: SessionRef): string | null;
   /**
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
@@ -293,6 +301,8 @@ export function createActivityService(
   const questionHeldKeys = new Set<string>();
   /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
   const mailWaits = new Map<string, MailWait>();
+  const contexts = new Map<string, ContextFill>();
+  const compactions = new Map<string, CompactionTrack>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -537,6 +547,9 @@ export function createActivityService(
       // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
       attribution: { workId: ref.workId, sessionId: session.id, roomId: null, runId: null },
     };
+    // Codex — из индекса лога; Claude и GLM — из файла строки статуса (`ContextService`).
+    const fill = session.provider === 'codex' ? (indexed?.context ?? null) : (contexts.get(key) ?? null);
+    const view = contextView(fill, compactions.get(key));
     return {
       usage,
       tokensIn: usage.input,
@@ -551,6 +564,8 @@ export function createActivityService(
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
       mailWaiting: mailWaits.get(key) ?? null,
+      context: view.context,
+      compaction: view.compaction,
     };
   }
 
@@ -854,6 +869,12 @@ export function createActivityService(
     for (const key of Array.from(mailWaits.keys())) {
       if (!validSessions.has(key)) mailWaits.delete(key);
     }
+    for (const key of Array.from(contexts.keys())) {
+      if (!validSessions.has(key)) contexts.delete(key);
+    }
+    for (const key of Array.from(compactions.keys())) {
+      if (!validSessions.has(key)) compactions.delete(key);
+    }
     for (const key of Array.from(questionHeldKeys)) {
       if (!validSessions.has(key)) questionHeldKeys.delete(key);
     }
@@ -923,6 +944,25 @@ export function createActivityService(
       if (reason === null) mailWaits.delete(key);
       else mailWaits.set(key, reason);
       recompute(ref);
+    },
+    setContext(ref, fill) {
+      const key = refKey(ref);
+      if (JSON.stringify(contexts.get(key) ?? null) === JSON.stringify(fill)) return;
+      if (fill === null) contexts.delete(key);
+      else contexts.set(key, fill);
+      recompute(ref);
+    },
+    setCompaction(ref, track) {
+      const key = refKey(ref);
+      if (JSON.stringify(compactions.get(key) ?? null) === JSON.stringify(track)) return;
+      if (track.phase === null && track.finishedAt === null) compactions.delete(key);
+      else compactions.set(key, track);
+      recompute(ref);
+    },
+    codexCompactedAt(ref) {
+      const session = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((item) => item.id === ref.sessionId);
+      if (session === undefined || session.provider !== 'codex') return null;
+      return logIndex.index(session)?.compactedAt ?? null;
     },
     questionHeld(ref, held) {
       const key = refKey(ref);

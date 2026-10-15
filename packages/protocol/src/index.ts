@@ -8,6 +8,7 @@ export type {
   FeedItem,
   HostErrorReason,
   HostNotice,
+  CompactionPhase,
   LimitWindow,
   LiveMetrics,
   LiveTask,

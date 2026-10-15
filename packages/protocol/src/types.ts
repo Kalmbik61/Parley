@@ -1,4 +1,4 @@
-import type { UsageSummary, WorkEntry } from '@parley/core';
+import type { ContextFill, UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -124,6 +124,12 @@ export type MailWait =
   | 'resume-limit'
   | 'pending';
 
+/**
+ * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
+ * цифры заполненности ещё нет.
+ */
+export type CompactionPhase = 'pending' | 'running' | 'compacted';
+
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
   /**
@@ -154,6 +160,13 @@ export interface LiveMetrics {
    * Поля нет у хоста более ранней версии.
    */
   mailWaiting?: MailWait | null;
+  /**
+   * Заполненность контекста сейчас (спека 2026-10-15, 4.3); `null` — неизвестно. Поля нет у хоста более ранней
+   * версии: окно чипа не показывает.
+   */
+  context?: ContextFill | null;
+  /** Сжатие контекста (спека 5.6); `null` — ничего. Поля нет у хоста более ранней версии. */
+  compaction?: CompactionPhase | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */
