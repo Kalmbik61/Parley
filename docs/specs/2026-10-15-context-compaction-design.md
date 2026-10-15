@@ -294,3 +294,30 @@ context?: ContextFill | null; // null — неизвестно; поля нет 
 - Будить спящую сессию ради сжатия.
 - Сохранять ждущие просьбы между перезапусками хоста.
 - Свой текст инструкции, запомненный для комнаты.
+
+## 9. Итоги живой пробы (2026-10-15, Claude Code 2.1.300, Codex 0.162.0)
+
+1. Codex `/compact <текст>`: НЕ принимается как команда. `/compact focus on the probe only` ушёл обычным
+   сообщением модели («I'll focus on the probe only.»), записи `compacted` в rollout нет, контекст вырос
+   (31,9K → 63,8K входа). Голый `/compact` выполнился: «Context compacted», в rollout появилась запись
+   `type: "compacted"` (поле `payload` без полезных данных, только `timestamp`). Вывод: Codex сжимается
+   только без фокуса; текст по теме комнаты Codex не передать. Расхождение с дизайном: для Codex хост должен
+   печатать голый `/compact`, а тема комнаты — только у Claude Code.
+2. Процент: Claude `used_percentage` = `/context` — да (6 % и 57k/1M). Codex по формуле `codexContextFill`
+   (база 12 000, окно 475 000 в этой сборке, `total_tokens` 31 897 → занято 4,3 %) = экран «Context 96% left»
+   — да; после сжатия `total_tokens` 20 681 → занято 1,9 % = экран «98% left» — да.
+3. GLM — проверяется в приёмке (задача 12).
+4. Строка статуса после `/compact` у Claude Code: зовётся сразу, со значением `used_percentage` 0 и нулевым
+   `current_usage`. У Codex после записи `compacted` в тот же момент (та же миллисекунда) идёт `token_count`
+   с `last_token_usage.total_tokens` 20 681.
+5. Поля `context_window` Claude Code: `context_window_size`, `current_usage`
+   (`input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`),
+   `remaining_percentage`, `total_input_tokens`, `total_output_tokens`, `used_percentage`.
+6. Длинный `/compact` (995 знаков) одной записью в PTY: сворачивается во вставку `[Pasted text #1]` и уходит
+   СООБЩЕНИЕМ модели (модель ответила, что команду выполнить не может), сжатия не было. Короткий
+   `/compact Focus on room Probe: the task, decisions.` выполнился как команда («Compacted»). Расхождение с
+   дизайном: длинную инструкцию одной записью печатать нельзя; порог сворачивания не определён (между ~50 и
+   ~995 знаками), нужен короткий текст или иной способ ввода.
+
+Дополнительно: окно Claude Code по умолчанию «Opus 5.5 (1M context)», `context_window_size` = 1 000 000.
+Диалог доверия Claude Code по умолчанию стоит на «No, exit»: для подтверждения нужны Down и Enter.
