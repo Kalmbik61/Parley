@@ -255,6 +255,63 @@ describe('indexCodexSession', () => {
     expect((await indexCodexSession(file)).tokens).toBeNull();
   });
 
+  describe('контекст и сжатие (спека 2026-10-15, 4.2 и 5.5)', () => {
+    const tokenCount = (last: Record<string, number>, at: string, window = 272_000) =>
+      line({
+        timestamp: at,
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: { input_tokens: 1_000, cached_input_tokens: 0, output_tokens: 10, total_tokens: 1_010 },
+            last_token_usage: last,
+            model_context_window: window,
+          },
+        },
+      });
+
+    it('context — из последнего token_count по формуле Codex', async () => {
+      const file = await writeRollout(
+        '2026-03-12',
+        '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+        meta() +
+          tokenCount({ total_tokens: 20_000 }, '2026-03-12T10:01:00.000Z') +
+          tokenCount({ total_tokens: 142_000 }, '2026-03-12T10:02:00.000Z'),
+      );
+      const index = await indexCodexSession(file);
+      expect(index.context).toEqual({ usedPercent: 50, windowTokens: 272_000, usedTokens: 142_000, at: '2026-03-12T10:02:00.000Z' });
+    });
+
+    it('token_count без last_token_usage не стирает прежнее наблюдение; без единого — null', async () => {
+      const bare = line({
+        timestamp: '2026-03-12T10:03:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'token_count', info: null },
+      });
+      const file = await writeRollout(
+        '2026-03-12',
+        '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+        meta() + tokenCount({ total_tokens: 142_000 }, '2026-03-12T10:02:00.000Z') + bare,
+      );
+      expect((await indexCodexSession(file)).context?.usedPercent).toBe(50);
+
+      const empty = await writeRollout('2026-03-13', '019ce3d5-584a-7be2-922e-b8185a8d7c20', meta());
+      expect((await indexCodexSession(empty)).context ?? null).toBeNull();
+    });
+
+    it('compactedAt — время последней записи compacted', async () => {
+      const compacted = (at: string) => line({ timestamp: at, type: 'compacted', payload: { message: 'summary' } });
+      const file = await writeRollout(
+        '2026-03-12',
+        '019ce3d5-584a-7be2-922e-b8185a8d7c19',
+        meta() + compacted('2026-03-12T10:05:00.000Z') + compacted('2026-03-12T10:09:00.000Z'),
+      );
+      expect((await indexCodexSession(file)).compactedAt).toBe('2026-03-12T10:09:00.000Z');
+      const none = await writeRollout('2026-03-13', '019ce3d5-584a-7be2-922e-b8185a8d7c20', meta());
+      expect((await indexCodexSession(none)).compactedAt ?? null).toBeNull();
+    });
+  });
+
   it('пустая сессия без реплик остаётся без заголовка, но не ломается', async () => {
     const file = await writeRollout('2026-03-12', '019ce3d5-584a-7be2-922e-b8185a8d7c19', meta());
 

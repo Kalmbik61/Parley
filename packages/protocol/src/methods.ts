@@ -30,7 +30,7 @@ import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CompactResult, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -151,6 +151,8 @@ export const METHODS = {
   // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
   // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
   'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
+  'sessions.compact': z.object({ ref: sessionRef, instructions: z.string().max(8_000).nullable() }),
+  'sessions.cancelCompact': z.object({ ref: sessionRef }),
   // Смена модели идущей сессии из меню чата (нормалайзер модели и effort, 5.8): то же одно слово, что у
   // `sessions.create`, но непустое. Список моделей сверяет хост (`bad_request`).
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
@@ -373,6 +375,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
    * карту. Не совпал — карта не меняется.
    */
   'sessions.setEffort': { effort: string | null; verified: boolean };
+  'sessions.compact': CompactResult;
+  'sessions.cancelCompact': { cancelled: boolean };
   /**
    * Смена модели (нормалайзер модели и effort, 5.8). `model` — модель, записанная в карту; `effort` —
    * уровень после смены (`null` — «по умолчанию»: прежнего уровня у новой модели нет или он не был

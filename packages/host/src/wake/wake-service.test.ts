@@ -385,6 +385,22 @@ describe('WakeService: смена модели или effort и открытый
     expect(writes).toEqual([pointer(1), '\r']);
   });
 
+  it('сжатие держит сессию (спека 2026-10-15, 5.4) — указатель не печатается; отпустило — уходит сам', async () => {
+    const { workId, sessionId } = await activeSession();
+    let compacting = true;
+    const { stream, pty } = await rig(sessionId, workId, {}, { compacting: () => compacting });
+    const writes = spyWrites(pty);
+
+    await sendLetter(workId, sessionId);
+    await settle(400);
+    expect(writes).toEqual([]);
+    expect(stream()).not.toContain(pointer(1));
+
+    compacting = false;
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 3000);
+    expect(writes).toEqual([pointer(1), '\r']);
+  });
+
   it('ползунок /effort на экране — указатель не печатается и Enter не уходит; ползунок закрыт — уходит сам', async () => {
     const { workId, sessionId } = await activeSession();
     const { stream, pty } = await rig(sessionId, workId);

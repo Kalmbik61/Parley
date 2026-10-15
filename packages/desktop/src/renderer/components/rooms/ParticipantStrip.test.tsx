@@ -154,3 +154,27 @@ describe('ParticipantStrip — тесная первая строка с рол�
     expect(within(card('s-01')).getByText('done · unseen').className).toContain('shrink-0');
   });
 });
+
+describe('чип контекста (спека 2026-10-15, 3.2)', () => {
+  it('чип во второй строке вне кнопки открытия; клик по «чем занят» открывает сессию', () => {
+    const onOpen = vi.fn();
+    render(
+      <ParticipantStrip
+        participants={[participant({ doing: 'Пишет миграции' })]}
+        onOpenSession={onOpen}
+        contextChip={() => <span data-testid="ctx">82%</span>}
+      />,
+    );
+    expect(screen.getByTestId('ctx').closest('button')).toBeNull();
+    fireEvent.click(screen.getByText('Пишет миграции'));
+    expect(onOpen.mock.calls[0]?.[0]).toBe('s-01');
+  });
+
+  it('без contextChip или с null — прежняя разметка: одна кнопка на обе строки', () => {
+    const { unmount } = render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} />);
+    expect(document.querySelectorAll('[data-participant="s-01"] button')).toHaveLength(1);
+    unmount();
+    render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} contextChip={() => null} />);
+    expect(document.querySelectorAll('[data-participant="s-01"] button')).toHaveLength(1);
+  });
+});

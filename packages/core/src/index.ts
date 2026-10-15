@@ -53,6 +53,16 @@ export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
+  claudeContextFill,
+  codexContextFill,
+  CODEX_BASELINE_TOKENS,
+  CONTEXT_DIR,
+  contextFile,
+  parseContextFill,
+  readContextFill,
+} from './context-fill.js';
+export type { ContextFill } from './context-fill.js';
+export {
   EFFORT_DESCRIPTION_MAX,
   EFFORT_TOKEN,
   MODEL_LABEL_MAX,
