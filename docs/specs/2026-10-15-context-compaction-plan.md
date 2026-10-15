@@ -15,7 +15,7 @@
 - Тексты окна — только английские, в `packages/desktop/src/shared/strings.ts` (раздел `S.context`); тексты для агента (инструкции `/compact` по умолчанию) — тоже английские, там же; комментарии, тесты и документы — по-русски.
 - Сжатие — только по клику человека. Автопорога нет. Хост сам `/compact` не печатает.
 - Пороги цвета: `< 60 %` — нейтральный, `60–84 %` — янтарный (`accent`), `≥ 85 %` — красный (`destructive`).
-- Инструкция — одна строка, не длиннее 1000 знаков после очистки; пусто — голый `/compact`; у Codex — всегда голый `/compact`.
+- Инструкция — одна строка, не длиннее 350 знаков после очистки (порог «вставки» Claude Code — около 800 знаков одной записью, спека 9, п. 7); пусто — голый `/compact`; у Codex — всегда голый `/compact`.
 - Ждущая просьба — одна на сессию, новая заменяет текст прежней; живёт только в памяти хоста.
 - Конец сжатия: `PostCompact` (Claude, GLM), запись `compacted` в rollout новее печати (Codex), выход процесса, или 5 минут без сигнала (`COMPACT_TIMEOUT_MS = 300_000`) — тогда уведомление `compact-failed`.
 - Опрос файлов контекста — раз в 5 секунд (`CONTEXT_POLL_MS = 5_000`), только запущенные сессии не-Codex.
@@ -1123,7 +1123,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `ActivityService.get/onChange/onLogChange/setCompaction/codexCompactedAt` (задача 4), `CompactionTrack` (задача 4), `SwitchLock` (`host/src/sessions/sessions-service.ts:202`), `typeAndSubmit` (`host/src/pty/type-and-submit.ts:39`), `choiceInProgress` (`host/src/pty/effort-switch.ts:78`), `stripEscapes` (`host/src/pty/draft.ts:31`), `CODEX_SUBMIT_DELAY_MS`, `KEY_ENTER` (`host/src/pty/codex-input.ts`), `hookedSince` (`@parley/core`).
 - Produces:
   - `type CompactResult = { state: 'started' | 'pending' } | { state: 'refused'; reason: 'unknown-screen' | 'asleep' }` (`@parley/protocol`)
-  - `compactCommand(provider: string | null, instructions: string | null): string`; `MAX_INSTRUCTIONS = 1000`; `COMPACT_TIMEOUT_MS = 300_000`
+  - `compactCommand(provider: string | null, instructions: string | null): string`; `MAX_INSTRUCTIONS = 350`; `COMPACT_TIMEOUT_MS = 300_000`
   - `createCompactionService(deps: CompactionDeps): CompactionService`
   - `CompactionService { compact(ref, instructions: string | null): CompactResult; cancel(ref): boolean; holds(ref): boolean; onHook(ref, body: Record<string, unknown>): void; start(): void; stop(): void }`
 
@@ -1174,9 +1174,9 @@ describe('compactCommand (спека 5.3)', () => {
   it('Codex — всегда голый /compact', () => {
     expect(compactCommand('codex', 'focus')).toBe('/compact');
   });
-  it('длиннее 1000 знаков — bad_request', () => {
-    expect(compactCommand('claude', 'я'.repeat(1000))).toBe(`/compact ${'я'.repeat(1000)}`);
-    expect(() => compactCommand('claude', 'я'.repeat(1001))).toThrow(HostError);
+  it('длиннее 350 знаков — bad_request', () => {
+    expect(compactCommand('claude', 'я'.repeat(350))).toBe(`/compact ${'я'.repeat(350)}`);
+    expect(() => compactCommand('claude', 'я'.repeat(351))).toThrow(HostError);
   });
 });
 
@@ -1461,18 +1461,18 @@ import type { CompactionTrack } from './context-view.js';
 
 /** Сколько ждать отчёта о конце сжатия (спека 5.5). */
 export const COMPACT_TIMEOUT_MS = 5 * 60_000;
-/** Предел инструкции после очистки (спека 5.3). */
-export const MAX_INSTRUCTIONS = 1000;
+/** Предел инструкции после очистки (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code. */
+export const MAX_INSTRUCTIONS = 350;
 
 // Управляющие байты и DEL — в пробел: инструкция уходит одной строкой.
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\x00-\x1f\x7f]+/g;
 
-/** Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 1000 знаков, пусто — без фокуса. */
+/** Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 350 знаков, пусто — без фокуса. */
 export function compactCommand(provider: string | null, instructions: string | null): string {
   if (provider === 'codex' || instructions === null) return '/compact';
   const line = stripEscapes(instructions).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
-  if (line.length > MAX_INSTRUCTIONS) throw new HostError('bad_request', 'instructions are longer than 1000 characters');
+  if (line.length > MAX_INSTRUCTIONS) throw new HostError('bad_request', 'instructions are longer than 350 characters');
   return line === '' ? '/compact' : `/compact ${line}`;
 }
 
@@ -1900,7 +1900,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `ContextFill` (`@parley/core`), `CompactionPhase` (`@parley/protocol`), `knownTokens` (`renderer/lib/usage-format.ts:14`).
 - Produces:
   - `S.context` (см. код ниже; ключи используются в задачах 9–11)
-  - `CONTEXT_WARN_PERCENT = 60`, `CONTEXT_CRITICAL_PERCENT = 85`, `COMPACT_MAX_INSTRUCTIONS = 1000`
+  - `CONTEXT_WARN_PERCENT = 60`, `CONTEXT_CRITICAL_PERCENT = 85`, `COMPACT_MAX_INSTRUCTIONS = 350`
   - `type ContextLevel = 'normal' | 'warn' | 'critical'`; `contextLevel(percent: number): ContextLevel`
   - `LEVEL_CLASS: Record<ContextLevel, string>`, `BAR_CLASS: Record<ContextLevel, string>`
   - `percentText(percent: number): string`
@@ -2040,7 +2040,7 @@ const C = S.context;
 export const CONTEXT_WARN_PERCENT = 60;
 export const CONTEXT_CRITICAL_PERCENT = 85;
 /** Предел инструкции — как у хоста (`MAX_INSTRUCTIONS`). */
-export const COMPACT_MAX_INSTRUCTIONS = 1000;
+export const COMPACT_MAX_INSTRUCTIONS = 350;
 
 export type ContextLevel = 'normal' | 'warn' | 'critical';
 
@@ -2210,7 +2210,7 @@ describe('ContextChip (спека 3.2, 3.4)', () => {
     fireEvent.click(screen.getByTestId('ctx'));
     const field = screen.getByTestId('compact-instructions') as HTMLTextAreaElement;
     expect(field.value).toBe(DEFAULT);
-    expect(field.maxLength).toBe(1000);
+    expect(field.maxLength).toBe(350);
     fireEvent.change(field, { target: { value: 'Keep the API decisions' } });
     fireEvent.click(screen.getByTestId('compact-submit'));
     await waitFor(() =>
