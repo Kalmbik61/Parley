@@ -69,9 +69,10 @@ test.describe('контекст и сжатие в комнате (800×500)', (
   for (const dpr of [1, 2]) {
     test(`чипы, поповер в границах окна, сжатие свободного и занятого агента (масштаб ${dpr})`, async () => {
       test.setTimeout(120_000);
-      const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent,
-        // Проба версий включена: HTTP-хуки (PostCompact, ход) есть только при известной версии `claude` (стаб отвечает 2.1.286).
-        PARLEY_SKIP_VERSION_PROBE: '', PARLEY_TERMINAL_RENDERER: 'dom' };
+      // Проба версий включена: HTTP-хуки (PostCompact, ход) есть только при известной версии `claude` (стаб отвечает 2.1.286).
+      const env: Record<string, string | undefined> = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent,
+        PARLEY_TERMINAL_RENDERER: 'dom' };
+      delete env.PARLEY_SKIP_VERSION_PROBE;
       const electronApp = await electron.launch({ args: [mainEntry, `--force-device-scale-factor=${dpr}`], env });
       app = electronApp;
       const window = await electronApp.firstWindow();
@@ -145,6 +146,9 @@ test.describe('контекст и сжатие в комнате (800×500)', (
       await expect(idleChip).toHaveText('…');
       await window.keyboard.press('Escape');
       await expect(window.getByRole('dialog')).toHaveCount(0);
+      // Хост печатает `/compact …`, ждёт ~500 мс и жмёт Enter; ввод человека в эту паузу он считает отказом
+      // (спека, 5), поэтому PostCompact шлём (это `pty.input`) только когда Enter уже ушёл.
+      await window.waitForTimeout(2_000);
       await hook(window, idle, 'PostCompact', { trigger: 'manual' });
       await expect(idleChip).toHaveText('compacted', { timeout: 10_000 });
       await writeContext(idle, 12);
@@ -158,6 +162,8 @@ test.describe('контекст и сжатие в комнате (800×500)', (
       // Со включёнными хуками сессия открывается видом Chat — к терминалу переключаемся.
       await window.getByRole('radio', { name: 'Terminal' }).click();
       await expect.poll(() => screenText(window), { timeout: 10_000 }).toContain('echo: /compact Focus on room');
+      // Ложного отказа не было: тост «compaction didn't go through» не появлялся.
+      await expect(window.locator('[data-sonner-toast]').filter({ hasText: "compaction didn't go through" })).toHaveCount(0);
     });
   }
 });

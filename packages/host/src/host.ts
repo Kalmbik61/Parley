@@ -239,6 +239,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
   // Сжатие контекста (спека 2026-10-15, 5): создаётся после будильника, но хук-сервер и будильник видят его уже сейчас.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: замыкания хук-сервера и будильника читают её раньше присваивания
   let compactionService: CompactionService | undefined;
   const hookServer = createHookServer({
     log,

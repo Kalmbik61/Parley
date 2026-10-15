@@ -873,7 +873,9 @@ describe('контекст участника (спека 2026-10-15, 3.2)', () 
   });
 
   it('метрик без поля context (старый хост) — context undefined', () => {
-    const { context: _drop, compaction: _drop2, ...old } = metrics as unknown as Record<string, unknown>;
+    const old: Record<string, unknown> = { ...metrics };
+    delete old.context;
+    delete old.compaction;
     const model = build(entryOf(), activityMap([makeActivity(REF('s-01'), 'idle', { metrics: old as unknown as LiveMetrics })]));
     expect(model.participants.find((p) => p.id === 's-01')?.context).toBeUndefined();
   });

@@ -98,7 +98,12 @@ describe('RoomContextChip (спека 3.3)', () => {
   });
 
   it('старый хост: ни у кого из живых нет поля context — значка нет', () => {
-    const old = MEMBERS.map(({ context: _c, compaction: _p, ...rest }) => rest as ParticipantModel);
+    const old = MEMBERS.map((m) => {
+      const copy: Partial<ParticipantModel> = { ...m };
+      delete copy.context;
+      delete copy.compaction;
+      return copy as ParticipantModel;
+    });
     render(<RoomContextChip bridge={bridge} roomTitle="Auth" participants={old} />);
     expect(screen.queryByTestId('room-context-chip')).toBeNull();
   });
