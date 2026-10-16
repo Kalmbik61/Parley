@@ -9,7 +9,9 @@
  * `window_not_connected`, есть только окно старой сборки — `unsupported` (спека 9), окно молчит `AGENT_LIMITS.opMs` —
  * `timeout`, окно ушло — `window_not_connected` сразу. Ответ принимается только от клиента, которому ушла операция.
  *
- * Сессию находит токен, а не тело: работу операции задаёт хост (`ref` события), агент назвать чужую не может.
+ * Сессию находит токен, а не тело: работу операции задаёт хост (`ref` события), агент назвать чужую не может. Хозяев,
+которыми сессия может пользоваться (`owners`: она сама и комнаты, где она участник), хост вкладывает в событие сам
+(спека 3.10).
  *
  * Журнал — одна строка на операцию: сессия, операция, вкладка, origin, исход. Аргументов, путей и query адресов,
  * данных страницы и токенов в нём нет.
@@ -18,7 +20,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sessionTag } from '@parley/core';
 import { AGENT_LIMITS, BROWSER_AGENT_FEATURE, browserAgentArgs, browserAgentRequest, refKey } from '@parley/protocol';
-import type { BrowserAgentErrorCode, BrowserAgentOp, BrowserAgentOpEvent, BrowserAgentResult, SessionRef } from '@parley/protocol';
+import type { BrowserAgentErrorCode, BrowserAgentOp, BrowserAgentOpEvent, BrowserAgentOwner, BrowserAgentResult, SessionRef } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { Log } from '../log.js';
 
@@ -29,6 +31,11 @@ export interface BrowserEndpointOptions {
   log: Log;
   /** Клиенты хоста; окно — клиент с `browser-agent` в `hello.features`. */
   clients(): readonly Client[];
+  /**
+   * Id комнат работы сессии, где она участник и которые не в архиве (спека 3.10). Читает карту из памяти хоста, не с
+   * диска: на пути операции хост только ищет токен и пересылает (спека 3.7, заметка 2026-10-16). Работы нет — пусто.
+   */
+  roomsOf(ref: SessionRef): readonly string[];
   /** Срок ответа окна; по умолчанию `AGENT_LIMITS.opMs`. Тестам — меньше. */
   timeoutMs?: number;
 }
@@ -168,7 +175,12 @@ export function createBrowserEndpoint(options: BrowserEndpointOptions): BrowserE
     res.on('close', () => {
       if (pending.has(opId)) finish(opId, failure('timeout', 'The agent cancelled the request.'));
     });
-    const event: BrowserAgentOpEvent = { opId, ref, label: sessionTag(ref.sessionId), op, args: args.data };
+    // Хозяева на момент операции: сама сессия и её комнаты. Вышла из комнаты — со следующей операции доступа нет.
+    const owners: BrowserAgentOwner[] = [
+      { kind: 'session', sessionId: ref.sessionId },
+      ...options.roomsOf(ref).map((roomId): BrowserAgentOwner => ({ kind: 'room', roomId })),
+    ];
+    const event: BrowserAgentOpEvent = { opId, ref, label: sessionTag(ref.sessionId), owners, op, args: args.data };
     window.send({ event: 'browser.agentOp', data: event });
   }
 

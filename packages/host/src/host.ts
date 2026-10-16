@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
+  isMember,
+  isRoomArchived,
   isStaleHostLock,
   migrateProjects,
   parleyHome,
@@ -265,7 +267,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
-  const browserEndpoint = createBrowserEndpoint({ log, clients: () => handle.context.clients() });
+  const browserEndpoint = createBrowserEndpoint({
+    log,
+    clients: () => handle.context.clients(),
+    // Комнаты сессии — из карты в памяти службы работ (спека 3.7: чтения с диска на пути операции нет).
+    roomsOf: (ref) =>
+      worksService
+        .entry(ref.projectPath, ref.workId)
+        ?.map.rooms.filter((room) => isMember(room, ref.sessionId) && !isRoomArchived(room))
+        .map((room) => room.id) ?? [],
+  });
   // Журнал задержек (спека диагностики хоста, A4): «сессия готова» по первому хуку или сигналу ready Codex.
   const readyJournal = createReadyJournal({ log, pty: ptyManager });
   handle.context.onShutdown(async () => readyJournal.stop());

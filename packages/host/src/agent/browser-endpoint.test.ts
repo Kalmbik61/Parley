@@ -42,9 +42,9 @@ afterEach(async () => {
   servers = [];
 });
 
-async function boot(clients: Client[], timeoutMs?: number) {
+async function boot(clients: Client[], timeoutMs?: number, roomsOf: (ref: SessionRef) => readonly string[] = () => []) {
   const log = silentLog();
-  const endpoint = createBrowserEndpoint({ log, clients: () => clients, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  const endpoint = createBrowserEndpoint({ log, clients: () => clients, roomsOf, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
   const server = createServer((req, res) => endpoint.handle(req, res));
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -145,6 +145,41 @@ describe('операция до окна и ответ', () => {
     expect(plain.sent).toEqual([]);
     expect(endpoint.resolve(op.opId, OPENED, window)).toBe(true);
     expect(json(await reply)).toEqual(OPENED);
+  });
+
+  it('owners события: сама сессия и комнаты, названные roomsOf; список берётся на каждую операцию заново (спека 3.10)', async () => {
+    const window = fakeWindow();
+    let rooms: string[] = ['r-01', 'r-03'];
+    const { endpoint, url, token } = await boot([window], undefined, () => rooms);
+    const first = post(url, { op: 'open', args: { url: PAGE } }, token);
+    const op1 = await nextOp(window);
+    expect(op1.owners).toEqual([
+      { kind: 'session', sessionId: 's-02' },
+      { kind: 'room', roomId: 'r-01' },
+      { kind: 'room', roomId: 'r-03' },
+    ]);
+    endpoint.resolve(op1.opId, OPENED, window);
+    await first;
+    rooms = [];
+    const second = post(url, { op: 'open', args: { url: PAGE } }, token);
+    const op2 = await nextOp(window, 1);
+    expect(op2.owners).toEqual([{ kind: 'session', sessionId: 's-02' }]);
+    endpoint.resolve(op2.opId, OPENED, window);
+    await second;
+  });
+
+  it('roomsOf получает ref сессии по токену, а не из тела', async () => {
+    const window = fakeWindow();
+    const seen: SessionRef[] = [];
+    const { endpoint, url, token } = await boot([window], undefined, (ref) => {
+      seen.push(ref);
+      return [];
+    });
+    const reply = post(url, { op: 'open', args: { url: PAGE } }, token);
+    const op = await nextOp(window);
+    expect(seen).toEqual([REF]);
+    endpoint.resolve(op.opId, OPENED, window);
+    await reply;
   });
 
   it('два окна с возможностью — операция только последнему подключившемуся', async () => {
