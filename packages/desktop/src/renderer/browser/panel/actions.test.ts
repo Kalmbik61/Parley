@@ -304,4 +304,10 @@ describe('тост агента «Show» (спека браузера 5.1, 5.2)'
     expect(panelNow()?.active).toBe(first.tabId);
     expect(findTab(layoutNow(), 'terminal:s-01')?.group.activeTabId).toBe('terminal:s-01');
   });
+
+  it('агент освежает панель: usedAt растёт на просьбе агента', () => {
+    usePanelRuntime.setState({ usedAt: {} });
+    handleAgentOpenTab(event('http://localhost:5173/'));
+    expect(usePanelRuntime.getState().usedAt[panelRuntimeKey(KEY, CHAT)]).toBeGreaterThan(0);
+  });
 });

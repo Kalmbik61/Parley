@@ -142,6 +142,8 @@ export function handleAgentOpenTab(event: AgentOpenTab): AgentOpenTabResult {
   if (!result.ok) return { error: result.reason === 'limit' ? 'limit' : 'no_work' };
   const key = panelRuntimeKey(event.workKey, event.owner);
   const runtime = usePanelRuntime.getState();
+  // Панель, с которой агент только что работал, — последняя в очереди на выгрузку (спека браузера 3.10, раздел 8).
+  runtime.touch(key);
   const mounted = runtime.hosts[key] !== undefined;
   if (!mounted) {
     const { workKey, owner } = event;
