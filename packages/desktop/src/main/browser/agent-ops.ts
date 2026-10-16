@@ -31,10 +31,11 @@ import type {
   BrowserAgentRequestDetail,
   BrowserAgentRequestSummary,
   BrowserAgentResult,
+  BrowserAgentScreenshotResult,
   BrowserAgentTabInfo,
 } from '@parley/protocol';
-import { DEVTOOLS_LIMITS, isFailed, viewportSize } from '../../shared/browser-devtools.js';
-import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame } from '../../shared/browser-devtools.js';
+import { DEVTOOLS_LIMITS, isFailed, VIEWPORT_PRESETS, viewportSize } from '../../shared/browser-devtools.js';
+import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame, ViewportPreset, ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
@@ -155,6 +156,15 @@ function bodyForAgent(text: string | null, mimeType: string | null, which: 'requ
     return null;
   }
   return redactBody(text, mimeType, AGENT_LIMITS.detailBody);
+}
+
+/** Размер снимка агента: совпал с пресетом в любой ориентации — пресет, иначе Custom; DPR 1 — PNG в CSS-пикселях. */
+export function captureSpec(width: number, height: number): ViewportSpec {
+  for (const [preset, size] of Object.entries(VIEWPORT_PRESETS) as Array<[ViewportPreset, { width: number; height: number }]>) {
+    if (size.width === width && size.height === height) return { preset, rotated: false, dpr: 1 };
+    if (size.width === height && size.height === width) return { preset, rotated: true, dpr: 1 };
+  }
+  return { width, height, mobile: false, dpr: 1 };
 }
 
 /** Пояснение агенту, когда работа вне LRU окна: вкладка в раскладке есть, гостя пока нет. */
@@ -383,6 +393,65 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     return { tab: record.agentId, url, requests: newest(matching.map(summaryOf), args.limit ?? DEFAULT_LIST), matched: matching.length };
   }
 
+  /** Длинная сторона PNG — не больше `AGENT_LIMITS.screenshotLongSide` (предел картинки, которую модель читает целиком). */
+  function fitLongSide(png: Buffer): Buffer {
+    const size = deps.image.size(png);
+    const long = Math.max(size.width, size.height);
+    if (long <= AGENT_LIMITS.screenshotLongSide) return png;
+    const scale = AGENT_LIMITS.screenshotLongSide / long;
+    return deps.image.resize(png, Math.max(1, Math.round(size.width * scale)), Math.max(1, Math.round(size.height * scale)));
+  }
+
+  async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult> {
+    const id = contents.id;
+    const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
+    const current = { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight) };
+    const spec = args.width === undefined && args.height === undefined ? null : captureSpec(args.width ?? current.width, args.height ?? current.height);
+    const view = spec === null ? current : (({ width, height }) => ({ width, height }))(viewportSize(spec));
+
+    const shoot = async (clip?: { x: number; y: number; width: number; height: number; scale: number }): Promise<Buffer> => {
+      const params = clip === undefined ? { format: 'png' } : { format: 'png', clip, captureBeyondViewport: true };
+      const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
+      return Buffer.from(shot.data, 'base64');
+    };
+
+    const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
+      if (args.fullPage !== true) return { png: await shoot(), viewport: view };
+      // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
+      const page = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
+      const total = Math.max(view.height, Math.ceil(page.cssContentSize.height));
+      if (total > view.height * AGENT_LIMITS.fullPageViewports) {
+        throw new AgentOpError(
+          'bad_request',
+          `The page is ${total} px tall, more than ${AGENT_LIMITS.fullPageViewports} viewport heights (${view.height} px): take viewport screenshots of parts of the page instead.`,
+        );
+      }
+      const width = Math.max(view.width, Math.ceil(page.cssContentSize.width));
+      const strips: Buffer[] = [];
+      // Полоса выше поверхности вида рисуется повтором (спайк 0.7): режем по высоте вьюпорта и склеиваем.
+      for (let y = 0; y < total; y += view.height) strips.push(await shoot({ x: 0, y, width, height: Math.min(view.height, total - y), scale: 1 }));
+      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width, height: total } };
+    };
+
+    // Невидимой странице поверхность переводят в opacity: 0 (спайк 0.2); смене размера нужна ещё и подпись «Agent capture W×H».
+    if (spec !== null || !record.visible) deps.activity({ webContentsId: id, session: request.label, op: request.op, phase: 'start', capture: view });
+    const taken = spec === null ? await capture() : await deps.emulation.withTemporary(id, spec, capture);
+    const png = fitLongSide(taken.png);
+    const size = deps.image.size(png);
+    const saved = await deps.saveImage(png);
+    if (saved === null) throw new AgentOpError('unsupported', 'The screenshot could not be saved to Parley drops.');
+    return {
+      tab: record.agentId,
+      url: redactUrl(contents.getURL()),
+      path: saved,
+      width: size.width,
+      height: size.height,
+      viewport: taken.viewport,
+      fullPage: args.fullPage === true,
+      emulated: spec !== null || deps.emulation.current(id) !== null,
+    };
+  }
+
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
     return new Promise((resolve) => {
       const done = (result: AgentOpenTabResult | 'no_window' | 'timeout'): void => {
@@ -449,9 +518,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             const args = parsed.data as BrowserAgentArgs<'network'>;
             return ok(await onPage(request, args.tab, (contents, record) => networkOf(contents, record, args)));
           }
-          default:
-            // Операции чтения, которых ещё нет (задачи 11–12).
-            return failure('unsupported', `This window does not support the operation ${request.op} yet: ask the human to update Parley.`);
+          case 'screenshot': {
+            const args = parsed.data as BrowserAgentArgs<'screenshot'>;
+            return ok(await onPage(request, args.tab, (contents, record) => screenshotOf(contents, record, request, args)));
+          }
         }
       } catch (error) {
         if (error instanceof AgentOpError) return failure(error.code, error.message);

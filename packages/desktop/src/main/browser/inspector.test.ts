@@ -741,6 +741,7 @@ describe('команды CDP (спека 3.3)', () => {
         'Page.captureScreenshot',
         'Page.disable',
         'Page.enable',
+        'Page.getLayoutMetrics',
         'Runtime.callFunctionOn',
         'Runtime.disable',
         'Runtime.enable',
@@ -847,6 +848,7 @@ describe('закрытый список CDP — этап B (спека брау�
       'Runtime.callFunctionOn',
       'Runtime.releaseObject',
       'Page.captureScreenshot',
+      'Page.getLayoutMetrics',
     ]) {
       expect(CDP_ALLOWED.has(method), method).toBe(true);
     }

@@ -1452,7 +1452,7 @@ git commit -m "feat(desktop): консоль и сеть для агента —
 - страница невидима (`!record.visible`) — перед снимком `deps.activity({ …, phase: 'start', capture: view })` даже без смены размера: окно (задача 15) переводит её поверхность в `opacity: 0` на время снимка и возвращает на `end`; это работает и для страницы панели, которую человек ни разу не видел, — отказа `tab_hidden` в чтении нет (его код нужен этапу D для кликов);
 - `fullPage` — склейка полос: высота полосы в CSS-пикселях равна высоте вьюпорта (`view.height`: вид страницы равен поверхности, а условие спайка 0.7 «высота × PNG-пикселей на CSS-пиксель ≤ высоты поверхности в физических пикселях» сводится к нему); каждая полоса — `Page.captureScreenshot` с `clip` и `captureBeyondViewport`; полосы склеивает `deps.image.stitch`; страница выше `fullPageViewports` высот вьюпорта — `bad_request` с советом.
 
-- [ ] **Шаг 1. Написать падающие тесты.** В `agent-ops.test.ts` (импорты `captureSpec`, `BrowserAgentScreenshotResult`):
+- [x] **Шаг 1. Написать падающие тесты.** В `agent-ops.test.ts` (импорты `captureSpec`, `BrowserAgentScreenshotResult`):
 
 ```ts
 describe('captureSpec — размер снимка агента', () => {
@@ -1560,9 +1560,9 @@ describe('screenshot (спека 5.1, 8)', () => {
 
   В `inspector.test.ts` (там есть проверка закрытого списка) добавить `'Page.getLayoutMetrics'` в ожидаемый набор и тест `CDP_ALLOWED.has('Page.getLayoutMetrics')` с `Runtime.evaluate` вне списка.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts src/main/browser/inspector.test.ts` → FAIL: `captureSpec` не экспортирован; `Page.getLayoutMetrics` не в списке.
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts src/main/browser/inspector.test.ts` → FAIL: `captureSpec` не экспортирован; `Page.getLayoutMetrics` не в списке.
 
-- [ ] **Шаг 3. Реализовать.**
+- [x] **Шаг 3. Реализовать.**
   - `inspector.ts`: в `CDP_ALLOWED` дописать `'Page.getLayoutMetrics'` рядом с `'Page.captureScreenshot'`.
   - `agent-ops.ts`: к импортам из `shared/browser-devtools.js` — `VIEWPORT_PRESETS` и типы `ViewportPreset`, `ViewportSpec`; к типам протокола — `BrowserAgentScreenshotResult`. После `bodyForAgent`:
 
@@ -1649,11 +1649,11 @@ export function captureSpec(width: number, height: number): ViewportSpec {
           }
 ```
 
-- [ ] **Шаг 4. Запустить — проходит.**
+- [x] **Шаг 4. Запустить — проходит.**
   - Та же команда → PASS.
   - `pnpm --filter @parley/desktop exec vitest run src/main/browser` → зелёный.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts

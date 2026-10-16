@@ -4,13 +4,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { AGENT_LIMITS } from '@parley/protocol';
-import type { BrowserAgentConsoleResult, BrowserAgentOpEvent, BrowserAgentRequestDetail, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
+import type { BrowserAgentConsoleResult, BrowserAgentOpEvent, BrowserAgentRequestDetail, BrowserAgentScreenshotResult, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type DevtoolsSnapshot, type NetworkEntry, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
-import { createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
+import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const OTHER_REF = { projectPath: '/proj', workId: 'w-2', sessionId: 's-01' };
@@ -566,5 +566,107 @@ describe('network (спека 5.1, 6)', () => {
     const { ops, runOp: run } = setup();
     register(ops, {});
     expect(codeOf(await run('network', { tab: 't1', requestId: 'nope' }))).toBe('bad_request');
+  });
+});
+
+describe('captureSpec — размер снимка агента', () => {
+  it('совпал с пресетом в любой ориентации — пресет с DPR 1; иначе Custom без мобильного режима', () => {
+    expect(captureSpec(375, 812)).toEqual({ preset: 'mobile-m', rotated: false, dpr: 1 });
+    expect(captureSpec(812, 375)).toEqual({ preset: 'mobile-m', rotated: true, dpr: 1 });
+    expect(captureSpec(1280, 800)).toEqual({ preset: 'laptop', rotated: false, dpr: 1 });
+    expect(captureSpec(500, 700)).toEqual({ width: 500, height: 700, mobile: false, dpr: 1 });
+  });
+});
+
+describe('screenshot (спека 5.1, 8)', () => {
+  it('вьюпорт человека: PNG 2560×1600 уменьшен до 1568×980 и сохранён в drops; CSS-размер — из Page.getLayoutMetrics', async () => {
+    const { ops, inspector, saveImage, emulation, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ shot: png(2560, 1600) }));
+    expect(okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }))).toEqual({
+      tab: 't1', url: 'http://localhost:5173/settings', path: '/drops/shot.png', width: 1568, height: 980, viewport: { width: 1280, height: 800 }, fullPage: false, emulated: false,
+    });
+    const saved = saveImage.mock.calls[0]?.[0] as unknown as Buffer;
+    expect([saved.readUInt32BE(16), saved.readUInt32BE(20)]).toEqual([1568, 980]);
+    expect(emulation.withTemporary).not.toHaveBeenCalled();
+    // Без fromSurface: false (спайк 0.2: виснет всегда).
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+  });
+
+  it('375×812: временная эмуляция mobile-m с DPR 1; подпись «Agent capture 375×812» на время снимка', async () => {
+    const { ops, inspector, emulation, activity, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ shot: png(375, 812) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', width: 375, height: 812 }));
+    expect(emulation.withTemporary).toHaveBeenCalledWith(7, { preset: 'mobile-m', rotated: false, dpr: 1 }, expect.any(Function));
+    expect(result).toMatchObject({ width: 375, height: 812, viewport: { width: 375, height: 812 }, emulated: true });
+    expect(activity).toEqual([
+      { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'start' },
+      { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'start', capture: { width: 375, height: 812 } },
+      { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'end' },
+    ]);
+  });
+
+  it('одна сторона — вторая от текущего вьюпорта: width 500 при вьюпорте 1280×800 — Custom 500×800', async () => {
+    const { ops, emulation, runOp: run } = setup();
+    register(ops, {});
+    await run('screenshot', { tab: 't1', width: 500 });
+    expect(emulation.withTemporary).toHaveBeenCalledWith(7, { width: 500, height: 800, mobile: false, dpr: 1 }, expect.any(Function));
+  });
+
+  it('невидимая страница снимается: activity с capture до снимка (окно переводит поверхность в opacity: 0), эмуляции нет', async () => {
+    const { ops, inspector, emulation, activity, runOp: run } = setup();
+    register(ops, { visible: false });
+    inspector.send.mockImplementation(sendWith({ shot: png(1280, 800) }));
+    expect(codeOf(await run('screenshot', { tab: 't1' }))).toBe('ok');
+    expect(emulation.withTemporary).not.toHaveBeenCalled();
+    expect(activity.map((e) => [e.phase, e.capture])).toEqual([['start', undefined], ['start', { width: 1280, height: 800 }], ['end', undefined]]);
+  });
+
+  it('fullPage: страница 2000 при вьюпорте 800 — три полосы 800+800+400, склейка; длиннее трёх вьюпортов — bad_request с советом', async () => {
+    const { ops, inspector, saveImage, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', fullPage: true }));
+    expect(result).toMatchObject({ fullPage: true, viewport: { width: 1280, height: 2000 } });
+    const clips = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => (params as { clip: { y: number; height: number }; captureBeyondViewport: boolean }));
+    expect(clips.map((call) => [call.clip.y, call.clip.height, call.captureBeyondViewport])).toEqual([[0, 800, true], [800, 800, true], [1600, 400, true]]);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2401 } }));
+    const tall = await run('screenshot', { tab: 't1', fullPage: true });
+    expect(codeOf(tall)).toBe('bad_request');
+    expect(messageOf(tall)).toContain('3 viewport heights');
+  });
+
+  it('операции одной страницы — по одной: второй снимок начинается после первого', async () => {
+    const { ops, inspector, runOp: run } = setup();
+    register(ops, {});
+    const order: string[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let shots = 0;
+    inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      shots += 1;
+      const n = shots;
+      order.push(`start ${n}`);
+      if (n === 1) await gate;
+      order.push(`end ${n}`);
+      return { data: png(100, 100).toString('base64') };
+    });
+    const first = run('screenshot', { tab: 't1' });
+    const second = run('screenshot', { tab: 't1' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(['start 1']);
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2']);
+  });
+
+  it('drops не записался — unsupported', async () => {
+    const { ops, saveImage, runOp: run } = setup();
+    register(ops, {});
+    saveImage.mockResolvedValue(null);
+    expect(codeOf(await run('screenshot', { tab: 't1' }))).toBe('unsupported');
   });
 });
