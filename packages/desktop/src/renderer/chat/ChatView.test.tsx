@@ -1973,7 +1973,8 @@ describe('ChatView — история ↑/↓ (спека 2026-10-16, 3.2)', () 
   const key = (name: 'ArrowUp' | 'ArrowDown'): void => {
     fireEvent.keyDown(field(), { key: name });
   };
-  const chips = (): string[] => screen.queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path') ?? '');
+  const chips = (): string[] =>
+    within(screen.getByTestId('chat-composer')).queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path') ?? '');
 
   /** Подсказки команд — как в блоке «подсказки поля ввода»: хост с `capabilities.list`, мост отдаёт команды. */
   function withCommands(names: string[]): void {
