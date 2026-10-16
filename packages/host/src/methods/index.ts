@@ -4,7 +4,9 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { CompactionService } from '../compaction/compaction-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
+import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { HealthService } from '../health/health-service.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
 import { createRoomsUsage } from '../rooms/room-usage.js';
@@ -21,6 +23,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createBacklogHandlers } from './backlog.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
+import { createDiagnosticsHandlers } from './diagnostics.js';
 import { createFeedHandlers } from './feed.js';
 import { createHistoryHandlers } from './history.js';
 import { createJournalHandlers } from './journal.js';
@@ -82,6 +85,10 @@ export interface MethodDeps {
   compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
+  /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
+  health?: HealthService;
+  /** CPU-профиль по запросу (`host.profile.*`); без него (и без `health`) методов диагностики у хоста нет. */
+  profiler?: Profiler;
 }
 
 /**
@@ -251,6 +258,19 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
     methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
+  }
+  if (deps.health !== undefined && deps.profiler !== undefined) {
+    // Не в `WORKS_GATED_METHODS`: снимка работ диагностика не читает и должна отвечать, пока хост ещё стартует.
+    const diagnostics = createDiagnosticsHandlers({
+      health: deps.health,
+      profiler: deps.profiler,
+      pty: deps.pty,
+      activity: deps.activity,
+      isAttached: pty.isAttached,
+    });
+    methods['host.diagnostics'] = diagnostics.hostDiagnostics as AnyHandler;
+    methods['host.profile.start'] = diagnostics.profileStart as AnyHandler;
+    methods['host.profile.status'] = diagnostics.profileStatus as AnyHandler;
   }
   const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
     'pty.input': pty.ptyInput as AnyNotificationHandler,

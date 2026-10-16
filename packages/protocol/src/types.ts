@@ -293,6 +293,47 @@ export type ProfileStatus =
   | { state: 'done'; file: string; finishedAt: string }
   | { state: 'failed'; error: string };
 
+/** Показатели хоста на момент запроса: строка журнала `host: состояние` и поле `health` ответа `host.diagnostics`. */
+export interface HealthSample {
+  cpuPct: number;
+  rssMb: number;
+  heapMb: number;
+  extMb: number;
+  loop: { maxMs: number; p99Ms: number; meanMs: number };
+  ptys: number;
+  attached: number;
+  feedSubs: number;
+  works: number;
+  rooms: number;
+  clients: number;
+}
+
+/** Живая сессия в ответе `host.diagnostics`: без текстов и вывода, только адрес, процесс и состояние. */
+export interface HostDiagnosticsSession {
+  ref: SessionRef;
+  provider: string | null;
+  activity: string | null;
+  pid: number;
+  startedAt: string;
+  attached: boolean;
+}
+
+/** Ответ `host.diagnostics`: мгновенный снимок хоста для архива диагностики. `profiles` — пути `.cpuprofile` на диске хоста. */
+export interface HostDiagnostics {
+  hostVersion: string;
+  node: string;
+  platform: string;
+  release: string;
+  arch: string;
+  pid: number;
+  startedAt: string;
+  uptimeSec: number;
+  health: HealthSample;
+  sessions: HostDiagnosticsSession[];
+  profiles: string[];
+  profile: ProfileStatus;
+}
+
 export interface WorksSnapshot {
   entries: WorkEntry[];
   branches: Record<string, string | null>;

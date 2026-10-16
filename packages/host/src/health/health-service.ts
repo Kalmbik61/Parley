@@ -1,4 +1,5 @@
 import { monitorEventLoopDelay, type IntervalHistogram } from 'node:perf_hooks';
+import type { HealthSample } from '@parley/protocol';
 import type { Log } from '../log.js';
 
 export const HEALTH_INTERVAL_MS = 30_000;
@@ -14,14 +15,6 @@ export interface HealthCounters {
   works: number;
   rooms: number;
   clients: number;
-}
-
-export interface HealthSample extends HealthCounters {
-  cpuPct: number;
-  rssMb: number;
-  heapMb: number;
-  extMb: number;
-  loop: { maxMs: number; p99Ms: number; meanMs: number };
 }
 
 export interface HealthService {

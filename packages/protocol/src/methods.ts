@@ -30,7 +30,7 @@ import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, CompactResult, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -93,6 +93,10 @@ export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
+  // Диагностика хоста (спека 2026-10-16): мгновенный снимок и CPU-профиль по запросу; старый хост методов не знает.
+  'host.diagnostics': z.object({}),
+  'host.profile.start': z.object({ seconds: z.number().int().min(1).max(60).optional() }),
+  'host.profile.status': z.object({}),
   'providers.list': z.object({}),
   'providers.refreshLimits': z.object({}),
   'providers.check': z.object({ provider: z.string() }),
@@ -295,6 +299,9 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
+  'host.diagnostics': HostDiagnostics;
+  'host.profile.start': ProfileStatus;
+  'host.profile.status': ProfileStatus;
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
   'providers.refreshLimits': { ok: true };
   /**

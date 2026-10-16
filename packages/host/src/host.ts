@@ -376,6 +376,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const backlogService = createBacklogService();
   handle.context.onShutdown(async () => backlogService.close());
 
+  // Профиль CPU по запросу: файлы в `~/.parley/host/diagnostics`; идущая запись на остановке хоста дописывается.
+  const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
+  handle.context.onShutdown(async () => profiler.stop());
+
   const handlers = createHostHandlers({
     backlog: backlogService,
     planEffects,
@@ -393,12 +397,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
+    health,
+    profiler,
   });
   health.start();
   handle.context.onShutdown(async () => health.stop());
-  // Профиль CPU по запросу: файлы в `~/.parley/host/diagnostics`; идущая запись на остановке хоста дописывается.
-  const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
-  handle.context.onShutdown(async () => profiler.stop());
   const server = createHostServer({
     context: handle.context,
     token,
