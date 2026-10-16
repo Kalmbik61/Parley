@@ -2,7 +2,7 @@
 
 > **2026-10-14:** браузер агента — панель чата или комнаты (спека 3.10, 4.11). B2 переписывается под панели и идёт веткой `feat/browser-panels`; в C и D доступ по хозяину панели вместо «Agent access».
 
-> **2026-10-16:** ревизия по реверс-проверке (`docs/audits/2026-10-16/Parley-rea-reverse-check-2026-10-16.md`, папка не в git). До этапа D: повторить спайк 0.4 с фокусом в `<textarea>` окна — по замеру Orca ввод агента через CDP `Input.*` в `<webview>` уходит в поле хозяина (спека 5.1, заметка); переписать планы C и D под 3.10 (owners, реестр страниц панелей, правило 5.1), как переписывается B2; хосту журналировать `op:"browser.agentOp"` (спека 3.7). Состояние: A и B выпущены; B2 на паузе — журнал `.claude/worktrees/browser-panels/.superpowers/sdd/2026-10-14-browser-panels/progress.md` (RESUME POINTER); актуальная спека — в этой ветке `feat/browser-panels`, копия в master старее.
+> **2026-10-16:** ревизия по реверс-проверке (`docs/audits/2026-10-16/Parley-rea-reverse-check-2026-10-16.md`, папка не в git). До этапа D: повторить спайк 0.4 с фокусом в `<textarea>` окна — по замеру Orca ввод агента через CDP `Input.*` в `<webview>` уходит в поле хозяина (спека 5.1, заметка); переписать планы C и D под 3.10 (owners, реестр страниц панелей, правило 5.1), как переписывается B2; хосту журналировать `op:"browser.agentOp"` (спека 3.7). Состояние на 2026-10-16: A и B выпущены, B2 влит PR #64 (журнал этапа — `.superpowers/sdd/2026-10-14-browser-panels/` в основной копии), спека в master актуальна. Идёт этап C: сперва переписка этого плана под 3.10 в ветке `feat/browser-agent-read`, потом исполнение. Живой проверки B2 в dev-окне не было.
 
 > **Для исполнителей-агентов:** обязательный навык — superpowers:subagent-driven-development (рекомендуется) или superpowers:executing-plans. Задачи выполняются по одной. Шаги отмечены флажками (`- [ ]`).
 
@@ -28,7 +28,7 @@
 | 0. Спайки | `2026-10-07-browser-devtools-agent-plan-0-spikes.md` | `research/browser-stage0` | `.claude/worktrees/browser-stage0` | S |
 | A. DevTools для человека | `…-plan-a-devtools.md` | `feat/browser-devtools` | `.claude/worktrees/browser-devtools` | L |
 | B. Контекст в чат | `…-plan-b-context.md` | `feat/browser-context` | `.claude/worktrees/browser-context` | L |
-| B2. Браузер чата и комнаты, агент открывает страницу | `…-plan-b2-open.md` (переписывается под панели, спека 3.10) | `feat/browser-panels` | `.claude/worktrees/browser-panels` | L |
+| B2. Браузер чата и комнаты, агент открывает страницу | `…-plan-b2-open.md` | влит PR #64 (ветка и worktree убраны) | — | L |
 | C. Агент читает | `…-plan-c-agent-read.md` | `feat/browser-agent-read` | `.claude/worktrees/browser-agent-read` | M |
 | D. Агент управляет | `…-plan-d-agent-control.md` | `feat/browser-agent-control` | `.claude/worktrees/browser-agent-control` | L |
 

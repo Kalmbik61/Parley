@@ -10,7 +10,7 @@
  * страницы при эмуляции — размер вида × DPR, а не размер на экране: `scale` его не уменьшает (Mobile M 2x даёт
  * 750×1624). Это пригодится снимку этапа C.
  *
- * Этап C добавит `withTemporary` (снимок агента в другом размере): размер и поле вкладки для возврата лежат в `state`.
+ * `withTemporary` — снимок агента в другом размере: размер и поле вкладки для возврата лежат в `state`.
  */
 import { MOBILE_USER_AGENT, viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type { CdpMethod, Inspector } from './inspector.js';
@@ -74,11 +74,13 @@ export interface Emulation {
   current(id: number): ViewportSpec | null;
   /** Гость уничтожен: размер его вкладки не помним (id не переиспользуются, но `current` не должен отдавать чужой след). */
   forget(id: number): void;
+  /** C: снимок агента в чужом размере — размер на время `run`, потом размер и поле человека (спека 2 п. 10). */
+  withTemporary<T>(id: number, spec: ViewportSpec, run: () => Promise<T>): Promise<T>;
 }
 
 export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation {
   const state = new Map<number, { spec: ViewportSpec; area: ViewportArea }>();
-  return {
+  const emulation: Emulation = {
     async set(id, spec, area) {
       const { commands, scale } = viewportCommands(spec, area);
       // По одной и по порядку. Отказ — отказ set; прежний размер остаётся в state.
@@ -94,5 +96,25 @@ export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): E
     forget(id) {
       state.delete(id);
     },
+    async withTemporary(id, spec, run) {
+      const before = state.get(id); // размер и поле человека; при Fit записи нет
+      const { width, height } = viewportSize(spec);
+      const same = (a: ViewportSpec | null, b: ViewportSpec | null): boolean => JSON.stringify(a) === JSON.stringify(b);
+      try {
+        // Поле равно размеру — scale 1: страница снимается в полный размер, а не вписанной во вкладку.
+        await emulation.set(id, spec, { width, height });
+        return await run();
+      } finally {
+        // Человек сменил размер во время снимка — его выбор не трогаем. Временный не встал (сбой `set`, команды могли
+        // лечь частично) — повторить прежний.
+        const now = state.get(id)?.spec ?? null;
+        if (same(now, spec) || same(now, before?.spec ?? null)) {
+          await emulation
+            .set(id, before?.spec ?? null, before?.area ?? { width, height })
+            .catch((error: unknown) => console.warn('[parley] emulation restore failed', error));
+        }
+      }
+    },
   };
+  return emulation;
 }

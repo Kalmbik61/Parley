@@ -70,6 +70,7 @@ export function PanelSurface({ workKey, owner, panel, visible, bridge, entry, se
       ref={rootRef}
       data-testid="browser-panel"
       data-panel-owner={ownerKey(owner)}
+      data-agents-paused={panel.paused === true ? 'true' : undefined}
       className="absolute flex flex-col overflow-hidden border-l border-border bg-background"
       style={{ visibility: visible ? 'visible' : 'hidden' }}
       onPointerDownCapture={() => {

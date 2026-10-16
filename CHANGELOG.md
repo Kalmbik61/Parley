@@ -19,6 +19,13 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
   same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
   before opening a page.
+- **Agents can read the browser of their chat and rooms.** An agent (Claude, GLM or Codex) lists the pages in the
+  browser panel of its own chat and of the rooms it belongs to, reads the console errors and failed requests of the
+  current page — secrets in headers, query strings and JSON bodies are masked as `<redacted>` — and takes screenshots,
+  also at another size such as 375×812 (the page shows "Agent capture 375×812" for a moment; your size comes back).
+  Your own browser tabs are never visible to agents. **⋯ → Pause agents** in a panel page stops all agents in that
+  panel (**Resume agents** lifts it); Settings → Browser → "Let agents use the browser" still turns access off for
+  everyone. Sessions started before the update get the tools after a restart.
 - **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
 - **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` now run without
   your plugins, other MCP servers and auto-memory — about a third less context on every turn of Claude Code

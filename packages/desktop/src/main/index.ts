@@ -340,6 +340,11 @@ if (!gotLock) {
       // перезагрузкой, которую потом отменит вопрос о правках (fix-7.3 п. 4б), и сбросил бы счёт.
       window.webContents.on('did-navigate', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
+      // Реестр страниц панелей для агента забывается вместе со страницами окна. Не did-start-loading: он приходит окну и от
+      // каждого `<webview>`, реестр стирался бы при открытии любой страницы. Рендерер регистрирует страницы заново.
+      window.webContents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) agentOps?.reset();
+      });
       window.on('closed', () => {
         closeGuard.dispose();
         if (mainWindow === window) mainWindow = null;
@@ -607,6 +612,22 @@ if (!gotLock) {
         window.webContents.send('browser:agent-open-tab', e);
         return true;
       },
+      fromId: (id) => webContents.fromId(id) ?? null,
+      inspector,
+      emulation,
+      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      image: {
+        size: (png) => nativeImage.createFromBuffer(png).getSize(),
+        resize: (png, width, height) => nativeImage.createFromBuffer(png).resize({ width, height, quality: 'good' }).toPNG(),
+        // Полосы одной ширины склеиваются побайтно: битмапы строка за строкой подряд (спайк 0.7).
+        stitch: (parts) => {
+          const images = parts.map((part) => nativeImage.createFromBuffer(part));
+          const { width } = images[0]?.getSize() ?? { width: 0 };
+          const height = images.reduce((sum, image) => sum + image.getSize().height, 0);
+          return nativeImage.createFromBitmap(Buffer.concat(images.map((image) => image.toBitmap())), { width, height }).toPNG();
+        },
+      },
+      activity: (e) => webContents.fromId(e.webContentsId)?.hostWebContents?.send('browser:agent-activity', e),
     });
     agentOps = ops;
 

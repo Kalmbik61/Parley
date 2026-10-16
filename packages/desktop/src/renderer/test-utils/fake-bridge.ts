@@ -16,6 +16,7 @@ import type {
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
+  AgentActivity,
   AgentOpenTab,
   AnnotationPick,
   AnnotationPosition,
@@ -196,6 +197,8 @@ export interface FakeBridge extends ParleyBridge {
   emitBrowserFocus(e: { webContentsId: number }): void;
   /** Агент просит открыть вкладку: событие `browser:agent-open-tab` слушателям `browser.onAgentOpenTab` (этап B2). */
   emitAgentOpenTab(e: AgentOpenTab): void;
+  /** Агент действует на странице: событие `browser:agent-activity` слушателям `browser.onAgentActivity` (этап C). */
+  emitAgentActivity(e: AgentActivity): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -308,6 +311,7 @@ export function createFakeBridge(): FakeBridge {
   const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
   const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
   const agentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
+  const agentActivityListeners = new Set<(e: AgentActivity) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -463,6 +467,9 @@ export function createFakeBridge(): FakeBridge {
     },
     emitAgentOpenTab: (e) => {
       for (const listener of agentOpenTabListeners) listener(e);
+    },
+    emitAgentActivity: (e) => {
+      for (const listener of agentActivityListeners) listener(e);
     },
     emitWindowFocus: (focused) => {
       for (const listener of windowFocusListeners) listener(focused);
@@ -640,6 +647,13 @@ export function createFakeBridge(): FakeBridge {
       },
       agentOpenTabResult: async (requestId, result) => {
         browserCalls.push({ method: 'agentOpenTabResult', args: [requestId, result] });
+      },
+      registerTab: async (e) => {
+        browserCalls.push({ method: 'registerTab', args: [e] });
+      },
+      onAgentActivity: (listener) => {
+        agentActivityListeners.add(listener);
+        return () => agentActivityListeners.delete(listener);
       },
     },
     files: {

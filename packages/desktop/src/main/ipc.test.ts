@@ -77,7 +77,7 @@ const emulation = {
   })),
 };
 /** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
-const agentOps = { openTabResult: vi.fn() };
+const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -1495,6 +1495,44 @@ describe('канал агента — только для main (этап B2, с�
       expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
     }
     expect(agentOps.openTabResult).toHaveBeenCalledTimes(4);
+  });
+
+  it('register-tab: страница панели с живым гостем раздела и пауза панели — в реестр агента; gone — без гостя; неверное и вкладка человека — bad_request', async () => {
+    const guest = fakeBrowserContents(7, 'webview');
+    const { ipcMain } = setup({ webContents: new Map<number, unknown>([[7, guest], [1, fakeBrowserContents(1, 'window')]]) });
+    agentOps.registerTab.mockClear();
+    const page = { webContentsId: 7, workKey: '/p w-1', owner: { kind: 'session', sessionId: 's-02' }, pageId: 'bp-abc123', visible: false };
+    await ipcMain.invoke('browser:register-tab', page);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith(page);
+    const unloaded = { ...page, webContentsId: null };
+    await ipcMain.invoke('browser:register-tab', unloaded);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith(unloaded);
+    const pause = { workKey: '/p w-1', owner: { kind: 'room', roomId: 'r-01' }, paused: true };
+    await ipcMain.invoke('browser:register-tab', pause);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith(pause);
+    await ipcMain.invoke('browser:register-tab', { workKey: '/p w-1', pageId: 'bp-abc123', gone: true });
+    expect(agentOps.registerTab).toHaveBeenCalledTimes(4);
+    for (const bad of [
+      { ...page, webContentsId: 1 }, // не гость раздела
+      { ...page, pageId: 'browser:abc123' }, // вкладка человека
+      { ...page, pageId: 'terminal:s-01' },
+      { ...page, owner: { kind: 'session', sessionId: '' } },
+      { ...page, owner: { kind: 'user', id: 1 } },
+      { ...page, visible: 'yes' },
+      { ...page, workKey: '__proto__' },
+      { ...pause, paused: 'yes' },
+      { workKey: '/p w-1', pageId: 'terminal:x', gone: true },
+      null,
+    ]) {
+      expect(await codeOf(ipcMain.invoke('browser:register-tab', bad)), JSON.stringify(bad)).toBe('bad_request');
+    }
+    expect(agentOps.registerTab).toHaveBeenCalledTimes(4);
+  });
+
+  it('host:call не пускает browser.agentResult: ответ на операцию агента шлёт только main (спека 3.7)', async () => {
+    const { ipcMain, connection } = setup();
+    await expect(ipcMain.invoke('host:call', 'browser.agentResult', { opId: 'op-1', ok: true, result: {} })).rejects.toBeDefined();
+    expect(connection.call).not.toHaveBeenCalled();
   });
 });
 

@@ -13,7 +13,7 @@ import type { PickResult } from '../../../shared/browser-types.js';
 import type { BrowserOwner, WorkLayout } from '../../../shared/layout-types.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
-import { addPanelPage, panelOf, setPanelOpen } from '../../layout/panels.js';
+import { addPanelPage, closePanelPage, panelOf, setPanelOpen } from '../../layout/panels.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { SurfaceLayer } from '../../layout/SurfaceLayer.js';
 import { emptyLayout } from '../../layout/tree.js';
@@ -27,6 +27,7 @@ import { resetDeliveryForTests } from '../context/deliver.js';
 import { useDevtoolsStore } from '../devtools/store.js';
 import { requestAddressFocus, useBrowserStore } from '../store.js';
 import { panelAnchor } from './anchor.js';
+import { resetAgentRegistry } from './agent-registry.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
@@ -99,6 +100,7 @@ const panelNow = (owner: BrowserOwner = CHAT): ReturnType<typeof panelOf> => pan
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
+  resetAgentRegistry();
   resetDeliveryForTests();
   vi.mocked(toast).mockClear();
   useWorksStore.setState({
@@ -217,6 +219,86 @@ describe('PanelSurface — предел живых панелей (спека б
     expect(webview(P1)).not.toBeNull();
     expect(root().style.visibility).toBe('visible');
     vi.useRealTimers();
+  });
+});
+
+const registrations = (): unknown[] => bridge.browserCalls.filter((call) => call.method === 'registerTab').map((call) => call.args[0]);
+
+describe('PanelSurface — реестр страниц для агента (этап C)', () => {
+  it('монтирование — без гостя, dom-ready — с id гостя, повтор не шлётся; уход вида хозяина с экрана — запись «невидима»', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    const view = arm(webview(P1), 7);
+    expect(registrations()).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true }]);
+    fire(view, 'dom-ready');
+    expect(registrations().at(-1)).toEqual({ webContentsId: 7, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true });
+    expect(registrations()).toHaveLength(2);
+    act(() => usePanelRuntime.getState().unmountHost(panelRuntimeKey(WORK_KEY, CHAT)));
+    // Вид хозяина ушёл с экрана — страница невидима человеку (гость, если он ещё жив, main проверит сам).
+    expect(registrations().at(-1)).toMatchObject({ pageId: P1, visible: false });
+  });
+
+  it('размонтирование, пока страница в раскладке, — запись без гостя; закрытую страницу размонтирование не воскрешает', () => {
+    setPanel(CHAT, ['http://localhost:3000/', 'http://localhost:3001/']);
+    showHost(CHAT);
+    const { unmount } = renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    fire(arm(webview(P2), 8), 'dom-ready');
+    act(() => {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => closePanelPage(layout, CHAT, P2));
+    });
+    const before = registrations().length;
+    unmount();
+    const added = registrations().slice(before);
+    expect(added).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: false }]);
+  });
+
+  it('пауза панели: data-agents-paused на корне, «Pause agents» пишет её в раскладку, «Resume agents» снимает', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    expect(root().getAttribute('data-agents-paused')).toBeNull();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pause agents' }));
+    expect(panelNow()?.paused).toBe(true);
+    expect(root().getAttribute('data-agents-paused')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Resume agents' }));
+    expect(panelNow()?.paused).toBeUndefined();
+  });
+});
+
+describe('PanelSurface — снимок агента на странице (этап C, спека 4.8; спайк 0.2)', () => {
+  const activity = (phase: 'start' | 'end', webContentsId: number, capture?: { width: number; height: number }): void =>
+    act(() => bridge.emitAgentActivity({ webContentsId, session: 'S02', op: 'screenshot', phase, ...(capture === undefined ? {} : { capture }) }));
+
+  it('start с capture своей страницы — «Agent capture 375×812»; end — подписи нет; чужая страница и start без capture не трогают', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    activity('start', 9, { width: 375, height: 812 });
+    activity('start', 7);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+    activity('start', 7, { width: 375, height: 812 });
+    expect(screen.getByTestId('agent-capture').textContent).toBe('Agent capture 375×812');
+    activity('end', 7);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+  });
+
+  it('невидимая страница на время start с capture: visibility: visible, opacity: 0, pointer-events: none; на end — снова hidden', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    const page = surface(P1) as HTMLElement;
+    expect(page.style.visibility).toBe('hidden');
+    activity('start', 7, { width: 1280, height: 800 });
+    expect([page.style.visibility, page.style.opacity, page.style.pointerEvents]).toEqual(['visible', '0', 'none']);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+    activity('end', 7);
+    expect(page.style.visibility).toBe('hidden');
   });
 });
 

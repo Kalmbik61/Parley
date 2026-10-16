@@ -159,6 +159,27 @@ export type AgentOpenTabResult =
   | { tabId: string; reused: boolean; mounted: boolean }
   | { error: 'limit' | 'no_work' };
 
+/**
+ * Запись реестра страниц панелей для агента (спека браузера 3.5, 3.7, 3.10). Вкладки человека не регистрируются.
+ * `webContentsId: null` — страницы в раскладке нет гостя (панель выгружена); `gone` — страница закрыта; `paused` — пауза
+ * панели хозяина (4.8).
+ */
+export type AgentPageRegistration =
+  | { webContentsId: number | null; workKey: string; owner: BrowserOwner; pageId: string; visible: boolean }
+  | { workKey: string; pageId: string; gone: true }
+  | { workKey: string; owner: BrowserOwner; paused: boolean };
+
+/** Агент действует на странице — событие `browser:agent-activity` окну-хозяину гостя. */
+export interface AgentActivity {
+  webContentsId: number;
+  /** Короткий номер сессии-агента: `S02`. */
+  session: string;
+  op: string;
+  phase: 'start' | 'end';
+  /** Снимок в чужом размере или у невидимой страницы: подпись «Agent capture W×H» и `opacity: 0` на время снимка (задача 15). */
+  capture?: { width: number; height: number };
+}
+
 // Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
 export interface BrowserApi {
   /** null — выбор отменён: Esc, pickCancel, навигация главного фрейма, падение или закрытие страницы. */
@@ -205,4 +226,8 @@ export interface BrowserApi {
   onAgentOpenTab(listener: (e: AgentOpenTab) => void): () => void;
   /** Ответ окна main на просьбу агента (`browser:agent-open-tab-result`): id вкладки раскладки или причина отказа. */
   agentOpenTabResult(requestId: string, result: AgentOpenTabResult): Promise<void>;
+  /** Реестр страниц панелей для агента (`browser:register-tab`, спека браузера 3.5, 3.10): страница, её закрытие, пауза панели. */
+  registerTab(e: AgentPageRegistration): Promise<void>;
+  /** Агент действует на странице (`browser:agent-activity`): подпись снимка в чужом размере, перевод скрытой поверхности в `opacity: 0`. */
+  onAgentActivity(listener: (e: AgentActivity) => void): () => void;
 }

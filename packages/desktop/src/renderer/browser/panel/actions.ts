@@ -16,7 +16,7 @@ import type { AgentOpenTab, AgentOpenTabResult } from '../../../shared/browser-t
 import type { BrowserOwner } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { ownerKey, ownerTabId, panelPageId } from '../../layout/ids.js';
-import { activatePanelPage, addPanelPage, closePanelPage, ownerOfPage, panelOf, setPanelOpen, setPanelWidth } from '../../layout/panels.js';
+import { activatePanelPage, addPanelPage, closePanelPage, ownerOfPage, panelOf, setPanelOpen, setPanelPaused, setPanelWidth } from '../../layout/panels.js';
 import { useLayoutStore, type LayoutOp, type LayoutState } from '../../layout/store.js';
 import { closeTab, findTab, focusTab, type OpError } from '../../layout/tree.js';
 import { requestAddressFocus, useBrowserStore } from '../store.js';
@@ -267,4 +267,9 @@ export function openPopupInPanel(openerPageId: string, url: string): boolean {
     usePanelRuntime.getState().hosts[panelRuntimeKey(located.workKey, located.owner)] !== undefined;
   if (shown) openPageInPanel(located.workKey, located.owner, url, { focus: false });
   return true;
+}
+
+/** «Pause agents» / «Resume agents» в «⋯» страницы панели (спека 4.8): агенты хозяина теряют доступ к её страницам. */
+export function pausePanel(workKey: string, owner: BrowserOwner, paused: boolean): void {
+  run(workKey, (layout) => setPanelPaused(layout, owner, paused));
 }

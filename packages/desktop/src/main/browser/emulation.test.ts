@@ -107,3 +107,49 @@ describe('createEmulation', () => {
     expect(emulation.current(7)).not.toBe(incoming);
   });
 });
+
+describe('withTemporary — снимок агента в чужом размере (Фокус ревью этапа C, п. 5)', () => {
+  const human: ViewportSpec = { preset: 'laptop', rotated: false, dpr: 2 };
+  const area = { width: 900, height: 600 };
+  const temp: ViewportSpec = { preset: 'mobile-m', rotated: false, dpr: 1 };
+  const own = { width: 375, height: 812 };
+  const commandsOf = (spec: ViewportSpec | null, at: { width: number; height: number }) =>
+    viewportCommands(spec, at).commands.map((command) => ({ method: command.method, params: command.params }));
+
+  function setup() {
+    const sent: Array<{ method: string; params: unknown }> = [];
+    const send = vi.fn(async (_id: number, method: string, params?: Record<string, unknown>) => {
+      sent.push({ method, params });
+      return {};
+    });
+    return { emulation: createEmulation({ inspector: { send } }), sent };
+  }
+
+  it('на время снимка — размер агента в масштабе 1 (площадь = его размер), потом — размер и площадь человека', async () => {
+    const { emulation, sent } = setup();
+    await emulation.set(7, human, area);
+    sent.length = 0;
+    let during: ViewportSpec | null = null;
+    expect(await emulation.withTemporary(7, temp, async () => { during = emulation.current(7); return 'shot'; })).toBe('shot');
+    expect(during).toEqual(temp);
+    expect(emulation.current(7)).toEqual(human);
+    expect(sent).toEqual([...commandsOf(temp, own), ...commandsOf(human, area)]);
+  });
+
+  it('у человека Fit — после снимка снова Fit', async () => {
+    const { emulation, sent } = setup();
+    await emulation.withTemporary(7, temp, async () => undefined);
+    expect(emulation.current(7)).toBeNull();
+    expect(sent.slice(-commandsOf(null, own).length)).toEqual(commandsOf(null, own));
+  });
+
+  it('снимок упал — размер человека вернулся, ошибка наружу; человек сменил размер во время снимка — его выбор не затирается', async () => {
+    const { emulation } = setup();
+    await emulation.set(7, human, area);
+    await expect(emulation.withTemporary(7, temp, async () => Promise.reject(new Error('capture failed')))).rejects.toThrow('capture failed');
+    expect(emulation.current(7)).toEqual(human);
+    const tablet: ViewportSpec = { preset: 'tablet', rotated: false, dpr: 2 };
+    await emulation.withTemporary(7, temp, async () => { await emulation.set(7, tablet, area); });
+    expect(emulation.current(7)).toEqual(tablet);
+  });
+});

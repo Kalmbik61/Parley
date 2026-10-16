@@ -624,7 +624,7 @@ function parseBrowserPanel(value: unknown, seen: Set<string>): BrowserPanelSpec 
       ? Math.max(value.width, PANEL_LIMITS.minWidth)
       : PANEL_LIMITS.defaultWidth;
   const active = pages.find((page) => page.id === value.active)?.id ?? pages[0]?.id ?? null;
-  return { open: value.open === true, width, pages, active };
+  return { open: value.open === true, width, pages, active, ...(value.paused === true ? { paused: true } : {}) };
 }
 
 /** Панели хозяев: чужой ключ и мусорная запись пропускаются; ни одной панели — `null` (поля в раскладке не будет). */

@@ -727,7 +727,9 @@ describe('правило приоритета браузера Parley (этап 
     expect(contextBytes(BROWSER_PRIORITY_RULE)).toBeLessThanOrEqual(700);
     expect(BROWSER_PRIORITY_RULE).toContain("use Parley's browser first");
     expect(BROWSER_PRIORITY_RULE).toContain('browser_open');
-    expect(BROWSER_PRIORITY_RULE).toContain('the human sees the same tab');
+    expect(BROWSER_PRIORITY_RULE).toContain('the human sees the same page');
+    expect(BROWSER_PRIORITY_RULE).toContain('browser_tabs');
+    expect(BROWSER_PRIORITY_RULE).not.toContain('reading or clicking');
     for (const other of ['Chrome', 'Chrome DevTools', 'Playwright']) expect(BROWSER_PRIORITY_RULE, other).toContain(other);
     for (const left of ['other sites', 'running JS', 'cookies', 'files', 'performance traces', 'browser_open is not available']) {
       expect(BROWSER_PRIORITY_RULE, left).toContain(left);

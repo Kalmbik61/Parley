@@ -80,6 +80,7 @@ export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Runtime.callFunctionOn',
   'Runtime.releaseObject',
   'Page.captureScreenshot',
+  'Page.getLayoutMetrics',
 ]);
 
 /**

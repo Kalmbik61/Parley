@@ -12,6 +12,7 @@ import {
   panelOf,
   prunePanels,
   setPanelOpen,
+  setPanelPaused,
   setPanelWidth,
   updatePanelPage,
 } from './panels.js';
@@ -69,6 +70,23 @@ describe('addPanelPage', () => {
     const snapshot = JSON.stringify(before);
     addPanelPage(before, CHAT, page(3));
     expect(JSON.stringify(before)).toBe(snapshot);
+  });
+});
+
+describe('setPanelPaused', () => {
+  it('ставит паузу и снимает: поле удаляется, а не пишется false; остальное цело', () => {
+    const layout = withPages(2);
+    const paused = setPanelPaused(layout, CHAT, true);
+    expect(panelOf(paused, CHAT)).toEqual({ ...panelOf(layout, CHAT), paused: true });
+    const resumed = setPanelPaused(paused, CHAT, false);
+    expect(panelOf(resumed, CHAT)).toEqual(panelOf(layout, CHAT));
+    expect('paused' in (panelOf(resumed, CHAT) ?? {})).toBe(false);
+  });
+
+  it('то же состояние и несуществующая панель — та же ссылка', () => {
+    const layout = withPages(1);
+    expect(setPanelPaused(layout, CHAT, false)).toBe(layout);
+    expect(setPanelPaused(layout, ROOM, true)).toBe(layout);
   });
 });
 

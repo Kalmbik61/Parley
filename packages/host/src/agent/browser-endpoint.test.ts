@@ -276,7 +276,8 @@ describe('журнал хоста', () => {
       projectPath: '/proj',
       workId: 'w-1',
       sessionId: 's-02',
-      op: 'open',
+      op: 'browser.agentOp',
+      agentOp: 'open',
       tab: 't1',
       origin: 'http://localhost:5173',
       outcome: 'ok',
@@ -295,7 +296,7 @@ describe('журнал хоста', () => {
     await reply;
     const none = await boot([]);
     await post(none.url, { op: 'open', args: { url: PAGE } }, none.token);
-    expect(vi.mocked(log.info).mock.calls.at(-1)?.[1]).toMatchObject({ op: 'open', tab: null, origin: null, outcome: 'not_loopback' });
+    expect(vi.mocked(log.info).mock.calls.at(-1)?.[1]).toMatchObject({ op: 'browser.agentOp', agentOp: 'open', tab: null, origin: null, outcome: 'not_loopback' });
     expect(vi.mocked(none.log.info).mock.calls.at(-1)?.[1]).toMatchObject({ outcome: 'window_not_connected', origin: 'http://localhost:5173', ms: 0 });
   });
 });
