@@ -95,6 +95,13 @@ const NEWLINE = 0x0a;
 export const TERMINAL_WORKING_EVENT = 'TerminalWorking';
 
 /**
+ * Отметка хоста «на запрос разрешения ответили» (Allow/Deny в Parley или в терминале). Claude Code хука для
+ * этого не шлёт, а запись пользователя (`tool_result`) ложится в транскрипт только после конца инструмента —
+ * до тех пор сессия числилась бы `blocked`. Пишет хост, не Claude Code; в свёртке снимает `blocked`, не начиная хода.
+ */
+export const PERMISSION_ANSWERED_EVENT = 'ParleyPermissionAnswered';
+
+/**
  * Событие без полей хука: все необязательные поля пусты. Так записывается событие, которого в
  * журнале нет, — хост выводит его из сигнала терминала Codex.
  */

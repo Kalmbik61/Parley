@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { activityOf, hookedSince, type ActivityLog } from './activity.js';
 import {
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   type BackgroundTask,
@@ -1356,5 +1357,75 @@ describe('activityOf: TerminalWorking — кадр спиннера термин
 
     expect(result.activity).toBe('working');
     expect(result.waitingFor).toBe('inbox');
+  });
+});
+
+describe('activityOf: ответ на запрос разрешения гасит blocked', () => {
+  const T1 = '2026-09-05T10:00:01.000Z';
+  const T2 = '2026-09-05T10:00:02.000Z';
+  const T3 = '2026-09-05T10:00:03.000Z';
+  const logAt = (lastUserRecordAt: string): ActivityLog => ({
+    lastRecordAt: lastUserRecordAt,
+    lastUserRecordAt,
+  });
+  const read = (events: EventRecord[], log: ActivityLog | null = null): ReturnType<typeof activityOf> =>
+    activityOf({ events, log, now: NOW, silenceThresholdMs: 30_000 });
+
+  it('PermissionRequest → запись пользователя → ParleyWaitStart: запись сравнивается с запросом, а не с последним событием', () => {
+    const result = read(
+      [
+        event('PermissionRequest', null, T1),
+        hook('ParleyWaitStart', { waitTarget: 'inbox' }, T3),
+      ],
+      logAt(T2),
+    );
+    expect(result.activity).toBe('working');
+    expect(result.waitingFor).toBe('inbox');
+  });
+
+  it('то же с SubagentStart вместо ожидания', () => {
+    const result = read(
+      [event('PermissionRequest', null, T1), hook('SubagentStart', { agentId: 'a1' }, T3)],
+      logAt(T2),
+    );
+    expect(result.activity).toBe('working');
+  });
+
+  it('Notification permission_prompt → запись пользователя → ParleyWaitStart → working', () => {
+    const result = read(
+      [
+        event('Notification', 'permission_prompt', T1),
+        hook('ParleyWaitStart', { waitTarget: 'inbox' }, T3),
+      ],
+      logAt(T2),
+    );
+    expect(result.activity).toBe('working');
+  });
+
+  it('PermissionRequest → ParleyPermissionAnswered → working от журнала', () => {
+    const result = read([event('PermissionRequest', null, T1), event(PERMISSION_ANSWERED_EVENT, null, T2)]);
+    expect(result.activity).toBe('working');
+    expect(result.source).toBe('hooks');
+  });
+
+  it('PermissionRequest → ответ → новый PermissionRequest → blocked', () => {
+    const result = read([
+      event('PermissionRequest', null, T1),
+      event(PERMISSION_ANSWERED_EVENT, null, T2),
+      event('PermissionRequest', null, T3),
+    ]);
+    expect(result.activity).toBe('blocked');
+  });
+
+  it('ответ после Stop хода не начинает', () => {
+    const stopped = [
+      event('UserPromptSubmit', null, T1),
+      event('Stop', null, T2),
+    ];
+    const before = read(stopped);
+    const after = read([...stopped, event(PERMISSION_ANSWERED_EVENT, null, T3)]);
+    expect(after.activity).toBe(before.activity);
+    expect(after.activity).toBe('unseen');
+    expect(after.turnEndedAt).toBe(T2);
   });
 });

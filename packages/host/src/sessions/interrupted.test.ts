@@ -44,6 +44,22 @@ describe('findInterrupted', () => {
     expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' }]);
   });
 
+  it('отметка хоста ParleyPermissionAnswered после Stop сессию прерванной не делает', async () => {
+    const entry = entryOf([
+      { id: 's-01', lifecycle: 'sleeping' },
+      { id: 's-02', lifecycle: 'sleeping' },
+    ]);
+    const journals: Record<string, readonly EventRecord[]> = {
+      's-01': [event('UserPromptSubmit'), event('Stop'), event('ParleyPermissionAnswered')],
+      // Отметка посреди хода его не заканчивает: прервана по-прежнему.
+      's-02': [event('UserPromptSubmit'), event('ParleyPermissionAnswered')],
+    };
+
+    const refs = await findInterrupted([entry], async (ref: SessionRef) => journals[ref.sessionId] ?? null);
+
+    expect(refs).toEqual([{ projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' }]);
+  });
+
   it('сессия codex без строк notify в журнале событий не считается прерванной', async () => {
     // У Codex журнал `events/` не пишет никто (`notify` не подменяется): журнала нет (null) или он пуст.
     const entry = entryOf([{ id: 's-01', lifecycle: 'sleeping' }]);

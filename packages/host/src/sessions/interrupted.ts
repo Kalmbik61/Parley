@@ -5,7 +5,7 @@
  * всех» — поднимать без согласия человека нельзя.
  */
 
-import { activityOf, type EventRecord, type WorkEntry } from '@parley/core';
+import { PERMISSION_ANSWERED_EVENT, activityOf, type EventRecord, type WorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 
 /** Хуки, которыми ход (или сама сессия) закончился штатно. */
@@ -20,12 +20,14 @@ const isIdleNotice = (event: EventRecord): boolean =>
   event.name === 'Notification' && event.notificationType === 'idle_prompt';
 
 /**
- * Строки, которые дописывает MCP-сервер сессии, а не Claude Code (начало и конец `wait_for`): они могут
+ * Строки, которые дописывает MCP-сервер сессии или хост, а не Claude Code (начало и конец `wait_for`, отметка «на запрос ответили»): они могут
  * лечь и после `Stop` — вызов, брошенный прерыванием, дожидается своего таймаута, — и ход не начинают и
  * не заканчивают.
  */
 const isWaitLine = (event: EventRecord): boolean =>
-  event.name === 'ParleyWaitStart' || event.name === 'ParleyWaitEnd';
+  event.name === 'ParleyWaitStart' ||
+  event.name === 'ParleyWaitEnd' ||
+  event.name === PERMISSION_ANSWERED_EVENT;
 
 /**
  * Начало и конец работы субагентов: помощники Claude Code останавливаются и после `Stop` — десятками, — а

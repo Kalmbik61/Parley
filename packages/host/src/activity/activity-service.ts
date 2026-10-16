@@ -13,8 +13,11 @@
  */
 
 import { existsSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
+import path from 'node:path';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   activityOf,
   claudeProjectRoots,
@@ -126,6 +129,14 @@ export interface ActivityService {
    * idle. Таймер тишины и метрики при этом считаются по настоящему значению.
    */
   questionHeld(ref: SessionRef, held: boolean): void;
+  /**
+   * На запрос разрешения (`PermissionRequest`) ответили — в окне или в терминале. Хука «разрешили» у Claude
+   * Code нет, а запись пользователя ложится в лог лишь после конца одобренного инструмента, и сессия до
+   * тех пор числилась бы `blocked`. Дописывает в журнал сессии отметку `ParleyPermissionAnswered`;
+   * пересчитает наблюдатель журнала. Best-effort: каталога `events/` нет (сессия без хуков) или диск
+   * не пишет — молча ничего.
+   */
+  permissionAnswered(ref: SessionRef): void;
   /**
    * Почему письма сессии ещё не забраны (причина будильника) — уходит окну в `LiveMetrics.mailWaiting`:
    * комната пишет её рядом с «not picked up yet». `null` — писем нет.
@@ -970,6 +981,18 @@ export function createActivityService(
       if (held) questionHeldKeys.add(key);
       else questionHeldKeys.delete(key);
       recompute(ref);
+    },
+    permissionAnswered(ref) {
+      // Каталог не создаём: его отсутствие — признак сессии без хуков (`hooks-missing`).
+      const file = path.join(
+        workPaths(ref.projectPath, ref.workId).events,
+        `${ref.sessionId}.jsonl`,
+      );
+      appendFile(file, `${JSON.stringify({ hook_event_name: PERMISSION_ANSWERED_EVENT })}\n`, 'utf8').catch(
+        () => {
+          // Отметка — подсказка состоянию: без неё `blocked` снимет страховка по логу.
+        },
+      );
     },
     onLogChange(listener) {
       return logIndex.onChange(listener);
