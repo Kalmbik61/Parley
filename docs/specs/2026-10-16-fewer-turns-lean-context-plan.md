@@ -73,10 +73,10 @@
 
 ### Task 5: Проверка куска 1
 
-- [ ] `pnpm build`, полный `pnpm test`, `pnpm typecheck`, `pnpm lint`.
-- [ ] Живая проверка автором (dev-окно): создать комнату из двух сессий Claude при включённой настройке; в `ps` у процессов `claude` видны `--strict-mcp-config`; `~/.parley/.../settings/<id>.json` содержит `enabledPlugins` со всеми `false`; в сессии `/mcp` показывает только `parley`; хуки Parley работают (статус сессии меняется, `report` доходит); `CLAUDE.md` проекта и `PARLEY.md` в контексте (спросить агента, что он видит в системных инструкциях — один дешёвый ход, по разрешению).
-- [ ] Замер контекста: первый `cache_creation_input_tokens` в транскрипте lean-сессии против обычной той же задачи — ожидание ≈ −19 тыс.
-- [ ] CHANGELOG `Unreleased`: Added — Lean agent sessions.
+- [x] `pnpm build`, `pnpm typecheck`, `pnpm lint` — чисто; юниты: core 3173, protocol 231, host 1597, desktop 6670 (под `LC_ALL=C`: локаль `ru_RU` ломает чужие тесты liveness — см. TODOS); E2E окна — в CI.
+- [x] Живая проверка автором 2026-10-16: dev-окно из ветки с отдельным домом `~/.parley-lean` и хостом из ветки; сессии (haiku) создавались драйвером через сокет хоста — lean и обычная рядом, комната из диалога руками не собиралась (логика диалога покрыта тестами окна). У lean-процесса `claude` в `ps` есть `--strict-mcp-config`, в окружении `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; `<проект>/.parley/works/<work>/settings/<id>.json` — все 11 плагинов пользователя `false` и 17 событий хуков Parley; `mcp/<id>.json` — только `parley`; `/context` показывает 46 инструментов MCP против 421 у обычной сессии, 1 агента против 39, 114 скиллов против 207 и не показывает «MCP server instructions» (3k); хуки работают (лента получила карточки хода, `report` дошёл — `done`); `CLAUDE.md` проекта среди memory files остаётся, автопамяти `MEMORY.md` нет; ребёнок из `spawn_session` при настройке по умолчанию — lean (`lean: true` в карте, те же флаги).
+- [x] Замер контекста: первый вызов API в транскрипте (input + cache_creation + cache_read) lean против обычной той же задачи — 39 386 против 58 702 токенов, −19,3 тыс. (−33 %) в проекте с автопамятью; в свежем проекте без `MEMORY.md` — −6,7 тыс. (−14 %): автопамять и есть главная статья, замерять там, где она есть.
+- [x] CHANGELOG `Unreleased`: Added — Lean agent sessions.
 
 ---
 
