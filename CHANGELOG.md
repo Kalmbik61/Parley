@@ -4,7 +4,20 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.13.1
+
+Chat gets Copy and Send again under messages, ↑ and ↓ through your past messages, and a send queue that keeps your messages in order in Chat and rooms. The host log now shows where time goes when starting a session or opening Chat is slow.
+
+### Added
+
+- **Copy and Send again under Chat messages.** Hover over your message to copy it or send it again right
+  away; every piece of the model's answer has Copy too. In an empty Chat field, ↑ and ↓ go through the
+  messages you sent in this session.
+- **Messages wait their turn.** What you send to a busy Chat or room shows up in the feed right away,
+  greyed out, and goes out strictly one at a time. Chat retries by itself while the agent is busy or
+  waiting for a permission. A message that could not be sent is marked **Not sent**, with **Retry** and
+  **×**; the ones after it wait, marked **Waiting**. The queue lives in the window: it survives switching
+  tabs and views, but not closing the window.
 
 ### Changed
 
