@@ -3,7 +3,7 @@
  * фильтры смотрят на текст с маской, как и ответ.
  */
 import type { WebContents } from 'electron';
-import { AGENT_LIMITS } from '@parley/protocol';
+import { AGENT_DEFAULTS, AGENT_LIMITS } from '@parley/protocol';
 import type {
   BrowserAgentArgs,
   BrowserAgentConsoleEntry,
@@ -20,9 +20,6 @@ import { AgentOpError } from './agent-errors.js';
 import type { PageRecord } from './agent-pages.js';
 import { clipUrl, urlForAgent } from './agent-url.js';
 import type { Inspector } from './inspector.js';
-
-/** Записей в ответе по умолчанию — то же число, что `default` в схемах инструментов MCP. */
-const DEFAULT_LIST = 50;
 
 /** Новейшие записи в пределах `limit` и `AGENT_LIMITS.listBytes` (по JSON), старые — первыми. Одна длинная запись проходит. */
 export function newest<T>(items: readonly T[], limit: number): T[] {
@@ -155,7 +152,7 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
   return {
     consoleOf(contents, record, args) {
       const snapshot = captured(contents.id);
-      const level = args.level ?? 'error';
+      const level = args.level ?? AGENT_DEFAULTS.level;
       const pattern = args.pattern?.toLowerCase();
       // Фильтр смотрит на текст с маской, как и ответ: по сырому подбирали бы значение секрета посимвольно через `matched`.
       const matching = snapshot.console
@@ -164,7 +161,7 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
         .filter(({ masked }) => pattern === undefined || masked.toLowerCase().includes(pattern));
       const folded = foldSimilar(matching.map(({ entry, masked }) => ({ entry: toAgentConsole(entry, masked), key: `${entry.level} ${masked.replace(/\d+/g, '#')}` })));
       const next = matching.reduce<number | null>((top, { entry }) => (top === null || entry.id > top ? entry.id : top), null);
-      return { tab: record.agentId, url: urlForAgent(contents.getURL()), entries: newest(folded, args.limit ?? DEFAULT_LIST), matched: matching.length, next };
+      return { tab: record.agentId, url: urlForAgent(contents.getURL()), entries: newest(folded, args.limit ?? AGENT_DEFAULTS.limit), matched: matching.length, next };
     },
     async networkOf(contents, record, args) {
       const snapshot = captured(contents.id);
@@ -187,10 +184,10 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
       // Фильтр смотрит на адрес с маской: подобрать им значение секрета нельзя.
       const matching = current
         .slice(from)
-        .filter((entry) => (args.failedOnly !== false ? isFailed(entry) : true) && (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)));
+        .filter((entry) => ((args.failedOnly ?? AGENT_DEFAULTS.failedOnly) ? isFailed(entry) : true) && (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)));
       const requests = newest(
         matching.map((entry) => ({ ...summaryOf(entry), url: clipUrl(shortUrl(redactUrl(entry.url))) })),
-        args.limit ?? DEFAULT_LIST,
+        args.limit ?? AGENT_DEFAULTS.limit,
       );
       return { tab: record.agentId, url, requests, matched: matching.length, notes, next: requests[requests.length - 1]?.id ?? null };
     },

@@ -71,6 +71,9 @@ export const AGENT_LIMITS = {
 /** Пределы ввода агента, которых нет в таблице спеки: длина адреса — та же, что у журнала вкладки (`DEVTOOLS_LIMITS.url`); `room` — id комнаты; `pattern` — фильтр консоли и сети; `requestId` — id запроса сети. */
 export const AGENT_INPUT = { url: 4096, room: 64, pattern: 200, requestId: 200 } as const;
 
+/** Умолчания необязательных аргументов чтений; MCP core (`browser-tools.ts`) пишет те же числа в схемы, сверяет `browser-agent-contract.test.ts`. */
+export const AGENT_DEFAULTS = { limit: 50, level: 'error', failedOnly: true, fullPage: false } as const;
+
 /** Размер снимка агента — те же пределы Custom, что у меню размеров окна (`DEVTOOLS_LIMITS`; сверяет тест окна). */
 export const AGENT_VIEWPORT = { min: 200, maxWidth: 3840, maxHeight: 2400 } as const;
 

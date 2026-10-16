@@ -68,7 +68,8 @@ export function setPanelPaused(layout: WorkLayout, owner: BrowserOwner, paused: 
   const panel = panelOf(layout, owner);
   if (panel === undefined || (panel.paused === true) === paused) return layout;
   if (paused) return withPanel(layout, owner, { ...panel, paused: true });
-  return withPanel(layout, owner, { open: panel.open, width: panel.width, pages: panel.pages, active: panel.active });
+  const { paused: _paused, ...rest } = panel;
+  return withPanel(layout, owner, rest);
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PAGE_DATA_NOTE } from '@parley/core';
 import type { ErrorCode, HostNotice, NoticeKind } from '@parley/protocol';
 import { errorText, noticeText, providerName, S } from './strings.js';
 
@@ -329,4 +330,10 @@ it('recipe labels are English, name every parse diagnostic and the template play
 it('S.island.donePeek — выглядывающий остров «✅ N», без слов', () => {
   expect(S.island.donePeek(1)).toBe('✅ 1');
   expect(S.island.donePeek(12)).toBe('✅ 12');
+});
+
+describe('пометка данных страницы', () => {
+  it('PAGE_DATA_NOTE core равна S.contextFile.pageDataNote', () => {
+    expect(PAGE_DATA_NOTE).toBe(S.contextFile.pageDataNote);
+  });
 });

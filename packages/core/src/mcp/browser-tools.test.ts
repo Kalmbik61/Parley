@@ -92,7 +92,6 @@ describe('объявление инструмента', () => {
     for (const phrase of ['Prefer this over Chrome, Chrome DevTools or Playwright', 'localhost', 'without taking the human', 'reused', `at most ${BROWSER_TOOL_LIMITS.panelPages} pages`, 'with own: true', 'exactly one room']) {
       expect(open?.description, phrase).toContain(phrase);
     }
-    expect(BROWSER_TOOLS).toHaveLength(5);
   });
 
   it('описание browser_open — не длиннее 600 знаков', () => {

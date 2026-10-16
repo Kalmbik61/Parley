@@ -23,6 +23,7 @@ import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, Brow
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
+import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import { createAgentCapture } from './agent-capture.js';
@@ -91,7 +92,7 @@ const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResu
 export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, so the page loads when the human opens it.";
 
 /** Отказ при выключенном общем «Let agents use the browser». */
-const AGENTS_OFF = 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).';
+const AGENTS_OFF = `The human turned off agent access to the browser (Settings → Browser → ${S.settings.letAgentsUseBrowser}).`;
 
 /** Адрес, который агент может открыть: http(s) на loopback, без учётных данных; иначе `null`. Фрагмент (#…) остаётся: им бывают маршруты SPA. */
 export function loopbackHref(raw: string): string | null {

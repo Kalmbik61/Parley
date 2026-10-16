@@ -142,7 +142,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
 ];
 
 /** Подсказка агенту к коду ошибки окна; у `not_loopback` и `bad_request` текст окна и так говорит, что поправить. */
-const HINTS: Readonly<Record<string, string>> = {
+export const BROWSER_TOOL_HINTS: Readonly<Record<string, string>> = {
   access_denied: 'Do not retry: the human decides when agents may use the browser.',
   window_not_connected: "Ask the human to open Parley's window, then retry.",
   timeout: 'Retry once; if it happens again, tell the human.',
@@ -402,7 +402,7 @@ export function createBrowserTools(agent: AgentChannel, deps: BrowserToolDeps = 
     const error = isRecord(body.error) ? body.error : {};
     const code = typeof error.code === 'string' ? error.code : 'unsupported';
     const message = typeof error.message === 'string' ? error.message : '';
-    const hint = HINTS[code];
+    const hint = BROWSER_TOOL_HINTS[code];
     return { ok: false, text: `${code}: ${message}${hint === undefined ? '' : ` ${hint}`}` };
   }
 
