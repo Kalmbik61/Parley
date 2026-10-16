@@ -11,6 +11,7 @@ export type {
   HostDiagnosticsSession,
   HostErrorReason,
   HostNotice,
+  RoomMailLetter,
   CompactionPhase,
   LimitWindow,
   LiveMetrics,
@@ -66,6 +67,7 @@ export type {
   Result,
   Results,
 } from './methods.js';
+export { ROOMS_MAIL_FEATURE } from './events.js';
 export type { EventData, EventName, Events } from './events.js';
 export {
   LineDecoder,

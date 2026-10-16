@@ -293,6 +293,15 @@ export type ProfileStatus =
   | { state: 'done'; file: string; finishedAt: string }
   | { state: 'failed'; error: string };
 
+/** Письмо в событии `rooms.mail`: без текста — кто, кому и когда. */
+export interface RoomMailLetter {
+  id: string;
+  from: string;
+  to: string[];
+  kind: string;
+  at: string;
+}
+
 /** Показатели хоста на момент запроса: строка журнала `host: состояние` и поле `health` ответа `host.diagnostics`. */
 export interface HealthSample {
   cpuPct: number;
@@ -310,6 +319,8 @@ export interface HealthSample {
   refreshCount: number;
   refreshMs: number;
   mapBytesParsed: number;
+  /** Байты журналов писем, прочитанные хвостом (карта-журнал): отдельно от `mapBytesParsed`, который считает только карты. */
+  journalBytesRead: number;
   /** Вывод PTY за окно: кусков и байт. */
   ptyChunks: number;
   ptyBytes: number;

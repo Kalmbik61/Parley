@@ -19,11 +19,13 @@ import path from 'node:path';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
-import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { assembleFromIndex, journalMapView, lazyJournalMap, rebaseOnIndex } from './assemble.js';
+import { JournalBusyError } from './letter-sink.js';
+import { bumpWorkId, JOURNAL_SCHEMA_VERSION, nextWorkId, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+import type { WorkIndexEntry, WorkIndexMap, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /**
  * Домашняя папка Parley (R4), первое подходящее:
@@ -63,6 +65,14 @@ export interface WorkPaths {
   context: string;
   /** Хуки Claude Code для сессий работы (`--settings`), один файл на работу. */
   settings: string;
+  /** Журналы писем комнат (карта v3): `rooms/<room-id>/messages.jsonl`. */
+  rooms: string;
+  /** Журнал прямых писем без комнаты (карта v3): `direct/messages.jsonl`. */
+  direct: string;
+  /** Прочитанное сессиями (карта v3): `cursors/<session-id>.json`. */
+  cursors: string;
+  /** Решения работы (карта v3), бывшие `decisionExports`. */
+  decisions: string;
 }
 
 /** Раскладка работы на диске (спецификация, раздел 2) в каталоге состояния проекта (`stateDir`). */
@@ -80,6 +90,10 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     limits: path.join(dir, LIMITS_DIR),
     context: path.join(dir, CONTEXT_DIR),
     settings: path.join(dir, 'settings.json'),
+    rooms: path.join(dir, 'rooms'),
+    direct: path.join(dir, 'direct', 'messages.jsonl'),
+    cursors: path.join(dir, 'cursors'),
+    decisions: path.join(dir, 'decisions.json'),
   };
 }
 
@@ -88,7 +102,7 @@ export interface WriteOptions {
   lockTimeoutMs?: number;
 }
 
-const DEFAULT_LOCK_TIMEOUT_MS = 3000;
+export const DEFAULT_LOCK_TIMEOUT_MS = 3000;
 const RETRY_MS = 20;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,6 +117,24 @@ export class MapLockTimeoutError extends Error {
   constructor(lockFile: string, timeoutMs: number) {
     super(`lock ${lockFile} was not released within ${timeoutMs} ms`);
     this.name = 'MapLockTimeoutError';
+  }
+}
+
+/** Попытки записи индекса после `flush` и пауза между ними (`updateStored`). */
+const INDEX_ATTEMPTS = 3;
+const INDEX_RETRY_MS = 50;
+
+/**
+ * Письма (журналы, решения, курсоры) записаны, а индекс карты — нет. Повторять вызов целиком нельзя: мутатор снова
+ * добавит те же письма, а доставка плана, оставшаяся в индексе `queued`, уйдёт дважды. Текст для того, кто читает лог.
+ */
+export class LettersWrittenIndexNotError extends Error {
+  constructor(mapFile: string, cause: unknown) {
+    super(
+      `letters are written to the journals but the index ${mapFile} was NOT saved (${String(cause)}): do not repeat the update, it would duplicate the letters; check the work state first`,
+      { cause },
+    );
+    this.name = 'LettersWrittenIndexNotError';
   }
 }
 
@@ -141,7 +173,7 @@ async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> 
   await rm(lockFile, { force: true });
 }
 
-async function withLock<T>(
+export async function withLock<T>(
   lockFile: string,
   timeoutMs: number,
   body: () => Promise<T>,
@@ -167,16 +199,80 @@ const exists = async (file: string): Promise<boolean> => {
 };
 
 /** Временный файл + rename: читатель видит либо старую карту, либо новую. */
-async function writeAtomic(file: string, text: string): Promise<void> {
+export async function writeAtomic(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp`;
   await writeFile(tmp, text, 'utf8');
   await rename(tmp, file);
 }
 
-/** Читает карту работы. Битый файл — ошибка, догадки не строим. */
+/**
+ * Читает карту работы. Битый файл — ошибка, догадки не строим. Карта-журнал (v3) собирается в прежнюю форму
+ * (`assembleMap`), поэтому читатели не знают, какой формат на диске.
+ */
 export async function readMap(projectPath: string, workId: string): Promise<WorkMap> {
   const file = workPaths(projectPath, workId).map;
-  return parseMap(await readFile(file, 'utf8'), file);
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) {
+    return assembleFromIndex(projectPath, workId, parseIndex(raw, file));
+  }
+  return parseMap(raw, file);
+}
+
+/**
+ * Карта из уже прочитанного текста `map.json` без чтения журналов: v3 — индекс с ленивыми `messages` и `decisionExports`
+ * (`lazyJournalMap`: журналы читаются, только когда к полю обратились), v2 — обычный `parseMap`. Для читателей, которым
+ * нужны сессии, комнаты и статус работы, а не вся переписка (панели решений и бэклога, поиск по итогам сессий).
+ */
+export function parseMapLazy(projectPath: string, workId: string, raw: string, file: string): WorkMap {
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) return lazyJournalMap(projectPath, workId, parseIndex(raw, file));
+  return parseMap(raw, file);
+}
+
+/** `readMap` без чтения журналов: см. `parseMapLazy`. */
+export async function readMapLazy(projectPath: string, workId: string): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  return parseMapLazy(projectPath, workId, await readFile(file, 'utf8'), file);
+}
+
+/**
+ * `readMap` для вызывающего, который уже держит собранную карту этой работы (`base`): карта-журнал читается как индекс
+ * поверх `base` (`rebaseOnIndex`), журналы и курсоры не читаются. Карта v2 разбирается целиком, `base` ей не нужна.
+ * Вызывать, только когда `base` собрана из журналов: письма и решения берутся из неё как есть.
+ */
+export async function readMapOnBase(projectPath: string, workId: string, base: WorkMap): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) return rebaseOnIndex(base, parseIndex(raw, file));
+  return parseMap(raw, file);
+}
+
+/**
+ * Версия формата карты работы без разбора всей карты: берётся из начала файла (`schemaVersion` пишется первым ключом),
+ * иначе файл разбирается целиком. Нет файла — `undefined`. Сервер MCP по ней отказывает в записи в формат новее своего.
+ */
+export async function workSchemaVersion(projectPath: string, workId: string): Promise<number | undefined> {
+  let handle;
+  try {
+    handle = await open(workPaths(projectPath, workId).map, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  try {
+    const head = Buffer.alloc(512);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    const found = /"schemaVersion"\s*:\s*(\d+)/.exec(head.toString('utf8', 0, bytesRead));
+    if (found !== null) return Number(found[1]);
+  } finally {
+    await handle.close();
+  }
+  return peekSchemaVersion(await readFile(workPaths(projectPath, workId).map, 'utf8'));
+}
+
+/** Читает индекс карты-журнала (v3): без писем и решений. Карта v2 — ошибка: её читает `readMap`. */
+export async function readIndex(projectPath: string, workId: string): Promise<WorkIndexMap> {
+  const file = workPaths(projectPath, workId).map;
+  return parseIndex(await readFile(file, 'utf8'), file);
 }
 
 /**
@@ -263,7 +359,7 @@ async function withWorksIndex<T>(
   });
 }
 
-const entryOf = (projectPath: string, map: WorkMap): WorkIndexEntry => ({
+const entryOf = (projectPath: string, map: Pick<WorkMap, 'work'>): WorkIndexEntry => ({
   id: map.work.id,
   projectPath,
   title: map.work.title,
@@ -382,8 +478,75 @@ export async function updateMap(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+  options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  return updateStored(projectPath, workId, options, (raw) => {
+    if (peekSchemaVersion(raw) !== JOURNAL_SCHEMA_VERSION) {
+      const map = parseMap(raw, file);
+      return { stored: map, finish: () => map, mutate: () => mutate(map) };
+    }
+    // Карта-журнал: пишется один индекс. Письма и решения мутатор может читать (журналы читаются при первом
+    // обращении), но менять — нет: для них `appendMessage` и решения в `decisions.json`.
+    // Ни мутатор, ни возврат журналов не читают, пока письма не спросили: запись индекса стоит записи индекса.
+    const index = parseIndex(raw, file);
+    const { view, commit, sink } = journalMapView(projectPath, workId, index);
+    return {
+      stored: index,
+      finish: () => lazyJournalMap(projectPath, workId, index),
+      mutate: () => {
+        mutate(view);
+        commit();
+      },
+      // Письма и решения, которые мутатор добавил, пишутся до индекса (см. `updateStored`); упал мутатор — замки снимаются.
+      flush: () => sink.flush(),
+      wroteLetters: () => sink.hasPending,
+      release: () => sink.release(),
+      afterCommit: () => sink.afterCommit(),
+    };
+  });
+}
+
+/**
+ * Как `updateMap`, но для карты-журнала (v3): мутатор получает индекс без писем и решений, пишется только он.
+ * Карта v2 — ошибка: её меняет `updateMap`.
+ */
+export async function updateIndex(
+  projectPath: string,
+  workId: string,
+  mutate: (index: WorkIndexMap) => void,
+  options: UpdateMapOptions = {},
+): Promise<WorkIndexMap> {
+  const file = workPaths(projectPath, workId).map;
+  return updateStored(projectPath, workId, options, (raw) => {
+    const index = parseIndex(raw, file);
+    return { stored: index, finish: () => index, mutate: () => mutate(index) };
+  });
+}
+
+/**
+ * Общая часть `updateMap` и `updateIndex`: замок, `.bak`, атомарная запись, запись в глобальном индексе.
+ * `open` разбирает файл и говорит, что писать на диск (`stored`), как применить мутатор и как собрать то, что получит
+ * вызывающий (`finish`, после мутатора и сдвига `updatedAt`, под замком).
+ */
+async function updateStored<R>(
+  projectPath: string,
+  workId: string,
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions,
+  open: (raw: string) => {
+    stored: Pick<WorkMap, 'work'>;
+    finish: () => R;
+    mutate: () => void;
+    /** Карта-журнал: записать письма и решения, добавленные мутатором, до индекса. */
+    flush?: () => Promise<void>;
+    /** Карта-журнал: мутатор что-то положил в журналы, решения или курсоры (они уже на диске после `flush`). */
+    wroteLetters?: () => boolean;
+    /** Карта-журнал: снять замки журналов, если до `flush` дело не дошло. */
+    release?: () => void;
+    /** Карта-журнал: после записи индекса убрать то, что индекс уже не держит (журналы удалённых комнат). */
+    afterCommit?: () => void;
+  },
+): Promise<R> {
   const paths = workPaths(projectPath, workId);
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
   // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
@@ -402,23 +565,78 @@ export async function updateMap(
   };
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
-    const raw = await readFile(paths.map, 'utf8');
-    const current = parseMap(raw, paths.map);
-    // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
-    // осела бы запись с чужим id, которую в списке работ нечем открыть.
-    if (current.work.id !== workId) {
-      throw new Error(`map ${paths.map} belongs to workspace ${current.work.id}, not ${workId}`);
+    // Замок журнала комнаты может держать асинхронный `appendMessage` (он держит его поверх `await`), а ждать его
+    // синхронно в мутаторе нельзя: цикл событий встал бы, и держатель не смог бы отпустить замок. Поэтому мутатор
+    // при занятом замке бросает `JournalBusyError`, приёмник снимает всё, что успел взять, а мы ждём асинхронно и
+    // начинаем попытку заново: файл читается снова, мутатор применяется к свежему разбору. Вечного круга нет:
+    // `map.lock` держим только мы, поэтому приёмников с замками журналов одновременно не бывает; замок журнала
+    // держит либо `appendMessage` (берёт один замок и `map.lock` не ждёт), либо прежняя попытка этого же приёмника
+    // (уже снята), так что держатель всегда доходит до конца сам. Предел — тот же таймаут блокировок.
+    const deadline = Date.now() + lockTimeoutMs;
+    let raw: string;
+    let opened: ReturnType<typeof open>;
+    for (;;) {
+      raw = await readFile(paths.map, 'utf8');
+      opened = open(raw);
+      // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
+      // осела бы запись с чужим id, которую в списке работ нечем открыть.
+      if (opened.stored.work.id !== workId) {
+        throw new Error(`map ${paths.map} belongs to workspace ${opened.stored.work.id}, not ${workId}`);
+      }
+      try {
+        opened.mutate();
+        // Письма — раньше индекса: оборвись запись между ними, лишнее письмо лучше потерянного (индекс отметил бы его отправленным).
+        await opened.flush?.();
+        break;
+      } catch (error) {
+        if (!(error instanceof JournalBusyError)) throw error;
+        if (Date.now() >= deadline) throw new MapLockTimeoutError(error.lockFile, lockTimeoutMs);
+      } finally {
+        opened.release?.();
+      }
+      await delay(RETRY_MS);
     }
-    mutate(current);
-    if (touch) current.work.updatedAt = new Date().toISOString();
+    const { stored, finish, afterCommit } = opened;
+    if (touch) stored.work.updatedAt = new Date().toISOString();
+    const result = finish();
 
     // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
     // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
     // Порядок записей в индексе при этом остаётся порядком записей карты.
-    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
-    await writeFile(paths.bak, raw, 'utf8');
-    await writeAtomic(paths.map, serialize(current));
-    return current;
+    //
+    // ПОРЯДОК РЕШЁН ТАК: письма, решения и курсоры уже на диске (`flush` выше), индекс — после них. Отказ индекса после
+    // `flush` оставляет письма без индекса, и повтор ВСЕГО вызова (мутатор заново) добавил бы те же письма второй раз, а
+    // доставка плана, оставшаяся в индексе `queued`, ушла бы дважды. Поэтому запись индекса повторяется здесь же, сама по
+    // себе: мутатор и `flush` второй раз не идут (письма «запомнены» тем, что до них дело не доходит). Если и повторы не
+    // помогли — громкий отказ `LettersWrittenIndexNotError`, не `MapLockTimeoutError`: хост повторяет вызов по
+    // `MapLockTimeoutError`, а здесь повтор вызова вреден.
+    // ОСТАВШЕЕСЯ ОКНО: процесс умирает между `flush` и записью индекса — письма в журналах, индекс прежний, без
+    // журнала транзакций это не закрыть; план-доставка, оставшаяся `queued`, при следующем разборе уйдёт повторно.
+    const writeIndex = async (): Promise<void> => {
+      await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, stored)));
+      await writeFile(paths.bak, raw, 'utf8');
+      await writeAtomic(paths.map, serialize(stored));
+    };
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await writeIndex();
+        break;
+      } catch (error) {
+        if (attempt < INDEX_ATTEMPTS) {
+          await delay(INDEX_RETRY_MS * attempt);
+          continue;
+        }
+        if (opened.wroteLetters?.() === true) throw new LettersWrittenIndexNotError(paths.map, error);
+        throw error;
+      }
+    }
+    // Индекс уже без удалённых комнат: журналы убираем только теперь, иначе поздний `send_message` воскресил бы каталог.
+    try {
+      afterCommit?.();
+    } catch (error) {
+      console.warn(`map ${paths.map}: index saved, but cleanup after it failed: ${String(error)}`);
+    }
+    return result;
   }).catch(whenGone);
 }
 
@@ -466,7 +684,7 @@ export async function setWorkStatus(
 export type SharedStateErrorCode = 'project-unavailable' | 'git-context-unverified' | 'main-project-unavailable' |
   'shared-state-unsafe' | 'shared-file-too-large' | 'shared-file-unreadable' | 'backlog-lock-timeout' |
   'backlog-conflict' | 'backlog-merge-conflict' | 'backlog-invalid' | 'preferences-invalid' | 'suggestions-invalid' |
-  'memory-invalid' | 'memory-merge-conflict' | 'memory-conflict' | 'memory-suggestions-invalid';
+  'memory-invalid' | 'memory-merge-conflict' | 'memory-conflict' | 'memory-suggestions-invalid' | 'workspace-format-newer';
 export class SharedStateError extends Error {
   constructor(readonly code: SharedStateErrorCode) { super(code); this.name = 'SharedStateError'; }
 }

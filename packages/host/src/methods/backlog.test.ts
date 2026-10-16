@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addRoom, addSession, archiveRoom, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, migrateMapToJournal, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
 
 let root: string;
@@ -197,4 +197,21 @@ it('uses canonical room liveness including a sleeping creator-only room, but ref
   const next = await add('Second'); const item = next.items[1]!;
   await expect(handlers['backlog.take']({ projectPath: project, id: item.id!, version: next.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
   expect((await get()).items[1]!.taken).toBeUndefined();
+});
+
+describe('backlog на карте-журнале (v3)', () => {
+  it('автор предложения берётся из индекса v3, а take проверяет комнату и сессию', async () => {
+    const created = await target();
+    // Миграция идёт только без живых сессий: сессия уснула.
+    await updateMap(project, created.workId, map => { transitionSession(map, 's-01', 'sleeping', { exitCode: 0 }); map.sessions[0]!.pid = null; });
+    expect(await migrateMapToJournal(project, created.workId)).toMatchObject({ status: 'migrated' });
+    const session = (await readMap(project, created.workId)).sessions[0]!;
+    await handlers['backlog.preferences.set']({ projectPath: project, rule: 'ask' });
+    await suggestBacklog(project, { kind: 'idea', title: 'Suggestion', why: 'Consider', workId: created.workId, sessionId: session.id });
+    expect((await get()).suggestions[0]!.author).toMatchObject({ projectPath: project, workId: created.workId, sessionId: session.id, label: 'Reviewer' });
+    const added = await add(); const id = added.items[0]!.id!;
+    const marked = await handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created });
+    expect(marked.items[0]!.taken).toBe(`${created.workId}/${created.roomId}`);
+    await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: { ...created, roomId: 'r-99' } })).rejects.toMatchObject({ code: 'not_found' });
+  });
 });

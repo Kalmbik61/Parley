@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, readlink, rm, writeFile } from 'node:f
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { readMap } from '@parley/core';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
@@ -285,7 +286,7 @@ test.describe('сквозная проверка апгрейда Parley, офл
     window.evaluate(() => (globalThis as unknown as { __notices: Array<{ kind: string; text: string }> }).__notices);
 
   const diskMap = async (workId: string, dir = project): Promise<{ sessions: Array<Record<string, unknown>>; rooms: Array<Record<string, unknown>>; plans?: Array<Record<string, unknown>> }> =>
-    JSON.parse(await readFile(path.join(dir, '.parley', 'works', workId, 'map.json'), 'utf8')) as { sessions: []; rooms: [] };
+    (await readMap(dir, workId)) as unknown as { sessions: Array<Record<string, unknown>>; rooms: Array<Record<string, unknown>>; plans?: Array<Record<string, unknown>> };
 
   const hostLog = (): Promise<string> => readFile(path.join(home, 'host', 'host.log'), 'utf8').catch(() => '');
 

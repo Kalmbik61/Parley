@@ -116,17 +116,25 @@ export {
   addSession,
   bumpWorkId,
   canTransition,
+  JOURNAL_SCHEMA_VERSION,
+  letterSinkOf,
   maxNumber,
   nextMessageId,
   nextSessionId,
   nextWorkId,
   parseMap,
+  peekSchemaVersion,
   removeSession,
   setResult,
   transitionSession,
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export { displayStatus } from './work/status-view.js';
+export { appendMessage, findMessage, findMessageWithin, parseLetters, readCursorFile, writeCursor } from './work/journal.js';
+export { appendLetters, applyCursors, readMapForPlanPreview } from './work/assemble.js';
+export { finishV2Cleanup, hasLiveSession, hasV2Copy, migrateMapToJournal } from './work/migrate-map.js';
+export type { MigrateMapOptions, MigrateMapResult, MigrationStep } from './work/migrate-map.js';
+export type { CursorFile, JournalLetter, NewJournalMessage } from './work/journal.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export {
   PAGE_DEFAULT_BYTES,
@@ -241,14 +249,20 @@ export {
   deleteWorkFiles,
   parleyHome,
   MapLockTimeoutError,
+  LettersWrittenIndexNotError,
   pruneWorksIndex,
+  readIndex,
   readMap,
+  readMapLazy,
+  readMapOnBase,
+  parseMapLazy,
   readWorksIndex,
   renameWork,
   setWorkStatus,
   updateMap,
   WorkNotFoundError,
   workPaths,
+  workSchemaVersion,
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
@@ -322,8 +336,8 @@ export {
   summaryPrompt,
 } from './work/summary.js';
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
-export { readWorks, watchWorks } from './work/works.js';
-export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
+export { derivedEntry, isJournalEntry, readWorkEntry, readWorks, watchWorks } from './work/works.js';
+export type { WatchWorksOptions, WorkEntry, WorkFileChange, WorksWatcher } from './work/works.js';
 export {
   LINK_TOLERANCE_MS,
   finishSession,
@@ -456,6 +470,7 @@ export {
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
   createParleyServer,
+  journalRoomPage,
 } from './mcp/tools.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {

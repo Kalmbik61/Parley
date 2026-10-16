@@ -453,6 +453,36 @@ export interface WorkMap {
   compact?: MapCompact;
 }
 
+/**
+ * Индекс карты v3 (`map.json` с `schemaVersion` 3): всё, кроме писем и решений. Письма лежат в журналах
+ * (`journal.ts`), решения — в `decisions.json`; прежнюю форму `WorkMap` собирает `assembleMap`.
+ */
+export interface WorkIndexMap extends Omit<WorkMap, 'schemaVersion' | 'messages' | 'decisionExports'> {
+  schemaVersion: 3;
+  /**
+   * Миграция v2 → v3 (`migrate-map.ts`): `false` — рядом лежит `map.v2.json`, откат; `true` — хост его уже убрал.
+   * Нет поля — работа создана сразу на v3, копии не было.
+   */
+  v2Removed?: boolean;
+  /**
+   * Запуск хоста (его время старта, ISO), который перевёл работу: `map.v2.json` убирает только более поздний запуск
+   * (`finishV2Cleanup`). Нет поля — переведено без этого учёта, копия остаётся.
+   */
+  migratedRun?: string;
+  /**
+   * Что миграция не воспроизвела (письма без комнаты, расхождения читателей и порядка). Есть поле —
+   * `map.v2.json` не удаляется никогда: в нём единственная полная копия. Нет поля — расхождений не было.
+   */
+  v2Kept?: V2Kept;
+}
+
+/** Счётчики расхождений миграции v2 → v3; хотя бы один не ноль — копия v2 остаётся. */
+export interface V2Kept {
+  orphaned: number;
+  readByMismatches: number;
+  orderMismatches: number;
+}
+
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {
   id: string;

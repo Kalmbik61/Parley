@@ -783,7 +783,8 @@ describe('parseMap', () => {
         '{"schemaVersion":3,"work":{"id":"w-0001"},"sessions":[],"messages":[],"rooms":[]}',
         'map.json',
       ),
-    ).toThrow(/cannot be parsed: unexpected shape/);
+    ).toThrow(/newer format.*restart the session/);
+    expect(() => parseMap('{"schemaVersion":4,"work":{"id":"w-0001"}}', 'map.json')).toThrow(/cannot be parsed: unexpected shape/);
     // v2 без комнат — не наша карта: v2 пишется только с ними.
     expect(() =>
       parseMap(

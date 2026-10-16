@@ -10,7 +10,7 @@ import {
   hookedSince,
   isClaudeCode,
   loadProviders,
-  readMap,
+  readMapLazy,
   renameSession,
   resolveModelEffort,
   RoomRuleError,
@@ -135,7 +135,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
       deps.sessions.exclusive(ref, async () => {
         const handle = deps.pty.get(ref);
         if (handle === undefined) throw new HostError('not_found', `no live PTY for session ${ref.sessionId}`);
-        const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+        const session = (await readMapLazy(ref.projectPath, ref.workId)).sessions.find(
           (candidate) => candidate.id === ref.sessionId,
         );
         if (session === undefined) {

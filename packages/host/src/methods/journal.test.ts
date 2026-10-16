@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HUMAN, addRoom, addSession, createWork, flushDecisionJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
+import { HUMAN, addRoom, addSession, createWork, flushDecisionJournal, migrateMapToJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
 import { createJournalHandlers } from './journal.js';
@@ -180,5 +180,28 @@ describe('room history methods', () => {
     expect(error).toMatchObject({ code: 'internal', data: { code: 'history-unavailable' } }); expect(String(error.message)).not.toContain(outside);
     expect(await readdir(outside)).toEqual([]);
     expect(await handlers()['rooms.history.get'](room())).toMatchObject({ state: 'not-shared', sharedAt: null });
+  });
+});
+
+describe('панель решений и история комнаты на карте-журнале (v3)', () => {
+  it('decisions.list после миграции показывает то же, что до неё: принятые и ждущие записи', async () => {
+    const workId = await accepted(project, ['Use sqlite\nbecause small', 'Ship the beta']);
+    await updateMap(project, workId, map => {
+      const proposal = setProposal(map, 'r-01', 's-01', 'Waiting for disk', new Date().toISOString());
+      resolveProposal(map, 'r-01', proposal.proposalId, 'accept', { rev: proposal.rev });
+    });
+    await refresh(project, workId);
+    const before = await handlers()['decisions.list']({ projectPath: project });
+    expect(before.decisions.map(row => row.state).sort()).toEqual(['accepted', 'accepted', 'pending']);
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated' });
+    await refresh(project, workId);
+    expect(await handlers()['decisions.list']({ projectPath: project })).toEqual(before);
+  });
+  it('rooms.history.get узнаёт комнату v3 и отказывает неизвестной', async () => {
+    const workId = await accepted(project, ['One']);
+    await migrateMapToJournal(project, workId);
+    const room = { projectPath: project, workId, roomId: 'r-01' };
+    expect(await handlers()['rooms.history.get'](room)).toEqual({ state: 'not-shared', sharedAt: null, version: 'missing', diagnostics: [] });
+    await expect(handlers()['rooms.history.get']({ ...room, roomId: 'r-99' })).rejects.toMatchObject({ code: 'not_found' });
   });
 });

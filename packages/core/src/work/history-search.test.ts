@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addBacklogItem } from './backlog.js';
+import { migrateMapToJournal } from './migrate-map.js';
 import { searchHistory } from './history-search.js';
 import { addMessage, addSession, setResult } from './map.js';
 import { addProjectMemory } from './project-memory.js';
@@ -150,5 +151,25 @@ describe('search_history: поиск по записям проекта', () => 
     await seed(path.join(project, '.claude', 'skills', 'y', 'SKILL.md'), '# y\nskilltoken lives here\n');
     await seed(path.join(home, '.codex', 'memories', 'memory.md'), 'skilltoken in native memory\n');
     expect((await searchHistory(project, { query: 'skilltoken' })).total).toBe(0);
+  });
+  it('карта-журнал (v3): итог сессии находится, а журналы писем не читаются', async () => {
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated', letters: 2 });
+    // Журнал комнаты подменён каталогом: любая попытка собрать письма упала бы, и источник ушёл бы в unavailable.
+    const journal = state('works', workId, 'rooms', 'r-01', 'messages.jsonl');
+    await rm(journal); await mkdir(journal);
+    const found = await searchHistory(project, { query: 'cache layer', scope: 'sessions' });
+    expect(found.unavailable).toEqual([]);
+    expect(found.hits).toMatchObject([{ source: 'sessions', workId, sessionId: 's-01', title: 'Migrated the cache layer' }]);
+  });
+
+  it('карта-журнал (v3): письмо находится по выложенной истории комнаты (scope history), как и до миграции', async () => {
+    const before = await rebuildRoomHistory(project, workId, 'r-01');
+    expect(before.diagnostics).toEqual([]);
+    const hitsBefore = (await searchHistory(project, { query: 'sharded', scope: 'history' })).hits.map(hit => [hit.source, hit.title, hit.excerpt]);
+    expect(hitsBefore).toHaveLength(1);
+    await migrateMapToJournal(project, workId);
+    await rm(state('history'), { recursive: true });
+    await rebuildRoomHistory(project, workId, 'r-01');
+    expect((await searchHistory(project, { query: 'sharded', scope: 'history' })).hits.map(hit => [hit.source, hit.title, hit.excerpt])).toEqual(hitsBefore);
   });
 });

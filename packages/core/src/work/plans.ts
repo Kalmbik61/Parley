@@ -1,4 +1,4 @@
-import { maxNumber } from "./map.js";
+import { draftMap, letterSinkOf, maxNumber } from "./map.js";
 import {
   addSystemMessage,
   isMember,
@@ -10,6 +10,7 @@ import {
 import { capturePlanSnapshot } from "./plan-snapshots.js";
 import { HUMAN } from "./types.js";
 import type {
+  Message,
   PlanDraft,
   PlanEvidence,
   PlanItem,
@@ -70,18 +71,17 @@ export function activeRoomPlan(
 
 /** Clone only mutated domain state: failures leave the caller's map unchanged. */
 function edit<T>(map: WorkMap, body: (draft: WorkMap) => T): T {
-  const draft: WorkMap = {
-    ...map,
+  const draft = draftMap(map, {
     work: { ...map.work },
     rooms: structuredClone(map.rooms),
-    messages: [...map.messages],
     plans: structuredClone(map.plans ?? []),
     planExports: structuredClone(map.planExports ?? []),
-  };
+  });
   const result = body(draft);
   map.work = draft.work;
   map.rooms = draft.rooms;
-  map.messages = draft.messages;
+  // Карта-журнал: письма черновика ушли в приёмник, назад присваивать нечего (и нельзя: это сборка всех журналов).
+  if (letterSinkOf(map) === undefined) map.messages = draft.messages;
   map.plans = draft.plans!;
   map.planExports = draft.planExports!;
   return result;
@@ -602,8 +602,8 @@ export function setRoomMode(
   reason: string,
   options: { confirmCancel?: boolean } = {},
   at = new Date().toISOString(),
-): void {
-  edit(map, (draft) => {
+): Message | undefined {
+  return edit(map, (draft) => {
     const room = requireOpenRoom(draft, roomId);
     const previous = room.mode ?? "free";
     const order = ["free", "checklist", "verified"];
@@ -615,7 +615,7 @@ export function setRoomMode(
         throw new RoomRuleError("only the human can lower room mode");
     } else if (isRoomClosed(draft, room))
       throw new RoomRuleError("room is closed");
-    if (previous === mode) return;
+    if (previous === mode) return undefined;
     const plan = activeRoomPlan(draft, roomId);
     if (mode === "free" && plan) {
       if (!options.confirmCancel)
@@ -638,7 +638,7 @@ export function setRoomMode(
       }
       recalculate(draft, plan, at);
     }
-    addSystemMessage(
+    return addSystemMessage(
       draft,
       roomId,
       `${actor === HUMAN ? "You" : actor} switched the room to ${mode}: ${reason}`,

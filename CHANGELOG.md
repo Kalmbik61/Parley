@@ -42,6 +42,18 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   1200 characters, to put documents and file edits into a file and send only its path, not to quote
   earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
   and to read the room map through the tools instead of opening `map.json`.
+- **Letters are stored per room, not in one `map.json`.** Every letter used to rewrite the whole workspace map;
+  now each room keeps its own append-only journal, with what has been read beside it and decisions in their own
+  file. The window and the agents see exactly what they saw before. Parley converts a workspace the first time it
+  opens it with no live session running, and keeps the old map as a copy for rollback. A workspace with live
+  sessions is left alone until they finish. A session started before the update refuses to write and asks to be
+  restarted; it can still read.
+- **A letter costs the host far less work.** Measured on one machine with 60 letters into a room of three: the
+  host no longer re-reads the workspace map on a letter (it used to, about every other letter), parses 0 bytes of
+  map JSON instead of 3 MB, writes 621 bytes per letter instead of 49 KB, sends the window 20 KB instead of
+  731 KB, and recomputes only the letter's addressees (2 per letter instead of 6). In the largest workspace
+  tested, the `map.json` an agent may read shrinks from 2 MB to 96 KB, and converting it took 93 ms with every
+  letter, id, decision and read mark reproduced exactly.
 
 ### Fixed
 

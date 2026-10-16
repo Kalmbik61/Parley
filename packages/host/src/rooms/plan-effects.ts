@@ -2,17 +2,23 @@ import {
   DEFAULT_CONFIG,
   loadConfig,
   readMap,
+  readMapForPlanPreview,
   reservePlanEffects,
   summarizePlanEffects,
   updateMap,
   flushPlanEffects,
   flushDecisionJournal,
+  letterSinkOf,
 } from "@parley/core";
 import type { PlanEffectsSummary, WorkMap } from "@parley/core";
 import type { WorksService } from "../works/works-service.js";
 
 export interface PlanEffectsServiceIO {
   readMap: typeof readMap;
+  /**
+   * Чтение для прохода: на карте-журнале без писем (см. `readMapForPlanPreview`). Нет — проход читает `readMap`.
+   */
+  readLight?: typeof readMap;
   updateMap: typeof updateMap;
   flush: typeof flushPlanEffects;
   flushJournal?: typeof flushDecisionJournal;
@@ -109,7 +115,8 @@ export function createPlanEffectsService(
   works: Pick<WorksService, "snapshot" | "entry" | "onChange">,
   options: PlanEffectsServiceOptions = {},
 ): PlanEffectsService {
-  const io = options.io ?? { readMap, updateMap, flush: flushPlanEffects };
+  const io = options.io ?? { readMap, readLight: readMapForPlanPreview, updateMap, flush: flushPlanEffects };
+  const readLight = io.readLight ?? io.readMap;
   const flushJournal = io.flushJournal ?? flushDecisionJournal;
   const now = options.now ?? Date.now;
   const messageRate =
@@ -173,7 +180,7 @@ export function createPlanEffectsService(
       state.dirty = false;
       if (stopped || !works.entry(state.projectPath, state.workId))
         return result;
-      const map = await io.readMap(state.projectPath, state.workId);
+      const map = await readLight(state.projectPath, state.workId);
       if (!hasWork(map)) return summarizePlanEffects(map);
       const source = sourceIdentity(map);
       if (source !== state.source) {
@@ -185,7 +192,9 @@ export function createPlanEffectsService(
       if (stopped || !works.entry(state.projectPath, state.workId))
         return result;
       const at = new Date(now()).toISOString();
-      const preview = structuredClone(map);
+      // Карта примерки (приёмник вместо писем) копировать нельзя и незачем: резервирование копирует то, что меняет, а записать
+      // через неё нельзя. Карта v2 копируется, как раньше: её письма резервирование переносит в карту при изменении.
+      const preview = letterSinkOf(map) === undefined ? structuredClone(map) : map;
       let reservation = reservePlanEffects(preview, rate, at);
       let current = map;
       if (reservation.changed) {
@@ -201,7 +210,7 @@ export function createPlanEffectsService(
           );
         } catch (error) {
           if (!(error instanceof NoPlanChange)) throw error;
-          current = await io.readMap(state.projectPath, state.workId);
+          current = await readLight(state.projectPath, state.workId);
         }
       }
       if (stopped || !works.entry(state.projectPath, state.workId))

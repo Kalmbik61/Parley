@@ -54,7 +54,7 @@ import {
   querySpawnLimits,
   validateSpawnBudget,
   SpawnBudgetError,
-  readMap,
+  readMapLazy,
   reserveAttempt,
   ResourceDeniedError,
   sessionTag,
@@ -446,7 +446,7 @@ export function createSessionsService(
     const key = refKey(ref);
     launching.add(key);
     const repaired = (async () => {
-      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+      const session = (await readMapLazy(ref.projectPath, ref.workId)).sessions.find(
         (candidate) => candidate.id === ref.sessionId,
       );
       if (session?.lifecycle !== 'sleeping') return;
@@ -488,7 +488,7 @@ export function createSessionsService(
     let processStarted = false;
     let agentChannel: { url: string; token: string } | undefined;
     try {
-      const map = await timer.step('readMap', () => readMap(ref.projectPath, ref.workId));
+      const map = await timer.step('readMap', () => readMapLazy(ref.projectPath, ref.workId));
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) {
         throw new Error(`session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
@@ -768,7 +768,7 @@ export function createSessionsService(
   /** База worktree ребёнка — ветка родителя, если он сам в worktree, иначе база проекта (как у `spawn_session`). */
   async function worktreeBaseFor(ref: SessionRef, parentId: string | null): Promise<string> {
     if (parentId !== null) {
-      const map = await readMap(ref.projectPath, ref.workId);
+      const map = await readMapLazy(ref.projectPath, ref.workId);
       const parent = map.sessions.find((candidate) => candidate.id === parentId);
       if (parent?.worktree !== null && parent?.worktree !== undefined) return parent.worktree.branch;
     }
@@ -938,7 +938,7 @@ export function createSessionsService(
     model: string,
   ): Promise<{ model: string; effort: string | null; restarted: boolean }> {
     return exclusive(ref, async () => {
-      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+      const session = (await readMapLazy(ref.projectPath, ref.workId)).sessions.find(
         (candidate) => candidate.id === ref.sessionId,
       );
       if (session === undefined) {
@@ -1008,7 +1008,7 @@ export function createSessionsService(
     // Worktree — рабочая копия на диске, а не только запись в карте: грязную
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
     // самого удаления записи.
-    const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
+    const map = await readMapLazy(ref.projectPath, ref.workId).catch(() => null);
     const worktree = map?.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
     if (worktree !== null && worktree !== undefined && worktree.createdAt !== null) {
       try {
@@ -1131,7 +1131,7 @@ export function createSessionsService(
       for (const ref of refs) {
         // Поднимаем только тех, кто всё ещё спит: закрытую (спека 7.1) и уже
         // поднятую — нет. Карта — свежим чтением: снимок работ мог отстать.
-        const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
+        const map = await readMapLazy(ref.projectPath, ref.workId).catch(() => null);
         const session = map?.sessions.find((candidate) => candidate.id === ref.sessionId);
         if (session?.lifecycle !== 'sleeping') continue;
         await launch(ref, 'resume').catch((error: unknown) => {

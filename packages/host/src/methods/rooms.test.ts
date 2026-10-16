@@ -16,9 +16,11 @@ import {
   transitionSession,
   unreadFor,
   updateMap,
+  workPaths,
 } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import { toJournalLayout } from '../../test/journal-layout.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext, RequestInfo } from '../context.js';
@@ -1337,5 +1339,74 @@ describe('rooms.archive: живые процессы (стаб вместо clau
     expect(sessions.live(a)).toBe(true);
     expect(sessions.live(b)).toBe(false);
     expect((await readMap(project, workId)).rooms[0]?.archivedAt).toEqual(expect.any(String));
+  });
+});
+
+describe('карта-журнал (v3): письма человека и смена режима', () => {
+  it('rooms.create с приглашениями и rooms.send: письма — строки журналов, id настоящие, индекс без messages', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    await toJournalLayout(dir, workId);
+
+    const created = await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Двое', members: [a, b] });
+    expect(created.result).toEqual({ roomId: 'r-01' });
+    const direct = await call(client, 'rooms.send', { projectPath: dir, workId, roomId: null, to: [a], text: 'прямое', kind: 'note' });
+    expect(direct.result).toEqual({ messageId: 'm-d-1' });
+    const inRoom = await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [b], text: 'в комнату', kind: 'note' });
+    expect(inRoom.result).toEqual({ messageId: 'm-r01-3' });
+
+    const map = await readMap(dir, workId);
+    expect(map.messages.filter((message) => message.roomId === 'r-01').map((message) => message.id)).toEqual(['m-r01-1', 'm-r01-2', 'm-r01-3']);
+    expect(map.messages.find((message) => message.id === 'm-d-1')).toMatchObject({ from: HUMAN, to: [a], text: 'прямое' });
+    const index = JSON.parse(await readFile(workPaths(dir, workId).map, 'utf8')) as Record<string, unknown>;
+    expect(index.schemaVersion).toBe(3);
+    expect(index).not.toHaveProperty('messages');
+  });
+
+  it('rooms.send отказ по правилам: письма в журнале нет', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b, outsider] = ids as [string, string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Двое', members: [a, b], quiet: true });
+    await toJournalLayout(dir, workId);
+
+    const refused = await call(client, 'rooms.send', { projectPath: dir, workId, roomId: 'r-01', to: [outsider], text: 'тебе', kind: 'note' });
+    expect(refused.error).toMatchObject({ code: 'bad_request' });
+    expect((await readMap(dir, workId)).messages).toEqual([]);
+  });
+
+  it('rooms.setMode: messageId — письмо журнала комнаты, строка о смене режима прочитана человеком', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Двое', members: [a, b], lead: a, quiet: true });
+    await toJournalLayout(dir, workId);
+
+    const response = await call(client, 'rooms.setMode', { projectPath: dir, workId, roomId: 'r-01', mode: 'checklist', reason: 'Human choice' });
+    expect(response.error).toBeUndefined();
+    const messageId = (response.result as { messageId: string | null }).messageId;
+    expect(messageId).toBe('m-r01-1');
+
+    const map = await readMap(dir, workId);
+    expect(map.rooms[0]?.mode).toBe('checklist');
+    expect(map.messages.find((message) => message.id === messageId)).toMatchObject({
+      from: SYSTEM,
+      roomId: 'r-01',
+      kind: 'note',
+      text: 'You switched the room to checklist: Human choice',
+    });
+
+    // Тот же режим — ничего не меняется, messageId пуст.
+    const again = await call(client, 'rooms.setMode', { projectPath: dir, workId, roomId: 'r-01', mode: 'checklist', reason: 'Human choice' });
+    expect((again.result as { messageId: string | null }).messageId).toBeNull();
+    // Строка о смене режима одна; второе письмо — доставка уведомления ведущему, оно прежнее.
+    expect((await readMap(dir, workId)).messages.filter((message) => message.from === SYSTEM)).toHaveLength(1);
+  });
+
+  it('rooms.setMode (v2): messageId — id строки карты', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    await call(client, 'rooms.create', { projectPath: dir, workId, title: 'Двое', members: [a, b], lead: a, quiet: true });
+
+    const response = await call(client, 'rooms.setMode', { projectPath: dir, workId, roomId: 'r-01', mode: 'checklist', reason: 'Human choice' });
+    expect((response.result as { messageId: string | null }).messageId).toBe('m-01');
   });
 });

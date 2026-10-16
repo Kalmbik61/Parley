@@ -23,6 +23,9 @@ async function main(): Promise<number> {
   const hookGraceRaw = Number(envValue(process.env, 'CODEX_HOOK_GRACE_MS'));
   const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
+    // Карты v2 без живых сессий переводятся на журналы при старте (план карты-журнала, задача 7): все читатели карты в хосте
+    // понимают v3. Копия `map.v2.json` остаётся на весь запуск и убирается при следующем.
+    migrateMaps: true,
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
     ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog } : {}),
     ...(limits === undefined ? {} : { limits }),

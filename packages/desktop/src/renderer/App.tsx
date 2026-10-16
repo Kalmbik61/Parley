@@ -23,6 +23,7 @@ import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
 import { useProvidersStore } from './store/providers.js';
 import { useUiStore } from './store/ui.js';
+import { useRoomPagesStore } from './store/room-pages.js';
 import { useWorksStore } from './store/works.js';
 import { Toaster } from './ui/sonner.js';
 import { wireHostBuildNotice } from './update/host-build-notice.js';
@@ -191,6 +192,7 @@ export function App(): JSX.Element {
 
     const disposers = [
       useWorksStore.getState().init(bridge),
+      useRoomPagesStore.getState().init(bridge),
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),

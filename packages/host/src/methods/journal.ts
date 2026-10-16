@@ -1,7 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, parseMap, readDecisionJournalFiles,
+  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, parseMapLazy, readDecisionJournalFiles,
   readRoomHistoryStatus, shareRoomHistory, sharedProjectPaths, unshareRoomHistory, workPaths,
 } from '@parley/core';
 import type { WorkEntry, WorkMap } from '@parley/core';
@@ -43,9 +43,11 @@ function validate<M extends JournalMethodName>(method: M, params: JournalMethodP
  * Не `readSharedFile`: его лимит 1 МиБ рассчитан на общие Markdown-файлы, а карта работы бывает больше (как и у `readMap` ядра).
  */
 async function freshMap(projectPath: string, workId: string): Promise<WorkMap> {
-  const file = workPaths(await realpath(projectPath), workId).map;
+  const canonical = await realpath(projectPath);
+  const file = workPaths(canonical, workId).map;
   if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
-  const map = parseMap(await readFile(file, 'utf8'), file);
+  // Карта-журнал (v3): индекс с ленивыми письмами и решениями. Панели нужны комнаты и `decisionExports`, а не переписка.
+  const map = parseMapLazy(canonical, workId, await readFile(file, 'utf8'), file);
   if (map.work.id !== workId) throw new SharedStateError('shared-state-unsafe');
   return map;
 }

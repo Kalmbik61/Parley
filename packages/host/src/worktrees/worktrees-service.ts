@@ -18,7 +18,7 @@ import {
   mergeWorktree,
   NothingToCommitError,
   projectChanges,
-  readMap,
+  readMapLazy,
   sessionTag,
   transitionSession,
   updateMap,
@@ -83,7 +83,7 @@ async function viaGit<T>(action: () => Promise<T>): Promise<T> {
 }
 
 async function requireSession(ref: SessionRef): Promise<WorkSession> {
-  const map = await readMap(ref.projectPath, ref.workId);
+  const map = await readMapLazy(ref.projectPath, ref.workId);
   const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
   if (session === undefined) throw new HostError('not_found', `session ${ref.sessionId} is not in the map`);
   return session;

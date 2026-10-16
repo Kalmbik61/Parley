@@ -173,6 +173,8 @@ export interface MessagePageOptions<V extends { text: string }> {
   cursor?: PageCursor | null;
   maxBytes?: number;
   maxItems?: number;
+  /** Номер письма для курсора; по умолчанию — из id `m-NN`. Письма журналов (`m-r01-5`) несут свой `seq`. */
+  seq?: (message: Message) => number;
   view: (message: Message) => V;
 }
 
@@ -188,7 +190,7 @@ export function messagePage<V extends { text: string }>(
       (options.filter === undefined || options.filter(message)),
   );
   const { items, page } = pageBySeq(selected, {
-    seq: (message) => seqOf(message.id, 'm-'),
+    seq: options.seq ?? ((message) => seqOf(message.id, 'm-')),
     view: options.view,
     shrink: shrinkText,
     ...(options.cursor === undefined ? {} : { cursor: options.cursor }),

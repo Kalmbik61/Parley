@@ -10,6 +10,7 @@ import type {
   MessageKind,
   SessionLifecycle,
   SessionResult,
+  WorkIndexMap,
   WorkMap,
   WorkProvider,
   WorkSession,
@@ -169,10 +170,14 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
       session.contextFrom = session.contextFrom.filter((id) => id !== sessionId);
     }
   }
-  for (const message of map.messages) {
-    // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
-    // перестало бы помечать письма удалённой сессии.
-    if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
+  // Карта-журнал: письма только добавляются, пометку `deleted` на месте не поставить. Её выводит сборщик из
+  // `work.deletedSessions` (ниже), поэтому здесь письма не трогаем.
+  if (letterSinkOf(map) === undefined) {
+    for (const message of map.messages) {
+      // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
+      // перестало бы помечать письма удалённой сессии.
+      if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
+    }
   }
 
   const deleted = map.work.deletedSessions ?? [];
@@ -199,8 +204,68 @@ export interface NewMessage {
   replyTo?: string;
 }
 
+/**
+ * Приёмник писем карты-журнала (v3). Мутатор `updateMap` на v3 получает карту с приёмником под этим ключом: письмо,
+ * добавленное `addMessage`, не ложится в `map.messages` (его там нет), а встаёт в очередь приёмника и уходит в журнал
+ * комнаты при сохранении карты. Номер письма приёмник выдаёт сразу, под замком журнала, поэтому `message.id` внутри
+ * мутатора настоящий. Реализация — `letter-sink.ts`; здесь только контракт, чтобы `map.ts` не тянул диск.
+ * На карте v2 ключа нет, и всё работает как раньше.
+ */
+export const LETTER_SINK = Symbol.for('parley.letterSink');
+
+export interface LetterSink {
+  /** Письмо в очередь журнала; возвращает письмо с настоящим id. Отметки `readBy`, поставленные после, станут курсорами. */
+  add(init: NewMessage, at: string): Message;
+  /** Адресаты комнаты прочли всё, что в ней лежит сейчас (в том числе письма очереди): `reopenRoom`. */
+  readThrough(roomId: string, sessionIds: readonly string[]): void;
+  /** Журнал комнаты уходит вместе с комнатой, как и курсоры на неё: `deleteRoom`. */
+  dropRoom(roomId: string): void;
+  /** Новая запись `decisions.json` (бывший `decisionExports.push`). */
+  appendDecision(intent: unknown): void;
+  /** Правка найденной записи `decisions.json` (`status: 'written'` после публикации). */
+  patchDecision(match: (row: never) => boolean, patch: object): void;
+  /**
+   * Письмо комнаты по id без сборки карты: сначала очередь приёмника, потом журнал комнаты обратным проходом от
+   * хвоста (стоимость растёт с возрастом письма). Нет письма — `undefined`. `readBy` у найденного пуст: отметки лежат в курсорах.
+   */
+  find(roomId: string, id: string): Message | undefined;
+  /** Письма новее `sinceMs` из хвостов журналов комнат `roomIds` и прямых, плюс очередь приёмника (бюджет за час). Читает хвосты, не журналы целиком. */
+  recent(roomIds: readonly string[], sinceMs: number): Message[];
+  /** Все письма ОДНОЙ комнаты (журнал целиком плюс очередь): для действия, которому нужна вся история именно этой комнаты. */
+  roomLetters(roomId: string): Message[];
+}
+
+export const letterSinkOf = (map: object): LetterSink | undefined =>
+  (map as { [LETTER_SINK]?: LetterSink })[LETTER_SINK];
+
+/**
+ * Черновик карты для правки «всё или ничего» (`edit` планов, `reservePlanEffects`): поля `fields` заменяют поля карты.
+ * На карте v2 письма копируются (`messages: [...map.messages]`): черновик, который отбросили, письма не оставляет.
+ * На карте-журнале (v3) письма копировать нельзя: `map.messages` собирает ВСЕ журналы синхронно под `map.lock`. Там черновик
+ * берёт поля карты как есть (в том числе приёмник писем: письма черновика уходят в журнал) и читает `messages` и
+ * `decisionExports` у карты лениво, только если правка к ним обратится. Вызывающий на v3 `messages` назад не присваивает.
+ */
+export function draftMap(map: WorkMap, fields: Partial<WorkMap>): WorkMap {
+  if (letterSinkOf(map) === undefined) return { ...map, ...fields, messages: [...map.messages] };
+  const draft = {} as WorkMap;
+  const own = Object.getOwnPropertyDescriptors(map);
+  for (const key of Reflect.ownKeys(own)) {
+    if (key === 'messages' || key === 'decisionExports') {
+      Object.defineProperty(draft, key, {
+        enumerable: true,
+        configurable: true,
+        get: () => (map as unknown as Record<string, unknown>)[key],
+        set: (value: unknown) => void ((map as unknown as Record<string, unknown>)[key] = value),
+      });
+    } else Object.defineProperty(draft, key, own[key as keyof typeof own] as PropertyDescriptor);
+  }
+  return Object.assign(draft, fields);
+}
+
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
 export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
+  const sink = letterSinkOf(map);
+  if (sink !== undefined) return sink.add(init, at);
   // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
   // По той же причине `replyTo` дописывается только заданный.
@@ -339,6 +404,11 @@ export function parseMap(raw: string, file: string): WorkMap {
 
   const work = isRecord(data) ? data.work : undefined;
   const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (version === JOURNAL_SCHEMA_VERSION) {
+    throw new Error(
+      `map ${file} is in a newer format (schemaVersion ${JOURNAL_SCHEMA_VERSION}) than this session understands: ask the human to restart the session`,
+    );
+  }
   if (
     !isRecord(data) ||
     (version !== 1 && version !== 2) ||
@@ -376,6 +446,67 @@ export function parseMap(raw: string, file: string): WorkMap {
   validateDecisionJournalStorage(map);
   validateResources(map);
   return map;
+}
+
+/** Версия карты-журнала: индекс в `map.json`, письма в журналах, решения в `decisions.json`. */
+export const JOURNAL_SCHEMA_VERSION = 3;
+
+/**
+ * Версия карты по началу файла, без разбора всего JSON: `schemaVersion` пишется первым ключом (`serialize`).
+ * Файл не по этой форме разбирается целиком; нечитаемый — `undefined`, а ошибку скажет `parseMap`/`parseIndex`.
+ */
+export function peekSchemaVersion(raw: string): number | undefined {
+  const head = /^\s*\{\s*"schemaVersion"\s*:\s*(\d+)\s*[,}]/.exec(raw.slice(0, 128));
+  if (head !== null) return Number(head[1]);
+  try {
+    const data: unknown = JSON.parse(raw);
+    return isRecord(data) && typeof data.schemaVersion === 'number' ? data.schemaVersion : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Разбирает индекс карты v3. Письма и решения в нём не живут: поля `messages`/`decisionExports`, если они
+ * там есть, игнорируются и при записи не сохраняются. Карта v1/v2 — отказ с подсказкой звать `readMap`/`updateMap`.
+ */
+export function parseIndex(raw: string, file: string): WorkIndexMap {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`index ${file} cannot be parsed: ${(error as Error).message}`);
+  }
+
+  const work = isRecord(data) ? data.work : undefined;
+  const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (version === 1 || version === 2) {
+    throw new Error(`map ${file} is not in the journal format (schemaVersion ${version}): read it with readMap, change it with updateMap`);
+  }
+  if (
+    !isRecord(data) ||
+    version !== JOURNAL_SCHEMA_VERSION ||
+    !isRecord(work) ||
+    typeof work.id !== 'string' ||
+    !Array.isArray(data.sessions) ||
+    !Array.isArray(data.rooms) ||
+    !data.sessions.every(isSessionShape(2))
+  ) {
+    throw new Error(`index ${file} cannot be parsed: unexpected shape (schemaVersion 3 needs work, sessions and rooms)`);
+  }
+  delete data.messages;
+  delete data.decisionExports;
+
+  const index = data as unknown as WorkIndexMap;
+  for (const session of index.sessions) migrateSession(session as unknown as Record<string, unknown>);
+  for (const room of index.rooms) migrateRoom(room as unknown);
+  index.plans ??= [];
+  // Проверки хранилища читают из карты только свои поля (планы, комнаты, журнал ресурсов), не письма.
+  const asMap = index as unknown as WorkMap;
+  validatePlanStorage(asMap);
+  validatePlanEffects(asMap);
+  validateResources(asMap);
+  return index;
 }
 
 /**

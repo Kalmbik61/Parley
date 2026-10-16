@@ -28,6 +28,7 @@ import {
 } from '@parley/core';
 import type { WorkEntry, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
+import { toJournalLayout } from '../../test/journal-layout.js';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { ProviderVersions } from '../providers/versions.js';
@@ -1442,6 +1443,54 @@ describe('worktree (план, кусок 4.2)', () => {
     expect(letter?.text).toMatch(/^worktree for S\d+ was not created: /);
     // Человеку — тот же текст уведомлением: письмо родителю и уведомление окна не расходятся.
     expect((notice?.data as { text: string }).text).toBe(letter?.text);
+  });
+
+  it('3 (карта v3): ветка уже существует — письмо родителю лежит в журнале, сессия остаётся pending', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const worktreeRootDir = await tempWorktreeRoot();
+    let parentId = '';
+    await updateMap(project, work.work.id, (map) => {
+      parentId = addSession(map, { provider: 'claude', label: 'родитель', task: 'т' }).id;
+    });
+
+    let childId = '';
+    await updateMap(project, work.work.id, (map) => {
+      const child = addSession(map, {
+        provider: 'claude',
+        label: 'дочерняя',
+        task: 'т',
+        parent: parentId,
+      });
+      childId = child.id;
+      child.worktree = plannedWorktree(project, work.work.id, child.id, 'main', worktreeRootDir);
+    });
+
+    // Ветка плана уже занята — `git worktree add -b <ветка>` откажет.
+    const branch = (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)
+      ?.worktree?.branch as string;
+    await runGit('git', ['-C', project, 'branch', branch]);
+
+    await toJournalLayout(project, work.work.id);
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId: childId };
+
+    await expect(service.launch(ref, 'launch')).rejects.toThrow();
+
+    const notice = broadcasts.find(
+      (b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'launch-failed',
+    );
+    expect(notice).toBeDefined();
+
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find((s) => s.id === childId)?.lifecycle).toBe('pending');
+    const letter = map.messages.find((m) => m.from === SYSTEM && m.to.includes(parentId));
+    expect(letter).toBeDefined();
+    expect(letter?.text).toMatch(/^worktree for S\d+ was not created: /);
+    // Человеку — тот же текст уведомлением: письмо родителю и уведомление окна не расходятся.
+    expect((notice?.data as { text: string }).text).toBe(letter?.text);
+    expect(letter?.id).toMatch(/^m-d-\d+$/);
   });
 
   it('7: sessions.delete грязного worktree без force — conflict; с force — сессия и worktree убраны целиком', async () => {

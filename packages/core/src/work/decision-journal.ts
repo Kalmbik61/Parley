@@ -3,6 +3,7 @@ import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { ProjectContextOptions } from './project-context.js';
 import type { SharedWriteOptions } from './store.js';
+import { letterSinkOf } from './map.js';
 import type { Proposal, Room, WorkMap } from './types.js';
 
 export type DecisionJournalCode = 'journal-invalid' | 'journal-conflict' | 'journal-unavailable';
@@ -33,7 +34,7 @@ export function validDecisionJournalIntent(value: unknown): value is DecisionJou
   return typeof row.workId === 'string' && /^w-\d+$/.test(row.workId) && row.workId.length <= 128 &&
     typeof row.roomId === 'string' && /^r-\d+$/.test(row.roomId) && row.roomId.length <= 128 &&
     typeof row.proposalId === 'string' && /^p-\d+$/.test(row.proposalId) && row.proposalId.length <= 128 &&
-    Number.isSafeInteger(row.rev) && row.rev >= 0 && typeof row.messageId === 'string' && /^m-\d+$/.test(row.messageId) && row.messageId.length <= 128 &&
+    Number.isSafeInteger(row.rev) && row.rev >= 0 && typeof row.messageId === 'string' && /^m-(?:\d+|r\d+-\d+|d-\d+)$/.test(row.messageId) && row.messageId.length <= 128 &&
     typeof row.acceptedAt === 'string' && iso(row.acceptedAt) &&
     row.file === `${row.acceptedAt.slice(0, 10)}-${row.workId}-${row.roomId}-${row.proposalId}-rev-${String(row.rev).padStart(2, '0')}.md` &&
     ['decision', 'completion'].includes(row.kind) && ['pending', 'written'].includes(row.status) &&
@@ -106,14 +107,20 @@ export function captureDecisionJournal(
     content: representLegacyMarkdown(`${lines.join('\n')}\n`), status: 'pending',
   };
   if (!validDecisionJournalIntent(intent)) throw new DecisionJournalError('journal-invalid');
+  if ((map.decisionExports?.length ?? 0) >= 30_000) throw new DecisionJournalError('journal-invalid');
+  const sink = letterSinkOf(map);
+  if (sink !== undefined) {
+    // Карта-журнал: записи решений живут в `decisions.json`, приёмник допишет файл при сохранении карты.
+    sink.appendDecision(intent);
+    return intent;
+  }
   map.decisionExports ??= [];
-  if (map.decisionExports.length >= 30_000) throw new DecisionJournalError('journal-invalid');
   map.decisionExports.push(intent);
   return intent;
 }
 
 /** Parsing keeps absent collections absent; private storage does not create an additional capacity limit. */
-export function validateDecisionJournalStorage(map: DecisionJournalMap): void {
+export function validateDecisionJournalStorage(map: Pick<DecisionJournalMap, 'work' | 'decisionExports'>): void {
   if (map.decisionExports === undefined) return;
   if (!Array.isArray(map.decisionExports) || map.decisionExports.length > 30_000) throw new DecisionJournalError('journal-invalid');
   const keys = new Set<string>();
@@ -148,7 +155,14 @@ export async function flushDecisionJournal(projectPath: string, workId: string, 
         await publishImmutableMarkdown(paths.dir, paths.decisions, intent, options);
       }, options);
       await store.updateMap(projectPath, workId, current => {
-        const captured = (current as DecisionJournalMap).decisionExports?.find(row => row.file === intent.file && row.content === intent.content && row.messageId === intent.messageId);
+        const same = (row: DecisionJournalIntent): boolean => row.file === intent.file && row.content === intent.content && row.messageId === intent.messageId;
+        const sink = letterSinkOf(current);
+        // Карта-журнал: статус правится в `decisions.json` при сохранении карты, `decisionExports` в ней только для чтения.
+        if (sink !== undefined) {
+          sink.patchDecision(same as (row: never) => boolean, { status: 'written' });
+          return;
+        }
+        const captured = (current as DecisionJournalMap).decisionExports?.find(same);
         if (captured) captured.status = 'written';
       }, { ...options, touch: false });
       result.written.push(intent.file);

@@ -14,7 +14,7 @@ import type { Message, WorkEntry } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { retainSeen, withMessages } from '../lib/window-merge.js';
+import { retainSeen, withMail, withMessages } from '../lib/window-merge.js';
 
 /** Отказ `works.list`: код протокола и причина хоста (`works-unreadable`, раунд lane-r5). */
 export interface WorksLoadError {
@@ -37,6 +37,8 @@ export interface WorksState {
   init: (bridge: Pick<ParleyBridge, 'call' | 'on'>) => () => void;
   /** Письма, пришедшие страницей (`context.messages`), встают в карту работы по номеру. */
   addMessages: (projectPath: string, workId: string, messages: readonly Message[]) => void;
+  /** Новые письма журнала (`rooms.mail`): встают в ленту, счётчики хоста растут (`withMail`). */
+  addMail: (projectPath: string, workId: string, messages: readonly Message[]) => void;
 }
 
 export const useWorksStore = create<WorksState>((set) => ({
@@ -44,6 +46,12 @@ export const useWorksStore = create<WorksState>((set) => ({
     set((state) => ({
       entries: state.entries.map((entry) =>
         entry.projectPath === projectPath && entry.map.work.id === workId ? withMessages(entry, messages) : entry,
+      ),
+    })),
+  addMail: (projectPath, workId, messages) =>
+    set((state) => ({
+      entries: state.entries.map((entry) =>
+        entry.projectPath === projectPath && entry.map.work.id === workId ? withMail(entry, messages) : entry,
       ),
     })),
   entries: [],

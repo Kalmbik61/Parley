@@ -1,4 +1,4 @@
-import { realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { claudeProjectRoots } from '../discover.js';
 import { readClaudeSkillCatalog } from '../skills/claude-listing.js';
@@ -46,11 +46,15 @@ import {
   pageBySeq,
   parseCursor,
   seqOf,
+  shrinkText,
   textPage,
+  type PageCursor,
+  type PageInfo,
 } from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { unreadFor } from '../work/letters.js';
-import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { unreadFor, unreadFromJournals } from '../work/letters.js';
+import { addRange, appendMessage, DIRECT_CURSOR_KEY, findMessage, mergeByTime, readCursorFile, readMessages, readPage, readPageBySeq, readPrefix, withCursors, type CursorFile, type JournalLetter } from '../work/journal.js';
+import { addMessage, addSession, JOURNAL_SCHEMA_VERSION, parseIndex, transitionSession, type NewMessage } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { rememberProjectMemory } from '../work/memory-suggestions.js';
@@ -73,7 +77,7 @@ import {
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
-import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
+import { SharedStateError, WorkNotFoundError, inspectSharedIgnore, readMap, readMapLazy, readWorksIndex, sharedProjectPaths, updateMap, workPaths, workSchemaVersion } from '../work/store.js';
 import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
 import {
   HUMAN,
@@ -277,6 +281,104 @@ const inboxView = (message: Message, map: WorkMap, recipientId: string) => {
   const roomTask = roomTaskOf(map, message, recipientId);
   return { ...messageView(message, map), ...(roomTask === undefined ? {} : { roomTask }) };
 };
+
+/** Сколько писем и байт отдаёт один `check_inbox` на карте-журнале; остальное — следующим вызовом (`more`). */
+const INBOX_MAX_LETTERS = 50;
+const INBOX_MAX_BYTES = 64 * 1024;
+
+/** Текст отказа в записи в формат новее сессии: `SharedStateError` несёт голый код, фраза для агента — здесь. */
+export const WORKSPACE_FORMAT_NEWER_TEXT = 'workspace format is newer than this session: ask the human to restart the session';
+
+/**
+ * Структура работы без писем. Карта-журнал (v3): индекс в форме `WorkMap` с пустыми `messages` — комнаты, сессии, планы
+ * для проверок и подписей; письма читаются из журналов. Разбор кэшируется по состоянию файла (`stat`: inode, размер,
+ * mtime; индекс пишется заменой файла): пока индекс не менялся, `send_message` его не читает. Карта v2 — `journal: false`,
+ * её читает `readMap`/`updateMap` как раньше.
+ */
+interface WorkStructure {
+  journal: boolean;
+  version: number | undefined;
+  map: WorkMap;
+}
+const structures = new Map<string, { sig: string; value: WorkStructure }>();
+
+async function workStructure(context: McpContext): Promise<WorkStructure> {
+  const file = workPaths(context.projectPath, context.workId).map;
+  let info;
+  try {
+    info = await stat(file);
+  } catch (error) {
+    // Как у `updateMap`: работы нет — `WorkNotFoundError`, а не голый ENOENT про файл.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new WorkNotFoundError(`map ${file} does not exist — workspace ${context.workId} does not exist`);
+    }
+    throw error;
+  }
+  const sig = `${info.ino}:${info.size}:${info.mtimeMs}`;
+  const hit = structures.get(file);
+  if (hit?.sig === sig) return hit.value;
+  // Формат узнаём по первым байтам файла; индекс разбирается целиком только у карты-журнала. Карту v2 (целая карта с
+  // письмами) здесь не читаем: её прочтёт `updateMap` под замком, второй раз за письмо она не нужна.
+  const version = await workSchemaVersion(context.projectPath, context.workId);
+  let value: WorkStructure;
+  if (version === JOURNAL_SCHEMA_VERSION) {
+    const raw = await readFile(file, 'utf8');
+    value = { journal: true, version, map: { ...parseIndex(raw, file), schemaVersion: 2, messages: [] } as unknown as WorkMap };
+  } else {
+    value = { journal: false, version, map: undefined as unknown as WorkMap };
+  }
+  structures.set(file, { sig, value });
+  return value;
+}
+
+/**
+ * Запись в формат новее, чем понимает сервер, отказывает: старая сессия пишет по-старому и разошлась бы с журналами.
+ * Чтение (`get_map`, `read_room`) работает через собранную карту. Версия берётся из кэша структуры, а если файл менялся —
+ * из первых байт файла: карту v2 целиком ради проверки не читаем.
+ */
+async function assertWorkspaceWritable(context: McpContext): Promise<void> {
+  const supported = context.supportedSchema ?? JOURNAL_SCHEMA_VERSION;
+  const file = workPaths(context.projectPath, context.workId).map;
+  const info = await stat(file).catch(() => null);
+  if (info === null) return;
+  const hit = structures.get(file);
+  const version = hit?.sig === `${info.ino}:${info.size}:${info.mtimeMs}` ? hit.value.version : await workSchemaVersion(context.projectPath, context.workId);
+  if (version !== undefined && version > supported) throw new SharedStateError('workspace-format-newer');
+}
+
+const WRITE_TOOLS = new Set([
+  'report', 'spawn_session', 'send_message', 'check_inbox', 'create_room', 'add_to_room', 'close_session',
+  'propose_decision', 'set_room_mode', 'plan_update', 'plan_submit', 'plan_verify', 'propose_completion',
+  'backlog_suggest', 'remember', // пишут строку в ленту комнат через `updateMap`
+]);
+
+/** Письма журналов как `Message` (без `seq`): для видов письма, проверок бюджета и страниц. */
+const asMessage = (letter: JournalLetter): Message => {
+  const rest = { ...letter };
+  delete (rest as { seq?: number }).seq;
+  return { ...rest, readBy: {} } as Message;
+};
+
+/**
+ * Письма агентов за скользящий час из хвостов журналов, а не из целых журналов: окно бюджета и лимита сессии (оба — час)
+ * читает каждый журнал с конца, пока не дойдёт до письма старше окна. Окно чтения растёт вдвое, пока самое старое
+ * прочитанное письмо внутри часа, поэтому стоимость — число писем за час, а не размер журнала.
+ */
+async function recentLetters(context: McpContext, map: WorkMap, now: number): Promise<Message[]> {
+  const keys: (string | null)[] = [null, ...map.rooms.map((room) => room.id)];
+  const rows = await Promise.all(
+    keys.map(async (roomId) => {
+      for (let limit = 64; ; limit *= 2) {
+        const letters = await readMessages(context.projectPath, context.workId, roomId, { limit, maxBytes: Infinity });
+        const oldest = letters[0];
+        if (letters.length < limit || oldest === undefined || now - Date.parse(oldest.at) >= RATE_WINDOW_MS) {
+          return letters.filter((letter) => now - Date.parse(letter.at) < RATE_WINDOW_MS);
+        }
+      }
+    }),
+  );
+  return rows.flat().map(asMessage);
+}
 
 /**
  * Окно писем (разговор агентов, 4.7): два вежливых агента способны отвечать
@@ -629,9 +731,64 @@ const TOOLS: Tool[] = [
   },
 ];
 
+/**
+ * Страница писем комнаты с карты-журнала: читается столько журнала, сколько влезает в страницу (`readPageBySeq`), курсор —
+ * номер строки журнала (`before:N`/`after:N`), а не `m-NN`. Форма ответа прежняя: `messages` и `page`. `total` — `null`:
+ * размер выборки журнал без прохода не знает (форма `PageInfo` это допускает).
+ */
+export async function journalRoomPage<V extends { text: string }>(
+  context: Pick<McpContext, 'projectPath' | 'workId'>,
+  roomId: string | null,
+  options: { kind?: Message['kind']; cursor: PageCursor | null; maxBytes: number; maxItems: number; view: (message: Message) => V },
+): Promise<{ messages: V[]; page: PageInfo }> {
+  const { cursor, maxBytes, maxItems } = options;
+  const forward = cursor?.dir === 'after';
+  const read = await readPageBySeq(context.projectPath, context.workId, roomId, {
+    ...(cursor === null ? {} : forward ? { afterSeq: cursor.seq } : { beforeSeq: cursor.seq }),
+    limit: maxItems,
+    maxBytes,
+  });
+  const seqs = new Map(read.letters.map((letter) => [letter.id, letter.seq]));
+  const window = read.letters.filter((letter) => options.kind === undefined || letter.kind === options.kind).map(asMessage);
+  const { items, page } = pageBySeq(window, {
+    seq: (message) => seqs.get(message.id) ?? 0,
+    view: options.view,
+    shrink: shrinkText,
+    ...(cursor === null ? {} : { cursor }),
+    maxBytes,
+    maxItems,
+    total: null,
+  });
+  // Окно кончилось, а журнал ещё нет: страница не последняя, курсор — край окна.
+  if (page.complete && read.more && window.length > 0) {
+    const edge = forward ? window[window.length - 1] : window[0];
+    page.complete = false;
+    page.next = `${forward ? 'after' : 'before'}:${seqs.get((edge as Message).id)}`;
+  }
+  return { messages: items, page };
+}
+
+/** Прямые письма журнала целиком (их немного: родитель и дети) как `Message` с `seq` для курсора страниц. */
+async function directMessages(context: McpContext): Promise<{ messages: Message[]; seqs: Map<string, number> }> {
+  const letters = await readMessages(context.projectPath, context.workId, null, { limit: Infinity, maxBytes: Infinity });
+  return { messages: letters.map(asMessage), seqs: new Map(letters.map((letter) => [letter.id, letter.seq])) };
+}
+
+/** Журналы, где может лежать письмо с этим id: по форме id — один, иначе (прежние `m-NN`) все. */
+function journalsOfId(map: WorkMap, id: string): (string | null)[] {
+  if (/^m-d-\d+$/.test(id)) return [null];
+  const room = /^m-r(\d+)-\d+$/.exec(id);
+  if (room !== null) return [`r-${room[1]}`];
+  return [null, ...map.rooms.map((candidate) => candidate.id)];
+}
+
 async function getMap(context: McpContext, args: Record<string, unknown> = {}): Promise<unknown> {
-  const map = await readMap(context.projectPath, context.workId);
-  if (Object.keys(args).length > 0) return mapPage(context, map, args);
+  // Страницы писем карты-журнала читают журналы, а не собранную карту: индекс даёт комнаты и участников.
+  const messagesField = args['field'] === 'messages' || args['field'] === 'message';
+  const structure = messagesField ? await workStructure(context) : null;
+  const journal = structure?.journal === true;
+  const map = journal ? structure!.map : await readMap(context.projectPath, context.workId);
+  if (Object.keys(args).length > 0) return mapPage(context, map, args, journal);
   const registry = await loadProviders();
   const providers = await Promise.all(
     Object.values(registry).map(async (entry) => {
@@ -669,7 +826,7 @@ function canReadMessage(map: WorkMap, message: Message, sessionId: string, threa
 }
 
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
-async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
+async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>, journal = false): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
   const field = optionalString(args, 'field');
   const sessionId = optionalString(args, 'session');
@@ -721,22 +878,47 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (field === 'message') {
         const id = optionalString(args, 'id');
         if (id === undefined) throw new Error('argument id is required for field message');
-        const message = map.messages.find((candidate) => candidate.id === id);
-        if (message === undefined || !canReadMessage(map, message, caller, new Set(threadOf(map, caller).messages.map((row) => row.id)))) throw new PageError('unknown-target', `message ${id} is not available to this session`);
+        let message: Message | undefined;
+        let direct: Message[] = [];
+        if (journal) {
+          for (const where of journalsOfId(map, id)) {
+            const letter = await findMessage(context.projectPath, context.workId, where, id);
+            if (letter !== undefined) {
+              message = asMessage(letter);
+              break;
+            }
+          }
+          if (message?.roomId === null) direct = (await directMessages(context)).messages;
+        } else message = map.messages.find((candidate) => candidate.id === id);
+        const readable = journal ? { ...map, messages: direct } : map;
+        if (message === undefined || !canReadMessage(map, message, caller, new Set(threadOf(readable, caller).messages.map((row) => row.id)))) throw new PageError('unknown-target', `message ${id} is not available to this session`);
         return { id, from: message.from, at: message.at, roomId: message.roomId, ...textPage(message.text, cursorRaw, maxBytes) };
       }
-      let filter: ((message: Message) => boolean) | undefined;
-      if (roomId === undefined) {
-        const thread = new Set(threadOf(map, caller).messages.map((row) => row.id));
-        filter = (message) => canReadMessage(map, message, caller, thread);
-      }
-      else if (!isMember(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
       const kind = optionalString(args, 'kind');
       if (kind !== undefined && !(MESSAGE_KINDS as readonly string[]).includes(kind)) throw new Error(`argument kind: one of ${MESSAGE_KINDS.join(', ')}`);
-      return messagePage(map, {
+      if (roomId !== undefined && !isMember(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
+      if (journal && roomId !== undefined) {
+        return journalRoomPage(context, roomId, {
+          ...(kind === undefined ? {} : { kind: kind as Message['kind'] }),
+          cursor: parseCursor(cursorRaw),
+          maxBytes,
+          maxItems: PAGE_MAX_ITEMS,
+          view: (message) => messageView(message, map),
+        });
+      }
+      // Без комнаты — прямые письма сессии: на карте-журнале это прямой журнал, он небольшой и читается целиком.
+      const direct = journal ? await directMessages(context) : null;
+      const source: WorkMap = direct === null ? map : { ...map, messages: direct.messages };
+      let filter: ((message: Message) => boolean) | undefined;
+      if (roomId === undefined) {
+        const thread = new Set(threadOf(source, caller).messages.map((row) => row.id));
+        filter = (message) => canReadMessage(map, message, caller, thread);
+      }
+      return messagePage(source, {
         roomId: roomId ?? null,
         ...(kind === undefined ? {} : { kind: kind as Message['kind'] }),
         ...(filter === undefined ? {} : { filter }),
+        ...(direct === null ? {} : { seq: (message: Message) => direct.seqs.get(message.id) ?? 0 }),
         cursor: parseCursor(cursorRaw),
         maxBytes,
         view: (message) => messageView(message, map),
@@ -870,7 +1052,7 @@ async function spawnSession(
     if (!(await isGitRepo(context.projectPath))) {
       throw new Error('the project has no git — a worktree cannot be created');
     }
-    const parent = requireSession(await readMap(context.projectPath, context.workId), sessionId);
+    const parent = requireSession(await readMapLazy(context.projectPath, context.workId), sessionId);
     worktreeBase =
       parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
   }
@@ -952,11 +1134,19 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const waitId = randomUUID();
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
-  const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  const read = (): Promise<WorkMap> => readMapLazy(context.projectPath, context.workId);
 
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
     probe = async () => {
+      // Карта-журнал: та же проходка по курсору, что у `check_inbox` (файл курсоров и хвосты журналов), курсоры не двигаются.
+      const structure = await workStructure(context);
+      if (structure.journal) {
+        const scan = await scanInbox(context, sessionId, structure.map, await readCursorFile(context.projectPath, context.workId, sessionId));
+        return scan.taken.length === 0
+          ? null
+          : { state: 'message', messages: scan.taken.map((letter) => inboxView(asMessage(letter), structure.map, sessionId)) };
+      }
       const map = await read();
       const messages = unreadFor(map, sessionId);
       return messages.length === 0
@@ -1063,8 +1253,9 @@ async function sendMessage(
   }
 
   const limits = await limitsOf(context);
-  let created = '';
-  await updateMap(context.projectPath, context.workId, (current) => {
+  // Проверки одни для обоих форматов. Различается только то, откуда берутся письма (карта v2 целиком под замком карты
+  // или хвосты журналов) и как цитата ищется в комнате (`quotedRoom`).
+  const vet = (current: WorkMap, quotedRoom: (id: string) => string | null | undefined): NewMessage => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
     // ответить на которое нечем (план от 2026-09-06, раздел C).
@@ -1086,11 +1277,8 @@ async function sendMessage(
       // Ответ (Parley 0.3.0): цитировать можно только сообщение этой же комнаты — несуществующий id, чужая
       // комната и прямое письмо дают отказ. Сверка идёт под тем же замком, что и запись: карта между ними
       // не устареет, как у проверок участников выше.
-      if (replyTo !== null) {
-        const quoted = current.messages.find((message) => message.id === replyTo);
-        if (quoted?.roomId !== roomId) {
-          throw new Error(`message ${replyTo} is not in room ${roomId}`);
-        }
+      if (replyTo !== null && quotedRoom(replyTo) !== roomId) {
+        throw new Error(`message ${replyTo} is not in room ${roomId}`);
       }
       assertMessageBudget(current, {
         actor: sessionId,
@@ -1100,27 +1288,39 @@ async function sendMessage(
         limits,
       });
       // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
-      created = addMessage(current, {
-        from: sessionId,
-        to,
-        text,
-        kind,
-        roomId,
-        ...(replyTo === null ? {} : { replyTo }),
-      }).id;
-    } else {
-      // Цитата живёт в ленте комнаты: у прямого письма её нет, и молча отбросить `replyTo` значило бы
-      // обмануть агента, ждущего цитаты.
-      if (replyTo !== null) throw new Error('replyTo works only together with room');
-      if (to.length !== 1) {
-        throw new Error('without room, exactly one addressee in to is required');
-      }
-      const target = to[0] as string;
-      assertDeliverable(current, target);
-      assertMessageBudget(current, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
-      created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
+      return { from: sessionId, to, text, kind, roomId, ...(replyTo === null ? {} : { replyTo }) };
     }
-  });
+    // Цитата живёт в ленте комнаты: у прямого письма её нет, и молча отбросить `replyTo` значило бы
+    // обмануть агента, ждущего цитаты.
+    if (replyTo !== null) throw new Error('replyTo works only together with room');
+    if (to.length !== 1) {
+      throw new Error('without room, exactly one addressee in to is required');
+    }
+    const target = to[0] as string;
+    assertDeliverable(current, target);
+    assertMessageBudget(current, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
+    return { from: sessionId, to: [target], text, kind };
+  };
+
+  let created = '';
+  const structure = await workStructure(context);
+  if (structure.journal) {
+    // Карта-журнал: письмо — одна строка в журнал комнаты, индекс не читается (кэш по `stat`) и не пишется. Читаются
+    // хвосты журналов за час (бюджет и лимит сессии) и, при `replyTo`, журнал этой комнаты до цитируемого письма.
+    const quoted = replyTo !== null && roomId !== null ? await findMessage(context.projectPath, context.workId, roomId, replyTo) : undefined;
+    const current = { ...structure.map, messages: await recentLetters(context, structure.map, Date.now()) } as WorkMap;
+    // Проверки лимита сессии, бюджета и членства идут по индексу и хвостам журналов БЕЗ общего замка: на v2 они шли
+    // под `map.lock` вместе с записью, и два одновременных письма на пороге лимита не проходили оба. Здесь могут
+    // пройти оба (сверх лимита на письмо-два) и письмо уйдёт в комнату, из которой участника только что убрали. Это
+    // допустимо: лимиты — защита от петли агентов за час, а не точный счёт; индекс читается по `stat` и устаревает
+    // на одну запись; а запись письма требует комнату в индексе (`appendMessage`). Замок вернул бы очередь за запись индекса.
+    const letter = vet(current, () => quoted?.roomId);
+    created = (await appendMessage(context.projectPath, context.workId, letter.roomId ?? null, letter)).id;
+  } else {
+    await updateMap(context.projectPath, context.workId, (current) => {
+      created = addMessage(current, vet(current, (id) => current.messages.find((message) => message.id === id)?.roomId)).id;
+    });
+  }
   const warnings = [
     text.length > LETTER_SOFT_CHARS ? `long letter (${text.length} chars): prefer a file and a path` : null,
     unknownParamsWarning(args),
@@ -1129,6 +1329,8 @@ async function sendMessage(
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
+  const structure = await workStructure(context);
+  if (structure.journal) return checkInboxJournal(context, sessionId, structure.map);
   let messages: Message[] = [];
   const at = new Date().toISOString();
   const map = await updateMap(context.projectPath, context.workId, (current) => {
@@ -1138,6 +1340,83 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
     for (const message of inbox) message.readBy[sessionId] = at;
   });
   return { messages: messages.map((message) => inboxView(message, map, sessionId)) };
+}
+
+/**
+ * `check_inbox` на карте-журнале: письма после курсора сессии в каждом журнале, пишется только её файл курсоров.
+ *
+ * Контракт «ни потерь, ни повторов»: курсор журнала встаёт на последнее письмо, которое просмотрено и отдано (или
+ * просмотрено и адресовано не этой сессии), и никогда дальше. За один вызов отдаётся не больше `INBOX_MAX_LETTERS` писем
+ * и `INBOX_MAX_BYTES` байт; письмо, которое не влезло, остаётся за курсором, а ответ говорит `more: true` и просит
+ * вызвать `check_inbox` ещё раз. Весь вызов идёт под замком курсоров сессии: два одновременных вызова (инструмент и
+ * ожидание) не раздадут одно письмо дважды. Сессия без курсора читает журнал с первого письма.
+ */
+async function checkInboxJournal(context: McpContext, sessionId: string, map: WorkMap): Promise<unknown> {
+  requireSession(map, sessionId);
+  const { taken, more } = await withCursors(context.projectPath, context.workId, sessionId, async (file) => {
+    const scan = await scanInbox(context, sessionId, map, file);
+    let changed = false;
+    for (const [key, [from, to]] of Object.entries(scan.moved)) if (addRange(file, key, from, to)) changed = true;
+    return { changed, value: { taken: scan.taken, more: scan.more } };
+  });
+  const messages = taken.map((letter) => inboxView(asMessage(letter), map, sessionId));
+  const warnings = more ? [`more unread letters remain (this call returned ${messages.length}): call check_inbox again`] : [];
+  return {
+    messages,
+    ...(more ? { more: true } : {}),
+    ...(warnings.length === 0 ? {} : { warning: warnings.join('; ') }),
+  };
+}
+
+/**
+ * Непрочитанное сессии по журналам: общий проход `check_inbox` и пробы `wait_for("inbox")`, поэтому они не расходятся
+ * в том, что непрочитано. Ничего не пишет: `moved` — диапазоны (`[от, до]` номеров строк), которые вызывающий (под замком
+ * курсоров) может добавить к прочитанному; проба их не добавляет. Читает файл курсоров (он уже в `file`) и хвосты журналов
+ * с первого разрыва в прочитанном, не целые журналы.
+ */
+async function scanInbox(
+  context: McpContext,
+  sessionId: string,
+  map: WorkMap,
+  file: CursorFile,
+): Promise<{ taken: JournalLetter[]; more: boolean; moved: Record<string, [number, number]> }> {
+  const keys: (string | null)[] = [null, ...map.rooms.map((room) => room.id)];
+  const resolve = async (roomId: string, id: string) => findMessage(context.projectPath, context.workId, roomId, id);
+  const budget = { letters: 0, bytes: 0 };
+  const rows: JournalLetter[][] = [];
+  const moved: Record<string, [number, number]> = {};
+  let more = false;
+  for (const roomId of keys) {
+    const key = roomId ?? DIRECT_CURSOR_KEY;
+    const mine: JournalLetter[] = [];
+    // Всё до первого разрыва прочитано (`readPrefix`); письма после него, уже прочитанные по отдельности, отсеивает `unreadFromJournals`.
+    const start = readPrefix(file, key);
+    let afterSeq = start;
+    let scannedTo = start;
+    scan: for (;;) {
+      const page = await readPage(context.projectPath, context.workId, roomId, { afterSeq, limit: 100, maxBytes: 256 * 1024 });
+      if (page.letters.length === 0) break;
+      const unread = new Set((await unreadFromJournals(map, { [key]: page.letters }, file, sessionId, resolve)).map((letter) => letter.id));
+      for (const letter of page.letters) {
+        if (unread.has(letter.id)) {
+          const size = Buffer.byteLength(letter.text, 'utf8');
+          if (budget.letters >= INBOX_MAX_LETTERS || (budget.letters > 0 && budget.bytes + size > INBOX_MAX_BYTES)) {
+            more = true;
+            break scan;
+          }
+          mine.push(letter);
+          budget.letters += 1;
+          budget.bytes += size;
+        }
+        scannedTo = letter.seq;
+      }
+      if (!page.more) break;
+      afterSeq = scannedTo;
+    }
+    if (scannedTo > start) moved[key] = [start + 1, scannedTo];
+    rows.push(mine);
+  }
+  return { taken: mergeByTime(rows), more, moved };
 }
 
 async function createRoom(
@@ -1220,7 +1499,9 @@ async function readRoom(
   const roomId = stringArg(args, 'room');
   const limit = numberArg(args, 'limit') ?? 50;
 
-  const map = await readMap(context.projectPath, context.workId);
+  // Карта-журнал: индекс даёт комнату и участников, письма читаются страницей из журнала комнаты.
+  const structure = await workStructure(context);
+  const map = structure.journal ? structure.map : await readMap(context.projectPath, context.workId);
   const room = requireRoom(map, roomId);
   if (!isMember(room, sessionId)) {
     throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
@@ -1229,6 +1510,14 @@ async function readRoom(
   // Хвост комнаты в пределах байтов: письмо, которое одно не влезает, сокращается с полным размером, а старее —
   // по `page.next`. Прежний ответ был `limit` писем любого размера.
   try {
+    if (structure.journal) {
+      return await journalRoomPage(context, roomId, {
+        cursor: parseCursor(optionalString(args, 'cursor')),
+        maxBytes: clampPageBytes(numberArg(args, 'maxBytes')),
+        maxItems: Math.min(Math.max(Math.floor(limit), 1), PAGE_MAX_ITEMS),
+        view: (message) => messageView(message, map),
+      });
+    }
     return messagePage(map, {
       roomId,
       cursor: parseCursor(optionalString(args, 'cursor')),
@@ -1309,7 +1598,7 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
     if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('backlog-invalid');
     const sessionId = context.sessionId;
     if (sessionId === null) throw new Error('Backlog tools require a known launched session.');
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(row => row.id === sessionId);
     if (!caller || map.work.id !== context.workId) throw new Error('Backlog tools require a known launched session.');
     if (name === 'backlog_list') {
@@ -1373,7 +1662,7 @@ async function memoryTool(context: McpContext, name: string, args: Record<string
     if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('memory-invalid');
     const sessionId = context.sessionId;
     if (sessionId === null) throw new Error('Memory tools require a known launched session.');
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(row => row.id === sessionId);
     if (!caller || map.work.id !== context.workId) throw new Error('Memory tools require a known launched session.');
     if (name === 'search_history') {
@@ -1442,11 +1731,15 @@ async function dispatch(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const { sessionId } = context;
+  // Запись в рабочую область формата новее сессии отказывает (чтение ниже работает через собранную карту). Проверка
+  // стоит до всех веток записи: `backlog_suggest` и `remember` тоже пишут в карту.
+  if (WRITE_TOOLS.has(name) && (isPlanTool(name) || sessionId !== null)) await assertWorkspaceWritable(context);
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context, args);
   if (name === 'list_roles') {
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);
     const cwd = caller?.worktree?.path ?? context.projectPath;
     return roleSummaries(await (context.roleCatalog ? context.roleCatalog(cwd) : sessionRoleCatalog(cwd, { codex: true })));
@@ -1455,7 +1748,6 @@ async function dispatch(
   if (name === 'read_guide') return readGuide(context, args);
 
   if (isPlanTool(name)) return planTool(context, name, args);
-  const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
 
   if (name === 'report') return report(context, sessionId, args);
@@ -1525,7 +1817,7 @@ async function bindCodexThread(
   if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
   try {
     // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
-    const known = (await readMap(context.projectPath, context.workId)).sessions.find(
+    const known = (await readMapLazy(context.projectPath, context.workId)).sessions.find(
       (candidate) => candidate.id === sessionId,
     );
     if (known === undefined) return false;
@@ -1588,7 +1880,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   // Подряд пустых поисков: сбрасывается находкой. Подъём письмом сам повторного поиска не просит (P34).
   let misses = 0;
   async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
     if (!session) throw new Error('Skill search requires a session in this work.');
     const rawCwd = session.worktree?.path ?? context.projectPath;
@@ -1638,7 +1930,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   }
   return {
     async list() {
-      const map = await readMap(context.projectPath, context.workId);
+      const map = await readMapLazy(context.projectPath, context.workId);
       const provider = map.sessions.find(item => item.id === context.sessionId)?.provider;
       const reduced = context.skillListReduced === true;
       if (provider !== undefined && isClaudeCode(provider)) return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;
@@ -1739,7 +2031,10 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         // Исчерпанный бюджет — безопасный исход: текст говорит, что расширяет его только человек.
-        const text = error instanceof ResourceDeniedError ? deniedForAgent(error) : (error as Error).message;
+        const text = error instanceof ResourceDeniedError ? deniedForAgent(error)
+          // `SharedStateError` несёт голый код; фраза с действием для этого отказа — здесь.
+          : error instanceof SharedStateError && error.code === 'workspace-format-newer' ? WORKSPACE_FORMAT_NEWER_TEXT
+          : (error as Error).message;
         return { content: [{ type: 'text', text }], isError: true };
       }
     },

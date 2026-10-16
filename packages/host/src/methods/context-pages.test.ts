@@ -1,13 +1,14 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, addRoom, addSession, createWork, updateMap } from '@parley/core';
+import { addMessage, addRoom, addSession, createWork, migrateMapToJournal, updateMap, workPaths } from '@parley/core';
 import type { Message } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS, MAX_LINE_BYTES } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import { ID_SCAN_BUDGET_BYTES } from './context-pages.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -235,6 +236,91 @@ describe('context.messages', () => {
     await updateMap(dir, workId, (current) => { current.sessions[0]!.task = 'другая задача'; });
     const stale = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'session', sessionId: 's-01', field: 'task' }, cursor: next });
     expect(stale.error).toMatchObject({ code: 'bad_request', data: { reason: 'stale-cursor' } });
+    client.close();
+  });
+  it('карта-журнал (v3): context.text находит письмо по id, не собирая журналы других комнат', async () => {
+    const { home, token, dir, prepared: workId } = await bootWith(async (dir) => {
+      const id = await seed(dir, 0, 0);
+      await updateMap(dir, id, (current) => {
+        addRoom(current, { title: 'Вторая', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
+        addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'первое письмо' });
+        addMessage(current, { from: 's-01', to: [], roomId: 'r-01', text: 'второе письмо' });
+        addMessage(current, { from: 's-01', to: [], roomId: 'r-02', text: 'из второй комнаты' });
+      });
+      expect(await migrateMapToJournal(dir, id)).toMatchObject({ status: 'migrated', letters: 3 });
+      // Журнал второй комнаты подменён каталогом: любая сборка всех журналов упала бы на нём.
+      const journal = workPaths(dir, id).rooms + '/r-02/messages.jsonl';
+      await rm(journal); await mkdir(journal);
+      return id;
+    });
+    const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);
+    const found = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'message', id: 'm-02' } });
+    expect(found.error).toBeUndefined();
+    expect(found.result).toMatchObject({ text: 'второе письмо', complete: true });
+    expect((await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'goal' } })).result).toMatchObject({ text: 'Цель работы', complete: true });
+    client.close();
+  });
+  it('карта-журнал (v3): context.messages листает журнал одной комнаты; журналы остальных подменены каталогами и не читаются', async () => {
+    const { home, token, dir, prepared: workId } = await bootWith(async (dir) => {
+      const id = await seed(dir, 0, 0);
+      await updateMap(dir, id, (current) => {
+        addRoom(current, { title: 'Вторая', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
+        for (let i = 0; i < 6; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(3000, 'я') });
+        addMessage(current, { from: 's-01', to: [], roomId: 'r-02', text: 'из второй комнаты' });
+        addMessage(current, { from: 's-01', to: [], roomId: null, text: 'прямое' });
+      });
+      expect(await migrateMapToJournal(dir, id)).toMatchObject({ status: 'migrated', letters: 8 });
+      // Сборка всех журналов (readMap) упала бы на каталоге вместо файла: EISDIR.
+      const paths = workPaths(dir, id);
+      for (const file of [`${paths.rooms}/r-02/messages.jsonl`, `${paths.dir}/messages.jsonl`]) {
+        await rm(file, { force: true });
+        await mkdir(file, { recursive: true });
+      }
+      return id;
+    });
+    const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard += 1) {
+      const answer = await ask(client, 'context.messages', { projectPath: dir, workId, roomId: 'r-01', maxBytes: 8192, ...(cursor === undefined ? {} : { cursor }) });
+      expect(answer.error).toBeUndefined();
+      const { messages, page } = answer.result as { messages: Message[]; page: { complete: boolean; next: string | null } };
+      seen.unshift(...messages.map((message) => message.text.slice(0, 2)));
+      if (page.complete) break;
+      cursor = page.next as string;
+    }
+    expect(seen).toEqual(['0:', '1:', '2:', '3:', '4:', '5:']);
+    client.close();
+  });
+  it('карта-журнал (v3): письмо прежнего вида (m-NN) ищется в пределах бюджета байт; дальше — понятный отказ, чужие журналы не открываются', async () => {
+    const { home, token, dir, prepared: workId } = await bootWith(async (dir) => {
+      const id = await seed(dir, 0, 0);
+      await updateMap(dir, id, (current) => {
+        addRoom(current, { title: 'Вторая', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
+        addRoom(current, { title: 'Третья', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
+        addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'самое старое' });
+        addMessage(current, { from: 's-02', to: [], roomId: 'r-02', text: 'во второй' });
+      });
+      expect(await migrateMapToJournal(dir, id)).toMatchObject({ status: 'migrated', letters: 2 });
+      const paths = workPaths(dir, id);
+      // Журнал первой комнаты разросся за бюджет поиска: самое старое письмо лежит глубже него.
+      const padding = Array.from({ length: Math.ceil(ID_SCAN_BUDGET_BYTES / 100_000) + 1 }, (_, at) =>
+        `${JSON.stringify({ seq: 100 + at, id: `m-r01-${100 + at}`, roomId: 'r-01', from: 's-02', to: [], text: 'я'.repeat(50_000), kind: 'note', at: new Date().toISOString() })}\n`);
+      const tail = `${JSON.stringify({ seq: 999, id: 'm-99', roomId: 'r-01', from: 's-02', to: [], text: 'свежее', kind: 'note', at: new Date().toISOString() })}\n`;
+      await appendFile(`${paths.rooms}/r-01/messages.jsonl`, padding.join('') + tail);
+      // Третий журнал — каталог: поиск, дошедший до него, упал бы с EISDIR, а не отказал по бюджету.
+      const third = `${paths.rooms}/r-03/messages.jsonl`;
+      await rm(third, { force: true });
+      await mkdir(third, { recursive: true });
+      return id;
+    });
+    const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);
+    const old = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'message', id: 'm-01' } });
+    expect(old.error).toMatchObject({ code: 'not_found' });
+    expect(String(old.error?.message)).toContain('not searched');
+    // Письмо у хвоста журнала находится: читается только то, что нужно для него.
+    const recent = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'message', id: 'm-99' } });
+    expect(recent.result).toMatchObject({ text: 'свежее', complete: true });
     client.close();
   });
 });

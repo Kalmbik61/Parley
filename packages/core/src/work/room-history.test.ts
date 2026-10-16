@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addSession, addMessage } from './map.js';
 import { addRoom } from './rooms.js';
-import { createWork, readMap, updateMap, sharedProjectPaths } from './store.js';
+import { migrateMapToJournal } from './migrate-map.js';
+import { createWork, readMap, updateMap, sharedProjectPaths, workPaths } from './store.js';
+import { journalFile } from './journal.js';
 import { HUMAN, SYSTEM } from './types.js';
 import { rebuildRoomHistory, renderRoomHistory, shareRoomHistory, unshareRoomHistory, removeLocalRoomHistories, readRoomHistoryStatus } from './room-history.js';
 const receiptAttack = vi.hoisted(() => ({ mode: '', temporary: '', foreignIno: 0 }));
@@ -51,6 +53,29 @@ describe('derived local history and explicitly owned shared snapshots', () => {
     expect(source).toContain('Human-readable feed'); expect(source).toContain('Accepted or returned'); expect(source).not.toContain('Private solo');
     await rebuildRoomHistory(project, workId, 'r-01'); expect(await readFile(local(), 'utf8')).toBe(source);
     expect(await readdir(path.join(project, '.parley'))).not.toContain('history-shared');
+  });
+  it('карта-журнал (v3): та же история комнаты, что у v2, и локальный файл пересобирается тем же текстом', async () => {
+    const v2 = renderRoomHistory(await readMap(project, workId), 'r-01');
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated' });
+    const v3 = renderRoomHistory(await readMap(project, workId), 'r-01');
+    expect(v3).toBe(v2);
+    await rebuildRoomHistory(project, workId, 'r-01'); expect(await readFile(local(), 'utf8')).toBe(v2);
+  });
+  it('карта-журнал (v3): история одной комнаты не читает журналы чужих комнат и прямой — они подменены каталогами', async () => {
+    await updateMap(project, workId, map => {
+      addRoom(map, { title: 'Other', creator: HUMAN, members: ['s-01'], lead: 's-01' });
+      addMessage(map, { from: 's-01', to: [], roomId: 'r-02', kind: 'note', text: 'Other room letter' });
+    });
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated' });
+    const expected = renderRoomHistory(await readMap(project, workId), 'r-01');
+    // Любая сборка всех журналов (readMap) упала бы на каталоге вместо файла: EISDIR.
+    for (const room of [null, 'r-02']) {
+      const file = journalFile(workPaths(project, workId), room);
+      await rm(file); await mkdir(file);
+    }
+    const result = await rebuildRoomHistory(project, workId, 'r-01');
+    expect(result.sharedAt).toBeNull();
+    expect(await readFile(local(), 'utf8')).toBe(expected);
   });
   it('manual Share freezes a snapshot; ordinary rebuild never updates shared text, repeat explicit Share does', async () => {
     const first = await shareRoomHistory(project, workId, 'r-01'); expect(first.sharedAt).not.toBeNull();

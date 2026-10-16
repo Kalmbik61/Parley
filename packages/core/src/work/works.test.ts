@@ -2,9 +2,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { appendMessage, writeCursor } from './journal.js';
 import { addSession } from './map.js';
+import { migrateMapToJournal } from './migrate-map.js';
+import { addRoom } from './rooms.js';
 import { createWork, updateMap, workPaths } from './store.js';
-import { readWorks, watchWorks, type WorkEntry } from './works.js';
+import { readWorks, watchWorks, type WorkEntry, type WorkFileChange } from './works.js';
 
 let home = '';
 let project = '';
@@ -138,4 +141,107 @@ describe('watchWorks', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(seen).toEqual([]);
   });
+});
+
+/** Работа на карте-журнале (v3) с комнатой r-01 и сессией s-01. */
+async function journalWork(dir: string, title: string): Promise<string> {
+  const { work } = await createWork(dir, { title });
+  await updateMap(dir, work.id, (map) => {
+    addSession(map, { provider: 'claude', label: 'a', task: 't' });
+    addRoom(map, { title: 'Комната', creator: 's-01', members: ['s-01'] });
+  });
+  const result = await migrateMapToJournal(dir, work.id, { run: new Date().toISOString() });
+  expect(result.status).toBe('migrated');
+  return work.id;
+}
+
+describe('readWorks: повторное использование прежних записей', () => {
+  it('карта, у которой не изменились mtime и размер, не разбирается заново; изменённая читается', async () => {
+    const first = await createWork(project, { title: 'Первая' });
+    await createWork(project, { title: 'Вторая' });
+    const before = await readWorks(project);
+    await updateMap(project, first.work.id, (map) => {
+      map.work.goal = 'новая цель';
+    });
+    const after = await readWorks(project, before);
+    const byId = (list: WorkEntry[], id: string): WorkEntry => list.find((entry) => entry.map.work.id === id)!;
+    const untouched = before.find((entry) => entry.map.work.id !== first.work.id)!;
+    expect(byId(after, untouched.map.work.id)).toBe(untouched);
+    expect(byId(after, first.work.id)).not.toBe(byId(before, first.work.id));
+    expect(byId(after, first.work.id).map.work.goal).toBe('новая цель');
+  });
+});
+
+describe('watchWorks: журналы и курсоры', () => {
+  async function until(predicate: () => boolean, poke: () => Promise<void>, timeoutMs = 15_000): Promise<void> {
+    const started = Date.now();
+    for (;;) {
+      await poke();
+      const deadline = Date.now() + 400;
+      while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (Date.now() - started > timeoutMs) throw new Error('события не дождались');
+    }
+  }
+
+  it('строка в журнале комнаты и прямом журнале и курсор сессии приходят в onChange с работой и комнатой; список не перечитывается', async () => {
+    const workId = await journalWork(project, 'Журнал');
+    const changes: WorkFileChange[] = [];
+    let lists = 0;
+    const watcher = watchWorks(() => (lists += 1), project, { debounceMs: 10, onChange: (change) => changes.push(change) });
+    try {
+      // Запоздалые события подготовки (запись индекса при миграции) к делу не относятся.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      lists = 0;
+      await until(
+        () => changes.some((c) => c.kind === 'journal' && c.roomId === 'r-01') && changes.some((c) => c.kind === 'journal' && c.roomId === null),
+        async () => {
+          await appendMessage(project, workId, 'r-01', { from: 's-01', to: [], text: 'в комнату' });
+          await appendMessage(project, workId, null, { from: 's-01', to: ['human'], text: 'прямое' });
+        },
+      );
+      await until(
+        () => changes.some((c) => c.kind === 'cursor' && c.sessionId === 's-01'),
+        async () => {
+          await writeCursor(project, workId, 's-01', 'r-01', 1);
+        },
+      );
+      expect(changes.filter((c) => c.kind === 'journal').every((c) => c.workId === workId && c.projectPath === project)).toBe(true);
+      // Ни одна запись журнала или курсора не вернулась перечитыванием списка работ.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(lists).toBe(0);
+    } finally {
+      watcher.close();
+    }
+  }, 30_000);
+
+  it('изменение индекса по-прежнему перечитывает список и сообщает разобранные байты; onChange молчит', async () => {
+    const workId = await journalWork(project, 'Индекс');
+    const changes: WorkFileChange[] = [];
+    const parsed: number[] = [];
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks(
+      (works, _seq, bytes) => {
+        seen.push(works);
+        parsed.push(bytes);
+      },
+      project,
+      { debounceMs: 10, onChange: (change) => changes.push(change) },
+    );
+    try {
+      await until(
+        () => seen.some((list) => list[0]?.map.work.goal === 'цель индекса'),
+        () =>
+          updateMap(project, workId, (map) => {
+            map.work.goal = 'цель индекса';
+          }).then(() => undefined),
+      );
+      expect(changes).toEqual([]);
+      expect(parsed.some((bytes) => bytes > 0)).toBe(true);
+    } finally {
+      watcher.close();
+    }
+  }, 30_000);
 });
