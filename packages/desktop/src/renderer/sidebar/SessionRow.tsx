@@ -3,10 +3,10 @@
  * агента, `S02 исполнитель`, слово состояния, значок ветки своего worktree и время последнего
  * события. Тултип — задача, сводка агента, итог, модель и метрики.
  *
- * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева `8 + 12·depth`, зазор 6, 12px;
- * значок состояния 12, значок агента 13, слово 11px строчными, GitBranch 11 (тултип `Own worktree ·
- * {branch}`), время 10px шириной 22. Фон: `blocked` — `accent-200` (слово `accent-800`), `unseen` —
- * `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, сдвиг на уровень `marginLeft: 20·depth` (заливка начинается
+ * после изгиба линии дерева, `TreeGuides.tsx`) и `paddingLeft` 8, зазор 6, 12px; значок состояния 12, значок агента 13,
+ * слово 11px строчными, GitBranch 11 (тултип `Own worktree · {branch}`), время 10px шириной 22. Фон: `blocked` —
+ * `accent-200` (слово `accent-800`), `unseen` — `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
  * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover весь текст строки —
  * основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1). Оба цвета задаются явно
  * (`--color-text`): в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
@@ -65,6 +65,8 @@ import { useNoticesStore } from '../store/notices.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card.js';
 import { SessionInlineRename } from './InlineRename.js';
 import { SessionRowMenu } from './SessionRowMenu.js';
+import { NO_GUIDES, type TreeGuide } from './sort.js';
+import { TREE_STEP, TreeGuides } from './TreeGuides.js';
 import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
@@ -93,8 +95,10 @@ export interface SessionRowProps {
   draggable: boolean;
   selected: boolean;
   onOpen(): void;
-  /** Строка участника комнаты: отступ слева 18 вместо `8 + 12·depth`, без правого поля. */
+  /** Строка участника комнаты: отступ слева 18 вместо сдвига `20·depth` с отступом 8, без правого поля и без линий дерева. */
   inRoom?: boolean;
+  /** Линии дерева к этой строке и сквозь неё (`sort.ts#treeGuides`); у участника комнаты их нет. */
+  guides?: readonly TreeGuide[];
   /** Комната участника — для «Make lead» в меню строки; только у участника комнаты. */
   roomId?: string;
   /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
@@ -116,6 +120,7 @@ export const SessionRow = memo(function SessionRow({
   selected,
   onOpen,
   inRoom = false,
+  guides = NO_GUIDES,
   roomId,
   lead = false,
 }: SessionRowProps): JSX.Element {
@@ -263,10 +268,10 @@ export const SessionRow = memo(function SessionRow({
             event.stopPropagation();
             onOpen();
           }}
-          style={{ paddingLeft: inRoom ? '18px' : `${8 + depth * 12}px` }}
+          style={inRoom ? { paddingLeft: '18px' } : { marginLeft: `${depth * TREE_STEP}px`, paddingLeft: '8px' }}
           className={cn(
-            // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
-            'flex h-[26px] min-w-0 items-center gap-1.5 rounded-full text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+            // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`). `relative` — для линий дерева.
+            'relative flex h-[26px] min-w-0 items-center gap-1.5 rounded-full text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
             inRoom ? 'pr-0' : 'pr-1.5',
             // Текст строки на hover — основной цвет: `neutral-700` на заливке hover ниже 4.5:1. Явный `--color-text`, а не
             // подмена одной переменной другой: внутри `[data-dimmed]` они равны, а на самой закрытой строке
@@ -354,6 +359,8 @@ export const SessionRow = memo(function SessionRow({
             </span>
           ) : null}
           {inRoom ? null : <span className={cn('w-[22px] shrink-0 text-right text-[10px] tabular-nums', secondary)}>{time}</span>}
+          {/* Последним: вне потока (absolute), поэтому раскладку строки не двигает. */}
+          {inRoom ? null : <TreeGuides guides={guides} depth={depth} />}
         </div>
       </HoverCardTrigger>
       </SessionRowMenu>

@@ -735,6 +735,7 @@ describe('целостность токенов', () => {
       '--work-sidebar-accent',
       '--work-sidebar-accent-foreground',
       '--work-sidebar-border',
+      '--work-sidebar-tree-line',
       '--work-sidebar-ring',
       '--work-sidebar-focus-ring',
       '--work-sidebar-muted-foreground',

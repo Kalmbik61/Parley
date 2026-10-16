@@ -56,7 +56,7 @@ import { InlineRename } from './InlineRename.js';
 import { RoomRow } from './RoomRow.js';
 import { RoomsMenu } from './RoomsMenu.js';
 import { SessionRow } from './SessionRow.js';
-import { archivedRows, cardRows, type CardRoomRow } from './sort.js';
+import { archivedRows, cardRows, NO_GUIDES, treeGuides, type CardRoomRow, type TreeGuide } from './sort.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
@@ -182,6 +182,8 @@ export const WorkCard = memo(function WorkCard({
   const closedCount = tree.filter(({ session }) => session.lifecycle === 'closed').length;
   // Строки карточки: сессии и комнаты на месте своих участников; закрытые — только при раскрытом «N more closed».
   const rows = cardRows(map, expanded);
+  // Линии дерева от родителя к дочерним сессиям — по основным строкам; у архивных комнат их нет.
+  const guides = treeGuides(rows);
   // Архивные комнаты — под ссылкой; число в ссылке — все архивные, а строки в DOM только у раскрытой.
   const archived = archivedRows(map, expanded);
   // «N сессий» — открытые, как в макете спеки 6.3: закрытые считает строка «+N closed».
@@ -200,9 +202,10 @@ export const WorkCard = memo(function WorkCard({
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
   // Строка комнаты — и в основных строках, и под ссылкой архивных: одни пропсы, у архивной приглушение делает сама строка.
-  const renderRoomRow = (row: CardRoomRow): JSX.Element => (
+  const renderRoomRow = (row: CardRoomRow, rowGuides: readonly TreeGuide[] = NO_GUIDES): JSX.Element => (
     <RoomRow
       key={`room ${row.room.id}`}
+      guides={rowGuides}
       workKey={key}
       projectPath={projectPath}
       workId={map.work.id}
@@ -312,7 +315,7 @@ export const WorkCard = memo(function WorkCard({
       </div>
       {rows.length > 0 ? (
         <div role="group" className="mt-1.5 flex flex-col gap-px">
-          {rows.map((row) =>
+          {rows.map((row, index) =>
             row.kind === 'session' ? (
               <SessionRow
                 key={row.session.id}
@@ -327,9 +330,10 @@ export const WorkCard = memo(function WorkCard({
                 draggable={active}
                 selected={row.session.id === selectedSessionId}
                 onOpen={openerFor(row.session.id)}
+                guides={guides[index] ?? NO_GUIDES}
               />
             ) : (
-              renderRoomRow(row)
+              renderRoomRow(row, guides[index])
             ),
           )}
         </div>
@@ -371,7 +375,7 @@ export const WorkCard = memo(function WorkCard({
       ) : null}
       {archivedShown && archived.length > 0 ? (
         <div role="group" data-archived-rooms-list="" className="mt-px flex flex-col gap-px">
-          {archived.map(renderRoomRow)}
+          {archived.map((row) => renderRoomRow(row))}
         </div>
       ) : null}
       {active && map.work.status === 'active' ? (

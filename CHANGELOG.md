@@ -49,6 +49,9 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   1200 characters, to put documents and file edits into a file and send only its path, not to quote
   earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
   and to read the room map through the tools instead of opening `map.json`.
+- **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
+  status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
+  child whose parent row is hidden under "N more closed" has no line.
 
 ### Fixed
 
