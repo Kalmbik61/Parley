@@ -277,15 +277,6 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.metrics).toMatchObject({ context: { usedPercent: 12 }, compaction: null });
   });
 
-  it('2г: codexCompactedAt у сессии Claude — null', async () => {
-    const { ref } = await activeSession();
-    const w = await works();
-    const a = activity(w);
-    await a.start();
-    await settle();
-    expect(a.codexCompactedAt(ref)).toBeNull();
-  });
-
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {
     const startedAt = new Date().toISOString();
     const { ref } = await activeSession({ providerSessionId: 's-log', createEventsDir: false });

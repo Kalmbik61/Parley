@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { codexContextFill, type ContextFill } from '../context-fill.js';
 import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
@@ -110,8 +109,6 @@ export async function indexCodexSession(
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
   let lastCounters = null as ReturnType<typeof codexCounters>;
-  let context: ContextFill | null = null;
-  let compactedAt: string | null = null;
   const ledger = createUsageLedger(options.usageWindows === undefined ? {} : { windows: options.usageWindows });
   let lastTurnEvent: SessionIndex['lastTurnEvent'];
   let spawned = false;
@@ -185,15 +182,7 @@ export async function indexCodexSession(
             lastCounters = counters;
             ledger.observe({ kind: 'cumulative', stream: 'rollout', counters, at });
           }
-          // Последнее наблюдение с окном модели; запись без `last_token_usage` прежнее не стирает.
-          if (at !== null) context = codexContextFill(asRecord(payload['info']), at) ?? context;
         }
-        break;
-      }
-
-      case 'compacted': {
-        // Сжатие разговора (ручное `/compact` или автосжатие) — конец сжатия для хоста (спека 5.5).
-        if (at !== null) compactedAt = at;
         break;
       }
 
@@ -251,8 +240,6 @@ export async function indexCodexSession(
     subsessionCount: 0,
     tokens,
     usage: ledger.summary(),
-    context,
-    compactedAt,
     provider: 'codex',
     ...(spawned ? { spawned: true } : {}),
     ...(parentId === null ? {} : { parentId }),

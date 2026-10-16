@@ -3,15 +3,16 @@
  * свободен, а до того держит просьбу (`pending`, одна на сессию). Сам хост сжатие не начинает. С печати и до конца
  * сжатия держит `sessions.exclusive` этой сессии — `pty.send`, будильник и смена модели/effort ему уступают;
  * ждущую просьбу будильник видит через `holds`. Конец сжатия — `PostCompact` (Claude, GLM), запись `compacted`
- * новее печати (Codex), выход процесса или таймаут.
+ * в хвосте rollout после печати (опрос раз в 2 с, Codex), выход процесса или таймаут.
  */
 
-import { hookedSince } from '@parley/core';
+import { hookedSince, type RolloutRecord } from '@parley/core';
 import { COMPACT_MAX_INSTRUCTIONS, refKey } from '@parley/protocol';
 import type { CompactResult, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
+import { createRolloutTail } from '../feed/codex-source.js';
 import { CODEX_SUBMIT_DELAY_MS, KEY_ENTER } from '../pty/codex-input.js';
 import { stripEscapes } from '../pty/draft.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
@@ -23,6 +24,10 @@ import type { CompactionTrack } from './context-view.js';
 
 /** Сколько ждать отчёта о конце сжатия (спека 5.5). */
 export const COMPACT_TIMEOUT_MS = 5 * 60_000;
+/** У Codex сжатие большого контекста длилось 7 минут (приёмка 2026-10-16): таймаут шире. */
+export const CODEX_COMPACT_TIMEOUT_MS = 15 * 60_000;
+/** Как `CODEX_POLL_MS` ленты: `fs.watch` на `~/.codex/sessions` дозаписи не доставляет, хвост опрашиваем сами. */
+export const CODEX_COMPACT_POLL_MS = 2_000;
 
 // Управляющие байты и DEL — в пробел: инструкция уходит одной строкой.
 // eslint-disable-next-line no-control-regex
@@ -58,22 +63,27 @@ export interface CompactionService {
 export interface CompactionDeps {
   host: Pick<HostContext, 'log' | 'broadcast'>;
   pty: PtyManager;
-  activity: Pick<ActivityService, 'get' | 'onChange' | 'onLogChange' | 'setCompaction' | 'codexCompactedAt'>;
+  activity: Pick<ActivityService, 'get' | 'onChange' | 'setCompaction' | 'logFile'>;
   exclusive: SwitchLock;
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
   timeoutMs?: number;
+  /** Хвост rollout-лога Codex; по умолчанию — `createRolloutTail` (первое чтение встаёт в конец файла). */
+  codexTail?: (file: string) => { read(): Promise<RolloutRecord[]> };
+  codexPollMs?: number;
+  codexTimeoutMs?: number;
 }
 
 interface Running {
   ref: SessionRef;
   codex: boolean;
-  /** Когда ушёл Enter; до этого запись `compacted` Codex — не наша. */
-  submittedAt: number | null;
   done(): void;
 }
 
 export function createCompactionService(deps: CompactionDeps): CompactionService {
   const timeoutMs = deps.timeoutMs ?? COMPACT_TIMEOUT_MS;
+  const codexTimeoutMs = deps.codexTimeoutMs ?? CODEX_COMPACT_TIMEOUT_MS;
+  const codexPollMs = deps.codexPollMs ?? CODEX_COMPACT_POLL_MS;
+  const codexTail = deps.codexTail ?? ((file: string) => createRolloutTail(file, { seedMaxBytes: 0 }));
   const pending = new Map<string, { ref: SessionRef; text: string }>();
   const running = new Map<string, Running>();
   /** Конец последнего сжатия сессии (ISO): окно прячет прежнюю цифру до наблюдения новее. */
@@ -105,13 +115,52 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
     else publish(ref, pending.has(key) ? 'pending' : null);
   }
 
+  /**
+   * Конец сжатия Codex: опрос хвоста rollout раз в `codexPollMs`. Первое чтение встаёт в конец файла (записи до
+   * печати не наши), дальше первая запись `compacted` — конец. Возвращает остановку опроса.
+   */
+  async function pollCodex(entry: Running): Promise<() => void> {
+    const file = deps.activity.logFile(entry.ref);
+    if (file === null) {
+      deps.host.log.warn('сжатие: у сессии Codex нет rollout-файла, конец — по таймауту', { ref: entry.ref });
+      return () => undefined;
+    }
+    const tail = codexTail(file);
+    try {
+      await tail.read();
+    } catch (error) {
+      deps.host.log.warn('сжатие: хвост rollout не читается', { ref: entry.ref, error: String(error) });
+    }
+    let stopped = false;
+    let reading = false;
+    const timer = setInterval(() => {
+      if (reading || stopped) return;
+      reading = true;
+      void tail
+        .read()
+        .then((records) => {
+          const hit = records.find((record) => record.type === 'compacted');
+          if (hit !== undefined && !stopped) finish(entry.ref, hit.at);
+        })
+        .catch((error: unknown) => deps.host.log.warn('сжатие: хвост rollout не читается', { ref: entry.ref, error: String(error) }))
+        .finally(() => {
+          reading = false;
+        });
+    }, codexPollMs);
+    timer.unref?.();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }
+
   function begin(ref: SessionRef, handle: PtyHandle, text: string): void {
     const key = refKey(ref);
     let release: () => void = () => undefined;
     const settled = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const entry: Running = { ref, codex: handle.provider === 'codex', submittedAt: null, done: () => release() };
+    const entry: Running = { ref, codex: handle.provider === 'codex', done: () => release() };
     running.set(key, entry);
     publish(ref, 'running');
 
@@ -126,14 +175,15 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
         notice('compact-failed', ref, `compaction of ${ref.sessionId} was not sent (${outcome})`);
         return;
       }
-      entry.submittedAt = Date.now();
       const timer = setTimeout(() => {
         notice('compact-failed', ref, `compaction of ${ref.sessionId} did not report back`);
         release();
-      }, timeoutMs);
+      }, entry.codex ? codexTimeoutMs : timeoutMs);
+      const stopPolling = entry.codex ? await pollCodex(entry) : () => undefined;
       try {
         await settled;
       } finally {
+        stopPolling();
         clearTimeout(timer);
       }
     };
@@ -211,13 +261,6 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
             notice('compact-cancelled', ref, `${ref.sessionId} stopped — compaction cancelled`);
           }
           running.get(key)?.done();
-        }),
-        deps.activity.onLogChange(() => {
-          for (const entry of running.values()) {
-            if (!entry.codex || entry.submittedAt === null) continue;
-            const at = deps.activity.codexCompactedAt(entry.ref);
-            if (at !== null && Date.parse(at) >= entry.submittedAt) finish(entry.ref, at);
-          }
         }),
       );
     },
